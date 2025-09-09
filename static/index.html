@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Agency Project Builder</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <header>
+    <h1>Agency Project Builder</h1>
+    <div class="sub">RFP → Scenarios → Timeline → Workfront Export</div>
+  </header>
+
+  <main>
+    <!-- STEP 1: Intake -->
+    <section class="card">
+      <h2>Step 1 – Intake</h2>
+      <div class="grid">
+        <div>
+          <label>RFP / Brief (paste text)</label>
+          <textarea id="rfpText" placeholder="Paste RFP text here... (or leave blank and pick deliverables manually)"></textarea>
+          <button id="btnSuggest" class="ghost">Suggest deliverables</button>
+          <div id="suggestions" class="pillbox"></div>
+        </div>
+        <div>
+          <label>Deliverables (select)</label>
+          <div id="deliverableList" class="listbox"></div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Pricing Mode</label>
+          <select id="pricingMode"></select>
+          <div id="blendedWrap" class="inline">
+            <label>Blended Rate ($/hr)</label>
+            <input id="blendedRate" type="number" step="1" min="1" value="185"/>
+          </div>
+          <div id="bandWrap" class="inline">
+            <label>Rate Band</label>
+            <select id="rateBand"></select>
+          </div>
+        </div>
+
+        <div>
+          <label>Scenario Type</label>
+          <div class="inline">
+            <input type="radio" id="useTemplates" name="scnType" value="template" checked/>
+            <label for="useTemplates">Use Templates (MED_LOW & MED_HIGH)</label>
+          </div>
+          <div class="inline">
+            <input type="radio" id="useBundles" name="scnType" value="bundle"/>
+            <label for="useBundles">Use Bundles (Express/Good/Better/Best)</label>
+          </div>
+
+          <div id="templateRow" class="inline">
+            <label>Scenario A (template)</label>
+            <select id="scenarioA"></select>
+            <label>Scenario B (template)</label>
+            <select id="scenarioB"></select>
+          </div>
+
+          <div id="bundleRow" class="inline hidden">
+            <label>Scenario A Bundle</label>
+            <select id="bundleA">
+              <option>Express</option><option selected>Better</option><option>Good</option><option>Best</option>
+            </select>
+            <label>Scenario B Bundle</label>
+            <select id="bundleB">
+              <option>Express</option><option>Good</option><option selected>Better</option><option>Best</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Timeline Options</label>
+          <div class="inline">
+            <input type="checkbox" id="useSlack" checked/>
+            <label for="useSlack">Add Slack Between Reviews</label>
+          </div>
+          <div class="inline">
+            <label>Slack After Internal Review (days)</label>
+            <input id="slackInternal" type="number" min="0" step="1" value="1"/>
+            <label>Slack After Client Review (days)</label>
+            <input id="slackClient" type="number" min="0" step="1" value="2"/>
+          </div>
+          <div class="inline">
+            <label>Global Slack %</label>
+            <input id="slackGlobal" type="number" min="0" max="0.5" step="0.01" value="0.05"/>
+            <label>Project Start</label>
+            <input id="projectStart" type="date"/>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btnBuild">Build Scenarios</button>
+      </div>
+    </section>
+
+    <!-- STEP 2: Scenarios -->
+    <section class="card">
+      <h2>Step 2 – Compare & Tweak</h2>
+      <div id="scenarios" class="scenarios"></div>
+      <div class="hint">Tip: Un/check task groups inside each deliverable to re-run quickly (client side). For authoritative totals, rebuild via the button above.</div>
+    </section>
+
+    <!-- STEP 3: Export -->
+    <section class="card">
+      <h2>Step 3 – Finalize & Export</h2>
+      <div class="grid">
+        <div class="totals">
+          <div><strong>Scenario A Total</strong>: <span id="totA">$0</span></div>
+          <div><strong>Scenario B Total</strong>: <span id="totB">$0</span></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="btnExportA" class="ghost">Export Scenario A → Workfront (CSV)</button>
+        <button id="btnExportB" class="ghost">Export Scenario B → Workfront (CSV)</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
