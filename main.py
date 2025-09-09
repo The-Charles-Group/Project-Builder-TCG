@@ -133,7 +133,7 @@ class AgencyDB:
         sub = sub.sort_values("Sort_Order")
         return [str(x) for x in sub["Task_Group"].tolist()]
 
-    def default_complexity_tier_for_bundle(self, bundle: str) -> (str, str):
+    def default_complexity_tier_for_bundle(self, bundle: str) -> tuple[str, str]:
         row = self.b_defaults[self.b_defaults["Bundle"]==bundle]
         if row.empty:
             return ("Advanced","T2_MediumVolume")
