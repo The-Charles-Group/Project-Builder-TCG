@@ -344,6 +344,30 @@
       box.value = '';
     }
 
+    function fallbackName(letter, fmt) {
+      const projectName = (document.getElementById('projectName')?.value || 'Proposal').trim();
+      const ts = document.getElementById('exportTimestamp')?.checked
+        ? (' - ' + new Date().toISOString().replace(/[-:T]/g,'').slice(0,12))
+        : '';
+      return `${projectName} - Scenario ${letter} - Workfront Export${ts}.${fmt}`;
+    }
+
+    function parseFilenameFromContentDisposition(cd) {
+      if (!cd) return null;
+      // filename*=UTF-8''<urlencoded>
+      const star = cd.match(/filename\*\s*=\s*([^;]+)/i);
+      if (star) {
+        const v = star[1].trim();
+        const parts = v.split("''");
+        const raw = parts.length === 2 ? parts[1] : v;
+        try { return decodeURIComponent(raw.replace(/^"(.*)"$/, '$1')); } catch { return null; }
+      }
+      // filename="<quoted>" or filename=bare
+      const simple = cd.match(/filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i);
+      if (simple) return (simple[1] || simple[2]).trim().replace(/^"(.*)"$/, '$1');
+      return null;
+    }
+
     async function exportScenario(letter) {
       if (!latestScenarios || !latestScenarios[letter]) {
         alert('Generate scenarios first.');
@@ -371,16 +395,15 @@
           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
 
-        // Use the filename suggested by the server (Content-Disposition)
-        const cd = res.headers.get('content-disposition') || '';
-        const m = cd.match(/filename="?([^"]+)"?/i);
-        const suggestedName = m ? m[1] : `workfront_export.${fmt}`;
-
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = suggestedName;      // Respect server-provided filename
+
+        // Prefer server-suggested filename; otherwise build from UI
+        const cd = res.headers.get('content-disposition');
+        a.download = parseFilenameFromContentDisposition(cd) || fallbackName(letter, fmt);
+
         a.click();
         URL.revokeObjectURL(url);
       } catch (error) {

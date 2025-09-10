@@ -790,22 +790,26 @@ def api_export(payload: ExportPayload):
         raise HTTPException(400, "file_format must be 'csv' or 'xlsx'.")
 
     if fmt == "csv":
-        out_path = f"{base}.csv"
-        df.to_csv(out_path, index=False)
-        return FileResponse(out_path, filename=out_path, media_type="text/csv")
-
-    # XLSX
-    try:
-        out_path = f"{base}.xlsx"
-        # engine='openpyxl' required for xlsx writes
-        df.to_excel(out_path, index=False, engine="openpyxl")
-        return FileResponse(
-            out_path,
-            filename=out_path,
+        out_name = f"{base}.csv"
+        df.to_csv(out_name, index=False)
+        resp = FileResponse(out_name, filename=out_name, media_type="text/csv")
+    else:
+        out_name = f"{base}.xlsx"
+        try:
+            df.to_excel(out_name, index=False, engine="openpyxl")
+        except Exception as ex:
+            raise HTTPException(400, "XLSX export requires 'openpyxl'. Add it to requirements.txt.") from ex
+        resp = FileResponse(
+            out_name,
+            filename=out_name,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-    except Exception as ex:
-        raise HTTPException(400, "XLSX export requires 'openpyxl'. Add it to requirements.txt and redeploy.") from ex
+
+    # Add RFC 5987 filename* for better cross-browser support
+    import urllib.parse
+    quoted = urllib.parse.quote(out_name)
+    resp.headers["Content-Disposition"] = f'attachment; filename="{out_name}"; filename*=UTF-8\'\'{quoted}'
+    return resp
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
