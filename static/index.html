@@ -43,6 +43,10 @@
           <label for="rateBand">Rate band</label>
           <input id="rateBand" type="text" value="Standard_US" />
         </div>
+        <div>
+          <label for="projectName">Project name</label>
+          <input id="projectName" type="text" placeholder="e.g., Casa Dragones" />
+        </div>
       </div>
       
       <div class="actions">
@@ -64,7 +68,18 @@
         <input type="text" id="addBox" placeholder="Add another deliverable..." />
         <button id="btnAdd">Add</button>
         <button id="btnRegenerate">Regenerate with Edits</button>
-        <button id="btnExportA">Export Scenario A CSV</button>
+      </div>
+
+      <div class="inline" style="margin-top:10px;">
+        <label>Export format:
+          <select id="exportFormat">
+            <option value="csv">CSV (.csv)</option>
+            <option value="xlsx">Excel (.xlsx)</option>
+          </select>
+        </label>
+        <label><input id="exportTimestamp" type="checkbox" /> Add timestamp</label>
+        <button id="btnExportA">Export Scenario A</button>
+        <button id="btnExportB">Export Scenario B</button>
       </div>
 
       <div class="scenarios">
@@ -206,6 +221,11 @@
         });
 
         const suggested = data.suggested || [];
+        const baseName = (data.filename || '').replace(/\.[^.]+$/, '').trim();
+        if (baseName && !document.getElementById('projectName').value) {
+          document.getElementById('projectName').value = baseName; // e.g., "Casa Dragones"
+        }
+
         await buildFromSuggestions(suggested);
       } catch (error) {
         alert('Error processing uploaded file: ' + error.message);
@@ -324,33 +344,47 @@
       box.value = '';
     }
 
-    async function exportScenarioA() {
-      if (!latestScenarios || !latestScenarios.A) {
-        alert('No scenario A to export. Generate scenarios first.');
+    async function exportScenario(letter) {
+      if (!latestScenarios || !latestScenarios[letter]) {
+        alert('Generate scenarios first.');
         return;
       }
 
+      const fmt = document.getElementById('exportFormat').value || 'csv';
+      const projectName = document.getElementById('projectName').value || '';
+      const addTs = document.getElementById('exportTimestamp').checked;
+
       try {
         const res = await fetch('/api/export', {
-          method: 'POST', 
+          method: 'POST',
           headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ scenario: latestScenarios.A })
+          body: JSON.stringify({
+            scenario: latestScenarios[letter],
+            project_name: projectName,
+            file_format: fmt,
+            scenario_label: `Scenario ${letter}`,
+            add_timestamp: addTs
+          })
         });
-        
+
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}: ${await res.text()}`);
         }
-        
-        // Force download
+
+        // Use the filename suggested by the server (Content-Disposition)
+        const cd = res.headers.get('content-disposition') || '';
+        const m = cd.match(/filename="?([^"]+)"?/i);
+        const suggestedName = m ? m[1] : `workfront_export.${fmt}`;
+
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; 
-        a.download = 'workfront_export.csv'; 
+        a.href = url;
+        a.download = suggestedName;      // Respect server-provided filename
         a.click();
         URL.revokeObjectURL(url);
       } catch (error) {
-        alert('Error exporting CSV: ' + error.message);
+        alert('Error exporting: ' + error.message);
       }
     }
 
@@ -358,7 +392,8 @@
     document.getElementById('btnGenerate').onclick = autoBuild;
     document.getElementById('btnRegenerate').onclick = regenerateWithEdits;
     document.getElementById('btnAdd').onclick = addDeliverableFromBox;
-    document.getElementById('btnExportA').onclick = exportScenarioA;
+    document.getElementById('btnExportA').onclick = () => exportScenario('A');
+    document.getElementById('btnExportB').onclick = () => exportScenario('B');
 
     // Allow Enter key in add box
     document.getElementById('addBox').addEventListener('keypress', function(e) {

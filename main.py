@@ -48,6 +48,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_headers=["*"],
     allow_methods=["*"],
+    expose_headers=["Content-Disposition"],  # Allow browser to read server-suggested filename
 )
 
 # Serve static frontend
@@ -416,6 +417,15 @@ def _extract_text_from_upload(content: bytes, filename: str) -> str:
 
     raise HTTPException(415, f"Unsupported file type: {ext}. Use .pdf, .docx, or .txt.")
 
+# ---------- Helper: sanitize filenames ----------
+def _safe_filename(s: str) -> str:
+    s = (s or "Proposal").strip()
+    # Replace characters that are invalid on Windows/macOS
+    s = re.sub(r'[\\/:*?"<>|]+', '-', s)
+    # Collapse whitespace
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
 # ---------- Pydantic models ----------
 class SuggestPayload(BaseModel):
     rfp_text: str
@@ -456,7 +466,11 @@ class AutoBuildPayload(BaseModel):
     project_start: Optional[str] = None     # "YYYY-MM-DD"
 
 class ExportPayload(BaseModel):
-    scenario: Dict[str, Any]                # a scenario dict returned from /api/build
+    scenario: Dict[str, Any]
+    project_name: Optional[str] = None       # e.g., "Casa Dragones"
+    file_format: Optional[str] = "csv"       # "csv" or "xlsx"
+    scenario_label: Optional[str] = None     # e.g., "Scenario A"
+    add_timestamp: Optional[bool] = False    # include yyyymmdd-HHMM in filename?                # a scenario dict returned from /api/build
 
 # ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
@@ -709,15 +723,22 @@ def api_auto_build(payload: AutoBuildPayload):
 @app.post("/api/export")
 def api_export(payload: ExportPayload):
     """
-    Export a Workfront Fusion CSV from a single scenario payload.
-    Each row: Deliverable → Task_Group lines with rolled-up planned hours (per role not required by Workfront WBS).
+    Export a Workfront file (CSV or XLSX) from a single scenario payload.
+    The 'Project_Name' column is set to payload.project_name if provided.
+    The download filename is derived from project/scenario.
     """
     if not DB.loaded:
         DB.load()
-    scenario = payload.scenario
+
+    scenario = payload.scenario or {}
+    project_name = payload.project_name or f"Proposal {datetime.date.today().isoformat()}"
+    project_name = _safe_filename(project_name)
+
+    # Optional scenario tag used in the download filename (not inside the sheet itself)
+    scen_label = _safe_filename(payload.scenario_label or "")
+
+    # Build rows (same as before, but use project_name param)
     rows = []
-    # Create a simple WBS: 1.x for deliverables, 1.x.y for tasks
-    project_name = f"Proposal {datetime.date.today().isoformat()}"
     for i, d in enumerate(scenario.get("items", []), start=1):
         wbs_id = f"1.{i}"
         rows.append({
@@ -737,7 +758,6 @@ def api_export(payload: ExportPayload):
             "Assignee_External_ID": "",
             "Notes": f"{d['complexity']} / {d['tier']}"
         })
-        # children by task_group
         for j, t in enumerate(d["schedule"], start=1):
             rows.append({
                 "Project_Name": project_name,
@@ -749,17 +769,43 @@ def api_export(payload: ExportPayload):
                 "Task": t["task_group"],
                 "Role": "",
                 "Seniority": "",
-                "Planned_Hours": "",     # (optional: prorate hours by task_group if needed)
-                "Start_Offset_Days": "", # handled by Fusion or further logic
+                "Planned_Hours": "",
+                "Start_Offset_Days": "",
                 "Duration_Days": t["duration_days"],
                 "Dependencies": "",
                 "Assignee_External_ID": "",
                 "Notes": ""
             })
+
     df = pd.DataFrame(rows)
-    out_path = "workfront_export.csv"
-    df.to_csv(out_path, index=False)
-    return FileResponse(out_path, filename=out_path, media_type="text/csv")
+
+    # File naming
+    parts = [p for p in [project_name, scen_label, "Workfront Export"] if p]
+    base = " - ".join(parts)
+    if payload.add_timestamp:
+        base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
+
+    fmt = (payload.file_format or "csv").lower().strip()
+    if fmt not in ("csv", "xlsx"):
+        raise HTTPException(400, "file_format must be 'csv' or 'xlsx'.")
+
+    if fmt == "csv":
+        out_path = f"{base}.csv"
+        df.to_csv(out_path, index=False)
+        return FileResponse(out_path, filename=out_path, media_type="text/csv")
+
+    # XLSX
+    try:
+        out_path = f"{base}.xlsx"
+        # engine='openpyxl' required for xlsx writes
+        df.to_excel(out_path, index=False, engine="openpyxl")
+        return FileResponse(
+            out_path,
+            filename=out_path,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as ex:
+        raise HTTPException(400, "XLSX export requires 'openpyxl'. Add it to requirements.txt and redeploy.") from ex
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
