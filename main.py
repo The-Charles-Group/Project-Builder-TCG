@@ -171,30 +171,69 @@ class AgencyDB:
 
     # ---------- RFP parsing via rules ----------
     def suggest_deliverables_from_text(self, text: str) -> List[Dict[str, Any]]:
+        """
+        Returns a list of suggestions: [{
+            deliverable_code, deliverable, category, confidence, matches: [matched_keywords...]
+        }]
+        Strategy:
+          1) Use RFP_Matching_Rules (Regex_Keywords -> Map_To_Deliverable).
+          2) If no rule hits and/or rules table empty, fallback: match deliverable names in text.
+        """
         if not text:
             return []
-        suggestions = {}
+
+        text = str(text)
+        suggestions: Dict[str, Dict[str, Any]] = {}
+
+        # (1) Rule-based pass (preferred)
         for _, row in self.rfp_rules.iterrows():
-            patt = str(row["Regex_Keywords"])
-            deliverable = str(row["Map_To_Deliverable"])
-            try:
-                if re.search(patt, text, flags=re.IGNORECASE):
-                    suggestions[deliverable] = suggestions.get(deliverable, 0) + 1
-            except re.error:
-                # Skip malformed regex
+            patt = str(row.get("Regex_Keywords", "") or "")
+            target = str(row.get("Map_To_Deliverable", "") or "")
+            if not patt or not target:
                 continue
-        # Map suggestions to Deliverable_Code if present
-        out = []
-        for dname, hits in sorted(suggestions.items(), key=lambda x: -x[1]):
-            match = self.deliverables[self.deliverables["Deliverable"]==dname]
-            if not match.empty:
-                for _, r in match.iterrows():
-                    out.append({
-                        "deliverable_code": r["Deliverable_Code"],
-                        "deliverable": r["Deliverable"],
-                        "category": r.get("Category",""),
-                        "confidence": hits
-                    })
+            try:
+                hits = re.findall(patt, text, flags=re.IGNORECASE)
+            except re.error:
+                continue
+            if not hits:
+                continue
+            match_df = self.deliverables[self.deliverables["Deliverable"] == target]
+            if match_df.empty:
+                continue
+            for __, r in match_df.iterrows():
+                code = str(r["Deliverable_Code"])
+                entry = suggestions.setdefault(code, {
+                    "deliverable_code": code,
+                    "deliverable": str(r["Deliverable"]),
+                    "category": str(r.get("Category", "")),
+                    "confidence": 0,
+                    "matches": []
+                })
+                entry["confidence"] += len(hits)
+                # Store a few unique matched tokens for UX
+                uniq = list({str(h).lower() for h in hits if str(h).strip()})
+                entry["matches"].extend([m for m in uniq if m not in entry["matches"]])
+
+        # (2) Fallback: check if deliverable names appear in-text (very light heuristic)
+        if not suggestions:
+            for _, r in self.deliverables.iterrows():
+                name = str(r["Deliverable"])
+                code = str(r["Deliverable_Code"])
+                if not name:
+                    continue
+                # token containment (case-insensitive)
+                if re.search(r"\b" + re.escape(name) + r"\b", text, flags=re.IGNORECASE):
+                    suggestions[code] = {
+                        "deliverable_code": code,
+                        "deliverable": name,
+                        "category": str(r.get("Category", "")),
+                        "confidence": 1,
+                        "matches": [name]
+                    }
+
+        # Rank by confidence desc, then by deliverable
+        out = list(suggestions.values())
+        out.sort(key=lambda x: (-x["confidence"], x["deliverable"]))
         return out
 
     # ---------- Bundle helpers ----------
