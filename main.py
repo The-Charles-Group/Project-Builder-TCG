@@ -20,6 +20,29 @@ except Exception:
 
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0")
+
+# Configure file upload limits - allow up to 20MB files
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+class FileSizeMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, max_size: int = 20 * 1024 * 1024):  # 20MB
+        super().__init__(app)
+        self.max_size = max_size
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method == "POST":
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > self.max_size:
+                return JSONResponse(
+                    {"error": f"File too large. Maximum size is {self.max_size // (1024*1024)}MB."},
+                    status_code=413
+                )
+        return await call_next(request)
+
+app.add_middleware(FileSizeMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -491,9 +514,9 @@ async def api_suggest_by_file(file: UploadFile = File(...)):
     if not content or len(content) == 0:
         raise HTTPException(400, "Empty upload.")
 
-    # Basic size guard (e.g., 5 MB)
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(413, "File too large (limit ~5MB).")
+    # Basic size guard (20 MB to match middleware)
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "File too large. Maximum size is 20MB.")
 
     text = _extract_text_from_upload(content, file.filename)
     # Hard cap text length to protect downstream regex scan
