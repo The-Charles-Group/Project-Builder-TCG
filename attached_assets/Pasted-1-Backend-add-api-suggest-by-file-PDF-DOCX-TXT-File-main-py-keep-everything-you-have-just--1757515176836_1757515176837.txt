@@ -1,0 +1,218 @@
+1) Backend: add /api/suggest_by_file (PDF/DOCX/TXT)
+
+File: main.py — keep everything you have; just add the imports, helper, and route shown here.
+
+# --- add near the top, after existing imports ---
+import io
+import os
+
+try:
+    from docx import Document  # pip install python-docx
+except Exception:
+    Document = None
+
+try:
+    from pypdf import PdfReader  # pip install pypdf
+except Exception:
+    PdfReader = None
+
+
+# --- helper: extract text from uploaded file bytes ---
+def _extract_text_from_upload(content: bytes, filename: str) -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
+
+    # Plain text-like
+    if ext in (".txt", ".md", ".csv"):
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError:
+            return content.decode("latin-1", errors="ignore")
+
+    # DOCX
+    if ext == ".docx":
+        if not Document:
+            raise HTTPException(400, "DOCX support requires 'python-docx'. Install it and redeploy.")
+        doc = Document(io.BytesIO(content))
+        return "\n".join(p.text for p in doc.paragraphs)
+
+    # PDF
+    if ext == ".pdf":
+        if not PdfReader:
+            raise HTTPException(400, "PDF support requires 'pypdf'. Install it and redeploy.")
+        reader = PdfReader(io.BytesIO(content))
+        buf = []
+        for page in reader.pages:
+            # pypdf exposes .extract_text()
+            t = page.extract_text() or ""
+            buf.append(t)
+        return "\n".join(buf)
+
+    raise HTTPException(415, f"Unsupported file type: {ext}. Use .pdf, .docx, or .txt.")
+
+
+# --- new route: suggest deliverables from uploaded file ---
+from fastapi import UploadFile, File  # already imported in your app
+
+@app.post("/api/suggest_by_file")
+async def api_suggest_by_file(file: UploadFile = File(...)):
+    if not DB.loaded:
+        DB.load()
+
+    # Read content
+    content = await file.read()
+    if not content or len(content) == 0:
+        raise HTTPException(400, "Empty upload.")
+
+    # Basic size guard (e.g., 5 MB)
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(413, "File too large (limit ~5MB).")
+
+    text = _extract_text_from_upload(content, file.filename)
+    # Hard cap text length to protect downstream regex scan
+    if len(text) > 200_000:
+        text = text[:200_000]
+
+    recs = DB.suggest_deliverables_from_text(text or "")
+    return {"suggested": recs, "filename": file.filename}
+
+
+Why this is minimal:
+
+It reuses your existing suggestion logic (suggest_deliverables_from_text) and requires no change to /api/build.
+
+Your app already serves the frontend from static/index.html, so adding one new route doesn’t disturb the rest.
+
+Dependencies (add to requirements.txt if not present):
+
+pypdf
+python-docx
+
+2) Frontend: allow Paste or Upload in Step 1
+
+File: static/index.html — keep your existing layout. Replace the Step‑1 header block + button handler with the following minimal changes.
+
+(a) Markup: add a file input (drag‑and‑drop optional)
+<section class="step" id="step1">
+  <h2>Step 1 — Paste or Upload the RFP / Brief</h2>
+
+  <!-- Paste option -->
+  <textarea id="rfpText" placeholder="Paste the RFP, agency brief, or request here..."></textarea>
+
+  <div style="margin:8px 0; text-align:center; color:#666;">— or —</div>
+
+  <!-- Upload option -->
+  <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" />
+
+  <div class="row" style="margin-top:8px;">
+    <label>Pricing mode:
+      <select id="pricingMode">
+        <option value="Flat_Blended">Flat_Blended</option>
+        <option value="Per_Resource">Per_Resource</option>
+      </select>
+    </label>
+    <label>Blended rate:
+      <input id="blendedRate" type="number" step="1" placeholder="(optional, e.g., 185)" />
+    </label>
+    <label>Rate band:
+      <input id="rateBand" type="text" value="Standard_US" />
+    </label>
+    <button id="btnGenerate">Generate</button>
+  </div>
+  <p class="muted">Use either method. We’ll auto‑identify deliverables and build Scenarios A & B.</p>
+</section>
+
+(b) Script: route to upload or paste automatically
+
+Drop these functions into your existing <script> block (they reuse your /api/suggest_by_text and /api/build—no new client contract):
+
+<script>
+  async function autoBuild() {
+    const fileEl = document.getElementById('rfpFile');
+    if (fileEl.files && fileEl.files.length > 0) {
+      await autoBuildFromUpload();
+    } else {
+      await autoBuildFromPaste();
+    }
+  }
+
+  async function autoBuildFromPaste() {
+    const rfpText = document.getElementById('rfpText').value || "";
+    const suggested = await fetch('/api/suggest_by_text', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ rfp_text: rfpText })
+    }).then(r => r.json()).then(j => j.suggested || []);
+
+    await buildFromSuggestions(suggested);
+  }
+
+  async function autoBuildFromUpload() {
+    const fileEl = document.getElementById('rfpFile');
+    const fd = new FormData();
+    fd.append('file', fileEl.files[0]);
+
+    const suggested = await fetch('/api/suggest_by_file', {
+      method: 'POST', body: fd
+    }).then(r => r.json()).then(j => j.suggested || []);
+
+    await buildFromSuggestions(suggested);
+  }
+
+  async function buildFromSuggestions(suggested) {
+    // Store for Step 2 editing
+    selectedCodes = (suggested || []).map(s => s.deliverable_code);
+    renderChips();
+
+    // Pull pricing / scenario inputs
+    const pricingMode = document.getElementById('pricingMode').value;
+    const blendedRateStr = document.getElementById('blendedRate').value;
+    const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+    const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+
+    // Build both scenarios using your existing /api/build
+    const payload = {
+      selected_deliverable_codes: selectedCodes,
+      scenario_a: { mode: "template", scenario_key: "MED_LOW" },
+      scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+      pricing_mode: pricingMode,
+      blended_rate: blendedRate,
+      rate_band: rateBand,
+      use_slack: true,
+      slack_after_internal: 1,
+      slack_after_client: 2,
+      slack_global_pct: 0.05
+    };
+
+    const scenarios = await fetch('/api/build', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    }).then(r => r.json());
+
+    latestScenarios = scenarios;
+    renderScenario('scenarioA', latestScenarios.A);
+    renderScenario('scenarioB', latestScenarios.B);
+
+    // Optional: show why/confidence if present
+    renderWhy((suggested || []));
+
+    document.getElementById('step2').style.display = 'block';
+    window.scrollTo({ top: document.getElementById('step2').offsetTop, behavior: 'smooth' });
+  }
+
+  // Make the existing button call the new dispatcher
+  document.getElementById('btnGenerate').onclick = autoBuild;
+
+  // Make 'why' support either matches[] or confidence
+  function renderWhy(suggested) {
+    const el = document.getElementById('whyPicks');
+    if (!el) return;
+    if (!suggested || !suggested.length) { el.textContent = ''; return; }
+    el.textContent = 'Why these picks? ' + suggested.map(s => {
+      if (s.matches && s.matches.length) return `${s.deliverable} • matches: ${s.matches.slice(0,5).join(', ')}`;
+      if (typeof s.confidence !== 'undefined') return `${s.deliverable} • confidence: ${s.confidence}`;
+      return s.deliverable;
+    }).join('  |  ');
+  }
+</script>
+
+
+The rest of your Step‑2 code (chips, “Regenerate with Edits” → /api/build, CSV export via /api/export) stays exactly the same.

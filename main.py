@@ -8,6 +8,16 @@ from pydantic import BaseModel
 import pandas as pd
 import numpy as np
 
+try:
+    from docx import Document  # pip install python-docx
+except Exception:
+    Document = None
+
+try:
+    from pypdf import PdfReader  # pip install pypdf
+except Exception:
+    PdfReader = None
+
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0")
 app.add_middleware(
@@ -351,6 +361,38 @@ class AgencyDB:
 
 DB = AgencyDB()
 
+# ---------- Helper: extract text from uploaded file bytes ----------
+def _extract_text_from_upload(content: bytes, filename: str) -> str:
+    ext = os.path.splitext(filename or "")[1].lower()
+
+    # Plain text-like
+    if ext in (".txt", ".md", ".csv"):
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError:
+            return content.decode("latin-1", errors="ignore")
+
+    # DOCX
+    if ext == ".docx":
+        if not Document:
+            raise HTTPException(400, "DOCX support requires 'python-docx'. Install it and redeploy.")
+        doc = Document(io.BytesIO(content))
+        return "\n".join(p.text for p in doc.paragraphs)
+
+    # PDF
+    if ext == ".pdf":
+        if not PdfReader:
+            raise HTTPException(400, "PDF support requires 'pypdf'. Install it and redeploy.")
+        reader = PdfReader(io.BytesIO(content))
+        buf = []
+        for page in reader.pages:
+            # pypdf exposes .extract_text()
+            t = page.extract_text() or ""
+            buf.append(t)
+        return "\n".join(buf)
+
+    raise HTTPException(415, f"Unsupported file type: {ext}. Use .pdf, .docx, or .txt.")
+
 # ---------- Pydantic models ----------
 class SuggestPayload(BaseModel):
     rfp_text: str
@@ -438,6 +480,28 @@ def api_suggest(payload: SuggestPayload):
         DB.load()
     recs = DB.suggest_deliverables_from_text(payload.rfp_text or "")
     return {"suggested": recs}
+
+@app.post("/api/suggest_by_file")
+async def api_suggest_by_file(file: UploadFile = File(...)):
+    if not DB.loaded:
+        DB.load()
+
+    # Read content
+    content = await file.read()
+    if not content or len(content) == 0:
+        raise HTTPException(400, "Empty upload.")
+
+    # Basic size guard (e.g., 5 MB)
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(413, "File too large (limit ~5MB).")
+
+    text = _extract_text_from_upload(content, file.filename)
+    # Hard cap text length to protect downstream regex scan
+    if len(text) > 200_000:
+        text = text[:200_000]
+
+    recs = DB.suggest_deliverables_from_text(text or "")
+    return {"suggested": recs, "filename": file.filename}
 
 def _resolve_scenario(spec: ScenarioSpec, category: str) -> Dict[str, Any]:
     if spec.mode == "template":
