@@ -152,12 +152,13 @@ class AgencyDB:
                 break
 
         if found:
-            # Standardize to 'Component'
+            # Standardize to 'Component' - fix order to handle NaN properly
             self.all_rows["Component"] = (
                 self.all_rows[found]
-                .astype(str)
                 .fillna("")
+                .astype(str)
                 .str.strip()
+                .replace({"nan": ""})  # Handle any literal "nan" strings
             )
         else:
             # Create empty for downstream logic; we'll only use 'General' per missing row, not globally
@@ -485,17 +486,27 @@ class AgencyDB:
         # Fill per-row only if blank
         sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
         comps = [c for c in sub["Component"].unique().tolist() if c]
+        has_blanks = (sub["Component"] == "").any()
 
-        if not comps:
+        if not comps and not has_blanks:
             # No component values at all for this deliverable → one placeholder bucket
             return ["General"]
+        
+        # Include "General" if there are any blank component rows (avoid duplicates)
+        if has_blanks and "General" not in comps:
+            comps.append("General")
 
         # Order components by earliest task_group position from Timeline_Params
         order_map = {str(tg): i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
         comp_earliest = {}
         for comp in comps:
-            tgs = sub.loc[sub["Component"] == comp, "task_group"].astype(str).unique().tolist()
-            comp_earliest[comp] = min([order_map.get(tg, 999) for tg in tgs]) if tgs else 999
+            if comp == "General":
+                # For General, find earliest task_group among blank component rows
+                blank_tgs = sub.loc[sub["Component"] == "", "task_group"].astype(str).unique().tolist()
+                comp_earliest[comp] = min([order_map.get(tg, 999) for tg in blank_tgs]) if blank_tgs else 999
+            else:
+                tgs = sub.loc[sub["Component"] == comp, "task_group"].astype(str).unique().tolist()
+                comp_earliest[comp] = min([order_map.get(tg, 999) for tg in tgs]) if tgs else 999
         return sorted(comps, key=lambda c: (comp_earliest.get(c, 999), c))
 
     def hours_by_component(self, deliverable_code: str, included_tgs: list[str], scenario_col: str) -> dict[str, float]:
@@ -518,12 +529,11 @@ class AgencyDB:
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
         ].copy()
         sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+        # Remap blanks to "General" before filtering (consistent with hours_by_component)
+        sub.loc[sub["Component"] == "", "Component"] = "General"
+        
         comp_key = (component or "").strip() or "General"
-        # Select either the named component or the blank rows when comp == 'General'
-        if comp_key == "General":
-            sub = sub[sub["Component"] == "General"]
-        else:
-            sub = sub[sub["Component"] == comp_key]
+        sub = sub[sub["Component"] == comp_key]
 
         if sub.empty:
             return {}
@@ -537,11 +547,11 @@ class AgencyDB:
             (self.all_rows["task_group"].astype(str) == str(task_group))
         ].copy()
         sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+        # Remap blanks to "General" before filtering (consistent with other helpers)
+        sub.loc[sub["Component"] == "", "Component"] = "General"
+        
         comp_key = (component or "").strip() or "General"
-        if comp_key == "General":
-            sub = sub[sub["Component"] == "General"]
-        else:
-            sub = sub[sub["Component"] == comp_key]
+        sub = sub[sub["Component"] == comp_key]
         if sub.empty:
             return ("", "")
         g = sub.groupby(["Resource_Title", "Seniority"], as_index=False)[scenario_col].sum()
