@@ -377,6 +377,19 @@ class BuildPayload(BaseModel):
     slack_global_pct: float = 0.05
     project_start: Optional[str] = None     # "YYYY-MM-DD"
 
+class AutoBuildPayload(BaseModel):
+    rfp_text: str
+    scenario_a: ScenarioSpec
+    scenario_b: ScenarioSpec
+    pricing_mode: str                       # "Flat_Blended" or "Per_Resource"
+    blended_rate: Optional[float] = None
+    rate_band: Optional[str] = "Standard_US"
+    use_slack: bool = True
+    slack_after_internal: int = 1
+    slack_after_client: int = 2
+    slack_global_pct: float = 0.05
+    project_start: Optional[str] = None     # "YYYY-MM-DD"
+
 class ExportPayload(BaseModel):
     scenario: Dict[str, Any]                # a scenario dict returned from /api/build
 
@@ -543,6 +556,68 @@ def api_build(payload: BuildPayload):
         }
 
     return scenarios
+
+@app.post("/api/auto_build")
+def api_auto_build(payload: AutoBuildPayload):
+    if not DB.loaded:
+        DB.load()
+
+    # 1) Get AI suggestions
+    suggestions = DB.suggest_deliverables_from_text(payload.rfp_text or "")
+    selected_codes = [s["deliverable_code"] for s in suggestions]
+
+    # 2) If nothing matched, return an empty set so frontend can prompt to add
+    if not selected_codes:
+        return {
+            "suggested": suggestions,
+            "scenarios": {
+                "A": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
+                "B": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
+            }
+        }
+
+    # 3) Reuse the same logic as /api/build to assemble scenarios
+    #    (We inline the essential parts to keep it simple.)
+    def _build_for(selected_deliverable_codes, scen_spec):
+        per_deliv = []
+        price_sum = 0.0
+        hours_sum = 0.0
+        for code in selected_deliverable_codes:
+            row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str) == str(code)]
+            if row.empty:
+                continue
+            cat = str(row["Category"].iloc[0])
+            spec_resolved = _resolve_scenario(scen_spec, cat)
+            out = _scenario_for_deliverable(
+                code, cat, spec_resolved,
+                payload.pricing_mode, payload.blended_rate, payload.rate_band or "Standard_US",
+                bool(payload.use_slack), int(payload.slack_after_internal), int(payload.slack_after_client),
+                float(payload.slack_global_pct or 0), payload.project_start
+            )
+            out["deliverable"] = str(row["Deliverable"].iloc[0])
+            out["category"] = cat
+            per_deliv.append(out)
+            price_sum += out["price"]
+            hours_sum += out["total_hours"]
+        return {
+            "pricing_mode": payload.pricing_mode,
+            "rate_band": payload.rate_band or "Standard_US",
+            "blended_rate": payload.blended_rate,
+            "use_slack": bool(payload.use_slack),
+            "slack_after_internal": int(payload.slack_after_internal),
+            "slack_after_client": int(payload.slack_after_client),
+            "slack_global_pct": float(payload.slack_global_pct or 0),
+            "project_start": payload.project_start,
+            "items": per_deliv,
+            "totals": {"hours": round(hours_sum, 2), "price": round(price_sum, 2)}
+        }
+
+    scenarios = {
+        "A": _build_for(selected_codes, payload.scenario_a),
+        "B": _build_for(selected_codes, payload.scenario_b),
+    }
+
+    return {"suggested": suggestions, "scenarios": scenarios}
 
 @app.post("/api/export")
 def api_export(payload: ExportPayload):
