@@ -563,8 +563,7 @@ def _round_int(x: float) -> int:
     except Exception:
         return 0
 
-def _distribute_rounding(target_total: int, parts: Dict[str, float]) -> Dict[str, int]:
-    """Largest-remainder method so children sum to the parent after rounding."""
+def _largest_remainder(target_total: int, parts: dict[str, float]) -> dict[str, int]:
     if not parts:
         return {}
     total = sum(parts.values())
@@ -573,14 +572,14 @@ def _distribute_rounding(target_total: int, parts: Dict[str, float]) -> Dict[str
     raw = {k: (v / total) * target_total for k, v in parts.items()}
     flo = {k: int(v) for k, v in raw.items()}
     rem = target_total - sum(flo.values())
-    # distribute remainder to the biggest fractional parts
-    order = sorted(parts.keys(), key=lambda k: raw[k]-flo[k], reverse=True)
+    order = sorted(parts.keys(), key=lambda k: (raw[k] - flo[k]), reverse=True)
     for k in order[:max(0, rem)]:
         flo[k] += 1
     return flo
 
-def build_wbs_dataframe_from_scenario(scenario: Dict[str, Any], project_name: str) -> pd.DataFrame:
-    """One scenario -> tidy WBS with project parent, offsets, dependencies, roles, rounded hours."""
+def build_wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFrame:
+    """Build WBS with a Project row, then Deliverable → Component → Task (task_group).
+       Fills: Component, Role, Seniority, Start_Offset_Days, Dependencies. Rounds hours."""
     rows = []
     # Root project row
     rows.append({
@@ -592,77 +591,106 @@ def build_wbs_dataframe_from_scenario(scenario: Dict[str, Any], project_name: st
     })
 
     items = scenario.get("items", [])
-
-    # Deliverable process ordering = earliest task-group index
-    order_map = {}
-    if DB.timeline_params is not None and "Task_Group" in DB.timeline_params.columns:
-        order_map = {tg: i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
+    # Deliverable ordering by earliest task_group index in Timeline_Params
+    order_map = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
 
     def deliv_key(d):
-        included = [str(x) for x in d.get("included_task_groups", [])]
-        idxs = [order_map.get(tg, 999) for tg in included]
+        tgs = [str(x) for x in d.get("included_task_groups", [])]
+        idxs = [order_map.get(tg, 999) for tg in tgs]
         return (min(idxs) if idxs else 999, str(d.get("deliverable","")))
 
     items_sorted = sorted(items, key=deliv_key)
 
-    # Sequential offsets
     day_cursor = 0
     prev_deliv_wbs = ""
 
     for i, d in enumerate(items_sorted, start=1):
         dcode = str(d["deliverable_code"])
-        included = DB.sorted_task_groups([str(x) for x in d.get("included_task_groups", [])])
-        # get per-task durations from the schedule already computed
-        # (schedule is in correct per-deliverable order)
+        scen_col = d["scenario_col"]
+        included = [str(x) for x in d.get("included_task_groups", [])]
+
+        # Build a per-deliverable schedule + offsets by task_group
         schedule = d.get("schedule", [])
-        tg_duration = {str(t["task_group"]): int(t["duration_days"]) for t in schedule}
+        tg_order = sorted(included, key=lambda tg: order_map.get(tg, 999))
+        duration_by_tg = {str(t["task_group"]): int(t["duration_days"]) for t in schedule}
+        offset_by_tg = {}
+        run = 0
+        for tg in tg_order:
+            offset_by_tg[tg] = run
+            run += int(duration_by_tg.get(tg, 1))
+        total_deliv_duration = run
 
-        # round parent hours
-        parent_hours = _round_int(d.get("total_hours", 0.0))
-        # child hours from v4 All_Task_Rows (scenario_col sums)
-        th = DB.task_hours_by_task_group(dcode, included, d["scenario_col"])
-        child_hours_rounded = _distribute_rounding(parent_hours, th)
+        # Hours: parent (rounded), components (rounded), then tasks (rounded)
+        parent_hours_rounded = _round_int(d.get("total_hours", 0.0))
+        comp_hours = DB.hours_by_component(dcode, tg_order, scen_col)
+        comp_hours_rounded = _largest_remainder(parent_hours_rounded, comp_hours)
 
-        # deliverable row
-        wbs_id = f"1.{i}"
+        # Deliverable row
+        wbs_deliv = f"1.{i}"
         rows.append({
-            "Project_Name": project_name, "WBS_ID": wbs_id, "Parent_WBS_ID": "1",
+            "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": "1",
             "Task_Name": str(d.get("deliverable","")), "Deliverable": str(d.get("deliverable","")),
-            "Component": "Deliverable", "Task": "", "Role": "", "Seniority": "",
-            "Planned_Hours": parent_hours,
+            "Component": "", "Task": "", "Role": "", "Seniority": "",
+            "Planned_Hours": parent_hours_rounded,
             "Start_Offset_Days": day_cursor,
-            "Duration_Days": sum(int(v) for v in tg_duration.values()),
-            "Dependencies": prev_deliv_wbs,  # FS: depends on previous deliverable
-            "Assignee_External_ID": "",      # keep blank for Workfront; can change to "TBD"
+            "Duration_Days": total_deliv_duration,
+            "Dependencies": prev_deliv_wbs,
+            "Assignee_External_ID": "",
             "Notes": f'{d.get("complexity","")}/{d.get("tier","")}'
         })
 
-        # task rows (child WBS)
-        running = 0
-        for j, tg in enumerate(included, start=1):
-            # Use durations from schedule; if missing, default 1
-            dur = int(tg_duration.get(tg, 1))
-            role, sen = DB.dominant_role_for_task_group(dcode, tg, d["scenario_col"])
-            rows.append({
-                "Project_Name": project_name,
-                "WBS_ID": f"{wbs_id}.{j}",
-                "Parent_WBS_ID": wbs_id,
-                "Task_Name": tg,
-                "Deliverable": str(d.get("deliverable","")),
-                "Component": "Task",
-                "Task": tg,
-                "Role": role, "Seniority": sen,
-                "Planned_Hours": child_hours_rounded.get(tg, 0),
-                "Start_Offset_Days": day_cursor + running,
-                "Duration_Days": dur,
-                "Dependencies": wbs_id if j == 1 else f"{wbs_id}.{j-1}",
-                "Assignee_External_ID": "",
-                "Notes": ""
-            })
-            running += dur
+        # Components ordered by earliest child task position
+        comps = DB.components_for_deliverable(dcode, tg_order)
+        prev_comp_wbs = ""
+        for j, comp in enumerate(comps, start=1):
+            tg_in_comp_all = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col).keys()
+            tg_in_comp = [tg for tg in tg_order if tg in tg_in_comp_all]
+            if not tg_in_comp:
+                continue
 
-        day_cursor += sum(int(v) for v in tg_duration.values())
-        prev_deliv_wbs = wbs_id
+            comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp)
+            comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
+            comp_hours_target = int(comp_hours_rounded.get(comp, 0))
+
+            # Task hours under this component
+            tg_hours = DB.hours_by_taskgroup_for_component(dcode, comp, tg_in_comp, scen_col)
+            tg_hours_rounded = _largest_remainder(comp_hours_target, tg_hours)
+
+            wbs_comp = f"{wbs_deliv}.{j}"
+            rows.append({
+                "Project_Name": project_name, "WBS_ID": wbs_comp, "Parent_WBS_ID": wbs_deliv,
+                "Task_Name": comp, "Deliverable": str(d.get("deliverable","")),
+                "Component": comp, "Task": "", "Role": "", "Seniority": "",
+                "Planned_Hours": comp_hours_target,
+                "Start_Offset_Days": day_cursor + comp_offset,
+                "Duration_Days": comp_duration,
+                "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs),
+                "Assignee_External_ID": "", "Notes": ""
+            })
+
+            prev_task_wbs = ""
+            running = 0
+            for k, tg in enumerate(tg_in_comp, start=1):
+                dur = int(duration_by_tg.get(tg, 1))
+                role, sen = DB.dominant_role_for_component_task(dcode, comp, tg, scen_col)
+                wbs_task = f"{wbs_comp}.{k}"
+                rows.append({
+                    "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
+                    "Task_Name": tg, "Deliverable": str(d.get("deliverable","")),
+                    "Component": comp, "Task": tg, "Role": role, "Seniority": sen,
+                    "Planned_Hours": int(tg_hours_rounded.get(tg, 0)),
+                    "Start_Offset_Days": day_cursor + offset_by_tg[tg],
+                    "Duration_Days": dur,
+                    "Dependencies": (wbs_comp if k == 1 else prev_task_wbs),
+                    "Assignee_External_ID": "", "Notes": ""
+                })
+                prev_task_wbs = wbs_task
+                running += dur
+
+            prev_comp_wbs = wbs_comp
+
+        day_cursor += total_deliv_duration
+        prev_deliv_wbs = wbs_deliv
 
     return pd.DataFrame(rows)
 
