@@ -140,6 +140,9 @@ class AgencyDB:
         self._normalize_component_column()
         # Normalize task label column from v4b spreadsheet
         self._normalize_task_label_column()
+        # Normalize role and seniority columns 
+        self._normalize_role_and_seniority_columns()
+        self._normalize_rate_card_seniority()
         
         self.loaded = True
         return True
@@ -214,6 +217,54 @@ class AgencyDB:
         else:
             # fallback; we'll still display task_group if label missing
             self.all_rows["Task_Label"] = ""
+
+    def _canonical_seniority(self, v: str) -> str:
+        """Standardize seniority levels to canonical values: Junior, Mid, Senior, Director"""
+        x = (str(v) or "").strip().lower()
+        x = x.replace(".", "")
+        if x in {"jr", "junior", "jr-level", "associate", "coordinator", "assistant", "l1", "level 1"}:
+            return "Junior"
+        if x in {"mid", "midlevel", "intermediate", "standard", "staff", "specialist", "producer", "manager", "l2", "level 2"}:
+            return "Mid"
+        if x in {"sr", "senior", "lead", "principal", "l3", "level 3"}:
+            return "Senior"
+        if x in {"director", "group director", "head", "executive director"}:
+            return "Director"
+        return (str(v) or "").strip()
+
+    def _normalize_role_and_seniority_columns(self):
+        """Normalize Role and Seniority columns to ensure consistent data format"""
+        if self.all_rows is None or self.all_rows.empty:
+            return
+        cols = {c.lower(): c for c in self.all_rows.columns}
+
+        # Role column ➜ Resource_Title
+        for cand in ["Resource_Title", "Role_Title", "Role", "Resource"]:
+            if cand.lower() in cols:
+                self.all_rows["Resource_Title"] = (
+                    self.all_rows[cols[cand.lower()]].astype(str).fillna("").str.strip()
+                )
+                break
+        if "Resource_Title" not in self.all_rows.columns:
+            self.all_rows["Resource_Title"] = ""
+
+        # Seniority column ➜ Seniority (canonical labels)
+        sen_src = None
+        for cand in ["Seniority", "Seniority_Level", "Seniority L1", "Seniority_Title", "Level"]:
+            if cand.lower() in cols:
+                sen_src = cols[cand.lower()]
+                break
+        ser = self.all_rows[sen_src].astype(str).fillna("") if sen_src else pd.Series([""]*len(self.all_rows))
+        self.all_rows["Seniority"] = ser.apply(self._canonical_seniority)
+
+    def _normalize_rate_card_seniority(self):
+        """Normalize seniority values in the role rate card to ensure pricing joins work properly"""
+        if self.role_rate_card is None or self.role_rate_card.empty:
+            return
+        rc = self.role_rate_card.copy()
+        if "Seniority" in rc.columns:
+            rc["Seniority"] = rc["Seniority"].astype(str).fillna("").apply(self._canonical_seniority)
+        self.role_rate_card = rc
 
     def _create_mock_data(self):
         """Create minimal mock data for demo purposes when database files are not available"""
@@ -593,21 +644,47 @@ class AgencyDB:
 
     def dominant_role_for_component_task(self, deliverable_code: str, component: str,
                                          task_group: str, scenario_col: str) -> tuple[str, str]:
+        """Enhanced role picker that prefers non-blank seniority with robust fallbacks"""
+        # Narrow to this deliverable + task_group (+ component if present)
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str) == str(task_group))
         ].copy()
-        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
-        # Remap blanks to "General" before filtering (consistent with other helpers)
-        sub.loc[sub["Component"] == "", "Component"] = "General"
-        
-        comp_key = (component or "").strip() or "General"
-        sub = sub[sub["Component"] == comp_key]
+
+        if "Component" in sub.columns and (component or "").strip():
+            sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
+            sub = sub[sub["Component"] == str(component).strip()]
+
         if sub.empty:
-            return ("", "")
-        g = sub.groupby(["Resource_Title", "Seniority"], as_index=False)[scenario_col].sum()
+            # Fallback: ignore component filter
+            sub = self.all_rows[
+                (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+                (self.all_rows["task_group"].astype(str) == str(task_group))
+            ].copy()
+
+        if sub.empty:
+            # Second fallback: any rows for this deliverable
+            sub = self.all_rows[self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)].copy()
+
+        if sub.empty:
+            return ("", "Mid")
+
+        # Prefer rows with non-blank seniority
+        sub["Resource_Title"] = sub["Resource_Title"].astype(str).fillna("").str.strip()
+        sub["Seniority"] = sub["Seniority"].astype(str).fillna("").str.strip()
+
+        pref = sub[sub["Seniority"] != ""]
+        pick_from = pref if not pref.empty else sub
+
+        g = pick_from.groupby(["Resource_Title", "Seniority"], as_index=False)[scenario_col].sum()
         r = g.sort_values(scenario_col, ascending=False).iloc[0]
-        return (str(r["Resource_Title"]), str(r["Seniority"]))
+
+        role = str(r["Resource_Title"]).strip()
+        sen  = self._canonical_seniority(str(r["Seniority"]).strip())
+        if sen == "":
+            sen = "Mid"  # last-resort default
+
+        return (role, sen)
 
     def task_label_for_component_tg(self, deliverable_code: str, component: str, task_group: str) -> str:
         """Get user-friendly task label from Task_Label column for UI display."""
