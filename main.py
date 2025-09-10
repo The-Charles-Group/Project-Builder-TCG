@@ -242,11 +242,20 @@ class AgencyDB:
         for cand in ["Resource_Title", "Role_Title", "Role", "Resource"]:
             if cand.lower() in cols:
                 self.all_rows["Resource_Title"] = (
-                    self.all_rows[cols[cand.lower()]].astype(str).fillna("").str.strip()
+                    self.all_rows[cols[cand.lower()]]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .replace({"nan": ""})  # Handle literal "nan" strings
                 )
                 break
         if "Resource_Title" not in self.all_rows.columns:
             self.all_rows["Resource_Title"] = ""
+        
+        # Ensure no blank roles - use placeholder for empty values
+        self.all_rows["Resource_Title"] = self.all_rows["Resource_Title"].where(
+            self.all_rows["Resource_Title"].str.len() > 0, "General Role"
+        )
 
         # Seniority column ➜ Seniority (canonical labels)
         sen_src = None
@@ -254,16 +263,50 @@ class AgencyDB:
             if cand.lower() in cols:
                 sen_src = cols[cand.lower()]
                 break
-        ser = self.all_rows[sen_src].astype(str).fillna("") if sen_src else pd.Series([""]*len(self.all_rows))
+        if sen_src:
+            ser = (self.all_rows[sen_src]
+                   .fillna("")
+                   .astype(str)
+                   .str.strip()
+                   .replace({"nan": ""}))
+        else:
+            ser = pd.Series([""]*len(self.all_rows))
         self.all_rows["Seniority"] = ser.apply(self._canonical_seniority)
+        
+        # Ensure no blank seniority values - default to "Mid"
+        self.all_rows["Seniority"] = self.all_rows["Seniority"].where(
+            self.all_rows["Seniority"].str.len() > 0, "Mid"
+        )
 
     def _normalize_rate_card_seniority(self):
-        """Normalize seniority values in the role rate card to ensure pricing joins work properly"""
+        """Normalize role and seniority values in the role rate card to ensure pricing joins work properly"""
         if self.role_rate_card is None or self.role_rate_card.empty:
             return
         rc = self.role_rate_card.copy()
+        
+        # Normalize Resource_Title in rate card
+        if "Resource_Title" in rc.columns:
+            rc["Resource_Title"] = (rc["Resource_Title"]
+                                   .fillna("")
+                                   .astype(str)
+                                   .str.strip()
+                                   .replace({"nan": ""}))
+            # Ensure no blank roles in rate card - use placeholder
+            rc["Resource_Title"] = rc["Resource_Title"].where(
+                rc["Resource_Title"].str.len() > 0, "General Role"
+            )
+        
+        # Normalize Seniority in rate card
         if "Seniority" in rc.columns:
-            rc["Seniority"] = rc["Seniority"].astype(str).fillna("").apply(self._canonical_seniority)
+            rc["Seniority"] = (rc["Seniority"]
+                              .fillna("")
+                              .astype(str)
+                              .str.strip()
+                              .replace({"nan": ""})
+                              .apply(self._canonical_seniority))
+            # Ensure no blank seniority in rate card - default to "Mid"
+            rc["Seniority"] = rc["Seniority"].where(rc["Seniority"].str.len() > 0, "Mid")
+        
         self.role_rate_card = rc
 
     def _create_mock_data(self):
