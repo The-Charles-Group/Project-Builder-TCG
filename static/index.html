@@ -13,11 +13,19 @@
   </header>
 
   <main>
-    <!-- Step 1: Paste RFP / brief -->
+    <!-- Step 1: Paste or Upload RFP / brief -->
     <section class="card" id="step1">
-      <h2>Step 1 — Paste the RFP / Brief</h2>
+      <h2>Step 1 — Paste or Upload the RFP / Brief</h2>
+      
+      <!-- Paste option -->
       <label for="rfpText">RFP Content</label>
       <textarea id="rfpText" placeholder="Paste the RFP, agency brief, or request here..."></textarea>
+
+      <div style="margin:8px 0; text-align:center; color:var(--muted);">— or —</div>
+
+      <!-- Upload option -->
+      <label for="rfpFile">Upload File</label>
+      <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" />
       
       <div class="grid" style="margin-top:16px;">
         <div>
@@ -38,9 +46,9 @@
       </div>
       
       <div class="actions">
-        <button id="btnGenerate">Generate from RFP</button>
+        <button id="btnGenerate">Generate</button>
       </div>
-      <div class="hint">This will auto‑identify deliverables & build Scenarios A and B.</div>
+      <div class="hint">Use either method. We'll auto‑identify deliverables and build Scenarios A & B.</div>
     </section>
 
     <!-- Step 2: Review & Edit -->
@@ -107,13 +115,14 @@
     }
 
     function renderWhy(suggested) {
-      const why = document.getElementById('whyPicks');
-      if (!suggested || !suggested.length) { why.textContent = ''; return; }
-      const lines = suggested.map(s => {
-        const m = (s.matches && s.matches.length) ? ` • matches: ${s.matches.slice(0,5).join(', ')}` : '';
-        return `${s.deliverable}${m}`;
-      });
-      why.textContent = 'Why these picks?  ' + lines.join('  |  ');
+      const el = document.getElementById('whyPicks');
+      if (!el) return;
+      if (!suggested || !suggested.length) { el.textContent = ''; return; }
+      el.textContent = 'Why these picks? ' + suggested.map(s => {
+        if (s.matches && s.matches.length) return `${s.deliverable} • matches: ${s.matches.slice(0,5).join(', ')}`;
+        if (typeof s.confidence !== 'undefined') return `${s.deliverable} • confidence: ${s.confidence}`;
+        return s.deliverable;
+      }).join('  |  ');
     }
 
     function renderScenario(targetId, scenario) {
@@ -145,68 +154,109 @@
       root.innerHTML = html;
     }
 
-    async function autoBuildFromRFP() {
-      const rfpText = document.getElementById('rfpText').value;
+    async function autoBuild() {
+      const fileEl = document.getElementById('rfpFile');
+      if (fileEl.files && fileEl.files.length > 0) {
+        await autoBuildFromUpload();
+      } else {
+        await autoBuildFromPaste();
+      }
+    }
+
+    async function autoBuildFromPaste() {
+      const rfpText = document.getElementById('rfpText').value || "";
       if (!rfpText.trim()) {
-        alert('Please enter some RFP content first.');
+        alert('Please enter some RFP content or select a file to upload.');
         return;
       }
-
-      const pricingMode = document.getElementById('pricingMode').value;
-      const blendedRateStr = document.getElementById('blendedRate').value;
-      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
-      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
 
       document.getElementById('btnGenerate').disabled = true;
       document.getElementById('btnGenerate').textContent = 'Generating...';
 
       try {
-        // defaults: use templates (you can wire real UI for choosing)
-        const payload = {
-          rfp_text: rfpText,
-          scenario_a: { mode: "template", scenario_key: "MED_LOW" },
-          scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
-          pricing_mode: pricingMode,
-          blended_rate: blendedRate,
-          rate_band: rateBand,
-          use_slack: true,
-          slack_after_internal: 1,
-          slack_after_client: 2,
-          slack_global_pct: 0.05
-        };
+        const suggested = await fetch('/api/suggest_by_text', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ rfp_text: rfpText })
+        }).then(r => r.json()).then(j => j.suggested || []);
 
-        const res = await fetch('/api/auto_build', {
-          method: 'POST', 
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-        
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-        }
-        
-        const data = await res.json();
-
-        // Suggested → Step 2 state
-        const suggested = data.suggested || [];
-        selectedCodes = suggested.map(s => s.deliverable_code);
-        latestScenarios = data.scenarios || null;
-
-        renderChips();
-        renderWhy(suggested);
-        if (latestScenarios) {
-          renderScenario('scenarioA', latestScenarios.A);
-          renderScenario('scenarioB', latestScenarios.B);
-        }
-        
-        document.getElementById('step2').style.display = 'block';
-        document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
+        await buildFromSuggestions(suggested);
       } catch (error) {
-        alert('Error generating scenarios: ' + error.message);
+        alert('Error processing RFP text: ' + error.message);
       } finally {
         document.getElementById('btnGenerate').disabled = false;
-        document.getElementById('btnGenerate').textContent = 'Generate from RFP';
+        document.getElementById('btnGenerate').textContent = 'Generate';
       }
+    }
+
+    async function autoBuildFromUpload() {
+      const fileEl = document.getElementById('rfpFile');
+      
+      document.getElementById('btnGenerate').disabled = true;
+      document.getElementById('btnGenerate').textContent = 'Processing file...';
+
+      try {
+        const fd = new FormData();
+        fd.append('file', fileEl.files[0]);
+
+        const data = await fetch('/api/suggest_by_file', {
+          method: 'POST', body: fd
+        }).then(r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+          return r.json();
+        });
+
+        const suggested = data.suggested || [];
+        await buildFromSuggestions(suggested);
+      } catch (error) {
+        alert('Error processing uploaded file: ' + error.message);
+      } finally {
+        document.getElementById('btnGenerate').disabled = false;
+        document.getElementById('btnGenerate').textContent = 'Generate';
+      }
+    }
+
+    async function buildFromSuggestions(suggested) {
+      // Store for Step 2 editing
+      selectedCodes = (suggested || []).map(s => s.deliverable_code);
+      renderChips();
+
+      // Pull pricing / scenario inputs
+      const pricingMode = document.getElementById('pricingMode').value;
+      const blendedRateStr = document.getElementById('blendedRate').value;
+      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+
+      // Build both scenarios using existing /api/build
+      const payload = {
+        selected_deliverable_codes: selectedCodes,
+        scenario_a: { mode: "template", scenario_key: "MED_LOW" },
+        scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+        pricing_mode: pricingMode,
+        blended_rate: blendedRate,
+        rate_band: rateBand,
+        use_slack: true,
+        slack_after_internal: 1,
+        slack_after_client: 2,
+        slack_global_pct: 0.05
+      };
+
+      const scenarios = await fetch('/api/build', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      }).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+        return r.json();
+      });
+
+      latestScenarios = scenarios;
+      renderScenario('scenarioA', latestScenarios.A);
+      renderScenario('scenarioB', latestScenarios.B);
+
+      // Show why/confidence if present
+      renderWhy((suggested || []));
+
+      document.getElementById('step2').style.display = 'block';
+      document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
     }
 
     async function regenerateWithEdits() {
@@ -305,7 +355,7 @@
     }
 
     // Event listeners
-    document.getElementById('btnGenerate').onclick = autoBuildFromRFP;
+    document.getElementById('btnGenerate').onclick = autoBuild;
     document.getElementById('btnRegenerate').onclick = regenerateWithEdits;
     document.getElementById('btnAdd').onclick = addDeliverableFromBox;
     document.getElementById('btnExportA').onclick = exportScenarioA;
