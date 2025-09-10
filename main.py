@@ -481,19 +481,20 @@ class AgencyDB:
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
-        ]
-        if "Component" not in sub.columns:
-            # Fallback: treat all tasks as one "General" component
-            return ["General"]
-        comps = [str(x) for x in sub["Component"].dropna().astype(str).unique().tolist()]
+        ].copy()
+        # Fill per-row only if blank
+        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+        comps = [c for c in sub["Component"].unique().tolist() if c]
+
         if not comps:
+            # No component values at all for this deliverable → one placeholder bucket
             return ["General"]
 
-        # Order components by the earliest task_group position in Timeline_Params
+        # Order components by earliest task_group position from Timeline_Params
         order_map = {str(tg): i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
         comp_earliest = {}
         for comp in comps:
-            tgs = sub[sub["Component"].astype(str) == comp]["task_group"].astype(str).unique().tolist()
+            tgs = sub.loc[sub["Component"] == comp, "task_group"].astype(str).unique().tolist()
             comp_earliest[comp] = min([order_map.get(tg, 999) for tg in tgs]) if tgs else 999
         return sorted(comps, key=lambda c: (comp_earliest.get(c, 999), c))
 
@@ -501,21 +502,31 @@ class AgencyDB:
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
-        ]
-        comp_col = "Component" if "Component" in sub.columns else None
-        if comp_col is None:
-            return {"General": float(sub[scenario_col].sum()) if not sub.empty else 0.0}
-        g = sub.groupby(comp_col, as_index=False)[scenario_col].sum()
-        return {str(r[comp_col]): float(r[scenario_col]) for _, r in g.iterrows()}
+        ].copy()
+        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+        # Only attach 'General' to rows that are actually blank
+        sub.loc[sub["Component"] == "", "Component"] = "General"
+        if sub.empty:
+            return {}
+        g = sub.groupby("Component", as_index=False)[scenario_col].sum()
+        return {str(r["Component"]): float(r[scenario_col]) for _, r in g.iterrows()}
 
     def hours_by_taskgroup_for_component(self, deliverable_code: str, component: str,
                                          included_tgs: list[str], scenario_col: str) -> dict[str, float]:
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
-        ]
-        if "Component" in sub.columns:
-            sub = sub[sub["Component"].astype(str) == str(component)]
+        ].copy()
+        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+        comp_key = (component or "").strip() or "General"
+        # Select either the named component or the blank rows when comp == 'General'
+        if comp_key == "General":
+            sub = sub[sub["Component"] == "General"]
+        else:
+            sub = sub[sub["Component"] == comp_key]
+
+        if sub.empty:
+            return {}
         g = sub.groupby("task_group", as_index=False)[scenario_col].sum()
         return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
 
@@ -524,9 +535,13 @@ class AgencyDB:
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str) == str(task_group))
-        ]
-        if "Component" in sub.columns:
-            sub = sub[sub["Component"].astype(str) == str(component)]
+        ].copy()
+        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+        comp_key = (component or "").strip() or "General"
+        if comp_key == "General":
+            sub = sub[sub["Component"] == "General"]
+        else:
+            sub = sub[sub["Component"] == comp_key]
         if sub.empty:
             return ("", "")
         g = sub.groupby(["Resource_Title", "Seniority"], as_index=False)[scenario_col].sum()
