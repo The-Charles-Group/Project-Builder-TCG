@@ -129,8 +129,39 @@ class AgencyDB:
             if c in self.deliverables.columns:
                 self.deliverables[c] = self.deliverables[c].astype(str)
 
+        # Normalize component column from v4 spreadsheet
+        self._normalize_component_column()
+        
         self.loaded = True
         return True
+
+    def _normalize_component_column(self):
+        """
+        Ensure self.all_rows has a 'Component' column populated from v4's Component_Task_L1 (Column F).
+        If other synonyms exist, prefer them in this order.
+        """
+        if self.all_rows is None or self.all_rows.empty:
+            return
+        # Known header names (case-insensitive)
+        candidates = ["Component_Task_L1", "Component L1", "Component_L1", "Component"]
+        cols_lc = {c.lower(): c for c in self.all_rows.columns}
+        found = None
+        for cand in candidates:
+            if cand.lower() in cols_lc:
+                found = cols_lc[cand.lower()]
+                break
+
+        if found:
+            # Standardize to 'Component'
+            self.all_rows["Component"] = (
+                self.all_rows[found]
+                .astype(str)
+                .fillna("")
+                .str.strip()
+            )
+        else:
+            # Create empty for downstream logic; we'll only use 'General' per missing row, not globally
+            self.all_rows["Component"] = ""
 
     def _create_mock_data(self):
         """Create minimal mock data for demo purposes when database files are not available"""
