@@ -1,4 +1,4 @@
-import os, re, io, math, json, datetime
+import os, re, io, math, json, datetime, urllib.parse, tempfile
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -420,11 +420,48 @@ def _extract_text_from_upload(content: bytes, filename: str) -> str:
 # ---------- Helper: sanitize filenames ----------
 def _safe_filename(s: str) -> str:
     s = (s or "Proposal").strip()
-    # Replace characters that are invalid on Windows/macOS
+    # Replace characters that are invalid on Windows/macOS and path separators for security
     s = re.sub(r'[\\/:*?"<>|]+', '-', s)
+    # Remove any path traversal attempts
+    s = re.sub(r'\.\.+', '', s)
+    # Only allow alphanumeric, spaces, underscores, hyphens, and dots
+    s = re.sub(r'[^A-Za-z0-9 _.-]', '', s)
     # Collapse whitespace
     s = re.sub(r'\s+', ' ', s).strip()
-    return s
+    # Ensure it's not empty after sanitization
+    return s if s else "Proposal"
+
+def _safe_sheet_name(s: str) -> str:
+    # Excel sheet name rules: max 31 chars, no : \ / ? * [ ]
+    s = re.sub(r'[:\\/?*\[\]]+', "-", (s or "Sheet"))
+    s = s.strip() or "Sheet"
+    return s[:31]
+
+def _wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFrame:
+    """Build the same WBS rows you already export to CSV, using provided project_name."""
+    rows = []
+    for i, d in enumerate(scenario.get("items", []), start=1):
+        wbs_id = f"1.{i}"
+        rows.append({
+            "Project_Name": project_name,
+            "WBS_ID": wbs_id, "Parent_WBS_ID": "1",
+            "Task_Name": d["deliverable"], "Deliverable": d["deliverable"],
+            "Component": "", "Task": "", "Role": "", "Seniority": "",
+            "Planned_Hours": d["total_hours"], "Start_Offset_Days": 0,
+            "Duration_Days": sum(x["duration_days"] for x in d["schedule"]),
+            "Dependencies": "", "Assignee_External_ID": "",
+            "Notes": f"{d['complexity']} / {d['tier']}"
+        })
+        for j, t in enumerate(d["schedule"], start=1):
+            rows.append({
+                "Project_Name": project_name,
+                "WBS_ID": f"{wbs_id}.{j}", "Parent_WBS_ID": wbs_id,
+                "Task_Name": t["task_group"], "Deliverable": d["deliverable"],
+                "Component": "", "Task": t["task_group"], "Role": "", "Seniority": "",
+                "Planned_Hours": "", "Start_Offset_Days": "", "Duration_Days": t["duration_days"],
+                "Dependencies": "", "Assignee_External_ID": "", "Notes": ""
+            })
+    return pd.DataFrame(rows)
 
 # ---------- Pydantic models ----------
 class SuggestPayload(BaseModel):
@@ -471,6 +508,14 @@ class ExportPayload(BaseModel):
     file_format: Optional[str] = "csv"       # "csv" or "xlsx"
     scenario_label: Optional[str] = None     # e.g., "Scenario A"
     add_timestamp: Optional[bool] = False    # include yyyymmdd-HHMM in filename?                # a scenario dict returned from /api/build
+
+class ExportWorkbookPayload(BaseModel):
+    scenario_a: dict
+    scenario_b: dict
+    project_name: str | None = None
+    sheet_name_a: str | None = "Scenario A"
+    sheet_name_b: str | None = "Scenario B"
+    add_timestamp: bool | None = False
 
 # ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
@@ -810,6 +855,61 @@ def api_export(payload: ExportPayload):
     quoted = urllib.parse.quote(out_name)
     resp.headers["Content-Disposition"] = f'attachment; filename="{out_name}"; filename*=UTF-8\'\'{quoted}'
     return resp
+
+@app.post("/api/export_workbook")
+def api_export_workbook(payload: ExportWorkbookPayload):
+    """
+    Export both scenarios in ONE Excel (.xlsx) file with two tabs.
+    """
+    if not DB.loaded:
+        DB.load()
+
+    # Naming (for download filename only, not file path)
+    project = _safe_filename(payload.project_name or f"Proposal {datetime.date.today().isoformat()}")
+    base = f"{project} - Scenarios A & B - Workfront Export"
+    if payload.add_timestamp:
+        base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    download_name = f"{base}.xlsx"
+
+    # Sheet names
+    sA = _safe_sheet_name(payload.sheet_name_a or "Scenario A")
+    sB = _safe_sheet_name(payload.sheet_name_b or "Scenario B")
+
+    # Build dataframes
+    dfA = _wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
+    dfB = _wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
+
+    # Use temporary file for secure file handling
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
+        temp_path = tmp_file.name
+
+    try:
+        # Write workbook with two sheets
+        with pd.ExcelWriter(temp_path, engine="openpyxl") as xw:
+            dfA.to_excel(xw, sheet_name=sA, index=False)
+            dfB.to_excel(xw, sheet_name=sB, index=False)
+
+        # Return with a robust Content-Disposition (filename + filename*)
+        resp = FileResponse(
+            temp_path,
+            filename=download_name,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        quoted = urllib.parse.quote(download_name)
+        resp.headers["Content-Disposition"] = f'attachment; filename="{download_name}"; filename*=UTF-8\'\'{quoted}'
+        
+        # Clean up temporary file after response
+        import atexit
+        atexit.register(lambda: os.unlink(temp_path) if os.path.exists(temp_path) else None)
+        
+        return resp
+    except Exception as ex:
+        # Clean up temp file on error
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+        if "openpyxl" in str(ex):
+            raise HTTPException(400, "Excel export requires 'openpyxl'. Add it to requirements.txt.") from ex
+        raise HTTPException(500, f"Error creating Excel workbook: {str(ex)}") from ex
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload

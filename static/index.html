@@ -80,7 +80,7 @@
         <label><input id="exportTimestamp" type="checkbox" /> Add timestamp</label>
         <button id="btnExportA">Export Scenario A</button>
         <button id="btnExportB">Export Scenario B</button>
-        <button id="btnExportBoth">Export Both (A & B)</button>
+        <button id="btnExportWorkbook" title="One Excel file, two tabs">Export A & B (one file)</button>
       </div>
 
       <div class="scenarios">
@@ -353,6 +353,13 @@
       return `${projectName} - Scenario ${letter} - Workfront Export${ts}.${fmt}`;
     }
 
+    function fallbackWorkbookName() {
+      const projectName = (document.getElementById('projectName')?.value || 'Proposal').trim();
+      const addTs = document.getElementById('exportTimestamp')?.checked;
+      const ts = addTs ? (' - ' + new Date().toISOString().replace(/[-:T]/g,'').slice(0,12)) : '';
+      return `${projectName} - Scenarios A & B - Workfront Export${ts}.xlsx`;
+    }
+
     function parseFilenameFromContentDisposition(cd) {
       if (!cd) return null;
       // filename*=UTF-8''<urlencoded>
@@ -442,13 +449,83 @@
       }
     }
 
+    async function exportWorkbook() {
+      if (!latestScenarios || !latestScenarios.A || !latestScenarios.B) {
+        alert('Generate scenarios first.');
+        return;
+      }
+      const fmt = document.getElementById('exportFormat').value;
+      if (fmt !== 'xlsx') {
+        alert('Select Excel (.xlsx) to export both scenarios in one file.');
+        return;
+      }
+      const projectName = document.getElementById('projectName').value || '';
+      const addTs = document.getElementById('exportTimestamp').checked;
+
+      // Disable button and show loading state
+      const btn = document.getElementById('btnExportWorkbook');
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Exporting...';
+
+      try {
+        const res = await fetch('/api/export_workbook', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            scenario_a: latestScenarios.A,
+            scenario_b: latestScenarios.B,
+            project_name: projectName,
+            sheet_name_a: 'Scenario A',
+            sheet_name_b: 'Scenario B',
+            add_timestamp: addTs
+          })
+        });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          throw new Error(`HTTP ${res.status}: ${errorText}`);
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+
+        const cd = res.headers.get('content-disposition');
+        a.download = parseFilenameFromContentDisposition(cd) || fallbackWorkbookName();
+
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        alert('Error exporting workbook: ' + error.message);
+      } finally {
+        // Restore button state
+        btn.disabled = false;
+        btn.textContent = originalText;
+        toggleWorkbookBtn(); // Re-apply format-based enable/disable
+      }
+    }
+
+    // Enable/disable the workbook button based on format
+    function toggleWorkbookBtn() {
+      const btn = document.getElementById('btnExportWorkbook');
+      const xlsx = document.getElementById('exportFormat').value === 'xlsx';
+      btn.disabled = !xlsx;
+      btn.title = xlsx ? 'One Excel file, two tabs' : 'Select Excel (.xlsx) to enable';
+    }
+
     // Event listeners
     document.getElementById('btnGenerate').onclick = autoBuild;
     document.getElementById('btnRegenerate').onclick = regenerateWithEdits;
     document.getElementById('btnAdd').onclick = addDeliverableFromBox;
     document.getElementById('btnExportA').onclick = () => exportScenario('A');
     document.getElementById('btnExportB').onclick = () => exportScenario('B');
-    document.getElementById('btnExportBoth').onclick = exportBoth;
+    document.getElementById('btnExportWorkbook').onclick = exportWorkbook;
+
+    // Enable/disable the button based on format
+    document.getElementById('exportFormat').addEventListener('change', toggleWorkbookBtn);
+    toggleWorkbookBtn(); // initialize
 
     // Allow Enter key in add box
     document.getElementById('addBox').addEventListener('keypress', function(e) {
