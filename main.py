@@ -204,22 +204,47 @@ class AgencyDB:
         self.src = "mock_data"
 
     # ---------- RFP parsing via rules ----------
+    def _ui_blocked_categories(self) -> set:
+        try:
+            if self.ui_options is not None and "Key" in self.ui_options.columns:
+                row = self.ui_options[self.ui_options["Key"]=="Suggest_Block_Categories"]
+                if not row.empty:
+                    raw = str(row["Value"].iloc[0])
+                    return {x.strip() for x in raw.split(";") if x.strip()}
+        except Exception:
+            pass
+        # Default: block analytics unless explicitly asked for
+        return {"Analytics"}
+
+    def _ui_strict_mode(self) -> bool:
+        try:
+            if self.ui_options is not None and "Key" in self.ui_options.columns:
+                row = self.ui_options[self.ui_options["Key"]=="RFP_Suggest_Strict"]
+                if not row.empty:
+                    v = str(row["Value"].iloc[0]).strip().lower()
+                    return v in ("1","true","yes","y")
+        except Exception:
+            pass
+        return True  # strict by default
+
     def suggest_deliverables_from_text(self, text: str) -> List[Dict[str, Any]]:
         """
-        Returns a list of suggestions: [{
-            deliverable_code, deliverable, category, confidence, matches: [matched_keywords...]
+        Strict rules-first RFP matching. Returns [{
+          deliverable_code, deliverable, category, confidence, matches: [...]
         }]
-        Strategy:
-          1) Use RFP_Matching_Rules (Regex_Keywords -> Map_To_Deliverable).
-          2) If no rule hits and/or rules table empty, fallback: match deliverable names in text.
+        - Uses RFP_Matching_Rules.Regex_Keywords -> Map_To_Deliverable
+        - Applies optional UI_Options.Suggest_Block_Categories
+        - NO fuzzy fallback in strict mode (prevents false positives)
         """
         if not text:
             return []
+        strict = self._ui_strict_mode()
+        blocked = self._ui_blocked_categories()
 
         text = str(text)
-        suggestions: Dict[str, Dict[str, Any]] = {}
+        found: Dict[str, Dict[str, Any]] = {}
 
-        # (1) Rule-based pass (preferred)
+        # 1) Rule-based suggestions
         for _, row in self.rfp_rules.iterrows():
             patt = str(row.get("Regex_Keywords", "") or "")
             target = str(row.get("Map_To_Deliverable", "") or "")
@@ -231,42 +256,53 @@ class AgencyDB:
                 continue
             if not hits:
                 continue
+
+            # Find deliverable row(s)
             match_df = self.deliverables[self.deliverables["Deliverable"] == target]
             if match_df.empty:
                 continue
+
             for __, r in match_df.iterrows():
-                code = str(r["Deliverable_Code"])
-                entry = suggestions.setdefault(code, {
+                code = str(r["Deliverable_Code"]); cat = str(r.get("Category",""))
+                if cat in blocked:
+                    # allow through only if there are at least 2 strong hits
+                    if len(hits) < 2:
+                        continue
+
+                entry = found.setdefault(code, {
                     "deliverable_code": code,
                     "deliverable": str(r["Deliverable"]),
-                    "category": str(r.get("Category", "")),
+                    "category": cat,
                     "confidence": 0,
                     "matches": []
                 })
                 entry["confidence"] += len(hits)
-                # Store a few unique matched tokens for UX
                 uniq = list({str(h).lower() for h in hits if str(h).strip()})
-                entry["matches"].extend([m for m in uniq if m not in entry["matches"]])
+                for m in uniq:
+                    if m not in entry["matches"]:
+                        entry["matches"].append(m)
 
-        # (2) Fallback: check if deliverable names appear in-text (very light heuristic)
-        if not suggestions:
-            for _, r in self.deliverables.iterrows():
-                name = str(r["Deliverable"])
-                code = str(r["Deliverable_Code"])
-                if not name:
-                    continue
-                # token containment (case-insensitive)
-                if re.search(r"\b" + re.escape(name) + r"\b", text, flags=re.IGNORECASE):
-                    suggestions[code] = {
+        # 2) NO fuzzy fallback when strict (prevents "not in RFP" picks)
+        if strict:
+            out = list(found.values())
+            out.sort(key=lambda x: (-x["confidence"], x["deliverable"]))
+            return out
+
+        # Optional: gentle fallback if strict is off (rare)
+        for _, r in self.deliverables.iterrows():
+            name = str(r["Deliverable"])
+            code = str(r["Deliverable_Code"])
+            if re.search(r"\b" + re.escape(name) + r"\b", text, flags=re.IGNORECASE):
+                if code not in found:
+                    found[code] = {
                         "deliverable_code": code,
                         "deliverable": name,
-                        "category": str(r.get("Category", "")),
+                        "category": str(r.get("Category","")),
                         "confidence": 1,
                         "matches": [name]
                     }
 
-        # Rank by confidence desc, then by deliverable
-        out = list(suggestions.values())
+        out = list(found.values())
         out.sort(key=lambda x: (-x["confidence"], x["deliverable"]))
         return out
 
@@ -383,6 +419,32 @@ class AgencyDB:
 
         return rows
 
+    # ---------- Helper methods for task ordering and role detection ----------
+    def sorted_task_groups(self, included: List[str]) -> List[str]:
+        order_map = {tg: i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
+        return sorted([str(x) for x in included], key=lambda tg: order_map.get(tg, 999))
+
+    def task_hours_by_task_group(self, deliverable_code: str, included: List[str], scenario_col: str) -> Dict[str, float]:
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+            (self.all_rows["task_group"].isin(included))
+        ]
+        if sub.empty:
+            return {}
+        g = sub.groupby(["task_group"], as_index=False)[scenario_col].sum()
+        return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
+
+    def dominant_role_for_task_group(self, deliverable_code: str, task_group: str, scenario_col: str):
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+            (self.all_rows["task_group"].astype(str) == str(task_group))
+        ]
+        if sub.empty:
+            return ("","")
+        g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
+        r = g.sort_values(scenario_col, ascending=False).iloc[0]
+        return (str(r["Resource_Title"]), str(r["Seniority"]))
+
 DB = AgencyDB()
 
 # ---------- Helper: extract text from uploaded file bytes ----------
@@ -437,31 +499,120 @@ def _safe_sheet_name(s: str) -> str:
     s = s.strip() or "Sheet"
     return s[:31]
 
-def _wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFrame:
-    """Build the same WBS rows you already export to CSV, using provided project_name."""
+# ---------- WBS builder functions ----------
+def _round_int(x: float) -> int:
+    try:
+        return int(round(float(x)))
+    except Exception:
+        return 0
+
+def _distribute_rounding(target_total: int, parts: Dict[str, float]) -> Dict[str, int]:
+    """Largest-remainder method so children sum to the parent after rounding."""
+    if not parts:
+        return {}
+    total = sum(parts.values())
+    if total <= 0:
+        return {k: 0 for k in parts.keys()}
+    raw = {k: (v / total) * target_total for k, v in parts.items()}
+    flo = {k: int(v) for k, v in raw.items()}
+    rem = target_total - sum(flo.values())
+    # distribute remainder to the biggest fractional parts
+    order = sorted(parts.keys(), key=lambda k: raw[k]-flo[k], reverse=True)
+    for k in order[:max(0, rem)]:
+        flo[k] += 1
+    return flo
+
+def build_wbs_dataframe_from_scenario(scenario: Dict[str, Any], project_name: str) -> pd.DataFrame:
+    """One scenario -> tidy WBS with project parent, offsets, dependencies, roles, rounded hours."""
     rows = []
-    for i, d in enumerate(scenario.get("items", []), start=1):
+    # Root project row
+    rows.append({
+        "Project_Name": project_name, "WBS_ID": "1", "Parent_WBS_ID": "",
+        "Task_Name": project_name, "Deliverable": "", "Component": "Project",
+        "Task": "", "Role": "", "Seniority": "",
+        "Planned_Hours": "", "Start_Offset_Days": 0, "Duration_Days": "",
+        "Dependencies": "", "Assignee_External_ID": "", "Notes": ""
+    })
+
+    items = scenario.get("items", [])
+
+    # Deliverable process ordering = earliest task-group index
+    order_map = {}
+    if DB.timeline_params is not None and "Task_Group" in DB.timeline_params.columns:
+        order_map = {tg: i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
+
+    def deliv_key(d):
+        included = [str(x) for x in d.get("included_task_groups", [])]
+        idxs = [order_map.get(tg, 999) for tg in included]
+        return (min(idxs) if idxs else 999, str(d.get("deliverable","")))
+
+    items_sorted = sorted(items, key=deliv_key)
+
+    # Sequential offsets
+    day_cursor = 0
+    prev_deliv_wbs = ""
+
+    for i, d in enumerate(items_sorted, start=1):
+        dcode = str(d["deliverable_code"])
+        included = DB.sorted_task_groups([str(x) for x in d.get("included_task_groups", [])])
+        # get per-task durations from the schedule already computed
+        # (schedule is in correct per-deliverable order)
+        schedule = d.get("schedule", [])
+        tg_duration = {str(t["task_group"]): int(t["duration_days"]) for t in schedule}
+
+        # round parent hours
+        parent_hours = _round_int(d.get("total_hours", 0.0))
+        # child hours from v4 All_Task_Rows (scenario_col sums)
+        th = DB.task_hours_by_task_group(dcode, included, d["scenario_col"])
+        child_hours_rounded = _distribute_rounding(parent_hours, th)
+
+        # deliverable row
         wbs_id = f"1.{i}"
         rows.append({
-            "Project_Name": project_name,
-            "WBS_ID": wbs_id, "Parent_WBS_ID": "1",
-            "Task_Name": d["deliverable"], "Deliverable": d["deliverable"],
-            "Component": "", "Task": "", "Role": "", "Seniority": "",
-            "Planned_Hours": d["total_hours"], "Start_Offset_Days": 0,
-            "Duration_Days": sum(x["duration_days"] for x in d["schedule"]),
-            "Dependencies": "", "Assignee_External_ID": "",
-            "Notes": f"{d['complexity']} / {d['tier']}"
+            "Project_Name": project_name, "WBS_ID": wbs_id, "Parent_WBS_ID": "1",
+            "Task_Name": str(d.get("deliverable","")), "Deliverable": str(d.get("deliverable","")),
+            "Component": "Deliverable", "Task": "", "Role": "", "Seniority": "",
+            "Planned_Hours": parent_hours,
+            "Start_Offset_Days": day_cursor,
+            "Duration_Days": sum(int(v) for v in tg_duration.values()),
+            "Dependencies": prev_deliv_wbs,  # FS: depends on previous deliverable
+            "Assignee_External_ID": "",      # keep blank for Workfront; can change to "TBD"
+            "Notes": f'{d.get("complexity","")}/{d.get("tier","")}'
         })
-        for j, t in enumerate(d["schedule"], start=1):
+
+        # task rows (child WBS)
+        running = 0
+        for j, tg in enumerate(included, start=1):
+            # Use durations from schedule; if missing, default 1
+            dur = int(tg_duration.get(tg, 1))
+            role, sen = DB.dominant_role_for_task_group(dcode, tg, d["scenario_col"])
             rows.append({
                 "Project_Name": project_name,
-                "WBS_ID": f"{wbs_id}.{j}", "Parent_WBS_ID": wbs_id,
-                "Task_Name": t["task_group"], "Deliverable": d["deliverable"],
-                "Component": "", "Task": t["task_group"], "Role": "", "Seniority": "",
-                "Planned_Hours": "", "Start_Offset_Days": "", "Duration_Days": t["duration_days"],
-                "Dependencies": "", "Assignee_External_ID": "", "Notes": ""
+                "WBS_ID": f"{wbs_id}.{j}",
+                "Parent_WBS_ID": wbs_id,
+                "Task_Name": tg,
+                "Deliverable": str(d.get("deliverable","")),
+                "Component": "Task",
+                "Task": tg,
+                "Role": role, "Seniority": sen,
+                "Planned_Hours": child_hours_rounded.get(tg, 0),
+                "Start_Offset_Days": day_cursor + running,
+                "Duration_Days": dur,
+                "Dependencies": wbs_id if j == 1 else f"{wbs_id}.{j-1}",
+                "Assignee_External_ID": "",
+                "Notes": ""
             })
+            running += dur
+
+        day_cursor += sum(int(v) for v in tg_duration.values())
+        prev_deliv_wbs = wbs_id
+
     return pd.DataFrame(rows)
+
+# For backward compatibility, keep the old function name pointing to the new one
+def _wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFrame:
+    """Legacy function name - redirects to the new WBS builder."""
+    return build_wbs_dataframe_from_scenario(scenario, project_name)
 
 # ---------- Pydantic models ----------
 class SuggestPayload(BaseModel):
@@ -775,141 +926,48 @@ def api_export(payload: ExportPayload):
     if not DB.loaded:
         DB.load()
 
-    scenario = payload.scenario or {}
     project_name = payload.project_name or f"Proposal {datetime.date.today().isoformat()}"
-    project_name = _safe_filename(project_name)
+    df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
 
-    # Optional scenario tag used in the download filename (not inside the sheet itself)
-    scen_label = _safe_filename(payload.scenario_label or "")
-
-    # Build rows (same as before, but use project_name param)
-    rows = []
-    for i, d in enumerate(scenario.get("items", []), start=1):
-        wbs_id = f"1.{i}"
-        rows.append({
-            "Project_Name": project_name,
-            "WBS_ID": wbs_id,
-            "Parent_WBS_ID": "1",
-            "Task_Name": d["deliverable"],
-            "Deliverable": d["deliverable"],
-            "Component": "",
-            "Task": "",
-            "Role": "",
-            "Seniority": "",
-            "Planned_Hours": d["total_hours"],
-            "Start_Offset_Days": 0,
-            "Duration_Days": sum([x["duration_days"] for x in d["schedule"]]),
-            "Dependencies": "",
-            "Assignee_External_ID": "",
-            "Notes": f"{d['complexity']} / {d['tier']}"
-        })
-        for j, t in enumerate(d["schedule"], start=1):
-            rows.append({
-                "Project_Name": project_name,
-                "WBS_ID": f"{wbs_id}.{j}",
-                "Parent_WBS_ID": wbs_id,
-                "Task_Name": t["task_group"],
-                "Deliverable": d["deliverable"],
-                "Component": "",
-                "Task": t["task_group"],
-                "Role": "",
-                "Seniority": "",
-                "Planned_Hours": "",
-                "Start_Offset_Days": "",
-                "Duration_Days": t["duration_days"],
-                "Dependencies": "",
-                "Assignee_External_ID": "",
-                "Notes": ""
-            })
-
-    df = pd.DataFrame(rows)
-
-    # File naming
-    parts = [p for p in [project_name, scen_label, "Workfront Export"] if p]
-    base = " - ".join(parts)
+    # Friendly filename
+    base_parts = [project_name, (payload.scenario_label or "").strip(), "Workfront Export"]
+    base = " - ".join([p for p in base_parts if p])
     if payload.add_timestamp:
         base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
 
-    fmt = (payload.file_format or "csv").lower().strip()
-    if fmt not in ("csv", "xlsx"):
-        raise HTTPException(400, "file_format must be 'csv' or 'xlsx'.")
-
+    fmt = (payload.file_format or "csv").lower()
     if fmt == "csv":
-        out_name = f"{base}.csv"
-        df.to_csv(out_name, index=False)
-        resp = FileResponse(out_name, filename=out_name, media_type="text/csv")
-    else:
-        out_name = f"{base}.xlsx"
-        try:
-            df.to_excel(out_name, index=False, engine="openpyxl")
-        except Exception as ex:
-            raise HTTPException(400, "XLSX export requires 'openpyxl'. Add it to requirements.txt.") from ex
-        resp = FileResponse(
-            out_name,
-            filename=out_name,
+        out_path = f"{base}.csv"
+        df.to_csv(out_path, index=False)
+        return FileResponse(out_path, filename=out_path, media_type="text/csv")
+
+    # xlsx
+    try:
+        out_path = f"{base}.xlsx"
+        df.to_excel(out_path, index=False, engine="openpyxl")
+        return FileResponse(
+            out_path, filename=out_path,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
-
-    # Add RFC 5987 filename* for better cross-browser support
-    import urllib.parse
-    quoted = urllib.parse.quote(out_name)
-    resp.headers["Content-Disposition"] = f'attachment; filename="{out_name}"; filename*=UTF-8\'\'{quoted}'
-    return resp
+    except Exception as ex:
+        raise HTTPException(400, "XLSX export requires 'openpyxl'.") from ex
 
 @app.post("/api/export_workbook")
 def api_export_workbook(payload: ExportWorkbookPayload):
-    """
-    Export both scenarios in ONE Excel (.xlsx) file with two tabs.
-    """
     if not DB.loaded:
         DB.load()
-
-    # Naming (for download filename only, not file path)
-    project = _safe_filename(payload.project_name or f"Proposal {datetime.date.today().isoformat()}")
+    project = (payload.project_name or f"Proposal {datetime.date.today().isoformat()}").strip()
+    dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
+    dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
     base = f"{project} - Scenarios A & B - Workfront Export"
     if payload.add_timestamp:
         base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
-    download_name = f"{base}.xlsx"
-
-    # Sheet names
-    sA = _safe_sheet_name(payload.sheet_name_a or "Scenario A")
-    sB = _safe_sheet_name(payload.sheet_name_b or "Scenario B")
-
-    # Build dataframes
-    dfA = _wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
-    dfB = _wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
-
-    # Use temporary file for secure file handling
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp_file:
-        temp_path = tmp_file.name
-
-    try:
-        # Write workbook with two sheets
-        with pd.ExcelWriter(temp_path, engine="openpyxl") as xw:
-            dfA.to_excel(xw, sheet_name=sA, index=False)
-            dfB.to_excel(xw, sheet_name=sB, index=False)
-
-        # Return with a robust Content-Disposition (filename + filename*)
-        resp = FileResponse(
-            temp_path,
-            filename=download_name,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-        quoted = urllib.parse.quote(download_name)
-        resp.headers["Content-Disposition"] = f'attachment; filename="{download_name}"; filename*=UTF-8\'\'{quoted}'
-        
-        # Clean up temporary file after response
-        import atexit
-        atexit.register(lambda: os.unlink(temp_path) if os.path.exists(temp_path) else None)
-        
-        return resp
-    except Exception as ex:
-        # Clean up temp file on error
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-        if "openpyxl" in str(ex):
-            raise HTTPException(400, "Excel export requires 'openpyxl'. Add it to requirements.txt.") from ex
-        raise HTTPException(500, f"Error creating Excel workbook: {str(ex)}") from ex
+    out_name = f"{base}.xlsx"
+    with pd.ExcelWriter(out_name, engine="openpyxl") as xw:
+        dfA.to_excel(xw, sheet_name=(_safe_sheet_name(payload.sheet_name_a or "Scenario A")), index=False)
+        dfB.to_excel(xw, sheet_name=(_safe_sheet_name(payload.sheet_name_b or "Scenario B")), index=False)
+    return FileResponse(out_name, filename=out_name,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
