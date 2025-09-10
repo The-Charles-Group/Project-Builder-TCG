@@ -84,10 +84,17 @@ class AgencyDB:
         return f"{complexity}__{tier}_Hours"
 
     def load(self):
-        # Try Excel v4, else CSV bundle, else create mock data
-        xlsx_name = "Replit_App_DB_READABLE_FullRows_v4.xlsx"
+        # Try Excel v4b first, then v4, else CSV bundle, else create mock data
+        xlsx_candidates = ["Replit_App_DB_READABLE_FullRows_v4b.xlsx",
+                          "Replit_App_DB_READABLE_FullRows_v4.xlsx"]
+        xlsx_name = None
+        for name in xlsx_candidates:
+            if os.path.exists(name):
+                xlsx_name = name
+                break
+        
         csv_dir  = "Replit_App_DB_READABLE_FullRows_v4_csvs"
-        if os.path.exists(xlsx_name):
+        if xlsx_name:
             xls = pd.ExcelFile(xlsx_name)
             read = lambda sh: pd.read_excel(xlsx_name, sheet_name=sh)
             self.src = xlsx_name
@@ -131,6 +138,8 @@ class AgencyDB:
 
         # Normalize component column from v4 spreadsheet
         self._normalize_component_column()
+        # Normalize task label column from v4b spreadsheet
+        self._normalize_task_label_column()
         
         self.loaded = True
         return True
@@ -163,6 +172,48 @@ class AgencyDB:
         else:
             # Create empty for downstream logic; we'll only use 'General' per missing row, not globally
             self.all_rows["Component"] = ""
+
+    def _normalize_task_label_column(self):
+        """
+        Ensure self.all_rows has a 'Task_Label' column populated from v4b's Column G.
+        Map v4b column G → 'Task_Label' (UI-display name for tasks)
+        """
+        if self.all_rows is None or self.all_rows.empty:
+            return
+
+        # optional UI override from UI_Options.Key == 'Task_Label_Column_Name'
+        preferred = None
+        try:
+            row = self.ui_options[self.ui_options["Key"] == "Task_Label_Column_Name"]
+            if not row.empty:
+                preferred = str(row["Value"].iloc[0]).strip()
+        except Exception:
+            pass
+
+        candidates = [preferred] if preferred else []
+        # common headers we've seen for column G in v4b
+        candidates += ["Task_Label", "Task_Name", "Task_L1", "Component_Task_L2", "Task"]
+
+        cols_lc = {c.lower(): c for c in self.all_rows.columns}
+        found = None
+        for cand in candidates:
+            if cand and cand.lower() in cols_lc:
+                found = cols_lc[cand.lower()]
+                break
+        if not found:
+            # last‑ditch: pick column index G (0‑based 6) if it exists
+            try:
+                found = self.all_rows.columns[6]
+            except Exception:
+                found = None
+
+        if found:
+            self.all_rows["Task_Label"] = (
+                self.all_rows[found].astype(str).fillna("").str.strip()
+            )
+        else:
+            # fallback; we'll still display task_group if label missing
+            self.all_rows["Task_Label"] = ""
 
     def _create_mock_data(self):
         """Create minimal mock data for demo purposes when database files are not available"""
@@ -558,6 +609,27 @@ class AgencyDB:
         r = g.sort_values(scenario_col, ascending=False).iloc[0]
         return (str(r["Resource_Title"]), str(r["Seniority"]))
 
+    def task_label_for_component_tg(self, deliverable_code: str, component: str, task_group: str) -> str:
+        """Get user-friendly task label from Task_Label column for UI display."""
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+            (self.all_rows["task_group"].astype(str) == str(task_group))
+        ].copy()
+        if "Component" in sub.columns:
+            sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+            # Remap blanks to "General" before filtering (consistent with other helpers)
+            sub.loc[sub["Component"] == "", "Component"] = "General"
+            comp_key = (component or "").strip() or "General"
+            sub = sub[sub["Component"] == comp_key]
+
+        if "Task_Label" in sub.columns:
+            lab = sub["Task_Label"].dropna().astype(str).str.strip()
+            lab = lab[lab != ""]
+            if not lab.empty:
+                # most frequent non‑empty label for that component+task_group
+                return lab.value_counts().idxmax()
+        return str(task_group)
+
 DB = AgencyDB()
 
 # ---------- Helper: extract text from uploaded file bytes ----------
@@ -730,10 +802,12 @@ def build_wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.D
                 dur = int(duration_by_tg.get(tg, 1))
                 role, sen = DB.dominant_role_for_component_task(dcode, comp, tg, scen_col)
                 wbs_task = f"{wbs_comp}.{k}"
+                # Get user-friendly task label from Column G (Task_Label)
+                label = DB.task_label_for_component_tg(dcode, comp, tg)
                 rows.append({
                     "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
-                    "Task_Name": tg, "Deliverable": str(d.get("deliverable","")),
-                    "Component": comp, "Task": tg, "Role": role, "Seniority": sen,
+                    "Task_Name": label, "Deliverable": str(d.get("deliverable","")),
+                    "Component": comp, "Task": label, "Role": role, "Seniority": sen,
                     "Planned_Hours": int(tg_hours_rounded.get(tg, 0)),
                     "Start_Offset_Days": day_cursor + offset_by_tg[tg],
                     "Duration_Days": dur,
