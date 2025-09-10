@@ -1,129 +1,324 @@
 <!doctype html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="utf-8"/>
+  <meta charset="utf-8" />
   <title>Agency Project Builder</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="/static/style.css"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header>
     <h1>Agency Project Builder</h1>
-    <div class="sub">RFP → Scenarios → Timeline → Workfront Export</div>
+    <div class="sub">Build project estimates from RFPs with 2‑step AI assistance</div>
   </header>
 
   <main>
-    <!-- STEP 1: Intake -->
-    <section class="card">
-      <h2>Step 1 – Intake</h2>
-      <div class="grid">
+    <!-- Step 1: Paste RFP / brief -->
+    <section class="card" id="step1">
+      <h2>Step 1 — Paste the RFP / Brief</h2>
+      <label for="rfpText">RFP Content</label>
+      <textarea id="rfpText" placeholder="Paste the RFP, agency brief, or request here..."></textarea>
+      
+      <div class="grid" style="margin-top:16px;">
         <div>
-          <label>RFP / Brief (paste text)</label>
-          <textarea id="rfpText" placeholder="Paste RFP text here... (or leave blank and pick deliverables manually)"></textarea>
-          <button id="btnSuggest" class="ghost">Suggest deliverables</button>
-          <div id="suggestions" class="pillbox"></div>
+          <label for="pricingMode">Pricing mode</label>
+          <select id="pricingMode">
+            <option value="Flat_Blended">Flat_Blended</option>
+            <option value="Per_Resource">Per_Resource</option>
+          </select>
         </div>
         <div>
-          <label>Deliverables (select)</label>
-          <div id="deliverableList" class="listbox"></div>
+          <label for="blendedRate">Blended rate (optional)</label>
+          <input id="blendedRate" type="number" step="1" placeholder="e.g., 185" />
         </div>
-      </div>
-
-      <div class="grid">
         <div>
-          <label>Pricing Mode</label>
-          <select id="pricingMode"></select>
-          <div id="blendedWrap" class="inline">
-            <label>Blended Rate ($/hr)</label>
-            <input id="blendedRate" type="number" step="1" min="1" value="185"/>
-          </div>
-          <div id="bandWrap" class="inline">
-            <label>Rate Band</label>
-            <select id="rateBand"></select>
-          </div>
-        </div>
-
-        <div>
-          <label>Scenario Type</label>
-          <div class="inline">
-            <input type="radio" id="useTemplates" name="scnType" value="template" checked/>
-            <label for="useTemplates">Use Templates (MED_LOW & MED_HIGH)</label>
-          </div>
-          <div class="inline">
-            <input type="radio" id="useBundles" name="scnType" value="bundle"/>
-            <label for="useBundles">Use Bundles (Express/Good/Better/Best)</label>
-          </div>
-
-          <div id="templateRow" class="inline">
-            <label>Scenario A (template)</label>
-            <select id="scenarioA"></select>
-            <label>Scenario B (template)</label>
-            <select id="scenarioB"></select>
-          </div>
-
-          <div id="bundleRow" class="inline hidden">
-            <label>Scenario A Bundle</label>
-            <select id="bundleA">
-              <option>Express</option><option selected>Better</option><option>Good</option><option>Best</option>
-            </select>
-            <label>Scenario B Bundle</label>
-            <select id="bundleB">
-              <option>Express</option><option>Good</option><option selected>Better</option><option>Best</option>
-            </select>
-          </div>
+          <label for="rateBand">Rate band</label>
+          <input id="rateBand" type="text" value="Standard_US" />
         </div>
       </div>
-
-      <div class="grid">
-        <div>
-          <label>Timeline Options</label>
-          <div class="inline">
-            <input type="checkbox" id="useSlack" checked/>
-            <label for="useSlack">Add Slack Between Reviews</label>
-          </div>
-          <div class="inline">
-            <label>Slack After Internal Review (days)</label>
-            <input id="slackInternal" type="number" min="0" step="1" value="1"/>
-            <label>Slack After Client Review (days)</label>
-            <input id="slackClient" type="number" min="0" step="1" value="2"/>
-          </div>
-          <div class="inline">
-            <label>Global Slack %</label>
-            <input id="slackGlobal" type="number" min="0" max="0.5" step="0.01" value="0.05"/>
-            <label>Project Start</label>
-            <input id="projectStart" type="date"/>
-          </div>
-        </div>
-      </div>
-
+      
       <div class="actions">
-        <button id="btnBuild">Build Scenarios</button>
+        <button id="btnGenerate">Generate from RFP</button>
       </div>
+      <div class="hint">This will auto‑identify deliverables & build Scenarios A and B.</div>
     </section>
 
-    <!-- STEP 2: Scenarios -->
-    <section class="card">
-      <h2>Step 2 – Compare & Tweak</h2>
-      <div id="scenarios" class="scenarios"></div>
-      <div class="hint">Tip: Un/check task groups inside each deliverable to re-run quickly (client side). For authoritative totals, rebuild via the button above.</div>
-    </section>
-
-    <!-- STEP 3: Export -->
-    <section class="card">
-      <h2>Step 3 – Finalize & Export</h2>
-      <div class="grid">
-        <div class="totals">
-          <div><strong>Scenario A Total</strong>: <span id="totA">$0</span></div>
-          <div><strong>Scenario B Total</strong>: <span id="totB">$0</span></div>
-        </div>
+    <!-- Step 2: Review & Edit -->
+    <section class="card" id="step2" style="display:none;">
+      <h2>Step 2 — Review & Edit Deliverables</h2>
+      <div>
+        <strong>AI‑picked deliverables:</strong>
+        <div class="pillbox" id="selectedChips"></div>
+        <div class="hint" id="whyPicks"></div>
       </div>
-      <div class="actions">
-        <button id="btnExportA" class="ghost">Export Scenario A → Workfront (CSV)</button>
-        <button id="btnExportB" class="ghost">Export Scenario B → Workfront (CSV)</button>
+      
+      <div class="inline" style="margin-top:16px;">
+        <input type="text" id="addBox" placeholder="Add another deliverable..." />
+        <button id="btnAdd">Add</button>
+        <button id="btnRegenerate">Regenerate with Edits</button>
+        <button id="btnExportA">Export Scenario A CSV</button>
+      </div>
+
+      <div class="scenarios">
+        <div class="scenario">
+          <h3>Scenario A</h3>
+          <div id="scenarioA">(No data)</div>
+        </div>
+
+        <div class="scenario">
+          <h3>Scenario B</h3>
+          <div id="scenarioB">(No data)</div>
+        </div>
       </div>
     </section>
   </main>
 
-  <script src="/static/app.js"></script>
+  <script>
+    // Simple client state
+    let allDeliverables = [];   // from /api/options
+    let selectedCodes = [];     // working set in Step 2
+    let latestScenarios = null; // last response.scenarios
+
+    async function loadOptions() {
+      const res = await fetch('/api/options');
+      const data = await res.json();
+      allDeliverables = data.deliverables || [];
+    }
+
+    function codeToName(code) {
+      const r = allDeliverables.find(d => d.Deliverable_Code === code);
+      return r ? r.Deliverable : code;
+    }
+
+    function renderChips() {
+      const wrap = document.getElementById('selectedChips');
+      wrap.innerHTML = '';
+      selectedCodes.forEach(code => {
+        const chip = document.createElement('span');
+        chip.className = 'pill';
+        chip.innerHTML = `${codeToName(code)} <span class="hit" onclick="removeCode('${code}')" style="cursor:pointer;">&times;</span>`;
+        wrap.appendChild(chip);
+      });
+    }
+
+    function removeCode(code) {
+      selectedCodes = selectedCodes.filter(c => c !== code);
+      renderChips();
+    }
+
+    function renderWhy(suggested) {
+      const why = document.getElementById('whyPicks');
+      if (!suggested || !suggested.length) { why.textContent = ''; return; }
+      const lines = suggested.map(s => {
+        const m = (s.matches && s.matches.length) ? ` • matches: ${s.matches.slice(0,5).join(', ')}` : '';
+        return `${s.deliverable}${m}`;
+      });
+      why.textContent = 'Why these picks?  ' + lines.join('  |  ');
+    }
+
+    function renderScenario(targetId, scenario) {
+      const root = document.getElementById(targetId);
+      if (!scenario || !scenario.items || !scenario.items.length) { 
+        root.innerHTML = '<p>(No data)</p>'; 
+        return; 
+      }
+      
+      let html = `
+        <div class="totals">
+          <div><strong>Hours:</strong> ${scenario.totals.hours}</div>
+          <div><strong>Price:</strong> $${scenario.totals.price.toLocaleString()}</div>
+        </div>
+        <table class="tbl">
+          <thead><tr><th>Deliverable</th><th>Hours</th><th>Price</th><th>Tasks</th></tr></thead>
+          <tbody>
+      `;
+      scenario.items.forEach(it => {
+        const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
+        html += `<tr>
+          <td>${it.deliverable}</td>
+          <td>${it.total_hours}</td>
+          <td>$${it.price.toLocaleString()}</td>
+          <td>${tasks}</td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+      root.innerHTML = html;
+    }
+
+    async function autoBuildFromRFP() {
+      const rfpText = document.getElementById('rfpText').value;
+      if (!rfpText.trim()) {
+        alert('Please enter some RFP content first.');
+        return;
+      }
+
+      const pricingMode = document.getElementById('pricingMode').value;
+      const blendedRateStr = document.getElementById('blendedRate').value;
+      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+
+      document.getElementById('btnGenerate').disabled = true;
+      document.getElementById('btnGenerate').textContent = 'Generating...';
+
+      try {
+        // defaults: use templates (you can wire real UI for choosing)
+        const payload = {
+          rfp_text: rfpText,
+          scenario_a: { mode: "template", scenario_key: "MED_LOW" },
+          scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+          pricing_mode: pricingMode,
+          blended_rate: blendedRate,
+          rate_band: rateBand,
+          use_slack: true,
+          slack_after_internal: 1,
+          slack_after_client: 2,
+          slack_global_pct: 0.05
+        };
+
+        const res = await fetch('/api/auto_build', {
+          method: 'POST', 
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        }
+        
+        const data = await res.json();
+
+        // Suggested → Step 2 state
+        const suggested = data.suggested || [];
+        selectedCodes = suggested.map(s => s.deliverable_code);
+        latestScenarios = data.scenarios || null;
+
+        renderChips();
+        renderWhy(suggested);
+        if (latestScenarios) {
+          renderScenario('scenarioA', latestScenarios.A);
+          renderScenario('scenarioB', latestScenarios.B);
+        }
+        
+        document.getElementById('step2').style.display = 'block';
+        document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
+      } catch (error) {
+        alert('Error generating scenarios: ' + error.message);
+      } finally {
+        document.getElementById('btnGenerate').disabled = false;
+        document.getElementById('btnGenerate').textContent = 'Generate from RFP';
+      }
+    }
+
+    async function regenerateWithEdits() {
+      const pricingMode = document.getElementById('pricingMode').value;
+      const blendedRateStr = document.getElementById('blendedRate').value;
+      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+
+      document.getElementById('btnRegenerate').disabled = true;
+      document.getElementById('btnRegenerate').textContent = 'Regenerating...';
+
+      try {
+        const payload = {
+          selected_deliverable_codes: selectedCodes,
+          scenario_a: { mode: "template", scenario_key: "MED_LOW" },
+          scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+          pricing_mode: pricingMode,
+          blended_rate: blendedRate,
+          rate_band: rateBand,
+          use_slack: true,
+          slack_after_internal: 1,
+          slack_after_client: 2,
+          slack_global_pct: 0.05
+        };
+
+        const res = await fetch('/api/build', {
+          method: 'POST', 
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        }
+        
+        const scenarios = await res.json();
+        latestScenarios = scenarios || null;
+        renderScenario('scenarioA', latestScenarios.A);
+        renderScenario('scenarioB', latestScenarios.B);
+      } catch (error) {
+        alert('Error regenerating scenarios: ' + error.message);
+      } finally {
+        document.getElementById('btnRegenerate').disabled = false;
+        document.getElementById('btnRegenerate').textContent = 'Regenerate with Edits';
+      }
+    }
+
+    function addDeliverableFromBox() {
+      const box = document.getElementById('addBox');
+      const q = box.value.trim().toLowerCase();
+      if (!q) return;
+      
+      // naive search across known deliverables
+      const match = allDeliverables.find(d =>
+        d.Deliverable.toLowerCase().includes(q) || d.Deliverable_Code.toLowerCase() === q
+      );
+      if (match && !selectedCodes.includes(match.Deliverable_Code)) {
+        selectedCodes.push(match.Deliverable_Code);
+        renderChips();
+      } else if (match) {
+        alert('That deliverable is already selected.');
+      } else {
+        alert('No matching deliverable found. Try a different search term.');
+      }
+      box.value = '';
+    }
+
+    async function exportScenarioA() {
+      if (!latestScenarios || !latestScenarios.A) {
+        alert('No scenario A to export. Generate scenarios first.');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/export', {
+          method: 'POST', 
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ scenario: latestScenarios.A })
+        });
+        
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        }
+        
+        // Force download
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; 
+        a.download = 'workfront_export.csv'; 
+        a.click();
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        alert('Error exporting CSV: ' + error.message);
+      }
+    }
+
+    // Event listeners
+    document.getElementById('btnGenerate').onclick = autoBuildFromRFP;
+    document.getElementById('btnRegenerate').onclick = regenerateWithEdits;
+    document.getElementById('btnAdd').onclick = addDeliverableFromBox;
+    document.getElementById('btnExportA').onclick = exportScenarioA;
+
+    // Allow Enter key in add box
+    document.getElementById('addBox').addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') {
+        addDeliverableFromBox();
+      }
+    });
+
+    // Initialize
+    loadOptions();
+  </script>
 </body>
 </html>
