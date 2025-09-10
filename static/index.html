@@ -80,6 +80,7 @@
         <label><input id="exportTimestamp" type="checkbox" /> Add timestamp</label>
         <button id="btnExportA">Export Scenario A</button>
         <button id="btnExportB">Export Scenario B</button>
+        <button id="btnExportBoth">Export Both (A & B)</button>
       </div>
 
       <div class="scenarios">
@@ -368,6 +369,37 @@
       return null;
     }
 
+    async function exportOne(letter, fmt, projectName, addTs) {
+      if (!latestScenarios || !latestScenarios[letter]) return;
+
+      const res = await fetch('/api/export', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          scenario: latestScenarios[letter],
+          project_name: projectName,
+          file_format: fmt,
+          scenario_label: `Scenario ${letter}`,
+          add_timestamp: addTs
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+
+      const cd = res.headers.get('content-disposition');
+      a.download = parseFilenameFromContentDisposition(cd) || fallbackName(letter, fmt);
+
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
     async function exportScenario(letter) {
       if (!latestScenarios || !latestScenarios[letter]) {
         alert('Generate scenarios first.');
@@ -379,35 +411,34 @@
       const addTs = document.getElementById('exportTimestamp').checked;
 
       try {
-        const res = await fetch('/api/export', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({
-            scenario: latestScenarios[letter],
-            project_name: projectName,
-            file_format: fmt,
-            scenario_label: `Scenario ${letter}`,
-            add_timestamp: addTs
-          })
-        });
-
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-        }
-
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-
-        // Prefer server-suggested filename; otherwise build from UI
-        const cd = res.headers.get('content-disposition');
-        a.download = parseFilenameFromContentDisposition(cd) || fallbackName(letter, fmt);
-
-        a.click();
-        URL.revokeObjectURL(url);
+        await exportOne(letter, fmt, projectName, addTs);
       } catch (error) {
         alert('Error exporting: ' + error.message);
+      }
+    }
+
+    async function exportBoth() {
+      if (!latestScenarios || (!latestScenarios.A && !latestScenarios.B)) {
+        alert('Generate scenarios first.');
+        return;
+      }
+
+      const fmt = document.getElementById('exportFormat').value || 'csv';
+      const projectName = document.getElementById('projectName').value || '';
+      const addTs = document.getElementById('exportTimestamp').checked;
+
+      try {
+        // Export A then B as two separate files
+        if (latestScenarios.A) {
+          await exportOne('A', fmt, projectName, addTs);
+        }
+        // tiny gap helps some browsers show two download toasts separately
+        await new Promise(r => setTimeout(r, 200));
+        if (latestScenarios.B) {
+          await exportOne('B', fmt, projectName, addTs);
+        }
+      } catch (error) {
+        alert('Error exporting both scenarios: ' + error.message);
       }
     }
 
@@ -417,6 +448,7 @@
     document.getElementById('btnAdd').onclick = addDeliverableFromBox;
     document.getElementById('btnExportA').onclick = () => exportScenario('A');
     document.getElementById('btnExportB').onclick = () => exportScenario('B');
+    document.getElementById('btnExportBoth').onclick = exportBoth;
 
     // Allow Enter key in add box
     document.getElementById('addBox').addEventListener('keypress', function(e) {
