@@ -1,0 +1,21 @@
+Project_Name,WBS_ID,Parent_WBS_ID,Task_Name,Deliverable,Component,Task,Service_Department,Role,Seniority,Planned_Hours,Start_Offset_Days,Duration_Days,Dependencies,Assignee_External_ID,Notes,Rate_USD,Price_USD
+Debug Service Department,1,,Debug Service Department,,Project,,,,,0,0,0,,,,0.0,0
+Debug Service Department,1.1,1,Brand Identity Development,Brand Identity Development,,,,,,255,0,1,,,Core/T2_MediumVolume,195.0,49725
+Debug Service Department,1.1.1,1.1,Graphic & Copy Messaging Cornerstones,Brand Identity Development,Graphic & Copy Messaging Cornerstones,,,,,24,0,1,1.1,,,195.0,4680
+Debug Service Department,1.1.1.1,1.1.1,Messaging Cornerstones Draft,Brand Identity Development,Graphic & Copy Messaging Cornerstones,Messaging Cornerstones Draft,,Designer,Mid,24,0,1,1.1.1,,,195.0,4680
+Debug Service Department,1.1.2,1.1,Graphic Mock-Ups,Brand Identity Development,Graphic Mock-Ups,,,,,22,0,1,1.1.1,,,195.0,4290
+Debug Service Department,1.1.2.1,1.1.2,Mockup Scenarios (3-4),Brand Identity Development,Graphic Mock-Ups,Mockup Scenarios (3-4),,Designer,Mid,22,0,1,1.1.2,,,195.0,4290
+Debug Service Department,1.1.3,1.1,Iconography,Brand Identity Development,Iconography,,,,,30,0,1,1.1.2,,,195.0,5850
+Debug Service Department,1.1.3.1,1.1.3,Export & Spec,Brand Identity Development,Iconography,Export & Spec,,Designer,Mid,30,0,1,1.1.3,,,195.0,5850
+Debug Service Department,1.1.4,1.1,Logo,Brand Identity Development,Logo,,,,,41,0,1,1.1.3,,,195.0,7995
+Debug Service Department,1.1.4.1,1.1.4,Logo Exploration (6-8 dirs),Brand Identity Development,Logo,Logo Exploration (6-8 dirs),,Designer,Mid,41,0,1,1.1.4,,,195.0,7995
+Debug Service Department,1.1.5,1.1,Overarching Moodboard,Brand Identity Development,Overarching Moodboard,,,,,24,0,1,1.1.4,,,195.0,4680
+Debug Service Department,1.1.5.1,1.1.5,Curate Moodboard,Brand Identity Development,Overarching Moodboard,Curate Moodboard,,Designer,Mid,24,0,1,1.1.5,,,195.0,4680
+Debug Service Department,1.1.6,1.1,Tagline Copy Bank,Brand Identity Development,Tagline Copy Bank,,,,,18,0,1,1.1.5,,,195.0,3510
+Debug Service Department,1.1.6.1,1.1.6,Shortlist & Rationale,Brand Identity Development,Tagline Copy Bank,Shortlist & Rationale,,Designer,Mid,18,0,1,1.1.6,,,195.0,3510
+Debug Service Department,1.1.7,1.1,Textures/Patterns/Materials,Brand Identity Development,Textures/Patterns/Materials,,,,,28,0,1,1.1.6,,,195.0,5460
+Debug Service Department,1.1.7.1,1.1.7,Build Repeating Tiles,Brand Identity Development,Textures/Patterns/Materials,Build Repeating Tiles,,Designer,Mid,28,0,1,1.1.7,,,195.0,5460
+Debug Service Department,1.1.8,1.1,Typography,Brand Identity Development,Typography,,,,,37,0,1,1.1.7,,,195.0,7215
+Debug Service Department,1.1.8.1,1.1.8,Final Packaging,Brand Identity Development,Typography,Final Packaging,,Designer,Mid,37,0,1,1.1.8,,,195.0,7215
+Debug Service Department,1.1.9,1.1,Visual Elements/Comps,Brand Identity Development,Visual Elements/Comps,,,,,31,0,1,1.1.8,,,195.0,6045
+Debug Service Department,1.1.9.1,1.1.9,Compositions (2-3),Brand Identity Development,Visual Elements/Comps,Compositions (2-3),,Designer,Mid,31,0,1,1.1.9,,,195.0,6045

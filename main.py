@@ -56,6 +56,17 @@ if not os.path.exists("static"):
     os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# ===== Workfront column order (now includes Service_Department) =====
+WF_COLUMNS = [
+    "Project_Name", "WBS_ID", "Parent_WBS_ID",
+    "Task_Name", "Deliverable", "Component", "Task",
+    "Service_Department",            # <-- NEW, own column
+    "Role", "Seniority",
+    "Planned_Hours", "Start_Offset_Days", "Duration_Days",
+    "Dependencies", "Assignee_External_ID", "Notes",
+    "Rate_USD", "Price_USD"
+]
+
 # ---------- Helper: DB Loader ----------
 class AgencyDB:
     def __init__(self):
@@ -1121,6 +1132,24 @@ def _apply_number_formats(ws, df):
             for cell in col_cells:
                 cell.number_format = "0.00"
 
+def _finalize_wf_df(df: pd.DataFrame) -> pd.DataFrame:
+    # Ensure all expected columns exist
+    for col in WF_COLUMNS:
+        if col not in df.columns:
+            df[col] = "" if col not in {"Planned_Hours","Start_Offset_Days","Duration_Days","Rate_USD","Price_USD"} else 0
+
+    # Reindex to canonical order
+    df = df[WF_COLUMNS].copy()
+
+    # Enforce numeric types & pricing identity
+    df["Planned_Hours"]     = pd.to_numeric(df["Planned_Hours"], errors="coerce").fillna(0).round(0).astype(int)
+    df["Start_Offset_Days"] = pd.to_numeric(df["Start_Offset_Days"], errors="coerce").fillna(0).round(0).astype(int)
+    df["Duration_Days"]     = pd.to_numeric(df["Duration_Days"], errors="coerce").fillna(0).round(0).astype(int)
+    df["Rate_USD"]          = pd.to_numeric(df["Rate_USD"], errors="coerce").fillna(0).round(2)
+    df["Price_USD"]         = (df["Planned_Hours"] * df["Rate_USD"]).round(0).astype(int)  # Hours × Rate (whole USD)
+
+    return df
+
 # ---------- WBS builder functions ----------
 def _round_int(x: float) -> int:
     try:
@@ -1734,6 +1763,7 @@ def api_export(payload: ExportPayload):
 
     project_name = payload.project_name or f"Proposal {datetime.date.today().isoformat()}"
     df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
+    df = _finalize_wf_df(df)  # <-- ensure Service_Department column + pricing identity
 
     # Friendly filename
     base_parts = [project_name, (payload.scenario_label or "").strip(), "Workfront Export"]
@@ -1752,8 +1782,7 @@ def api_export(payload: ExportPayload):
         out_path = f"{base}.xlsx"
         with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
             df.to_excel(xw, index=False)
-            ws = list(xw.sheets.values())[0]
-            _apply_number_formats(ws, df)
+            _apply_number_formats(xw.sheets[list(xw.sheets.keys())[0]], df)
         return FileResponse(
             out_path, filename=out_path,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1768,6 +1797,8 @@ def api_export_workbook(payload: ExportWorkbookPayload):
     project = (payload.project_name or f"Proposal {datetime.date.today().isoformat()}").strip()
     dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
     dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
+    dfA = _finalize_wf_df(dfA)
+    dfB = _finalize_wf_df(dfB)
     base = f"{project} - Scenarios A & B - Workfront Export"
     if payload.add_timestamp:
         base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
