@@ -1392,6 +1392,79 @@ class ExportWorkbookPayload(BaseModel):
     sheet_name_b: str | None = "Scenario B"
     add_timestamp: bool | None = False
 
+# ---- Deliverable ordering helpers ----
+def _phase_rank_for(deliv_name: str, included_tgs: list[str]) -> int:
+    """Lower rank = earlier phase. Name takes precedence, then task_groups."""
+    n = (deliv_name or "").strip().lower()
+    if "discovery" in n or "research" in n or "strategy" in n:
+        return 0
+    if "design" in n or "creative" in n or "concept" in n:
+        return 10
+    if "post" in n:  # covers "post-production" - check this BEFORE production
+        return 30
+    if "development" in n or "build" in n or "production" in n:
+        return 20
+    if "qa" in n or "review" in n or "test" in n:
+        return 40
+    if "launch" in n or "deploy" in n:
+        return 50
+    # fall back to included task groups against Timeline_Params order
+    base = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
+    if included_tgs:
+        return min([base.get(str(tg), 999) for tg in included_tgs])
+    return 999
+
+def _deliverable_order_overrides(letter: str) -> list[tuple[str,str]]:
+    """
+    Optional: UI_Options keys:
+      Deliverable_Order_Overrides_A = Development<Post-Production; QA<Launch
+      Deliverable_Order_Overrides_B = ...
+    Default for both A & B ensures Development comes before Post-Production.
+    """
+    try:
+        key = f"Deliverable_Order_Overrides_{letter.upper()}"
+        row = DB.ui_options[DB.ui_options["Key"] == key]
+        if not row.empty:
+            pairs = []
+            for p in str(row["Value"].iloc[0]).split(";"):
+                if "<" in p:
+                    a, b = [x.strip().lower() for x in p.split("<", 1)]
+                    if a and b: pairs.append((a, b))
+            if pairs: return pairs
+    except Exception:
+        pass
+    return [("production", "post-production")]  # default: Production < Post-Production
+
+def _sort_deliverables(per_deliv: list[dict], letter: str) -> list[dict]:
+    # base rank from phase
+    def base_rank(d):
+        return _phase_rank_for(d.get("deliverable",""), d.get("included_task_groups", []))
+    # topological sort from overrides + base rank as tiebreak
+    nodes = list(range(len(per_deliv)))
+    name_lc = [str(d.get("deliverable","")).lower() for d in per_deliv]
+    edges = []
+    for a,b in _deliverable_order_overrides(letter):
+        for i, n in enumerate(name_lc):
+            if a in n:
+                for j, m in enumerate(name_lc):
+                    if b in m: edges.append((i,j))
+    preds = {i:set() for i in nodes}; succs = {i:set() for i in nodes}
+    for i,j in edges: succs[i].add(j); preds[j].add(i)
+    ready = [i for i in nodes if not preds[i]]
+    ready.sort(key=lambda i: (base_rank(per_deliv[i]), name_lc[i]))
+    out = []
+    while ready:
+        i = ready.pop(0)
+        out.append(i)
+        for j in sorted(list(succs[i]), key=lambda k: (base_rank(per_deliv[k]), name_lc[k])):
+            preds[j].discard(i)
+            if not preds[j] and j not in out and j not in ready:
+                ready.append(j)
+        ready.sort(key=lambda k: (base_rank(per_deliv[k]), name_lc[k]))
+    tail = [i for i in nodes if i not in out]
+    tail.sort(key=lambda i: (base_rank(per_deliv[i]), name_lc[i]))
+    return [per_deliv[i] for i in out + tail]
+
 # ---------- Routes ----------
 @app.get("/", response_class=HTMLResponse)
 def root():
@@ -1568,6 +1641,7 @@ def api_build(payload: BuildPayload):
             per_deliv.append(out)
 
         # after building per_deliv
+        per_deliv = _sort_deliverables(per_deliv, letter)  # NEW: sort by phase order
         price_sum = sum(int(x["price"]) for x in per_deliv)
         hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
 
