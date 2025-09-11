@@ -8,6 +8,27 @@ This is a web-based Agency Project Builder that helps agencies create project es
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+### v3 Drivers Support Implementation Complete (September 2025)
+- **Backend Implementation**: Added v3 Drivers support with complete token normalization and mapping functionality
+  - Added helper methods to AgencyDB class: `_norm_token`, `_v4_complexity_tokens`, `_v4_tier_tokens`, `_map_to_v4_token`, and `drivers_complexities_tiers_v3`
+  - Updated `/api/options` endpoint to provide exactly 3 standardized options each for complexity, tiers, and rate bands
+  - Enhanced `scenario_hours_col` method to handle v3 labels mapping to v4 columns with intelligent fallback
+  - Implemented robust fallback logic when no v3 Excel file is available, using v4 data with 3-option limits
+
+- **Frontend Enhancement**: Complete UI integration for v3 Drivers functionality  
+  - Converted Rate Band input field to dropdown and added Complexity and Volume Tier dropdowns
+  - Updated JavaScript to populate all dropdowns from `/api/options` API data with smart defaults
+  - Modified `buildFromSuggestions` and `regenerateWithEdits` functions to send selected values to `/api/build`
+  - All dropdowns now provide exactly 3 options: Complexities (Core/Advanced/Complex), Tiers (T1/T2/T3), Rate Bands (Standard_US/Premium_US/Nearshore_Value)
+
+- **Integration Testing**: Full end-to-end validation confirms proper functionality
+  - API returns exactly 3 options per category as designed
+  - Backend correctly processes complexity and tier overrides in scenario specifications
+  - Pricing calculations work correctly with v3 parameter combinations  
+  - System maintains backward compatibility through intelligent v4 column mapping
+
 ## System Architecture
 
 ### Backend Architecture
