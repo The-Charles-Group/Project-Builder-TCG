@@ -60,7 +60,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 WF_COLUMNS = [
     "Project_Name", "WBS_ID", "Parent_WBS_ID",
     "Task_Name", "Deliverable", "Component", "Task",
-    "Service_Department",            # <-- NEW, own column
+    "Service Department",            # <-- exact header, its own column
     "Role", "Seniority",
     "Planned_Hours", "Start_Offset_Days", "Duration_Days",
     "Dependencies", "Assignee_External_ID", "Notes",
@@ -279,8 +279,8 @@ class AgencyDB:
         if comp_col: df["Component"] = df[comp_col].astype(str).fillna("").str.strip()
         else: df["Component"] = ""
 
-        if svc_col: df["Service_Department"] = df[svc_col].astype(str).fillna("").str.strip()
-        else: df["Service_Department"] = ""
+        if svc_col: df["Service Department"] = df[svc_col].astype(str).fillna("").str.strip()
+        else: df["Service Department"] = ""
 
     def _canonical_seniority(self, v: str) -> str:
         """Standardize seniority levels to canonical values: Junior, Mid, Senior, Director"""
@@ -1039,7 +1039,7 @@ class AgencyDB:
         ].copy()
         if component:
             sub = sub[sub["Component"].astype(str) == str(component)]
-        return self._svc_mode(sub["Service_Department"])
+        return self._svc_mode(sub["Service Department"])
 
     def service_department_for_component(self, deliverable_code: str, component: str, task_groups: list[str]) -> str:
         if self.v3_all_rows is None or self.v3_all_rows.empty:
@@ -1050,7 +1050,7 @@ class AgencyDB:
         ].copy()
         if component:
             sub = sub[sub["Component"].astype(str) == str(component)]
-        return self._svc_mode(sub["Service_Department"])
+        return self._svc_mode(sub["Service Department"])
 
     def service_department_for_deliverable(self, deliverable_code: str, task_groups: list[str]) -> str:
         if self.v3_all_rows is None or self.v3_all_rows.empty:
@@ -1059,7 +1059,7 @@ class AgencyDB:
             (self.v3_all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.v3_all_rows["task_group"].astype(str).isin([str(x) for x in task_groups]))
         ]
-        return self._svc_mode(sub["Service_Department"])
+        return self._svc_mode(sub["Service Department"])
 
 DB = AgencyDB()
 
@@ -1197,7 +1197,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         "Task_Name": project_name, "Deliverable": "", "Component": "Project", "Task": "",
         "Role": "", "Seniority": "", "Planned_Hours": "", "Start_Offset_Days": 0, "Duration_Days": "",
         "Dependencies": "", "Assignee_External_ID": "", "Notes": "",
-        "Service_Department": "",
+        "Service Department": "",
         "Rate_USD": "", "Price_USD": ""
     })
 
@@ -1252,7 +1252,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             "Planned_Hours": parent_hours_display,
             "Start_Offset_Days": day_cursor, "Duration_Days": total_deliv_duration,
             "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": f'{d.get("complexity","")}/{d.get("tier","")}',
-            "Service_Department": svc_deliv,
+            "Service Department": svc_deliv,
             "Rate_USD": round(deliv_rate, 2), "Price_USD": round(deliv_price, 2)
         })
 
@@ -1293,7 +1293,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Component": comp, "Task": "", "Role": "", "Seniority": "",
                 "Planned_Hours": comp_hours_display, "Start_Offset_Days": day_cursor + comp_offset, "Duration_Days": comp_duration,
                 "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs), "Assignee_External_ID": "", "Notes": "",
-                "Service_Department": svc_comp,
+                "Service Department": svc_comp,
                 "Rate_USD": round(comp_rate, 2), "Price_USD": round(comp_price, 2)
             })
 
@@ -1329,7 +1329,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Component": comp, "Task": label, "Role": role, "Seniority": sen,
                     "Planned_Hours": task_hours_display, "Start_Offset_Days": day_cursor + offset_by_tg[tg], "Duration_Days": dur,
                     "Dependencies": (wbs_comp if k == 1 else prev_task_wbs), "Assignee_External_ID": "", "Notes": "",
-                    "Service_Department": svc_task,
+                    "Service Department": svc_task,
                     "Rate_USD": round(task_rate, 2), "Price_USD": round(task_price, 2)
                 })
                 prev_task_wbs = wbs_task
