@@ -77,6 +77,7 @@ class AgencyDB:
         self.slack_settings = None          # Slack_Settings
         self.pricing_settings = None        # Pricing_Settings
         self.scenario_templates = None      # Scenario_Templates
+        self.drivers_v3 = None              # v3 Drivers sheet
         self.ui_options = None              # UI_Options
         self.rfp_rules = None               # RFP_Matching_Rules
 
@@ -143,6 +144,16 @@ class AgencyDB:
         # Normalize role and seniority columns 
         self._normalize_role_and_seniority_columns()
         self._normalize_rate_card_seniority()
+        
+        # Try to read v3 drivers (exact file name may vary)
+        for v3_name in ["Replit_App_DB_READABLE_FullRows_v3.xlsx",
+                        "Replit_App_DB_READABLE_FullRows_v3 (2).xlsx"]:
+            if os.path.exists(v3_name):
+                try:
+                    self.drivers_v3 = pd.read_excel(v3_name, sheet_name="Drivers")
+                except Exception:
+                    self.drivers_v3 = None
+                break
         
         self.loaded = True
         return True
@@ -308,6 +319,57 @@ class AgencyDB:
             rc["Seniority"] = rc["Seniority"].where(rc["Seniority"].str.len() > 0, "Mid")
         
         self.role_rate_card = rc
+
+    # ---------- v3 Drivers helper methods ----------
+    def _norm_token(self, s: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(s).strip().lower())
+
+    def _v4_complexity_tokens(self) -> list[str]:
+        toks = set()
+        for c in self.all_rows.columns:
+            if c.endswith("_Hours") and "__" in c:
+                toks.add(c.split("__", 1)[0])
+        return sorted(toks)
+
+    def _v4_tier_tokens(self) -> list[str]:
+        toks = set()
+        for c in self.all_rows.columns:
+            if c.endswith("_Hours") and "__" in c:
+                toks.add(c.rsplit("__", 1)[0].split("__",1)[1].replace("_Hours",""))
+        return sorted(toks)
+
+    def _map_to_v4_token(self, label: str, candidates: list[str]) -> str:
+        if not label: return ""
+        z = self._norm_token(label)
+        # exact normalized match first
+        for c in candidates:
+            if self._norm_token(c) == z:
+                return c
+        # relaxed: startswith / contains
+        for c in candidates:
+            if z and (self._norm_token(c).startswith(z) or z.startswith(self._norm_token(c))):
+                return c
+        # fallback to first
+        return candidates[0] if candidates else ""
+
+    def drivers_complexities_tiers_v3(self) -> tuple[list[str], list[str]]:
+        """Return display labels from v3 Drivers (max 3 each)."""
+        if self.drivers_v3 is None or self.drivers_v3.empty:
+            return ([], [])
+        df = self.drivers_v3.copy()
+        cols = {c.lower(): c for c in df.columns}
+        # Try to find the columns
+        type_col = next((cols.get(x) for x in ["type","driver","driver_type","category"]), None)
+        key_col  = next((cols.get(x) for x in ["key","value","name","label","option"]), None)
+        order_col= next((cols.get(x) for x in ["sort","order","seq","priority"]), None)
+        if not type_col or not key_col:
+            return ([], [])
+        if order_col:
+            df = df.sort_values(order_col, kind="stable")
+        df[key_col] = df[key_col].astype(str).str.strip()
+        comp = df[df[type_col].str.contains("complex", case=False, na=False)][key_col].dropna().unique().tolist()
+        tier = df[df[type_col].str.contains("tier", case=False, na=False)][key_col].dropna().unique().tolist()
+        return (comp[:3], tier[:3])
 
     def _create_mock_data(self):
         """Create minimal mock data for demo purposes when database files are not available"""
@@ -515,10 +577,17 @@ class AgencyDB:
 
     # ---------- Hours aggregation ----------
     def scenario_hours_col(self, complexity: str, tier: str) -> str:
-        col = self._scenario_col(complexity, tier)
-        if col not in self.all_rows.columns:
-            raise HTTPException(400, f"Scenario column not found: {col}")
-        return col
+        # exact
+        col = f"{complexity}__{tier}_Hours"
+        if col in self.all_rows.columns:
+            return col
+        # try mapping display labels -> v4 tokens
+        c_tok = self._map_to_v4_token(complexity, self._v4_complexity_tokens())
+        t_tok = self._map_to_v4_token(tier,        self._v4_tier_tokens())
+        col2 = f"{c_tok}__{t_tok}_Hours"
+        if col2 not in self.all_rows.columns:
+            raise HTTPException(400, f"Scenario column not found for ({complexity}, {tier}).")
+        return col2
 
     def hours_by_role_for_deliverable(
         self, deliverable_code: str, included_task_groups: List[str], scenario_col: str
@@ -1168,25 +1237,26 @@ def api_load():
 def api_options():
     if not DB.loaded:
         DB.load()
-    # Extract dropdown lists
-    complexities = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Complexity"]["Key"].tolist()
-    tiers        = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].tolist()
-    rate_bands   = DB.rate_bands["Band_Name"].tolist()
-    pricing_modes= ["Flat_Blended","Per_Resource"]
-    # Bundles per category
-    bundles = DB.b_defaults["Bundle"].tolist()
-    # Deliverables
+
+    # Prefer v3 Drivers (3 each)
+    v3_complexities, v3_tiers = DB.drivers_complexities_tiers_v3()
+    if not v3_complexities:
+        v3_complexities = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Complexity"]["Key"].head(3).tolist()
+    if not v3_tiers:
+        v3_tiers = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].head(3).tolist()
+
+    rate_bands = DB.rate_bands["Band_Name"].head(3).tolist()  # 3 bands max
+    pricing_modes = ["Flat_Blended","Per_Resource"]
     deliverables = DB.deliverables[["Deliverable_Code","Deliverable","Category"]].to_dict(orient="records")
-    # Scenario templates
-    scenario_templates = DB.scenario_templates.to_dict(orient="records")
+
     return {
-        "complexities": complexities,
-        "tiers": tiers,
+        "complexities": v3_complexities,
+        "tiers": v3_tiers,
         "rate_bands": rate_bands,
         "pricing_modes": pricing_modes,
-        "bundles": bundles,
+        "bundles": DB.b_defaults["Bundle"].tolist(),
         "deliverables": deliverables,
-        "scenario_templates": scenario_templates,
+        "scenario_templates": DB.scenario_templates.to_dict(orient="records"),
         "pricing_settings": DB.pricing_settings.to_dict(orient="records"),
         "slack_settings": DB.slack_settings.to_dict(orient="records"),
     }
