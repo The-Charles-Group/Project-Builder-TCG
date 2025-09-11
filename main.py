@@ -631,10 +631,9 @@ class AgencyDB:
     def build_schedule(self, deliverable_code: str, included_task_groups: List[str],
                        complexity: str, tier: str,
                        use_slack: bool, slack_after_internal: int, slack_after_client: int, slack_global_pct: float,
-                       project_start: Optional[str]=None) -> List[Dict[str, Any]]:
-        # Order task groups by a sensible default from Timeline_Params appearance
-        order_map = {tg:i for i, tg in enumerate(self.timeline_params["Task_Group"].tolist())}
-        tgs = sorted(included_task_groups, key=lambda x: order_map.get(x, 999))
+                       project_start: Optional[str]=None, scenario_letter: str="A") -> List[Dict[str, Any]]:
+        order_map = {tg:i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
+        tgs = self.sort_task_groups(included_task_groups, scenario_letter)
 
         # Start date
         if project_start:
@@ -664,6 +663,57 @@ class AgencyDB:
                 cursor_day += int(slack_after_client)
 
         return rows
+
+    def _order_overrides(self, letter: str) -> list[tuple[str,str]]:
+        """
+        Optional UI_Options row(s):
+          - Key: Task_Order_Overrides_A  Value: post_production<development; qa<launch
+          - Key: Task_Order_Overrides_B  Value: ...
+        Fallback: ensure post_production < development for Scenario A.
+        """
+        try:
+            key = f"Task_Order_Overrides_{letter.upper()}"
+            row = self.ui_options[self.ui_options["Key"] == key]
+            if not row.empty:
+                parts = str(row["Value"].iloc[0]).split(";")
+                pairs = []
+                for p in parts:
+                    if "<" in p:
+                        a, b = [x.strip() for x in p.split("<", 1)]
+                        if a and b: pairs.append((a, b))
+                if pairs:
+                    return pairs
+        except Exception:
+            pass
+        if letter.upper() == "A":
+            return [("post_production", "development")]
+        return []
+
+    def sort_task_groups(self, tgs: list[str], letter: str) -> list[str]:
+        """Topological sort using Timeline_Params order as baseline + overrides."""
+        base = {str(tg): i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
+        nodes = [str(x) for x in tgs]
+        edges = [(a, b) for (a, b) in self._order_overrides(letter) if a in nodes and b in nodes]
+        # Kahn's algorithm with baseline tie-break
+        preds = {n: set() for n in nodes}
+        succs = {n: set() for n in nodes}
+        for a, b in edges:
+            succs[a].add(b); preds[b].add(a)
+        ready = [n for n in nodes if not preds[n]]
+        ready.sort(key=lambda n: base.get(n, 999))
+        out = []
+        while ready:
+            n = ready.pop(0)
+            out.append(n)
+            for m in sorted(list(succs[n]), key=lambda x: base.get(x, 999)):
+                preds[m].discard(n)
+                if not preds[m] and m not in out and m in nodes and m not in ready:
+                    ready.append(m)
+            ready.sort(key=lambda x: base.get(x, 999))
+        # append any left (cycle or unrelated), preserving baseline
+        tail = [n for n in nodes if n not in out]
+        tail.sort(key=lambda n: base.get(n, 999))
+        return out + tail
 
     # ---------- Helper methods for task ordering and role detection ----------
     def sorted_task_groups(self, included: List[str]) -> List[str]:
@@ -1345,7 +1395,7 @@ def _resolve_scenario(spec: ScenarioSpec, category: str) -> Dict[str, Any]:
 def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, Any],
                               pricing_mode: str, blended_rate: Optional[float], rate_band: str,
                               use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
-                              project_start: Optional[str]) -> Dict[str, Any]:
+                              project_start: Optional[str], scenario_letter: str) -> Dict[str, Any]:
     # Which task groups to include?
     if spec["mode"] == "bundle":
         included = DB.included_task_groups(category, spec["bundle"])
@@ -1357,21 +1407,26 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
     complexity, tier = spec["complexity"], spec["tier"]
     scen_col = DB.scenario_hours_col(complexity, tier)
     hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
-    total_hours = float(hrs_by_role["Hours"].sum()) if not hrs_by_role.empty else 0.0
+    
+    # ---- after total_hours is computed ----
+    total_hours_raw = float(hrs_by_role["Hours"].sum()) if not hrs_by_role.empty else 0.0
+    total_hours = int(round(total_hours_raw))  # whole hours
 
-    # Price
     if pricing_mode == "Flat_Blended":
-        if blended_rate is None:
-            # default from Pricing_Settings
-            ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
-            blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
-        price = DB.blended_price(total_hours, blended_rate)
+        eff_rate = float(blended_rate if blended_rate is not None else
+                         DB.pricing_settings.loc[DB.pricing_settings["Key"]=="Default_Blended_Rate","Default"].astype(float).iloc[0])
     else:
-        price = DB.per_resource_price(hrs_by_role, rate_band=rate_band or "Standard_US")
+        # per-resource: compute effective weighted rate from role rates
+        price_raw = DB.per_resource_price(hrs_by_role, rate_band=rate_band or "Standard_US")
+        eff_rate = round((price_raw / total_hours_raw), 2) if total_hours_raw > 0 else 0.0
+
+    price_int = int(round(total_hours * eff_rate))  # Price = Hours × Rate (whole USD)
 
     # Schedule
     schedule = DB.build_schedule(
-        deliv_code, included, complexity, tier, use_slack, slack_i, slack_c, slack_pct, project_start
+        deliv_code, included, complexity, tier,
+        use_slack, slack_i, slack_c, slack_pct, project_start,
+        scenario_letter=scenario_letter
     )
 
     return {
@@ -1381,8 +1436,9 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         "tier": tier,
         "scenario_col": scen_col,
         "hours_by_role": hrs_by_role.to_dict(orient="records"),
-        "total_hours": total_hours,
-        "price": round(price, 2),
+        "total_hours": total_hours,          # int
+        "effective_rate": round(eff_rate, 2),# 2-dec for UI
+        "price": price_int,                  # int USD
         "schedule": schedule
     }
 
@@ -1407,8 +1463,6 @@ def api_build(payload: BuildPayload):
     scenarios = {}
     for letter, spec_in in [("A", payload.scenario_a), ("B", payload.scenario_b)]:
         per_deliv = []
-        price_sum = 0.0
-        hours_sum = 0.0
         for code in payload.selected_deliverable_codes:
             row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
             if row.empty: 
@@ -1418,14 +1472,17 @@ def api_build(payload: BuildPayload):
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 pricing_mode, blended_rate, rate_band,
-                use_slack, slack_i, slack_c, slack_pct, project_start
+                use_slack, slack_i, slack_c, slack_pct, project_start,
+                scenario_letter=letter
             )
             # Add names for readability
             out["deliverable"] = str(row["Deliverable"].iloc[0])
             out["category"]    = cat
             per_deliv.append(out)
-            price_sum += out["price"]
-            hours_sum += out["total_hours"]
+
+        # after building per_deliv
+        price_sum = sum(int(x["price"]) for x in per_deliv)
+        hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
 
         scenarios[letter] = {
             "pricing_mode": pricing_mode,
@@ -1437,7 +1494,7 @@ def api_build(payload: BuildPayload):
             "slack_global_pct": slack_pct,
             "project_start": project_start,
             "items": per_deliv,
-            "totals": {"hours": round(hours_sum,2), "price": round(price_sum,2)}
+            "totals": {"hours": int(hours_sum), "price": int(price_sum)}
         }
 
     return scenarios

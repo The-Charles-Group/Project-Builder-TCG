@@ -544,6 +544,37 @@
       }
     }
 
+    // Number formatting functions
+    function fmtInt(n){ return (Math.round(Number(n)||0)).toLocaleString(); }
+    function fmtUSD0(n){ return '$' + fmtInt(n); }
+    function fmtUSD2(n){ return '$' + (Number(n)||0).toFixed(2); }
+
+    // Updated scenario rendering function with proper formatting
+    function renderScenario(targetId, scenario) {
+      let html = `
+        <div class="totals">Totals — Hours: ${fmtInt(scenario.totals.hours)}, Price: ${fmtUSD0(scenario.totals.price)}</div>
+        <table>
+          <thead><tr><th>Deliverable</th><th>Hours</th><th>Rate (USD)</th><th>Price (USD)</th><th>Tasks</th></tr></thead>
+          <tbody>
+      `;
+      scenario.items.forEach(it => {
+        const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
+        const rate = (typeof it.effective_rate !== 'undefined') ? it.effective_rate : (it.total_hours ? (it.price/it.total_hours) : 0);
+        html += `<tr>
+          <td>${it.deliverable}</td>
+          <td>${fmtInt(it.total_hours)}</td>
+          <td>${fmtUSD2(rate)}</td>
+          <td>${fmtUSD0(it.price)}</td>
+          <td>${tasks}</td>
+        </tr>`;
+      });
+      html += `
+          </tbody>
+        </table>
+      `;
+      document.getElementById(targetId).innerHTML = html;
+    }
+
     // Enable/disable the workbook button based on format
     function toggleWorkbookBtn() {
       const btn = document.getElementById('btnExportWorkbook');
