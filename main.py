@@ -975,6 +975,23 @@ def _safe_sheet_name(s: str) -> str:
     s = s.strip() or "Sheet"
     return s[:31]
 
+def _apply_number_formats(ws, df):
+    """Format numeric columns: Hours & Price -> 0 decimals, Rate -> 2 decimals."""
+    col_idx = {c: i+1 for i, c in enumerate(df.columns)}  # 1-based
+    # Whole-number columns
+    for col in ["Planned_Hours", "Start_Offset_Days", "Duration_Days", "Price_USD"]:
+        if col in col_idx:
+            j = col_idx[col]
+            for col_cells in ws.iter_cols(min_col=j, max_col=j, min_row=2, max_row=ws.max_row):
+                for cell in col_cells:
+                    cell.number_format = "0"
+    # Rate with 2 decimals
+    if "Rate_USD" in col_idx:
+        j = col_idx["Rate_USD"]
+        for col_cells in ws.iter_cols(min_col=j, max_col=j, min_row=2, max_row=ws.max_row):
+            for cell in col_cells:
+                cell.number_format = "0.00"
+
 # ---------- WBS builder functions ----------
 def _round_int(x: float) -> int:
     try:
@@ -1156,7 +1173,24 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         day_cursor += total_deliv_duration
         prev_deliv_wbs = wbs_deliv
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    
+    # --- ENFORCE NUMERIC TYPES & PRICE FORMULA ---
+    # Coerce to numeric and fill blanks
+    if "Planned_Hours" in df.columns:
+        df["Planned_Hours"] = pd.to_numeric(df["Planned_Hours"], errors="coerce").fillna(0).round(0).astype(int)
+
+    # Rate shown with 2 decimals; blanks -> 0
+    if "Rate_USD" in df.columns:
+        df["Rate_USD"] = pd.to_numeric(df["Rate_USD"], errors="coerce").fillna(0).round(2)
+
+    # Always compute Price from Hours × Rate, then round to whole dollars (no cents)
+    if "Planned_Hours" in df.columns and "Rate_USD" in df.columns:
+        df["Price_USD"] = (df["Planned_Hours"] * df["Rate_USD"]).round(0).astype(int)
+    else:
+        df["Price_USD"] = 0
+
+    return df
 
 def build_wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFrame:
     """Build WBS with pricing - delegates to the enhanced pricing-aware version."""
@@ -1498,7 +1532,10 @@ def api_export(payload: ExportPayload):
     # xlsx
     try:
         out_path = f"{base}.xlsx"
-        df.to_excel(out_path, index=False, engine="openpyxl")
+        with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+            df.to_excel(xw, index=False)
+            ws = list(xw.sheets.values())[0]
+            _apply_number_formats(ws, df)
         return FileResponse(
             out_path, filename=out_path,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1517,9 +1554,13 @@ def api_export_workbook(payload: ExportWorkbookPayload):
     if payload.add_timestamp:
         base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
     out_name = f"{base}.xlsx"
+    sheetA = _safe_sheet_name(payload.sheet_name_a or "Scenario A")
+    sheetB = _safe_sheet_name(payload.sheet_name_b or "Scenario B")
     with pd.ExcelWriter(out_name, engine="openpyxl") as xw:
-        dfA.to_excel(xw, sheet_name=(_safe_sheet_name(payload.sheet_name_a or "Scenario A")), index=False)
-        dfB.to_excel(xw, sheet_name=(_safe_sheet_name(payload.sheet_name_b or "Scenario B")), index=False)
+        dfA.to_excel(xw, sheet_name=sheetA, index=False)
+        dfB.to_excel(xw, sheet_name=sheetB, index=False)
+        _apply_number_formats(xw.sheets[sheetA], dfA)
+        _apply_number_formats(xw.sheets[sheetB], dfB)
     return FileResponse(out_name, filename=out_name,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
