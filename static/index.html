@@ -41,7 +41,21 @@
         </div>
         <div>
           <label for="rateBand">Rate band</label>
-          <input id="rateBand" type="text" value="Standard_US" />
+          <select id="rateBand">
+            <!-- Options populated from API -->
+          </select>
+        </div>
+        <div>
+          <label for="complexity">Complexity</label>
+          <select id="complexity">
+            <!-- Options populated from API -->
+          </select>
+        </div>
+        <div>
+          <label for="volumeTier">Volume tier</label>
+          <select id="volumeTier">
+            <!-- Options populated from API -->
+          </select>
         </div>
         <div>
           <label for="projectName">Project name</label>
@@ -107,6 +121,25 @@
       const res = await fetch('/api/options');
       const data = await res.json();
       allDeliverables = data.deliverables || [];
+      
+      // Populate dropdowns
+      populateDropdown('rateBand', data.rate_bands || [], 'Standard_US');
+      populateDropdown('complexity', data.complexities || [], 'Core');
+      populateDropdown('volumeTier', data.tiers || [], 'T2_MediumVolume');
+    }
+
+    function populateDropdown(elementId, options, defaultValue) {
+      const select = document.getElementById(elementId);
+      if (!select) return;
+      
+      select.innerHTML = '';
+      options.forEach(option => {
+        const optEl = document.createElement('option');
+        optEl.value = option;
+        optEl.textContent = option;
+        if (option === defaultValue) optEl.selected = true;
+        select.appendChild(optEl);
+      });
     }
 
     function codeToName(code) {
@@ -246,12 +279,14 @@
       const blendedRateStr = document.getElementById('blendedRate').value;
       const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
       const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+      const complexity = document.getElementById('complexity').value;
+      const tier = document.getElementById('volumeTier').value;
 
       // Build both scenarios using existing /api/build
       const payload = {
         selected_deliverable_codes: selectedCodes,
-        scenario_a: { mode: "template", scenario_key: "MED_LOW" },
-        scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+        scenario_a: { mode: "template", scenario_key: "MED_LOW", complexity: complexity, tier: tier },
+        scenario_b: { mode: "template", scenario_key: "MED_HIGH", complexity: complexity, tier: tier },
         pricing_mode: pricingMode,
         blended_rate: blendedRate,
         rate_band: rateBand,
@@ -285,6 +320,8 @@
       const blendedRateStr = document.getElementById('blendedRate').value;
       const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
       const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+      const complexity = document.getElementById('complexity').value;
+      const tier = document.getElementById('volumeTier').value;
 
       document.getElementById('btnRegenerate').disabled = true;
       document.getElementById('btnRegenerate').textContent = 'Regenerating...';
@@ -292,8 +329,8 @@
       try {
         const payload = {
           selected_deliverable_codes: selectedCodes,
-          scenario_a: { mode: "template", scenario_key: "MED_LOW" },
-          scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+          scenario_a: { mode: "template", scenario_key: "MED_LOW", complexity: complexity, tier: tier },
+          scenario_b: { mode: "template", scenario_key: "MED_HIGH", complexity: complexity, tier: tier },
           pricing_mode: pricingMode,
           blended_rate: blendedRate,
           rate_band: rateBand,
