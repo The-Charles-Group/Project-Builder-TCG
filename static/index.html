@@ -691,6 +691,11 @@
         return;
       }
       
+      if (!latestScenarios || !latestScenarios.A || !latestScenarios.B) {
+        alert('Generate scenarios first.');
+        return;
+      }
+      
       // Disable button and show loading state
       const btn = document.getElementById('btnExportWorkbook');
       const originalText = btn ? btn.textContent : '';
@@ -701,8 +706,8 @@
 
       try {
         await downloadBlobFromPost('/api/export_workbook', {
-          scenario_a: latestScenarios?.A || {items:[]},
-          scenario_b: latestScenarios?.B || {items:[]},
+          scenario_a: latestScenarios.A,
+          scenario_b: latestScenarios.B,
           project_name: prefs.project_name,
           sheet_name_a: 'Scenario A',
           sheet_name_b: 'Scenario B',
