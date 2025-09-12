@@ -142,6 +142,33 @@
   </main>
 
   <script>
+    // --- Safe DOM helpers ---
+    const $ = (id) => document.getElementById(id);
+    const setHTML = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
+    const setText  = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+
+    // Ensure Stage-2 containers exist so we never write into null nodes
+    function ensureStage2Dom() {
+      const targets = {
+        'left-list':   '#left-panel',
+        'left-total':  '#left-panel',
+        'add-form':    '#middle-panel',
+        'del-form':    '#middle-panel',
+        'summary':     '#right-panel',
+        'wordcount':   '#right-panel'
+      };
+      for (const [id, parentSel] of Object.entries(targets)) {
+        if (!$(id)) {
+          const parent = document.querySelector(parentSel) || document.body;
+          const tag = (id === 'summary') ? 'pre' : (id.endsWith('form') ? 'form' : 'div');
+          const el = document.createElement(tag);
+          el.id = id;
+          parent.appendChild(el);
+        }
+      }
+    }
+    document.addEventListener('DOMContentLoaded', ensureStage2Dom);
+
     // App state management
     const appState = {
       selectedCodes: [],        // critical for Step 3 build
@@ -208,36 +235,63 @@
       btn.textContent = 'Analyzing...';
 
       try {
+        ensureStage2Dom();
+
         const fd = new FormData();
         fd.append('file', fileEl.files[0]);
 
-        // Call AI Summary endpoint
-        const summaryRes = await fetch('/api/summarize_by_file', {
-          method: 'POST', 
-          body: fd
-        });
-        
-        if (!summaryRes.ok) {
-          throw new Error(`AI Analysis failed: ${summaryRes.status}`);
-        }
+        // 1) AI Summary (right panel, GPT-5 only)
+        const sum = await fetch('/api/summarize_by_file', { method: 'POST', body: fd }).then(r => r.json());
+        appState.aiSummary = sum;
 
-        appState.aiSummary = await summaryRes.json();
-        
-        // Extract the RFP text for auto_build
-        const textRes = await fetch('/api/suggest_by_file', {
-          method: 'POST', 
-          body: fd
-        });
-        const textData = await textRes.json();
-        appState.currentRfpText = textData.rfp_text || '';
-        
+        setText('wordcount', `${sum.word_count}/500 words`);
+        setText('summary', sum.summary_text);
+
+        // 2) DB suggestions (left) strictly from rules
+        const sugg = await fetch('/api/suggest_by_file', { method: 'POST', body: fd }).then(r => r.json());
+        const selectedCodes = (sugg || []).map(s => s.deliverable_code);
+        appState.selectedCodes = selectedCodes;
+
+        // 3) Build Average scenario now to populate left panel with pricing
+        const scenarios = await fetch('/api/build', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            selected_deliverable_codes: selectedCodes,
+            pricing_mode: 'Flat_Blended',
+            blended_rate: 195,
+            rate_band: 'Standard_US',
+            scenario_a: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
+            scenario_b: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'}
+          })
+        }).then(r => r.json());
+
+        // Render left panel (Average = Scenario A)
+        renderLeftPanel(scenarios.A.items || [], scenarios.A.totals || {price_total:0});
+
+        // 4) Reconcile (middle panel) using AI labels vs selected codes
+        const aiLabels = (sum.deliverables || []).map(d => d.label);
+        const recon = await fetch('/api/reconcile', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            summary_deliverables: aiLabels,
+            db_selected_deliverable_codes: selectedCodes    // pass codes to keep panels in sync
+          })
+        }).then(r => r.json());
+
+        appState.reconciliation = recon;
+        renderReconcile(recon);
+
         // Set project name from filename
         const baseName = (fileEl.files[0].name || '').replace(/\.[^.]+$/, '').trim();
-        if (baseName && !document.getElementById('projectName').value) {
-          document.getElementById('projectName').value = baseName;
+        if (baseName && !$('projectName').value) {
+          $('projectName').value = baseName;
         }
 
-        await performReconciliation();
+        // Show Stage 2
+        $('stage2').style.display = 'block';
+        $('stage2').scrollIntoView({ behavior: 'smooth' });
         
       } catch (error) {
         alert('Error analyzing file: ' + error.message);
@@ -458,28 +512,18 @@
       }
     }
 
-    // Apply Selection function as specified
+    // Apply Selection (keeps Step 3 happy)
     function applySelection() {
-      const curr = new Set(appState.selectedCodes);
-      
-      // Add checked additions
-      document.querySelectorAll('.add-checkbox:checked').forEach(checkbox => {
-        curr.add(checkbox.dataset.code);
-      });
-      
-      // Remove checked deletions
-      document.querySelectorAll('.delete-checkbox:checked').forEach(checkbox => {
-        curr.delete(checkbox.dataset.code);
-      });
-      
+      const curr = new Set(appState.selectedCodes || []);
+      document.querySelectorAll('#add-form input.add:checked').forEach(cb => curr.add(cb.dataset.code));
+      document.querySelectorAll('#del-form input.del:checked').forEach(cb => curr.delete(cb.dataset.code));
       appState.selectedCodes = [...curr];
-      
-      // Optionally, rebuild the left panel pricing with /api/build (Average)
+      // Optionally, re-build Average to refresh left panel total after changes
       rebuildLeftPanelWithNewSelection();
       
       // Show Stage 3
-      document.getElementById('step3').style.display = 'block';
-      document.getElementById('step3').scrollIntoView({ behavior: 'smooth' });
+      $('step3').style.display = 'block';
+      $('step3').scrollIntoView({ behavior: 'smooth' });
     }
     
     async function rebuildLeftPanelWithNewSelection() {
@@ -774,66 +818,24 @@
       document.getElementById(targetId).innerHTML = html;
     }
 
-    // New render functions as specified
+    // Safe render functions using DOM helpers
     function renderLeftPanel(items, totals) {
-      if (!items || items.length === 0) {
-        document.getElementById('leftplan').innerHTML = '<p>No deliverables selected yet.</p>';
-        return;
-      }
-      
-      let html = '<div class="deliverables-list">';
-      items.forEach(item => {
-        html += `<div class="deliverable-item">
-          <strong>${item.deliverable_name || codeToName(item.deliverable_code)}</strong>
-          <span class="hours">${item.hours || 0}h</span>
-          <span class="cost">$${(item.cost || 0).toFixed(2)}</span>
-        </div>`;
-      });
-      
-      if (totals) {
-        html += `<div class="totals">
-          <strong>Total: ${totals.hours || 0}h / $${(totals.cost || 0).toFixed(2)}</strong>
-        </div>`;
-      }
-      
-      html += '</div>';
-      document.getElementById('leftplan').innerHTML = html;
+      const rows = (items || []).map(i =>
+        `<div class="row"><span>${i.deliverable}</span><span>$${(i.price_total ?? i.price ?? 0).toLocaleString()}</span></div>`
+      );
+      setHTML('left-list', rows.length ? rows.join('') : '<em>No deliverables selected</em>');
+      setText('left-total', `Total: $${(totals?.price_total ?? totals?.price ?? 0).toLocaleString()}`);
     }
-    
-    function renderReconcile(recon) {
-      let html = '';
-      
-      if (recon.add && recon.add.length > 0) {
-        html += '<h4>Suggested Additions:</h4>';
-        recon.add.forEach(item => {
-          html += `<label class="recon-item add">
-            <input type="checkbox" class="add-checkbox" data-code="${item.code}" ${item.preselect ? 'checked' : ''}>
-            <span class="item-label">${item.label}</span>
-            <span class="reason">${item.reason}</span>
-          </label>`;
-        });
-      }
-      
-      if (recon.delete && recon.delete.length > 0) {
-        html += '<h4>Suggested Removals:</h4>';
-        recon.delete.forEach(item => {
-          html += `<label class="recon-item delete">
-            <input type="checkbox" class="delete-checkbox" data-code="${item.code}" ${item.preselect ? 'checked' : ''}>
-            <span class="item-label">${item.label}</span>
-            <span class="reason">${item.reason}</span>
-          </label>`;
-        });
-      }
-      
-      if (recon.unchanged && recon.unchanged.length > 0) {
-        html += '<h4>Unchanged:</h4>';
-        recon.unchanged.forEach(label => {
-          html += `<div class="recon-item unchanged">${label}</div>`;
-        });
-      }
-      
-      html += '<button id="btnApplySelection" onclick="applySelection()">Apply Selection</button>';
-      document.getElementById('reconcile').innerHTML = html;
+
+    function renderReconcile(data) {
+      const addRows = (data.add || []).map(s =>
+        `<label><input type="checkbox" class="add" data-code="${s.code}" checked> ${s.label} – ${s.reason}</label>`
+      );
+      const delRows = (data.delete || []).map(s =>
+        `<label class="danger"><input type="checkbox" class="del" data-code="${s.code}" checked> ${s.label} – ${s.reason}</label>`
+      );
+      setHTML('add-form', addRows.length ? addRows.join('<br>') : '<em>No suggestions to add</em>');
+      setHTML('del-form', delRows.length ? delRows.join('<br>') : '<em>No deletions suggested</em>');
     }
 
     // UI state management functions for Step 3 Build
