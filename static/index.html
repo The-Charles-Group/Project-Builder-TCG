@@ -276,9 +276,14 @@
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({
             summary_deliverables: aiLabels,
-            db_selected_deliverable_codes: selectedCodes    // pass codes to keep panels in sync
+            db_selected_deliverable_codes: appState.selectedCodes    // keep panels in sync
           })
         }).then(r => r.json());
+
+        // --- NEW: auto-adopt AI "ADD" when DB gave nothing ---
+        if ((!appState.selectedCodes?.length) && (recon.add?.length)) {
+          appState.selectedCodes = recon.add.map(s => s.code);
+        }
 
         appState.reconciliation = recon;
         renderReconcile(recon);
@@ -528,7 +533,8 @@
     
     async function rebuildLeftPanelWithNewSelection() {
       if (appState.selectedCodes.length === 0) {
-        document.getElementById('leftplan').innerHTML = '<p>No deliverables selected.</p>';
+        setHTML('left-list', '<em>No deliverables selected</em>');
+        setText('left-total', 'Total: $0');
         return;
       }
       

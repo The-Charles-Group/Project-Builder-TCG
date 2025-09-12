@@ -1740,25 +1740,22 @@ def ai_summarize_rfp_text(text: str) -> RfpSummary:
     try:
         # Create structured prompt for GPT-5
         system_prompt = """
-You are an expert producer at a creative/digital agency.
-Read the RFP text and return JSON ONLY in this exact shape:
+You are an agency executive producer.
+Read the RFP text and output JSON ONLY in this exact schema:
 
 {
   "deliverables": [
-    {
-      "label": "Brief deliverable name",
-      "short_desc": "Max 2 sentences describing the work the agency must do.",
-      "tasks": ["optional subtask 1", "optional subtask 2"]
-    }
+    {"label": "...", "short_desc": "...", "tasks": ["...", "..."]}
   ]
 }
 
-Rules:
-- Identify 3–8 concrete agency deliverables required to fulfill the request (strategy, creative, content, production, social, experiential, editorial/web, media, measurement, project management, etc.).
-- Each "label" must use common agency taxonomy so it can match a database (e.g., "Brand Strategy", "Campaign Creative", "Content Production (Video/Audio)", "Social Media & Community", "Experiential Activation", "Editorial Microsite / Livestream", "Media Planning & Buying", "Measurement & Reporting", "Program Management", "Rollout & Production Timeline").
-- "short_desc" MUST be ≤2 sentences, action-oriented, and specific to this RFP.
-- Do NOT quote lines from the RFP. Summarize what WORK we must deliver.
-- Keep total output concise; the UI will render a 500-word cap.
+Guidelines:
+- Identify 3–8 concrete agency deliverables needed to fulfill the request:
+  strategy, campaign creative, content production (video/audio/stills), social/community, editorial web/livestream, experiential/IRL, media planning/buying, measurement & reporting, program management/timeline.
+- Each "short_desc" is ≤2 sentences, specific to this RFP, action‑oriented.
+- Use common agency taxonomy for "label" so it will match a database later (e.g., "Brand Strategy", "Campaign Creative", "Content Production (Video/Audio)", "Social Media & Community", "Editorial Microsite & Livestream", "Experiential Activation", "Media Planning & Buying", "Measurement & Reporting", "Program Management & Timeline").
+- Do NOT quote the RFP; summarize the work we must deliver.
+- Keep total text concise (UI cap is 500 words).
 """
 
         user_prompt = f"Analyze this RFP text and extract the key deliverables:\n\n{text[:8000]}"  # Limit input size
@@ -1779,16 +1776,43 @@ Rules:
         deliverables = result.get("deliverables", [])
         
     except Exception as e:
-        # Fallback: create basic deliverables from text analysis
-        print(f"OpenAI error (using fallback): {e}")
+        print(f"OpenAI error (using smarter fallback): {e}")
+        t = (text or "").lower()
         deliverables = []
-        # crude fallback: pick top lines that look like deliverables
-        for line in (text or "").splitlines():
-            line = line.strip("-•* \t")
-            if len(line.split()) >= 2 and len(deliverables) < 8:
-                deliverables.append({"label": line[:80], "short_desc": "As requested in the RFP. Further details to be refined.", "tasks": []})
+
+        def add(label, desc, *keys):
+            if any(k in t for k in keys) and not any(d["label"] == label for d in deliverables):
+                deliverables.append({"label": label, "short_desc": desc[:300], "tasks": []})
+
+        add("Program Design (Artist Accelerator)",
+            "Define cohort structure, creator services, milestones and governance for a year‑long program that introduces, elevates and celebrates artists.", 
+            "accelerator", "year long", "program")
+        add("Campaign Strategy & Creative Platform",
+            "Create the organizing idea, audience strategy, KPIs and messaging architecture anchored to 'What's next in music is first on SoundCloud.'",
+            "objectives", "kpi", "platform", "strategy", "creative")
+        add("Content Production (Video/Audio/Stills)",
+            "Produce hero and cutdown assets telling authentic artist stories across video, audio and stills sized for paid/owned social, digital and OOH.",
+            "video", "audio", "stills")
+        add("Editorial Microsite & Livestream",
+            "Propose an editorial destination and livestream approach with UX outline, tech options and content governance.",
+            "editorial", "platform", "live streaming")
+        add("Social Media & Community",
+            "Define an always‑on social calendar, creator collab mechanics and community management playbook.",
+            "social")
+        add("Experiential Activation",
+            "Design a nimble IRL/virtual activation concept with budget tiers and contingency planning.",
+            "experiential")
+        add("Media Planning & Buying",
+            "Provide paid media plan and flighting to support brand spend, with channel mix and pacing across the year.",
+            "media")
+        add("Measurement & Reporting",
+            "Define KPI framework, reporting cadence and learning agenda; include a production timeline and rollout plan.",
+            "measurement", "kpi", "production timeline", "rollout")
+
         if not deliverables:
-            deliverables = [{"label": "Scope Discovery", "short_desc": "Review the RFP and clarify scope with stakeholders.", "tasks": []}]
+            deliverables = [{"label":"Program Management & Timeline",
+                             "short_desc":"Create a production timeline and rollout schedule with milestones and owners.",
+                             "tasks":[]}]
 
     # enforce constraints
     for d in deliverables:
@@ -2348,7 +2372,7 @@ def api_reconcile(p: ReconcilePayload):
         ai_tok = [(lab, _norm_tokens(lab)) for lab in ai_labels]
         db_tok = [(r["Deliverable_Code"], r["Deliverable"], _norm_tokens(r["Deliverable"])) for _, r in db_all.iterrows()]
 
-        ADD_THRESHOLD = 0.45     # how close an AI label must be to a DB deliverable to recommend ADD
+        ADD_THRESHOLD = 0.35     # how close an AI label must be to a DB deliverable to recommend ADD (lowered from 0.45)
         DELETE_THRESHOLD = 0.25  # if no AI label is at least this close, recommend DELETE
 
         add: List[ReconcileSuggestion] = []
@@ -2375,7 +2399,7 @@ def api_reconcile(p: ReconcilePayload):
                     unchanged.append(best_name)
             else:
                 # Not selected yet -> recommend ADD if strong enough
-                if best_score >= ADD_THRESHOLD:
+                if best_score >= 0.35:
                     add.append(ReconcileSuggestion(
                         code=best_code, label=best_name,
                         reason=f"Matches AI summary item \"{lab}\" (score {best_score:.2f}).",

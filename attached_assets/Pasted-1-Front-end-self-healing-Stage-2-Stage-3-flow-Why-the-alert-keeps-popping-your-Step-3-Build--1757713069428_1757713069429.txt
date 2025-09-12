@@ -1,0 +1,147 @@
+1) Front‑end: self‑healing Stage‑2 → Stage‑3 flow
+
+Why the alert keeps popping: your Step‑3 “Build” uses a selectedCodes array that is still empty. /api/suggest_by_file returns { suggested: [...] } (object, not array) and, for SoundCloud, the strict rules may return no suggestions; so selectedCodes never gets set.
+
+Fix (small, robust): after you call /api/reconcile, if there are ADD suggestions and selectedCodes is empty, take those codes and immediately build Scenario A (Average). This aligns the panels and unlocks Step‑3.
+
+// After summarize_by_file and suggest_by_file:
+const sum  = await postFile('/api/summarize_by_file', file);
+const sugg = await postFile('/api/suggest_by_file', file);
+
+// DB suggestions (may be empty on strict rules)
+let selectedCodes = (sugg?.suggested || []).map(x => x.deliverable_code);
+appState.selectedCodes = selectedCodes;
+
+// Reconcile AI (right) vs DB (left)
+const aiLabels = (sum.deliverables || []).map(d => d.label);
+const recon = await postJSON('/api/reconcile', {
+  summary_deliverables: aiLabels,
+  db_selected_deliverable_codes: appState.selectedCodes   // keep panels in sync
+});
+
+// --- NEW: auto‑adopt AI “ADD” when DB gave nothing ---
+if ((!appState.selectedCodes?.length) && (recon.add?.length)) {
+  appState.selectedCodes = recon.add.map(s => s.code);
+}
+
+// Build Average plan now so left panel is populated + priced
+const scenarios = await postJSON('/api/build', {
+  selected_deliverable_codes: appState.selectedCodes,   // <-- NOT empty now
+  pricing_mode: 'Flat_Blended',
+  blended_rate: 195,
+  rate_band: 'Standard_US',
+  scenario_a: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
+  scenario_b: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'}
+});
+
+renderLeftPanel(scenarios.A.items, scenarios.A.totals);
+renderReconcile(recon);
+
+
+Also fix the earlier JS typo (the popup you saw came from this):
+Change (sugg || []).map(...) → (sugg?.suggested || []).map(...). The API returns an object with a suggested array.
+
+2) Backend: reconciliation that always works (and suggests more ADDs)
+
+Replace the DELETE section in /api/reconcile with this safe block (your current version builds a mismatched DataFrame and can break silently):
+
+# b) DB items not present in AI summary -> DELETE (red highlight)
+ai_labels = [str(x) for x in (p.summary_deliverables or []) if str(x).strip()]
+
+for code in sel_codes:
+    name = db_deliv_map.get(code, code)
+    name_tokens = _norm_tokens(name)
+    max_score = 0.0
+    for lbl in ai_labels:
+        max_score = max(max_score, _jaccard(name_tokens, _norm_tokens(lbl)))
+    if max_score < 0.25:
+        delete.append(ReconcileSuggestion(
+            code=code, label=name, reason="Not found in AI Summary.", preselect=True
+        ))
+
+
+Nudge the ADD threshold down so AI labels more readily match your DB names:
+
+# a) AI items that aren't in DB selection -> ADD
+# (change 0.45 to 0.35)
+if code not in sel_codes and score >= 0.35:
+    add.append(ReconcileSuggestion(...))
+
+
+Those two tweaks make the middle panel produce useful ADD rows for the SoundCloud brief once the AI summary is good.
+
+3) Backend: make the AI summary actually helpful
+
+Right now, your OpenAI call is failing (or returning nothing) and you hit the fallback that picks “top lines” from the PDF—hence bullets like “F O S C: As requested in the RFP …”. That fallback is the code below in your repo; it’s not a model problem.
+
+3a) Stronger system prompt (drop‑in)
+
+Replace the system_prompt inside ai_summarize_rfp_text() with:
+
+system_prompt = """
+You are an agency executive producer.
+Read the RFP text and output JSON ONLY in this exact schema:
+
+{
+  "deliverables": [
+    {"label": "...", "short_desc": "...", "tasks": ["...", "..."]}
+  ]
+}
+
+Guidelines:
+- Identify 3–8 concrete agency deliverables needed to fulfill the request:
+  strategy, campaign creative, content production (video/audio/stills), social/community, editorial web/livestream, experiential/IRL, media planning/buying, measurement & reporting, program management/timeline.
+- Each "short_desc" is ≤2 sentences, specific to this RFP, action‑oriented.
+- Use common agency taxonomy for "label" so it will match a database later (e.g., "Brand Strategy", "Campaign Creative", "Content Production (Video/Audio)", "Social Media & Community", "Editorial Microsite & Livestream", "Experiential Activation", "Media Planning & Buying", "Measurement & Reporting", "Program Management & Timeline").
+- Do NOT quote the RFP; summarize the work we must deliver.
+- Keep total text concise (UI cap is 500 words).
+"""
+
+
+(Your call already uses model="gpt-5" and the client reads OPENAI_API_KEY from Replit Secrets—ensure that secret is present and the openai package is installed. )
+
+3b) Useful fallback (uses real RFP cues)
+
+If OpenAI fails, replace the current “random lines” fallback with a tiny rule‑based one that maps this RFP’s “Mediums” and “Specific deliverables” to agency‑style labels. The SoundCloud brief explicitly calls for Video/Audio, Editorial + Livestream, Social, OOH, Experiential, Production timeline, Rollout plan.
+
+except Exception as e:
+    print(f"OpenAI error (using smarter fallback): {e}")
+    t = (text or "").lower()
+    deliverables = []
+
+    def add(label, desc, *keys):
+        if any(k in t for k in keys) and not any(d["label"] == label for d in deliverables):
+            deliverables.append({"label": label, "short_desc": desc[:300], "tasks": []})
+
+    add("Program Design (Artist Accelerator)",
+        "Define cohort structure, creator services, milestones and governance for a year‑long program that introduces, elevates and celebrates artists.", 
+        "accelerator", "year long", "program")
+    add("Campaign Strategy & Creative Platform",
+        "Create the organizing idea, audience strategy, KPIs and messaging architecture anchored to 'What’s next in music is first on SoundCloud.'",
+        "objectives", "kpi", "platform", "strategy", "creative")
+    add("Content Production (Video/Audio/Stills)",
+        "Produce hero and cutdown assets telling authentic artist stories across video, audio and stills sized for paid/owned social, digital and OOH.",
+        "video", "audio", "stills")
+    add("Editorial Microsite & Livestream",
+        "Propose an editorial destination and livestream approach with UX outline, tech options and content governance.",
+        "editorial", "platform", "live streaming")
+    add("Social Media & Community",
+        "Define an always‑on social calendar, creator collab mechanics and community management playbook.",
+        "social")
+    add("Experiential Activation",
+        "Design a nimble IRL/virtual activation concept with budget tiers and contingency planning.",
+        "experiential")
+    add("Media Planning & Buying",
+        "Provide paid media plan and flighting to support brand spend, with channel mix and pacing across the year.",
+        "media")
+    add("Measurement & Reporting",
+        "Define KPI framework, reporting cadence and learning agenda; include a production timeline and rollout plan.",
+        "measurement", "kpi", "production timeline", "rollout")
+
+    if not deliverables:
+        deliverables = [{"label":"Program Management & Timeline",
+                         "short_desc":"Create a production timeline and rollout schedule with milestones and owners.",
+                         "tasks":[]}]
+
+
+Now, even if the model key is missing or rate‑limited, your right panel will still show agency‑ready deliverables that reconcile well.
