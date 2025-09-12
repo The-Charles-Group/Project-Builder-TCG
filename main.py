@@ -1282,6 +1282,10 @@ def _eff_rate(price: float, hours: float) -> float:
     """Calculate effective rate: price / hours with rounding."""
     return round(price / hours, 2) if hours and hours > 0 else 0.0
 
+def _band_multiplier(rate_band: str) -> float:
+    band = DB.rate_bands[DB.rate_bands["Band_Name"] == (rate_band or "Standard_US")]
+    return float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
+
 def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     """
     Adds Rate_USD and Price_USD at deliverable/component/task level.
@@ -1551,6 +1555,13 @@ class ExportWorkbookPayload(BaseModel):
     sheet_name_a: str | None = "Scenario A"
     sheet_name_b: str | None = "Scenario B"
     add_timestamp: bool | None = False
+
+class AuditPricingPayload(BaseModel):
+    scenario: Dict[str, Any]           # scenario object from /api/build
+    pricing_mode: str                  # "Flat_Blended" | "Per_Resource"
+    blended_rate: Optional[float] = None
+    rate_band: Optional[str] = "Standard_US"
+    price_uses_rounded_hours: bool = True  # bill with rounded hours to match export
 
 # ---- Deliverable ordering helpers ----
 def _phase_rank_for(deliv_name: str, included_tgs: list[str]) -> int:
@@ -1945,6 +1956,82 @@ def api_export_workbook(payload: ExportWorkbookPayload):
         _apply_number_formats(xw.sheets[sheetB], dfB)
     return FileResponse(out_name, filename=out_name,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+@app.post("/api/audit_pricing")
+def api_audit_pricing(p: AuditPricingPayload):
+    if not DB.loaded:
+        DB.load()
+
+    items = p.scenario.get("items", [])
+    m = _band_multiplier(p.rate_band)
+    deliverables = []
+    tot_expected = 0.0
+    tot_shown = 0.0
+    warnings = []
+
+    for d in items:
+        # hours by role from scenario
+        hrs = pd.DataFrame(d.get("hours_by_role", []))
+        if hrs.empty:
+            hrs = pd.DataFrame(columns=["Resource_Title","Seniority","Hours"]).assign(Hours=0.0)
+        total_raw = float(hrs["Hours"].sum())
+
+        # decide billable hours basis
+        billable_total = round(total_raw) if p.price_uses_rounded_hours else total_raw
+        scale = (billable_total / total_raw) if total_raw > 0 else 0.0
+        hrs_bill = hrs.copy()
+        hrs_bill["Hours"] = hrs_bill["Hours"] * scale
+
+        if p.pricing_mode == "Flat_Blended":
+            # default blended rate if omitted
+            if p.blended_rate is None:
+                ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
+                p.blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+            expected = billable_total * float(p.blended_rate)
+            missing_roles = []
+        else:
+            # per-resource: join to rate card
+            rc = DB.role_rate_card[["Resource_Title","Seniority","Rate_USD"]].copy()
+            merged = hrs_bill.merge(rc, on=["Resource_Title","Seniority"], how="left")
+            miss = merged[merged["Rate_USD"].isna()][["Resource_Title","Seniority"]].drop_duplicates()
+            missing_roles = miss.to_dict(orient="records")
+            merged["Rate_USD"] = merged["Rate_USD"].fillna(0.0)
+            merged["Cost"] = merged["Hours"] * merged["Rate_USD"] * m
+            expected = float(merged["Cost"].sum())
+            if missing_roles:
+                warnings.append({
+                    "deliverable": d.get("deliverable"),
+                    "missing_rate_roles": missing_roles
+                })
+
+        shown = float(d.get("price", 0.0))
+        diff = round(expected - shown, 2)
+        deliverables.append({
+            "deliverable": d.get("deliverable"),
+            "hours_raw": round(total_raw, 2),
+            "hours_billed": round(billable_total, 2),
+            "expected_price": round(expected, 2),
+            "shown_price": round(shown, 2),
+            "delta": diff,
+        })
+        tot_expected += expected
+        tot_shown += shown
+
+    scenario_delta = round(tot_expected - tot_shown, 2)
+    return {
+        "pricing_mode": p.pricing_mode,
+        "rate_band": p.rate_band,
+        "blended_rate": p.blended_rate,
+        "uses_rounded_hours_for_pricing": bool(p.price_uses_rounded_hours),
+        "deliverables": deliverables,
+        "totals": {
+            "expected": round(tot_expected, 2),
+            "shown": round(tot_shown, 2),
+            "delta": scenario_delta
+        },
+        "ok": abs(scenario_delta) < 0.01 and not warnings,
+        "warnings": warnings
+    }
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
