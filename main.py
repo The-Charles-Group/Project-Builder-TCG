@@ -1739,24 +1739,27 @@ def ai_summarize_rfp_text(text: str) -> RfpSummary:
     """
     try:
         # Create structured prompt for GPT-5
-        system_prompt = """You are an expert RFP analyzer. Extract deliverables from the RFP text and create a structured summary.
+        system_prompt = """
+You are an expert producer at a creative/digital agency.
+Read the RFP text and return JSON ONLY in this exact shape:
 
-Return JSON in exactly this format:
 {
   "deliverables": [
     {
-      "label": "Brief deliverable name", 
-      "short_desc": "Maximum 2 sentences describing what needs to be done.",
-      "tasks": ["optional task 1", "optional task 2"]
+      "label": "Brief deliverable name",
+      "short_desc": "Max 2 sentences describing the work the agency must do.",
+      "tasks": ["optional subtask 1", "optional subtask 2"]
     }
   ]
 }
 
-Requirements:
-- Each short_desc must be maximum 2 sentences
-- Focus on concrete deliverables mentioned in the RFP
-- Extract 3-8 key deliverables maximum
-- Be concise and actionable"""
+Rules:
+- Identify 3–8 concrete agency deliverables required to fulfill the request (strategy, creative, content, production, social, experiential, editorial/web, media, measurement, project management, etc.).
+- Each "label" must use common agency taxonomy so it can match a database (e.g., "Brand Strategy", "Campaign Creative", "Content Production (Video/Audio)", "Social Media & Community", "Experiential Activation", "Editorial Microsite / Livestream", "Media Planning & Buying", "Measurement & Reporting", "Program Management", "Rollout & Production Timeline").
+- "short_desc" MUST be ≤2 sentences, action-oriented, and specific to this RFP.
+- Do NOT quote lines from the RFP. Summarize what WORK we must deliver.
+- Keep total output concise; the UI will render a 500-word cap.
+"""
 
         user_prompt = f"Analyze this RFP text and extract the key deliverables:\n\n{text[:8000]}"  # Limit input size
         
@@ -2380,18 +2383,17 @@ def api_reconcile(p: ReconcilePayload):
                     ))
 
         # --- DELETE ---
-        # Anything currently selected but not supported by AI summary gets a DELETE recommendation
+        # Safe delete block - prevents DataFrame errors with unequal column lengths
+        ai_labels = [str(x) for x in (p.summary_deliverables or []) if str(x).strip()]
         for code in sel_codes:
             name = code_to_name.get(code, code)
-            name_tok = _norm_tokens(name)
+            name_tokens = _norm_tokens(name)
             max_score = 0.0
-            for _, lab_tok in ai_tok:
-                max_score = max(max_score, _jaccard(name_tok, lab_tok))
-            if max_score < DELETE_THRESHOLD:
+            for lbl in ai_labels:
+                max_score = max(max_score, _jaccard(name_tokens, _norm_tokens(lbl)))
+            if max_score < 0.25:
                 delete.append(ReconcileSuggestion(
-                    code=code, label=name,
-                    reason="Not supported by the AI Summary.",
-                    preselect=True
+                    code=code, label=name, reason="Not found in AI Summary.", preselect=True
                 ))
 
         # Deduplicate unchanged list & sort

@@ -249,7 +249,7 @@
 
         // 2) DB suggestions (left) strictly from rules
         const sugg = await fetch('/api/suggest_by_file', { method: 'POST', body: fd }).then(r => r.json());
-        const selectedCodes = (sugg || []).map(s => s.deliverable_code);
+        const selectedCodes = (sugg?.suggested || []).map(s => s.deliverable_code);
         appState.selectedCodes = selectedCodes;
 
         // 3) Build Average scenario now to populate left panel with pricing
