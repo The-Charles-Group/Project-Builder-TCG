@@ -148,6 +148,7 @@
     let aiSummary = null;       // AI analysis results
     let dbSelection = [];       // current database selection
     let reconciliation = null;  // reconciliation results
+    let leftPanelScenario = null;  // scenario data for left panel
     let latestScenarios = null; // built scenarios
 
     async function loadOptions() {
@@ -218,13 +219,13 @@
 
         aiSummary = await summaryRes.json();
         
-        // Extract text for reconciliation
+        // Extract the RFP text for auto_build
         const textRes = await fetch('/api/suggest_by_file', {
           method: 'POST', 
           body: fd
         });
         const textData = await textRes.json();
-        dbSelection = textData.suggested || [];
+        currentRfpText = textData.rfp_text || '';
         
         // Set project name from filename
         const baseName = (fileEl.files[0].name || '').replace(/\.[^.]+$/, '').trim();
@@ -264,15 +265,6 @@
         }
 
         aiSummary = await summaryRes.json();
-        
-        // Get DB suggestions
-        const dbRes = await fetch('/api/suggest_by_text', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ rfp_text: currentRfpText })
-        });
-        const dbData = await dbRes.json();
-        dbSelection = dbData.suggested || [];
 
         await performReconciliation();
         
@@ -286,6 +278,31 @@
 
     async function performReconciliation() {
       try {
+        // Step 1: Call /api/auto_build to get DB selection (Scenario A as Average plan)
+        const autoBuildRes = await fetch('/api/auto_build', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            rfp_text: currentRfpText,
+            scenario_a: { mode: "template", scenario_key: "MED_LOW" },
+            scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+            pricing_mode: "Flat_Blended",
+            blended_rate: 150,
+            rate_band: "Standard_US"
+          })
+        });
+        
+        if (!autoBuildRes.ok) {
+          throw new Error(`Auto build failed: ${autoBuildRes.status}`);
+        }
+
+        const autoBuild = await autoBuildRes.json();
+        
+        // Step 2: Extract DB selection from scenario A
+        dbSelection = autoBuild.suggested || [];
+        leftPanelScenario = autoBuild.scenarios?.A || null;
+        
+        // Step 3: Call /api/reconcile with AI deliverables and DB codes
         const summaryLabels = aiSummary.deliverables.map(d => d.label);
         const dbCodes = dbSelection.map(s => s.deliverable_code);
 
@@ -294,8 +311,8 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
             summary_deliverables: summaryLabels,
-            db_selected_deliverable_codes: dbCodes,
-            rfp_text: currentRfpText
+            db_selected_deliverable_codes: dbCodes
+            // Note: NOT sending rfp_text here to prevent server fallback and keep panels in sync
           })
         });
         

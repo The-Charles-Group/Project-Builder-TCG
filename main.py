@@ -1699,6 +1699,8 @@ class ReconcileResult(BaseModel):
     add: list[ReconcileSuggestion]
     delete: list[ReconcileSuggestion]
     unchanged: list[str]
+    db_used_codes: list[str]          # NEW: actual codes reconcile compared
+    db_used_labels: list[str]         # NEW: labels for those codes
 
 class ReorderPayload(BaseModel):
     deliverable_codes: list[str]               # desired order
@@ -2395,7 +2397,13 @@ def api_reconcile(p: ReconcilePayload):
         # Deduplicate unchanged list & sort
         unchanged = sorted(set(unchanged))
 
-        return ReconcileResult(add=add, delete=delete, unchanged=unchanged)
+        # Add the actual selection the server used
+        db_used_labels = [code_to_name.get(c, c) for c in sel_codes]
+
+        return ReconcileResult(
+            add=add, delete=delete, unchanged=unchanged,
+            db_used_codes=sel_codes, db_used_labels=db_used_labels
+        )
 
     except Exception as ex:
         # Return a clear 400 instead of a 500 so the UI can show a friendly message
