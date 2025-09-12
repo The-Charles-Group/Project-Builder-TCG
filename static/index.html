@@ -631,165 +631,112 @@
 
     // Legacy function removed
 
-    function fallbackName(letter, fmt) {
-      const projectName = (document.getElementById('projectName')?.value || 'Proposal').trim();
-      const ts = document.getElementById('exportTimestamp')?.checked
-        ? (' - ' + new Date().toISOString().replace(/[-:T]/g,'').slice(0,12))
-        : '';
-      return `${projectName} - Scenario ${letter} - Workfront Export${ts}.${fmt}`;
-    }
-
-    function fallbackWorkbookName() {
-      const projectName = (document.getElementById('projectName')?.value || 'Proposal').trim();
-      const addTs = document.getElementById('exportTimestamp')?.checked;
-      const ts = addTs ? (' - ' + new Date().toISOString().replace(/[-:T]/g,'').slice(0,12)) : '';
-      return `${projectName} - Scenarios A & B - Workfront Export${ts}.xlsx`;
-    }
-
-    function parseFilenameFromContentDisposition(cd) {
-      if (!cd) return null;
-      // filename*=UTF-8''<urlencoded>
-      const star = cd.match(/filename\*\s*=\s*([^;]+)/i);
-      if (star) {
-        const v = star[1].trim();
-        const parts = v.split("''");
-        const raw = parts.length === 2 ? parts[1] : v;
-        try { return decodeURIComponent(raw.replace(/^"(.*)"$/, '$1')); } catch { return null; }
-      }
-      // filename="<quoted>" or filename=bare
-      const simple = cd.match(/filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i);
-      if (simple) return (simple[1] || simple[2]).trim().replace(/^"(.*)"$/, '$1');
-      return null;
-    }
-
-    async function exportOne(letter, fmt, projectName, addTs) {
-      if (!latestScenarios || !latestScenarios[letter]) return;
-
-      const res = await fetch('/api/export', {
+    // Improved export functionality with robust blob handling
+    async function downloadBlobFromPost(url, payload) {
+      const res = await fetch(url, {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-          scenario: latestScenarios[letter],
-          project_name: projectName,
-          file_format: fmt,
-          scenario_label: `Scenario ${letter}`,
-          add_timestamp: addTs
-        })
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
       });
-
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const msg = await res.text().catch(() => String(res.status));
+        alert(`Export failed: ${res.status} — ${msg}`);
+        return;
       }
-
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+
+      // Read filename from Content-Disposition if present
+      const cd = res.headers.get('Content-Disposition') || '';
+      const m = /filename="?([^"]+)"?/i.exec(cd);
+      const filename = m ? m[1] : (payload.scenario_label || 'Scenario') + '.' + (payload.file_format || 'csv');
+
+      const urlObj = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-
-      const cd = res.headers.get('content-disposition');
-      a.download = parseFilenameFromContentDisposition(cd) || fallbackName(letter, fmt);
-
+      a.href = urlObj;
+      a.download = filename;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      URL.revokeObjectURL(urlObj);
+    }
+
+    function getExportPrefs() {
+      // Using current HTML element IDs
+      const fmt = (document.querySelector('#exportFormat')?.value || 'xlsx').toLowerCase();
+      const addTs = !!document.querySelector('#exportTimestamp')?.checked;
+      const project = document.querySelector('#projectName')?.value || 'Proposal';
+      return { file_format: fmt, add_timestamp: addTs, project_name: project };
     }
 
     async function exportScenario(letter) {
-      if (!latestScenarios || !latestScenarios[letter]) {
-        alert('Generate scenarios first.');
+      const scen = (latestScenarios && latestScenarios[letter]) || null;
+      if (!scen || !scen.items || !scen.items.length) {
+        alert('Build scenarios first (Stage 3).');
         return;
       }
+      const prefs = getExportPrefs();
+      await downloadBlobFromPost('/api/export', {
+        scenario: scen,
+        project_name: prefs.project_name,
+        file_format: prefs.file_format,        // 'csv' or 'xlsx'
+        scenario_label: `Scenario ${letter}`,
+        add_timestamp: prefs.add_timestamp
+      });
+    }
 
-      const fmt = document.getElementById('exportFormat').value || 'csv';
-      const projectName = document.getElementById('projectName').value || '';
-      const addTs = document.getElementById('exportTimestamp').checked;
+    async function exportWorkbook() {
+      const prefs = getExportPrefs();
+      if (prefs.file_format !== 'xlsx') {
+        alert('Select Excel (.xlsx) to export both scenarios in one file.');
+        return;
+      }
+      
+      // Disable button and show loading state
+      const btn = document.getElementById('btnExportWorkbook');
+      const originalText = btn ? btn.textContent : '';
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Exporting...';
+      }
 
       try {
-        await exportOne(letter, fmt, projectName, addTs);
-      } catch (error) {
-        alert('Error exporting: ' + error.message);
+        await downloadBlobFromPost('/api/export_workbook', {
+          scenario_a: latestScenarios?.A || {items:[]},
+          scenario_b: latestScenarios?.B || {items:[]},
+          project_name: prefs.project_name,
+          sheet_name_a: 'Scenario A',
+          sheet_name_b: 'Scenario B',
+          add_timestamp: prefs.add_timestamp
+        });
+      } finally {
+        // Restore button state
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = originalText;
+          toggleWorkbookBtn(); // Re-apply format-based enable/disable
+        }
       }
     }
 
+    // Legacy function for backward compatibility
     async function exportBoth() {
       if (!latestScenarios || (!latestScenarios.A && !latestScenarios.B)) {
         alert('Generate scenarios first.');
         return;
       }
 
-      const fmt = document.getElementById('exportFormat').value || 'csv';
-      const projectName = document.getElementById('projectName').value || '';
-      const addTs = document.getElementById('exportTimestamp').checked;
-
       try {
         // Export A then B as two separate files
         if (latestScenarios.A) {
-          await exportOne('A', fmt, projectName, addTs);
+          await exportScenario('A');
         }
         // tiny gap helps some browsers show two download toasts separately
         await new Promise(r => setTimeout(r, 200));
         if (latestScenarios.B) {
-          await exportOne('B', fmt, projectName, addTs);
+          await exportScenario('B');
         }
       } catch (error) {
         alert('Error exporting both scenarios: ' + error.message);
-      }
-    }
-
-    async function exportWorkbook() {
-      if (!latestScenarios || !latestScenarios.A || !latestScenarios.B) {
-        alert('Generate scenarios first.');
-        return;
-      }
-      const fmt = document.getElementById('exportFormat').value;
-      if (fmt !== 'xlsx') {
-        alert('Select Excel (.xlsx) to export both scenarios in one file.');
-        return;
-      }
-      const projectName = document.getElementById('projectName').value || '';
-      const addTs = document.getElementById('exportTimestamp').checked;
-
-      // Disable button and show loading state
-      const btn = document.getElementById('btnExportWorkbook');
-      const originalText = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Exporting...';
-
-      try {
-        const res = await fetch('/api/export_workbook', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({
-            scenario_a: latestScenarios.A,
-            scenario_b: latestScenarios.B,
-            project_name: projectName,
-            sheet_name_a: 'Scenario A',
-            sheet_name_b: 'Scenario B',
-            add_timestamp: addTs
-          })
-        });
-
-        if (!res.ok) {
-          const errorText = await res.text();
-          throw new Error(`HTTP ${res.status}: ${errorText}`);
-        }
-
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-
-        const cd = res.headers.get('content-disposition');
-        a.download = parseFilenameFromContentDisposition(cd) || fallbackWorkbookName();
-
-        a.click();
-        URL.revokeObjectURL(url);
-      } catch (error) {
-        alert('Error exporting workbook: ' + error.message);
-      } finally {
-        // Restore button state
-        btn.disabled = false;
-        btn.textContent = originalText;
-        toggleWorkbookBtn(); // Re-apply format-based enable/disable
       }
     }
 
