@@ -1122,6 +1122,63 @@ class AgencyDB:
             sub = sub[sub["Component"]==str(component).strip()]
         return self._majority_by_hours(sub, self._col_service_dept, scenario_col)
 
+    def hours_by_role_for_component_task(
+        self, deliverable_code: str, component: str, task_group: str, scenario_col: str
+    ) -> pd.DataFrame:
+        """Return hours by (Resource_Title, Seniority) for one component+task_group."""
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+            (self.all_rows["task_group"].astype(str) == str(task_group))
+        ].copy()
+        if "Component" in sub.columns and str(component).strip():
+            sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
+            sub = sub[sub["Component"] == str(component).strip()]
+        if sub.empty:
+            return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
+        return g.rename(columns={scenario_col: "Hours"})
+
+    def codes_for_component_task_role(
+        self, deliverable_code: str, component: str, task_group: str,
+        role: str, seniority: str, scenario_col: str
+    ) -> tuple[str, str, str]:
+        """Return (Row_ID, Task_Code, Service_Department) for one Role on a component+task_group."""
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+            (self.all_rows["task_group"].astype(str) == str(task_group)) &
+            (self.all_rows["Resource_Title"].astype(str) == str(role)) &
+            (self.all_rows["Seniority"].astype(str) == str(seniority))
+        ].copy()
+        if "Component" in sub.columns and str(component).strip():
+            sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
+            sub = sub[sub["Component"] == str(component).strip()]
+
+        # Row_ID
+        row_id = ""
+        if getattr(self, "_col_row_id", None) and self._col_row_id in sub.columns:
+            vals = sub[self._col_row_id].dropna().astype(str).str.strip()
+            if not vals.empty:
+                row_id = sorted(vals.tolist(), key=lambda x: (len(x), x))[0]
+
+        # Task_Code
+        task_code = ""
+        if getattr(self, "_col_task_code", None) and self._col_task_code in sub.columns:
+            v = sub[self._col_task_code].dropna().astype(str).str.strip()
+            if not v.empty:
+                task_code = v.value_counts().idxmax()
+        if not task_code:
+            task_code = str(task_group).upper().replace(" ", "_")
+
+        # Service_Department (majority by hours in this subset)
+        service = ""
+        if getattr(self, "_col_service_dept", None) and self._col_service_dept in sub.columns:
+            g = sub.groupby(self._col_service_dept, as_index=False)[scenario_col].sum()
+            g = g[g[self._col_service_dept].astype(str).str.strip() != ""]
+            if not g.empty:
+                service = str(g.sort_values(scenario_col, ascending=False).iloc[0][self._col_service_dept]).strip()
+
+        return (row_id, task_code, service)
+
     def codes_for_component_task(self, deliverable_code: str, component: str, task_group: str, scenario_col: str) -> tuple[str,str,str]:
         """Return (Row_ID, Task_Code, Service_Department) for a task row under a component."""
         sub = self.all_rows[
@@ -1432,45 +1489,75 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             })
 
             # tasks under the component
-            prev_task_wbs = ""
+            prev_task_last_wbs = ""  # track last role row of previous task for dependency
             # distribute component display hours across tasks (largest remainder)
             tg_hours_map = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
             tg_hours_rounded = _largest_remainder(comp_hours_display, tg_hours_map)
 
             for k, tg in enumerate(tg_in_comp, start=1):
                 dur = int(duration_by_tg.get(tg, 1))
-                role, sen = DB.dominant_role_for_component_task(dcode, comp, tg, scen_col)
-
-                # pricing per task (use exact hours for pricing, rounded for display)
-                task_hours_display = int(tg_hours_rounded.get(tg, 0))
-                task_hours_exact = float(tg_hours_in_comp.get(tg, 0.0))
-                
-                if pricing_mode == "Flat_Blended":
-                    task_rate = blended_rate
-                    task_price = round(task_hours_exact * task_rate, 2)
-                else:
-                    hrs_by_role_task = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
-                    task_price, _ = DB.price_for_hours_by_role(hrs_by_role_task, rate_band)
-                    task_price = round(task_price, 2)
-                    task_rate  = _eff_rate(task_price, task_hours_exact)
-
-                wbs_task = f"{wbs_comp}.{k}"
                 label = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
-                row_id, task_code, svc_task = DB.codes_for_component_task(dcode, comp, tg, scen_col)
+                # Task header (duration lives here; no hours)
+                wbs_task = f"{wbs_comp}.{k}"
                 rows.append({
-                    "Row_ID": row_id,
-                    "Deliverable_Code": dcode,
-                    "Task_Code": task_code,
-                    "Service_Department": svc_task,
+                    "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                     "Deliverable": str(d.get("deliverable","")),
                     "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
                     "Task_Name": label, "Component": comp, "Task": label,
-                    "Role": role, "Seniority": sen,
-                    "Planned_Hours": task_hours_display, "Start_Offset_Days": day_cursor + offset_by_tg[tg], "Duration_Days": dur,
-                    "Dependencies": (wbs_comp if k == 1 else prev_task_wbs), "Assignee_External_ID": "", "Notes": "",
-                    "Rate_USD": round(task_rate, 2), "Price_USD": round(task_price, 2)
+                    "Role": "", "Seniority": "",
+                    "Planned_Hours": "",                           # hours pushed to role rows
+                    "Start_Offset_Days": day_cursor + offset_by_tg[tg],
+                    "Duration_Days": dur,
+                    "Dependencies": (wbs_comp if k == 1 else prev_task_last_wbs),
+                    "Assignee_External_ID": "", "Notes": ""
                 })
-                prev_task_wbs = wbs_task
+
+                # Role rows for this task (hours by role+seniority)
+                hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
+                role_rows = hrs_role_df.to_dict(orient="records")
+                # target hours (int) for this task, from your earlier allocation
+                target_task_hours = int(tg_hours_rounded.get(tg, 0))
+
+                # Largest-remainder rounding so role rows sum to task target
+                raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
+                # if no role rows (shouldn't happen), make one "Unknown" line
+                if not raw_map:
+                    raw_map = {("","Mid"): float(target_task_hours)}
+                total = sum(raw_map.values()) or 1.0
+                raw_scaled = {k: (v/total)*target_task_hours for k, v in raw_map.items()}
+                flo = {k: int(v) for k, v in raw_scaled.items()}
+                rem = target_task_hours - sum(flo.values())
+                order = sorted(raw_map.keys(), key=lambda k: (raw_scaled[k]-flo[k]), reverse=True)
+                for kk in order[:max(0, rem)]:
+                    flo[kk] += 1
+
+                prev_role_wbs = ""
+                r_index = 0
+                for (role, sen), h in flo.items():
+                    if h <= 0: 
+                        continue
+                    r_index += 1
+                    # per-role codes
+                    row_id, task_code, svc_task = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
+                    wbs_role = f"{wbs_task}.{r_index}"
+                    rows.append({
+                        "Row_ID": row_id,
+                        "Deliverable_Code": dcode,
+                        "Task_Code": task_code,
+                        "Service_Department": (svc_task or svc_comp),
+                        "Deliverable": str(d.get("deliverable","")),
+                        "Project_Name": project_name, "WBS_ID": wbs_role, "Parent_WBS_ID": wbs_task,
+                        "Task_Name": label, "Component": comp, "Task": label,
+                        "Role": role or "", "Seniority": sen or "",
+                        "Planned_Hours": int(h),                     # leaf hours live here
+                        "Start_Offset_Days": "",                     # keep schedule on header
+                        "Duration_Days": "",                         # no duration on role rows
+                        "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
+                        "Assignee_External_ID": "", "Notes": ""
+                    })
+                    prev_role_wbs = wbs_role
+
+                prev_task_last_wbs = prev_role_wbs or wbs_task
 
             prev_comp_wbs = wbs_comp
 
