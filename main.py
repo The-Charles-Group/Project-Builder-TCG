@@ -1286,6 +1286,16 @@ def _band_multiplier(rate_band: str) -> float:
     band = DB.rate_bands[DB.rate_bands["Band_Name"] == (rate_band or "Standard_US")]
     return float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
 
+def _wbs_order_mode():
+    try:
+        row = DB.ui_options[DB.ui_options["Key"]=="WBS_Order_Mode"]
+        if not row.empty:
+            v = str(row["Value"].iloc[0]).strip().lower()
+            if v in ("ui","timeline"): return v
+    except Exception:
+        pass
+    return "ui"
+
 def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     """
     Adds Rate_USD and Price_USD at deliverable/component/task level.
@@ -1319,12 +1329,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     items = scenario.get("items", [])
     order_map = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
 
-    def deliv_key(d):
-        tgs = [str(x) for x in d.get("included_task_groups", [])]
-        idxs = [order_map.get(tg, 999) for tg in tgs]
-        return (min(idxs) if idxs else 999, str(d.get("deliverable","")))
-
-    items_sorted = sorted(items, key=deliv_key)
+    if _wbs_order_mode() == "timeline":
+        def deliv_key(d):
+            tgs = [str(x) for x in d.get("included_task_groups", [])]
+            idxs = [order_map.get(tg, 999) for tg in tgs]
+            return (min(idxs) if idxs else 999, str(d.get("deliverable","")))
+        items_sorted = sorted(items, key=deliv_key)
+    else:
+        items_sorted = list(scenario.get("items", []))
 
     day_cursor = 0
     prev_deliv_wbs = ""
