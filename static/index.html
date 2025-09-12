@@ -142,14 +142,18 @@
   </main>
 
   <script>
-    // Stage 2 client state
+    // App state management
+    const appState = {
+      selectedCodes: [],        // critical for Step 3 build
+      currentRfpText: '',       // current RFP content
+      aiSummary: null,          // AI analysis results
+      reconciliation: null,     // reconciliation results
+      leftPanelScenario: null,  // scenario data for left panel
+      latestScenarios: null     // built scenarios
+    };
+    
+    // Global data
     let allDeliverables = [];   // from /api/options
-    let currentRfpText = '';    // current RFP content
-    let aiSummary = null;       // AI analysis results
-    let dbSelection = [];       // current database selection
-    let reconciliation = null;  // reconciliation results
-    let leftPanelScenario = null;  // scenario data for left panel
-    let latestScenarios = null; // built scenarios
 
     async function loadOptions() {
       const res = await fetch('/api/options');
@@ -217,7 +221,7 @@
           throw new Error(`AI Analysis failed: ${summaryRes.status}`);
         }
 
-        aiSummary = await summaryRes.json();
+        appState.aiSummary = await summaryRes.json();
         
         // Extract the RFP text for auto_build
         const textRes = await fetch('/api/suggest_by_file', {
@@ -225,7 +229,7 @@
           body: fd
         });
         const textData = await textRes.json();
-        currentRfpText = textData.rfp_text || '';
+        appState.currentRfpText = textData.rfp_text || '';
         
         // Set project name from filename
         const baseName = (fileEl.files[0].name || '').replace(/\.[^.]+$/, '').trim();
@@ -247,7 +251,7 @@
       const textArea = document.getElementById('rfpText');
       const btn = document.getElementById('btnAnalyze');
       
-      currentRfpText = textArea.value.trim();
+      appState.currentRfpText = textArea.value.trim();
       
       btn.disabled = true;
       btn.textContent = 'Analyzing...';
@@ -257,14 +261,14 @@
         const summaryRes = await fetch('/api/summarize', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ rfp_text: currentRfpText })
+          body: JSON.stringify({ rfp_text: appState.currentRfpText })
         });
         
         if (!summaryRes.ok) {
           throw new Error(`AI Analysis failed: ${summaryRes.status}`);
         }
 
-        aiSummary = await summaryRes.json();
+        appState.aiSummary = await summaryRes.json();
 
         await performReconciliation();
         
@@ -278,54 +282,56 @@
 
     async function performReconciliation() {
       try {
-        // Step 1: Call /api/auto_build to get DB selection (Scenario A as Average plan)
-        const autoBuildRes = await fetch('/api/auto_build', {
+        // Step 1: Call /api/auto_build to seed the left panel with a real Average plan
+        const auto = await fetch('/api/auto_build', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            rfp_text: currentRfpText,
-            scenario_a: { mode: "template", scenario_key: "MED_LOW" },
-            scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
-            pricing_mode: "Flat_Blended",
-            blended_rate: 150,
-            rate_band: "Standard_US"
+            rfp_text: appState.currentRfpText,
+            pricing_mode: 'Flat_Blended',
+            blended_rate: 195,
+            rate_band: 'Standard_US',
+            use_slack: true,
+            slack_after_internal: 1,
+            slack_after_client: 2,
+            slack_global_pct: 0.05,
+            project_start: null,
+            scenario_a: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' },
+            scenario_b: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' }
           })
         });
         
-        if (!autoBuildRes.ok) {
-          throw new Error(`Auto build failed: ${autoBuildRes.status}`);
+        if (!auto.ok) {
+          throw new Error(`Auto build failed: ${auto.status}`);
         }
 
-        const autoBuild = await autoBuildRes.json();
+        const autoData = await auto.json();
         
-        // Step 2: Extract DB selection from scenario A
-        dbSelection = autoBuild.suggested || [];
-        leftPanelScenario = autoBuild.scenarios?.A || null;
+        // Step 2: Seed the left panel + app state
+        const suggestedCodes = (autoData.scenarios?.A?.items || []).map(i => i.deliverable_code);
+        appState.selectedCodes = suggestedCodes;  // <-- critical for Step 3
+        appState.leftPanelScenario = autoData.scenarios.A;
         
-        // Step 3: Call /api/reconcile with AI deliverables and DB codes
-        const summaryLabels = aiSummary.deliverables.map(d => d.label);
-        const dbCodes = dbSelection.map(s => s.deliverable_code);
-
-        const reconRes = await fetch('/api/reconcile', {
+        // Step 3: Call /api/reconcile using those codes so middle panel lines up with left
+        const recon = await fetch('/api/reconcile', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({
-            summary_deliverables: summaryLabels,
-            db_selected_deliverable_codes: dbCodes
-            // Note: NOT sending rfp_text here to prevent server fallback and keep panels in sync
+            summary_deliverables: appState.aiSummary.deliverables.map(d => d.label),
+            db_selected_deliverable_codes: appState.selectedCodes   // pass codes, not names
           })
         });
         
-        if (!reconRes.ok) {
-          throw new Error(`Reconciliation failed: ${reconRes.status}`);
+        if (!recon.ok) {
+          throw new Error(`Reconciliation failed: ${recon.status}`);
         }
 
-        reconciliation = await reconRes.json();
+        appState.reconciliation = await recon.json();
         
         // Update Stage 2 panels
         updateRightPanel();
-        await updateLeftPanel();
-        updateMiddlePanel();
+        renderLeftPanel(autoData.scenarios.A.items, autoData.scenarios.A.totals);
+        renderReconcile(appState.reconciliation);
         
         // Show Stage 2
         document.getElementById('stage2').style.display = 'block';
@@ -338,10 +344,10 @@
 
     // Stage 2: Panel Updates
     function updateRightPanel() {
-      if (!aiSummary) return;
+      if (!appState.aiSummary) return;
       
-      document.getElementById('wordcount').textContent = `${aiSummary.word_count}/500 words`;
-      document.getElementById('summary').textContent = aiSummary.summary_text;
+      document.getElementById('wordcount').textContent = `${appState.aiSummary.word_count}/500 words`;
+      document.getElementById('summary').textContent = appState.aiSummary.summary_text;
     }
     
     async function updateLeftPanel() {
@@ -452,107 +458,95 @@
       }
     }
 
-    // Stage 2: Apply Selection
-    async function applySelection() {
-      const btn = document.getElementById('apply-btn');
-      btn.disabled = true;
-      btn.textContent = 'Applying...';
+    // Apply Selection function as specified
+    function applySelection() {
+      const curr = new Set(appState.selectedCodes);
       
-      try {
-        // Collect ADD selections
-        const addCheckboxes = document.querySelectorAll('#add-form input[type="checkbox"]:checked');
-        const toAdd = Array.from(addCheckboxes).map(cb => cb.value);
-        
-        // Collect DELETE selections  
-        const delCheckboxes = document.querySelectorAll('#del-form input[type="checkbox"]:checked');
-        const toDelete = Array.from(delCheckboxes).map(cb => cb.value);
-        
-        // Update dbSelection
-        // Add new items
-        toAdd.forEach(code => {
-          if (!dbSelection.find(s => s.deliverable_code === code)) {
-            const deliverable = allDeliverables.find(d => d.Deliverable_Code === code);
-            if (deliverable) {
-              dbSelection.push({
-                deliverable_code: code,
-                deliverable: deliverable.Deliverable,
-                confidence: 0.8
-              });
-            }
-          }
-        });
-        
-        // Remove deleted items
-        dbSelection = dbSelection.filter(s => !toDelete.includes(s.deliverable_code));
-        
-        // Refresh left panel with new selection
-        await updateLeftPanel();
-        
-        // Show Stage 3
-        document.getElementById('step3').style.display = 'block';
-        document.getElementById('step3').scrollIntoView({ behavior: 'smooth' });
-        
-      } catch (error) {
-        alert('Error applying selection: ' + error.message);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Apply Selection';
-      }
+      // Add checked additions
+      document.querySelectorAll('.add-checkbox:checked').forEach(checkbox => {
+        curr.add(checkbox.dataset.code);
+      });
+      
+      // Remove checked deletions
+      document.querySelectorAll('.delete-checkbox:checked').forEach(checkbox => {
+        curr.delete(checkbox.dataset.code);
+      });
+      
+      appState.selectedCodes = [...curr];
+      
+      // Optionally, rebuild the left panel pricing with /api/build (Average)
+      rebuildLeftPanelWithNewSelection();
+      
+      // Show Stage 3
+      document.getElementById('step3').style.display = 'block';
+      document.getElementById('step3').scrollIntoView({ behavior: 'smooth' });
     }
     
-    // Stage 3: Build Scenarios
-    async function buildScenarios() {
-      if (!dbSelection || dbSelection.length === 0) {
-        alert('No deliverables selected. Please complete Stage 2 first.');
+    async function rebuildLeftPanelWithNewSelection() {
+      if (appState.selectedCodes.length === 0) {
+        document.getElementById('leftplan').innerHTML = '<p>No deliverables selected.</p>';
         return;
       }
       
-      const btn = document.getElementById('btnBuild');
-      btn.disabled = true;
-      btn.textContent = 'Building...';
-
       try {
-        const pricingMode = document.getElementById('pricingMode').value;
-        const blendedRateStr = document.getElementById('blendedRate').value;
-        const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
-        const rateBand = document.getElementById('rateBand').value || 'Standard_US';
-        const complexity = document.getElementById('complexity').value;
-        const tier = document.getElementById('volumeTier').value;
-
         const payload = {
-          selected_deliverable_codes: dbSelection.map(s => s.deliverable_code),
-          scenario_a: { mode: "template", scenario_key: "MED_LOW", complexity: complexity, tier: tier },
-          scenario_b: { mode: "template", scenario_key: "MED_HIGH", complexity: complexity, tier: tier },
-          pricing_mode: pricingMode,
-          blended_rate: blendedRate,
-          rate_band: rateBand,
-          use_slack: true,
-          slack_after_internal: 1,
-          slack_after_client: 2,
-          slack_global_pct: 0.05
+          selected_deliverable_codes: appState.selectedCodes,
+          pricing_mode: 'Flat_Blended',
+          blended_rate: 195,
+          rate_band: 'Standard_US',
+          scenario_a: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' },
+          scenario_b: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' }
         };
-
+        
         const res = await fetch('/api/build', {
-          method: 'POST', 
-          headers: {'Content-Type':'application/json'},
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
         
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        if (res.ok) {
+          const scenarios = await res.json();
+          renderLeftPanel(scenarios.A.items, scenarios.A.totals);
         }
-        
-        latestScenarios = await res.json();
-        renderScenario('scenarioA', latestScenarios.A);
-        renderScenario('scenarioB', latestScenarios.B);
-        
       } catch (error) {
-        alert('Error building scenarios: ' + error.message);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Build Scenarios A & B';
+        console.error('Error rebuilding left panel:', error);
       }
     }
+    
+    // Step 3 — make the Build button work (as specified)
+    async function buildScenariosAB() {
+      if (!appState.selectedCodes || appState.selectedCodes.length === 0) {
+        alert('No deliverables selected. Please complete Stage 2 first.');
+        return;
+      }
+
+      const payload = {
+        selected_deliverable_codes: appState.selectedCodes,          // <- required
+        pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
+        blended_rate: getBlendedRateFromUI(),                        // number or null
+        rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
+        use_slack: getUseSlackFromUI(),
+        slack_after_internal: getSlackInternalFromUI(),
+        slack_after_client: getSlackClientFromUI(),
+        slack_global_pct: getSlackPctFromUI(),
+        project_start: getProjectStartFromUI() || null,
+        scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
+        scenario_b: getScenarioSpecBFromUI()
+      };
+
+      const resp = await fetch('/api/build', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+
+      const scenarios = await resp.json();
+      renderScenario('scenarioA', scenarios.A);
+      renderScenario('scenarioB', scenarios.B);
+    }
+    
+    // Legacy function name for backward compatibility
+    const buildScenarios = buildScenariosAB;
 
     function renderScenario(targetId, scenario) {
       const root = document.getElementById(targetId);
@@ -780,6 +774,118 @@
       document.getElementById(targetId).innerHTML = html;
     }
 
+    // New render functions as specified
+    function renderLeftPanel(items, totals) {
+      if (!items || items.length === 0) {
+        document.getElementById('leftplan').innerHTML = '<p>No deliverables selected yet.</p>';
+        return;
+      }
+      
+      let html = '<div class="deliverables-list">';
+      items.forEach(item => {
+        html += `<div class="deliverable-item">
+          <strong>${item.deliverable_name || codeToName(item.deliverable_code)}</strong>
+          <span class="hours">${item.hours || 0}h</span>
+          <span class="cost">$${(item.cost || 0).toFixed(2)}</span>
+        </div>`;
+      });
+      
+      if (totals) {
+        html += `<div class="totals">
+          <strong>Total: ${totals.hours || 0}h / $${(totals.cost || 0).toFixed(2)}</strong>
+        </div>`;
+      }
+      
+      html += '</div>';
+      document.getElementById('leftplan').innerHTML = html;
+    }
+    
+    function renderReconcile(recon) {
+      let html = '';
+      
+      if (recon.add && recon.add.length > 0) {
+        html += '<h4>Suggested Additions:</h4>';
+        recon.add.forEach(item => {
+          html += `<label class="recon-item add">
+            <input type="checkbox" class="add-checkbox" data-code="${item.code}" ${item.preselect ? 'checked' : ''}>
+            <span class="item-label">${item.label}</span>
+            <span class="reason">${item.reason}</span>
+          </label>`;
+        });
+      }
+      
+      if (recon.delete && recon.delete.length > 0) {
+        html += '<h4>Suggested Removals:</h4>';
+        recon.delete.forEach(item => {
+          html += `<label class="recon-item delete">
+            <input type="checkbox" class="delete-checkbox" data-code="${item.code}" ${item.preselect ? 'checked' : ''}>
+            <span class="item-label">${item.label}</span>
+            <span class="reason">${item.reason}</span>
+          </label>`;
+        });
+      }
+      
+      if (recon.unchanged && recon.unchanged.length > 0) {
+        html += '<h4>Unchanged:</h4>';
+        recon.unchanged.forEach(label => {
+          html += `<div class="recon-item unchanged">${label}</div>`;
+        });
+      }
+      
+      html += '<button id="btnApplySelection" onclick="applySelection()">Apply Selection</button>';
+      document.getElementById('reconcile').innerHTML = html;
+    }
+
+    // UI state management functions for Step 3 Build
+    function getPricingModeFromUI() {
+      return document.getElementById('pricingMode')?.value || 'Flat_Blended';
+    }
+    
+    function getBlendedRateFromUI() {
+      const val = document.getElementById('blendedRate')?.value;
+      return val ? Number(val) : null;
+    }
+    
+    function getRateBandFromUI() {
+      return document.getElementById('rateBand')?.value || 'Standard_US';
+    }
+    
+    function getUseSlackFromUI() {
+      return true; // default to true
+    }
+    
+    function getSlackInternalFromUI() {
+      return 1; // default
+    }
+    
+    function getSlackClientFromUI() {
+      return 2; // default
+    }
+    
+    function getSlackPctFromUI() {
+      return 0.05; // default
+    }
+    
+    function getProjectStartFromUI() {
+      return null; // default
+    }
+    
+    function getScenarioSpecAFromUI() {
+      return {
+        mode: 'template',
+        complexity: document.getElementById('complexity')?.value || 'Advanced',
+        tier: document.getElementById('volumeTier')?.value || 'T2_MediumVolume'
+      };
+    }
+    
+    function getScenarioSpecBFromUI() {
+      return {
+        mode: 'template',
+        complexity: document.getElementById('complexity')?.value || 'Advanced',
+        tier: document.getElementById('volumeTier')?.value || 'T2_MediumVolume'
+      };
+    }
+
     // Enable/disable the workbook button based on format
     function toggleWorkbookBtn() {
       const btn = document.getElementById('btnExportWorkbook');
@@ -791,7 +897,7 @@
     // Event listeners
     document.getElementById('btnAnalyze').onclick = analyzeRfp;
     document.getElementById('apply-btn').onclick = applySelection;
-    document.getElementById('btnBuild').onclick = buildScenarios;
+    document.getElementById('btnBuild').onclick = buildScenariosAB;  // Updated to use new function
     document.getElementById('btnExportA').onclick = () => exportScenario('A');
     document.getElementById('btnExportB').onclick = () => exportScenario('B');
     document.getElementById('btnExportWorkbook').onclick = exportWorkbook;
