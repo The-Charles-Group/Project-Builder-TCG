@@ -1244,6 +1244,19 @@ def _finalize_wf_df(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+# ---------- v3 A-E Column Ordering Helper ----------
+V3_AE_ORDER = ["Row_ID", "Deliverable_Code", "Task_Code", "Service_Department", "Deliverable"]
+
+def _ensure_v3_ae_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure v3 A-E columns exist and are positioned first (leftmost) in exports."""
+    # Create columns if missing
+    for c in V3_AE_ORDER:
+        if c not in df.columns:
+            df[c] = ""
+    # Reorder so A–E are leftmost
+    rest = [c for c in df.columns if c not in V3_AE_ORDER]
+    return df[V3_AE_ORDER + rest]
+
 # ---------- WBS builder functions ----------
 def _round_int(x: float) -> int:
     try:
@@ -1290,7 +1303,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         "Row_ID": "",
         "Deliverable_Code": "",
         "Task_Code": "",
-        "Service Department": "",
+        "Service_Department": "",
         "Deliverable": "",
         "Project_Name": project_name, "WBS_ID": "1", "Parent_WBS_ID": "",
         "Task_Name": project_name, "Component": "Project", "Task": "",
@@ -1347,7 +1360,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             "Row_ID": "",
             "Deliverable_Code": dcode,
             "Task_Code": "",
-            "Service Department": svc_deliv,
+            "Service_Department": svc_deliv,
             "Deliverable": str(d.get("deliverable","")),
             "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": "1",
             "Task_Name": str(d.get("deliverable","")),
@@ -1393,7 +1406,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Row_ID": "",
                 "Deliverable_Code": dcode,
                 "Task_Code": "",
-                "Service Department": svc_comp,
+                "Service_Department": svc_comp,
                 "Deliverable": str(d.get("deliverable","")),
                 "Project_Name": project_name, "WBS_ID": wbs_comp, "Parent_WBS_ID": wbs_deliv,
                 "Task_Name": comp, "Component": comp, "Task": "", "Role": "", "Seniority": "",
@@ -1432,7 +1445,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Row_ID": row_id,
                     "Deliverable_Code": dcode,
                     "Task_Code": task_code,
-                    "Service Department": svc_task,
+                    "Service_Department": svc_task,
                     "Deliverable": str(d.get("deliverable","")),
                     "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
                     "Task_Name": label, "Component": comp, "Task": label,
@@ -1451,7 +1464,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     
     # --- ENFORCE A-E COLUMN ORDER FOR v3 COMPATIBILITY ---
-    order_ae = ["Row_ID","Deliverable_Code","Task_Code","Service Department","Deliverable"]
+    order_ae = ["Row_ID","Deliverable_Code","Task_Code","Service_Department","Deliverable"]
     # Ensure all required columns exist before reordering
     for col in order_ae:
         if col not in df.columns:
@@ -1881,7 +1894,8 @@ def api_export(payload: ExportPayload):
 
     project_name = payload.project_name or f"Proposal {datetime.date.today().isoformat()}"
     df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
-    df = _finalize_wf_df(df)  # <-- ensure Service_Department column + pricing identity
+    # <<< force A–E to the left and guarantee presence
+    df = _ensure_v3_ae_columns(df)
 
     # Friendly filename
     base_parts = [project_name, (payload.scenario_label or "").strip(), "Workfront Export"]
@@ -1915,8 +1929,9 @@ def api_export_workbook(payload: ExportWorkbookPayload):
     project = (payload.project_name or f"Proposal {datetime.date.today().isoformat()}").strip()
     dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
     dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
-    dfA = _finalize_wf_df(dfA)
-    dfB = _finalize_wf_df(dfB)
+    
+    dfA = _ensure_v3_ae_columns(dfA)
+    dfB = _ensure_v3_ae_columns(dfB)
     base = f"{project} - Scenarios A & B - Workfront Export"
     if payload.add_timestamp:
         base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
