@@ -195,6 +195,13 @@
       scenarios: null           // built scenarios (moved to appState)
     };
     
+    // Legacy compatibility alias for latestScenarios
+    window.appState = window.appState || {};
+    Object.defineProperty(window, 'latestScenarios', {
+      get() { return window.appState.scenarios; },
+      set(v) { window.appState.scenarios = v; }
+    });
+    
     // Global data
     let allDeliverables = [];   // from /api/options
 
@@ -610,7 +617,8 @@
       
       // Store scenarios globally for timeline and export
       window.appState = window.appState || {};
-      appState.scenarios = scenarios;
+      appState.scenarios = scenarios;      // canonical
+      window.latestScenarios = scenarios;  // legacy alias (works with older code)
       
       renderScenario('scenarioA', scenarios.A);
       renderScenario('scenarioB', scenarios.B);
@@ -662,7 +670,7 @@
 
     // Timeline rendering (Step 4)
     function renderTimeline(letter) {
-      const scen = appState.scenarios?.[letter];
+      const scen = getScenario(letter);
       const box = document.getElementById('timeline');
       if (!scen || !scen.items?.length) {
         box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
@@ -729,8 +737,13 @@
       };
     }
 
+    // Guard function for safe scenario access
+    function getScenario(letter) {
+      return (window.appState?.scenarios || window.latestScenarios || {})[letter] || null;
+    }
+
     async function exportScenario(letter) {
-      const scen = appState.scenarios?.[letter];
+      const scen = getScenario(letter);
       if (!scen || !scen.items?.length) { 
         alert('Build scenarios first in Step 3.'); 
         return; 
@@ -746,10 +759,12 @@
     }
 
     async function exportWorkbookAB() {
+      const scenA = getScenario('A');
+      const scenB = getScenario('B');
       const prefs = getExportPrefs();
       await downloadBlobFromPost('/api/export_workbook', {
-        scenario_a: appState.scenarios?.A || {items:[]},
-        scenario_b: appState.scenarios?.B || {items:[]},
+        scenario_a: scenA || {items:[]},
+        scenario_b: scenB || {items:[]},
         project_name: prefs.project_name,
         sheet_name_a: 'Scenario A', 
         sheet_name_b: 'Scenario B',
