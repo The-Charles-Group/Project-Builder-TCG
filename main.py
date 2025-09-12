@@ -1685,10 +1685,9 @@ class SummarizePayload(BaseModel):
 
 # --- Reconcile (Stage 2, middle panel) ---
 class ReconcilePayload(BaseModel):
-    summary_deliverables: list[str]          # labels from right panel
-    db_selected_deliverable_codes: list[str] # current DB selection (left panel)
-    # optional: if client doesn't pass selection, server can re-run rules on rfp_text to form "DB selection"
-    rfp_text: str | None = None
+    summary_deliverables: List[str]                 # from the right-panel AI summary (labels only)
+    db_selected_deliverable_codes: Optional[List[str]] = None  # current selection on the left (codes)
+    rfp_text: Optional[str] = None
 
 class ReconcileSuggestion(BaseModel):
     code: str
@@ -1709,6 +1708,15 @@ class ReorderPayload(BaseModel):
 
 # Initialize OpenAI client now that we can import it
 openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# --- Reconciliation Helper Functions ---
+def _norm_tokens(s: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
 
 # --- LLM adapter: must not touch DB ---
 _SENT_SPLIT = re.compile(r'(?<=[.!?])\s+')
@@ -2310,46 +2318,88 @@ async def api_summarize_by_file(file: UploadFile = File(...)):
 
 @app.post("/api/reconcile", response_model=ReconcileResult)
 def api_reconcile(p: ReconcilePayload):
-    if not DB.loaded: DB.load()
+    if not DB.loaded:
+        DB.load()
 
-    # 1) DB selection (left panel) – either client provided codes or derive from rules
-    if p.db_selected_deliverable_codes:
-        sel_codes = [str(x) for x in p.db_selected_deliverable_codes]
-    elif p.rfp_text:
-        # fallback: reuse your strict rules matcher (this is allowed in LEFT panel)
-        sel_codes = [s["deliverable_code"] for s in DB.suggest_deliverables_from_text(p.rfp_text or "")]
-    else:
-        sel_codes = []
+    try:
+        # Normalize inputs
+        ai_labels: List[str] = [str(x).strip() for x in (p.summary_deliverables or []) if str(x).strip()]
+        if not ai_labels:
+            # Nothing to reconcile
+            return ReconcileResult(add=[], delete=[], unchanged=[])
 
-    db_deliv = DB.deliverables[DB.deliverables["Deliverable_Code"].isin(sel_codes)][["Deliverable_Code","Deliverable"]].copy()
-    db_deliv_map = {str(r["Deliverable_Code"]): str(r["Deliverable"]) for _, r in db_deliv.iterrows()}
+        sel_codes: List[str] = [str(x) for x in (p.db_selected_deliverable_codes or [])]
 
-    # 2) Map AI labels to DB deliverables
-    add: list[ReconcileSuggestion] = []
-    unchanged: list[str] = []
-    delete: list[ReconcileSuggestion] = []
+        # DB deliverables map
+        db_all = DB.deliverables[["Deliverable_Code", "Deliverable"]].copy()
+        db_all["Deliverable_Code"] = db_all["Deliverable_Code"].astype(str)
+        db_all["Deliverable"] = db_all["Deliverable"].astype(str)
 
-    # a) AI items that aren't in DB selection -> ADD
-    for label in p.summary_deliverables:
-        best = _best_match(label, DB.deliverables)
-        if not best:
-            continue
-        code, name, score = best
-        if code not in sel_codes and score >= 0.45:   # conservative threshold
-            add.append(ReconcileSuggestion(code=code, label=name, reason=f"Similar to \"{label}\" (score {score:.2f}).", preselect=True))
-        elif code in sel_codes:
-            unchanged.append(name)
+        # Selected map (left panel)
+        db_sel = db_all[db_all["Deliverable_Code"].isin(sel_codes)]
+        code_to_name = {r["Deliverable_Code"]: r["Deliverable"] for _, r in db_sel.iterrows()}
 
-    # b) DB items not present in AI summary -> DELETE (red highlight)
-    ai_labels = set(p.summary_deliverables or [])
-    for code in sel_codes:
-        name = db_deliv_map.get(code, code)
-        best = _best_match(name, pd.DataFrame({"Deliverable_Code":[None], "Deliverable":list(ai_labels)}) if ai_labels else DB.deliverables.head(0))
-        score = best[2] if best else 0.0
-        if score < 0.25:
-            delete.append(ReconcileSuggestion(code=code, label=name, reason="Not found in AI Summary.", preselect=True))
+        # Precompute tokens for speed
+        ai_tok = [(lab, _norm_tokens(lab)) for lab in ai_labels]
+        db_tok = [(r["Deliverable_Code"], r["Deliverable"], _norm_tokens(r["Deliverable"])) for _, r in db_all.iterrows()]
 
-    return ReconcileResult(add=add, delete=delete, unchanged=sorted(set(unchanged)))
+        ADD_THRESHOLD = 0.45     # how close an AI label must be to a DB deliverable to recommend ADD
+        DELETE_THRESHOLD = 0.25  # if no AI label is at least this close, recommend DELETE
+
+        add: List[ReconcileSuggestion] = []
+        unchanged: List[str] = []
+        delete: List[ReconcileSuggestion] = []
+
+        # --- ADD & UNCHANGED ---
+        # For each AI label, find the best matching DB deliverable by token Jaccard
+        for lab, lab_tok in ai_tok:
+            best_code = None
+            best_name = ""
+            best_score = 0.0
+            for code, name, name_tok in db_tok:
+                s = _jaccard(lab_tok, name_tok)
+                if s > best_score:
+                    best_code, best_name, best_score = code, name, s
+
+            if not best_code:
+                continue
+
+            if best_code in sel_codes:
+                # Already selected -> unchanged (count it if reasonably close)
+                if best_score >= DELETE_THRESHOLD:
+                    unchanged.append(best_name)
+            else:
+                # Not selected yet -> recommend ADD if strong enough
+                if best_score >= ADD_THRESHOLD:
+                    add.append(ReconcileSuggestion(
+                        code=best_code, label=best_name,
+                        reason=f"Matches AI summary item \"{lab}\" (score {best_score:.2f}).",
+                        preselect=True
+                    ))
+
+        # --- DELETE ---
+        # Anything currently selected but not supported by AI summary gets a DELETE recommendation
+        for code in sel_codes:
+            name = code_to_name.get(code, code)
+            name_tok = _norm_tokens(name)
+            max_score = 0.0
+            for _, lab_tok in ai_tok:
+                max_score = max(max_score, _jaccard(name_tok, lab_tok))
+            if max_score < DELETE_THRESHOLD:
+                delete.append(ReconcileSuggestion(
+                    code=code, label=name,
+                    reason="Not supported by the AI Summary.",
+                    preselect=True
+                ))
+
+        # Deduplicate unchanged list & sort
+        unchanged = sorted(set(unchanged))
+
+        return ReconcileResult(add=add, delete=delete, unchanged=unchanged)
+
+    except Exception as ex:
+        # Return a clear 400 instead of a 500 so the UI can show a friendly message
+        raise HTTPException(status_code=400, detail=f"Reconciliation error: {ex}")
 
 @app.post("/api/reorder_timeline")
 def api_reorder_timeline(p: ReorderPayload):
