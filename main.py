@@ -179,6 +179,8 @@ class AgencyDB:
 
         # normalize v3 columns for lookups
         self._normalize_v3_service_department()
+        # normalize code columns from v4/v4b for canonical naming
+        self._normalize_code_columns()
         
         self.loaded = True
         return True
@@ -281,6 +283,38 @@ class AgencyDB:
 
         if svc_col: df["Service Department"] = df[svc_col].astype(str).fillna("").str.strip()
         else: df["Service Department"] = ""
+
+    def _normalize_code_columns(self):
+        """Map v4/v4b All_Task_Rows code columns to canonical names we use downstream."""
+        if self.all_rows is None or self.all_rows.empty:
+            return
+        cols = {c.lower(): c for c in self.all_rows.columns}
+
+        def pick(*names):
+            for n in names:
+                if n and n.lower() in cols:
+                    return cols[n.lower()]
+            return None
+
+        # canonical: Deliverable_Code already exists in v4/v4b; keep synonyms just in case
+        if "Deliverable_Code" not in self.all_rows.columns:
+            alt = pick("Deliverable Code", "Deliv_Code", "DeliverableID")
+            if alt: self.all_rows["Deliverable_Code"] = self.all_rows[alt].astype(str)
+
+        # Row_ID (v3 style)
+        self._col_row_id        = pick("Row_ID", "RowID", "Row Id", "ID")
+
+        # Task_Code (v3 style)
+        self._col_task_code     = pick("Task_Code", "Task Code", "TaskCode", "Task_Code_L1", "Task_Group_Code")
+
+        # Service_Department (v3 style)
+        self._col_service_dept  = pick("Service_Department", "Service Department", "Service_Dept", "Department", "Dept")
+
+        # Make sure we have Component + Task_Label from prior patches
+        if "Component" not in self.all_rows.columns:
+            self.all_rows["Component"] = ""
+        if "Task_Label" not in self.all_rows.columns:
+            self.all_rows["Task_Label"] = ""
 
     def _canonical_seniority(self, v: str) -> str:
         """Standardize seniority levels to canonical values: Junior, Mid, Senior, Director"""
@@ -1061,6 +1095,66 @@ class AgencyDB:
         ]
         return self._svc_mode(sub["Service Department"])
 
+    def _majority_by_hours(self, sub: pd.DataFrame, col: str, scenario_col: str) -> str:
+        if sub.empty or col not in sub.columns:
+            return ""
+        g = sub.groupby(col, as_index=False)[scenario_col].sum()
+        g = g[g[col].astype(str).str.strip() != ""]
+        if g.empty: return ""
+        return str(g.sort_values(scenario_col, ascending=False).iloc[0][col]).strip()
+
+    def service_dept_for_deliverable(self, deliverable_code: str, included_tgs: list[str], scenario_col: str) -> str:
+        if not getattr(self, "_col_service_dept", None): return ""
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)) &
+            (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
+        ]
+        return self._majority_by_hours(sub, self._col_service_dept, scenario_col)
+
+    def service_dept_for_component(self, deliverable_code: str, component: str, included_tgs: list[str], scenario_col: str) -> str:
+        if not getattr(self, "_col_service_dept", None): return ""
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)) &
+            (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
+        ].copy()
+        if "Component" in sub.columns:
+            sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
+            sub = sub[sub["Component"]==str(component).strip()]
+        return self._majority_by_hours(sub, self._col_service_dept, scenario_col)
+
+    def codes_for_component_task(self, deliverable_code: str, component: str, task_group: str, scenario_col: str) -> tuple[str,str,str]:
+        """Return (Row_ID, Task_Code, Service_Department) for a task row under a component."""
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)) &
+            (self.all_rows["task_group"].astype(str)==str(task_group))
+        ].copy()
+        if "Component" in sub.columns and component:
+            sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
+            sub = sub[sub["Component"]==str(component).strip()]
+
+        # Row_ID: stable pick (min or first non-empty)
+        row_id = ""
+        if getattr(self, "_col_row_id", None) and self._col_row_id in sub.columns:
+            vals = sub[self._col_row_id].dropna().astype(str).str.strip()
+            if not vals.empty:
+                row_id = sorted(vals.tolist(), key=lambda x: (len(x), x))[0]
+
+        # Task_Code: majority by count (or fallback to task_group)
+        task_code = ""
+        if getattr(self, "_col_task_code", None) and self._col_task_code in sub.columns:
+            v = sub[self._col_task_code].dropna().astype(str).str.strip()
+            if not v.empty:
+                task_code = v.value_counts().idxmax()
+        if not task_code:
+            task_code = str(task_group).upper().replace(" ", "_")
+
+        # Service_Department: majority by hours
+        service = ""
+        if getattr(self, "_col_service_dept", None) and self._col_service_dept in sub.columns:
+            service = self._majority_by_hours(sub, self._col_service_dept, scenario_col)
+
+        return (row_id, task_code, service)
+
 DB = AgencyDB()
 
 # ---------- Helper: extract text from uploaded file bytes ----------
@@ -1193,11 +1287,15 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
     # project parent
     rows.append({
+        "Row_ID": "",
+        "Deliverable_Code": "",
+        "Task_Code": "",
+        "Service Department": "",
+        "Deliverable": "",
         "Project_Name": project_name, "WBS_ID": "1", "Parent_WBS_ID": "",
-        "Task_Name": project_name, "Deliverable": "", "Component": "Project", "Task": "",
+        "Task_Name": project_name, "Component": "Project", "Task": "",
         "Role": "", "Seniority": "", "Planned_Hours": "", "Start_Offset_Days": 0, "Duration_Days": "",
         "Dependencies": "", "Assignee_External_ID": "", "Notes": "",
-        "Service Department": "",
         "Rate_USD": "", "Price_USD": ""
     })
 
@@ -1244,15 +1342,19 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             deliv_rate  = _eff_rate(deliv_price, parent_hours_exact)
 
         wbs_deliv = f"1.{i}"
-        svc_deliv = DB.service_department_for_deliverable(dcode, tg_order)
+        svc_deliv = DB.service_dept_for_deliverable(dcode, tg_order, scen_col)
         rows.append({
+            "Row_ID": "",
+            "Deliverable_Code": dcode,
+            "Task_Code": "",
+            "Service Department": svc_deliv,
+            "Deliverable": str(d.get("deliverable","")),
             "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": "1",
-            "Task_Name": str(d.get("deliverable","")), "Deliverable": str(d.get("deliverable","")),
+            "Task_Name": str(d.get("deliverable","")),
             "Component": "", "Task": "", "Role": "", "Seniority": "",
             "Planned_Hours": parent_hours_display,
             "Start_Offset_Days": day_cursor, "Duration_Days": total_deliv_duration,
             "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": f'{d.get("complexity","")}/{d.get("tier","")}',
-            "Service Department": svc_deliv,
             "Rate_USD": round(deliv_rate, 2), "Price_USD": round(deliv_price, 2)
         })
 
@@ -1286,14 +1388,17 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 comp_rate  = _eff_rate(comp_price, comp_hours_exact)
 
             wbs_comp = f"{wbs_deliv}.{j}"
-            svc_comp = DB.service_department_for_component(dcode, comp, tg_in_comp)
+            svc_comp = DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col)
             rows.append({
+                "Row_ID": "",
+                "Deliverable_Code": dcode,
+                "Task_Code": "",
+                "Service Department": svc_comp,
+                "Deliverable": str(d.get("deliverable","")),
                 "Project_Name": project_name, "WBS_ID": wbs_comp, "Parent_WBS_ID": wbs_deliv,
-                "Task_Name": comp, "Deliverable": str(d.get("deliverable","")),
-                "Component": comp, "Task": "", "Role": "", "Seniority": "",
+                "Task_Name": comp, "Component": comp, "Task": "", "Role": "", "Seniority": "",
                 "Planned_Hours": comp_hours_display, "Start_Offset_Days": day_cursor + comp_offset, "Duration_Days": comp_duration,
                 "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs), "Assignee_External_ID": "", "Notes": "",
-                "Service Department": svc_comp,
                 "Rate_USD": round(comp_rate, 2), "Price_USD": round(comp_price, 2)
             })
 
@@ -1322,14 +1427,18 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
                 wbs_task = f"{wbs_comp}.{k}"
                 label = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
-                svc_task = DB.service_department_for_task(dcode, comp, tg)
+                row_id, task_code, svc_task = DB.codes_for_component_task(dcode, comp, tg, scen_col)
                 rows.append({
+                    "Row_ID": row_id,
+                    "Deliverable_Code": dcode,
+                    "Task_Code": task_code,
+                    "Service Department": svc_task,
+                    "Deliverable": str(d.get("deliverable","")),
                     "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
-                    "Task_Name": label, "Deliverable": str(d.get("deliverable","")),
-                    "Component": comp, "Task": label, "Role": role, "Seniority": sen,
+                    "Task_Name": label, "Component": comp, "Task": label,
+                    "Role": role, "Seniority": sen,
                     "Planned_Hours": task_hours_display, "Start_Offset_Days": day_cursor + offset_by_tg[tg], "Duration_Days": dur,
                     "Dependencies": (wbs_comp if k == 1 else prev_task_wbs), "Assignee_External_ID": "", "Notes": "",
-                    "Service Department": svc_task,
                     "Rate_USD": round(task_rate, 2), "Price_USD": round(task_price, 2)
                 })
                 prev_task_wbs = wbs_task
@@ -1340,6 +1449,15 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         prev_deliv_wbs = wbs_deliv
 
     df = pd.DataFrame(rows)
+    
+    # --- ENFORCE A-E COLUMN ORDER FOR v3 COMPATIBILITY ---
+    order_ae = ["Row_ID","Deliverable_Code","Task_Code","Service Department","Deliverable"]
+    # Ensure all required columns exist before reordering
+    for col in order_ae:
+        if col not in df.columns:
+            df[col] = ""
+    rest = [c for c in df.columns if c not in order_ae]
+    df = df.reindex(columns=order_ae + rest, fill_value="")
     
     # --- ENFORCE NUMERIC TYPES & PRICE FORMULA ---
     # Coerce to numeric and fill blanks
