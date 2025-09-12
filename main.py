@@ -72,118 +72,7 @@ from openai import OpenAI
 
 # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
 # do not change this unless explicitly requested by the user
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-
-# --- LLM adapter: must not touch DB ---
-_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+')
-
-def _count_words(s: str) -> int:
-    return len(re.findall(r"\b\w+\b", s or ""))
-
-def _truncate_to_2_sentences(s: str) -> str:
-    parts = _SENT_SPLIT.split((s or "").strip())
-    return " ".join(parts[:2]).strip()
-
-def ai_summarize_rfp_text(text: str) -> RfpSummary:
-    """
-    Call GPT‑5 (max compute) with a structured prompt that returns JSON:
-      { "deliverables": [{"label": "...", "short_desc": "...", "tasks": [".."]}, ...] }
-    and a prose summary <= 500 words.
-    This function intentionally avoids any DB lookups.
-    """
-    try:
-        # Create structured prompt for GPT-5
-        system_prompt = """You are an expert RFP analyzer. Extract deliverables from the RFP text and create a structured summary.
-
-Return JSON in exactly this format:
-{
-  "deliverables": [
-    {
-      "label": "Brief deliverable name", 
-      "short_desc": "Maximum 2 sentences describing what needs to be done.",
-      "tasks": ["optional task 1", "optional task 2"]
-    }
-  ]
-}
-
-Requirements:
-- Each short_desc must be maximum 2 sentences
-- Focus on concrete deliverables mentioned in the RFP
-- Extract 3-8 key deliverables maximum
-- Be concise and actionable"""
-
-        user_prompt = f"Analyze this RFP text and extract the key deliverables:\n\n{text[:8000]}"  # Limit input size
-        
-        response = openai_client.chat.completions.create(
-            model="gpt-5",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3
-        )
-        
-        # Parse JSON response
-        import json
-        result = json.loads(response.choices[0].message.content)
-        deliverables = result.get("deliverables", [])
-        
-    except Exception as e:
-        # Fallback: create basic deliverables from text analysis
-        print(f"OpenAI error (using fallback): {e}")
-        deliverables = []
-        # crude fallback: pick top lines that look like deliverables
-        for line in (text or "").splitlines():
-            line = line.strip("-•* \t")
-            if len(line.split()) >= 2 and len(deliverables) < 8:
-                deliverables.append({"label": line[:80], "short_desc": "As requested in the RFP. Further details to be refined.", "tasks": []})
-        if not deliverables:
-            deliverables = [{"label": "Scope Discovery", "short_desc": "Review the RFP and clarify scope with stakeholders.", "tasks": []}]
-
-    # enforce constraints
-    for d in deliverables:
-        d["short_desc"] = _truncate_to_2_sentences(d.get("short_desc",""))
-
-    # concise prose capped at 500 words
-    bullets = [f"• {d['label']}: {d['short_desc']}" for d in deliverables]
-    prose = "\n".join(bullets)
-    words = _count_words(prose)
-    if words > 500:
-        # trim from the end
-        # (simple conservative trimming; UI also shows a counter)
-        while bullets and _count_words("\n".join(bullets)) > 500:
-            bullets.pop()
-        prose = "\n".join(bullets)
-        words = _count_words(prose)
-
-    return RfpSummary(summary_text=prose, deliverables=[RfpSummaryItem(**d) for d in deliverables], word_count=words)
-
-# --- Name matching for reconciliation (deterministic; DB only used here) ---
-
-def _norm(s: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
-
-def _best_match(label: str, db_rows: pd.DataFrame) -> tuple[str,str,float] | None:
-    tokens = _norm(label)
-    best = None
-    for _, r in db_rows.iterrows():
-        code = str(r["Deliverable_Code"]); name = str(r["Deliverable"])
-        t2 = _norm(name)
-        if not tokens or not t2: 
-            continue
-        jacc = len(tokens & t2) / max(1, len(tokens | t2))
-        if best is None or jacc > best[2]:
-            best = (code, name, jacc)
-    return best
-
-def _average_spec_for(category: str) -> dict:
-    # Prefer a template key containing "MED" if present, else default constants already used in v4 hours
-    row = DB.scenario_templates[DB.scenario_templates["Scenario_Key"].str.contains("MED", case=False, na=False)]
-    if not row.empty:
-        c = str(row.iloc[0]["Complexity"]); t = str(row.iloc[0]["Tier"])
-        return {"mode":"template","scenario_key":str(row.iloc[0]["Scenario_Key"]), "complexity":c, "tier":t}
-    return {"mode":"template","scenario_key":"AVERAGE","complexity":"Advanced","tier":"T2_MediumVolume"}
+# Initialize OpenAI client - will be set after models are defined
 
 # ---------- Helper: DB Loader ----------
 class AgencyDB:
@@ -1816,6 +1705,122 @@ class ReorderPayload(BaseModel):
     deliverable_codes: list[str]               # desired order
     task_group_overrides: dict[str, list[str]] | None = None  # optional per-deliverable task group order
 
+# ---------- OpenAI Integration Functions (Stage 2) ----------
+
+# Initialize OpenAI client now that we can import it
+openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# --- LLM adapter: must not touch DB ---
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+')
+
+def _count_words(s: str) -> int:
+    return len(re.findall(r"\b\w+\b", s or ""))
+
+def _truncate_to_2_sentences(s: str) -> str:
+    parts = _SENT_SPLIT.split((s or "").strip())
+    return " ".join(parts[:2]).strip()
+
+def ai_summarize_rfp_text(text: str) -> RfpSummary:
+    """
+    Call GPT‑5 (max compute) with a structured prompt that returns JSON:
+      { "deliverables": [{"label": "...", "short_desc": "...", "tasks": [".."]}, ...] }
+    and a prose summary <= 500 words.
+    This function intentionally avoids any DB lookups.
+    """
+    try:
+        # Create structured prompt for GPT-5
+        system_prompt = """You are an expert RFP analyzer. Extract deliverables from the RFP text and create a structured summary.
+
+Return JSON in exactly this format:
+{
+  "deliverables": [
+    {
+      "label": "Brief deliverable name", 
+      "short_desc": "Maximum 2 sentences describing what needs to be done.",
+      "tasks": ["optional task 1", "optional task 2"]
+    }
+  ]
+}
+
+Requirements:
+- Each short_desc must be maximum 2 sentences
+- Focus on concrete deliverables mentioned in the RFP
+- Extract 3-8 key deliverables maximum
+- Be concise and actionable"""
+
+        user_prompt = f"Analyze this RFP text and extract the key deliverables:\n\n{text[:8000]}"  # Limit input size
+        
+        response = openai_client.chat.completions.create(
+            model="gpt-5",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3
+        )
+        
+        # Parse JSON response
+        import json
+        result = json.loads(response.choices[0].message.content)
+        deliverables = result.get("deliverables", [])
+        
+    except Exception as e:
+        # Fallback: create basic deliverables from text analysis
+        print(f"OpenAI error (using fallback): {e}")
+        deliverables = []
+        # crude fallback: pick top lines that look like deliverables
+        for line in (text or "").splitlines():
+            line = line.strip("-•* \t")
+            if len(line.split()) >= 2 and len(deliverables) < 8:
+                deliverables.append({"label": line[:80], "short_desc": "As requested in the RFP. Further details to be refined.", "tasks": []})
+        if not deliverables:
+            deliverables = [{"label": "Scope Discovery", "short_desc": "Review the RFP and clarify scope with stakeholders.", "tasks": []}]
+
+    # enforce constraints
+    for d in deliverables:
+        d["short_desc"] = _truncate_to_2_sentences(d.get("short_desc",""))
+
+    # concise prose capped at 500 words
+    bullets = [f"• {d['label']}: {d['short_desc']}" for d in deliverables]
+    prose = "\n".join(bullets)
+    words = _count_words(prose)
+    if words > 500:
+        # trim from the end
+        # (simple conservative trimming; UI also shows a counter)
+        while bullets and _count_words("\n".join(bullets)) > 500:
+            bullets.pop()
+        prose = "\n".join(bullets)
+        words = _count_words(prose)
+
+    return RfpSummary(summary_text=prose, deliverables=[RfpSummaryItem(**d) for d in deliverables], word_count=words)
+
+# --- Name matching for reconciliation (deterministic; DB only used here) ---
+
+def _norm(s: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", (s or "").lower()))
+
+def _best_match(label: str, db_rows: pd.DataFrame) -> tuple[str,str,float] | None:
+    tokens = _norm(label)
+    best = None
+    for _, r in db_rows.iterrows():
+        code = str(r["Deliverable_Code"]); name = str(r["Deliverable"])
+        t2 = _norm(name)
+        if not tokens or not t2: 
+            continue
+        jacc = len(tokens & t2) / max(1, len(tokens | t2))
+        if best is None or jacc > best[2]:
+            best = (code, name, jacc)
+    return best
+
+def _average_spec_for(category: str) -> dict:
+    # Prefer a template key containing "MED" if present, else default constants already used in v4 hours
+    row = DB.scenario_templates[DB.scenario_templates["Scenario_Key"].str.contains("MED", case=False, na=False)]
+    if not row.empty:
+        c = str(row.iloc[0]["Complexity"]); t = str(row.iloc[0]["Tier"])
+        return {"mode":"template","scenario_key":str(row.iloc[0]["Scenario_Key"]), "complexity":c, "tier":t}
+    return {"mode":"template","scenario_key":"AVERAGE","complexity":"Advanced","tier":"T2_MediumVolume"}
+
 # ---- Deliverable ordering helpers ----
 def _phase_rank_for(deliv_name: str, included_tgs: list[str]) -> int:
     """Lower rank = earlier phase. Name takes precedence, then task_groups."""
@@ -2331,7 +2336,7 @@ def api_reconcile(p: ReconcilePayload):
             continue
         code, name, score = best
         if code not in sel_codes and score >= 0.45:   # conservative threshold
-            add.append(ReconcileSuggestion(code=code, label=name, reason=f"Similar to "{label}" (score {score:.2f}).", preselect=True))
+            add.append(ReconcileSuggestion(code=code, label=name, reason=f"Similar to \"{label}\" (score {score:.2f}).", preselect=True))
         elif code in sel_codes:
             unchanged.append(name)
 

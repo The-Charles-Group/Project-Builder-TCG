@@ -40,3 +40,55 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .badge{display:inline-block;background:#1b2331;border:1px solid #2b3648;color:#b7c2d1;border-radius:6px;padding:3px 6px;margin-left:6px;font-size:12px}
 .totals{display:flex;gap:24px}
 .hint{color:var(--muted);font-size:12px;margin-top:10px}
+
+/* Stage 2 Three Panel Layout */
+.stage2-grid{display:grid;grid-template-columns:2fr 3fr 2fr;gap:16px;margin-top:16px}
+@media (max-width:1200px){ .stage2-grid{grid-template-columns:1fr;gap:12px} }
+
+#left-panel, #middle-panel, #right-panel{
+  border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--card);
+}
+
+#left-panel h3, #middle-panel h3, #right-panel h3{
+  margin:0 0 12px;font-size:16px;color:var(--text);
+}
+
+#middle-panel h4{
+  margin:16px 0 8px;font-size:14px;color:var(--accent);
+}
+
+#middle-panel h4:first-of-type{margin-top:0}
+
+.danger label{color:#b00020}
+
+#wordcount{
+  color:var(--muted);font-size:12px;margin-bottom:8px;
+}
+
+#summary{
+  background:#0b0e13;border:1px solid var(--border);border-radius:6px;
+  padding:12px;margin:0;white-space:pre-wrap;max-height:400px;overflow-y:auto;
+}
+
+#add-form, #del-form{margin-bottom:16px}
+#add-form label, #del-form label{
+  display:block;padding:4px 0;cursor:pointer;
+}
+#add-form input[type="checkbox"], #del-form input[type="checkbox"]{
+  margin-right:8px;
+}
+
+#unchanged-list{
+  color:var(--muted);font-size:13px;margin-bottom:16px;
+}
+
+#apply-btn{
+  width:100%;background:var(--accent2);border:1px solid var(--accent2);
+  color:#08121e;font-weight:600;padding:12px;
+}
+
+#left-list{margin-bottom:12px}
+#left-total{
+  font-weight:600;padding:8px 12px;background:#0b0e13;
+  border:1px solid var(--border);border-radius:6px;
+}

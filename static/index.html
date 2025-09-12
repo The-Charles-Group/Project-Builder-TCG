@@ -13,9 +13,9 @@
   </header>
 
   <main>
-    <!-- Step 1: Paste or Upload RFP / brief -->
+    <!-- Step 1: Upload RFP -->
     <section class="card" id="step1">
-      <h2>Step 1 — Paste or Upload the RFP / Brief</h2>
+      <h2>Step 1 — Upload Your RFP / Brief</h2>
       
       <!-- Paste option -->
       <label for="rfpText">RFP Content</label>
@@ -27,7 +27,54 @@
       <label for="rfpFile">Upload File</label>
       <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" />
       
-      <div class="grid" style="margin-top:16px;">
+      <div class="actions">
+        <button id="btnAnalyze">Analyze with AI</button>
+      </div>
+      <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
+    </section>
+
+    <!-- Step 2: Stage 2 Three Panel Layout -->
+    <section id="stage2" style="display:none;">
+      <h2>Stage 2 — AI Analysis & Reconciliation</h2>
+      
+      <div class="stage2-grid">
+        <!-- Left Panel: Database Plan (Average Scenario) -->
+        <section id="left-panel">
+          <h3>Database Plan — Average</h3>
+          <div id="left-list"></div>
+          <div id="left-total"></div>
+        </section>
+
+        <!-- Middle Panel: Reconcile -->
+        <section id="middle-panel">
+          <h3>Reconcile</h3>
+          
+          <h4>Add (left-out)</h4>
+          <form id="add-form"></form>
+          
+          <h4>Delete (not relevant)</h4>
+          <form id="del-form" class="danger"></form>
+          
+          <h4>Unchanged</h4>
+          <div id="unchanged-list"></div>
+          
+          <button id="apply-btn">Apply Selection</button>
+        </section>
+
+        <!-- Right Panel: AI Summary -->
+        <section id="right-panel">
+          <h3>AI Summary</h3>
+          <div id="wordcount"></div>
+          <pre id="summary"></pre>
+        </section>
+      </div>
+    </section>
+
+    <!-- Step 3: Advanced Configuration & Export -->
+    <section class="card" id="step3" style="display:none;">
+      <h2>Step 3 — Pricing & Export Configuration</h2>
+      
+      <div class="grid" style="margin-bottom:16px;">
         <div>
           <label for="pricingMode">Pricing mode</label>
           <select id="pricingMode">
@@ -62,26 +109,9 @@
           <input id="projectName" type="text" placeholder="e.g., Casa Dragones" />
         </div>
       </div>
-      
-      <div class="actions">
-        <button id="btnGenerate">Generate</button>
-      </div>
-      <div class="hint">Use either method. We'll auto‑identify deliverables and build Scenarios A & B. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
-    </section>
 
-    <!-- Step 2: Review & Edit -->
-    <section class="card" id="step2" style="display:none;">
-      <h2>Step 2 — Review & Edit Deliverables</h2>
-      <div>
-        <strong>AI‑picked deliverables:</strong>
-        <div class="pillbox" id="selectedChips"></div>
-        <div class="hint" id="whyPicks"></div>
-      </div>
-      
-      <div class="inline" style="margin-top:16px;">
-        <input type="text" id="addBox" placeholder="Add another deliverable..." />
-        <button id="btnAdd">Add</button>
-        <button id="btnRegenerate">Regenerate with Edits</button>
+      <div class="inline">
+        <button id="btnBuild">Build Scenarios A & B</button>
       </div>
 
       <div class="inline" style="margin-top:10px;">
@@ -112,10 +142,13 @@
   </main>
 
   <script>
-    // Simple client state
+    // Stage 2 client state
     let allDeliverables = [];   // from /api/options
-    let selectedCodes = [];     // working set in Step 2
-    let latestScenarios = null; // last response.scenarios
+    let currentRfpText = '';    // current RFP content
+    let aiSummary = null;       // AI analysis results
+    let dbSelection = [];       // current database selection
+    let reconciliation = null;  // reconciliation results
+    let latestScenarios = null; // built scenarios
 
     async function loadOptions() {
       const res = await fetch('/api/options');
@@ -124,7 +157,7 @@
       
       // Populate dropdowns
       populateDropdown('rateBand', data.rate_bands || [], 'Standard_US');
-      populateDropdown('complexity', data.complexities || [], 'Core');
+      populateDropdown('complexity', data.complexities || [], 'Advanced');
       populateDropdown('volumeTier', data.tiers || [], 'T2_MediumVolume');
     }
 
@@ -147,31 +180,361 @@
       return r ? r.Deliverable : code;
     }
 
-    function renderChips() {
-      const wrap = document.getElementById('selectedChips');
-      wrap.innerHTML = '';
-      selectedCodes.forEach(code => {
-        const chip = document.createElement('span');
-        chip.className = 'pill';
-        chip.innerHTML = `${codeToName(code)} <span class="hit" onclick="removeCode('${code}')" style="cursor:pointer;">&times;</span>`;
-        wrap.appendChild(chip);
+    // Stage 2: AI Analysis
+    async function analyzeRfp() {
+      const fileEl = document.getElementById('rfpFile');
+      const textArea = document.getElementById('rfpText');
+      
+      if (fileEl.files && fileEl.files.length > 0) {
+        await analyzeFromFile();
+      } else if (textArea.value.trim()) {
+        await analyzeFromText();
+      } else {
+        alert('Please provide RFP content either by uploading a file or pasting text.');
+        return;
+      }
+    }
+
+    async function analyzeFromFile() {
+      const fileEl = document.getElementById('rfpFile');
+      const btn = document.getElementById('btnAnalyze');
+      
+      btn.disabled = true;
+      btn.textContent = 'Analyzing...';
+
+      try {
+        const fd = new FormData();
+        fd.append('file', fileEl.files[0]);
+
+        // Call AI Summary endpoint
+        const summaryRes = await fetch('/api/summarize_by_file', {
+          method: 'POST', 
+          body: fd
+        });
+        
+        if (!summaryRes.ok) {
+          throw new Error(`AI Analysis failed: ${summaryRes.status}`);
+        }
+
+        aiSummary = await summaryRes.json();
+        
+        // Extract text for reconciliation
+        const textRes = await fetch('/api/suggest_by_file', {
+          method: 'POST', 
+          body: fd
+        });
+        const textData = await textRes.json();
+        dbSelection = textData.suggested || [];
+        
+        // Set project name from filename
+        const baseName = (fileEl.files[0].name || '').replace(/\.[^.]+$/, '').trim();
+        if (baseName && !document.getElementById('projectName').value) {
+          document.getElementById('projectName').value = baseName;
+        }
+
+        await performReconciliation();
+        
+      } catch (error) {
+        alert('Error analyzing file: ' + error.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Analyze with AI';
+      }
+    }
+
+    async function analyzeFromText() {
+      const textArea = document.getElementById('rfpText');
+      const btn = document.getElementById('btnAnalyze');
+      
+      currentRfpText = textArea.value.trim();
+      
+      btn.disabled = true;
+      btn.textContent = 'Analyzing...';
+
+      try {
+        // Call AI Summary endpoint
+        const summaryRes = await fetch('/api/summarize', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ rfp_text: currentRfpText })
+        });
+        
+        if (!summaryRes.ok) {
+          throw new Error(`AI Analysis failed: ${summaryRes.status}`);
+        }
+
+        aiSummary = await summaryRes.json();
+        
+        // Get DB suggestions
+        const dbRes = await fetch('/api/suggest_by_text', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ rfp_text: currentRfpText })
+        });
+        const dbData = await dbRes.json();
+        dbSelection = dbData.suggested || [];
+
+        await performReconciliation();
+        
+      } catch (error) {
+        alert('Error analyzing text: ' + error.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Analyze with AI';
+      }
+    }
+
+    async function performReconciliation() {
+      try {
+        const summaryLabels = aiSummary.deliverables.map(d => d.label);
+        const dbCodes = dbSelection.map(s => s.deliverable_code);
+
+        const reconRes = await fetch('/api/reconcile', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            summary_deliverables: summaryLabels,
+            db_selected_deliverable_codes: dbCodes,
+            rfp_text: currentRfpText
+          })
+        });
+        
+        if (!reconRes.ok) {
+          throw new Error(`Reconciliation failed: ${reconRes.status}`);
+        }
+
+        reconciliation = await reconRes.json();
+        
+        // Update Stage 2 panels
+        updateRightPanel();
+        await updateLeftPanel();
+        updateMiddlePanel();
+        
+        // Show Stage 2
+        document.getElementById('stage2').style.display = 'block';
+        document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
+        
+      } catch (error) {
+        alert('Error performing reconciliation: ' + error.message);
+      }
+    }
+
+    // Stage 2: Panel Updates
+    function updateRightPanel() {
+      if (!aiSummary) return;
+      
+      document.getElementById('wordcount').textContent = `${aiSummary.word_count}/500 words`;
+      document.getElementById('summary').textContent = aiSummary.summary_text;
+    }
+    
+    async function updateLeftPanel() {
+      if (!dbSelection || dbSelection.length === 0) {
+        document.getElementById('left-list').innerHTML = '<p>No deliverables selected</p>';
+        document.getElementById('left-total').textContent = 'Total: $0';
+        return;
+      }
+      
+      try {
+        // Build average scenario using existing logic
+        const avgSpec = { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" };
+        const payload = {
+          selected_deliverable_codes: dbSelection.map(s => s.deliverable_code),
+          scenario_a: avgSpec,
+          scenario_b: avgSpec,
+          pricing_mode: "Flat_Blended",
+          rate_band: "Standard_US",
+          use_slack: true,
+          slack_after_internal: 1,
+          slack_after_client: 2,
+          slack_global_pct: 0.05
+        };
+        
+        const res = await fetch('/api/build', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        
+        if (!res.ok) throw new Error('Failed to build average scenario');
+        
+        const scenarios = await res.json();
+        const avgScenario = scenarios.A;
+        
+        // Render left panel
+        let html = '';
+        if (avgScenario.items && avgScenario.items.length > 0) {
+          html = '<ul>';
+          avgScenario.items.forEach(item => {
+            html += `<li>${item.deliverable} - $${item.price.toLocaleString()}</li>`;
+          });
+          html += '</ul>';
+        } else {
+          html = '<p>No items</p>';
+        }
+        
+        document.getElementById('left-list').innerHTML = html;
+        document.getElementById('left-total').textContent = 
+          `Total: $${avgScenario.totals ? avgScenario.totals.price.toLocaleString() : '0'}`;
+          
+      } catch (error) {
+        console.error('Error updating left panel:', error);
+        document.getElementById('left-list').innerHTML = '<p>Error loading data</p>';
+        document.getElementById('left-total').textContent = 'Total: $0';
+      }
+    }
+    
+    function updateMiddlePanel() {
+      if (!reconciliation) return;
+      
+      // Render ADD checkboxes (pre-checked)
+      const addForm = document.getElementById('add-form');
+      addForm.innerHTML = '';
+      reconciliation.add.forEach((item, index) => {
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.preselect;
+        checkbox.value = item.code;
+        checkbox.name = 'add';
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(`${item.label} - ${item.reason}`));
+        addForm.appendChild(label);
       });
+      
+      if (reconciliation.add.length === 0) {
+        addForm.innerHTML = '<p>No suggestions to add</p>';
+      }
+      
+      // Render DELETE checkboxes (pre-checked, in red)
+      const delForm = document.getElementById('del-form');
+      delForm.innerHTML = '';
+      reconciliation.delete.forEach((item, index) => {
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.preselect;
+        checkbox.value = item.code;
+        checkbox.name = 'delete';
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(`${item.label} - ${item.reason}`));
+        delForm.appendChild(label);
+      });
+      
+      if (reconciliation.delete.length === 0) {
+        delForm.innerHTML = '<p>No suggestions to remove</p>';
+      }
+      
+      // Render UNCHANGED items
+      const unchangedDiv = document.getElementById('unchanged-list');
+      if (reconciliation.unchanged && reconciliation.unchanged.length > 0) {
+        unchangedDiv.innerHTML = '<strong>Unchanged:</strong> ' + reconciliation.unchanged.join(', ');
+      } else {
+        unchangedDiv.innerHTML = '<em>No unchanged items</em>';
+      }
     }
 
-    function removeCode(code) {
-      selectedCodes = selectedCodes.filter(c => c !== code);
-      renderChips();
+    // Stage 2: Apply Selection
+    async function applySelection() {
+      const btn = document.getElementById('apply-btn');
+      btn.disabled = true;
+      btn.textContent = 'Applying...';
+      
+      try {
+        // Collect ADD selections
+        const addCheckboxes = document.querySelectorAll('#add-form input[type="checkbox"]:checked');
+        const toAdd = Array.from(addCheckboxes).map(cb => cb.value);
+        
+        // Collect DELETE selections  
+        const delCheckboxes = document.querySelectorAll('#del-form input[type="checkbox"]:checked');
+        const toDelete = Array.from(delCheckboxes).map(cb => cb.value);
+        
+        // Update dbSelection
+        // Add new items
+        toAdd.forEach(code => {
+          if (!dbSelection.find(s => s.deliverable_code === code)) {
+            const deliverable = allDeliverables.find(d => d.Deliverable_Code === code);
+            if (deliverable) {
+              dbSelection.push({
+                deliverable_code: code,
+                deliverable: deliverable.Deliverable,
+                confidence: 0.8
+              });
+            }
+          }
+        });
+        
+        // Remove deleted items
+        dbSelection = dbSelection.filter(s => !toDelete.includes(s.deliverable_code));
+        
+        // Refresh left panel with new selection
+        await updateLeftPanel();
+        
+        // Show Stage 3
+        document.getElementById('step3').style.display = 'block';
+        document.getElementById('step3').scrollIntoView({ behavior: 'smooth' });
+        
+      } catch (error) {
+        alert('Error applying selection: ' + error.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Apply Selection';
+      }
     }
+    
+    // Stage 3: Build Scenarios
+    async function buildScenarios() {
+      if (!dbSelection || dbSelection.length === 0) {
+        alert('No deliverables selected. Please complete Stage 2 first.');
+        return;
+      }
+      
+      const btn = document.getElementById('btnBuild');
+      btn.disabled = true;
+      btn.textContent = 'Building...';
 
-    function renderWhy(suggested) {
-      const el = document.getElementById('whyPicks');
-      if (!el) return;
-      if (!suggested || !suggested.length) { el.textContent = ''; return; }
-      el.textContent = 'Why these picks? ' + suggested.map(s => {
-        if (s.matches && s.matches.length) return `${s.deliverable} • matches: ${s.matches.slice(0,5).join(', ')}`;
-        if (typeof s.confidence !== 'undefined') return `${s.deliverable} • confidence: ${s.confidence}`;
-        return s.deliverable;
-      }).join('  |  ');
+      try {
+        const pricingMode = document.getElementById('pricingMode').value;
+        const blendedRateStr = document.getElementById('blendedRate').value;
+        const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+        const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+        const complexity = document.getElementById('complexity').value;
+        const tier = document.getElementById('volumeTier').value;
+
+        const payload = {
+          selected_deliverable_codes: dbSelection.map(s => s.deliverable_code),
+          scenario_a: { mode: "template", scenario_key: "MED_LOW", complexity: complexity, tier: tier },
+          scenario_b: { mode: "template", scenario_key: "MED_HIGH", complexity: complexity, tier: tier },
+          pricing_mode: pricingMode,
+          blended_rate: blendedRate,
+          rate_band: rateBand,
+          use_slack: true,
+          slack_after_internal: 1,
+          slack_after_client: 2,
+          slack_global_pct: 0.05
+        };
+
+        const res = await fetch('/api/build', {
+          method: 'POST', 
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        }
+        
+        latestScenarios = await res.json();
+        renderScenario('scenarioA', latestScenarios.A);
+        renderScenario('scenarioB', latestScenarios.B);
+        
+      } catch (error) {
+        alert('Error building scenarios: ' + error.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Build Scenarios A & B';
+      }
     }
 
     function renderScenario(targetId, scenario) {
@@ -203,184 +566,9 @@
       root.innerHTML = html;
     }
 
-    async function autoBuild() {
-      const fileEl = document.getElementById('rfpFile');
-      if (fileEl.files && fileEl.files.length > 0) {
-        await autoBuildFromUpload();
-      } else {
-        await autoBuildFromPaste();
-      }
-    }
+    // Legacy functions removed - replaced by Stage 2 workflow
 
-    async function autoBuildFromPaste() {
-      const rfpText = document.getElementById('rfpText').value || "";
-      if (!rfpText.trim()) {
-        alert('Please enter some RFP content or select a file to upload.');
-        return;
-      }
-
-      document.getElementById('btnGenerate').disabled = true;
-      document.getElementById('btnGenerate').textContent = 'Generating...';
-
-      try {
-        const suggested = await fetch('/api/suggest_by_text', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ rfp_text: rfpText })
-        }).then(r => r.json()).then(j => j.suggested || []);
-
-        await buildFromSuggestions(suggested);
-      } catch (error) {
-        alert('Error processing RFP text: ' + error.message);
-      } finally {
-        document.getElementById('btnGenerate').disabled = false;
-        document.getElementById('btnGenerate').textContent = 'Generate';
-      }
-    }
-
-    async function autoBuildFromUpload() {
-      const fileEl = document.getElementById('rfpFile');
-      
-      document.getElementById('btnGenerate').disabled = true;
-      document.getElementById('btnGenerate').textContent = 'Processing file...';
-
-      try {
-        const fd = new FormData();
-        fd.append('file', fileEl.files[0]);
-
-        const data = await fetch('/api/suggest_by_file', {
-          method: 'POST', body: fd
-        }).then(r => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
-          return r.json();
-        });
-
-        const suggested = data.suggested || [];
-        const baseName = (data.filename || '').replace(/\.[^.]+$/, '').trim();
-        if (baseName && !document.getElementById('projectName').value) {
-          document.getElementById('projectName').value = baseName; // e.g., "Casa Dragones"
-        }
-
-        await buildFromSuggestions(suggested);
-      } catch (error) {
-        alert('Error processing uploaded file: ' + error.message);
-      } finally {
-        document.getElementById('btnGenerate').disabled = false;
-        document.getElementById('btnGenerate').textContent = 'Generate';
-      }
-    }
-
-    async function buildFromSuggestions(suggested) {
-      // Store for Step 2 editing
-      selectedCodes = (suggested || []).map(s => s.deliverable_code);
-      renderChips();
-
-      // Pull pricing / scenario inputs
-      const pricingMode = document.getElementById('pricingMode').value;
-      const blendedRateStr = document.getElementById('blendedRate').value;
-      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
-      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
-      const complexity = document.getElementById('complexity').value;
-      const tier = document.getElementById('volumeTier').value;
-
-      // Build both scenarios using existing /api/build
-      const payload = {
-        selected_deliverable_codes: selectedCodes,
-        scenario_a: { mode: "template", scenario_key: "MED_LOW", complexity: complexity, tier: tier },
-        scenario_b: { mode: "template", scenario_key: "MED_HIGH", complexity: complexity, tier: tier },
-        pricing_mode: pricingMode,
-        blended_rate: blendedRate,
-        rate_band: rateBand,
-        use_slack: true,
-        slack_after_internal: 1,
-        slack_after_client: 2,
-        slack_global_pct: 0.05
-      };
-
-      const scenarios = await fetch('/api/build', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      }).then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
-        return r.json();
-      });
-
-      latestScenarios = scenarios;
-      renderScenario('scenarioA', latestScenarios.A);
-      renderScenario('scenarioB', latestScenarios.B);
-
-      // Show why/confidence if present
-      renderWhy((suggested || []));
-
-      document.getElementById('step2').style.display = 'block';
-      document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
-    }
-
-    async function regenerateWithEdits() {
-      const pricingMode = document.getElementById('pricingMode').value;
-      const blendedRateStr = document.getElementById('blendedRate').value;
-      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
-      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
-      const complexity = document.getElementById('complexity').value;
-      const tier = document.getElementById('volumeTier').value;
-
-      document.getElementById('btnRegenerate').disabled = true;
-      document.getElementById('btnRegenerate').textContent = 'Regenerating...';
-
-      try {
-        const payload = {
-          selected_deliverable_codes: selectedCodes,
-          scenario_a: { mode: "template", scenario_key: "MED_LOW", complexity: complexity, tier: tier },
-          scenario_b: { mode: "template", scenario_key: "MED_HIGH", complexity: complexity, tier: tier },
-          pricing_mode: pricingMode,
-          blended_rate: blendedRate,
-          rate_band: rateBand,
-          use_slack: true,
-          slack_after_internal: 1,
-          slack_after_client: 2,
-          slack_global_pct: 0.05
-        };
-
-        const res = await fetch('/api/build', {
-          method: 'POST', 
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-        
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-        }
-        
-        const scenarios = await res.json();
-        latestScenarios = scenarios || null;
-        renderScenario('scenarioA', latestScenarios.A);
-        renderScenario('scenarioB', latestScenarios.B);
-      } catch (error) {
-        alert('Error regenerating scenarios: ' + error.message);
-      } finally {
-        document.getElementById('btnRegenerate').disabled = false;
-        document.getElementById('btnRegenerate').textContent = 'Regenerate with Edits';
-      }
-    }
-
-    function addDeliverableFromBox() {
-      const box = document.getElementById('addBox');
-      const q = box.value.trim().toLowerCase();
-      if (!q) return;
-      
-      // naive search across known deliverables
-      const match = allDeliverables.find(d =>
-        d.Deliverable.toLowerCase().includes(q) || d.Deliverable_Code.toLowerCase() === q
-      );
-      if (match && !selectedCodes.includes(match.Deliverable_Code)) {
-        selectedCodes.push(match.Deliverable_Code);
-        renderChips();
-      } else if (match) {
-        alert('That deliverable is already selected.');
-      } else {
-        alert('No matching deliverable found. Try a different search term.');
-      }
-      box.value = '';
-    }
+    // Legacy function removed
 
     function fallbackName(letter, fmt) {
       const projectName = (document.getElementById('projectName')?.value || 'Proposal').trim();
@@ -584,9 +772,9 @@
     }
 
     // Event listeners
-    document.getElementById('btnGenerate').onclick = autoBuild;
-    document.getElementById('btnRegenerate').onclick = regenerateWithEdits;
-    document.getElementById('btnAdd').onclick = addDeliverableFromBox;
+    document.getElementById('btnAnalyze').onclick = analyzeRfp;
+    document.getElementById('apply-btn').onclick = applySelection;
+    document.getElementById('btnBuild').onclick = buildScenarios;
     document.getElementById('btnExportA').onclick = () => exportScenario('A');
     document.getElementById('btnExportB').onclick = () => exportScenario('B');
     document.getElementById('btnExportWorkbook').onclick = exportWorkbook;
@@ -594,13 +782,6 @@
     // Enable/disable the button based on format
     document.getElementById('exportFormat').addEventListener('change', toggleWorkbookBtn);
     toggleWorkbookBtn(); // initialize
-
-    // Allow Enter key in add box
-    document.getElementById('addBox').addEventListener('keypress', function(e) {
-      if (e.key === 'Enter') {
-        addDeliverableFromBox();
-      }
-    });
 
     // Initialize
     loadOptions();
