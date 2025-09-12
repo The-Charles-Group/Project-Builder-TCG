@@ -70,9 +70,9 @@
       </div>
     </section>
 
-    <!-- Step 3: Advanced Configuration & Export -->
+    <!-- Step 3: Pricing -->
     <section class="card" id="step3" style="display:none;">
-      <h2>Step 3 — Pricing & Export Configuration</h2>
+      <h2>Step 3 — Pricing</h2>
       
       <div class="grid" style="margin-bottom:16px;">
         <div>
@@ -114,19 +114,6 @@
         <button id="btnBuild">Build Scenarios A & B</button>
       </div>
 
-      <div class="inline" style="margin-top:10px;">
-        <label>Export format:
-          <select id="exportFormat">
-            <option value="csv">CSV (.csv)</option>
-            <option value="xlsx">Excel (.xlsx)</option>
-          </select>
-        </label>
-        <label><input id="exportTimestamp" type="checkbox" /> Add timestamp</label>
-        <button id="btnExportA">Export Scenario A</button>
-        <button id="btnExportB">Export Scenario B</button>
-        <button id="btnExportWorkbook" title="One Excel file, two tabs">Export A & B (one file)</button>
-      </div>
-
       <div class="scenarios">
         <div class="scenario">
           <h3>Scenario A</h3>
@@ -137,6 +124,35 @@
           <h3>Scenario B</h3>
           <div id="scenarioB">(No data)</div>
         </div>
+      </div>
+    </section>
+
+    <!-- Step 4: Timeline -->
+    <section class="card" id="step4" style="display:none;">
+      <h2>Step 4 — Timeline</h2>
+      <div id="timeline-controls">
+        <button id="tl-sel-A" class="btn-small">Scenario A</button>
+        <button id="tl-sel-B" class="btn-small">Scenario B</button>
+      </div>
+      <div id="timeline">(Build scenarios in Step 3 to see timeline)</div>
+    </section>
+
+    <!-- Step 5: Export -->
+    <section class="card" id="step5" style="display:none;">
+      <h2>Step 5 — Export</h2>
+      <div class="inline" style="margin-bottom:16px;">
+        <label>Export format:
+          <select id="export-format">
+            <option value="xlsx" selected>Excel (.xlsx)</option>
+            <option value="csv">CSV (.csv)</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="export-add-ts"> Add timestamp</label>
+      </div>
+      <div class="inline">
+        <button id="btn-export-a">Export Scenario A</button>
+        <button id="btn-export-b">Export Scenario B</button>
+        <button id="btn-export-ab">Export A & B (one file)</button>
       </div>
     </section>
   </main>
@@ -176,7 +192,7 @@
       aiSummary: null,          // AI analysis results
       reconciliation: null,     // reconciliation results
       leftPanelScenario: null,  // scenario data for left panel
-      latestScenarios: null     // built scenarios
+      scenarios: null           // built scenarios (moved to appState)
     };
     
     // Global data
@@ -591,8 +607,21 @@
       });
 
       const scenarios = await resp.json();
+      
+      // Store scenarios globally for timeline and export
+      window.appState = window.appState || {};
+      appState.scenarios = scenarios;
+      
       renderScenario('scenarioA', scenarios.A);
       renderScenario('scenarioB', scenarios.B);
+      
+      // Immediately show Step 4 for Scenario A
+      renderTimeline('A');
+      
+      // Show Steps 4 and 5
+      document.getElementById('step4').style.display = 'block';
+      document.getElementById('step5').style.display = 'block';
+      document.getElementById('step4').scrollIntoView({ behavior: 'smooth' });
     }
     
     // Legacy function name for backward compatibility
@@ -631,6 +660,38 @@
 
     // Legacy function removed
 
+    // Timeline rendering (Step 4)
+    function renderTimeline(letter) {
+      const scen = appState.scenarios?.[letter];
+      const box = document.getElementById('timeline');
+      if (!scen || !scen.items?.length) {
+        box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
+        return;
+      }
+      
+      // Simple, readable timeline: one row per deliverable with start–end
+      const rows = scen.items.map(d => {
+        const sched = d.schedule || [];
+        const start = sched.length ? sched[0].start_date : '';
+        const end   = sched.length ? sched[sched.length - 1].end_date : '';
+        const days  = sched.reduce((n, s) => n + (s.duration_days || 0), 0);
+        return `<tr>
+          <td>${d.deliverable}</td>
+          <td>${start}</td>
+          <td>${end}</td>
+          <td>${days}</td>
+        </tr>`;
+      }).join('');
+
+      box.innerHTML = `
+        <table class="table-compact">
+          <thead><tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (days)</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p class="hint">Drag‑drop reordering will call <code>/api/reorder_timeline</code> in Stage 4.</p>
+      `;
+    }
+
     // Improved export functionality with robust blob handling
     async function downloadBlobFromPost(url, payload) {
       const res = await fetch(url, {
@@ -648,7 +709,7 @@
       // Read filename from Content-Disposition if present
       const cd = res.headers.get('Content-Disposition') || '';
       const m = /filename="?([^"]+)"?/i.exec(cd);
-      const filename = m ? m[1] : (payload.scenario_label || 'Scenario') + '.' + (payload.file_format || 'csv');
+      const filename = m ? m[1] : 'Workfront_Export.xlsx';
 
       const urlObj = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -661,89 +722,42 @@
     }
 
     function getExportPrefs() {
-      // Using current HTML element IDs
-      const fmt = (document.querySelector('#exportFormat')?.value || 'xlsx').toLowerCase();
-      const addTs = !!document.querySelector('#exportTimestamp')?.checked;
-      const project = document.querySelector('#projectName')?.value || 'Proposal';
-      return { file_format: fmt, add_timestamp: addTs, project_name: project };
+      return {
+        file_format: (document.getElementById('export-format')?.value || 'xlsx'),
+        add_timestamp: !!document.getElementById('export-add-ts')?.checked,
+        project_name: document.getElementById('projectName')?.value || 'Proposal'
+      };
     }
 
     async function exportScenario(letter) {
-      const scen = (latestScenarios && latestScenarios[letter]) || null;
-      if (!scen || !scen.items || !scen.items.length) {
-        alert('Build scenarios first (Stage 3).');
-        return;
+      const scen = appState.scenarios?.[letter];
+      if (!scen || !scen.items?.length) { 
+        alert('Build scenarios first in Step 3.'); 
+        return; 
       }
       const prefs = getExportPrefs();
       await downloadBlobFromPost('/api/export', {
         scenario: scen,
         project_name: prefs.project_name,
-        file_format: prefs.file_format,        // 'csv' or 'xlsx'
+        file_format: prefs.file_format,
         scenario_label: `Scenario ${letter}`,
         add_timestamp: prefs.add_timestamp
       });
     }
 
-    async function exportWorkbook() {
+    async function exportWorkbookAB() {
       const prefs = getExportPrefs();
-      if (prefs.file_format !== 'xlsx') {
-        alert('Select Excel (.xlsx) to export both scenarios in one file.');
-        return;
-      }
-      
-      if (!latestScenarios || !latestScenarios.A || !latestScenarios.B) {
-        alert('Generate scenarios first.');
-        return;
-      }
-      
-      // Disable button and show loading state
-      const btn = document.getElementById('btnExportWorkbook');
-      const originalText = btn ? btn.textContent : '';
-      if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Exporting...';
-      }
-
-      try {
-        await downloadBlobFromPost('/api/export_workbook', {
-          scenario_a: latestScenarios.A,
-          scenario_b: latestScenarios.B,
-          project_name: prefs.project_name,
-          sheet_name_a: 'Scenario A',
-          sheet_name_b: 'Scenario B',
-          add_timestamp: prefs.add_timestamp
-        });
-      } finally {
-        // Restore button state
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = originalText;
-          toggleWorkbookBtn(); // Re-apply format-based enable/disable
-        }
-      }
+      await downloadBlobFromPost('/api/export_workbook', {
+        scenario_a: appState.scenarios?.A || {items:[]},
+        scenario_b: appState.scenarios?.B || {items:[]},
+        project_name: prefs.project_name,
+        sheet_name_a: 'Scenario A', 
+        sheet_name_b: 'Scenario B',
+        add_timestamp: prefs.add_timestamp
+      });
     }
 
-    // Legacy function for backward compatibility
-    async function exportBoth() {
-      if (!latestScenarios || (!latestScenarios.A && !latestScenarios.B)) {
-        alert('Generate scenarios first.');
-        return;
-      }
-
-      try {
-        // Export A then B as two separate files
-        if (latestScenarios.A) {
-          await exportScenario('A');
-        }
-        // tiny gap helps some browsers show two download toasts separately
-        await new Promise(r => setTimeout(r, 200));
-        if (latestScenarios.B) {
-          await exportScenario('B');
-        }
-      } catch (error) {
-        alert('Error exporting both scenarios: ' + error.message);
-      }
-    }
+    // Legacy function removed - use Step 5 exports instead
 
     // Number formatting functions
     function fmtInt(n){ return (Math.round(Number(n)||0)).toLocaleString(); }
@@ -846,25 +860,24 @@
       };
     }
 
-    // Enable/disable the workbook button based on format
-    function toggleWorkbookBtn() {
-      const btn = document.getElementById('btnExportWorkbook');
-      const xlsx = document.getElementById('exportFormat').value === 'xlsx';
-      btn.disabled = !xlsx;
-      btn.title = xlsx ? 'One Excel file, two tabs' : 'Select Excel (.xlsx) to enable';
-    }
+    // Legacy toggle function removed - new export handling in Step 5
 
     // Event listeners
     document.getElementById('btnAnalyze').onclick = analyzeRfp;
     document.getElementById('apply-btn').onclick = applySelection;
-    document.getElementById('btnBuild').onclick = buildScenariosAB;  // Updated to use new function
-    document.getElementById('btnExportA').onclick = () => exportScenario('A');
-    document.getElementById('btnExportB').onclick = () => exportScenario('B');
-    document.getElementById('btnExportWorkbook').onclick = exportWorkbook;
+    document.getElementById('btnBuild').onclick = buildScenariosAB;
+    
+    // Timeline controls
+    document.getElementById('tl-sel-A').onclick = () => renderTimeline('A');
+    document.getElementById('tl-sel-B').onclick = () => renderTimeline('B');
+    
+    // Step 5 Export buttons
+    document.getElementById('btn-export-a')?.addEventListener('click', () => exportScenario('A'));
+    document.getElementById('btn-export-b')?.addEventListener('click', () => exportScenario('B'));
+    document.getElementById('btn-export-ab')?.addEventListener('click', exportWorkbookAB);
 
-    // Enable/disable the button based on format
-    document.getElementById('exportFormat').addEventListener('change', toggleWorkbookBtn);
-    toggleWorkbookBtn(); // initialize
+    // Legacy format tracking (remove old handlers)
+    // Note: New export format handling is in Step 5
 
     // Initialize
     loadOptions();

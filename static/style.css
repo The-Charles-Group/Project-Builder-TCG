@@ -20,6 +20,14 @@ input,select{border-radius:8px;border:1px solid var(--border);background:#0b0e13
 button{padding:10px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#08121e;cursor:pointer;font-weight:600}
 button.ghost{background:transparent;color:var(--accent)}
 button:disabled{opacity:.6;cursor:not-allowed}
+
+/* Timeline controls */
+#timeline-controls{margin-bottom:16px}
+.btn-small{padding:8px 16px;font-size:14px;margin-right:8px}
+.table-compact{width:100%;border-collapse:collapse;margin-top:16px}
+.table-compact th,.table-compact td{border:1px solid var(--border);padding:8px;text-align:left}
+.table-compact th{background-color:var(--card);font-weight:bold;color:var(--muted)}
+.hint{font-style:italic;color:var(--muted);margin-top:12px}
 .actions{margin-top:14px;display:flex;gap:12px;flex-wrap:wrap}
 
 .pillbox{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
