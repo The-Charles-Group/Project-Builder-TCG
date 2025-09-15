@@ -750,7 +750,7 @@
       const btn = e.target.closest('[data-timeline-sel]');
       if (!btn) return;
       e.preventDefault();
-      selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
+      selectTimeline(btn.dataset.timelineSel);  // 'A', 'B', or 'C'
     });
 
     function parseFilenameFromContentDisposition(cd, fallback) {
@@ -1075,12 +1075,6 @@
       box.innerHTML = `<h4>Time Allocation (Scenario ${letter})</h4>${rows}`;
     }
 
-    function selectTimeline(letter) {
-      renderTimeline(letter);
-      document.querySelectorAll('[data-timeline-sel]')
-        .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
-    }
-
     // Scenario C (Upsell) functionality
     function renderUpsellList() {
       const base = document.querySelector('#c-base')?.value || 'A';
@@ -1149,7 +1143,7 @@
     document.addEventListener('click', e => {
       const btn = e.target.closest('[data-timeline-sel]');
       if (!btn) return;
-      selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
+      selectTimeline(btn.dataset.timelineSel);  // 'A', 'B', or 'C'
     });
     
     // Hook up your buttons (adjust IDs to your HTML)
