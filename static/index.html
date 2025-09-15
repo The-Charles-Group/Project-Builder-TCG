@@ -714,16 +714,12 @@
 
     // Legacy function removed
 
-    function parseFilenameFromContentDisposition(cd, fallback) {
-      if (!cd) return fallback;
-      // RFC 5987 (filename*=UTF-8'')
-      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
-      if (star) return decodeURIComponent(star[1]);
-      // Legacy: filename="..."
-      const quoted = /filename="?([^"]+)"?/i.exec(cd);
-      if (quoted) return quoted[1];
-      return fallback;
-    }
+    // Safe to run multiple times; never redeclares
+    window.parseFilenameFromContentDisposition = window.parseFilenameFromContentDisposition || function (hdr, fallback) {
+      if (!hdr) return fallback;
+      const m = /filename\*?=(?:UTF-8''|")?([^\"\;]+)/i.exec(hdr);
+      try { return decodeURIComponent(m?.[1] || '').replace(/\s+/g,' ').trim(); } catch { return (m?.[1]||'').trim(); }
+    };
 
     async function downloadFromEndpoint(url, payload, fallbackName = 'Workfront_Export.xlsx') {
       const res = await fetch(url, {
@@ -742,7 +738,7 @@
       // Read the file as a Blob and honor the server-suggested name
       const blob = await res.blob();
       const cd = res.headers.get('Content-Disposition') || '';
-      const filename = parseFilenameFromContentDisposition(cd, fallbackName);
+      const filename = window.parseFilenameFromContentDisposition(cd, fallbackName);
 
       const href = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -764,13 +760,13 @@
       const v = document.querySelector('#export-format')?.value || 'xlsx';
       return v.toLowerCase();
     }
-    function getScenario(letter) {
+    window.getScenario = window.getScenario || function(letter) {
       const s = (window.appState?.scenarios || {})[letter];
       return (s && Array.isArray(s.items) && s.items.length) ? s : null;
-    }
+    };
 
     async function onExportScenario(letter) {
-      const scen = getScenario(letter);
+      const scen = window.getScenario(letter);
       if (!scen) { alert('Build scenarios first.'); return; }
 
       const payload = {
@@ -783,8 +779,8 @@
     }
 
     async function onExportWorkbookAB() {
-      const A = getScenario('A');
-      const B = getScenario('B');
+      const A = window.getScenario('A');
+      const B = window.getScenario('B');
       if (!A || !B) { alert('Build scenarios A & B first.'); return; }
 
       const payload = {
@@ -797,9 +793,9 @@
     }
 
     async function onExportWorkbookABC() {
-      const A = getScenario('A');
-      const B = getScenario('B');
-      const C = getScenario('C');
+      const A = window.getScenario('A');
+      const B = window.getScenario('B');
+      const C = window.getScenario('C');
       if (!A || !B) { alert('Build scenarios A & B first.'); return; }
       if (!C) { alert('Build Scenario C first.'); return; }
 
@@ -815,15 +811,16 @@
 
     // Legacy function removed - use Step 5 exports instead
 
-    // Number formatting functions
-    function fmtInt(n){ return (Math.round(Number(n)||0)).toLocaleString(); }
-    function fmtUSD0(n){ return '$' + fmtInt(n); }
-    function fmtUSD2(n){ return '$' + (Number(n)||0).toFixed(2); }
+    // Number formatting functions - guarded global assignments
+    window.fmtInt = window.fmtInt || function(n){ return (Math.round(Number(n)||0)).toLocaleString(); };
+    window.fmtUSD0 = window.fmtUSD0 || function(n){ return '$' + window.fmtInt(n); };
+    window.fmtUSD2 = window.fmtUSD2 || function(n){ return '$' + (Number(n)||0).toFixed(2); };
+    window.fmtUSD = window.fmtUSD || (n => Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n));
 
     // Updated scenario rendering function with proper formatting
     function renderScenario(targetId, scenario) {
       let html = `
-        <div class="totals">Totals — Hours: ${fmtInt(scenario.totals.hours)}, Price: ${fmtUSD0(scenario.totals.price)}</div>
+        <div class="totals">Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}</div>
         <table>
           <thead><tr><th>Deliverable</th><th>Hours</th><th>Rate (USD)</th><th>Price (USD)</th><th>Tasks</th></tr></thead>
           <tbody>
@@ -833,9 +830,9 @@
         const rate = (typeof it.effective_rate !== 'undefined') ? it.effective_rate : (it.total_hours ? (it.price/it.total_hours) : 0);
         html += `<tr>
           <td>${it.deliverable}</td>
-          <td>${fmtInt(it.total_hours)}</td>
-          <td>${fmtUSD2(rate)}</td>
-          <td>${fmtUSD0(it.price)}</td>
+          <td>${window.fmtInt(it.total_hours)}</td>
+          <td>${window.fmtUSD2(rate)}</td>
+          <td>${window.fmtUSD0(it.price)}</td>
           <td>${tasks}</td>
         </tr>`;
       });
@@ -918,20 +915,28 @@
 
     // Legacy toggle function removed - new export handling in Step 5
 
-    // ——— helpers ———
-    function getScenario(letter){ return (window.appState?.scenarios||{})[letter] || null; }
-    function setText(id, t){ const el=document.getElementById(id); if(el) el.textContent=t; }
-    function setHTML(id, h){ const el=document.getElementById(id); if(el) el.innerHTML=h; }
+    // ——— helpers - guarded global assignments ———
+    window.getScenario = window.getScenario || function(letter){ return (window.appState?.scenarios||{})[letter] || null; };
+    window.setText = window.setText || function (id, t) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = t;
+    };
+    window.setHTML = window.setHTML || function (id, h) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = h;
+    };
+    window.qs = window.qs || ((sel, root=document) => root.querySelector(sel));
+    window.qsa = window.qsa || ((sel, root=document) => [...root.querySelectorAll(sel)]);
 
     // ——— render the timeline for a scenario ———
     function renderTimeline(letter) {
-      const scen = getScenario(letter);
+      const scen = window.getScenario(letter);
       const body = document.getElementById('tl-body');
       document.querySelectorAll('[data-timeline-sel]').forEach(b =>
         b.classList.toggle('active', b.dataset.timelineSel === letter)
       );
       if (!scen || !Array.isArray(scen.items) || !scen.items.length) {
-        setHTML('tl-body','<tr><td colspan="4"><em>Build scenarios in Step 3 to see a timeline.</em></td></tr>');
+        window.setHTML('tl-body','<tr><td colspan="4"><em>Build scenarios in Step 3 to see a timeline.</em></td></tr>');
         return;
       }
       const rows = scen.items.map(d => {
@@ -943,7 +948,7 @@
           <td>${d.deliverable}</td><td>${start}</td><td>${end}</td><td>${days}</td>
         </tr>`;
       }).join('');
-      setHTML('tl-body', rows);
+      window.setHTML('tl-body', rows);
       enableTimelineDnD(letter);
     }
 
@@ -985,7 +990,7 @@
     async function saveTimelineOrder(letter){
       const body = document.getElementById('tl-body');
       const codes = [...body.querySelectorAll('.tl-row')].map(tr=>tr.dataset.dcode);
-      const scen = getScenario(letter) || {};
+      const scen = window.getScenario(letter) || {};
       const includedMap = {};
       (scen.items||[]).forEach(it => includedMap[it.deliverable_code] = it.included_task_groups || []);
 
