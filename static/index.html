@@ -705,33 +705,30 @@
       `;
     }
 
-    // Robust filename parsing from Content-Disposition header
-    function parseFilenameFromCD(cd, fallback) {
-      if (!cd) return fallback;
-      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
-      if (star) return decodeURIComponent(star[1]);
-      const quoted = /filename="?([^"]+)"?/i.exec(cd);
-      if (quoted) return quoted[1];
-      return fallback;
-    }
-
-    async function downloadBlobFromPost(url, payload, fallbackName) {
+    async function downloadFromEndpoint(url, payload) {
       const res = await fetch(url, {
         method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        alert(`Export failed: ${res.status} — ${await res.text().catch(()=>res.statusText)}`);
+        const text = await res.text();
+        alert(`Export failed: ${text}`);
         return;
-      }
+        }
       const blob = await res.blob();
-      const filename = parseFilenameFromCD(res.headers.get('Content-Disposition'), fallbackName);
+      // Prefer server-suggested name, else fall back
+      const disp = res.headers.get('Content-Disposition') || '';
+      const match = /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/.exec(disp);
+      const suggested = decodeURIComponent((match?.[1] || match?.[2] || 'Workfront_Export.xlsx'));
+      const urlObj = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filename || fallbackName || 'Workfront_Export.xlsx';
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(a.href);
+      a.href = urlObj;
+      a.download = suggested;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(urlObj);
     }
 
     function getExportPrefs() {
@@ -753,7 +750,7 @@
         return; 
       }
       const prefs = getExportPrefs();
-      await downloadBlobFromPost('/api/export', {
+      await downloadFromEndpoint('/api/export', {
         scenario: scen,
         project_name: prefs.project_name,
         file_format: prefs.file_format,
@@ -765,7 +762,7 @@
       const scenA = getScenario('A');
       const scenB = getScenario('B');
       const prefs = getExportPrefs();
-      await downloadBlobFromPost('/api/export_workbook', {
+      await downloadFromEndpoint('/api/export_workbook', {
         scenario_a: scenA || {items:[]},
         scenario_b: scenB || {items:[]},
         project_name: prefs.project_name,
