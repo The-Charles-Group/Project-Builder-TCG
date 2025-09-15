@@ -835,6 +835,23 @@
         'Workfront_Export_Scenarios_A_and_B.xlsx');
     }
 
+    async function onExportWorkbookABC() {
+      const A = getScenario('A');
+      const B = getScenario('B');
+      const C = getScenario('C');
+      if (!A || !B) { alert('Build scenarios A & B first.'); return; }
+      if (!C) { alert('Build Scenario C first.'); return; }
+
+      const payload = {
+        scenario_a: A,
+        scenario_b: B,
+        scenario_c: C,
+        project_name: getProjectName()
+      };
+      await downloadFromEndpoint('/api/export_workbook_abc', payload,
+        'Workfront_Export_Scenarios_A_B_and_C.xlsx');
+    }
+
     // Legacy function removed - use Step 5 exports instead
 
     // Number formatting functions

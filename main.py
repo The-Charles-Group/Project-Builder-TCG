@@ -1721,6 +1721,16 @@ class ExportWorkbookPayload(BaseModel):
     sheet_name_b: str | None = "Scenario B"
     add_timestamp: bool | None = False
 
+class ExportWorkbookABCPayload(BaseModel):
+    scenario_a: dict
+    scenario_b: dict
+    scenario_c: dict
+    project_name: str | None = None
+    sheet_name_a: str | None = "Scenario A"
+    sheet_name_b: str | None = "Scenario B"
+    sheet_name_c: str | None = "Scenario C"
+    add_timestamp: bool | None = False
+
 class AuditPricingPayload(BaseModel):
     scenario: Dict[str, Any]           # scenario object from /api/build
     pricing_mode: str                  # "Flat_Blended" | "Per_Resource"
@@ -2417,6 +2427,46 @@ def api_export_workbook(payload: ExportWorkbookPayload):
         dfB.to_excel(xw, sheet_name=sheetB, index=False)
         _apply_number_formats(xw.sheets[sheetA], dfA)
         _apply_number_formats(xw.sheets[sheetB], dfB)
+    return FileResponse(
+        out_path, filename=os.path.basename(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+@app.post("/api/export_workbook_abc")
+def api_export_workbook_abc(payload: ExportWorkbookABCPayload):
+    """Export scenarios A, B, and C to a single Excel file with separate sheets."""
+    if not DB.loaded:
+        DB.load()
+    
+    project = (payload.project_name
+               or _upload_title_default()
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
+    
+    # Build DataFrames for all three scenarios
+    dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
+    dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
+    dfC = build_wbs_dataframe_from_scenario(payload.scenario_c or {}, project)
+    
+    # Ensure consistent column formatting
+    dfA = _ensure_v3_ae_columns(dfA)
+    dfB = _ensure_v3_ae_columns(dfB)
+    dfC = _ensure_v3_ae_columns(dfC)
+    
+    # Generate filename with EST timestamp
+    base = _export_basename(project, "Scenarios A, B & C")  # includes EST timestamp
+    out_path = f"{base}.xlsx"
+    
+    # Create Excel file with three sheets
+    with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+        dfA.to_excel(xw, sheet_name=payload.sheet_name_a or "Scenario A", index=False)
+        dfB.to_excel(xw, sheet_name=payload.sheet_name_b or "Scenario B", index=False)
+        dfC.to_excel(xw, sheet_name=payload.sheet_name_c or "Scenario C", index=False)
+        
+        # Apply number formatting to all sheets
+        _apply_number_formats(xw.sheets[payload.sheet_name_a or "Scenario A"], dfA)
+        _apply_number_formats(xw.sheets[payload.sheet_name_b or "Scenario B"], dfB)
+        _apply_number_formats(xw.sheets[payload.sheet_name_c or "Scenario C"], dfC)
+    
     return FileResponse(
         out_path, filename=os.path.basename(out_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
