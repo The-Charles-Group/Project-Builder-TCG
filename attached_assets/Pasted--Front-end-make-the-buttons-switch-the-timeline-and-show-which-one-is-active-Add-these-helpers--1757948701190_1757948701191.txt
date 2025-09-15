@@ -1,0 +1,106 @@
+✅ Front‑end: make the buttons switch the timeline (and show which one is active)
+
+Add these helpers once in your main JS (after you set up appState):
+
+// --- state & compatibility alias ---
+window.appState = window.appState || {};
+Object.defineProperty(window, 'latestScenarios', {
+  get() { return window.appState.scenarios; },
+  set(v) { window.appState.scenarios = v; }
+});
+
+// --- safe getters ---
+function getScenario(letter) {
+  const s = (window.appState?.scenarios || {})[letter];
+  return (s && Array.isArray(s.items) && s.items.length) ? s : null;
+}
+
+// --- renderer for Step 4 ---
+function renderTimeline(letter) {
+  const scen = getScenario(letter);
+  const box = document.getElementById('timeline');
+  if (!box) return;
+  if (!scen) {
+    box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
+    return;
+  }
+
+  // simple header so you SEE the switch even if schedules are similar
+  const header = `<div class="timeline-head">
+    <strong>Scenario ${letter}</strong> · Deliverables: ${scen.items.length}
+  </div>`;
+
+  const rows = (scen.items || []).map(d => {
+    const sch = d.schedule || [];
+    const start = sch.length ? sch[0].start_date : '';
+    const end   = sch.length ? sch[sch.length - 1].end_date : '';
+    const days  = sch.reduce((n, s) => n + (s.duration_days || 0), 0);
+    return `<tr>
+      <td>${d.deliverable}</td>
+      <td>${start}</td>
+      <td>${end}</td>
+      <td>${days}</td>
+    </tr>`;
+  }).join('');
+
+  box.innerHTML = header + `
+    <table class="table-compact">
+      <thead><tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (days)</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// --- A/B toggle wiring (works even if buttons are added later) ---
+function selectTimeline(letter) {
+  renderTimeline(letter);
+  document.querySelectorAll('[data-timeline-sel]')
+    .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-timeline-sel]');
+  if (!btn) return;
+  e.preventDefault();
+  selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
+});
+
+// Call once after /api/build succeeds:
+selectTimeline('A');
+
+
+HTML expectations (minimal):
+
+<!-- Step 4 header controls -->
+<div id="timeline-controls">
+  <button type="button" data-timeline-sel="A" id="tl-sel-A">Scenario A</button>
+  <button type="button" data-timeline-sel="B" id="tl-sel-B">Scenario B</button>
+</div>
+<div id="timeline"></div>
+
+
+Why this helps: it binds after the DOM is ready, uses your canonical appState.scenarios, sets a visible header “Scenario A/B”, and toggles an active class so you can style the selected button.
+
+✅ Back‑end: make Scenario B actually build with “B” ordering
+
+Your schedule builder supports a scenario_letter parameter; it defaults to "A". If your Scenario‑B build path doesn’t pass "B", both schedules will look the same. Patch the loop that builds scenarios so it passes the letter through to build_schedule(...).
+
+Inside /api/build, where you construct Scenario A and Scenario B, make sure you call:
+
+# letter is "A" or "B" depending on which scenario you're building
+sched = DB.build_schedule(
+    deliverable_code=code,
+    included_task_groups=included_tgs,
+    complexity=scen_complexity,
+    tier=scen_tier,
+    use_slack=use_slack,
+    slack_after_internal=slack_after_internal,
+    slack_after_client=slack_after_client,
+    slack_global_pct=slack_global_pct,
+    project_start=project_start,
+    scenario_letter=letter,       # <-- CRITICAL (A vs B)
+)
+
+
+build_schedule() uses scenario_letter downstream in sort_task_groups(...), which applies per‑scenario task‑order overrides (e.g., different ordering for A vs B). If you omit it, both are computed as "A".
+
+Bonus tip: If your Step‑3 form currently sets identical complexity/tier for A and B, their timelines may still look the same even after this fix. That’s expected—give A and B different specs or different task‑order overrides if you want them to differ visually. The override plug‑point is Task_Order_Overrides_A/B in UI_Options.

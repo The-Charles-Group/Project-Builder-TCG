@@ -131,8 +131,8 @@
     <section class="card" id="step4" style="display:none;">
       <h2>Step 4 — Timeline</h2>
       <div id="timeline-controls">
-        <button id="tl-sel-A" class="btn-small">Scenario A</button>
-        <button id="tl-sel-B" class="btn-small">Scenario B</button>
+        <button type="button" data-timeline-sel="A" id="tl-sel-A" class="btn-small">Scenario A</button>
+        <button type="button" data-timeline-sel="B" id="tl-sel-B" class="btn-small">Scenario B</button>
       </div>
       <div id="timeline">(Build scenarios in Step 3 to see timeline)</div>
     </section>
@@ -628,6 +628,9 @@
       renderScenario('scenarioA', scenarios.A);
       renderScenario('scenarioB', scenarios.B);
       
+      // Call once after /api/build succeeds:
+      selectTimeline('A');
+      
       // Immediately show Step 4 for Scenario A
       renderTimeline('A');
       
@@ -673,21 +676,26 @@
 
     // Legacy function removed
 
-    // Timeline rendering (Step 4)
+    // --- renderer for Step 4 ---
     function renderTimeline(letter) {
       const scen = getScenario(letter);
       const box = document.getElementById('timeline');
-      if (!scen || !scen.items?.length) {
+      if (!box) return;
+      if (!scen) {
         box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
         return;
       }
-      
-      // Simple, readable timeline: one row per deliverable with start–end
-      const rows = scen.items.map(d => {
-        const sched = d.schedule || [];
-        const start = sched.length ? sched[0].start_date : '';
-        const end   = sched.length ? sched[sched.length - 1].end_date : '';
-        const days  = sched.reduce((n, s) => n + (s.duration_days || 0), 0);
+
+      // simple header so you SEE the switch even if schedules are similar
+      const header = `<div class="timeline-head">
+        <strong>Scenario ${letter}</strong> · Deliverables: ${scen.items.length}
+      </div>`;
+
+      const rows = (scen.items || []).map(d => {
+        const sch = d.schedule || [];
+        const start = sch.length ? sch[0].start_date : '';
+        const end   = sch.length ? sch[sch.length - 1].end_date : '';
+        const days  = sch.reduce((n, s) => n + (s.duration_days || 0), 0);
         return `<tr>
           <td>${d.deliverable}</td>
           <td>${start}</td>
@@ -696,14 +704,26 @@
         </tr>`;
       }).join('');
 
-      box.innerHTML = `
+      box.innerHTML = header + `
         <table class="table-compact">
           <thead><tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (days)</th></tr></thead>
           <tbody>${rows}</tbody>
-        </table>
-        <p class="hint">Drag‑drop reordering will call <code>/api/reorder_timeline</code> in Stage 4.</p>
-      `;
+        </table>`;
     }
+
+    // --- A/B toggle wiring (works even if buttons are added later) ---
+    function selectTimeline(letter) {
+      renderTimeline(letter);
+      document.querySelectorAll('[data-timeline-sel]')
+        .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
+    }
+
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-timeline-sel]');
+      if (!btn) return;
+      e.preventDefault();
+      selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
+    });
 
     function parseFilenameFromContentDisposition(cd, fallback) {
       if (!cd) return fallback;
@@ -897,9 +917,7 @@
     document.getElementById('apply-btn').onclick = applySelection;
     document.getElementById('btnBuild').onclick = buildScenariosAB;
     
-    // Timeline controls
-    document.getElementById('tl-sel-A').onclick = () => renderTimeline('A');
-    document.getElementById('tl-sel-B').onclick = () => renderTimeline('B');
+    // Timeline controls handled by event delegation above
     
     // Hook up your buttons (adjust IDs to your HTML)
     document.querySelector('#btn-export-a')?.addEventListener('click', () => onExportScenario('A'));
