@@ -147,7 +147,6 @@
             <option value="csv">CSV (.csv)</option>
           </select>
         </label>
-        <label><input type="checkbox" id="export-add-ts"> Add timestamp</label>
       </div>
       <div class="inline">
         <button id="btn-export-a">Export Scenario A</button>
@@ -274,6 +273,12 @@
         const sugg = await fetch('/api/suggest_by_file', { method: 'POST', body: fd }).then(r => r.json());
         const selectedCodes = (sugg?.suggested || []).map(s => s.deliverable_code);
         appState.selectedCodes = selectedCodes;
+        
+        // Auto-populate project name field from uploaded filename
+        appState.uploadFilename = sugg.filename || appState.uploadFilename;
+        const base = (appState.uploadFilename || '').replace(/\.[^.]+$/, ''); // strip extension only
+        const projectInput = document.getElementById('projectName');
+        if (projectInput && !projectInput.value) projectInput.value = base;
 
         // 3) Build Average scenario now to populate left panel with pricing
         const scenarios = await fetch('/api/build', {
@@ -731,9 +736,8 @@
 
     function getExportPrefs() {
       return {
-        file_format: (document.getElementById('export-format')?.value || 'xlsx'),
-        add_timestamp: !!document.getElementById('export-add-ts')?.checked,
-        project_name: document.getElementById('projectName')?.value || 'Proposal'
+        file_format: (document.getElementById('export-format')?.value || 'xlsx').toLowerCase(),
+        project_name: document.getElementById('projectName')?.value || ''
       };
     }
 

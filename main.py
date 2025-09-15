@@ -1,5 +1,6 @@
 import os, re, io, math, json, datetime, urllib.parse, tempfile
 from typing import List, Optional, Dict, Any
+from zoneinfo import ZoneInfo  # Python 3.9+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,6 +21,9 @@ except Exception:
 
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0")
+
+# Global to track last uploaded filename for export defaults
+LAST_UPLOAD_FILENAME: str | None = None
 
 # Configure file upload limits - allow up to 20MB files
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -1267,6 +1271,31 @@ def _safe_filename(s: str) -> str:
     # Ensure it's not empty after sanitization
     return s if s else "Proposal"
 
+def _upload_title_default() -> str | None:
+    """Base title from the most recent uploaded file (sans extension), sanitized."""
+    if not LAST_UPLOAD_FILENAME:
+        return None
+    base = os.path.splitext(os.path.basename(LAST_UPLOAD_FILENAME))[0]
+    return _safe_filename(base)
+
+def _est_stamp_for_filename() -> str:
+    """
+    Eastern time, 12-hour with AM/PM. Use dot instead of colon because
+    ':' is illegal in filenames on Windows.
+    Example: 2025-09-13 09.30AM EST
+    """
+    now_est = datetime.datetime.now(ZoneInfo("America/New_York"))
+    return now_est.strftime("%Y-%m-%d %I.%M%p EST")
+
+def _export_basename(project_name: str, scenario_label: str | None = None) -> str:
+    """Project - Workfront_Export - [Scenario?] - 2025-09-13 09.30AM EST"""
+    title = _safe_filename(project_name or "Proposal")
+    parts = [title, "Workfront_Export"]
+    if scenario_label:
+        parts.append(_safe_filename(scenario_label))
+    parts.append(_est_stamp_for_filename())
+    return " - ".join(parts)
+
 def _safe_sheet_name(s: str) -> str:
     # Excel sheet name rules: max 31 chars, no : \ / ? * [ ]
     s = re.sub(r'[:\\/?*\[\]]+', "-", (s or "Sheet"))
@@ -1997,6 +2026,9 @@ async def api_suggest_by_file(file: UploadFile = File(...)):
         text = text[:200_000]
 
     recs = DB.suggest_deliverables_from_text(text or "")
+    # NEW: remember for default project name
+    global LAST_UPLOAD_FILENAME
+    LAST_UPLOAD_FILENAME = file.filename
     return {"suggested": recs, "filename": file.filename}
 
 def _resolve_scenario(spec: ScenarioSpec, category: str) -> Dict[str, Any]:
@@ -2197,22 +2229,21 @@ def api_export(payload: ExportPayload):
     if not DB.loaded:
         DB.load()
 
-    project_name = payload.project_name or f"Proposal {datetime.date.today().isoformat()}"
+    project_name = (payload.project_name
+                    or _upload_title_default()
+                    or f"Proposal {datetime.date.today().isoformat()}")
+
     df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
     # <<< force A–E to the left and guarantee presence
     df = _ensure_v3_ae_columns(df)
 
-    # Friendly filename
-    base_parts = [project_name, (payload.scenario_label or "").strip(), "Workfront Export"]
-    base = " - ".join([p for p in base_parts if p])
-    if payload.add_timestamp:
-        base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    base = _export_basename(project_name, payload.scenario_label)  # always adds EST timestamp
 
     fmt = (payload.file_format or "csv").lower()
     if fmt == "csv":
         out_path = f"{base}.csv"
         df.to_csv(out_path, index=False)
-        return FileResponse(out_path, filename=out_path, media_type="text/csv")
+        return FileResponse(out_path, filename=os.path.basename(out_path), media_type="text/csv")
 
     # xlsx
     try:
@@ -2221,7 +2252,7 @@ def api_export(payload: ExportPayload):
             df.to_excel(xw, index=False)
             _apply_number_formats(xw.sheets[list(xw.sheets.keys())[0]], df)
         return FileResponse(
-            out_path, filename=out_path,
+            out_path, filename=os.path.basename(out_path),
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     except Exception as ex:
@@ -2231,25 +2262,27 @@ def api_export(payload: ExportPayload):
 def api_export_workbook(payload: ExportWorkbookPayload):
     if not DB.loaded:
         DB.load()
-    project = (payload.project_name or f"Proposal {datetime.date.today().isoformat()}").strip()
+    project = (payload.project_name
+               or _upload_title_default()
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
     dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
     dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
     
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
-    base = f"{project} - Scenarios A & B - Workfront Export"
-    if payload.add_timestamp:
-        base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
-    out_name = f"{base}.xlsx"
+    base = _export_basename(project, "Scenarios A & B")  # includes EST timestamp
+    out_path = f"{base}.xlsx"
     sheetA = _safe_sheet_name(payload.sheet_name_a or "Scenario A")
     sheetB = _safe_sheet_name(payload.sheet_name_b or "Scenario B")
-    with pd.ExcelWriter(out_name, engine="openpyxl") as xw:
+    with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
         dfA.to_excel(xw, sheet_name=sheetA, index=False)
         dfB.to_excel(xw, sheet_name=sheetB, index=False)
         _apply_number_formats(xw.sheets[sheetA], dfA)
         _apply_number_formats(xw.sheets[sheetB], dfB)
-    return FileResponse(out_name, filename=out_name,
-                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return FileResponse(
+        out_path, filename=os.path.basename(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 @app.post("/api/audit_pricing")
 def api_audit_pricing(p: AuditPricingPayload):
@@ -2342,6 +2375,9 @@ async def api_summarize_by_file(file: UploadFile = File(...)):
     # Hard cap already present in /api/suggest_by_file; can reapply if desired
     if len(text) > 200_000:
         text = text[:200_000]
+    # NEW: remember for default project name
+    global LAST_UPLOAD_FILENAME
+    LAST_UPLOAD_FILENAME = file.filename
     return ai_summarize_rfp_text(text)
 
 @app.post("/api/reconcile", response_model=ReconcileResult)
