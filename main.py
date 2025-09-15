@@ -1762,8 +1762,16 @@ class ReconcileResult(BaseModel):
     db_used_labels: list[str]         # NEW: labels for those codes
 
 class ReorderPayload(BaseModel):
-    deliverable_codes: list[str]               # desired order
-    task_group_overrides: dict[str, list[str]] | None = None  # optional per-deliverable task group order
+    scenario_letter: str
+    deliverable_order: list[str]
+    mode: str = "sequential"   # "sequential" or "parallel"
+
+# ---------- Global Scenario Storage for Reordering ----------
+_CURRENT_SCENARIOS = {}  # Store scenarios for reordering
+
+def _current_scenarios():
+    """Access current scenarios for reordering operations."""
+    return _CURRENT_SCENARIOS
 
 # ---------- OpenAI Integration Functions (Stage 2) ----------
 
@@ -2185,6 +2193,10 @@ def api_build(payload: BuildPayload):
             "totals": {"hours": int(hours_sum), "price": int(price_sum)}
         }
 
+    # Store scenarios globally for reordering
+    global _CURRENT_SCENARIOS
+    _CURRENT_SCENARIOS.update(scenarios)
+    
     return scenarios
 
 @app.post("/api/auto_build")
@@ -2503,10 +2515,65 @@ def api_reconcile(p: ReconcilePayload):
 
 @app.post("/api/reorder_timeline")
 def api_reorder_timeline(p: ReorderPayload):
-    # Store UI overrides in DB.ui_options so build_wbs respects them,
-    # then re-build the schedule with your existing build_schedule logic
-    # For now, return a simple acknowledgment
-    return {"success": True, "reordered_codes": p.deliverable_codes, "message": "Timeline reordering feature ready for Stage 4"}
+    if not DB.loaded:
+        DB.load()
+
+    letter = p.scenario_letter.upper()
+    scen = _current_scenarios().get(letter)
+    if not scen:
+        raise HTTPException(400, f"Scenario {letter} not found.")
+
+    # Gather builder params the same way /api/build used them
+    complexity = scen.get("complexity", "Advanced")
+    tier       = scen.get("tier", "T2_MediumVolume")
+    use_slack  = scen.get("use_slack", True)
+    s_after_i  = scen.get("slack_after_internal", 1)
+    s_after_c  = scen.get("slack_after_client", 2)
+    s_pct      = scen.get("slack_global_pct", 0.05)
+    start0     = scen.get("project_start")  # may be None → defaults to today
+
+    # Recompute schedules in requested order
+    ordered = [i for i in scen["items"] if i["deliverable_code"] in set(p.deliverable_order)]
+    rest    = [i for i in scen["items"] if i["deliverable_code"] not in set(p.deliverable_order)]
+    items   = []
+    cursor_date = None
+
+    for dcode in p.deliverable_order + [i["deliverable_code"] for i in rest]:
+        # reconstruct included_task_groups from the item
+        item = next(i for i in scen["items"] if i["deliverable_code"] == dcode)
+        included_tgs = item.get("included_task_groups", [r["task_group"] for r in item.get("schedule", [])])
+
+        # decide project_start for this deliverable (sequential chaining)
+        project_start = None
+        if p.mode == "sequential":
+            if cursor_date is None:
+                project_start = start0  # keep the scenario's start for the first item
+            else:
+                project_start = str(cursor_date)
+        else:
+            project_start = start0
+
+        sched = DB.build_schedule(
+            deliverable_code=dcode, included_task_groups=included_tgs,
+            complexity=complexity, tier=tier,
+            use_slack=use_slack, slack_after_internal=s_after_i,
+            slack_after_client=s_after_c, slack_global_pct=s_pct,
+            project_start=project_start, scenario_letter=letter
+        )
+
+        # update cursor_date to the day after this deliverable's last end (sequential only)
+        if p.mode == "sequential":
+            last_end = max([r["end_date"] for r in sched]) if sched else None
+            if last_end:
+                y,m,d = map(int, last_end.split("-"))
+                cursor_date = datetime.date(y,m,d) + datetime.timedelta(days=1)
+
+        # replace item with new schedule
+        new_item = dict(item); new_item["schedule"] = sched
+        items.append(new_item)
+
+    scen["items"] = items
+    return {"scenario": scen}
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
