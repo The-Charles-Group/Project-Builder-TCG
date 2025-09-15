@@ -705,70 +705,86 @@
       `;
     }
 
-    async function downloadFromEndpoint(url, payload) {
+    function parseFilenameFromContentDisposition(cd, fallback) {
+      if (!cd) return fallback;
+      // RFC 5987 (filename*=UTF-8'')
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      if (star) return decodeURIComponent(star[1]);
+      // Legacy: filename="..."
+      const quoted = /filename="?([^"]+)"?/i.exec(cd);
+      if (quoted) return quoted[1];
+      return fallback;
+    }
+
+    async function downloadFromEndpoint(url, payload, fallbackName = 'Workfront_Export.xlsx') {
       const res = await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload),
+        body: JSON.stringify(payload)
       });
+
+      // If the server returned an error (e.g., missing openpyxl), show message
       if (!res.ok) {
-        const text = await res.text();
-        alert(`Export failed: ${text}`);
+        const text = await res.text().catch(() => res.statusText);
+        alert(`Export failed: ${res.status} — ${text}`);
         return;
-        }
+      }
+
+      // Read the file as a Blob and honor the server-suggested name
       const blob = await res.blob();
-      // Prefer server-suggested name, else fall back
-      const disp = res.headers.get('Content-Disposition') || '';
-      const match = /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/.exec(disp);
-      const suggested = decodeURIComponent((match?.[1] || match?.[2] || 'Workfront_Export.xlsx'));
-      const urlObj = URL.createObjectURL(blob);
+      const cd = res.headers.get('Content-Disposition') || '';
+      const filename = parseFilenameFromContentDisposition(cd, fallbackName);
+
+      const href = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = urlObj;
-      a.download = suggested;
+      a.href = href;
+      a.download = filename;
+      a.target = '_blank';   // safer in some embedded contexts
+      a.rel = 'noopener';
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(urlObj);
+      URL.revokeObjectURL(href);
     }
 
-    function getExportPrefs() {
-      return {
-        file_format: (document.getElementById('export-format')?.value || 'xlsx').toLowerCase(),
-        project_name: document.getElementById('projectName')?.value || ''
-      };
+    function getProjectName() {
+      return (document.querySelector('#projectName')?.value || '').trim();
     }
-
-    // Guard function for safe scenario access
+    function getFileFormat() {
+      // If you expose CSV/XLSX in a select; default to xlsx
+      const v = document.querySelector('#export-format')?.value || 'xlsx';
+      return v.toLowerCase();
+    }
     function getScenario(letter) {
-      return (window.appState?.scenarios || window.latestScenarios || {})[letter] || null;
+      const s = (window.appState?.scenarios || {})[letter];
+      return (s && Array.isArray(s.items) && s.items.length) ? s : null;
     }
 
-    async function exportScenario(letter) {
+    async function onExportScenario(letter) {
       const scen = getScenario(letter);
-      if (!scen || !scen.items?.length) { 
-        alert('Build scenarios first in Step 3.'); 
-        return; 
-      }
-      const prefs = getExportPrefs();
-      await downloadFromEndpoint('/api/export', {
+      if (!scen) { alert('Build scenarios first.'); return; }
+
+      const payload = {
         scenario: scen,
-        project_name: prefs.project_name,
-        file_format: prefs.file_format,
+        project_name: getProjectName(),
+        file_format: getFileFormat(),
         scenario_label: `Scenario ${letter}`
-      });
+      };
+      await downloadFromEndpoint('/api/export', payload, `Workfront_Export_Scenario_${letter}.xlsx`);
     }
 
-    async function exportWorkbookAB() {
-      const scenA = getScenario('A');
-      const scenB = getScenario('B');
-      const prefs = getExportPrefs();
-      await downloadFromEndpoint('/api/export_workbook', {
-        scenario_a: scenA || {items:[]},
-        scenario_b: scenB || {items:[]},
-        project_name: prefs.project_name,
-        sheet_name_a: 'Scenario A', 
-        sheet_name_b: 'Scenario B'
-      });
+    async function onExportWorkbookAB() {
+      const A = getScenario('A');
+      const B = getScenario('B');
+      if (!A || !B) { alert('Build scenarios A & B first.'); return; }
+
+      const payload = {
+        scenario_a: A,
+        scenario_b: B,
+        project_name: getProjectName()
+      };
+      await downloadFromEndpoint('/api/export_workbook', payload,
+        'Workfront_Export_Scenarios_A_and_B.xlsx');
     }
 
     // Legacy function removed - use Step 5 exports instead
@@ -885,10 +901,10 @@
     document.getElementById('tl-sel-A').onclick = () => renderTimeline('A');
     document.getElementById('tl-sel-B').onclick = () => renderTimeline('B');
     
-    // Step 5 Export buttons
-    document.getElementById('btn-export-a')?.addEventListener('click', () => exportScenario('A'));
-    document.getElementById('btn-export-b')?.addEventListener('click', () => exportScenario('B'));
-    document.getElementById('btn-export-ab')?.addEventListener('click', exportWorkbookAB);
+    // Hook up your buttons (adjust IDs to your HTML)
+    document.querySelector('#btn-export-a')?.addEventListener('click', () => onExportScenario('A'));
+    document.querySelector('#btn-export-b')?.addEventListener('click', () => onExportScenario('B'));
+    document.querySelector('#btn-export-ab')?.addEventListener('click', onExportWorkbookAB);
 
     // Legacy format tracking (remove old handlers)
     // Note: New export format handling is in Step 5
