@@ -145,6 +145,14 @@ async function onBuild(){
   const res = await api("/api/build", {method:"POST", body:JSON.stringify(payload)});
   SCENARIOS = res;
   renderScenarios(res);
+  
+  // Store scenarios globally for timeline and export
+  window.appState = window.appState || {};
+  window.appState.scenarios = res;
+  
+  // Show timeline step and render timeline for Scenario A
+  document.querySelector("#step4").style.display = "block";
+  selectTimeline('A');
 }
 
 function renderScenarios(data){
@@ -206,5 +214,130 @@ async function onExport(which){
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
+
+// Timeline functionality
+function getScenario(letter) {
+  return window.appState?.scenarios?.[letter];
+}
+
+function renderTimeline(letter) {
+  const scen = getScenario(letter);
+  const box = document.getElementById('timeline');
+  
+  if (!scen) {
+    box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
+    return;
+  }
+
+  const header = `<div class="timeline-head">
+    <strong>Scenario ${letter}</strong> · Deliverables: ${(scen.items || []).length}
+  </div>`;
+
+  // Build draggable rows, one per deliverable
+  const table = `<table id="tl-table" class="table-compact">
+    <thead>
+      <tr><th>Deliverable</th><th>Start Date</th><th>End Date</th><th>Total Days</th></tr>
+    </thead>
+    <tbody id="tl-body"></tbody>
+  </table>`;
+
+  box.innerHTML = header + table;
+
+  const body = document.getElementById('tl-body');
+  body.innerHTML = (scen.items || []).map(d => {
+    const sch = d.schedule || [];
+    const start = sch[0]?.start_date ?? '';
+    const end   = sch[sch.length - 1]?.end_date ?? '';
+    const days  = sch.reduce((n,s)=>n+(s.duration_days||0),0);
+    return `<tr class="tl-row" draggable="true" data-dcode="${d.deliverable_code}">
+      <td>${d.deliverable}</td><td>${start}</td><td>${end}</td><td>${days}</td>
+    </tr>`;
+  }).join('');
+
+  enableTimelineDnD(letter);
+  renderTimelineStatus(letter);
+}
+
+function enableTimelineDnD(letter) {
+  const body = document.getElementById('tl-body');
+  let dragEl = null;
+
+  body.querySelectorAll('.tl-row').forEach(row => {
+    row.addEventListener('dragstart', e => {
+      dragEl = row;
+      e.dataTransfer.effectAllowed = 'move';
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragend', () => row.classList.remove('dragging'));
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      const after = getDragAfterElement(body, e.clientY);
+      if (!after) body.appendChild(dragEl);
+      else body.insertBefore(dragEl, after);
+    });
+  });
+
+  function getDragAfterElement(container, y) {
+    const els = [...container.querySelectorAll('.tl-row:not(.dragging)')];
+    return els.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+  }
+
+  // Save + recompute schedule
+  document.getElementById('timeline-controls')?.querySelector('#tl-save')?.remove();
+  const btn = document.createElement('button');
+  btn.id = 'tl-save'; btn.textContent = 'Save Order';
+  btn.onclick = async () => {
+    const ordered = [...body.querySelectorAll('.tl-row')].map(tr => tr.dataset.dcode);
+    const payload = { scenario_letter: letter, deliverable_order: ordered, mode: 'sequential' };
+    const res = await fetch('/api/reorder_timeline', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    }).then(r => r.json());
+    // Replace scenario in appState and re-render
+    window.appState.scenarios[letter] = res.scenario;
+    renderTimeline(letter);
+  };
+  document.getElementById('timeline-controls')?.appendChild(btn);
+}
+
+function renderTimelineStatus(letter) {
+  const scen = getScenario(letter);
+  const box = document.getElementById('timeline-status');
+  if (!scen) { box.innerHTML = ''; return; }
+
+  // Sum days by deliverable
+  const stats = (scen.items || []).map(d => {
+    const days = (d.schedule || []).reduce((n,s)=>n+(s.duration_days||0),0);
+    return { label: d.deliverable, days };
+  });
+  const total = stats.reduce((n,s)=>n+s.days,0) || 1;
+  const rows = stats
+    .sort((a,b)=>b.days-a.days)
+    .map(s => {
+      const pct = Math.round((100*s.days)/total);
+      return `<div class="stat">
+        <div class="label">${s.label}</div>
+        <div class="bar"><span style="width:${pct}%"></span></div>
+        <div class="pct">${pct}%</div>
+      </div>`;
+    }).join('');
+  box.innerHTML = `<h4>Time Allocation (Scenario ${letter})</h4>${rows}`;
+}
+
+function selectTimeline(letter) {
+  renderTimeline(letter);
+  document.querySelectorAll('[data-timeline-sel]')
+    .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
+}
+
+// Event delegation for timeline controls
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-timeline-sel]');
+  if (!btn) return;
+  selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
+});
 
 window.addEventListener("load", boot);
