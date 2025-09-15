@@ -705,33 +705,33 @@
       `;
     }
 
-    // Improved export functionality with robust blob handling
-    async function downloadBlobFromPost(url, payload) {
+    // Robust filename parsing from Content-Disposition header
+    function parseFilenameFromCD(cd, fallback) {
+      if (!cd) return fallback;
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      if (star) return decodeURIComponent(star[1]);
+      const quoted = /filename="?([^"]+)"?/i.exec(cd);
+      if (quoted) return quoted[1];
+      return fallback;
+    }
+
+    async function downloadBlobFromPost(url, payload, fallbackName) {
       const res = await fetch(url, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
       });
       if (!res.ok) {
-        const msg = await res.text().catch(() => String(res.status));
-        alert(`Export failed: ${res.status} — ${msg}`);
+        alert(`Export failed: ${res.status} — ${await res.text().catch(()=>res.statusText)}`);
         return;
       }
       const blob = await res.blob();
-
-      // Read filename from Content-Disposition if present
-      const cd = res.headers.get('Content-Disposition') || '';
-      const m = /filename="?([^"]+)"?/i.exec(cd);
-      const filename = m ? m[1] : 'Workfront_Export.xlsx';
-
-      const urlObj = URL.createObjectURL(blob);
+      const filename = parseFilenameFromCD(res.headers.get('Content-Disposition'), fallbackName);
       const a = document.createElement('a');
-      a.href = urlObj;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(urlObj);
+      a.href = URL.createObjectURL(blob);
+      a.download = filename || fallbackName || 'Workfront_Export.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(a.href);
     }
 
     function getExportPrefs() {
@@ -757,8 +757,7 @@
         scenario: scen,
         project_name: prefs.project_name,
         file_format: prefs.file_format,
-        scenario_label: `Scenario ${letter}`,
-        add_timestamp: prefs.add_timestamp
+        scenario_label: `Scenario ${letter}`
       });
     }
 
@@ -771,8 +770,7 @@
         scenario_b: scenB || {items:[]},
         project_name: prefs.project_name,
         sheet_name_a: 'Scenario A', 
-        sheet_name_b: 'Scenario B',
-        add_timestamp: prefs.add_timestamp
+        sheet_name_b: 'Scenario B'
       });
     }
 
