@@ -712,54 +712,7 @@
 
     // Legacy function removed
 
-    // --- renderer for Step 4 ---
-    function renderTimeline(letter) {
-      const scen = getScenario(letter);
-      const box = document.getElementById('timeline');
-      if (!box) return;
-      if (!scen) {
-        box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
-        return;
-      }
-
-      // simple header so you SEE the switch even if schedules are similar
-      const header = `<div class="timeline-head">
-        <strong>Scenario ${letter}</strong> · Deliverables: ${scen.items.length}
-      </div>`;
-
-      const rows = (scen.items || []).map(d => {
-        const sch = d.schedule || [];
-        const start = sch.length ? sch[0].start_date : '';
-        const end   = sch.length ? sch[sch.length - 1].end_date : '';
-        const days  = sch.reduce((n, s) => n + (s.duration_days || 0), 0);
-        return `<tr>
-          <td>${d.deliverable}</td>
-          <td>${start}</td>
-          <td>${end}</td>
-          <td>${days}</td>
-        </tr>`;
-      }).join('');
-
-      box.innerHTML = header + `
-        <table class="table-compact">
-          <thead><tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (days)</th></tr></thead>
-          <tbody>${rows}</tbody>
-        </table>`;
-    }
-
-    // --- A/B toggle wiring (works even if buttons are added later) ---
-    function selectTimeline(letter) {
-      renderTimeline(letter);
-      document.querySelectorAll('[data-timeline-sel]')
-        .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
-    }
-
-    document.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-timeline-sel]');
-      if (!btn) return;
-      e.preventDefault();
-      selectTimeline(btn.dataset.timelineSel);  // 'A', 'B', or 'C'
-    });
+    // Legacy function removed
 
     function parseFilenameFromContentDisposition(cd, fallback) {
       if (!cd) return fallback;
@@ -965,148 +918,110 @@
 
     // Legacy toggle function removed - new export handling in Step 5
 
-    // Timeline functionality
-    function getScenario(letter) {
-      return window.appState?.scenarios?.[letter];
-    }
+    // ——— helpers ———
+    function getScenario(letter){ return (window.appState?.scenarios||{})[letter] || null; }
+    function setText(id, t){ const el=document.getElementById(id); if(el) el.textContent=t; }
+    function setHTML(id, h){ const el=document.getElementById(id); if(el) el.innerHTML=h; }
 
+    // ——— render the timeline for a scenario ———
     function renderTimeline(letter) {
       const scen = getScenario(letter);
-      const box = document.getElementById('timeline');
-      
-      if (!scen) {
-        box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
+      const body = document.getElementById('tl-body');
+      document.querySelectorAll('[data-timeline-sel]').forEach(b =>
+        b.classList.toggle('active', b.dataset.timelineSel === letter)
+      );
+      if (!scen || !Array.isArray(scen.items) || !scen.items.length) {
+        setHTML('tl-body','<tr><td colspan="4"><em>Build scenarios in Step 3 to see a timeline.</em></td></tr>');
         return;
       }
-
-      const header = `<div class="timeline-head">
-        <strong>Scenario ${letter}</strong> · Deliverables: ${(scen.items || []).length}
-      </div>`;
-
-      // Build draggable rows, one per deliverable
-      const table = `<table id="tl-table" class="table-compact">
-        <thead>
-          <tr><th>Deliverable</th><th>Start Date</th><th>End Date</th><th>Total Days</th></tr>
-        </thead>
-        <tbody id="tl-body"></tbody>
-      </table>`;
-
-      box.innerHTML = header + table;
-
-      const body = document.getElementById('tl-body');
-      body.innerHTML = (scen.items || []).map(d => {
-        const sch = d.schedule || [];
+      const rows = scen.items.map(d => {
+        const sch = d.schedule||[];
         const start = sch[0]?.start_date ?? '';
-        const end   = sch[sch.length - 1]?.end_date ?? '';
+        const end   = sch[sch.length-1]?.end_date ?? '';
         const days  = sch.reduce((n,s)=>n+(s.duration_days||0),0);
         return `<tr class="tl-row" draggable="true" data-dcode="${d.deliverable_code}">
           <td>${d.deliverable}</td><td>${start}</td><td>${end}</td><td>${days}</td>
         </tr>`;
       }).join('');
-
+      setHTML('tl-body', rows);
       enableTimelineDnD(letter);
-      renderTimelineStatus(letter);
     }
 
-    function enableTimelineDnD(letter) {
+    // ——— drag & drop wiring ———
+    function enableTimelineDnD(letter){
       const body = document.getElementById('tl-body');
       let dragEl = null;
 
-      body.querySelectorAll('.tl-row').forEach(row => {
-        row.addEventListener('dragstart', e => {
-          dragEl = row;
-          e.dataTransfer.effectAllowed = 'move';
-          row.classList.add('dragging');
-        });
-        row.addEventListener('dragend', () => row.classList.remove('dragging'));
-        row.addEventListener('dragover', e => {
+      body.querySelectorAll('.tl-row').forEach(row=>{
+        row.addEventListener('dragstart', e => { dragEl=row; row.classList.add('dragging'); });
+        row.addEventListener('dragend',   e => { row.classList.remove('dragging'); dragEl=null; });
+        row.addEventListener('dragover',  e => {
           e.preventDefault();
-          const after = getDragAfterElement(body, e.clientY);
-          if (!after) body.appendChild(dragEl);
-          else body.insertBefore(dragEl, after);
+          const after = getAfter(body, e.clientY);
+          if(!after) body.appendChild(row); else if(after!==row) body.insertBefore(row, after);
         });
       });
 
-      function getDragAfterElement(container, y) {
-        const els = [...container.querySelectorAll('.tl-row:not(.dragging)')];
-        return els.reduce((closest, child) => {
-          const box = child.getBoundingClientRect();
-          const offset = y - box.top - box.height / 2;
-          return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
-        }, { offset: Number.NEGATIVE_INFINITY }).element;
+      function getAfter(container, y){
+        const els=[...container.querySelectorAll('.tl-row:not(.dragging)')];
+        return els.reduce((closest, child)=>{
+          const box=child.getBoundingClientRect();
+          const offset = y - (box.top + box.height/2);
+          return (offset<0 && offset>closest.offset) ? {offset, element:child} : closest;
+        }, {offset: -Infinity}).element;
       }
 
-      // Save + recompute schedule
-      document.getElementById('timeline-controls')?.querySelector('#tl-save')?.remove();
-      const btn = document.createElement('button');
-      btn.id = 'tl-save'; btn.textContent = 'Save Order';
-      btn.onclick = async () => {
-        try {
-          const orderedCodes = [...body.querySelectorAll('.tl-row')].map(tr => tr.dataset.dcode);
-          
-          // Map of included task groups per deliverable (so server can rebuild exactly these)
-          const scen = getScenario(letter);
-          const includedMap = {};
-          (scen.items || []).forEach(it => { includedMap[it.deliverable_code] = it.included_task_groups || []; });
-          
-          const payload = {
-            scenario_letter: letter,
-            deliverable_codes: orderedCodes,
-            included_map: includedMap,
-            use_slack: !!scen.use_slack,
-            slack_after_internal: scen.slack_after_internal ?? 1,
-            slack_after_client: scen.slack_after_client ?? 2,
-            slack_global_pct: scen.slack_global_pct ?? 0,
-            project_start: scen.project_start || null,
-            // take complexity/tier from first item (all items use same scenario col in v2.3)
-            complexity: (scen.items[0]?.complexity || 'Advanced'),
-            tier: (scen.items[0]?.tier || 'T2_MediumVolume')
-          };
-          
-          const res = await fetch('/api/reorder_timeline', {
-            method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
-          });
-          if (!res.ok) throw new Error('Failed to reorder timeline');
-          const result = await res.json();
-          
-          // Merge new schedules back into appState and re-render
-          if (result?.items?.length) {
-            const byCode = new Map(result.items.map(i => [i.deliverable_code, i.schedule]));
-            scen.items = scen.items.map(it => byCode.has(it.deliverable_code) ? { ...it, schedule: byCode.get(it.deliverable_code) } : it);
-            renderTimeline(letter);
-          } else {
-            alert('Reorder did not return schedules. Check backend /api/reorder_timeline.');
-          }
-        } catch (error) {
-          alert('Error saving timeline order: ' + error.message);
-        }
+      // add/refresh Save button
+      let btn = document.getElementById('tl-save');
+      if(!btn){
+        btn = document.createElement('button');
+        btn.id='tl-save'; btn.textContent='Save Order';
+        document.getElementById('timeline-controls').appendChild(btn);
+      }
+      btn.onclick = () => saveTimelineOrder(letter);
+    }
+
+    // ——— persist new order to backend and merge schedules back ———
+    async function saveTimelineOrder(letter){
+      const body = document.getElementById('tl-body');
+      const codes = [...body.querySelectorAll('.tl-row')].map(tr=>tr.dataset.dcode);
+      const scen = getScenario(letter) || {};
+      const includedMap = {};
+      (scen.items||[]).forEach(it => includedMap[it.deliverable_code] = it.included_task_groups || []);
+
+      const payload = {
+        scenario_letter: letter,
+        deliverable_codes: codes,
+        included_map: includedMap,
+        use_slack: !!scen.use_slack,
+        slack_after_internal: scen.slack_after_internal ?? 1,
+        slack_after_client:  scen.slack_after_client ?? 2,
+        slack_global_pct:    scen.slack_global_pct ?? 0,
+        project_start:       scen.project_start || null,
+        complexity:          (scen.items?.[0]?.complexity || 'Advanced'),
+        tier:                (scen.items?.[0]?.tier || 'T2_MediumVolume')
       };
-      document.getElementById('timeline-controls')?.appendChild(btn);
+
+      const res = await fetch('/api/reorder_timeline', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      }).then(r => r.json());
+
+      if(res?.items?.length){
+        const byCode = new Map(res.items.map(i=>[i.deliverable_code, i.schedule]));
+        scen.items = (scen.items||[]).map(it => byCode.has(it.deliverable_code) ? {...it, schedule: byCode.get(it.deliverable_code)} : it);
+        (window.appState.scenarios||{})[letter] = scen;
+        renderTimeline(letter);
+      } else {
+        alert('Reorder did not return schedules. Check backend /api/reorder_timeline.');
+      }
     }
 
-    function renderTimelineStatus(letter) {
-      const scen = getScenario(letter);
-      const box = document.getElementById('timeline-status');
-      if (!scen) { box.innerHTML = ''; return; }
-
-      // Sum days by deliverable
-      const stats = (scen.items || []).map(d => {
-        const days = (d.schedule || []).reduce((n,s)=>n+(s.duration_days||0),0);
-        return { label: d.deliverable, days };
-      });
-      const total = stats.reduce((n,s)=>n+s.days,0) || 1;
-      const rows = stats
-        .sort((a,b)=>b.days-a.days)
-        .map(s => {
-          const pct = Math.round((100*s.days)/total);
-          return `<div class="stat">
-            <div class="label">${s.label}</div>
-            <div class="bar"><span style="width:${pct}%"></span></div>
-            <div class="pct">${pct}%</div>
-          </div>`;
-        }).join('');
-      box.innerHTML = `<h4>Time Allocation (Scenario ${letter})</h4>${rows}`;
-    }
+    // ——— allow clicking A/B/C ———
+    document.addEventListener('click', e=>{
+      const btn = e.target.closest('[data-timeline-sel]');
+      if(btn) renderTimeline(btn.dataset.timelineSel);
+    });
 
     // Scenario C (Upsell) functionality
     function renderUpsellList() {
@@ -1171,13 +1086,6 @@
     document.getElementById('btnBuild').onclick = buildScenariosAB;
     document.getElementById('btn-build-c').onclick = buildScenarioC;
     document.querySelector('#c-base')?.addEventListener('change', renderUpsellList);
-    
-    // Timeline controls event delegation
-    document.addEventListener('click', e => {
-      const btn = e.target.closest('[data-timeline-sel]');
-      if (!btn) return;
-      selectTimeline(btn.dataset.timelineSel);  // 'A', 'B', or 'C'
-    });
     
     // Hook up your buttons (adjust IDs to your HTML)
     document.querySelector('#btn-export-a')?.addEventListener('click', () => onExportScenario('A'));
