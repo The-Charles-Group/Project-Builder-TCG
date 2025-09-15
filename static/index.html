@@ -1034,16 +1034,41 @@
       btn.id = 'tl-save'; btn.textContent = 'Save Order';
       btn.onclick = async () => {
         try {
-          const ordered = [...body.querySelectorAll('.tl-row')].map(tr => tr.dataset.dcode);
-          const payload = { scenario_letter: letter, deliverable_order: ordered, mode: 'sequential' };
+          const orderedCodes = [...body.querySelectorAll('.tl-row')].map(tr => tr.dataset.dcode);
+          
+          // Map of included task groups per deliverable (so server can rebuild exactly these)
+          const scen = getScenario(letter);
+          const includedMap = {};
+          (scen.items || []).forEach(it => { includedMap[it.deliverable_code] = it.included_task_groups || []; });
+          
+          const payload = {
+            scenario_letter: letter,
+            deliverable_codes: orderedCodes,
+            included_map: includedMap,
+            use_slack: !!scen.use_slack,
+            slack_after_internal: scen.slack_after_internal ?? 1,
+            slack_after_client: scen.slack_after_client ?? 2,
+            slack_global_pct: scen.slack_global_pct ?? 0,
+            project_start: scen.project_start || null,
+            // take complexity/tier from first item (all items use same scenario col in v2.3)
+            complexity: (scen.items[0]?.complexity || 'Advanced'),
+            tier: (scen.items[0]?.tier || 'T2_MediumVolume')
+          };
+          
           const res = await fetch('/api/reorder_timeline', {
             method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
           });
           if (!res.ok) throw new Error('Failed to reorder timeline');
           const result = await res.json();
-          // Replace scenario in appState and re-render
-          window.appState.scenarios[letter] = result.scenario;
-          renderTimeline(letter);
+          
+          // Merge new schedules back into appState and re-render
+          if (result?.items?.length) {
+            const byCode = new Map(result.items.map(i => [i.deliverable_code, i.schedule]));
+            scen.items = scen.items.map(it => byCode.has(it.deliverable_code) ? { ...it, schedule: byCode.get(it.deliverable_code) } : it);
+            renderTimeline(letter);
+          } else {
+            alert('Reorder did not return schedules. Check backend /api/reorder_timeline.');
+          }
         } catch (error) {
           alert('Error saving timeline order: ' + error.message);
         }

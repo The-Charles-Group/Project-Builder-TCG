@@ -1787,8 +1787,15 @@ class ReconcileResult(BaseModel):
 
 class ReorderPayload(BaseModel):
     scenario_letter: str
-    deliverable_order: list[str]
-    mode: str = "sequential"   # "sequential" or "parallel"
+    deliverable_codes: list[str]                        # new order
+    included_map: dict[str, list[str]] | None = None   # {code: [task_groups]}
+    use_slack: bool = True
+    slack_after_internal: int = 1
+    slack_after_client: int = 2
+    slack_global_pct: float = 0.0
+    project_start: str | None = None                   # "YYYY-MM-DD"
+    complexity: str = "Advanced"
+    tier: str = "T2_MediumVolume"
 
 # ---------- Global Scenario Storage for Reordering ----------
 _CURRENT_SCENARIOS = {}  # Store scenarios for reordering
@@ -2663,62 +2670,45 @@ def api_reorder_timeline(p: ReorderPayload):
     if not DB.loaded:
         DB.load()
 
-    letter = p.scenario_letter.upper()
-    scen = _current_scenarios().get(letter)
-    if not scen:
-        raise HTTPException(400, f"Scenario {letter} not found.")
+    letter = (p.scenario_letter or "A").upper()
+    # Build new schedules in the requested order, sequentially
+    items: list[dict] = []
+    cursor_date = None  # None -> use project_start for first
 
-    # Gather builder params the same way /api/build used them
-    complexity = scen.get("complexity", "Advanced")
-    tier       = scen.get("tier", "T2_MediumVolume")
-    use_slack  = scen.get("use_slack", True)
-    s_after_i  = scen.get("slack_after_internal", 1)
-    s_after_c  = scen.get("slack_after_client", 2)
-    s_pct      = scen.get("slack_global_pct", 0.05)
-    start0     = scen.get("project_start")  # may be None → defaults to today
+    for code in p.deliverable_codes:
+        # included task groups (from client), else derive all TGs present for that deliverable
+        included = (p.included_map or {}).get(code)
+        if not included:
+            sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str) == str(code)]
+            included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
 
-    # Recompute schedules in requested order
-    ordered = [i for i in scen["items"] if i["deliverable_code"] in set(p.deliverable_order)]
-    rest    = [i for i in scen["items"] if i["deliverable_code"] not in set(p.deliverable_order)]
-    items   = []
-    cursor_date = None
-
-    for dcode in p.deliverable_order + [i["deliverable_code"] for i in rest]:
-        # reconstruct included_task_groups from the item
-        item = next(i for i in scen["items"] if i["deliverable_code"] == dcode)
-        included_tgs = item.get("included_task_groups", [r["task_group"] for r in item.get("schedule", [])])
-
-        # decide project_start for this deliverable (sequential chaining)
-        project_start = None
-        if p.mode == "sequential":
-            if cursor_date is None:
-                project_start = start0  # keep the scenario's start for the first item
-            else:
-                project_start = str(cursor_date)
-        else:
-            project_start = start0
+        # sequential packing: first item uses project_start, others start the day after previous end
+        start = p.project_start
+        if cursor_date is not None:
+            start = str(cursor_date)
 
         sched = DB.build_schedule(
-            deliverable_code=dcode, included_task_groups=included_tgs,
-            complexity=complexity, tier=tier,
-            use_slack=use_slack, slack_after_internal=s_after_i,
-            slack_after_client=s_after_c, slack_global_pct=s_pct,
-            project_start=project_start, scenario_letter=letter
+            deliverable_code=code,
+            included_task_groups=included,
+            complexity=p.complexity, tier=p.tier,
+            use_slack=p.use_slack,
+            slack_after_internal=p.slack_after_internal,
+            slack_after_client=p.slack_after_client,
+            slack_global_pct=p.slack_global_pct,
+            project_start=start,
+            scenario_letter=letter
         )
 
-        # update cursor_date to the day after this deliverable's last end (sequential only)
-        if p.mode == "sequential":
-            last_end = max([r["end_date"] for r in sched]) if sched else None
-            if last_end:
-                y,m,d = map(int, last_end.split("-"))
-                cursor_date = datetime.date(y,m,d) + datetime.timedelta(days=1)
+        items.append({"deliverable_code": code, "schedule": sched})
 
-        # replace item with new schedule
-        new_item = dict(item); new_item["schedule"] = sched
-        items.append(new_item)
+        # advance cursor to the day after this deliverable's last end date
+        if sched:
+            last_end = sched[-1]["end_date"]
+            y, m, d = map(int, last_end.split("-"))
+            cursor_date = datetime.date(y, m, d) + datetime.timedelta(days=1)
 
-    scen["items"] = items
-    return {"scenario": scen}
+    # Return only what's needed; the front-end merges schedules back into its scenario
+    return {"items": items}
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
