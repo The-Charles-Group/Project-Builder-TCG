@@ -149,14 +149,22 @@
     <section class="card" id="step4" style="display:none;">
       <h2>Step 4 — Timeline</h2>
       <div id="timeline-controls">
-        <button type="button" data-timeline-sel="A" id="tl-sel-A" class="btn-small">Scenario A</button>
-        <button type="button" data-timeline-sel="B" id="tl-sel-B" class="btn-small">Scenario B</button>
-        <button type="button" data-timeline-sel="C" id="tl-sel-C" class="btn-small">Scenario C</button>
+        <button type="button" data-timeline-sel="A" id="tl-sel-A">Scenario A</button>
+        <button type="button" data-timeline-sel="B" id="tl-sel-B">Scenario B</button>
+        <button type="button" data-timeline-sel="C" id="tl-sel-C" style="display:none">Scenario C</button>
       </div>
-      <div class="timeline-layout">
-        <div id="timeline" class="timeline-main">(Build scenarios in Step 3 to see timeline)</div>
-        <aside id="timeline-status" class="sidebar"></aside>
-      </div>
+      <table id="tl-table" class="table-compact" style="width:100%">
+        <thead>
+          <tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (days)</th></tr>
+        </thead>
+        <tbody id="tl-body"></tbody>
+      </table>
+      
+      <style>
+        #timeline-controls button.active{font-weight:700;text-decoration:underline}
+        #tl-body .tl-row{cursor:move}
+        #tl-body .tl-row.dragging{opacity:.6;outline:2px dashed #aaa}
+      </style>
     </section>
 
     <!-- Step 5: Export -->
