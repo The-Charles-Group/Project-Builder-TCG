@@ -1576,6 +1576,33 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     # per-role codes
                     row_id, task_code, svc_task = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
                     wbs_role = f"{wbs_task}.{r_index}"
+                    
+                    # --- determine rate for this role row ---
+                    if pricing_mode == "Flat_Blended":
+                        role_rate = float(blended_rate)
+                    else:
+                        # Get band-adjusted role rates once (outside loops if you prefer)
+                        rr = DB.role_rates_table(rate_band)  # already band-adjusted
+                        # exact role+seniority match
+                        match = rr[(rr["Resource_Title"] == str(role)) &
+                                   (rr["Seniority"] == str(sen))]
+                        if not match.empty:
+                            role_rate = float(match["Rate_USD"].iloc[0])
+                        else:
+                            # fallback 1: role-only
+                            match2 = rr[rr["Resource_Title"] == str(role)]
+                            if not match2.empty:
+                                role_rate = float(match2["Rate_USD"].iloc[0])
+                            else:
+                                # fallback 2: band-aware default (mirrors price_for_hours_by_role)
+                                ps = DB.pricing_settings[DB.pricing_settings["Key"] == "Default_Blended_Rate"]
+                                base_default = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+                                role_rate = base_default * _band_multiplier(rate_band)
+
+                    # Optional: compute row price here; the export recalcs anyway
+                    row_hours = int(h)
+                    row_price = int(round(role_rate * row_hours))
+                    
                     rows.append({
                         "Row_ID": row_id,
                         "Deliverable_Code": dcode,
@@ -1585,11 +1612,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         "Project_Name": project_name, "WBS_ID": wbs_role, "Parent_WBS_ID": wbs_task,
                         "Task_Name": label, "Component": comp, "Task": label,
                         "Role": role or "", "Seniority": sen or "",
-                        "Planned_Hours": int(h),                     # leaf hours live here
+                        "Planned_Hours": row_hours,
                         "Start_Offset_Days": "",                     # keep schedule on header
                         "Duration_Days": "",                         # no duration on role rows
                         "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
-                        "Assignee_External_ID": "", "Notes": ""
+                        "Assignee_External_ID": "", "Notes": "",
+                        # NEW:
+                        "Rate_USD": round(role_rate, 2),
+                        "Price_USD": row_price
                     })
                     prev_role_wbs = wbs_role
 
