@@ -1728,6 +1728,20 @@ class AuditPricingPayload(BaseModel):
     rate_band: Optional[str] = "Standard_US"
     price_uses_rounded_hours: bool = True  # bill with rounded hours to match export
 
+class BuildScenarioCPayload(BaseModel):
+    base: str  # "A" or "B"
+    add_on_codes: List[str] = []
+    pricing_mode: str = "Flat_Blended"   # or "Per_Resource"
+    blended_rate: Optional[float] = 195.0
+    rate_band: str = "Standard_US"
+    complexity: Optional[str] = None        # default to base scenario's
+    tier: Optional[str] = None
+    use_slack: Optional[bool] = None
+    slack_after_internal: Optional[int] = None
+    slack_after_client: Optional[int] = None
+    slack_global_pct: Optional[float] = None
+    project_start: Optional[str] = None     # "YYYY-MM-DD"
+
 # --- AI Summary models (Stage 2) ---
 class RfpSummaryItem(BaseModel):
     label: str                       # deliverable name (human-friendly)
@@ -2198,6 +2212,87 @@ def api_build(payload: BuildPayload):
     _CURRENT_SCENARIOS.update(scenarios)
     
     return scenarios
+
+@app.post("/api/build_scenario_c")
+def api_build_scenario_c(payload: BuildScenarioCPayload):
+    if not DB.loaded:
+        DB.load()
+
+    # 1) Fetch the base scenario (A or B) from current scenarios store
+    base_letter = payload.base.upper()
+    base = _current_scenarios().get(base_letter)
+    if not base:
+        raise HTTPException(status_code=400, detail=f"Base scenario {base_letter} not found. Please build scenarios A and B first.")
+
+    # 2) Union of deliverable codes (base codes + add-on codes)
+    base_codes = [item["deliverable_code"] for item in (base.get("items") or [])]
+    # Use dict.fromkeys to maintain order and remove duplicates
+    union_codes = list(dict.fromkeys(base_codes + payload.add_on_codes))
+    
+    # Filter out any unknown codes
+    valid_codes = []
+    for code in union_codes:
+        if not DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)].empty:
+            valid_codes.append(code)
+    
+    # 3) Inherit parameters from base unless explicitly provided
+    complexity = payload.complexity or base.get("complexity", "Advanced")
+    tier = payload.tier or base.get("tier", "T2_MediumVolume")
+    use_slack = base.get("use_slack", True) if payload.use_slack is None else payload.use_slack
+    slack_i = base.get("slack_after_internal", 1) if payload.slack_after_internal is None else payload.slack_after_internal
+    slack_c = base.get("slack_after_client", 2) if payload.slack_after_client is None else payload.slack_after_client
+    slack_pct = base.get("slack_global_pct", 0.05) if payload.slack_global_pct is None else payload.slack_global_pct
+    project_start = payload.project_start or base.get("project_start")
+
+    # 4) Build scenario items using existing logic (same as /api/build)
+    per_deliv = []
+    for code in valid_codes:
+        row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
+        if row.empty:
+            continue
+        cat = str(row["Category"].iloc[0])
+        
+        # Create scenario spec for this deliverable
+        spec_resolved = {"mode": "template", "complexity": complexity, "tier": tier}
+        
+        out = _scenario_for_deliverable(
+            code, cat, spec_resolved,
+            payload.pricing_mode, payload.blended_rate, payload.rate_band,
+            use_slack, slack_i, slack_c, slack_pct, project_start,
+            scenario_letter="C"
+        )
+        # Add names for readability
+        out["deliverable"] = str(row["Deliverable"].iloc[0])
+        out["category"] = cat
+        per_deliv.append(out)
+
+    # Sort deliverables by phase order
+    per_deliv = _sort_deliverables(per_deliv, "C")
+    price_sum = sum(int(x["price"]) for x in per_deliv)
+    hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
+
+    # 5) Create Scenario C
+    scenario_c = {
+        "label": "Scenario C (Upsell)",
+        "pricing_mode": payload.pricing_mode,
+        "rate_band": payload.rate_band,
+        "blended_rate": payload.blended_rate,
+        "complexity": complexity,
+        "tier": tier,
+        "use_slack": use_slack,
+        "slack_after_internal": slack_i,
+        "slack_after_client": slack_c,
+        "slack_global_pct": slack_pct,
+        "project_start": project_start,
+        "items": per_deliv,
+        "totals": {"hours": int(hours_sum), "price": int(price_sum)}
+    }
+
+    # 6) Store/update in memory next to A/B for this session
+    global _CURRENT_SCENARIOS
+    _CURRENT_SCENARIOS["C"] = scenario_c
+    
+    return {"C": scenario_c}
 
 @app.post("/api/auto_build")
 def api_auto_build(payload: AutoBuildPayload):
