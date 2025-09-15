@@ -2272,8 +2272,9 @@ def api_export_workbook(payload: ExportWorkbookPayload):
     dfB = _ensure_v3_ae_columns(dfB)
     base = _export_basename(project, "Scenarios A & B")  # includes EST timestamp
     out_path = f"{base}.xlsx"
-    sheetA = _safe_sheet_name(payload.sheet_name_a or "Scenario A")
-    sheetB = _safe_sheet_name(payload.sheet_name_b or "Scenario B")
+    # Always use stable, distinct tab names to prevent accidental overwrite
+    sheetA = "Scenario A"
+    sheetB = "Scenario B"
     with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
         dfA.to_excel(xw, sheet_name=sheetA, index=False)
         dfB.to_excel(xw, sheet_name=sheetB, index=False)
