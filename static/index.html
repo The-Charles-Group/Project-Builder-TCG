@@ -66,6 +66,15 @@
           <h3>AI Summary</h3>
           <div id="wordcount"></div>
           <pre id="summary"></pre>
+          
+          <!-- Retainer Suggestions -->
+          <div id="retainer-hints" style="margin-top: 16px; display: none;">
+            <h4 style="color: var(--accent2); margin-bottom: 8px;">🔄 Retainer Opportunities Detected</h4>
+            <div id="retainer-list" class="hint"></div>
+            <p class="hint" style="font-size: 12px; margin-top: 8px;">
+              These deliverables appear suitable for ongoing monthly engagements. You can specify retainer months in Step 3.
+            </p>
+          </div>
         </section>
       </div>
     </section>
@@ -108,6 +117,15 @@
           <label for="projectName">Project name</label>
           <input id="projectName" type="text" placeholder="e.g., Casa Dragones" />
         </div>
+      </div>
+
+      <!-- Retainer Configuration -->
+      <div id="retainer-config" class="card" style="display: none; margin: 16px 0; background: #0b0e13; border: 1px dashed var(--accent2);">
+        <h3 style="color: var(--accent2); margin-bottom: 12px;">🔄 Retainer Configuration</h3>
+        <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
+          Configure monthly retainer engagements for selected deliverables
+        </p>
+        <div id="retainer-list-controls"></div>
       </div>
 
       <div class="inline">
@@ -306,6 +324,10 @@
         const selectedCodes = (sugg?.suggested || []).map(s => s.deliverable_code);
         appState.selectedCodes = selectedCodes;
         
+        // Store retainer suggestions
+        appState.retainerSuggestions = (sugg?.suggested || []).filter(s => s.retainer_hint);
+        displayRetainerHints(appState.retainerSuggestions);
+        
         // Auto-populate project name field from uploaded filename
         appState.uploadFilename = sugg.filename || appState.uploadFilename;
         const base = (appState.uploadFilename || '').replace(/\.[^.]+$/, ''); // strip extension only
@@ -401,6 +423,19 @@
 
     async function performReconciliation() {
       try {
+        // Get suggestions for retainer hints
+        const suggRes = await fetch('/api/suggest_by_text', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ rfp_text: appState.currentRfpText })
+        });
+        
+        if (suggRes.ok) {
+          const suggData = await suggRes.json();
+          appState.retainerSuggestions = (suggData?.suggested || []).filter(s => s.retainer_hint);
+          displayRetainerHints(appState.retainerSuggestions);
+        }
+
         // Step 1: Call /api/auto_build to seed the left panel with a real Average plan
         const auto = await fetch('/api/auto_build', {
           method: 'POST',
@@ -586,6 +621,9 @@
       // Optionally, re-build Average to refresh left panel total after changes
       rebuildLeftPanelWithNewSelection();
       
+      // Update retainer controls for Step 3
+      updateRetainerControls();
+      
       // Show Stage 3
       $('step3').style.display = 'block';
       $('step3').scrollIntoView({ behavior: 'smooth' });
@@ -630,6 +668,9 @@
         return;
       }
 
+      // Collect retainer data from UI
+      const retainers = collectRetainerData();
+
       const payload = {
         selected_deliverable_codes: appState.selectedCodes,          // <- required
         pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
@@ -641,7 +682,8 @@
         slack_global_pct: getSlackPctFromUI(),
         project_start: getProjectStartFromUI() || null,
         scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
-        scenario_b: getScenarioSpecBFromUI()
+        scenario_b: getScenarioSpecBFromUI(),
+        retainers: retainers  // Include retainer data
       };
 
       const resp = await fetch('/api/build', {
@@ -1118,6 +1160,91 @@
 
     // Legacy format tracking (remove old handlers)
     // Note: New export format handling is in Step 5
+
+    // --- Retainer functionality ---
+    function displayRetainerHints(retainerSuggestions) {
+      const hintsDiv = document.getElementById('retainer-hints');
+      const listDiv = document.getElementById('retainer-list');
+      
+      if (!retainerSuggestions || retainerSuggestions.length === 0) {
+        hintsDiv.style.display = 'none';
+        return;
+      }
+      
+      let html = '<ul>';
+      retainerSuggestions.forEach(sugg => {
+        const months = sugg.retainer_months_suggested || 'N/A';
+        html += `<li><strong>${sugg.deliverable}</strong> - Suggested: ${months} months</li>`;
+      });
+      html += '</ul>';
+      
+      listDiv.innerHTML = html;
+      hintsDiv.style.display = 'block';
+    }
+    
+    function updateRetainerControls() {
+      const retainerConfig = document.getElementById('retainer-config');
+      const controlsDiv = document.getElementById('retainer-list-controls');
+      
+      if (!appState.selectedCodes || appState.selectedCodes.length === 0) {
+        retainerConfig.style.display = 'none';
+        return;
+      }
+      
+      // Check if any selected deliverables have retainer suggestions
+      const hasRetainerSuggestions = appState.retainerSuggestions && 
+        appState.retainerSuggestions.some(r => appState.selectedCodes.includes(r.deliverable_code));
+      
+      if (!hasRetainerSuggestions) {
+        retainerConfig.style.display = 'none';
+        return;
+      }
+      
+      retainerConfig.style.display = 'block';
+      
+      let html = '';
+      appState.selectedCodes.forEach(code => {
+        const deliverable = codeToName(code);
+        const suggestion = appState.retainerSuggestions?.find(r => r.deliverable_code === code);
+        const suggestedMonths = suggestion?.retainer_months_suggested || 3;
+        
+        if (suggestion) {
+          html += `
+            <div style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--border); border-radius: 6px;">
+              <label style="display: block; margin-bottom: 4px; font-weight: 600;">${deliverable}</label>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <label style="margin: 0; color: var(--muted);">Retainer months:</label>
+                <input type="number" 
+                       id="retainer-${code}" 
+                       min="1" max="24" 
+                       value="${suggestedMonths}"
+                       style="width: 80px; text-align: center;" />
+                <span style="color: var(--muted); font-size: 12px;">(suggested: ${suggestedMonths})</span>
+              </div>
+            </div>
+          `;
+        }
+      });
+      
+      controlsDiv.innerHTML = html;
+    }
+    
+    function collectRetainerData() {
+      const retainers = [];
+      if (!appState.selectedCodes) return retainers;
+      
+      appState.selectedCodes.forEach(code => {
+        const input = document.getElementById(`retainer-${code}`);
+        if (input && input.value && parseInt(input.value) > 0) {
+          retainers.push({
+            deliverable_code: code,
+            months: parseInt(input.value)
+          });
+        }
+      });
+      
+      return retainers;
+    }
 
     // Initialize
     loadOptions();
