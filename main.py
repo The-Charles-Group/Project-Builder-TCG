@@ -1692,6 +1692,8 @@ class BuildPayload(BaseModel):
     slack_after_client: int = 2
     slack_global_pct: float = 0.05
     project_start: Optional[str] = None     # "YYYY-MM-DD"
+    # NEW: monthly retainers selected on the second screen
+    retainers: Optional[List[RetainerSelection]] = []
 
 class AutoBuildPayload(BaseModel):
     rfp_text: str
@@ -1705,6 +1707,8 @@ class AutoBuildPayload(BaseModel):
     slack_after_client: int = 2
     slack_global_pct: float = 0.05
     project_start: Optional[str] = None     # "YYYY-MM-DD"
+    # NEW: optional retainers alongside auto suggestions
+    retainers: Optional[List[RetainerSelection]] = []
 
 class ExportPayload(BaseModel):
     scenario: Dict[str, Any]
@@ -1751,6 +1755,8 @@ class BuildScenarioCPayload(BaseModel):
     slack_after_client: Optional[int] = None
     slack_global_pct: Optional[float] = None
     project_start: Optional[str] = None     # "YYYY-MM-DD"
+    # NEW: override or inherit from base scenario
+    retainers: Optional[List[RetainerSelection]] = []
 
 # --- AI Summary models (Stage 2) ---
 class RfpSummaryItem(BaseModel):
