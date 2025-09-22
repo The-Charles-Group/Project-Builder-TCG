@@ -2177,7 +2177,8 @@ def _resolve_scenario(spec: ScenarioSpec, category: str) -> Dict[str, Any]:
 def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, Any],
                               pricing_mode: str, blended_rate: Optional[float], rate_band: str,
                               use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
-                              project_start: Optional[str], scenario_letter: str) -> Dict[str, Any]:
+                              project_start: Optional[str], scenario_letter: str,
+                              retainer_months: int = 0) -> Dict[str, Any]:
     # Which task groups to include?
     if spec["mode"] == "bundle":
         included = DB.included_task_groups(category, spec["bundle"])
@@ -2190,19 +2191,26 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
     scen_col = DB.scenario_hours_col(complexity, tier)
     hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
     
-    # ---- after total_hours is computed ----
+    # ---- after total_hours is computed - RETAINER-AWARE PRICING ----
     total_hours_raw = float(hrs_by_role["Hours"].sum()) if not hrs_by_role.empty else 0.0
-    total_hours = int(round(total_hours_raw))  # whole hours
-
+    
+    monthly_hours_int = int(round(total_hours_raw))
     if pricing_mode == "Flat_Blended":
         eff_rate = float(blended_rate if blended_rate is not None else
                          DB.pricing_settings.loc[DB.pricing_settings["Key"]=="Default_Blended_Rate","Default"].astype(float).iloc[0])
+        monthly_price_int = int(round(monthly_hours_int * eff_rate))
     else:
-        # per-resource: compute effective weighted rate from role rates
         price_raw = DB.per_resource_price(hrs_by_role, rate_band=rate_band or "Standard_US")
         eff_rate = round((price_raw / total_hours_raw), 2) if total_hours_raw > 0 else 0.0
+        monthly_price_int = int(round(monthly_hours_int * eff_rate))
 
-    price_int = int(round(total_hours * eff_rate))  # Price = Hours × Rate (whole USD)
+    months = max(0, int(retainer_months or 0))
+    if months > 0:
+        total_hours = monthly_hours_int * months
+        price_int = monthly_price_int * months
+    else:
+        total_hours = monthly_hours_int
+        price_int = monthly_price_int
 
     # Schedule
     schedule = DB.build_schedule(
@@ -2218,10 +2226,14 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         "tier": tier,
         "scenario_col": scen_col,
         "hours_by_role": hrs_by_role.to_dict(orient="records"),
-        "total_hours": total_hours,          # int
-        "effective_rate": round(eff_rate, 2),# 2-dec for UI
-        "price": price_int,                  # int USD
-        "schedule": schedule
+        "total_hours": total_hours,                # total (months × monthly)
+        "effective_rate": round(eff_rate, 2),
+        "price": price_int,                        # total (months × monthly)
+        "schedule": schedule,
+        # NEW:
+        "retainer": {"months": months} if months > 0 else None,
+        "monthly_hours": monthly_hours_int if months > 0 else None,
+        "monthly_price": monthly_price_int if months > 0 else None,
     }
 
 @app.post("/api/build")
@@ -2241,6 +2253,9 @@ def api_build(payload: BuildPayload):
     slack_pct = float(payload.slack_global_pct or 0)
     project_start = payload.project_start
 
+    # Build retainer map
+    ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
+
     # Build scenarios
     scenarios = {}
     for letter, spec_in in [("A", payload.scenario_a), ("B", payload.scenario_b)]:
@@ -2251,11 +2266,13 @@ def api_build(payload: BuildPayload):
                 continue
             cat = str(row["Category"].iloc[0])
             spec_resolved = _resolve_scenario(spec_in, cat)
+            months = int(ret_map.get(code, 0))
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 pricing_mode, blended_rate, rate_band,
                 use_slack, slack_i, slack_c, slack_pct, project_start,
-                scenario_letter=letter
+                scenario_letter=letter,
+                retainer_months=months   # NEW
             )
             # Add names for readability
             out["deliverable"] = str(row["Deliverable"].iloc[0])
@@ -2316,6 +2333,14 @@ def api_build_scenario_c(payload: BuildScenarioCPayload):
     slack_c = base.get("slack_after_client", 2) if payload.slack_after_client is None else payload.slack_after_client
     slack_pct = base.get("slack_global_pct", 0.05) if payload.slack_global_pct is None else payload.slack_global_pct
     project_start = payload.project_start or base.get("project_start")
+    
+    # Build inheritance map from base unless overridden
+    base_ret_map = {}
+    for it in (base.get("items") or []):
+        if it.get("retainer", {}) and int(it["retainer"].get("months", 0)) > 0:
+            base_ret_map[it["deliverable_code"]] = int(it["retainer"]["months"])
+    override_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or [])}
+    ret_map = {**base_ret_map, **override_map}
 
     # 4) Build scenario items using existing logic (same as /api/build)
     per_deliv = []
@@ -2328,11 +2353,13 @@ def api_build_scenario_c(payload: BuildScenarioCPayload):
         # Create scenario spec for this deliverable
         spec_resolved = {"mode": "template", "complexity": complexity, "tier": tier}
         
+        months = int(ret_map.get(code, 0))
         out = _scenario_for_deliverable(
             code, cat, spec_resolved,
             payload.pricing_mode, payload.blended_rate, payload.rate_band,
             use_slack, slack_i, slack_c, slack_pct, project_start,
-            scenario_letter="C"
+            scenario_letter="C",
+            retainer_months=months   # NEW
         )
         # Add names for readability
         out["deliverable"] = str(row["Deliverable"].iloc[0])
@@ -2376,6 +2403,9 @@ def api_auto_build(payload: AutoBuildPayload):
     suggestions = DB.suggest_deliverables_from_text(payload.rfp_text or "")
     selected_codes = [s["deliverable_code"] for s in suggestions]
 
+    # Build retainer map
+    ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
+
     # 2) If nothing matched, return an empty set so frontend can prompt to add
     if not selected_codes:
         return {
@@ -2398,11 +2428,14 @@ def api_auto_build(payload: AutoBuildPayload):
                 continue
             cat = str(row["Category"].iloc[0])
             spec_resolved = _resolve_scenario(scen_spec, cat)
+            months = int(ret_map.get(code, 0))
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 payload.pricing_mode, payload.blended_rate, payload.rate_band or "Standard_US",
                 bool(payload.use_slack), int(payload.slack_after_internal), int(payload.slack_after_client),
-                float(payload.slack_global_pct or 0), payload.project_start
+                float(payload.slack_global_pct or 0), payload.project_start,
+                scenario_letter="A",  # letter doesn't affect numbers; acceptable here
+                retainer_months=months  # NEW
             )
             out["deliverable"] = str(row["Deliverable"].iloc[0])
             out["category"] = cat
