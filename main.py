@@ -433,7 +433,10 @@ class AgencyDB:
         toks = set()
         for c in self.all_rows.columns:
             if c.endswith("_Hours") and "__" in c:
-                toks.add(c.rsplit("__", 1)[0].split("__",1)[1].replace("_Hours",""))
+                # Safety check: ensure column has expected format before splitting
+                parts = c.rsplit("__", 1)[0].split("__", 1)
+                if len(parts) > 1:
+                    toks.add(parts[1].replace("_Hours", ""))
         return sorted(toks)
 
     def _map_to_v4_token(self, label: str, candidates: list[str]) -> str:
@@ -1493,177 +1496,194 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         # hours (use exact for pricing, round for display)
         parent_hours_exact = float(d.get("total_hours", 0.0))
         parent_hours_display = int(round(parent_hours_exact))
-        # price/rate at deliverable (use exact hours for pricing)
+
+        months = int((d.get("retainer") or {}).get("months", 0))
+        monthly_hours = int(d.get("monthly_hours") or 0)
+        monthly_price = int(d.get("monthly_price") or 0)
+
+        # price/rate at deliverable
         if pricing_mode == "Flat_Blended":
             deliv_rate = blended_rate
-            deliv_price = round(parent_hours_exact * deliv_rate, 2)
+            deliv_price = round((monthly_hours if months else parent_hours_display) * deliv_rate, 2)
         else:
             hrs_by_role_deliv = DB.hours_by_role_for_deliverable(dcode, tg_order, scen_col)
             deliv_price, _ = DB.price_for_hours_by_role(hrs_by_role_deliv, rate_band)
             deliv_price = round(deliv_price, 2)
-            deliv_rate  = _eff_rate(deliv_price, parent_hours_exact)
+        if months:
+            deliv_price = round(deliv_price * months, 2)
 
+        # Build deliverable node
         wbs_deliv = f"1.{i}"
         svc_deliv = DB.service_dept_for_deliverable(dcode, tg_order, scen_col)
+        deliv_label = str(d.get("deliverable",""))
+        deliv_notes = f'{d.get("complexity","")}/{d.get("tier","")}' + (f' | Retainer x{months} months' if months else '')
+        total_deliv_duration = sum(int(t["duration_days"]) for t in schedule)  # one-cycle length
         rows.append({
             "Row_ID": "",
             "Deliverable_Code": dcode,
             "Task_Code": "",
             "Service_Department": svc_deliv,
-            "Deliverable": str(d.get("deliverable","")),
+            "Deliverable": deliv_label,
             "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": "1",
-            "Task_Name": str(d.get("deliverable","")),
+            "Task_Name": deliv_label,
             "Component": "", "Task": "", "Role": "", "Seniority": "",
-            "Planned_Hours": parent_hours_display,
-            "Start_Offset_Days": day_cursor, "Duration_Days": total_deliv_duration,
-            "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": f'{d.get("complexity","")}/{d.get("tier","")}',
-            "Rate_USD": round(deliv_rate, 2), "Price_USD": round(deliv_price, 2)
+            "Planned_Hours": (monthly_hours * months) if months else parent_hours_display,
+            "Start_Offset_Days": day_cursor,
+            "Duration_Days": (total_deliv_duration * months) if months else total_deliv_duration,
+            "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": deliv_notes,
+            "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
+            "Price_USD": round(deliv_price, 2)
         })
 
-        # components (use your existing components_for_deliverable helper)
         comps = DB.components_for_deliverable(dcode, tg_order)
-        # split parent hours to components - use exact hours for pricing, rounded for display
-        comp_hours_map = DB.hours_by_component(dcode, tg_order, scen_col)
-        # round component hours so they sum to parent display hours
-        comp_hours_rounded = _largest_remainder(parent_hours_display, comp_hours_map)
+        # Per-month hours by component (exact) and rounded for display
+        comp_hours_map_month = DB.hours_by_component(dcode, tg_order, scen_col)
+        # If not a retainer, treat "month" as the whole
+        base_comp_hours_display = _largest_remainder((monthly_hours if months else parent_hours_display), comp_hours_map_month if months else comp_hours_map_month)
+
         prev_comp_wbs = ""
 
         for j, comp in enumerate(comps, start=1):
-            # which tgs belong to this component (in process order)
-            tg_hours_in_comp = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)
+            tg_hours_in_comp = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)  # per 'month' basis
             tg_in_comp = [tg for tg in tg_order if tg in tg_hours_in_comp.keys()]
             if not tg_in_comp:
                 continue
 
             comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp)
             comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
-            comp_hours_display = int(comp_hours_rounded.get(comp, 0))
-            comp_hours_exact = float(comp_hours_map.get(comp, 0.0))
 
+            comp_hours_month_display = int(base_comp_hours_display.get(comp, 0))
+            comp_hours_total_display = comp_hours_month_display * months if months else comp_hours_month_display
+
+            # Compute component-level price in Per_Resource mode (band-aware), monthly then scale
             if pricing_mode == "Flat_Blended":
                 comp_rate = blended_rate
-                comp_price = round(comp_hours_exact * comp_rate, 2)
+                comp_price = round((comp_hours_month_display if months else comp_hours_total_display) * comp_rate, 2)
+                if months:
+                    comp_price = round(comp_price * months, 2)
             else:
                 hrs_by_role_comp = DB.hours_by_role_for_component(dcode, comp, tg_in_comp, scen_col)
-                comp_price, _ = DB.price_for_hours_by_role(hrs_by_role_comp, rate_band)
-                comp_price = round(comp_price, 2)
-                comp_rate  = _eff_rate(comp_price, comp_hours_exact)
+                comp_price_month, _ = DB.price_for_hours_by_role(hrs_by_role_comp, rate_band)
+                comp_price = round(comp_price_month * (months if months else 1), 2)
 
             wbs_comp = f"{wbs_deliv}.{j}"
             svc_comp = DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col)
             rows.append({
-                "Row_ID": "",
-                "Deliverable_Code": dcode,
-                "Task_Code": "",
-                "Service_Department": svc_comp,
-                "Deliverable": str(d.get("deliverable","")),
+                "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
+                "Deliverable": deliv_label,
                 "Project_Name": project_name, "WBS_ID": wbs_comp, "Parent_WBS_ID": wbs_deliv,
                 "Task_Name": comp, "Component": comp, "Task": "", "Role": "", "Seniority": "",
-                "Planned_Hours": comp_hours_display, "Start_Offset_Days": day_cursor + comp_offset, "Duration_Days": comp_duration,
-                "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs), "Assignee_External_ID": "", "Notes": "",
-                "Rate_USD": round(comp_rate, 2), "Price_USD": round(comp_price, 2)
+                "Planned_Hours": comp_hours_total_display,
+                "Start_Offset_Days": day_cursor + comp_offset,
+                "Duration_Days": (comp_duration * months) if months else comp_duration,
+                "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs),
+                "Assignee_External_ID": "", "Notes": "",
+                "Rate_USD": round(comp_rate if pricing_mode=="Flat_Blended" else _eff_rate(comp_price, comp_hours_total_display or 0), 2),
+                "Price_USD": round(comp_price, 2)
             })
 
-            # tasks under the component
-            prev_task_last_wbs = ""  # track last role row of previous task for dependency
-            # distribute component display hours across tasks (largest remainder)
-            tg_hours_map = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
-            tg_hours_rounded = _largest_remainder(comp_hours_display, tg_hours_map)
+            # --- Tasks under the component ---
+            # Per-month target hours for each task group, then repeat Month 01..N
+            tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
+            tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
 
-            for k, tg in enumerate(tg_in_comp, start=1):
-                dur = int(duration_by_tg.get(tg, 1))
-                label = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
-                # Task header (duration lives here; no hours)
-                wbs_task = f"{wbs_comp}.{k}"
-                rows.append({
-                    "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
-                    "Deliverable": str(d.get("deliverable","")),
-                    "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
-                    "Task_Name": label, "Component": comp, "Task": label,
-                    "Role": "", "Seniority": "",
-                    "Planned_Hours": "",                           # hours pushed to role rows
-                    "Start_Offset_Days": day_cursor + offset_by_tg[tg],
-                    "Duration_Days": dur,
-                    "Dependencies": (wbs_comp if k == 1 else prev_task_last_wbs),
-                    "Assignee_External_ID": "", "Notes": ""
-                })
+            # Build month-by-month repetition
+            total_tasks_per_month = len(tg_in_comp)
+            prev_month_last_wbs = ""  # chain months sequentially per component
 
-                # Role rows for this task (hours by role+seniority)
-                hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
-                role_rows = hrs_role_df.to_dict(orient="records")
-                # target hours (int) for this task, from your earlier allocation
-                target_task_hours = int(tg_hours_rounded.get(tg, 0))
+            for month_idx in range(1, (months if months else 1) + 1):
+                # enumerates tasks within this month
+                prev_task_last_wbs = ""
+                for k, tg in enumerate(tg_in_comp, start=1):
+                    dur = int(duration_by_tg.get(tg, 1))
+                    label_core = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
+                    label = (f"Month {month_idx:02d} – {label_core}") if months else label_core
 
-                # Largest-remainder rounding so role rows sum to task target
-                raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
-                # if no role rows (shouldn't happen), make one "Unknown" line
-                if not raw_map:
-                    raw_map = {("","Mid"): float(target_task_hours)}
-                total = sum(raw_map.values()) or 1.0
-                raw_scaled = {k: (v/total)*target_task_hours for k, v in raw_map.items()}
-                flo = {k: int(v) for k, v in raw_scaled.items()}
-                rem = target_task_hours - sum(flo.values())
-                order = sorted(raw_map.keys(), key=lambda k: (raw_scaled[k]-flo[k]), reverse=True)
-                for kk in order[:max(0, rem)]:
-                    flo[kk] += 1
+                    # Unique task index within the component across months
+                    task_ordinal = (month_idx-1)*total_tasks_per_month + k
+                    wbs_task = f"{wbs_comp}.{task_ordinal}"
 
-                prev_role_wbs = ""
-                r_index = 0
-                for (role, sen), h in flo.items():
-                    if h <= 0: 
-                        continue
-                    r_index += 1
-                    # per-role codes
-                    row_id, task_code, svc_task = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
-                    wbs_role = f"{wbs_task}.{r_index}"
-                    
-                    # --- determine rate for this role row ---
-                    if pricing_mode == "Flat_Blended":
-                        role_rate = float(blended_rate)
-                    else:
-                        # Get band-adjusted role rates once (outside loops if you prefer)
-                        rr = DB.role_rates_table(rate_band)  # already band-adjusted
-                        # exact role+seniority match
-                        match = rr[(rr["Resource_Title"] == str(role)) &
-                                   (rr["Seniority"] == str(sen))]
-                        if not match.empty:
-                            role_rate = float(match["Rate_USD"].iloc[0])
-                        else:
-                            # fallback 1: role-only
-                            match2 = rr[rr["Resource_Title"] == str(role)]
-                            if not match2.empty:
-                                role_rate = float(match2["Rate_USD"].iloc[0])
-                            else:
-                                # fallback 2: band-aware default (mirrors price_for_hours_by_role)
-                                ps = DB.pricing_settings[DB.pricing_settings["Key"] == "Default_Blended_Rate"]
-                                base_default = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
-                                role_rate = base_default * _band_multiplier(rate_band)
+                    base_offset = day_cursor + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
 
-                    # Optional: compute row price here; the export recalcs anyway
-                    row_hours = int(h)
-                    row_price = int(round(role_rate * row_hours))
-                    
                     rows.append({
-                        "Row_ID": row_id,
-                        "Deliverable_Code": dcode,
-                        "Task_Code": task_code,
-                        "Service_Department": (svc_task or svc_comp),
-                        "Deliverable": str(d.get("deliverable","")),
-                        "Project_Name": project_name, "WBS_ID": wbs_role, "Parent_WBS_ID": wbs_task,
+                        "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
+                        "Deliverable": deliv_label,
+                        "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
                         "Task_Name": label, "Component": comp, "Task": label,
-                        "Role": role or "", "Seniority": sen or "",
-                        "Planned_Hours": row_hours,
-                        "Start_Offset_Days": "",                     # keep schedule on header
-                        "Duration_Days": "",                         # no duration on role rows
-                        "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
-                        "Assignee_External_ID": "", "Notes": "",
-                        # NEW:
-                        "Rate_USD": round(role_rate, 2),
-                        "Price_USD": row_price
+                        "Role": "", "Seniority": "",
+                        "Planned_Hours": "",   # stays on role rows
+                        "Start_Offset_Days": base_offset,
+                        "Duration_Days": dur,
+                        "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
+                        "Assignee_External_ID": "", "Notes": ""
                     })
-                    prev_role_wbs = wbs_role
 
-                prev_task_last_wbs = prev_role_wbs or wbs_task
+                    # Role rows for this task in this month
+                    hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
+                    role_rows = hrs_role_df.to_dict(orient="records")
+                    target_task_hours = int(tg_target_month.get(tg, 0)) if months else int(tg_target_month.get(tg, 0))
+
+                    raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
+                    if not raw_map:
+                        raw_map = {("","Mid"): float(target_task_hours)}
+                    total = sum(raw_map.values()) or 1.0
+                    raw_scaled = {key: (val/total)*target_task_hours for key, val in raw_map.items()}
+                    flo = {key: int(val) for key, val in raw_scaled.items()}
+                    rem = target_task_hours - sum(flo.values())
+                    order = sorted(raw_map.keys(), key=lambda kk: (raw_scaled[kk]-flo[kk]), reverse=True)
+                    for kk in order[:max(0, rem)]:
+                        flo[kk] += 1
+
+                    prev_role_wbs = ""
+                    r_index = 0
+                    for (role, sen), h in flo.items():
+                        if h <= 0:
+                            continue
+                        r_index += 1
+                        row_id, task_code, svc_task = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
+                        wbs_role = f"{wbs_task}.{r_index}"
+
+                        # Compute role rate
+                        if pricing_mode == "Flat_Blended":
+                            role_rate = float(blended_rate)
+                        else:
+                            rr = DB.role_rates_table(rate_band)
+                            match = rr[(rr["Resource_Title"] == str(role)) & (rr["Seniority"] == str(sen))]
+                            if not match.empty:
+                                role_rate = float(match["Rate_USD"].iloc[0])
+                            else:
+                                match2 = rr[rr["Resource_Title"] == str(role)]
+                                if not match2.empty:
+                                    role_rate = float(match2["Rate_USD"].iloc[0])
+                                else:
+                                    ps = DB.pricing_settings[DB.pricing_settings["Key"] == "Default_Blended_Rate"]
+                                    base_default = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+                                    role_rate = base_default * _band_multiplier(rate_band)
+
+                        row_hours = int(h)
+                        row_price = int(round(role_rate * row_hours))
+
+                        rows.append({
+                            "Row_ID": row_id,
+                            "Deliverable_Code": dcode,
+                            "Task_Code": task_code,
+                            "Service_Department": (svc_task or svc_comp),
+                            "Deliverable": deliv_label,
+                            "Project_Name": project_name, "WBS_ID": wbs_role, "Parent_WBS_ID": wbs_task,
+                            "Task_Name": label, "Component": comp, "Task": label,
+                            "Role": role or "", "Seniority": sen or "",
+                            "Planned_Hours": row_hours,
+                            "Start_Offset_Days": "", "Duration_Days": "",
+                            "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
+                            "Assignee_External_ID": "", "Notes": "",
+                            "Rate_USD": round(role_rate, 2),
+                            "Price_USD": row_price
+                        })
+                        prev_role_wbs = wbs_role
+
+                    prev_task_last_wbs = prev_role_wbs or wbs_task
+
+                prev_month_last_wbs = prev_task_last_wbs
 
             prev_comp_wbs = wbs_comp
 
@@ -1710,6 +1730,11 @@ def _wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFr
 # ---------- Pydantic models ----------
 class SuggestPayload(BaseModel):
     rfp_text: str
+
+# --- NEW: Retainer selection model ---
+class RetainerSelection(BaseModel):
+    deliverable_code: str
+    months: int  # 1..12
 
 class ScenarioSpec(BaseModel):
     mode: str                               # "template" or "bundle"
@@ -1853,7 +1878,10 @@ def _current_scenarios():
 # ---------- OpenAI Integration Functions (Stage 2) ----------
 
 # Initialize OpenAI client now that we can import it
-openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+try:
+    openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+except Exception:
+    openai_client = None  # Optional OpenAI integration
 
 # --- Reconciliation Helper Functions ---
 def _norm_tokens(s: str) -> set[str]:
