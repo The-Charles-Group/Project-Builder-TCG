@@ -643,6 +643,46 @@ class AgencyDB:
         out.sort(key=lambda x: (-x["confidence"], x["deliverable"]))
         return out
 
+    def retainer_recommendation(self, text: str, deliverable_name: str) -> tuple[bool, int]:
+        """
+        Very simple rule-of-thumb to suggest retainer and months.
+        Returns (is_retainer, months) where months in [1..12].
+        """
+        t = (text or "").lower()
+
+        # If RFP states an explicit month count, respect that (clamped to 1..12)
+        import re
+        m = re.search(r'\b(\d{1,2})\s*(?:months|mos|mo)\b', t)
+        months = 0
+        if m:
+            try:
+                months = max(1, min(12, int(m.group(1))))
+            except Exception:
+                months = 0
+
+        # Soft indicators that the work is monthly/ongoing
+        signals = [
+            "retainer", "monthly", "per month", "each month", "every month",
+            "always-on", "always on", "ongoing", "maintenance", "management",
+            "reporting cadence", "monthly report", "social calendar", "community"
+        ]
+
+        is_signal = any(s in t for s in signals)
+
+        # Some deliverables are very often retainers
+        likely_retainer_keywords = [
+            "social", "community", "media", "measurement", "reporting",
+            "seo", "maintenance", "support", "content", "blog"
+        ]
+        is_likely_by_name = any(k in (deliverable_name or "").lower() for k in likely_retainer_keywords)
+
+        is_ret = bool(is_signal or is_likely_by_name)
+        if is_ret and months == 0:
+            # Default sensible guess
+            months = 12 if "year" in t or "annual" in t else 6
+
+        return (is_ret, max(1, min(12, months)) if months else (12 if is_ret else 0))
+
     # ---------- Bundle helpers ----------
     def included_task_groups(self, category: str, bundle: str) -> List[str]:
         sub = self.b_rules[(self.b_rules["Category"]==category) & (self.b_rules["Bundle"]==bundle)]
@@ -2079,6 +2119,11 @@ def api_suggest(payload: SuggestPayload):
     if not DB.loaded:
         DB.load()
     recs = DB.suggest_deliverables_from_text(payload.rfp_text or "")
+    # NEW: attach retainer hints
+    for r in recs:
+        is_ret, months = DB.retainer_recommendation(payload.rfp_text or "", r.get("deliverable",""))
+        r["retainer_hint"] = bool(is_ret)
+        r["retainer_months_suggested"] = int(months or 0)
     return {"suggested": recs}
 
 @app.post("/api/suggest_by_file")
@@ -2101,6 +2146,11 @@ async def api_suggest_by_file(file: UploadFile = File(...)):
         text = text[:200_000]
 
     recs = DB.suggest_deliverables_from_text(text or "")
+    # NEW: attach retainer hints per deliverable
+    for r in recs:
+        is_ret, months = DB.retainer_recommendation(text or "", r.get("deliverable",""))
+        r["retainer_hint"] = bool(is_ret)
+        r["retainer_months_suggested"] = int(months or 0)
     # NEW: remember for default project name
     global LAST_UPLOAD_FILENAME
     LAST_UPLOAD_FILENAME = file.filename
