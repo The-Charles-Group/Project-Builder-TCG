@@ -715,34 +715,6 @@
     // Legacy function name for backward compatibility
     const buildScenarios = buildScenariosAB;
 
-    function renderScenario(targetId, scenario) {
-      const root = document.getElementById(targetId);
-      if (!scenario || !scenario.items || !scenario.items.length) { 
-        root.innerHTML = '<p>(No data)</p>'; 
-        return; 
-      }
-      
-      let html = `
-        <div class="totals">
-          <div><strong>Hours:</strong> ${scenario.totals.hours}</div>
-          <div><strong>Price:</strong> $${scenario.totals.price.toLocaleString()}</div>
-        </div>
-        <table class="tbl">
-          <thead><tr><th>Deliverable</th><th>Hours</th><th>Price</th><th>Tasks</th></tr></thead>
-          <tbody>
-      `;
-      scenario.items.forEach(it => {
-        const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
-        html += `<tr>
-          <td>${it.deliverable}</td>
-          <td>${it.total_hours}</td>
-          <td>$${it.price.toLocaleString()}</td>
-          <td>${tasks}</td>
-        </tr>`;
-      });
-      html += `</tbody></table>`;
-      root.innerHTML = html;
-    }
 
     // Legacy functions removed - replaced by Stage 2 workflow
 
@@ -853,10 +825,32 @@
     window.fmtUSD2 = window.fmtUSD2 || function(n){ return '$' + (Number(n)||0).toFixed(2); };
     window.fmtUSD = window.fmtUSD || (n => Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n));
 
-    // Updated scenario rendering function with proper formatting
+    // Enhanced scenario rendering function with retainer support
     function renderScenario(targetId, scenario) {
-      let html = `
-        <div class="totals">Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}</div>
+      if (!scenario || !scenario.items || !scenario.items.length) {
+        document.getElementById(targetId).innerHTML = '<p>(No data)</p>';
+        return;
+      }
+      
+      // Check for retainer items
+      const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
+      const hasRetainers = retainerItems.length > 0;
+      
+      let html = `<div class="totals">Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
+      
+      if (hasRetainers) {
+        const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
+        const oneTimeTotal = scenario.totals.price - retainerTotal;
+        html += `
+          <div style="margin-top: 8px; padding: 8px; background: var(--card); border-radius: 4px; border-left: 3px solid var(--accent2); font-size: 12px;">
+            <strong style="color: var(--accent2);">💼 Breakdown:</strong>
+            ${oneTimeTotal > 0 ? ` One-time: ${window.fmtUSD0(oneTimeTotal)} •` : ''}
+            Retainers: ${window.fmtUSD0(retainerTotal)} (${retainerItems.length} deliverable${retainerItems.length > 1 ? 's' : ''})
+          </div>
+        `;
+      }
+      
+      html += `</div>
         <table>
           <thead><tr><th>Deliverable</th><th>Hours</th><th>Rate (USD)</th><th>Price (USD)</th><th>Tasks</th></tr></thead>
           <tbody>
@@ -864,8 +858,15 @@
       scenario.items.forEach(it => {
         const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
         const rate = (typeof it.effective_rate !== 'undefined') ? it.effective_rate : (it.total_hours ? (it.price/it.total_hours) : 0);
+        
+        let deliverableName = it.deliverable;
+        if (it.retainer_months && it.retainer_months > 1) {
+          const monthlyPrice = Math.round(it.price / it.retainer_months);
+          deliverableName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${it.retainer_months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
+        }
+        
         html += `<tr>
-          <td>${it.deliverable}</td>
+          <td>${deliverableName}</td>
           <td>${window.fmtInt(it.total_hours)}</td>
           <td>${window.fmtUSD2(rate)}</td>
           <td>${window.fmtUSD0(it.price)}</td>
