@@ -1802,6 +1802,22 @@ class ExportWorkbookABCPayload(BaseModel):
     sheet_name_c: str | None = "Scenario C"
     add_timestamp: bool | None = False
 
+class ExportXMLPayload(BaseModel):
+    scenario: Optional[Dict[str, Any]] = None
+    project_name: Optional[str] = None
+    scenario_label: Optional[str] = None
+    sheet_name: str = "Scenario A"
+    start_date_mode: str = "next_monday"
+    fixed_start_iso: Optional[str] = None
+    hours_per_day: float = 8.0
+    merge_identical_children: bool = True
+
+class ExportWorkbookXMLPayload(BaseModel):
+    scenario_a: Optional[Dict[str, Any]] = None
+    scenario_b: Optional[Dict[str, Any]] = None  
+    project_name: Optional[str] = None
+    merge_identical_children: bool = True
+
 class AuditPricingPayload(BaseModel):
     scenario: Dict[str, Any]           # scenario object from /api/build
     pricing_mode: str                  # "Flat_Blended" | "Per_Resource"
@@ -2598,6 +2614,138 @@ def api_export_workbook_abc(payload: ExportWorkbookABCPayload):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+@app.post("/api/export_xml")
+def api_export_xml(payload: ExportXMLPayload):
+    """
+    Export a single scenario as Microsoft Project XML (MSPDI) format.
+    Uses the convert_excel_to_mspdi function with multi-resource merge capability.
+    """
+    if not DB.loaded:
+        DB.load()
+
+    project_name = (payload.project_name
+                    or _upload_title_default()
+                    or f"Proposal {datetime.date.today().isoformat()}")
+
+    # Build WBS DataFrame
+    df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
+    df = _ensure_v3_ae_columns(df)
+
+    # Create temporary Excel file for MSPDI conversion
+    base = _export_basename(project_name, payload.scenario_label or "Scenario")
+    temp_xlsx = f"{base}_temp.xlsx"
+    output_xml = f"{base}.xml"
+    
+    try:
+        # Write to temporary Excel file
+        with pd.ExcelWriter(temp_xlsx, engine="openpyxl") as xw:
+            df.to_excel(xw, sheet_name=payload.sheet_name, index=False)
+            _apply_number_formats(xw.sheets[payload.sheet_name], df)
+
+        # Convert to MSPDI XML
+        stats = convert_excel_to_mspdi(
+            input_xlsx=temp_xlsx,
+            output_xml=output_xml,
+            sheet_name=payload.sheet_name,
+            start_date_mode=payload.start_date_mode,
+            fixed_start_iso=payload.fixed_start_iso,
+            hours_per_day=payload.hours_per_day,
+            merge_identical_children=payload.merge_identical_children
+        )
+
+        return FileResponse(
+            output_xml,
+            filename=os.path.basename(output_xml),
+            media_type="application/xml",
+            headers={"X-Export-Stats": json.dumps(stats)}
+        )
+
+    finally:
+        # Clean up temporary Excel file
+        if os.path.exists(temp_xlsx):
+            os.remove(temp_xlsx)
+
+@app.post("/api/export_workbook_xml")
+def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
+    """
+    Export scenarios A and B to separate XML files in a zip archive.
+    Each XML uses the convert_excel_to_mspdi function with multi-resource merge.
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    project = (payload.project_name
+               or _upload_title_default()
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
+    
+    # Build DataFrames
+    dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
+    dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
+    
+    dfA = _ensure_v3_ae_columns(dfA)
+    dfB = _ensure_v3_ae_columns(dfB)
+    
+    base = _export_basename(project, "Scenarios A & B XML")
+    temp_files = []
+    
+    try:
+        # Create XML for Scenario A
+        temp_xlsx_a = f"{base}_A_temp.xlsx"
+        output_xml_a = f"{base}_Scenario_A.xml"
+        temp_files.extend([temp_xlsx_a, output_xml_a])
+        
+        with pd.ExcelWriter(temp_xlsx_a, engine="openpyxl") as xw:
+            dfA.to_excel(xw, sheet_name="Scenario A", index=False)
+            _apply_number_formats(xw.sheets["Scenario A"], dfA)
+        
+        stats_a = convert_excel_to_mspdi(
+            input_xlsx=temp_xlsx_a,
+            output_xml=output_xml_a,
+            sheet_name="Scenario A",
+            merge_identical_children=payload.merge_identical_children
+        )
+        
+        # Create XML for Scenario B
+        temp_xlsx_b = f"{base}_B_temp.xlsx"
+        output_xml_b = f"{base}_Scenario_B.xml"
+        temp_files.extend([temp_xlsx_b, output_xml_b])
+        
+        with pd.ExcelWriter(temp_xlsx_b, engine="openpyxl") as xw:
+            dfB.to_excel(xw, sheet_name="Scenario B", index=False)
+            _apply_number_formats(xw.sheets["Scenario B"], dfB)
+        
+        stats_b = convert_excel_to_mspdi(
+            input_xlsx=temp_xlsx_b,
+            output_xml=output_xml_b,
+            sheet_name="Scenario B",
+            merge_identical_children=payload.merge_identical_children
+        )
+        
+        # Create zip file with both XMLs
+        import zipfile
+        zip_path = f"{base}.zip"
+        with zipfile.ZipFile(zip_path, 'w') as zipf:
+            zipf.write(output_xml_a, f"Scenario_A.xml")
+            zipf.write(output_xml_b, f"Scenario_B.xml")
+            # Add stats as JSON file
+            stats_json = json.dumps({
+                "scenario_a": stats_a,
+                "scenario_b": stats_b
+            }, indent=2)
+            zipf.writestr("export_stats.json", stats_json)
+        
+        return FileResponse(
+            zip_path,
+            filename=os.path.basename(zip_path),
+            media_type="application/zip"
+        )
+        
+    finally:
+        # Clean up temporary files
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
 @app.post("/api/audit_pricing")
 def api_audit_pricing(p: AuditPricingPayload):
     if not DB.loaded:
@@ -2828,6 +2976,7 @@ def api_reorder_timeline(p: ReorderPayload):
 
     # Return only what's needed; the front-end merges schedules back into its scenario
     return {"items": items}
+
 
 # ---------- MSPDI Export Function ----------
 def convert_excel_to_mspdi(
