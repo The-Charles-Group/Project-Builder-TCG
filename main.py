@@ -1,6 +1,8 @@
 import os, re, io, math, json, datetime, urllib.parse, tempfile
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple, Set
 from zoneinfo import ZoneInfo  # Python 3.9+
+from xml.etree.ElementTree import Element, SubElement, tostring
+from xml.dom import minidom
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -2826,6 +2828,411 @@ def api_reorder_timeline(p: ReorderPayload):
 
     # Return only what's needed; the front-end merges schedules back into its scenario
     return {"items": items}
+
+# ---------- MSPDI Export Function ----------
+def convert_excel_to_mspdi(
+    input_xlsx: str,
+    output_xml: str,
+    sheet_name: str = "Scenario A",
+    start_date_mode: str = "next_monday",
+    fixed_start_iso: Optional[str] = None,
+    hours_per_day: float = 8.0,
+    calendar_blocks: List[Tuple[str, str]] = [("08:00:00","12:00:00"), ("13:00:00","17:00:00")],
+    roles_split_rule: str = "even",
+    role_weights: Optional[Dict[str, float]] = None,
+    preserve_predecessors: str = "normalize",
+    allow_unassigned: bool = True,
+    include_audits: bool = True,
+    audits_dir: Optional[str] = None,
+    merge_identical_children: bool = True   # <— toggle for multi-resource merge
+) -> Dict[str, int]:
+    """
+    Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
+    
+    Returns a dictionary with statistics about the conversion process.
+    """
+    try:
+        # Load Excel data
+        df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
+        
+        # Convert DataFrame to list of row dictionaries for processing
+        rows = []
+        for _, row in df.iterrows():
+            # Extract basic task information
+            task_row = {
+                "WBS": str(row.get("WBS_ID", "")),
+                "ParentWBS": str(row.get("Parent_WBS_ID", "")),
+                "Name": str(row.get("Task_Name", "")),
+                "PlannedHours": float(row.get("Planned_Hours", 0)),
+                "StartOffset": int(row.get("Start_Offset_Days", 0)),
+                "Duration": int(row.get("Duration_Days", 1)),
+                "Dependencies": str(row.get("Dependencies", "")),
+                "RoleList": [str(row.get("Role", "Unassigned"))] if row.get("Role") else ["Unassigned"],
+                "RoleStr": str(row.get("Role", "Unassigned")),
+                "UID": 0  # Will be assigned later
+            }
+            rows.append(task_row)
+        
+        # Assign UIDs
+        for i, row in enumerate(rows, 1):
+            row["UID"] = i
+        
+        # --- NEW: merge siblings with the same name into their parent as multi-assignments
+        prealloc_by_parent_wbs: Dict[str, Dict[str, float]] = {}
+        removed_child_wbs: Set[str] = set()
+
+        if merge_identical_children:
+            # index helpers
+            by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+            kids_by_parent: Dict[str, List[str]] = {}
+            for r in rows:
+                p = r.get("ParentWBS")
+                if p:
+                    kids_by_parent.setdefault(p, []).append(r["WBS"])
+
+            for parent_wbs, kid_wbs_list in list(kids_by_parent.items()):
+                # Only immediate children and all must be leaves
+                kid_rows = [by_wbs[k] for k in kid_wbs_list if k in by_wbs]
+                if not kid_rows:
+                    continue
+                # skip if any child itself has children (not a leaf)
+                if any(k in kids_by_parent for k in kid_wbs_list):
+                    continue
+
+                parent = by_wbs.get(parent_wbs)
+                if not parent:
+                    continue
+
+                # Heuristic:
+                # - every child has same Name as parent
+                # - each child has exactly ONE role
+                # - each child has >0 planned hours
+                same_name = all(kr["Name"] == parent["Name"] for kr in kid_rows)
+                one_role  = all(len(kr["RoleList"]) == 1 for kr in kid_rows)
+                has_hours = all((kr["PlannedHours"] or 0) > 0 for kr in kid_rows)
+                if not (same_name and one_role and has_hours):
+                    continue
+
+                # Aggregate hours by role
+                agg: Dict[str, float] = {}
+                for kr in kid_rows:
+                    role = kr["RoleList"][0]
+                    agg[role] = agg.get(role, 0.0) + float(kr["PlannedHours"])
+
+                if len(agg) < 2:
+                    continue
+
+                # Record prealloc for the parent
+                prealloc_by_parent_wbs[parent_wbs] = agg
+
+                # Make the parent a single multi-role leaf
+                parent["RoleList"] = list(agg.keys())
+                parent["RoleStr"]  = ",".join(parent["RoleList"])
+                if (parent.get("PlannedHours") or 0) <= 0:
+                    parent["PlannedHours"] = sum(agg.values())
+
+                # Remove the children
+                removed_child_wbs.update(kid_wbs_list)
+
+        # If we merged anything, drop the children now
+        if removed_child_wbs:
+            rows = [r for r in rows if r["WBS"] not in removed_child_wbs]
+
+        # Build children_by_parent map and child_to_parent for dep rewrites
+        children_by_parent: Dict[str, List[str]] = {}
+        for r in rows:
+            p = r["ParentWBS"]
+            if p:
+                children_by_parent.setdefault(p, []).append(r["WBS"])
+        summary_set: Set[str] = set(children_by_parent.keys())
+
+        child_to_parent: Dict[str, str] = {}
+        for p, kids in children_by_parent.items():
+            for k in kids:
+                if k in removed_child_wbs:   # only those removed pre-merge
+                    child_to_parent[k] = p
+
+        # Helper functions for dependency normalization
+        def is_ancestor(ancestor_wbs: str, descendant_wbs: str) -> bool:
+            current = descendant_wbs
+            visited = set()
+            while current and current not in visited:
+                visited.add(current)
+                if current == ancestor_wbs:
+                    return True
+                # Find parent of current
+                parent_found = None
+                for r in rows:
+                    if r["WBS"] == current:
+                        parent_found = r.get("ParentWBS")
+                        break
+                current = parent_found
+            return False
+
+        def list_leaves_under(parent_wbs: str) -> List[str]:
+            leaves = []
+            for r in rows:
+                if r.get("ParentWBS") == parent_wbs and r["WBS"] not in summary_set:
+                    leaves.append(r["WBS"])
+            return leaves
+
+        def first_leaf(wbs: str) -> str:
+            if wbs in summary_set:
+                children = children_by_parent.get(wbs, [])
+                if children:
+                    return first_leaf(children[0])
+            return wbs
+
+        def last_leaf(wbs: str) -> str:
+            if wbs in summary_set:
+                children = children_by_parent.get(wbs, [])
+                if children:
+                    return last_leaf(children[-1])
+            return wbs
+
+        # Normalize dependencies & drop unsafe hierarchy edges
+        init_edges = []
+        for r in rows:
+            deps = r.get("Dependencies", "").strip()
+            if deps:
+                for dep in deps.split(","):
+                    dep = dep.strip()
+                    if dep:
+                        init_edges.append((dep, r["WBS"]))
+
+        normalized_edges = []
+        for pred_wbs, succ_wbs in init_edges:
+            # Rewrite removed children to their parents
+            actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
+            actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
+            
+            # Skip if either doesn't exist after merge
+            if actual_pred not in by_wbs or actual_succ not in by_wbs:
+                continue
+                
+            # Skip hierarchy edges (ancestor -> descendant)
+            if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
+                continue
+                
+            # Convert summary tasks to their representative leaves
+            if actual_pred in summary_set:
+                actual_pred = last_leaf(actual_pred)
+            if actual_succ in summary_set:
+                actual_succ = first_leaf(actual_succ)
+                
+            if actual_pred != actual_succ:
+                normalized_edges.append((actual_pred, actual_succ))
+
+        # Calculate project start date
+        if fixed_start_iso:
+            project_start = datetime.datetime.fromisoformat(fixed_start_iso.replace('Z', '+00:00'))
+        elif start_date_mode == "next_monday":
+            today = datetime.date.today()
+            days_ahead = 0 - today.weekday()  # Monday is 0
+            if days_ahead <= 0:
+                days_ahead += 7
+            project_start = datetime.datetime.combine(today + datetime.timedelta(days=days_ahead), datetime.time(9, 0))
+        else:
+            project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+
+        # Calculate task schedules
+        uid_to_sched = {}
+        for r in rows:
+            start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+            duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+            end_date = start_date + datetime.timedelta(hours=duration_hours)
+            
+            uid_to_sched[r["UID"]] = {
+                "Start": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
+                "Finish": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+                "PlannedHours": r["PlannedHours"],
+                "DurationHours": duration_hours
+            }
+
+        # Create resource list
+        all_roles = set()
+        for r in rows:
+            all_roles.update(r["RoleList"])
+        if allow_unassigned:
+            all_roles.add("Unassigned")
+        
+        resources = []
+        res_name_to_uid = {}
+        for i, role in enumerate(sorted(all_roles), 1):
+            resources.append({"UID": i, "Name": role})
+            res_name_to_uid[role] = i
+
+        # Map prealloc from WBS -> UID (after UIDs exist)
+        prealloc_by_task_uid: Dict[int, Dict[str, float]] = {}
+        if prealloc_by_parent_wbs:
+            wbs_to_uid = {r["WBS"]: r["UID"] for r in rows if r["WBS"]}
+            for wbs, role_hours in prealloc_by_parent_wbs.items():
+                uid = wbs_to_uid.get(wbs)
+                if uid:
+                    prealloc_by_task_uid[uid] = role_hours
+
+        # Create assignments
+        assignments = []
+        assign_uid = 1
+        for r in rows:
+            if r["WBS"] in summary_set:
+                continue
+
+            task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
+            if task_hours <= 0.0001:
+                continue
+
+            # Duration basis for Units
+            task_dur_h = uid_to_sched[r["UID"]]["DurationHours"] if uid_to_sched[r["UID"]]["DurationHours"] > 0 else task_hours
+            if uid_to_sched[r["UID"]]["DurationHours"] <= 0.0001 and task_hours > 0:
+                uid_to_sched[r["UID"]]["DurationHours"] = task_hours
+
+            # --- Use precomputed role->hours if merged
+            alloc = prealloc_by_task_uid.get(r["UID"])
+            if alloc:
+                for role, work_h in alloc.items():
+                    res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
+                    units = (work_h / task_dur_h) if task_dur_h > 0 else 1.0
+                    units = max(0.05, min(units, 2.0))
+                    assignments.append({
+                        "UID": assign_uid,
+                        "TaskUID": r["UID"],
+                        "ResourceUID": res_uid,
+                        "Start": uid_to_sched[r["UID"]]["Start"],
+                        "Finish": uid_to_sched[r["UID"]]["Finish"],
+                        "Units": units,
+                        "WorkHours": work_h
+                    })
+                    assign_uid += 1
+                continue  # done with this task
+
+            # else: fall back to existing split-by-role behavior
+            role_list = r["RoleList"]
+            if not role_list:
+                role_list = ["Unassigned"]
+                
+            if roles_split_rule == "even":
+                hours_per_role = task_hours / len(role_list)
+                for role in role_list:
+                    res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
+                    units = (hours_per_role / task_dur_h) if task_dur_h > 0 else 1.0
+                    units = max(0.05, min(units, 2.0))
+                    assignments.append({
+                        "UID": assign_uid,
+                        "TaskUID": r["UID"],
+                        "ResourceUID": res_uid,
+                        "Start": uid_to_sched[r["UID"]]["Start"],
+                        "Finish": uid_to_sched[r["UID"]]["Finish"],
+                        "Units": units,
+                        "WorkHours": hours_per_role
+                    })
+                    assign_uid += 1
+            elif roles_split_rule == "weighted" and role_weights:
+                total_weight = sum(role_weights.get(role, 1.0) for role in role_list)
+                for role in role_list:
+                    weight = role_weights.get(role, 1.0)
+                    hours_for_role = task_hours * (weight / total_weight)
+                    res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
+                    units = (hours_for_role / task_dur_h) if task_dur_h > 0 else 1.0
+                    units = max(0.05, min(units, 2.0))
+                    assignments.append({
+                        "UID": assign_uid,
+                        "TaskUID": r["UID"],
+                        "ResourceUID": res_uid,
+                        "Start": uid_to_sched[r["UID"]]["Start"],
+                        "Finish": uid_to_sched[r["UID"]]["Finish"],
+                        "Units": units,
+                        "WorkHours": hours_for_role
+                    })
+                    assign_uid += 1
+
+        # Generate XML
+        project = Element("Project", xmlns="http://schemas.microsoft.com/project")
+        
+        # Project info
+        SubElement(project, "Name").text = f"Project from {sheet_name}"
+        SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # Calendars
+        calendars = SubElement(project, "Calendars")
+        calendar = SubElement(calendars, "Calendar")
+        SubElement(calendar, "UID").text = "1"
+        SubElement(calendar, "Name").text = "Standard"
+        SubElement(calendar, "IsBaseCalendar").text = "1"
+        
+        # Working days
+        weekdays = SubElement(calendar, "WeekDays")
+        for day_num in range(1, 8):  # 1=Sunday, 2=Monday, etc.
+            weekday = SubElement(weekdays, "WeekDay")
+            SubElement(weekday, "DayType").text = str(day_num)
+            if day_num in [1, 7]:  # Sunday, Saturday
+                SubElement(weekday, "DayWorking").text = "0"
+            else:
+                SubElement(weekday, "DayWorking").text = "1"
+                working_times = SubElement(weekday, "WorkingTimes")
+                for start_time, end_time in calendar_blocks:
+                    working_time = SubElement(working_times, "WorkingTime")
+                    SubElement(working_time, "FromTime").text = start_time
+                    SubElement(working_time, "ToTime").text = end_time
+
+        # Resources
+        resources_elem = SubElement(project, "Resources")
+        for res in resources:
+            resource = SubElement(resources_elem, "Resource")
+            SubElement(resource, "UID").text = str(res["UID"])
+            SubElement(resource, "Name").text = res["Name"]
+            SubElement(resource, "Type").text = "1"  # Work resource
+
+        # Tasks
+        tasks_elem = SubElement(project, "Tasks")
+        for r in rows:
+            task = SubElement(tasks_elem, "Task")
+            SubElement(task, "UID").text = str(r["UID"])
+            SubElement(task, "Name").text = r["Name"]
+            SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
+            SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
+            SubElement(task, "Work").text = f"PT{int(uid_to_sched[r['UID']]['PlannedHours'] * 60)}M"
+            SubElement(task, "Duration").text = f"PT{int(uid_to_sched[r['UID']]['DurationHours'] * 60)}M"
+            
+            # Outline level (based on WBS hierarchy depth)
+            outline_level = r["WBS"].count(".") if "." in r["WBS"] else 0
+            SubElement(task, "OutlineLevel").text = str(outline_level)
+            
+            # Summary task flag
+            SubElement(task, "Summary").text = "1" if r["WBS"] in summary_set else "0"
+
+        # Assignments
+        assignments_elem = SubElement(project, "Assignments")
+        for assign in assignments:
+            assignment = SubElement(assignments_elem, "Assignment")
+            SubElement(assignment, "UID").text = str(assign["UID"])
+            SubElement(assignment, "TaskUID").text = str(assign["TaskUID"])
+            SubElement(assignment, "ResourceUID").text = str(assign["ResourceUID"])
+            SubElement(assignment, "Start").text = assign["Start"]
+            SubElement(assignment, "Finish").text = assign["Finish"]
+            SubElement(assignment, "Units").text = str(assign["Units"])
+            SubElement(assignment, "Work").text = f"PT{int(assign['WorkHours'] * 60)}M"
+
+        # Write XML file
+        xml_string = tostring(project, encoding='unicode')
+        dom = minidom.parseString(xml_string)
+        pretty_xml = dom.toprettyxml(indent="  ")
+        
+        with open(output_xml, 'w', encoding='utf-8') as f:
+            f.write(pretty_xml)
+
+        # Return statistics
+        return {
+            "tasks_total": len(rows),
+            "tasks_merged": len(removed_child_wbs),
+            "resources_total": len(resources),
+            "assignments_total": len(assignments),
+            "dependencies_total": len(normalized_edges)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"MSPDI conversion failed: {str(e)}")
 
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
