@@ -2851,6 +2851,11 @@ def api_retainer_detect(p: dict):
     rfp_text = str(p.get("rfp_text", "") or "")
     deliverable_codes = [str(x) for x in (p.get("deliverable_codes", []) or [])]
     
+    # Fallback: use codes from the last built A scenario if none provided
+    if not deliverable_codes:
+        scen = _current_scenarios().get("A") or {}
+        deliverable_codes = [str(it.get("deliverable_code")) for it in (scen.get("items") or []) if it.get("deliverable_code")]
+        
     if not deliverable_codes:
         return {"retainers": []}
     
@@ -3545,6 +3550,10 @@ def convert_excel_to_mspdi(
                 
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
+                
+                # Pin leaf tasks to prevent drift - "Start No Earlier Than" constraint
+                SubElement(task, "ConstraintType").text = "4"  # Start No Earlier Than
+                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
             
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
