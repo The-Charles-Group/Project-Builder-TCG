@@ -3211,6 +3211,49 @@ def convert_excel_to_mspdi(
         else:
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
 
+        # Business calendar helpers (using same Mon-Fri, 8-12 & 13-17 schedule)
+        from datetime import time, date
+        
+        BUS_BLOCKS = [(time(8,0), time(12,0)), (time(13,0), time(17,0))]
+
+        def is_business_day(d):
+            return d.weekday() < 5  # Mon–Fri
+
+        def business_minutes_in_range(day: date, start_t: time, end_t: time) -> int:
+            # minutes worked on a single day between start_t and end_t
+            if not is_business_day(day): 
+                return 0
+            start_t = max(start_t, BUS_BLOCKS[0][0])
+            end_t   = min(end_t,   BUS_BLOCKS[-1][1])
+            if end_t <= start_t:
+                return 0
+            total = 0
+            for a,b in BUS_BLOCKS:
+                s = max(start_t, a)
+                e = min(end_t,   b)
+                if e > s:
+                    total += int((datetime.datetime.combine(day,e) - datetime.datetime.combine(day,s)).total_seconds() // 60)
+            return total
+
+        def business_minutes_between(start_dt: datetime.datetime, end_dt: datetime.datetime) -> int:
+            if end_dt <= start_dt:
+                return 0
+            cur = start_dt.date()
+            end = end_dt.date()
+            minutes = 0
+            # first day (partial)
+            minutes += business_minutes_in_range(cur, start_dt.time(), time(17,0))
+            # middle full days
+            d = cur + datetime.timedelta(days=1)
+            while d < end:
+                if is_business_day(d):
+                    minutes += 480  # 8h
+                d += datetime.timedelta(days=1)
+            # last day (partial)
+            if end > cur:  # only if we have a last day
+                minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
+            return minutes
+
         # Calculate task schedules
         uid_to_sched = {}
         for r in rows:
@@ -3219,11 +3262,61 @@ def convert_excel_to_mspdi(
             end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
-                "Start": start_date.strftime("%Y-%m-%dT%H:%M:%S"),
-                "Finish": end_date.strftime("%Y-%m-%dT%H:%M:%S"),
+                "Start": start_date,
+                "Finish": end_date,
                 "PlannedHours": r["PlannedHours"],
                 "DurationHours": duration_hours
             }
+
+        # Build UID-based children mapping for rollup
+        children_by_parent_uid = {}
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+        for wbs, child_wbs_list in children_by_parent.items():
+            parent_uid = wbs_to_uid.get(wbs)
+            if parent_uid:
+                children_by_parent_uid[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
+
+        # Summary UID set 
+        summary_uid_set = set(children_by_parent_uid.keys())
+
+        # 1) Roll up start/finish for every summary from its direct/indirect leaves
+        def rollup_summary(uid):
+            kids = children_by_parent_uid.get(uid, [])
+            if not kids:
+                return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
+            starts, finishes = [], []
+            for k in kids:
+                if k in uid_to_sched:
+                    s,f = rollup_summary(k) if k in summary_uid_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
+                    starts.append(s)
+                    finishes.append(f)
+            if starts and finishes:
+                uid_to_sched[uid]["Start"]  = min(starts)
+                uid_to_sched[uid]["Finish"] = max(finishes)
+            return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
+
+        # Call rollup on every summary
+        for uid in list(summary_uid_set):
+            rollup_summary(uid)
+
+        # Also roll up the very top project row if you have one (UID of the first row)
+        if uid_to_sched:
+            top_uid = min(uid_to_sched.keys())
+            if top_uid in summary_uid_set:
+                rollup_summary(top_uid)
+
+        # 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)
+        for uid, sched in uid_to_sched.items():
+            span_min = business_minutes_between(sched["Start"], sched["Finish"])
+            # cache as hours for later; the XML writer will multiply by 60 again
+            sched["DurationHours"] = max(sched.get("DurationHours", 0), span_min / 60.0)
+            
+        # Convert datetime objects back to strings for XML output
+        for uid, sched in uid_to_sched.items():
+            if isinstance(sched["Start"], datetime.datetime):
+                sched["Start"] = sched["Start"].strftime("%Y-%m-%dT%H:%M:%S")
+            if isinstance(sched["Finish"], datetime.datetime):
+                sched["Finish"] = sched["Finish"].strftime("%Y-%m-%dT%H:%M:%S")
 
         # Create resource list (filter out nan/empty roles)
         all_roles = set()
@@ -3380,12 +3473,12 @@ def convert_excel_to_mspdi(
             SubElement(task, "Name").text = r["Name"]
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
-            # Safe int conversion for time values
+            # Safe int conversion for time values using rolled-up duration
             planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
-            duration_minutes = max(0, int(uid_to_sched[r['UID']]['DurationHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['DurationHours']) else 480  # Default 8 hours
+            dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
             
             SubElement(task, "Work").text = f"PT{planned_minutes}M"
-            SubElement(task, "Duration").text = f"PT{duration_minutes}M"
+            SubElement(task, "Duration").text = f"PT{dur_minutes}M"
             
             # Outline level (based on WBS hierarchy depth, set project summary to 1)
             outline_level = r["WBS"].count(".") if "." in r["WBS"] else 1  # Project summary gets level 1
