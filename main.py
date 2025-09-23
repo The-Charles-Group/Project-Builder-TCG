@@ -2970,11 +2970,25 @@ def api_reorder_timeline(p: ReorderPayload):
         DB.load()
 
     letter = (p.scenario_letter or "A").upper()
+    scen = _current_scenarios().get(letter)
+    if not scen:
+        raise HTTPException(400, f"Scenario {letter} not built")
+
+    # Get current items and create mapping by deliverable code
+    current_items = list(scen.get("items") or [])
+    by_code = {str(it.get("deliverable_code") or it.get("code")): it for it in current_items}
+    want = [str(c) for c in p.deliverable_codes]
+
     # Build new schedules in the requested order, sequentially
-    items: list[dict] = []
+    reordered_items: list[dict] = []
     cursor_date = None  # None -> use project_start for first
 
-    for code in p.deliverable_codes:
+    for code in want:
+        # Get existing item for metadata
+        existing_item = by_code.get(code)
+        if not existing_item:
+            continue
+
         # included task groups (from client), else derive all TGs present for that deliverable
         included = (p.included_map or {}).get(code)
         if not included:
@@ -2989,7 +3003,8 @@ def api_reorder_timeline(p: ReorderPayload):
         sched = DB.build_schedule(
             deliverable_code=code,
             included_task_groups=included,
-            complexity=p.complexity, tier=p.tier,
+            complexity=p.complexity or existing_item.get("complexity"), 
+            tier=p.tier or existing_item.get("tier"),
             use_slack=p.use_slack,
             slack_after_internal=p.slack_after_internal,
             slack_after_client=p.slack_after_client,
@@ -2998,7 +3013,10 @@ def api_reorder_timeline(p: ReorderPayload):
             scenario_letter=letter
         )
 
-        items.append({"deliverable_code": code, "schedule": sched})
+        # Update existing item with new schedule
+        updated_item = existing_item.copy()
+        updated_item["schedule"] = sched
+        reordered_items.append(updated_item)
 
         # advance cursor to the day after this deliverable's last end date
         if sched:
@@ -3006,8 +3024,18 @@ def api_reorder_timeline(p: ReorderPayload):
             y, m, d = map(int, last_end.split("-"))
             cursor_date = datetime.date(y, m, d) + datetime.timedelta(days=1)
 
-    # Return only what's needed; the front-end merges schedules back into its scenario
-    return {"items": items}
+    # Update scenario with new order and persist
+    scen["items"] = reordered_items
+    if reordered_items:
+        scen["timeline"] = {
+            "start": reordered_items[0]["schedule"][0]["start_date"] if reordered_items[0].get("schedule") else None,
+            "end": reordered_items[-1]["schedule"][-1]["end_date"] if reordered_items[-1].get("schedule") else None,
+        }
+    _CURRENT_SCENARIOS[letter] = scen  # persist
+
+    # Return items for frontend and full scenario for persistence
+    return {"items": [{"deliverable_code": d["deliverable_code"], "schedule": d["schedule"]} for d in reordered_items],
+            "scenario": scen}
 
 
 # ---------- MSPDI Export Function ----------
@@ -3461,6 +3489,7 @@ def convert_excel_to_mspdi(
         SubElement(project, "MinutesPerDay").text = "480"
         SubElement(project, "MinutesPerWeek").text = "2400"
         SubElement(project, "DaysPerMonth").text = "20"
+        SubElement(project, "DurationFormat").text = "7"
         
         # Calendars
         calendars = SubElement(project, "Calendars")
@@ -3517,8 +3546,8 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
             
-            # Outline level (based on WBS hierarchy depth, set project summary to 1)
-            outline_level = r["WBS"].count(".") if "." in r["WBS"] else 1  # Project summary gets level 1
+            # Outline level (based on WBS hierarchy depth, count('.') + 1)
+            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
 
         # Assignments

@@ -1,0 +1,84 @@
+Surgical fixes (copy/paste ready)
+A) Fix Workfront indentation (WBS / OutlineNumber / OutlineLevel)
+
+What to change: in your MSPDI writer (v2.6), when you emit each <Task>, set WBS metadata and compute outline level as count('.') + 1. This mirrors the v2.5 behavior.
+
+# inside convert_excel_to_mspdi(...) when building each <Task>
+level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
+addt("WBS", r["WBS"])
+addt("OutlineNumber", r["WBS"])
+addt("OutlineLevel", level)
+
+
+Why: v2.6 currently computes level incorrectly and omits WBS/OutlineNumber; v2.5 did this right and Workfront indented correctly.
+
+B) Make duration display as days (not hours)
+
+Ensure these project header fields are written (same as v2.5). If any are missing in your current v2.6 writer, add them:
+
+add("MinutesPerDay","480")
+add("MinutesPerWeek","2400")
+add("DaysPerMonth","20")
+add("DurationFormat","7")
+
+
+These are present in the working header and are required for day‑based display and calculations on import.
+
+Note: Workfront still calculates and may show hours in some list views (it multiplies days × 8). With the header above, your planned dates will be interpreted on a 8‑hours‑per‑day calendar and any “Duration (days)” view/field in Workfront will align with Step‑4 (your Step‑4 durations are already in days).
+
+C) Persist Step‑4 resequencing so dates move
+
+Replace your v2.6 /api/reorder_timeline with the persisting version from v2.5 (or add the same persistence lines). The key is to update the scenario in memory and return the full scenario so the UI state and exporter stay in sync. Minimal diff:
+
+@app.post("/api/resequence_timeline")
+def api_resequence_timeline(p: ResequencePayload):
+    letter = (p.scenario_letter or "A").upper()
+    scen = _current_scenarios().get(letter)
+    if not scen:
+        raise HTTPException(400, f"Scenario {letter} not built")
+
+    items = list(scen.get("items") or [])
+    by_code = {str(it.get("deliverable_code") or it.get("code")): it for it in items}
+    want = [str(c) for c in p.ordered_deliverable_codes]
+
+    ordered = [by_code[c] for c in want]
+    scen["items"] = ordered
+    scen["timeline"] = {
+        "start": ordered[0]["schedule"][0]["start_date"],
+        "end":   ordered[-1]["schedule"][-1]["end_date"],
+    }
+    _CURRENT_SCENARIOS[letter] = scen  # <-- persist
+
+    return {"items":[{"deliverable_code": d["deliverable_code"], "schedule": d["schedule"]} for d in ordered],
+            "scenario": scen}
+
+
+This is the exact persistence logic v2.5 uses and is why re‑ordering there repaints dates and exports correctly.
+
+Also keep your “rebuild sequential schedule” route (/api/reorder_timeline) if you like, but after computing its items, write them back into _CURRENT_SCENARIOS[letter] the same way. Your current v2.6 version returns items but doesn’t persist them.
+
+D) Ensure predecessors appear
+
+Keep the Excel contract unchanged — the converter expects a Dependencies column with WBS IDs; it normalizes to leaf‑to‑leaf FS and drops summary links safely.
+
+Verify the writer still emits <PredecessorLink>. (The working writer does.) If you removed it, restore the same logic (normalize summary→leaf, break cycles) before writing the <PredecessorLink> blocks. The converter already writes dependency audits (Dependency_Audit.csv) when enabled; keep that on while testing.
+
+E) Pin leaf tasks to their deliverable’s Step‑4 start (optional but recommended)
+
+This prevents Workfront from drifting leaves earlier than the deliverable window. The v2.5 writer sets ConstraintType=4 (“Start No Earlier Than”) on leaves and calculates the date from each deliverable’s Start_Offset_Days. Copy that block as is; it uses the deliverable’s level‑2 WBS to find the correct start.
+
+F) Step‑2 “Delete” causing Step‑3 retainers to vanish
+
+Your retainer detector (/api/retainer_detect) looks at the codes you pass in and returns suggestions per those codes. Make sure your Step‑2 “Apply Selection” forwards the post‑reconcile set to Step‑3. The server side is already set up to accept deliverable_codes and maps them to deliverable names before classifying retainer opportunities.
+
+If you want to bullet‑proof the server too, you can let /api/retainer_detect fall back to the last built scenarios’ codes when deliverable_codes is empty:
+
+codes = [str(x) for x in (p.get("deliverable_codes") or [])]
+if not codes:
+    # fallback: use codes from the last built A scenario
+    scen = _current_scenarios().get("A") or {}
+    codes = [str(it.get("deliverable_code")) for it in (scen.get("items") or []) if it.get("deliverable_code")]
+
+One more alignment: export path that the UI calls
+
+When the UI calls /api/export_xml, you already create the workbook → call convert_excel_to_mspdi(...). Keep using that endpoint so the same code path is exercised every time. (It’s the one that writes the XML with the same converter and returns the XML file to the browser.)
