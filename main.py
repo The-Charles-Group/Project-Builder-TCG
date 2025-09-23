@@ -3595,6 +3595,44 @@ def convert_excel_to_mspdi(
                         SubElement(pred_link, "CrossProject").text = "0"
                         break
 
+        # Compute project summary start/finish from children (no more hardcoded dates)
+        if tasks_elem is not None:
+            all_task_starts = []
+            all_task_finishes = []
+            project_task_elem = None
+            
+            for task_elem in tasks_elem.findall("Task"):
+                uid_elem = task_elem.find("UID")
+                start_elem = task_elem.find("Start")
+                finish_elem = task_elem.find("Finish")
+                
+                if uid_elem is not None and start_elem is not None and finish_elem is not None:
+                    if uid_elem.text == "1":  # Project summary task
+                        project_task_elem = task_elem
+                    else:
+                        # Collect all non-project task dates
+                        all_task_starts.append(start_elem.text)
+                        all_task_finishes.append(finish_elem.text)
+            
+            # Set project summary dates from children min/max
+            if project_task_elem is not None and all_task_starts and all_task_finishes:
+                earliest_start = min(all_task_starts)
+                latest_finish = max(all_task_finishes)
+                
+                # Update project summary start/finish
+                proj_start_elem = project_task_elem.find("Start")
+                proj_finish_elem = project_task_elem.find("Finish")
+                
+                if proj_start_elem is not None:
+                    proj_start_elem.text = earliest_start
+                if proj_finish_elem is not None:
+                    proj_finish_elem.text = latest_finish
+                
+                # Ensure project summary is marked as summary
+                proj_summary_elem = project_task_elem.find("Summary")
+                if proj_summary_elem is not None:
+                    proj_summary_elem.text = "1"
+
         # Write XML file
         xml_string = tostring(project, encoding='unicode')
         dom = minidom.parseString(xml_string)
