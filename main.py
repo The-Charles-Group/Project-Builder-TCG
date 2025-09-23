@@ -3579,20 +3579,17 @@ def convert_excel_to_mspdi(
             pred_uid = wbs_to_uid.get(pred_wbs)
             succ_uid = wbs_to_uid.get(succ_wbs)
             if pred_uid and succ_uid:
-                # Find the successor task element and add PredecessorLink
+                # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
                 for task_elem in tasks_elem.findall("Task"):
                     task_uid_elem = task_elem.find("UID")
                     if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
-                        # Create or find PredecessorLinks container
-                        pred_links_elem = task_elem.find("PredecessorLinks")
-                        if pred_links_elem is None:
-                            pred_links_elem = SubElement(task_elem, "PredecessorLinks")
-                        
-                        # Add PredecessorLink
-                        pred_link = SubElement(pred_links_elem, "PredecessorLink")
+                        pred_link = SubElement(task_elem, "PredecessorLink")
                         SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
-                        SubElement(pred_link, "Type").text = "1"  # Finish-to-Start
+                        SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
                         SubElement(pred_link, "CrossProject").text = "0"
+                        # Optional but harmless:
+                        SubElement(pred_link, "LinkLag").text = "0"
+                        SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
                         break
 
         # Compute project summary start/finish from children (no more hardcoded dates)
