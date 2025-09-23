@@ -3208,6 +3208,9 @@ def convert_excel_to_mspdi(
             if days_ahead <= 0:
                 days_ahead += 7
             project_start = datetime.datetime.combine(today + datetime.timedelta(days=days_ahead), datetime.time(9, 0))
+        elif start_date_mode == "fixed":
+            # Use current date with business hours start if no fixed_start_iso provided
+            project_start = datetime.datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
         else:
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
 
