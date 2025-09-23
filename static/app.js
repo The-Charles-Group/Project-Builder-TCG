@@ -292,12 +292,20 @@ function enableTimelineDnD(letter) {
   btn.id = 'tl-save'; btn.textContent = 'Save Order';
   btn.onclick = async () => {
     const ordered = [...body.querySelectorAll('.tl-row')].map(tr => tr.dataset.dcode);
-    const payload = { scenario_letter: letter, deliverable_order: ordered, mode: 'sequential' };
+    const payload = { scenario_letter: letter, deliverable_codes: ordered };
     const res = await fetch('/api/reorder_timeline', {
       method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
     }).then(r => r.json());
-    // Replace scenario in appState and re-render
-    window.appState.scenarios[letter] = res.scenario;
+    // Update the scenario with the new schedules from response
+    if (res.items && window.appState.scenarios[letter]) {
+      res.items.forEach(item => {
+        const existingItem = window.appState.scenarios[letter].items.find(si => 
+          si.deliverable_code === item.deliverable_code);
+        if (existingItem) {
+          existingItem.schedule = item.schedule;
+        }
+      });
+    }
     renderTimeline(letter);
   };
   document.getElementById('timeline-controls')?.appendChild(btn);
