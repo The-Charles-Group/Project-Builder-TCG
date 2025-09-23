@@ -2842,6 +2842,38 @@ async def api_summarize_by_file(file: UploadFile = File(...)):
     LAST_UPLOAD_FILENAME = file.filename
     return ai_summarize_rfp_text(text)
 
+@app.post("/api/retainer_detect")
+def api_retainer_detect(p: dict):
+    """Detect retainer opportunities for given deliverables."""
+    if not DB.loaded:
+        DB.load()
+    
+    rfp_text = str(p.get("rfp_text", "") or "")
+    deliverable_codes = [str(x) for x in (p.get("deliverable_codes", []) or [])]
+    
+    if not deliverable_codes:
+        return {"retainers": []}
+    
+    # Get deliverable names from codes
+    db_delivs = DB.deliverables[["Deliverable_Code", "Deliverable"]].copy()
+    db_delivs["Deliverable_Code"] = db_delivs["Deliverable_Code"].astype(str)
+    code_to_name = {r["Deliverable_Code"]: r["Deliverable"] for _, r in db_delivs.iterrows()}
+    
+    retainers = []
+    for code in deliverable_codes:
+        deliv_name = code_to_name.get(code, "")
+        if deliv_name:
+            is_retainer, months = DB.retainer_recommendation(rfp_text, deliv_name)
+            if is_retainer:
+                retainers.append({
+                    "deliverable_code": code,
+                    "deliverable_name": deliv_name,
+                    "suggested_months": int(months or 6),
+                    "confidence": "high" if months and months >= 6 else "medium"
+                })
+    
+    return {"retainers": retainers}
+
 @app.post("/api/reconcile", response_model=ReconcileResult)
 def api_reconcile(p: ReconcilePayload):
     if not DB.loaded:
