@@ -1,0 +1,143 @@
+Below I’ve mapped these to your six questions with code‑level fixes.
+
+1) “Why aren’t deliverables indented in Workfront—why do I have to indent manually?”
+
+Root cause (SoundCloud 11:51 file): That XML lacks <WBS> and <OutlineNumber> on tasks and sets many tasks to OutlineLevel=1. Without WBS/OutlineNumber, Workfront won’t build the tree, so everything imports flat.
+
+Proof the new converter fixes this: The “workfront.xml” you attached contains WBS and OutlineNumber at multiple levels (e.g., 1.7.21, 1.7.21.1, etc.), which Workfront recognizes and indents on import.
+
+Action
+Make sure all exports run through the same converter used by “workfront.xml”, i.e., convert_excel_to_mspdi() (already wired into v2.5’s /api/export flow). It emits WBS/OutlineNumber, resources, assignments, and predecessors.
+
+If a second microservice is being used, confirm it also calls convert_excel_to_mspdi (your app.py does).
+
+2) “Planned duration shows in hours, not days.”
+
+What you’re seeing: Workfront’s Tasks grid shows the Duration column in hours. Even though we set <DurationFormat>7</DurationFormat> (“days”), Workfront stores the field in minutes and renders hours in that grid.
+
+What to fix (and what not to fight)
+
+Keep exporting Start and Finish correctly; that’s the source of truth for actual schedule length.
+
+Expect the grid’s Duration to show hours (e.g., 15 days ≈ 120 hours). This is normal for Workfront imports.
+
+If you must show days: use a Workfront view that includes Planned Duration (days) or add a custom calculated column (Duration/8) in your Workfront view. The XML itself cannot force the UI to render that column in days.
+
+3) “Start and End date still shows Sept 29.”
+
+Root cause: This is the older SoundCloud XML again. That file pins multiple tasks to 9/29 and does not carry the sequential Step‑4 offsets (or dependencies). Note the repeated 9/29 starts across parent tasks.
+
+Fix in the exporter
+Use the new converter call that already exists in v2.5 /api/export, and pass the actual Step‑4 project start:
+
+# v2.5 already does this; just ensure the call is used everywhere
+stats = convert_excel_to_mspdi(
+    input_xlsx=out_path,
+    output_xml=xml_path,
+    sheet_name="Sheet1",
+    start_date_mode="next_monday",  # OR "fixed"
+    # If you want XML to match the Step‑4 start exactly, prefer fixed:
+    # fixed_start_iso=f"{scenario_project_start}T08:00:00",
+    roles_split_rule="even",
+    preserve_predecessors="normalize",
+    allow_unassigned=True,
+    include_audits=False
+)
+
+
+That converter consumes the Start_Offset_Days column (produced by your Excel export) so later deliverables don’t all begin on 9/29. (It also writes normalized predecessors so a chain will propagate.)
+
+4) “No predecessors found in the SoundCloud XML file.”
+
+Root cause: That 11:51 file simply doesn’t include <PredecessorLink> elements—again a symptom of the earlier exporter. (Contrast with the new “workfront.xml”, which includes proper PredecessorLink entries.)
+
+Fix
+Ensure all exports go via convert_excel_to_mspdi(...) with preserve_predecessors="normalize". That routine:
+
+converts WBS‑based “Dependencies” into Finish‑to‑Start links,
+
+rewires risky summary‑level links to safe leaf↔leaf pairs,
+
+guarantees a cycle‑free graph.
+
+5) “Step 4 – when I change the deliverable’s position, the start/end date doesn’t change.”
+
+Root cause: The current Step‑4 endpoint you’re calling only reorders; it doesn’t rebuild dates. The code comment literally says “Do NOT rebuild any schedules”. That’s why dates stay the same after drag‑drop.
+
+Fix (server)
+Use the sequential rebuild endpoint that does exist in your Windows build and is already present in the v2.5 code block:
+
+# Use this endpoint in v2.6
+@app.post("/api/reorder_timeline")
+def api_reorder_timeline(p: ReorderPayload):
+    ...
+    # sequential packing: first item uses project_start,
+    # others start the business day after the previous end
+    # it rebuilds each deliverable schedule in new order
+    ...
+    return {"items": items}
+
+
+It advances the cursor to the business day after the previous item’s end and rebuilds each deliverable’s schedule in order. (See the implementation you already have.)
+
+Fix (client)
+Change Step‑4 “Save Order” to call /api/reorder_timeline (not the old “resequence” endpoint). Then refresh the timeline table with the returned items so the dates update.
+
+6) “Step 2 – when I check ‘Delete (AI detected)’, the retainer options in Step 3 don’t appear.”
+
+Root cause: The retainer detection panel appears to be computed from the post‑reconcile selected list. If you tick “Delete” for everything the AI matched (or the only items that qualify for retainer), the Step‑3 retainer section has nothing to show and disappears. That matches the server contract: /api/reconcile returns db_used_codes (what the server actually used after applying add/delete), and downstream logic should base retainer hints on those codes.
+
+Two quick hardening steps
+
+Ensure the UI computes retainer suggestions from db_used_codes after Apply Selection (not from “unchanged” or the raw AI list).
+
+If you want the retainer panel to always show when any deliverable is selected (even if the AI suggested deletes), gate it on the size of the selected set, not on whether there were “deletes”.
+Server‑side safety: add a dedicated endpoint so the UI can re‑request suggestions anytime:
+
+# add to API (simple example) — return any selected codes that are retainer-eligible
+@app.post("/api/retainer_detect")
+def api_retainer_detect(payload: dict):
+    selected_codes = [str(x) for x in (payload.get("deliverable_codes") or [])]
+    # naive rule: categories/types we consider monthly
+    retainerish = set(["Reporting","Development","Post-Production","Brand Style & Usage Guidelines"])
+    out = []
+    for code in selected_codes:
+        row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==code]
+        if row.empty: 
+            continue
+        cat = str(row["Category"].iloc[0])
+        if cat in retainerish:
+            out.append({"deliverable_code": code, "suggested_months": 12})
+    return {"retainers": out}
+
+
+(You can swap the “category” heuristic for a DB field such as Is_Retainer_Default if you have one.)
+
+One more thing you asked about earlier: the “8 hours on row 1”
+
+In the older XMLs the project root was given a dummy 8‑hour duration, so Workfront shows “8 Hours” for row 1. In a hierarchical plan, the root/summary durations should be derived from children, not hard‑coded.
+
+Exporter tweak (in convert_excel_to_mspdi()): don’t set <Duration>/<Work> on summary tasks (root and deliverable headers). Let Workfront compute those from children.
+
+The function you’re using is here; apply the change where tasks are emitted so summary lines do not write Duration/Work, only Summary=1 and correct WBS.
+
+Drop‑in patch list for Replit
+
+Hand these to the dev building v2.6 Production:
+
+Use one exporter everywhere. Make sure every “Export XML” button calls the same v2.5 converter flow that already calls convert_excel_to_mspdi(...). (That is what writes WBS/OutlineNumber, normalized predecessors, resources, and assignments.)
+
+Pass the real Step‑4 project start to the converter. If you want exact alignment with the Step‑4 table, switch from start_date_mode="next_monday" to start_date_mode="fixed" and inject the selected start date:
+fixed_start_iso=f"{project_start_iso}T08:00:00".
+
+Do not write Duration/Work for summary tasks (root and deliverable headers). Let Workfront compute those from children so “8 hours” disappears at row 1 and deliverable headers show the span of their children. (Modify the task‑emit block inside convert_excel_to_mspdi() accordingly.)
+
+Wire Step‑4 reorder to the rebuild endpoint. Change the client to call /api/reorder_timeline; keep the implementation you already have which rebuilds schedules sequentially and advances the business‑day cursor.
+
+Retainer panel robustness. Drive suggestions from the selected deliverables returned by /api/reconcile (field db_used_codes) and optionally expose /api/retainer_detect as shown so the panel can be recomputed regardless of “Delete” choices.
+
+Why this will align across different RFPs/files
+
+The Excel→MSPDI converter defines a single contract (columns like WBS_ID, Parent_WBS_ID, Planned_Hours, Duration_Days, Dependencies, Start_Offset_Days). As long as the app exports those columns consistently, the XML remains consistent—indentation, predecessors, resources, and hours all import correctly.
+
+Your API already contains the business‑day scheduler and sequential rebuild logic needed to make Step‑4 order reflect in dates. Use that consistently and pass its output into the exporter.

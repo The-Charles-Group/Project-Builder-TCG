@@ -3465,21 +3465,26 @@ def convert_excel_to_mspdi(
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
             SubElement(task, "Name").text = r["Name"]
+            SubElement(task, "WBS").text = r["WBS"]
+            SubElement(task, "OutlineNumber").text = r["WBS"] 
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
-            # Safe int conversion for time values using rolled-up duration
-            planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
-            dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
+            # Summary task flag
+            is_summary = r["WBS"] in summary_set
+            SubElement(task, "Summary").text = "1" if is_summary else "0"
             
-            SubElement(task, "Work").text = f"PT{planned_minutes}M"
-            SubElement(task, "Duration").text = f"PT{dur_minutes}M"
+            # Only set Duration/Work for non-summary tasks (let Workfront compute for summaries)
+            if not is_summary:
+                # Safe int conversion for time values using rolled-up duration
+                planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
+                dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
+                
+                SubElement(task, "Work").text = f"PT{planned_minutes}M"
+                SubElement(task, "Duration").text = f"PT{dur_minutes}M"
             
             # Outline level (based on WBS hierarchy depth, set project summary to 1)
             outline_level = r["WBS"].count(".") if "." in r["WBS"] else 1  # Project summary gets level 1
             SubElement(task, "OutlineLevel").text = str(outline_level)
-            
-            # Summary task flag
-            SubElement(task, "Summary").text = "1" if r["WBS"] in summary_set else "0"
 
         # Assignments
         assignments_elem = SubElement(project, "Assignments")
