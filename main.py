@@ -1480,8 +1480,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     prev_deliv_wbs = ""
 
     for i, d in enumerate(items_sorted, start=1):
-        dcode = str(d["deliverable_code"])
-        scen_col = d["scenario_col"]
+        dcode = str(d.get("deliverable_code", d.get("code", f"DELIV_{i}")))
+        scen_col = d.get("scenario_col", "MED_LOW")
         included = [str(x) for x in d.get("included_task_groups", [])]
 
         # schedule offsets/durations by task_group
@@ -3007,14 +3007,32 @@ def convert_excel_to_mspdi(
         # Convert DataFrame to list of row dictionaries for processing
         rows = []
         for _, row in df.iterrows():
-            # Extract basic task information
+            # Extract basic task information with NaN handling
+            def safe_int(value, default=0):
+                """Convert value to int, handling NaN and None."""
+                if pd.isna(value) or value is None:
+                    return default
+                try:
+                    return int(float(value))
+                except (ValueError, TypeError):
+                    return default
+            
+            def safe_float(value, default=0.0):
+                """Convert value to float, handling NaN and None."""
+                if pd.isna(value) or value is None:
+                    return default
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+                    
             task_row = {
                 "WBS": str(row.get("WBS_ID", "")),
                 "ParentWBS": str(row.get("Parent_WBS_ID", "")),
                 "Name": str(row.get("Task_Name", "")),
-                "PlannedHours": float(row.get("Planned_Hours", 0)),
-                "StartOffset": int(row.get("Start_Offset_Days", 0)),
-                "Duration": int(row.get("Duration_Days", 1)),
+                "PlannedHours": safe_float(row.get("Planned_Hours"), 0),
+                "StartOffset": safe_int(row.get("Start_Offset_Days"), 0),
+                "Duration": safe_int(row.get("Duration_Days"), 1),
                 "Dependencies": str(row.get("Dependencies", "")),
                 "RoleList": [str(row.get("Role", "Unassigned"))] if row.get("Role") else ["Unassigned"],
                 "RoleStr": str(row.get("Role", "Unassigned")),
@@ -3341,8 +3359,12 @@ def convert_excel_to_mspdi(
             SubElement(task, "Name").text = r["Name"]
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
-            SubElement(task, "Work").text = f"PT{int(uid_to_sched[r['UID']]['PlannedHours'] * 60)}M"
-            SubElement(task, "Duration").text = f"PT{int(uid_to_sched[r['UID']]['DurationHours'] * 60)}M"
+            # Safe int conversion for time values
+            planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
+            duration_minutes = max(0, int(uid_to_sched[r['UID']]['DurationHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['DurationHours']) else 480  # Default 8 hours
+            
+            SubElement(task, "Work").text = f"PT{planned_minutes}M"
+            SubElement(task, "Duration").text = f"PT{duration_minutes}M"
             
             # Outline level (based on WBS hierarchy depth)
             outline_level = r["WBS"].count(".") if "." in r["WBS"] else 0
