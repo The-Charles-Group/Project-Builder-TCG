@@ -3250,8 +3250,7 @@ def convert_excel_to_mspdi(
                     minutes += 480  # 8h
                 d += datetime.timedelta(days=1)
             # last day (partial)
-            if end > cur:  # only if we have a last day
-                minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
+            minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
             return minutes
 
         # Calculate task schedules
@@ -3268,42 +3267,37 @@ def convert_excel_to_mspdi(
                 "DurationHours": duration_hours
             }
 
-        # Build UID-based children mapping for rollup
-        children_by_parent_uid = {}
+        # Build UID-based children mapping for rollup (as expected by patch)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
-        for wbs, child_wbs_list in children_by_parent.items():
+        wbs_children = children_by_parent  # Save original WBS-based mapping
+        children_by_parent = {}  # UID-based mapping for rollup
+        for wbs, child_wbs_list in wbs_children.items():
             parent_uid = wbs_to_uid.get(wbs)
             if parent_uid:
-                children_by_parent_uid[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
+                children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
+        summary_set = set(children_by_parent.keys())
 
-        # Summary UID set 
-        summary_uid_set = set(children_by_parent_uid.keys())
-
-        # 1) Roll up start/finish for every summary from its direct/indirect leaves
+        # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
-            kids = children_by_parent_uid.get(uid, [])
+            kids = children_by_parent.get(uid, [])
             if not kids:
                 return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
             starts, finishes = [], []
             for k in kids:
-                if k in uid_to_sched:
-                    s,f = rollup_summary(k) if k in summary_uid_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
-                    starts.append(s)
-                    finishes.append(f)
-            if starts and finishes:
-                uid_to_sched[uid]["Start"]  = min(starts)
-                uid_to_sched[uid]["Finish"] = max(finishes)
+                s,f = rollup_summary(k) if k in summary_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
+                starts.append(s); finishes.append(f)
+            uid_to_sched[uid]["Start"]  = min(starts)
+            uid_to_sched[uid]["Finish"] = max(finishes)
             return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
 
-        # Call rollup on every summary
-        for uid in list(summary_uid_set):
+        # Call it on every summary
+        for uid in list(summary_set):
             rollup_summary(uid)
 
         # Also roll up the very top project row if you have one (UID of the first row)
-        if uid_to_sched:
-            top_uid = min(uid_to_sched.keys())
-            if top_uid in summary_uid_set:
-                rollup_summary(top_uid)
+        top_uid = min(uid_to_sched.keys())
+        if top_uid in summary_set:
+            rollup_summary(top_uid)
 
         # 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)
         for uid, sched in uid_to_sched.items():
