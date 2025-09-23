@@ -3026,16 +3026,25 @@ def convert_excel_to_mspdi(
                 except (ValueError, TypeError):
                     return default
                     
+            # Clean up task name and role
+            task_name = str(row.get("Task_Name", ""))
+            if not task_name or task_name.lower() in ['nan', 'none', '']:
+                task_name = "Unnamed Task"
+                
+            role = str(row.get("Role", "Unassigned"))
+            if not role or role.lower() in ['nan', 'none', '']:
+                role = "Unassigned"
+                
             task_row = {
                 "WBS": str(row.get("WBS_ID", "")),
                 "ParentWBS": str(row.get("Parent_WBS_ID", "")),
-                "Name": str(row.get("Task_Name", "")),
+                "Name": task_name,
                 "PlannedHours": safe_float(row.get("Planned_Hours"), 0),
                 "StartOffset": safe_int(row.get("Start_Offset_Days"), 0),
                 "Duration": safe_int(row.get("Duration_Days"), 1),
                 "Dependencies": str(row.get("Dependencies", "")),
-                "RoleList": [str(row.get("Role", "Unassigned"))] if row.get("Role") else ["Unassigned"],
-                "RoleStr": str(row.get("Role", "Unassigned")),
+                "RoleList": [role],
+                "RoleStr": role,
                 "UID": 0  # Will be assigned later
             }
             rows.append(task_row)
@@ -3216,17 +3225,20 @@ def convert_excel_to_mspdi(
                 "DurationHours": duration_hours
             }
 
-        # Create resource list
+        # Create resource list (filter out nan/empty roles)
         all_roles = set()
         for r in rows:
             all_roles.update(r["RoleList"])
         if allow_unassigned:
             all_roles.add("Unassigned")
         
+        # Remove nan, empty, and None values
+        all_roles = {role for role in all_roles if role and str(role).lower() not in ['nan', 'none', '']}
+        
         resources = []
         res_name_to_uid = {}
         for i, role in enumerate(sorted(all_roles), 1):
-            resources.append({"UID": i, "Name": role})
+            resources.append({"UID": i, "ID": i, "Name": role})
             res_name_to_uid[role] = i
 
         # Map prealloc from WBS -> UID (after UIDs exist)
@@ -3321,6 +3333,13 @@ def convert_excel_to_mspdi(
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
+        # Project header tuning
+        SubElement(project, "DefaultCalendarUID").text = "1"
+        SubElement(project, "ScheduleFromStart").text = "1"
+        SubElement(project, "MinutesPerDay").text = "480"
+        SubElement(project, "MinutesPerWeek").text = "2400"
+        SubElement(project, "DaysPerMonth").text = "20"
+        
         # Calendars
         calendars = SubElement(project, "Calendars")
         calendar = SubElement(calendars, "Calendar")
@@ -3348,14 +3367,16 @@ def convert_excel_to_mspdi(
         for res in resources:
             resource = SubElement(resources_elem, "Resource")
             SubElement(resource, "UID").text = str(res["UID"])
+            SubElement(resource, "ID").text = str(res["ID"])
             SubElement(resource, "Name").text = res["Name"]
             SubElement(resource, "Type").text = "1"  # Work resource
 
         # Tasks
         tasks_elem = SubElement(project, "Tasks")
-        for r in rows:
+        for task_id, r in enumerate(rows, 1):
             task = SubElement(tasks_elem, "Task")
             SubElement(task, "UID").text = str(r["UID"])
+            SubElement(task, "ID").text = str(task_id)
             SubElement(task, "Name").text = r["Name"]
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
@@ -3366,8 +3387,8 @@ def convert_excel_to_mspdi(
             SubElement(task, "Work").text = f"PT{planned_minutes}M"
             SubElement(task, "Duration").text = f"PT{duration_minutes}M"
             
-            # Outline level (based on WBS hierarchy depth)
-            outline_level = r["WBS"].count(".") if "." in r["WBS"] else 0
+            # Outline level (based on WBS hierarchy depth, set project summary to 1)
+            outline_level = r["WBS"].count(".") if "." in r["WBS"] else 1  # Project summary gets level 1
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
             # Summary task flag
