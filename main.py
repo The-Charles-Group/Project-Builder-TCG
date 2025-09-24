@@ -3058,7 +3058,7 @@ def convert_excel_to_mspdi(
     allow_unassigned: bool = True,
     include_audits: bool = True,
     audits_dir: Optional[str] = None,
-    merge_identical_children: bool = True   # <— toggle for multi-resource merge
+    merge_identical_children: bool = False   # <— toggle for multi-resource merge
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
