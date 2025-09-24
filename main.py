@@ -343,6 +343,46 @@ class AgencyDB:
             return "Director"
         return (str(v) or "").strip()
 
+    def _canonical_deliverable_code(self, v: str) -> str:
+        """Map a free-text label to a DB deliverable code"""
+        if not v or self.deliverables is None:
+            return ""
+        
+        v_norm = (str(v) or "").strip().lower()
+        if not v_norm:
+            return ""
+        
+        # Try exact match on deliverable code first
+        exact_code_match = self.deliverables[
+            self.deliverables["Deliverable_Code"].astype(str).str.lower() == v_norm
+        ]
+        if not exact_code_match.empty:
+            return str(exact_code_match["Deliverable_Code"].iloc[0])
+        
+        # Try exact match on deliverable name
+        exact_name_match = self.deliverables[
+            self.deliverables["Deliverable"].astype(str).str.lower() == v_norm
+        ]
+        if not exact_name_match.empty:
+            return str(exact_name_match["Deliverable_Code"].iloc[0])
+        
+        # Try substring match on deliverable name
+        substring_match = self.deliverables[
+            self.deliverables["Deliverable"].astype(str).str.lower().str.contains(v_norm, na=False)
+        ]
+        if not substring_match.empty:
+            return str(substring_match["Deliverable_Code"].iloc[0])
+        
+        # Try substring match on category
+        category_match = self.deliverables[
+            self.deliverables["Category"].astype(str).str.lower().str.contains(v_norm, na=False)
+        ]
+        if not category_match.empty:
+            return str(category_match["Deliverable_Code"].iloc[0])
+        
+        # No match found
+        return ""
+
     def _normalize_role_and_seniority_columns(self):
         """Normalize Role and Seniority columns to ensure consistent data format"""
         if self.all_rows is None or self.all_rows.empty:
@@ -1726,6 +1766,9 @@ def _wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFr
 class SuggestPayload(BaseModel):
     rfp_text: str
 
+class ResolveDeliverablesPayload(BaseModel):
+    inputs: list[str] = []
+
 # --- NEW: Retainer selection model ---
 class RetainerSelection(BaseModel):
     deliverable_code: str
@@ -2152,6 +2195,38 @@ def api_options():
         "pricing_settings": DB.pricing_settings.to_dict(orient="records"),
         "slack_settings": DB.slack_settings.to_dict(orient="records"),
     }
+
+@app.get("/api/search_deliverables")
+def api_search_deliverables(q: str = "", limit: int = 50):
+    if not DB.loaded: DB.load()
+    df = DB.deliverables.copy()
+    q = (q or "").strip().lower()
+    if q:
+        mask = (
+            df["Deliverable"].astype(str).str.lower().str.contains(q)
+            | df["Category"].astype(str).str.lower().str.contains(q)
+            | df["Deliverable_Code"].astype(str).str.lower().str.contains(q)
+        )
+        df = df[mask]
+    rows = df[["Deliverable_Code", "Deliverable", "Category"]].head(limit).to_dict("records")
+    return {"items": rows}
+
+@app.post("/api/resolve_deliverables")
+def api_resolve_deliverables(p: ResolveDeliverablesPayload):
+    if not DB.loaded: DB.load()
+    out = []
+    for s in (p.inputs or []):
+        code = DB._canonical_deliverable_code(s)   # v2.7 helper
+        row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
+        if row.empty: 
+            continue
+        out.append({
+            "input": s,
+            "code": code,
+            "deliverable": str(row["Deliverable"].iloc[0]),
+            "category":  str(row["Category"].iloc[0]),
+        })
+    return {"resolved": out}
 
 @app.post("/api/suggest_by_text")
 def api_suggest(payload: SuggestPayload):
