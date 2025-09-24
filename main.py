@@ -2650,7 +2650,7 @@ def api_export_xml(payload: ExportXMLPayload):
             start_date_mode=payload.start_date_mode,
             fixed_start_iso=payload.fixed_start_iso,
             hours_per_day=payload.hours_per_day,
-            merge_identical_children=payload.merge_identical_children
+            merge_identical_children=False
         )
 
         return FileResponse(
@@ -2702,7 +2702,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             input_xlsx=temp_xlsx_a,
             output_xml=output_xml_a,
             sheet_name="Scenario A",
-            merge_identical_children=payload.merge_identical_children
+            merge_identical_children=False
         )
         
         # Create XML for Scenario B
@@ -2718,7 +2718,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             input_xlsx=temp_xlsx_b,
             output_xml=output_xml_b,
             sheet_name="Scenario B",
-            merge_identical_children=payload.merge_identical_children
+            merge_identical_children=False
         )
         
         # Create zip file with both XMLs
