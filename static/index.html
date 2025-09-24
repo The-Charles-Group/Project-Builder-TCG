@@ -431,9 +431,14 @@
           $('projectName').value = baseName;
         }
 
-        // Show Stage 2
-        $('stage2').style.display = 'block';
-        $('stage2').scrollIntoView({ behavior: 'smooth' });
+        // Show Step 2 (deliverable selection) instead of Stage 2
+        $('step2').style.display = 'block';
+        $('step2').scrollIntoView({ behavior: 'smooth' });
+        
+        // Initialize Step 2 picker with the built scenarios
+        if (window.initStep2DeliverablePicker) {
+          await window.initStep2DeliverablePicker(scenarios);
+        }
         
       } catch (error) {
         alert('Error analyzing file: ' + error.message);
