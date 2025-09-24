@@ -3036,6 +3036,8 @@ def api_reorder_timeline(p: ReorderPayload):
             "start": reordered_items[0]["schedule"][0]["start_date"] if reordered_items[0].get("schedule") else None,
             "end": reordered_items[-1]["schedule"][-1]["end_date"] if reordered_items[-1].get("schedule") else None,
         }
+    scen["user_order"] = want
+    scen["manual_order_locked"] = True
     _CURRENT_SCENARIOS[letter] = scen  # persist
 
     # Return items for frontend and full scenario for persistence
