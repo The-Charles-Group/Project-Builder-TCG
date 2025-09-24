@@ -711,6 +711,12 @@ function renderTimeline(letter) {
   const scen = getScenario(letter);
   const box = document.getElementById('timeline');
   
+  // Safety check - if timeline elements don't exist, skip rendering
+  if (!box) {
+    console.log("Timeline elements not available, skipping render");
+    return;
+  }
+  
   if (!scen) {
     box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
     return;

@@ -785,9 +785,13 @@
       document.getElementById('btn-build-c').disabled = false;
       
       // Call once after /api/build succeeds:
-      // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline
-      document.getElementById('step5').style.display = 'block';
-      showStep4('A');
+      // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
+      const step5 = document.getElementById('step5');
+      if (step5) step5.style.display = 'block';
+      
+      // Only show Step 4 if the timeline elements are ready
+      const step4 = document.getElementById('step4');
+      if (step4) showStep4('A');
     }
     
     // Legacy function name for backward compatibility
@@ -1086,15 +1090,28 @@
       const btnC = document.getElementById('tl-sel-C');
       if (btnC) btnC.style.display = hasC ? '' : 'none';
 
-      // render and scroll
-      renderTimeline(letter);                  // uses the renderer we added earlier
-      s4?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // render and scroll (with safety check for missing timeline elements)
+      try {
+        renderTimeline(letter);                  // uses the renderer we added earlier
+        s4?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (error) {
+        console.log("Timeline rendering skipped:", error.message);
+        // Still scroll to Step 4 even if timeline fails
+        s4?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }
 
     // ——— render the timeline for a scenario ———
     function renderTimeline(letter) {
       const scen = window.getScenario(letter);
       const body = document.getElementById('tl-body');
+      
+      // Safety check - if timeline elements don't exist, skip rendering
+      if (!body) {
+        console.log("Timeline body element not available, skipping render");
+        return;
+      }
+      
       document.querySelectorAll('[data-timeline-sel]').forEach(b =>
         b.classList.toggle('active', b.dataset.timelineSel === letter)
       );
