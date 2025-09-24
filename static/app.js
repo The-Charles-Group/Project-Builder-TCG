@@ -134,7 +134,9 @@ function renderDeliverableList(items){
 
 // Step 2 workflow functions
 function onProceedToStep3() {
-  if (selectedCodes.length === 0) {
+  // Check both old and new selection systems
+  const hasSelection = selectedCodes.length > 0 || (window.appState && window.appState.selectedCodes && window.appState.selectedCodes.length > 0);
+  if (!hasSelection) {
     alert("Please select at least one deliverable before proceeding to pricing.");
     return;
   }
@@ -151,9 +153,20 @@ function onProceedToStep3() {
 }
 
 async function onRunReconcile() {
-  const txt = document.querySelector("#rfpText").value || "";
-  if (!txt.trim()) {
+  // In Step 2 context, we already have RFP analysis - just transition to Stage 2
+  const txt = document.querySelector("#rfpText")?.value || "";
+  const hasAnalysis = window.appState && window.appState.aiSummary;
+  
+  if (!txt.trim() && !hasAnalysis) {
     alert("Please enter RFP text first to get AI suggestions.");
+    return;
+  }
+  
+  // If we're in Step 2, just transition to Stage 2 (reconciliation)
+  if (hasAnalysis) {
+    document.getElementById('step2').style.display = 'none';
+    document.getElementById('stage2').style.display = 'block';
+    document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
     return;
   }
 

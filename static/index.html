@@ -1254,13 +1254,7 @@
       const btnBuildC = document.getElementById('btn-build-c');
       if (btnBuildC) btnBuildC.onclick = buildScenarioC;
       
-      // Handle Step 2 -> Stage 2 transition
-      const btnRunReconcile = document.getElementById('btnRunReconcile');
-      if (btnRunReconcile) btnRunReconcile.onclick = function() {
-        document.getElementById('step2').style.display = 'none';
-        document.getElementById('stage2').style.display = 'block';
-        document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
-      };
+      // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
     });
     document.querySelector('#c-base')?.addEventListener('change', renderUpsellList);
     
