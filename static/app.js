@@ -418,21 +418,37 @@ function renderSearchAndAdd() {
       cb.addEventListener('change', e => {
         const code = e.target.getAttribute('data-code');
         if (e.target.checked) state.selected.add(code); else state.selected.delete(code);
+        // Sync selection immediately
+        window.selectedCodes = Array.from(state.selected);
+        if (window.appState) window.appState.selectedCodes = window.selectedCodes;
       });
     });
   }
 
   // 4) Apply → rebuild scenarios keeping the same scenario settings / pricing / timeline
   async function applySelection() {
-    if (!window.__lastBuildPayload) {
-      alert('No build context yet. Build from Step 1 once, then adjust selection here.');
-      return;
-    }
     const selectedCodes = Array.from(state.selected);
     if (selectedCodes.length === 0) {
       alert('Pick at least one deliverable.');
       return;
     }
+    
+    // If no build context, create a basic payload
+    if (!window.__lastBuildPayload) {
+      window.__lastBuildPayload = {
+        pricing_mode: 'Flat_Blended',
+        blended_rate: 195,
+        rate_band: 'Standard_US',
+        scenario_a: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
+        scenario_b: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
+        use_slack: true,
+        slack_after_internal: 1,
+        slack_after_client: 2,
+        slack_global_pct: 0.05,
+        project_start: null
+      };
+    }
+    
     const payload = { ...window.__lastBuildPayload, selected_deliverable_codes: selectedCodes };
     const r = await fetch('/api/build', {
       method: 'POST',
@@ -454,6 +470,10 @@ function renderSearchAndAdd() {
     // reseed selection from newly built scenarios
     seedFromCurrentScenarios(scenarios);
     renderList(el.search.value);
+    
+    // Sync with global state for other workflows
+    window.selectedCodes = Array.from(state.selected);
+    if (window.appState) window.appState.selectedCodes = window.selectedCodes;
   }
 
   // 5) Hook up UI
@@ -461,8 +481,17 @@ function renderSearchAndAdd() {
   el.btnAll.addEventListener('click', () => {
     (state.options?.deliverables || []).forEach(d => state.selected.add(String(d.Deliverable_Code)));
     renderList(el.search.value);
+    // Sync selection immediately
+    window.selectedCodes = Array.from(state.selected);
+    if (window.appState) window.appState.selectedCodes = window.selectedCodes;
   });
-  el.btnClear.addEventListener('click', () => { state.selected.clear(); renderList(el.search.value); });
+  el.btnClear.addEventListener('click', () => { 
+    state.selected.clear(); 
+    renderList(el.search.value);
+    // Sync selection immediately
+    window.selectedCodes = Array.from(state.selected);
+    if (window.appState) window.appState.selectedCodes = window.selectedCodes;
+  });
   el.btnApply.addEventListener('click', applySelection);
 
   // 6) Public init for Step 2; call this right after Step 2 renders scenarios
