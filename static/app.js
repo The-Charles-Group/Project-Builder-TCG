@@ -152,7 +152,12 @@ async function onProceedToStep3() {
   // Build scenarios for Step 3 if we don't have them already
   if (!SCENARIOS || Object.keys(SCENARIOS).length === 0) {
     try {
-      await buildScenarios();
+      // Use the working buildScenariosAB function from index.html
+      if (window.buildScenariosAB) {
+        await window.buildScenariosAB();
+      } else {
+        console.log("buildScenariosAB not available, scenarios will be built when user clicks Build button in Step 3");
+      }
     } catch (error) {
       console.error("Failed to build scenarios:", error);
       alert("Failed to build scenarios. Please try again.");
@@ -590,68 +595,9 @@ async function onSearchDeliverables() {
   }
 }
 
-// Updated build function to use selectedCodes as specified in blueprint
-async function buildScenarios() {
-  const payload = {
-    selected_deliverable_codes: selectedCodes,
-    scenario_a: {/* from UI */},
-    scenario_b: {/* from UI */},
-    pricing_mode: document.querySelector("#pricingMode").value,
-    blended_rate: Number(document.querySelector("#blendedRate").value || 0) || null,
-    rate_band: document.querySelector("#rateBand").value,
-    use_slack: document.querySelector("#useSlack").checked,
-    slack_after_internal: Number(document.querySelector("#slackInternal").value || 0),
-    slack_after_client: Number(document.querySelector("#slackClient").value || 0),
-    slack_global_pct: Number(document.querySelector("#slackGlobal").value || 0),
-    project_start: document.querySelector("#projectStart").value || null,
-    retainers: /* if you're using v2.7 retainers */[]
-  };
-  
-  // Get scenario specs from UI
-  const useTemplates = document.querySelector("#useTemplates").checked;
-  if(useTemplates){
-    payload.scenario_a = {mode:"template", scenario_key: document.querySelector("#scenarioA").value};
-    payload.scenario_b = {mode:"template", scenario_key: document.querySelector("#scenarioB").value};
-  } else {
-    payload.scenario_a = {mode:"bundle", bundle: document.querySelector("#bundleA").value};
-    payload.scenario_b = {mode:"bundle", bundle: document.querySelector("#bundleB").value};
-  }
-  
-  // Store payload for Step 2 picker
-  window.__lastBuildPayload = payload;
-  
-  const res = await fetch("/api/build", { 
-    method: "POST", 
-    body: JSON.stringify(payload), 
-    headers: { "Content-Type": "application/json" }
-  });
-  const scenarios = await res.json();
-  
-  // proceed to steps 3/4 with scenarios.A / scenarios.B
-  SCENARIOS = scenarios;
-  renderScenarios(scenarios);
-  
-  // Store scenarios globally for timeline and export
-  window.appState = window.appState || {};
-  window.appState.scenarios = scenarios;
-  
-  // Ensure SCENARIOS is also available on window for Step 3 validation consistency
-  window.SCENARIOS = SCENARIOS = scenarios;
-  
-  // Initialize Step 2 picker
-  if (window.initStep2DeliverablePicker) {
-    await window.initStep2DeliverablePicker(scenarios);
-  }
-  
-  // Show timeline step and render timeline for Scenario A
-  document.querySelector("#step4").style.display = "block";
-  selectTimeline('A');
-}
+// Removed broken buildScenarios function - using buildScenariosAB from index.html instead
 
-async function onBuild(){
-  if(selectedCodes.length===0){ alert("Select at least one deliverable."); return; }
-  await buildScenarios();
-}
+// onBuild function removed - using buildScenariosAB from index.html instead
 
 function renderScenarios(data){
   const box = document.querySelector("#scenarios");

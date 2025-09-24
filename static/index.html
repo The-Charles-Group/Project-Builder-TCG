@@ -744,6 +744,8 @@
     
     // Step 3 — make the Build button work (as specified)
     async function buildScenariosAB() {
+      // Make this function globally accessible
+      window.buildScenariosAB = buildScenariosAB;
       // Check all possible sources of selected deliverables
       const selectedFromAppState = appState.selectedCodes || [];
       const selectedFromGlobal = window.selectedCodes || [];
