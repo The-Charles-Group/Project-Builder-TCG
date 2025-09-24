@@ -266,6 +266,13 @@ function selectedDeliverables(){
   return selectedCodes;
 }
 
+// Initialize Step 2 UI when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+  if (document.querySelector('#yourSelection')) {
+    renderStep2UI();
+  }
+});
+
 // New Step 2 UI renderer (blueprint wireframe)
 function renderStep2UI() {
   renderYourSelection();

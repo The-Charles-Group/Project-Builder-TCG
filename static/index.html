@@ -760,7 +760,7 @@
     }
     
     // Legacy function name for backward compatibility
-    const buildScenarios = buildScenariosAB;
+    const buildScenariosLegacy = buildScenariosAB;
 
 
     // Legacy functions removed - replaced by Stage 2 workflow
@@ -1222,11 +1222,20 @@
       }
     }
 
-    // Event listeners
-    document.getElementById('btnAnalyze').onclick = analyzeRfp;
-    document.getElementById('apply-btn').onclick = applySelection;
-    document.getElementById('btnBuild').onclick = buildScenariosAB;
-    document.getElementById('btn-build-c').onclick = buildScenarioC;
+    // Event listeners - ensure DOM is loaded first
+    document.addEventListener('DOMContentLoaded', function() {
+      const btnAnalyze = document.getElementById('btnAnalyze');
+      if (btnAnalyze) btnAnalyze.onclick = analyzeRfp;
+      
+      const applyBtn = document.getElementById('apply-btn');
+      if (applyBtn) applyBtn.onclick = applySelection;
+      
+      const btnBuild = document.getElementById('btnBuild');
+      if (btnBuild) btnBuild.onclick = buildScenariosAB;
+      
+      const btnBuildC = document.getElementById('btn-build-c');
+      if (btnBuildC) btnBuildC.onclick = buildScenarioC;
+    });
     document.querySelector('#c-base')?.addEventListener('change', renderUpsellList);
     
     // Hook up your buttons (adjust IDs to your HTML)
@@ -1332,5 +1341,6 @@
     // Initialize
     loadOptions();
   </script>
+  <script src="/static/app.js" defer></script>
 </body>
 </html>
