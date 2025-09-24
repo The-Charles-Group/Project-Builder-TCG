@@ -71,8 +71,9 @@ async function boot() {
   const btnSuggest = document.querySelector("#btnSuggest");
   if (btnSuggest) btnSuggest.onclick = onSuggest;
   
-  const btnBuild = document.querySelector("#btnBuild");
-  if (btnBuild) btnBuild.onclick = onBuild;
+  // Remove double binding - Step 3 uses buildScenariosAB from index.html
+  // const btnBuild = document.querySelector("#btnBuild");
+  // if (btnBuild) btnBuild.onclick = onBuild;
   
   const pricingModeEl = document.querySelector("#pricingMode");
   if (pricingModeEl) pricingModeEl.onchange = onPricingModeChanged;
@@ -625,6 +626,9 @@ async function buildScenarios() {
   // Store scenarios globally for timeline and export
   window.appState = window.appState || {};
   window.appState.scenarios = scenarios;
+  
+  // Ensure SCENARIOS is also available on window for Step 3 validation consistency
+  window.SCENARIOS = SCENARIOS = scenarios;
   
   // Initialize Step 2 picker
   if (window.initStep2DeliverablePicker) {
