@@ -133,12 +133,30 @@ function renderDeliverableList(items){
 }
 
 // Step 2 workflow functions
-function onProceedToStep3() {
-  // Check both old and new selection systems
-  const hasSelection = selectedCodes.length > 0 || (window.appState && window.appState.selectedCodes && window.appState.selectedCodes.length > 0);
-  if (!hasSelection) {
+async function onProceedToStep3() {
+  // Check both old and new selection systems and sync them
+  const step2Selected = window.appState?.selectedCodes || [];
+  const pickerSelected = window.selectedCodes || [];
+  const allSelected = [...new Set([...step2Selected, ...pickerSelected])];
+  
+  if (allSelected.length === 0) {
     alert("Please select at least one deliverable before proceeding to pricing.");
     return;
+  }
+  
+  // Sync the selection state
+  selectedCodes = allSelected;
+  if (window.appState) window.appState.selectedCodes = allSelected;
+  
+  // Build scenarios for Step 3 if we don't have them already
+  if (!SCENARIOS || Object.keys(SCENARIOS).length === 0) {
+    try {
+      await buildScenarios();
+    } catch (error) {
+      console.error("Failed to build scenarios:", error);
+      alert("Failed to build scenarios. Please try again.");
+      return;
+    }
   }
   
   // Hide Step 2 and show Step 3
@@ -153,20 +171,24 @@ function onProceedToStep3() {
 }
 
 async function onRunReconcile() {
-  // In Step 2 context, we already have RFP analysis - just transition to Stage 2
+  // Check if we're in Step 2 with existing analysis or Step 1 needing text input
+  const step2Visible = document.getElementById('step2')?.style.display !== 'none';
   const txt = document.querySelector("#rfpText")?.value || "";
   const hasAnalysis = window.appState && window.appState.aiSummary;
   
-  if (!txt.trim() && !hasAnalysis) {
-    alert("Please enter RFP text first to get AI suggestions.");
-    return;
-  }
+  console.log("onRunReconcile debug:", { step2Visible, hasText: !!txt.trim(), hasAnalysis, appState: window.appState });
   
-  // If we're in Step 2, just transition to Stage 2 (reconciliation)
-  if (hasAnalysis) {
+  // If Step 2 is visible, we already have analysis - just transition to Stage 2
+  if (step2Visible) {
     document.getElementById('step2').style.display = 'none';
     document.getElementById('stage2').style.display = 'block';
     document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
+    return;
+  }
+  
+  // Otherwise we need RFP text first  
+  if (!txt.trim() && !hasAnalysis) {
+    alert("Please enter RFP text first to get AI suggestions.");
     return;
   }
 
