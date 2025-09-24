@@ -1933,8 +1933,15 @@ def _current_scenarios():
 
 # Initialize OpenAI client now that we can import it
 try:
-    openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-except Exception:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if api_key:
+        openai_client = OpenAI(api_key=api_key)
+        print(f"OpenAI client initialized successfully")
+    else:
+        print("No OPENAI_API_KEY found in environment")
+        openai_client = None
+except Exception as e:
+    print(f"Failed to initialize OpenAI client: {e}")
     openai_client = None  # Optional OpenAI integration
 
 # --- Reconciliation Helper Functions ---
