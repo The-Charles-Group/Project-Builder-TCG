@@ -737,6 +737,11 @@ function renderTimeline(letter) {
   box.innerHTML = header + table;
 
   const body = document.getElementById('tl-body');
+  if (!body) {
+    console.log("Timeline body element not found after creation, skipping content render");
+    return;
+  }
+  
   body.innerHTML = (scen.items || []).map(d => {
     const sch = d.schedule || [];
     const start = sch[0]?.start_date ?? '';
@@ -747,12 +752,20 @@ function renderTimeline(letter) {
     </tr>`;
   }).join('');
 
-  enableTimelineDnD(letter);
-  renderTimelineStatus(letter);
+  try {
+    enableTimelineDnD(letter);
+    renderTimelineStatus(letter);
+  } catch (error) {
+    console.log("Timeline DnD/Status rendering failed:", error.message);
+  }
 }
 
 function enableTimelineDnD(letter) {
   const body = document.getElementById('tl-body');
+  if (!body) {
+    console.log("Timeline body not available for DnD setup");
+    return;
+  }
   let dragEl = null;
 
   body.querySelectorAll('.tl-row').forEach(row => {
@@ -843,6 +856,10 @@ function enableTimelineDnD(letter) {
 function renderTimelineStatus(letter) {
   const scen = getScenario(letter);
   const box = document.getElementById('timeline-status');
+  if (!box) {
+    console.log("Timeline status element not available");
+    return;
+  }
   if (!scen) { box.innerHTML = ''; return; }
 
   // Sum days by deliverable
