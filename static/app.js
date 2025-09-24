@@ -718,58 +718,7 @@ function getScenario(letter) {
   return window.appState?.scenarios?.[letter];
 }
 
-function renderTimeline(letter) {
-  const scen = getScenario(letter);
-  const box = document.getElementById('timeline');
-  
-  // Safety check - if timeline elements don't exist, skip rendering
-  if (!box) {
-    console.log("Timeline elements not available, skipping render");
-    return;
-  }
-  
-  if (!scen) {
-    box.innerHTML = '<em>Build scenarios in Step 3 to see a timeline.</em>';
-    return;
-  }
-
-  const header = `<div class="timeline-head">
-    <strong>Scenario ${letter}</strong> · Deliverables: ${(scen.items || []).length}
-  </div>`;
-
-  // Build draggable rows, one per deliverable
-  const table = `<table id="tl-table" class="table-compact">
-    <thead>
-      <tr><th>Deliverable</th><th>Start Date</th><th>End Date</th><th>Total Days</th></tr>
-    </thead>
-    <tbody id="tl-body"></tbody>
-  </table>`;
-
-  box.innerHTML = header + table;
-
-  const body = document.getElementById('tl-body');
-  if (!body) {
-    console.log("Timeline body element not found after creation, skipping content render");
-    return;
-  }
-  
-  body.innerHTML = (scen.items || []).map(d => {
-    const sch = d.schedule || [];
-    const start = sch[0]?.start_date ?? '';
-    const end   = sch[sch.length - 1]?.end_date ?? '';
-    const days  = sch.reduce((n,s)=>n+(s.duration_days||0),0);
-    return `<tr class="tl-row" draggable="true" data-dcode="${d.deliverable_code}">
-      <td>${d.deliverable}</td><td>${start}</td><td>${end}</td><td>${days}</td>
-    </tr>`;
-  }).join('');
-
-  try {
-    enableTimelineDnD(letter);
-    renderTimelineStatus(letter);
-  } catch (error) {
-    console.log("Timeline DnD/Status rendering failed:", error.message);
-  }
-}
+// Timeline rendering function removed - using the one in index.html to avoid conflicts
 
 function enableTimelineDnD(letter) {
   const body = document.getElementById('tl-body');
@@ -893,7 +842,10 @@ function renderTimelineStatus(letter) {
 }
 
 function selectTimeline(letter) {
-  renderTimeline(letter);
+  // Call the timeline rendering function from index.html
+  if (window.renderTimeline) {
+    window.renderTimeline(letter);
+  }
   document.querySelectorAll('[data-timeline-sel]')
     .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
 }

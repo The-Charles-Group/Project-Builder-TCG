@@ -1119,6 +1119,8 @@
 
     // ——— render the timeline for a scenario ———
     function renderTimeline(letter) {
+      // Also make this function available globally
+      window.renderTimeline = renderTimeline;
       const scen = window.getScenario(letter);
       const body = document.getElementById('tl-body');
       
