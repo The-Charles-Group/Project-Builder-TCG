@@ -74,11 +74,11 @@ async function boot() {
   const btnBuild = document.querySelector("#btnBuild");
   if (btnBuild) btnBuild.onclick = onBuild;
   
-  const pricingModeEl = document.querySelector("#pricingMode");
-  if (pricingModeEl) pricingModeEl.onchange = onPricingModeChanged;
+  const pricingMode = document.querySelector("#pricingMode");
+  if (pricingMode) pricingMode.onchange = onPricingModeChanged;
   
-  const useTemplatesEl = document.querySelector("#useTemplates");
-  if (useTemplatesEl) useTemplatesEl.onchange = onScenarioTypeChanged;
+  const useTemplates = document.querySelector("#useTemplates");
+  if (useTemplates) useTemplates.onchange = onScenarioTypeChanged;
   
   const useBundles = document.querySelector("#useBundles");
   if (useBundles) useBundles.onchange = onScenarioTypeChanged;
