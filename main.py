@@ -1869,13 +1869,13 @@ class ExportXMLPayload(BaseModel):
     start_date_mode: str = "next_monday"
     fixed_start_iso: Optional[str] = None
     hours_per_day: float = 8.0
-    merge_identical_children: bool = True
+    merge_identical_children: bool = False
 
 class ExportWorkbookXMLPayload(BaseModel):
     scenario_a: Optional[Dict[str, Any]] = None
     scenario_b: Optional[Dict[str, Any]] = None  
     project_name: Optional[str] = None
-    merge_identical_children: bool = True
+    merge_identical_children: bool = False
 
 class AuditPricingPayload(BaseModel):
     scenario: Dict[str, Any]           # scenario object from /api/build
