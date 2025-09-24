@@ -262,3 +262,90 @@ button:disabled{opacity:.6;cursor:not-allowed}
     max-height: 300px;
   }
 }
+
+/* Step 2 Blueprint Wireframe Styles */
+.left-panel, .middle-panel, .right-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--card);
+  min-height: 300px;
+}
+
+.left-panel h3, .middle-panel h3, .right-panel h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+/* Button styles for Step 2 */
+.remove-btn, .restore-btn, .add-btn {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.remove-btn {
+  background: #b00020;
+  border-color: #b00020;
+  color: white;
+}
+
+.restore-btn {
+  background: var(--accent2);
+  border-color: var(--accent2);
+  color: #08121e;
+}
+
+.add-btn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08121e;
+}
+
+.remove-btn:hover, .restore-btn:hover, .add-btn:hover {
+  opacity: 0.8;
+}
+
+/* Row states */
+.row.selected {
+  background: rgba(106, 163, 255, 0.1);
+  border-color: var(--accent);
+}
+
+.row.danger {
+  background: rgba(176, 0, 32, 0.1);
+  border-color: #b00020;
+}
+
+.already-selected {
+  color: var(--accent2);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* Search box styling */
+#searchBox {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+#searchResults {
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+/* Error styling */
+.error {
+  color: #b00020;
+  font-style: italic;
+  padding: 8px;
+  background: rgba(176, 0, 32, 0.1);
+  border-radius: 4px;
+  margin: 8px 0;
+}

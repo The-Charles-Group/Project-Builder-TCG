@@ -222,14 +222,15 @@ async function onRunReconcile() {
 
 async function onSuggest(){
   // Updated to work with new Step 2 system
-  await onRunReconcile();
-  
-  // Show Step 2 if not already shown
+  // Show Step 2 first
   const step2 = document.querySelector("#step2");
   if (step2) {
     step2.style.display = "block";
     step2.scrollIntoView({ behavior: "smooth" });
   }
+  
+  // Then run AI analysis
+  await onRunReconcile();
 }
 
 // UI behaviors from blueprint
