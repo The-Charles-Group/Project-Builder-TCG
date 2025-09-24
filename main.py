@@ -1425,14 +1425,7 @@ def _band_multiplier(rate_band: str) -> float:
     return float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
 
 def _wbs_order_mode():
-    try:
-        row = DB.ui_options[DB.ui_options["Key"]=="WBS_Order_Mode"]
-        if not row.empty:
-            v = str(row["Value"].iloc[0]).strip().lower()
-            if v in ("ui","timeline"): return v
-    except Exception:
-        pass
-    return "ui"
+    return "timeline"
 
 def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     """
@@ -3077,6 +3070,7 @@ def api_reorder_timeline(p: ReorderPayload):
             "end": reordered_items[-1]["schedule"][-1]["end_date"] if reordered_items[-1].get("schedule") else None,
         }
     scen["user_order"] = want
+    scen["ai_order"] = scen.get("ai_order") or list(want)
     scen["manual_order_locked"] = True
     _CURRENT_SCENARIOS[letter] = scen  # persist
 
