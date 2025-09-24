@@ -160,11 +160,9 @@ async function onProceedToStep3() {
     }
   }
   
-  // Hide Step 2 and show Step 3
-  const step2 = document.querySelector("#step2");
+  // Show Step 3 while keeping Step 2 visible
   const step3 = document.querySelector("#step3");
   
-  if (step2) step2.style.display = "none";
   if (step3) {
     step3.style.display = "block";
     step3.scrollIntoView({ behavior: "smooth" });
@@ -179,9 +177,8 @@ async function onRunReconcile() {
   
   console.log("onRunReconcile debug:", { step2Visible, hasText: !!txt.trim(), hasAnalysis, appState: window.appState });
   
-  // If Step 2 is visible, we already have analysis - just transition to Stage 2
+  // If Step 2 is visible, we already have analysis - just show Stage 2
   if (step2Visible) {
-    document.getElementById('step2').style.display = 'none';
     document.getElementById('stage2').style.display = 'block';
     document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
     return;
