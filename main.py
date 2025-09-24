@@ -1526,6 +1526,16 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         scen_col = d.get("scenario_col", "MED_LOW")
         included = [str(x) for x in d.get("included_task_groups", [])]
 
+        # Get deliverable name - try from scenario first, then lookup from database
+        deliv_label = str(d.get("deliverable", "")).strip()
+        if not deliv_label:
+            # Fallback: lookup deliverable name from database using code
+            row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(dcode)]
+            if not row.empty:
+                deliv_label = str(row["Deliverable"].iloc[0])
+            else:
+                deliv_label = f"Deliverable {dcode}"
+
         # schedule offsets/durations by task_group
         schedule = d.get("schedule", [])
         tg_order = sorted(included, key=lambda tg: order_map.get(tg, 999))
@@ -1559,7 +1569,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         # Build deliverable node
         wbs_deliv = f"1.{i}"
         svc_deliv = DB.service_dept_for_deliverable(dcode, tg_order, scen_col)
-        deliv_label = str(d.get("deliverable",""))
+        # deliv_label already set above with database fallback - don't override it
         deliv_notes = f'{d.get("complexity","")}/{d.get("tier","")}' + (f' | Retainer x{months} months' if months else '')
         total_deliv_duration = sum(int(t["duration_days"]) for t in schedule)  # one-cycle length
         rows.append({
@@ -2410,8 +2420,13 @@ def api_build(payload: BuildPayload):
         for code in payload.selected_deliverable_codes:
             row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
             if row.empty: 
+                print(f"DEBUG Build: No deliverable found for code '{code}'")
                 continue
+            
+            deliverable_name = str(row["Deliverable"].iloc[0])
             cat = str(row["Category"].iloc[0])
+            print(f"DEBUG Build: Code '{code}' -> Name '{deliverable_name}' (Category: {cat})")
+            
             spec_resolved = _resolve_scenario(spec_in, cat)
             months = int(ret_map.get(code, 0))
             out = _scenario_for_deliverable(
@@ -2422,8 +2437,9 @@ def api_build(payload: BuildPayload):
                 retainer_months=months   # NEW
             )
             # Add names for readability
-            out["deliverable"] = str(row["Deliverable"].iloc[0])
+            out["deliverable"] = deliverable_name
             out["category"]    = cat
+            print(f"DEBUG Build: Added to scenario - deliverable field: '{out.get('deliverable', 'MISSING')}')")
             per_deliv.append(out)
 
         # Look up any previously built scenario so we can preserve a user-locked timeline
