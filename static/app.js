@@ -291,20 +291,56 @@ function enableTimelineDnD(letter) {
   const btn = document.createElement('button');
   btn.id = 'tl-save'; btn.textContent = 'Save Order';
   btn.onclick = async () => {
-    const ordered = [...body.querySelectorAll('.tl-row')].map(tr => tr.dataset.dcode);
-    const payload = { scenario_letter: letter, deliverable_codes: ordered };
+    const scenario = getScenario(letter);
+    if (!scenario) return;
+
+    // Get ordered deliverable codes from UI
+    const rows = [...body.querySelectorAll('.tl-row')];
+    const codes = rows.map(tr => tr.dataset.dcode);
+    
+    // Build included_map from current scenario items
+    const includedMap = Object.fromEntries(
+      scenario.items.map(item => [item.deliverable_code, item.included_task_groups ?? []])
+    );
+
+    // Get knobs from current scenario (these are the authoritative values)
+    const knobs = {
+      project_start: scenario.project_start,
+      complexity: scenario.items[0]?.complexity,  // Use first item's complexity as default
+      tier: scenario.items[0]?.tier,  // Use first item's tier as default
+      use_slack: scenario.use_slack,
+      slack_after_internal: scenario.slack_after_internal,
+      slack_after_client: scenario.slack_after_client,
+      slack_global_pct: scenario.slack_global_pct
+    };
+
+    const payload = {
+      scenario_letter: letter,
+      deliverable_codes: codes,
+      included_map: includedMap,
+      project_start: knobs.project_start,
+      complexity: knobs.complexity,
+      tier: knobs.tier,
+      use_slack: knobs.use_slack,
+      slack_after_internal: knobs.slack_after_internal,
+      slack_after_client: knobs.slack_after_client,
+      slack_global_pct: knobs.slack_global_pct
+    };
+
     const res = await fetch('/api/reorder_timeline', {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
     }).then(r => r.json());
-    // Update the scenario with the new schedules from response
+
+    // Replace local items with server-persisted order + dates
     if (res.items && window.appState.scenarios[letter]) {
-      res.items.forEach(item => {
-        const existingItem = window.appState.scenarios[letter].items.find(si => 
-          si.deliverable_code === item.deliverable_code);
-        if (existingItem) {
-          existingItem.schedule = item.schedule;
-        }
-      });
+      window.appState.scenarios[letter] = {
+        ...window.appState.scenarios[letter],
+        items: res.items,
+        user_order: codes,
+        manual_order_locked: true
+      };
     }
     renderTimeline(letter);
   };
