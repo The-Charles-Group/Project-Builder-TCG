@@ -13,64 +13,83 @@
   </header>
 
   <main>
-    <!-- Step 1: Upload RFP -->
-    <section class="card" id="step1">
-      <h2>Step 1 — Upload Your RFP / Brief</h2>
-      
-      <!-- Paste option -->
-      <label for="rfpText">RFP Content</label>
-      <textarea id="rfpText" placeholder="Paste the RFP, agency brief, or request here..."></textarea>
+    <!-- Step 1 – Intake -->
+    <section id="step1" style="padding:16px; max-width:1100px; margin:auto;">
+      <h2>Step 1 — Intake</h2>
 
-      <div style="margin:8px 0; text-align:center; color:var(--muted);">— or —</div>
-
-      <!-- Upload option -->
-      <label for="rfpFile">Upload File</label>
-      <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" />
-      
-      <div class="actions">
-        <button id="btnAnalyze">Analyze with AI</button>
+      <label style="display:block; margin-bottom:8px;">RFP / Brief</label>
+      <textarea id="rfpText" placeholder="Paste RFP text…" style="width:100%; min-height:120px;"></textarea>
+      <div style="margin:8px 0;">
+        <button id="suggestBtn">Suggest deliverables</button>
       </div>
-      <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
+
+      <div style="display:flex; gap:24px; align-items:flex-start;">
+        <!-- Deliverables picker -->
+        <div style="flex:1;">
+          <h3 style="margin:8px 0;">Deliverables (select)</h3>
+          <div style="display:flex; gap:8px; margin-bottom:8px;">
+            <input id="deliverableSearch" placeholder="Search deliverables…" style="flex:1;" />
+            <button id="selectAllBtn" type="button">Select all</button>
+            <button id="clearAllBtn" type="button">Clear</button>
+          </div>
+          <div id="deliverableList" style="border:1px solid #2a2a2a; border-radius:6px; padding:8px; height:260px; overflow:auto;"></div>
+        </div>
+
+        <!-- Scenario & Pricing -->
+        <div style="width:360px;">
+          <h3 style="margin:8px 0;">Scenario Type</h3>
+          <label><input type="radio" name="scMode" value="template" checked /> Use Templates (MED_LOW & MED_HIGH)</label><br/>
+          <div id="templateBlock" style="margin:8px 0 12px 12px;">
+            <div>Scenario A (template): <select id="scenarioASelect"></select></div>
+            <div style="margin-top:6px;">Scenario B (template): <select id="scenarioBSelect"></select></div>
+          </div>
+
+          <label><input type="radio" name="scMode" value="bundle" /> Use Bundles (Express/Good/Better/Best)</label>
+          <div id="bundleBlock" style="margin:8px 0 12px 12px; display:none;">
+            <div>Scenario A (bundle): <select id="bundleASelect"></select></div>
+            <div style="margin-top:6px;">Scenario B (bundle): <select id="bundleBSelect"></select></div>
+          </div>
+
+          <h3 style="margin:12px 0 8px;">Pricing</h3>
+          <div>
+            <label>Mode:
+              <select id="pricingMode">
+                <option value="Flat_Blended">Flat_Blended</option>
+                <option value="Per_Resource">Per_Resource</option>
+              </select>
+            </label>
+          </div>
+          <div style="margin-top:6px;">
+            <label>Blended Rate ($/hr): <input id="blendedRate" type="number" value="195" step="5" /></label>
+          </div>
+          <div style="margin-top:6px;">
+            <label>Rate Band: <select id="rateBand"></select></label>
+          </div>
+
+          <h3 style="margin:12px 0 8px;">Timeline</h3>
+          <label><input id="useSlack" type="checkbox" checked /> Add Slack Between Reviews</label>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:6px;">
+            <label>Slack After Internal (days)<br/><input id="slackI" type="number" value="1" min="0" /></label>
+            <label>Slack After Client (days)<br/><input id="slackC" type="number" value="2" min="0" /></label>
+          </div>
+          <div style="margin-top:6px;">
+            <label>Global Slack % <input id="slackPct" type="number" value="0.05" min="0" max="1" step="0.01"/></label>
+          </div>
+          <div style="margin-top:6px;">
+            <label>Project Start <input id="projectStart" type="date"/></label>
+          </div>
+
+          <div style="margin-top:16px;">
+            <button id="buildBtn" style="width:100%;">Build Scenarios</button>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <!-- Step 2: Deliverable Selection (Blueprint Wireframe) -->
-    <section class="card" id="step2" style="display:none;">
-      <h2>Step 2 — Select & Manage Deliverables</h2>
-      
-      <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-        <!-- Left Panel: Your Selection + Removed Items -->
-        <div class="left-panel">
-          <div id="yourSelection">
-            <h3>Your Selection</h3>
-            <p>No deliverables selected yet.</p>
-          </div>
-          <div id="removedItems" style="margin-top: 20px;">
-            <!-- Removed items will appear here -->
-          </div>
-        </div>
-
-        <!-- Middle Panel: AI Suggestions -->
-        <div class="middle-panel">
-          <h3>AI Suggestions</h3>
-          <div id="aiSuggestions">
-            <p>Run AI analysis to get suggestions.</p>
-          </div>
-        </div>
-
-        <!-- Right Panel: Search & Add -->
-        <div class="right-panel">
-          <div id="searchAndAdd">
-            <h3>Search / Add</h3>
-            <input type="text" id="searchBox" placeholder="Search deliverables..." />
-            <div id="searchResults"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="actions">
-        <button id="btnProceedToStep3">Proceed to Pricing</button>
-        <button id="btnRunReconcile">Get AI Suggestions</button>
-      </div>
+    <!-- Step 2 – Results -->
+    <section id="step2" style="display:none; padding:16px; max-width:1100px; margin:auto;">
+      <h2>Step 2 — Scenarios</h2>
+      <div id="scenariosWrap"></div>
     </section>
 
     <!-- Stage 2: AI Analysis & Reconciliation (Original) -->
@@ -1341,6 +1360,182 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js" defer></script>
+
+<script>
+(function(){
+  const state = {
+    options: { deliverables: [], scenario_templates: [], bundles: [], rate_bands: [] },
+    selected: new Set(),
+  };
+
+  const els = {
+    list: document.getElementById('deliverableList'),
+    search: document.getElementById('deliverableSearch'),
+    selectAll: document.getElementById('selectAllBtn'),
+    clearAll: document.getElementById('clearAllBtn'),
+    suggestBtn: document.getElementById('suggestBtn'),
+    rfp: document.getElementById('rfpText'),
+    pricingMode: document.getElementById('pricingMode'),
+    blendedRate: document.getElementById('blendedRate'),
+    rateBand: document.getElementById('rateBand'),
+    useSlack: document.getElementById('useSlack'),
+    slackI: document.getElementById('slackI'),
+    slackC: document.getElementById('slackC'),
+    slackPct: document.getElementById('slackPct'),
+    projectStart: document.getElementById('projectStart'),
+    buildBtn: document.getElementById('buildBtn'),
+    step1: document.getElementById('step1'),
+    step2: document.getElementById('step2'),
+    scenariosWrap: document.getElementById('scenariosWrap'),
+    scModeRadios: document.querySelectorAll('input[name="scMode"]'),
+    templateBlock: document.getElementById('templateBlock'),
+    bundleBlock: document.getElementById('bundleBlock'),
+    scenarioASelect: document.getElementById('scenarioASelect'),
+    scenarioBSelect: document.getElementById('scenarioBSelect'),
+    bundleASelect: document.getElementById('bundleASelect'),
+    bundleBSelect: document.getElementById('bundleBSelect')
+  };
+
+  function applyScModeVisibility() {
+    const mode = document.querySelector('input[name="scMode"]:checked').value;
+    els.templateBlock.style.display = mode === 'template' ? 'block' : 'none';
+    els.bundleBlock.style.display = mode === 'bundle' ? 'block' : 'none';
+  }
+  [...els.scModeRadios].forEach(r => r.addEventListener('change', applyScModeVisibility));
+
+  function renderDeliverables(filter='') {
+    const q = (filter || '').toLowerCase().trim();
+    const rows = state.options.deliverables.filter(d =>
+      !q || d.Deliverable.toLowerCase().includes(q) || d.Category.toLowerCase().includes(q) || d.Deliverable_Code.toLowerCase().includes(q)
+    );
+    els.list.innerHTML = rows.map(d => `
+      <label style="display:flex; align-items:center; gap:8px; padding:6px 4px;">
+        <input type="checkbox" data-code="${d.Deliverable_Code}" ${state.selected.has(d.Deliverable_Code) ? 'checked' : ''}/>
+        <span>${d.Deliverable}</span>
+        <span style="margin-left:auto; font-size:12px; opacity:0.8;">${d.Category}</span>
+      </label>
+    `).join('') || '<div style="opacity:.7;">No deliverables</div>';
+    // wire events
+    els.list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const code = e.target.getAttribute('data-code');
+        if (e.target.checked) state.selected.add(code); else state.selected.delete(code);
+      });
+    });
+  }
+
+  async function loadOptions() {
+    const res = await fetch('/api/options');
+    const data = await res.json();
+    state.options = data;
+    // deliverables
+    renderDeliverables('');
+    // templates
+    els.scenarioASelect.innerHTML = data.scenario_templates.map(t => `<option value="${t.Scenario_Key}">${t.Scenario_Key}</option>`).join('');
+    els.scenarioBSelect.innerHTML = els.scenarioASelect.innerHTML;
+    // bundles
+    els.bundleASelect.innerHTML = data.bundles.map(b => `<option value="${b}">${b}</option>`).join('');
+    els.bundleBSelect.innerHTML = els.bundleASelect.innerHTML;
+    // rate bands
+    els.rateBand.innerHTML = data.rate_bands.map(b => `<option value="${b}">${b}</option>`).join('');
+    applyScModeVisibility();
+  }
+
+  async function suggestFromRfp() {
+    const text = els.rfp.value || '';
+    if (!text.trim()) return;
+    const res = await fetch('/api/suggest_by_text', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ rfp_text: text })
+    });
+    const data = await res.json();
+    for (const s of (data.suggested || [])) state.selected.add(s.deliverable_code);
+    renderDeliverables(els.search.value);
+  }
+
+  function selectedCodes() { return Array.from(state.selected); }
+
+  function scenarioSpecAB() {
+    const mode = document.querySelector('input[name="scMode"]:checked').value;
+    if (mode === 'bundle') {
+      return {
+        scenario_a: { mode:'bundle', bundle: els.bundleASelect.value },
+        scenario_b: { mode:'bundle', bundle: els.bundleBSelect.value }
+      };
+    }
+    return {
+      scenario_a: { mode:'template', scenario_key: els.scenarioASelect.value },
+      scenario_b: { mode:'template', scenario_key: els.scenarioBSelect.value }
+    };
+  }
+
+  async function buildScenarios() {
+    const codes = selectedCodes();
+    if (codes.length === 0) { alert('Pick at least one deliverable.'); return; }
+
+    const specs = scenarioSpecAB();
+    const payload = {
+      selected_deliverable_codes: codes,
+      scenario_a: specs.scenario_a,
+      scenario_b: specs.scenario_b,
+      pricing_mode: els.pricingMode.value,
+      blended_rate: els.pricingMode.value === 'Flat_Blended' ? Number(els.blendedRate.value) : undefined,
+      rate_band: els.rateBand.value,
+      use_slack: els.useSlack.checked,
+      slack_after_internal: Number(els.slackI.value || 0),
+      slack_after_client: Number(els.slackC.value || 0),
+      slack_global_pct: Number(els.slackPct.value || 0),
+      project_start: els.projectStart.value || null
+    };
+
+    const res = await fetch('/api/build', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    renderStep2(data);
+  }
+
+  function renderStep2(scens) {
+    els.step1.style.display = 'none';
+    els.step2.style.display = 'block';
+    els.scenariosWrap.innerHTML = ['A','B'].map(letter => {
+      const s = scens[letter] || {items:[], totals:{hours:0, price:0}};
+      const rows = (s.items || []).map(it => `
+        <tr>
+          <td>${it.deliverable}</td>
+          <td>${it.category || ''}</td>
+          <td style="text-align:right;">${Math.round(it.total_hours)}</td>
+          <td style="text-align:right;">$${Number(it.price).toLocaleString()}</td>
+        </tr>
+      `).join('');
+      return `
+        <div style="margin-bottom:24px;">
+          <h3>Scenario ${letter}</h3>
+          <table style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr><th style="text-align:left;">Deliverable</th><th>Category</th><th style="text-align:right;">Hours</th><th style="text-align:right;">Price</th></tr>
+            </thead>
+            <tbody>${rows || '<tr><td colspan="4" style="opacity:.7;">No items.</td></tr>'}</tbody>
+            <tfoot>
+              <tr><td colspan="2" style="text-align:right; font-weight:600;">Totals</td>
+                  <td style="text-align:right; font-weight:600;">${(s.totals && s.totals.hours) || 0}</td>
+                  <td style="text-align:right; font-weight:600;">$${(s.totals && s.totals.price || 0).toLocaleString()}</td></tr>
+            </tfoot>
+          </table>
+        </div>`;
+    }).join('');
+  }
+
+  // events
+  els.search.addEventListener('input', () => renderDeliverables(els.search.value));
+  els.selectAll.addEventListener('click', () => { state.options.deliverables.forEach(d => state.selected.add(d.Deliverable_Code)); renderDeliverables(els.search.value); });
+  els.clearAll.addEventListener('click', () => { state.selected.clear(); renderDeliverables(els.search.value); });
+  els.suggestBtn.addEventListener('click', suggestFromRfp);
+  els.buildBtn.addEventListener('click', buildScenarios);
+
+  loadOptions(); // on load
+})();
+</script>
 </body>
 </html>
