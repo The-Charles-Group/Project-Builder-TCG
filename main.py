@@ -3179,6 +3179,9 @@ def convert_excel_to_mspdi(
         if removed_child_wbs:
             rows = [r for r in rows if r["WBS"] not in removed_child_wbs]
 
+        # Build a universal WBS index (needed even when merge is OFF)
+        by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+
         # Build children_by_parent map and child_to_parent for dep rewrites
         children_by_parent: Dict[str, List[str]] = {}
         for r in rows:
