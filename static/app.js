@@ -92,6 +92,7 @@ function onScenarioTypeChanged(){
 
 function renderDeliverableList(items){
   const box = document.querySelector("#deliverableList");
+  if (!box) return; // Element doesn't exist, skip rendering
   box.innerHTML = "";
   items.forEach(d => {
     const id = `deliv_${d.Deliverable_Code}`;
