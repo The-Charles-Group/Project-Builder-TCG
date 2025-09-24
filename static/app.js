@@ -2,6 +2,11 @@ let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
 
+// Step 2 component state (from blueprint)
+let selectedCodes = [];   // The authoritative list passed to /api/build
+let removedCodes = [];    // "soft delete" items (show in "Removed" bucket with Undo)
+let addedCodes = [];      // Track what the user explicitly added (optional, for UX badges/telemetry)
+
 async function api(path, opts={}) {
   const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
   if(!res.ok){ throw new Error(await res.text()); }
@@ -37,6 +42,12 @@ async function boot() {
   DELIVERABLES = OPTIONS.deliverables;
   renderDeliverableList(DELIVERABLES);
 
+  // Initialize Step 2 state
+  selectedCodes = [];
+  removedCodes = [];
+  addedCodes = [];
+  renderStep2UI();
+
   // Pricing default blended
   const ps = OPTIONS.pricing_settings.find(x => x.Key==="Default_Blended_Rate");
   if(ps) document.querySelector("#blendedRate").value = ps.Default;
@@ -48,7 +59,7 @@ async function boot() {
   document.querySelector("#slackClient").value   = ss["Slack_After_Client_Review_Days"] ?? 2;
   document.querySelector("#slackGlobal").value   = ss["Slack_Global_Percent"] ?? 0.05;
 
-  // UI wiring
+  // UI wiring (original)
   document.querySelector("#btnSuggest").onclick = onSuggest;
   document.querySelector("#btnBuild").onclick   = onBuild;
   document.querySelector("#pricingMode").onchange = onPricingModeChanged;
@@ -56,6 +67,14 @@ async function boot() {
   document.querySelector("#useBundles").onchange   = onScenarioTypeChanged;
   document.querySelector("#btnExportA").onclick = () => onExport('A');
   document.querySelector("#btnExportB").onclick = () => onExport('B');
+
+  // UI wiring (new Step 2)
+  const proceedBtn = document.querySelector("#btnProceedToStep3");
+  if (proceedBtn) proceedBtn.onclick = onProceedToStep3;
+  
+  const reconcileBtn = document.querySelector("#btnRunReconcile");
+  if (reconcileBtn) reconcileBtn.onclick = onRunReconcile;
+
   onPricingModeChanged();
 }
 
@@ -85,74 +104,331 @@ function renderDeliverableList(items){
   });
 }
 
-async function onSuggest(){
+// Step 2 workflow functions
+function onProceedToStep3() {
+  if (selectedCodes.length === 0) {
+    alert("Please select at least one deliverable before proceeding to pricing.");
+    return;
+  }
+  
+  // Hide Step 2 and show Step 3
+  const step2 = document.querySelector("#step2");
+  const step3 = document.querySelector("#step3");
+  
+  if (step2) step2.style.display = "none";
+  if (step3) {
+    step3.style.display = "block";
+    step3.scrollIntoView({ behavior: "smooth" });
+  }
+}
+
+async function onRunReconcile() {
   const txt = document.querySelector("#rfpText").value || "";
-  const data = await api("/api/suggest_by_text", {method:"POST", body:JSON.stringify({rfp_text:txt})});
-  const sugg = document.querySelector("#suggestions");
-  sugg.innerHTML = "";
-  (data.suggested || []).forEach(s => {
-    sugg.append(el(`<span class="pill">${s.deliverable}<span class="hit">+${s.confidence}</span></span>`));
-    // pre-check matching deliverables
-    const elx = document.querySelector(`#deliv_${s.deliverable_code}`);
-    if(elx) elx.checked = true;
-  });
+  if (!txt.trim()) {
+    alert("Please enter RFP text first to get AI suggestions.");
+    return;
+  }
+
+  try {
+    // Get AI suggestions
+    const data = await api("/api/suggest_by_text", {method:"POST", body:JSON.stringify({rfp_text:txt})});
+    
+    // Update AI Suggestions panel
+    const suggestions = document.querySelector("#aiSuggestions");
+    suggestions.innerHTML = "<h3>AI Suggestions</h3>";
+    
+    if (data.suggested && data.suggested.length > 0) {
+      data.suggested.forEach(s => {
+        const isSelected = selectedCodes.includes(s.deliverable_code);
+        const item = el(`
+          <div class="row ${isSelected ? 'selected' : ''}">
+            <div>
+              <strong>${s.deliverable}</strong> 
+              <small class="badge">${s.category}</small>
+              <br><small>Confidence: ${s.confidence}</small>
+            </div>
+            ${isSelected ? '<span class="already-selected">✓ Selected</span>' : 
+              `<button onclick="onAdd('${s.deliverable_code}')" class="add-btn">Add</button>`}
+          </div>
+        `);
+        suggestions.append(item);
+      });
+      
+      // Auto-add highly confident suggestions
+      data.suggested.forEach(s => {
+        if (s.confidence >= 0.7 && !selectedCodes.includes(s.deliverable_code)) {
+          onAdd(s.deliverable_code);
+        }
+      });
+    } else {
+      suggestions.append(el(`<p>No AI suggestions found. Try using the search function on the right.</p>`));
+    }
+    
+    // Call reconcile API for additional suggestions  
+    const reconData = await api("/api/reconcile", {
+      method:"POST", 
+      body:JSON.stringify({
+        summary_deliverables: data.suggested ? data.suggested.map(s => s.deliverable) : [],
+        db_selected_deliverable_codes: selectedCodes
+      })
+    });
+    
+    // Add reconcile suggestions to the middle panel
+    if (reconData.add && reconData.add.length > 0) {
+      const addSection = el(`<div style="margin-top: 16px;"><h4>Additional Suggestions</h4></div>`);
+      suggestions.append(addSection);
+      
+      reconData.add.forEach(item => {
+        const isSelected = selectedCodes.includes(item.code);
+        const reconItem = el(`
+          <div class="row ${isSelected ? 'selected' : ''}">
+            <div>
+              <strong>${item.label}</strong>
+              <br><small>${item.reason}</small>
+            </div>
+            ${isSelected ? '<span class="already-selected">✓ Selected</span>' : 
+              `<button onclick="onAdd('${item.code}')" class="add-btn">Add</button>`}
+          </div>
+        `);
+        suggestions.append(reconItem);
+      });
+    }
+    
+    if (reconData.delete && reconData.delete.length > 0) {
+      const deleteSection = el(`<div style="margin-top: 16px;"><h4>Consider Removing</h4></div>`);
+      suggestions.append(deleteSection);
+      
+      reconData.delete.forEach(item => {
+        const isSelected = selectedCodes.includes(item.code);
+        if (isSelected) {
+          const deleteItem = el(`
+            <div class="row danger">
+              <div>
+                <strong>${item.label}</strong>
+                <br><small>${item.reason}</small>
+              </div>
+              <button onclick="onRemove('${item.code}')" class="remove-btn">Remove</button>
+            </div>
+          `);
+          suggestions.append(deleteItem);
+        }
+      });
+    }
+    
+  } catch (error) {
+    alert("Error getting AI suggestions: " + error.message);
+  }
+}
+
+async function onSuggest(){
+  // Updated to work with new Step 2 system
+  await onRunReconcile();
+  
+  // Show Step 2 if not already shown
+  const step2 = document.querySelector("#step2");
+  if (step2) {
+    step2.style.display = "block";
+    step2.scrollIntoView({ behavior: "smooth" });
+  }
+}
+
+// UI behaviors from blueprint
+function onRemove(code) {
+  selectedCodes = selectedCodes.filter(c => c !== code);
+  if (!removedCodes.includes(code)) {
+    removedCodes = [...removedCodes, code];
+  }
+  renderStep2UI();
+}
+
+function onRestore(code) {
+  removedCodes = removedCodes.filter(c => c !== code);
+  if (!selectedCodes.includes(code)) {
+    selectedCodes = [...selectedCodes, code];
+  }
+  renderStep2UI();
+}
+
+function onAdd(code) {
+  removedCodes = removedCodes.filter(c => c !== code); // un-soft-delete if needed
+  if (!selectedCodes.includes(code)) {
+    selectedCodes = [...selectedCodes, code];
+  }
+  if (!addedCodes.includes(code)) {
+    addedCodes = [...addedCodes, code];
+  }
+  renderStep2UI();
 }
 
 function selectedDeliverables(){
-  return Array.from(document.querySelectorAll("#deliverableList input[type=checkbox]:checked"))
-    .map(x => x.dataset.code);
+  // Updated to use new state model
+  return selectedCodes;
 }
 
-async function onBuild(){
-  const codes = selectedDeliverables();
-  if(codes.length===0){ alert("Select at least one deliverable."); return; }
+// New Step 2 UI renderer (blueprint wireframe)
+function renderStep2UI() {
+  renderYourSelection();
+  renderRemovedItems();
+  renderSearchAndAdd();
+}
 
-  const pricingMode = document.querySelector("#pricingMode").value;
-  const blendedRate = Number(document.querySelector("#blendedRate").value || 0) || null;
-  const rateBand    = document.querySelector("#rateBand").value;
+function renderYourSelection() {
+  const box = document.querySelector("#yourSelection");
+  if (!box) return;
+  box.innerHTML = "<h3>Your Selection</h3>";
+  
+  selectedCodes.forEach(code => {
+    const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
+    if (!deliverable) return;
+    
+    const item = el(`
+      <div class="row">
+        <div>
+          <strong>${deliverable.Deliverable}</strong> 
+          <small class="badge">${deliverable.Category}</small>
+        </div>
+        <button onclick="onRemove('${code}')" class="remove-btn">×</button>
+      </div>
+    `);
+    box.append(item);
+  });
+}
 
-  const useSlack    = document.querySelector("#useSlack").checked;
-  const slackInternal = Number(document.querySelector("#slackInternal").value || 0);
-  const slackClient   = Number(document.querySelector("#slackClient").value || 0);
-  const slackGlobal   = Number(document.querySelector("#slackGlobal").value || 0);
-  const projectStart  = document.querySelector("#projectStart").value || null;
-
-  // Scenario specs
-  const useTemplates = document.querySelector("#useTemplates").checked;
-  let specA, specB;
-  if(useTemplates){
-    specA = {mode:"template", scenario_key: document.querySelector("#scenarioA").value};
-    specB = {mode:"template", scenario_key: document.querySelector("#scenarioB").value};
-  } else {
-    specA = {mode:"bundle", bundle: document.querySelector("#bundleA").value};
-    specB = {mode:"bundle", bundle: document.querySelector("#bundleB").value};
+function renderRemovedItems() {
+  const box = document.querySelector("#removedItems");
+  if (!box) return;
+  
+  if (removedCodes.length === 0) {
+    box.innerHTML = "";
+    return;
   }
+  
+  box.innerHTML = "<h3>Removed</h3>";
+  removedCodes.forEach(code => {
+    const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
+    if (!deliverable) return;
+    
+    const item = el(`
+      <div class="row">
+        <div>
+          <strong>${deliverable.Deliverable}</strong> 
+          <small class="badge">${deliverable.Category}</small>
+        </div>
+        <button onclick="onRestore('${code}')" class="restore-btn">Restore</button>
+      </div>
+    `);
+    box.append(item);
+  });
+}
 
-  const payload = {
-    selected_deliverable_codes: codes,
-    scenario_a: specA,
-    scenario_b: specB,
-    pricing_mode: pricingMode,
-    blended_rate: blendedRate,
-    rate_band: rateBand,
-    use_slack: useSlack,
-    slack_after_internal: slackInternal,
-    slack_after_client: slackClient,
-    slack_global_pct: slackGlobal,
-    project_start: projectStart
+function renderSearchAndAdd() {
+  const box = document.querySelector("#searchAndAdd");
+  if (!box) return;
+  
+  box.innerHTML = `
+    <h3>Search / Add</h3>
+    <input type="text" id="searchBox" placeholder="Search deliverables..." />
+    <div id="searchResults"></div>
+  `;
+  
+  const searchBox = document.querySelector("#searchBox");
+  searchBox.addEventListener('input', debounce(onSearchDeliverables, 300));
+}
+
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
   };
+}
 
-  const res = await api("/api/build", {method:"POST", body:JSON.stringify(payload)});
-  SCENARIOS = res;
-  renderScenarios(res);
+async function onSearchDeliverables() {
+  const query = document.querySelector("#searchBox").value;
+  const results = document.querySelector("#searchResults");
+  
+  if (!query.trim()) {
+    results.innerHTML = "";
+    return;
+  }
+  
+  try {
+    const data = await api(`/api/search_deliverables?q=${encodeURIComponent(query)}`);
+    results.innerHTML = "";
+    
+    (data.items || []).forEach(item => {
+      const isSelected = selectedCodes.includes(item.Deliverable_Code);
+      const resultItem = el(`
+        <div class="row ${isSelected ? 'selected' : ''}">
+          <div>
+            <strong>${item.Deliverable}</strong> 
+            <small class="badge">${item.Category}</small>
+          </div>
+          ${isSelected ? '<span class="already-selected">✓</span>' : 
+            `<button onclick="onAdd('${item.Deliverable_Code}')" class="add-btn">Add</button>`}
+        </div>
+      `);
+      results.append(resultItem);
+    });
+  } catch (err) {
+    results.innerHTML = `<div class="error">Search error: ${err.message}</div>`;
+  }
+}
+
+// Updated build function to use selectedCodes as specified in blueprint
+async function buildScenarios() {
+  const payload = {
+    selected_deliverable_codes: selectedCodes,
+    scenario_a: {/* from UI */},
+    scenario_b: {/* from UI */},
+    pricing_mode: document.querySelector("#pricingMode").value,
+    blended_rate: Number(document.querySelector("#blendedRate").value || 0) || null,
+    rate_band: document.querySelector("#rateBand").value,
+    use_slack: document.querySelector("#useSlack").checked,
+    slack_after_internal: Number(document.querySelector("#slackInternal").value || 0),
+    slack_after_client: Number(document.querySelector("#slackClient").value || 0),
+    slack_global_pct: Number(document.querySelector("#slackGlobal").value || 0),
+    project_start: document.querySelector("#projectStart").value || null,
+    retainers: /* if you're using v2.7 retainers */[]
+  };
+  
+  // Get scenario specs from UI
+  const useTemplates = document.querySelector("#useTemplates").checked;
+  if(useTemplates){
+    payload.scenario_a = {mode:"template", scenario_key: document.querySelector("#scenarioA").value};
+    payload.scenario_b = {mode:"template", scenario_key: document.querySelector("#scenarioB").value};
+  } else {
+    payload.scenario_a = {mode:"bundle", bundle: document.querySelector("#bundleA").value};
+    payload.scenario_b = {mode:"bundle", bundle: document.querySelector("#bundleB").value};
+  }
+  
+  const res = await fetch("/api/build", { 
+    method: "POST", 
+    body: JSON.stringify(payload), 
+    headers: { "Content-Type": "application/json" }
+  });
+  const scenarios = await res.json();
+  
+  // proceed to steps 3/4 with scenarios.A / scenarios.B
+  SCENARIOS = scenarios;
+  renderScenarios(scenarios);
   
   // Store scenarios globally for timeline and export
   window.appState = window.appState || {};
-  window.appState.scenarios = res;
+  window.appState.scenarios = scenarios;
   
   // Show timeline step and render timeline for Scenario A
   document.querySelector("#step4").style.display = "block";
   selectTimeline('A');
+}
+
+async function onBuild(){
+  if(selectedCodes.length===0){ alert("Select at least one deliverable."); return; }
+  await buildScenarios();
 }
 
 function renderScenarios(data){
