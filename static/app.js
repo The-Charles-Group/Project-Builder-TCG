@@ -48,25 +48,46 @@ async function boot() {
   addedCodes = [];
   renderStep2UI();
 
-  // Pricing default blended
+  // Pricing default blended - with null check
   const ps = OPTIONS.pricing_settings.find(x => x.Key==="Default_Blended_Rate");
-  if(ps) document.querySelector("#blendedRate").value = ps.Default;
+  const blendedRateEl = document.querySelector("#blendedRate");
+  if(ps && blendedRateEl) blendedRateEl.value = ps.Default;
 
-  // Slack defaults
+  // Slack defaults - with null checks
   const ss = Object.fromEntries(OPTIONS.slack_settings.map(x => [x.Key, x.Default]));
-  document.querySelector("#useSlack").checked = !!ss["Use_Slack"];
-  document.querySelector("#slackInternal").value = ss["Slack_After_Internal_Review_Days"] ?? 1;
-  document.querySelector("#slackClient").value   = ss["Slack_After_Client_Review_Days"] ?? 2;
-  document.querySelector("#slackGlobal").value   = ss["Slack_Global_Percent"] ?? 0.05;
+  const useSlackEl = document.querySelector("#useSlack");
+  if (useSlackEl) useSlackEl.checked = !!ss["Use_Slack"];
+  
+  const slackInternalEl = document.querySelector("#slackInternal");
+  if (slackInternalEl) slackInternalEl.value = ss["Slack_After_Internal_Review_Days"] ?? 1;
+  
+  const slackClientEl = document.querySelector("#slackClient");
+  if (slackClientEl) slackClientEl.value = ss["Slack_After_Client_Review_Days"] ?? 2;
+  
+  const slackGlobalEl = document.querySelector("#slackGlobal");
+  if (slackGlobalEl) slackGlobalEl.value = ss["Slack_Global_Percent"] ?? 0.05;
 
-  // UI wiring (original)
-  document.querySelector("#btnSuggest").onclick = onSuggest;
-  document.querySelector("#btnBuild").onclick   = onBuild;
-  document.querySelector("#pricingMode").onchange = onPricingModeChanged;
-  document.querySelector("#useTemplates").onchange = onScenarioTypeChanged;
-  document.querySelector("#useBundles").onchange   = onScenarioTypeChanged;
-  document.querySelector("#btnExportA").onclick = () => onExport('A');
-  document.querySelector("#btnExportB").onclick = () => onExport('B');
+  // UI wiring (original) - with null checks
+  const btnSuggest = document.querySelector("#btnSuggest");
+  if (btnSuggest) btnSuggest.onclick = onSuggest;
+  
+  const btnBuild = document.querySelector("#btnBuild");
+  if (btnBuild) btnBuild.onclick = onBuild;
+  
+  const pricingMode = document.querySelector("#pricingMode");
+  if (pricingMode) pricingMode.onchange = onPricingModeChanged;
+  
+  const useTemplates = document.querySelector("#useTemplates");
+  if (useTemplates) useTemplates.onchange = onScenarioTypeChanged;
+  
+  const useBundles = document.querySelector("#useBundles");
+  if (useBundles) useBundles.onchange = onScenarioTypeChanged;
+  
+  const btnExportA = document.querySelector("#btnExportA");
+  if (btnExportA) btnExportA.onclick = () => onExport('A');
+  
+  const btnExportB = document.querySelector("#btnExportB");
+  if (btnExportB) btnExportB.onclick = () => onExport('B');
 
   // UI wiring (new Step 2)
   const proceedBtn = document.querySelector("#btnProceedToStep3");
