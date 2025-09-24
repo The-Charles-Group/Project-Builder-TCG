@@ -2325,12 +2325,40 @@ def api_build(payload: BuildPayload):
             out["category"]    = cat
             per_deliv.append(out)
 
-        # after building per_deliv
-        per_deliv = _sort_deliverables(per_deliv, letter)  # NEW: sort by phase order
+        # Look up any previously built scenario so we can preserve a user-locked timeline
+        _prev = _current_scenarios().get(letter) or {}
+        locked = bool(_prev.get("manual_order_locked"))
+
+        if locked:
+            # 1) Preserve the user's order (keep intersection, append any new codes at the end)
+            built_by_code = {str(it["deliverable_code"]): it for it in per_deliv}
+            prev_order = [str(c) for c in (_prev.get("user_order") or [])]
+            keep = [c for c in prev_order if c in built_by_code]
+            tail = [c for c in built_by_code.keys() if c not in keep]
+            ordered_codes = keep + tail
+            per_deliv = [built_by_code[c] for c in ordered_codes]
+
+            # 2) Carry forward the sequential schedule/dates computed by Save Order
+            prev_by_code = {str(it.get("deliverable_code")): it for it in (_prev.get("items") or [])}
+            for it in per_deliv:
+                code = str(it["deliverable_code"])
+                prev_it = prev_by_code.get(code)
+                if prev_it and prev_it.get("schedule"):
+                    sched = prev_it["schedule"]
+                    it["schedule"] = sched
+                    it["start"] = sched[0]["start_date"]
+                    it["end"]   = sched[-1]["end_date"]
+                    it["duration_days"] = sum(int(r["duration_days"]) for r in sched)
+        else:
+            # Default behavior when user hasn't locked a timeline yet
+            per_deliv = _sort_deliverables(per_deliv, letter)
+
+        # Totals after order is finalized
         price_sum = sum(int(x["price"]) for x in per_deliv)
         hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
 
-        scenarios[letter] = {
+        # Build the scenario object
+        scenario_out = {
             "pricing_mode": pricing_mode,
             "rate_band": rate_band,
             "blended_rate": blended_rate,
@@ -2342,6 +2370,18 @@ def api_build(payload: BuildPayload):
             "items": per_deliv,
             "totals": {"hours": int(hours_sum), "price": int(price_sum)}
         }
+
+        # Preserve/Set order tracking flags
+        if locked:
+            scenario_out["ai_order"] = list(_prev.get("ai_order") or [it["deliverable_code"] for it in per_deliv])
+            scenario_out["user_order"] = ordered_codes
+            scenario_out["manual_order_locked"] = True
+        else:
+            scenario_out["ai_order"] = [it["deliverable_code"] for it in per_deliv]
+            scenario_out["user_order"] = list(scenario_out["ai_order"])
+            scenario_out["manual_order_locked"] = False
+
+        scenarios[letter] = scenario_out
 
     # Store scenarios globally for reordering
     global _CURRENT_SCENARIOS
