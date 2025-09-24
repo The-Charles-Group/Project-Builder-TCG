@@ -1590,8 +1590,11 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         })
 
         comps = DB.components_for_deliverable(dcode, tg_order)
+        print(f"DEBUG WBS: Deliverable {dcode} has components: {comps}")
+        
         # Per-month hours by component (exact) and rounded for display
         comp_hours_map_month = DB.hours_by_component(dcode, tg_order, scen_col)
+        print(f"DEBUG WBS: Component hours map: {comp_hours_map_month}")
         # If not a retainer, treat "month" as the whole
         base_comp_hours_display = _largest_remainder((monthly_hours if months else parent_hours_display), comp_hours_map_month if months else comp_hours_map_month)
 
@@ -1675,6 +1678,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     # Role rows for this task in this month
                     hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
                     role_rows = hrs_role_df.to_dict(orient="records")
+                    print(f"DEBUG WBS: Task {tg} in comp {comp}: found {len(role_rows)} role assignments")
                     target_task_hours = int(tg_target_month.get(tg, 0)) if months else int(tg_target_month.get(tg, 0))
 
                     raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
