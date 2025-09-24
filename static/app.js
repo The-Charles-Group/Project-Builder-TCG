@@ -74,8 +74,8 @@ async function boot() {
   const btnBuild = document.querySelector("#btnBuild");
   if (btnBuild) btnBuild.onclick = onBuild;
   
-  const pricingMode = document.querySelector("#pricingMode");
-  if (pricingMode) pricingMode.onchange = onPricingModeChanged;
+  const pricingModeEl = document.querySelector("#pricingMode");
+  if (pricingModeEl) pricingModeEl.onchange = onPricingModeChanged;
   
   const useTemplates = document.querySelector("#useTemplates");
   if (useTemplates) useTemplates.onchange = onScenarioTypeChanged;
@@ -100,9 +100,15 @@ async function boot() {
 }
 
 function onPricingModeChanged(){
-  const mode = document.querySelector("#pricingMode").value;
-  document.querySelector("#blendedWrap").classList.toggle("hidden", mode!=="Flat_Blended");
-  document.querySelector("#bandWrap").classList.toggle("hidden", mode!=="Per_Resource");
+  const pricingMode = document.querySelector("#pricingMode");
+  if (!pricingMode) return;
+  const mode = pricingMode.value;
+  
+  const blendedWrap = document.querySelector("#blendedWrap");
+  if (blendedWrap) blendedWrap.classList.toggle("hidden", mode!=="Flat_Blended");
+  
+  const bandWrap = document.querySelector("#bandWrap");
+  if (bandWrap) bandWrap.classList.toggle("hidden", mode!=="Per_Resource");
 }
 
 function onScenarioTypeChanged(){
@@ -352,17 +358,81 @@ function renderRemovedItems() {
 }
 
 function renderSearchAndAdd() {
-  const box = document.querySelector("#searchAndAdd");
+  renderDeliverablesSelect();
+}
+
+function renderDeliverablesSelect() {
+  const box = document.querySelector("#deliverablesList");
   if (!box) return;
   
-  box.innerHTML = `
-    <h3>Search / Add</h3>
-    <input type="text" id="searchBox" placeholder="Search deliverables..." />
-    <div id="searchResults"></div>
-  `;
+  box.innerHTML = "";
   
-  const searchBox = document.querySelector("#searchBox");
-  searchBox.addEventListener('input', debounce(onSearchDeliverables, 300));
+  DELIVERABLES.forEach(deliverable => {
+    const isChecked = selectedCodes.includes(deliverable.Deliverable_Code);
+    const item = el(`
+      <div class="deliverable-item" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #333;">
+        <label style="display: flex; align-items: center; cursor: pointer; flex: 1;">
+          <input type="checkbox" 
+                 data-code="${deliverable.Deliverable_Code}" 
+                 ${isChecked ? 'checked' : ''}
+                 style="margin-right: 8px;" />
+          <span>${deliverable.Deliverable}</span>
+        </label>
+        <small style="color: #888; font-size: 12px;">${deliverable.Category}</small>
+      </div>
+    `);
+    box.append(item);
+  });
+  
+  // Add event listeners for checkboxes
+  box.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+    checkbox.addEventListener('change', function() {
+      const code = this.dataset.code;
+      if (this.checked) {
+        onAdd(code);
+      } else {
+        onRemove(code);
+      }
+    });
+  });
+  
+  // Setup search functionality
+  const searchBox = document.querySelector("#deliverableSearch");
+  if (searchBox) {
+    searchBox.addEventListener('input', debounce(filterDeliverables, 300));
+  }
+  
+  // Setup Select All button
+  const selectAllBtn = document.querySelector("#selectAllBtn");
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', function() {
+      DELIVERABLES.forEach(d => {
+        if (!selectedCodes.includes(d.Deliverable_Code)) {
+          onAdd(d.Deliverable_Code);
+        }
+      });
+      renderDeliverablesSelect();
+    });
+  }
+  
+  // Setup Clear button
+  const clearAllBtn = document.querySelector("#clearAllBtn");
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener('click', function() {
+      selectedCodes.forEach(code => onRemove(code));
+      renderDeliverablesSelect();
+    });
+  }
+}
+
+function filterDeliverables() {
+  const searchText = document.querySelector("#deliverableSearch").value.toLowerCase();
+  const items = document.querySelectorAll('.deliverable-item');
+  
+  items.forEach(item => {
+    const text = item.textContent.toLowerCase();
+    item.style.display = text.includes(searchText) ? 'flex' : 'none';
+  });
 }
 
 function debounce(func, wait) {

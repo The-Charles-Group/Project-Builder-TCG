@@ -57,12 +57,20 @@
           </div>
         </div>
 
-        <!-- Right Panel: Search & Add -->
+        <!-- Right Panel: Deliverables Selection -->
         <div class="right-panel">
-          <div id="searchAndAdd">
-            <h3>Search / Add</h3>
-            <input type="text" id="searchBox" placeholder="Search deliverables..." />
-            <div id="searchResults"></div>
+          <div id="deliverablesSelect">
+            <h3>Deliverables (select)</h3>
+            <div style="margin-bottom: 12px;">
+              <input type="text" id="deliverableSearch" placeholder="Search deliverables..." style="width: 100%; margin-bottom: 8px;" />
+              <div style="display: flex; gap: 8px;">
+                <button id="selectAllBtn" style="background: #4a5fd7; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">Select all</button>
+                <button id="clearAllBtn" style="background: #6b7280; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;">Clear</button>
+              </div>
+            </div>
+            <div id="deliverablesList" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; padding: 8px;">
+              <!-- Deliverables will be populated here -->
+            </div>
           </div>
         </div>
       </div>
