@@ -542,9 +542,14 @@
         renderLeftPanel(autoData.scenarios.A.items, autoData.scenarios.A.totals);
         renderReconcile(appState.reconciliation);
         
-        // Show Stage 2
-        document.getElementById('stage2').style.display = 'block';
-        document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
+        // Show Step 2 (deliverable selection) instead of Stage 2
+        document.getElementById('step2').style.display = 'block';
+        document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
+        
+        // Initialize Step 2 picker with the built scenarios
+        if (window.initStep2DeliverablePicker) {
+          await window.initStep2DeliverablePicker(autoData.scenarios);
+        }
         
       } catch (error) {
         alert('Error performing reconciliation: ' + error.message);
@@ -1243,6 +1248,14 @@
       
       const btnBuildC = document.getElementById('btn-build-c');
       if (btnBuildC) btnBuildC.onclick = buildScenarioC;
+      
+      // Handle Step 2 -> Stage 2 transition
+      const btnRunReconcile = document.getElementById('btnRunReconcile');
+      if (btnRunReconcile) btnRunReconcile.onclick = function() {
+        document.getElementById('step2').style.display = 'none';
+        document.getElementById('stage2').style.display = 'block';
+        document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
+      };
     });
     document.querySelector('#c-base')?.addEventListener('change', renderUpsellList);
     
