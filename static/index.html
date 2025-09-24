@@ -682,7 +682,23 @@
       const curr = new Set(appState.selectedCodes || []);
       document.querySelectorAll('#add-form input.add:checked').forEach(cb => curr.add(cb.dataset.code));
       document.querySelectorAll('#del-form input.del:checked').forEach(cb => curr.delete(cb.dataset.code));
-      appState.selectedCodes = [...curr];
+      
+      const updatedSelection = [...curr];
+      
+      // Sync with all selection state systems
+      appState.selectedCodes = updatedSelection;
+      window.selectedCodes = updatedSelection;
+      
+      // Sync with Step 2 picker state if available
+      if (window.updateStep2PickerSelection) {
+        window.updateStep2PickerSelection(updatedSelection);
+      } else if (window.step2PickerState) {
+        // Direct state update as fallback
+        window.step2PickerState.selected.clear();
+        updatedSelection.forEach(code => window.step2PickerState.selected.add(code));
+      }
+      
+      console.log("Reconciliation applied - updated selection:", updatedSelection);
       // Optionally, re-build Average to refresh left panel total after changes
       rebuildLeftPanelWithNewSelection();
       

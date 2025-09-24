@@ -413,6 +413,9 @@ function renderSearchAndAdd() {
     options: null,                 // { deliverables, scenario_templates, bundles, ... }
     selected: new Set(),           // selected deliverable codes
   };
+  
+  // Expose state globally for reconciliation sync
+  window.step2PickerState = state;
 
   // 1) Load options if needed
   async function ensureOptions() {
@@ -532,6 +535,14 @@ function renderSearchAndAdd() {
     await ensureOptions();
     seedFromCurrentScenarios(scenarios);
     renderList('');
+  };
+  
+  // 7) Public function to update Step 2 picker from external selection (e.g., reconciliation)
+  window.updateStep2PickerSelection = function updateStep2PickerSelection(selectedCodes) {
+    state.selected.clear();
+    selectedCodes.forEach(code => state.selected.add(String(code)));
+    renderList(el.search.value);
+    console.log("Step 2 picker updated with selection:", selectedCodes);
   };
 })();
 
