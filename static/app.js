@@ -358,82 +358,120 @@ function renderRemovedItems() {
 }
 
 function renderSearchAndAdd() {
-  renderDeliverablesSelect();
+  // This will be handled by the Step 2 Deliverables Picker
 }
 
-function renderDeliverablesSelect() {
-  const box = document.querySelector("#deliverablesList");
-  if (!box) return;
-  
-  box.innerHTML = "";
-  
-  DELIVERABLES.forEach(deliverable => {
-    const isChecked = selectedCodes.includes(deliverable.Deliverable_Code);
-    const item = el(`
-      <div class="deliverable-item" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #333;">
-        <label style="display: flex; align-items: center; cursor: pointer; flex: 1;">
-          <input type="checkbox" 
-                 data-code="${deliverable.Deliverable_Code}" 
-                 ${isChecked ? 'checked' : ''}
-                 style="margin-right: 8px;" />
-          <span>${deliverable.Deliverable}</span>
-        </label>
-        <small style="color: #888; font-size: 12px;">${deliverable.Category}</small>
-      </div>
-    `);
-    box.append(item);
-  });
-  
-  // Add event listeners for checkboxes
-  box.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
-    checkbox.addEventListener('change', function() {
-      const code = this.dataset.code;
-      if (this.checked) {
-        onAdd(code);
-      } else {
-        onRemove(code);
-      }
-    });
-  });
-  
-  // Setup search functionality
-  const searchBox = document.querySelector("#deliverableSearch");
-  if (searchBox) {
-    searchBox.addEventListener('input', debounce(filterDeliverables, 300));
+// ---- Step 2 Deliverables Picker (search + select/clear + apply) ----
+(function(){
+  // cache from Step 1 build; make sure you store payload when you build (see note below)
+  window.__lastBuildPayload = window.__lastBuildPayload || null;
+
+  const el = {
+    card: document.getElementById('s2-deliv-card'),
+    search: document.getElementById('s2-deliv-search'),
+    list: document.getElementById('s2-deliv-list'),
+    btnAll: document.getElementById('s2-deliv-selectall'),
+    btnClear: document.getElementById('s2-deliv-clear'),
+    btnApply: document.getElementById('s2-apply'),
+  };
+  if (!el.card) return; // card not present on this page
+
+  const state = {
+    options: null,                 // { deliverables, scenario_templates, bundles, ... }
+    selected: new Set(),           // selected deliverable codes
+  };
+
+  // 1) Load options if needed
+  async function ensureOptions() {
+    if (state.options) return;
+    const r = await fetch('/api/options'); // v2.8 route
+    state.options = await r.json();
   }
-  
-  // Setup Select All button
-  const selectAllBtn = document.querySelector("#selectAllBtn");
-  if (selectAllBtn) {
-    selectAllBtn.addEventListener('click', function() {
-      DELIVERABLES.forEach(d => {
-        if (!selectedCodes.includes(d.Deliverable_Code)) {
-          onAdd(d.Deliverable_Code);
-        }
+
+  // 2) Seed selection from the most recent scenarios (A/B)
+  function seedFromCurrentScenarios(scenarios) {
+    const set = new Set();
+    ['A','B'].forEach(letter => {
+      (scenarios?.[letter]?.items || []).forEach(it => set.add(String(it.deliverable_code)));
+    });
+    if (set.size) state.selected = set;
+  }
+
+  // 3) Render list
+  function renderList(filter = '') {
+    const q = (filter || '').toLowerCase().trim();
+    const items = (state.options?.deliverables || []).filter(d =>
+      !q ||
+      String(d.Deliverable).toLowerCase().includes(q) ||
+      String(d.Category).toLowerCase().includes(q) ||
+      String(d.Deliverable_Code).toLowerCase().includes(q)
+    );
+    el.list.innerHTML = items.map(d => `
+      <label style="display:flex; gap:8px; align-items:center; padding:8px;">
+        <input type="checkbox" data-code="${d.Deliverable_Code}"
+               ${state.selected.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+        <span>${d.Deliverable}</span>
+        <span style="margin-left:auto; opacity:.75; font-size:12px;">${d.Category}</span>
+      </label>
+    `).join('') || '<div style="opacity:.7; padding:8px;">No deliverables</div>';
+    el.list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const code = e.target.getAttribute('data-code');
+        if (e.target.checked) state.selected.add(code); else state.selected.delete(code);
       });
-      renderDeliverablesSelect();
     });
   }
-  
-  // Setup Clear button
-  const clearAllBtn = document.querySelector("#clearAllBtn");
-  if (clearAllBtn) {
-    clearAllBtn.addEventListener('click', function() {
-      selectedCodes.forEach(code => onRemove(code));
-      renderDeliverablesSelect();
-    });
-  }
-}
 
-function filterDeliverables() {
-  const searchText = document.querySelector("#deliverableSearch").value.toLowerCase();
-  const items = document.querySelectorAll('.deliverable-item');
-  
-  items.forEach(item => {
-    const text = item.textContent.toLowerCase();
-    item.style.display = text.includes(searchText) ? 'flex' : 'none';
+  // 4) Apply → rebuild scenarios keeping the same scenario settings / pricing / timeline
+  async function applySelection() {
+    if (!window.__lastBuildPayload) {
+      alert('No build context yet. Build from Step 1 once, then adjust selection here.');
+      return;
+    }
+    const selectedCodes = Array.from(state.selected);
+    if (selectedCodes.length === 0) {
+      alert('Pick at least one deliverable.');
+      return;
+    }
+    const payload = { ...window.__lastBuildPayload, selected_deliverable_codes: selectedCodes };
+    const r = await fetch('/api/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const scenarios = await r.json();
+    // keep for future edits
+    window.__lastBuildPayload = payload;
+
+    // if you already have a Step 2 render method, call it here:
+    if (window.renderStep2) {
+      window.renderStep2(scenarios);
+    } else {
+      // minimal fallback
+      console.log('Scenarios rebuilt:', scenarios);
+    }
+
+    // reseed selection from newly built scenarios
+    seedFromCurrentScenarios(scenarios);
+    renderList(el.search.value);
+  }
+
+  // 5) Hook up UI
+  el.search.addEventListener('input', () => renderList(el.search.value));
+  el.btnAll.addEventListener('click', () => {
+    (state.options?.deliverables || []).forEach(d => state.selected.add(String(d.Deliverable_Code)));
+    renderList(el.search.value);
   });
-}
+  el.btnClear.addEventListener('click', () => { state.selected.clear(); renderList(el.search.value); });
+  el.btnApply.addEventListener('click', applySelection);
+
+  // 6) Public init for Step 2; call this right after Step 2 renders scenarios
+  window.initStep2DeliverablePicker = async function initStep2DeliverablePicker(scenarios) {
+    await ensureOptions();
+    seedFromCurrentScenarios(scenarios);
+    renderList('');
+  };
+})();
 
 function debounce(func, wait) {
   let timeout;
@@ -506,6 +544,9 @@ async function buildScenarios() {
     payload.scenario_b = {mode:"bundle", bundle: document.querySelector("#bundleB").value};
   }
   
+  // Store payload for Step 2 picker
+  window.__lastBuildPayload = payload;
+  
   const res = await fetch("/api/build", { 
     method: "POST", 
     body: JSON.stringify(payload), 
@@ -520,6 +561,11 @@ async function buildScenarios() {
   // Store scenarios globally for timeline and export
   window.appState = window.appState || {};
   window.appState.scenarios = scenarios;
+  
+  // Initialize Step 2 picker
+  if (window.initStep2DeliverablePicker) {
+    await window.initStep2DeliverablePicker(scenarios);
+  }
   
   // Show timeline step and render timeline for Scenario A
   document.querySelector("#step4").style.display = "block";

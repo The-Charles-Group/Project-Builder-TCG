@@ -20,4 +20,6 @@ uvicorn[standard]
 pypdf
 python-docx
 starlette
+openaiopenpyxl>=3.1
 openai
+openpyxl>=3.1

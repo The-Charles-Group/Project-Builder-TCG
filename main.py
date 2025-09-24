@@ -73,6 +73,18 @@ WF_COLUMNS = [
     "Rate_USD", "Price_USD"
 ]
 
+# Helper to find v3 database by environment or common paths
+def _find_v3_path() -> str | None:
+    for p in [
+        os.getenv("APB_V3_DB"),                                      # prefer Replit Secret
+        "Replit_App_DB_READABLE_FullRows_v3.xlsx",                   # project root
+        "data/Replit_App_DB_READABLE_FullRows_v3.xlsx",              # ./data
+        "static/data/Replit_App_DB_READABLE_FullRows_v3.xlsx",       # ./static/data
+    ]:
+        if p and os.path.exists(p):
+            return p
+    return None
+
 # ---------- OpenAI Integration (Stage 2) ----------
 from openai import OpenAI
 
@@ -170,25 +182,22 @@ class AgencyDB:
         self._normalize_role_and_seniority_columns()
         self._normalize_rate_card_seniority()
         
-        # Try to read v3 drivers (exact file name may vary)
-        for v3_name in ["Replit_App_DB_READABLE_FullRows_v3.xlsx",
-                        "Replit_App_DB_READABLE_FullRows_v3 (2).xlsx"]:
-            if os.path.exists(v3_name):
-                try:
-                    self.drivers_v3 = pd.read_excel(v3_name, sheet_name="Drivers")
-                except Exception:
-                    self.drivers_v3 = None
-                break
-
-        # after you already load v4 sheets / drivers_v3 etc.
-        for v3_name in ["Replit_App_DB_READABLE_FullRows_v3.xlsx",
-                        "Replit_App_DB_READABLE_FullRows_v3 (2).xlsx"]:
-            if os.path.exists(v3_name):
-                try:
-                    self.v3_all_rows = pd.read_excel(v3_name, sheet_name="All_Task_Rows")
-                except Exception:
-                    self.v3_all_rows = None
-                break
+        # Try to read v3 data using path-aware helper
+        v3_path = _find_v3_path()
+        if v3_path:
+            try:
+                self.drivers_v3 = pd.read_excel(v3_path, sheet_name="Drivers")
+            except Exception:
+                self.drivers_v3 = None
+            try:
+                self.v3_all_rows = pd.read_excel(v3_path, sheet_name="All_Task_Rows")
+            except Exception:
+                self.v3_all_rows = None
+            print(f"[DB] v3 loaded from: {v3_path}")
+        else:
+            self.drivers_v3 = None
+            self.v3_all_rows = None
+            print("[DB] v3 not found")
 
         # normalize v3 columns for lookups
         self._normalize_v3_service_department()
@@ -2234,6 +2243,23 @@ def api_resolve_deliverables(p: ResolveDeliverablesPayload):
             "category":  str(row["Category"].iloc[0]),
         })
     return {"resolved": out}
+
+@app.get("/api/db/status")
+def db_status():
+    if not DB.loaded: DB.load()
+    def ok(df): return (df is not None) and (getattr(df, "empty", True) is False)
+    return {
+        "loaded": DB.loaded,
+        "source": DB.src,
+        "has_v3": ok(DB.v3_all_rows),
+        "v3_sheets": {"drivers": ok(DB.drivers_v3), "all_rows": ok(DB.v3_all_rows)}
+    }
+
+@app.post("/api/db/reload")
+def db_reload():
+    DB.loaded = False
+    DB.load()
+    return {"ok": True}
 
 @app.post("/api/suggest_by_text")
 def api_suggest(payload: SuggestPayload):
