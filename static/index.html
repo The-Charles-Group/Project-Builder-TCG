@@ -927,7 +927,7 @@
         project_name: getProjectName(),
         scenario_label: `Scenario ${letter}`,
         sheet_name: `Scenario ${letter}`,
-        merge_identical_children: true
+        merge_identical_children: false
       };
       await downloadFromEndpoint('/api/export_xml', payload, `Project_Scenario_${letter}.xml`);
     }
@@ -941,7 +941,7 @@
         scenario_a: A,
         scenario_b: B,
         project_name: getProjectName(),
-        merge_identical_children: true
+        merge_identical_children: false
       };
       await downloadFromEndpoint('/api/export_workbook_xml', payload,
         'Project_Scenarios_A_and_B.zip');
