@@ -1144,8 +1144,12 @@
         const start = sch[0]?.start_date ?? '';
         const end   = sch[sch.length-1]?.end_date ?? '';
         const days  = sch.reduce((n,s)=>n+(s.duration_days||0),0);
+        
+        // Try multiple possible field names for deliverable name
+        const deliverableName = d.deliverable || d.deliverable_name || d.name || d.deliverable_code || 'Unknown Deliverable';
+        
         return `<tr class="tl-row" draggable="true" data-dcode="${d.deliverable_code}">
-          <td>${d.deliverable}</td><td>${start}</td><td>${end}</td><td>${days}</td>
+          <td>${deliverableName}</td><td>${start}</td><td>${end}</td><td>${days}</td>
         </tr>`;
       }).join('');
       window.setHTML('tl-body', rows);
