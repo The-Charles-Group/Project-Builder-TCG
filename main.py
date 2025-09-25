@@ -3199,7 +3199,7 @@ def api_reorder_timeline(p: ReorderPayload):
     _CURRENT_SCENARIOS[letter] = scen  # persist
 
     # Return items for frontend and full scenario for persistence
-    return {"items": [{"deliverable_code": d["deliverable_code"], "schedule": d["schedule"]} for d in reordered_items],
+    return {"items": [{"deliverable_code": d["deliverable_code"], "deliverable": d.get("deliverable"), "schedule": d["schedule"]} for d in reordered_items],
             "scenario": scen}
 
 
