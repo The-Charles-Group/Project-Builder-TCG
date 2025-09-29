@@ -111,9 +111,10 @@ async function boot() {
   const btnExportB = document.querySelector("#btnExportB");
   if (btnExportB) btnExportB.onclick = () => onExport('B');
 
-  // UI wiring (new Step 2)
-  const proceedBtn = document.querySelector("#btnProceedToStep3");
-  if (proceedBtn) proceedBtn.onclick = onProceedToStep3;
+  // UI wiring (new Step 2) - support both legacy and v2.8 buttons
+  document.querySelectorAll("#btnProceedToStep3, #s2-proceed").forEach(btn => {
+    btn.onclick = onProceedToStep3;
+  });
   
   const reconcileBtn = document.querySelector("#btnRunReconcile");
   if (reconcileBtn) reconcileBtn.onclick = onRunReconcile;
@@ -140,26 +141,39 @@ function onScenarioTypeChanged(){
 }
 
 function renderDeliverableList(items){
-  const box = document.querySelector("#deliverableList");
+  // Support both legacy and v2.8 IDs
+  const box = document.querySelector("#s2-deliv-list") || document.querySelector("#deliverableList");
   if (!box) return; // Element doesn't exist, skip rendering
   box.innerHTML = "";
   items.forEach(d => {
-    const id = `deliv_${d.Deliverable_Code}`;
+    // Normalize field names (support both PascalCase and camelCase)
+    const code = d.Deliverable_Code || d.deliverable_code;
+    const name = d.Deliverable || d.deliverable;
+    const cat = d.Category || d.category;
+    const id = `deliv_${code}`;
     box.append(el(`
-      <div class="row">
-        <input type="checkbox" id="${id}" data-code="${d.Deliverable_Code}"/>
-        <label for="${id}"><strong>${d.Deliverable}</strong> <small class="badge">${d.Category}</small></label>
-      </div>
+      <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+        <input type="checkbox" id="${id}" data-code="${code}"/>
+        <span><strong>${name}</strong> <small class="badge">${cat}</small></span>
+      </label>
     `));
   });
 }
 
 // Step 2 workflow functions
 async function onProceedToStep3() {
-  // Check both old and new selection systems and sync them
-  const step2Selected = window.appState?.selectedCodes || [];
-  const pickerSelected = window.selectedCodes || [];
-  const allSelected = [...new Set([...step2Selected, ...pickerSelected])];
+  // Check all possible sources: S2 state (v2.8), appState, and global selectedCodes
+  let allSelected = [];
+  
+  if (window.S2 && window.S2.selectedCodes && window.S2.selectedCodes.size > 0) {
+    // v2.8: Use S2 state
+    allSelected = [...window.S2.selectedCodes];
+  } else {
+    // Legacy: Check old systems
+    const step2Selected = window.appState?.selectedCodes || [];
+    const pickerSelected = window.selectedCodes || [];
+    allSelected = [...new Set([...step2Selected, ...pickerSelected])];
+  }
   
   if (allSelected.length === 0) {
     alert("Please select at least one deliverable before proceeding to pricing.");
@@ -170,29 +184,9 @@ async function onProceedToStep3() {
   selectedCodes = allSelected;
   if (window.appState) window.appState.selectedCodes = allSelected;
   
-  // Build scenarios for Step 3 if we don't have them already
-  if (!SCENARIOS || Object.keys(SCENARIOS).length === 0) {
-    try {
-      // Use the working buildScenariosAB function from index.html
-      if (window.buildScenariosAB) {
-        await window.buildScenariosAB();
-      } else {
-        console.log("buildScenariosAB not available, scenarios will be built when user clicks Build button in Step 3");
-      }
-    } catch (error) {
-      console.error("Failed to build scenarios:", error);
-      alert("Failed to build scenarios. Please try again.");
-      return;
-    }
-  }
-  
-  // Show Step 3 while keeping Step 2 visible
-  const step3 = document.querySelector("#step3");
-  
-  if (step3) {
-    step3.style.display = "block";
-    step3.scrollIntoView({ behavior: "smooth" });
-  }
+  // Always hide Step 2 and show Step 3 (consistent with v2.8)
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('step3').style.display = 'block';
 }
 
 async function onRunReconcile() {
@@ -980,9 +974,14 @@ function initS2() {
         return;
       }
       
-      // Build and proceed - call existing build function
-      if (window.buildScenariosAB) {
-        await window.buildScenariosAB();
+      // Show Step 3
+      document.getElementById('step2').style.display = 'none';
+      document.getElementById('step3').style.display = 'block';
+      
+      // Mirror S2 state to legacy for compatibility
+      window.selectedCodes = [...S2.selectedCodes];
+      if (window.appState) {
+        window.appState.selectedCodes = [...S2.selectedCodes];
       }
     };
   }
