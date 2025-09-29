@@ -33,39 +33,39 @@
       <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
     </section>
 
-    <!-- Step 2: Deliverable Selection (v2.8 Production Layout) -->
+    <!-- Step 2: Deliverable Selection (v2.8 Fixed Structure) -->
     <section class="card" id="step2" style="display:none;">
       <h2>Step 2 — Select & Manage Deliverables</h2>
       
-      <div class="s2-grid">
-        <!-- LEFT: Deliverables (select) -->
-        <section id="s2-picker" class="panel">
-          <h3>Deliverables (select)</h3>
-          <input id="s2-deliv-search" placeholder="Search deliverables..." style="width:100%;margin-bottom:8px;" />
+      <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+        <!-- Left Panel: Your Selection -->
+        <div class="col">
+          <h4>Your Selection</h4>
+          <div id="yourSelection"></div>
+        </div>
+
+        <!-- Middle Panel: AI Suggestions -->
+        <div class="col">
+          <h4>AI Suggestions</h4>
+          <div id="aiSuggestions"></div>
+        </div>
+
+        <!-- Right Panel: Deliverables (select) -->
+        <div class="col">
+          <h4>Deliverables (select)</h4>
+          <input id="delivSearch" placeholder="Search deliverables..." />
           <div style="display:flex;gap:8px;margin:8px 0">
-            <button id="s2-select-all" class="btn">Select all</button>
-            <button id="s2-clear" class="btn">Clear</button>
+            <button id="delivSelectAll">Select all</button>
+            <button id="delivClear">Clear</button>
           </div>
-          <div id="s2-deliv-list" style="height:320px;overflow:auto;border:1px solid #222;border-radius:6px;"></div>
-          <button id="s2-apply" class="btn primary" style="margin-top:12px;width:100%;">Apply selection</button>
-        </section>
-
-        <!-- MIDDLE: Your Selection -->
-        <section id="s2-selected" class="panel">
-          <h3>Your Selection</h3>
-          <div id="s2-selected-list"></div>
-        </section>
-
-        <!-- RIGHT: AI Suggestions -->
-        <section id="s2-ai" class="panel">
-          <h3>AI Suggestions</h3>
-          <div id="s2-ai-list"></div>
-        </section>
+          <div id="deliverableList" style="height:320px;overflow:auto;border:1px solid #222;border-radius:6px;"></div>
+          <button id="applySelection" class="primary" style="margin-top:12px;width:100%;">Apply selection</button>
+        </div>
       </div>
 
       <div class="actions">
-        <button id="s2-proceed" class="btn primary">Proceed to Pricing</button>
-        <button id="btnRunReconcile" class="btn">Get AI Suggestions</button>
+        <button id="btnProceedToStep3">Proceed to Pricing</button>
+        <button id="btnRunReconcile">Get AI Suggestions</button>
       </div>
     </section>
 
@@ -115,22 +115,23 @@
       </div>
     </section>
 
-    <!-- Components Modal (v2.8 Production) -->
-    <dialog id="components-modal" style="width:500px;max-width:90vw;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-        <h3 style="margin:0;">Select Components</h3>
-        <button data-action="close" class="btn" style="padding:4px 8px;">✕</button>
+    <!-- Component Drawer (GPT 5 Pro Implementation) -->
+    <div id="compDrawer" class="drawer hidden" style="position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;display:none;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <strong id="compTitle" style="flex:1">Components</strong>
+        <button id="compDone" class="btn small">Done</button>
       </div>
-      <div style="display:flex;gap:8px;margin-bottom:12px;">
-        <button data-action="select-all" class="btn">Select all</button>
-        <button data-action="unselect-all" class="btn">Unselect all</button>
-      </div>
-      <div class="comp-list" style="max-height:400px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:8px;margin-bottom:12px;"></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;">
-        <button data-action="cancel" class="btn ghost">Cancel</button>
-        <button data-action="save" class="btn primary">Save</button>
-      </div>
-    </dialog>
+      <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
+    </div>
+    <script>
+      // show/hide helpers for the inline styles above
+      const _drawer = document.getElementById('compDrawer');
+      if (_drawer) {
+        _drawer.classList.add('hidden');
+        Object.defineProperty(_drawer.classList, 'remove', { value: function(){ _drawer.style.display='block'; DOMTokenList.prototype.remove.apply(this, arguments);} });
+        Object.defineProperty(_drawer.classList, 'add',    { value: function(){ _drawer.style.display='none';  DOMTokenList.prototype.add.apply(this, arguments);} });
+      }
+    </script>
 
     <!-- Step 3: Pricing -->
     <section class="card" id="step3" style="display:none;">
@@ -757,33 +758,14 @@
     async function buildScenariosAB() {
       // Make this function globally accessible
       window.buildScenariosAB = buildScenariosAB;
+      // Check all possible sources of selected deliverables
+      const selectedFromAppState = appState.selectedCodes || [];
+      const selectedFromGlobal = window.selectedCodes || [];
+      const selectedFromScenarios = window.SCENARIOS ? 
+        Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
+      const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
       
-      // Use S2 state if available (v2.8), otherwise fallback to legacy state
-      let allSelected;
-      let selectedComponentsPayload = {};
-      
-      if (window.S2 && window.S2.selectedCodes && window.S2.selectedCodes.size > 0) {
-        // v2.8 Production: Use S2 state
-        allSelected = [...window.S2.selectedCodes];
-        // Convert S2.compMap to payload format
-        for (const code of window.S2.selectedCodes) {
-          selectedComponentsPayload[code] = [...(window.S2.compMap[code] || new Set())];
-        }
-        console.log('buildScenariosAB using S2 state:', { allSelected, selectedComponentsPayload });
-      } else {
-        // Legacy fallback
-        const selectedFromAppState = appState.selectedCodes || [];
-        const selectedFromGlobal = window.selectedCodes || [];
-        const selectedFromScenarios = window.SCENARIOS ? 
-          Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
-        allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
-        
-        // Legacy component map
-        selectedComponentsPayload = Object.fromEntries(
-          Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
-        );
-        console.log("buildScenariosAB using legacy state:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
-      }
+      console.log("buildScenariosAB validation:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
       
       if (allSelected.length === 0) {
         alert('No deliverables selected. Please complete Step 2 first.');
@@ -796,6 +778,11 @@
 
       // Collect retainer data from UI
       const retainers = collectRetainerData();
+
+      // Prepare component selections for payload
+      const selectedComponentsPayload = Object.fromEntries(
+        Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
+      );
       
       const payload = {
         selected_deliverable_codes: appState.selectedCodes,          // <- required

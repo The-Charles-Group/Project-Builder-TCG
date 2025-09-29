@@ -10,37 +10,6 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### Step 2 Layout v2.8 Production (September 29, 2025)
-- **Complete UI Redesign**: Reordered Step 2 columns for improved workflow
-  - LEFT panel: Deliverables selection picker with search and Select all/Clear controls
-  - MIDDLE panel: Your Selection showing selected deliverables with Components buttons
-  - RIGHT panel: AI Suggestions for intelligent deliverable recommendations
-  - Responsive CSS grid layout (1.1fr 1.4fr 1fr) with mobile breakpoint at 1200px
-
-- **Component Selection Enhancement**: Modal-based component picker with granular control
-  - Replaced drawer with proper `<dialog>` modal for better UX
-  - Select all / Unselect all controls for quick component management
-  - Individual checkboxes showing component names and hour estimates
-  - Component count display in selection panel ("Components... (5 selected)")
-  - Default all components selected behavior when deliverable is chosen
-
-- **S2 State Management**: New production-ready state system
-  - `S2.selectedCodes` Set for deliverable tracking
-  - `S2.compMap` object for per-deliverable component selections (code → Set of component names)
-  - `S2.options` for complexity/tier driver settings
-  - Global `window.S2` exposure for cross-module compatibility
-
-- **API Integration**: Enhanced build process with component threading
-  - Updated `buildScenariosAB()` to prioritize S2 state over legacy systems
-  - Automatic conversion of S2.compMap to `selected_components_map` payload format
-  - `/api/search_deliverables` integration with debounced search input
-  - Dual button support (#s2-proceed and #btnProceedToStep3) with querySelectorAll wiring
-
-- **Data Normalization**: Field compatibility for PascalCase and camelCase formats
-  - Support for both `Deliverable_Code` and `deliverable_code` naming conventions
-  - Catalog lookup enhancements for robust deliverable name resolution
-  - Consistent step visibility management (hide Step 2, show Step 3)
-
 ### Component-Level Selection & Export Robustness (September 2025)
 - **Component-Level Selection Feature**: Complete implementation of granular deliverable component control in Step 2
   - Added `/api/components_for` endpoint for retrieving components with hours breakdown by deliverable
