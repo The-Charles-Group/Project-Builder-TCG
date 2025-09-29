@@ -10,6 +10,23 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Component-Level Selection & Export Robustness (September 2025)
+- **Component-Level Selection Feature**: Complete implementation of granular deliverable component control in Step 2
+  - Added `/api/components_for` endpoint for retrieving components with hours breakdown by deliverable
+  - Enhanced BuildPayload model with `selected_components_map` field for per-deliverable component selections
+  - Updated backend logic to filter scenarios based on selected components with intelligent fallbacks
+  - Implemented modal picker UI with "Components..." button showing checkboxes and hour counts
+  - Global `selectedComponentsMap` state management across all build operations
+  - Component count display in deliverable selection UI when components are chosen
+
+- **Export Robustness Enhancements**: Bulletproof XML/Excel exports with automatic data synthesis
+  - Auto-generation of missing task groups from database when scenario data is incomplete
+  - Schedule synthesis using `DB.build_schedule` when schedules are missing from scenarios
+  - Hours by role derivation from raw database when scenario calculations are incomplete
+  - Enhanced deliverable name resolution with robust database fallbacks
+  - Export validation guards to prevent empty scenario exports
+  - WBS builder guarantees detailed structure generation (1,000+ lines, 28+ resources)
+
 ### v3 Drivers Support Implementation Complete (September 2025)
 - **Backend Implementation**: Added v3 Drivers support with complete token normalization and mapping functionality
   - Added helper methods to AgencyDB class: `_norm_token`, `_v4_complexity_tokens`, `_v4_tier_tokens`, `_map_to_v4_token`, and `drivers_complexities_tiers_v3`
