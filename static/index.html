@@ -127,6 +127,24 @@
       </div>
     </section>
 
+    <!-- Component Drawer (GPT 5 Pro Implementation) -->
+    <div id="compDrawer" class="drawer hidden" style="position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;display:none;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <strong id="compTitle" style="flex:1">Components</strong>
+        <button id="compDone" class="btn small">Done</button>
+      </div>
+      <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
+    </div>
+    <script>
+      // show/hide helpers for the inline styles above
+      const _drawer = document.getElementById('compDrawer');
+      if (_drawer) {
+        _drawer.classList.add('hidden');
+        Object.defineProperty(_drawer.classList, 'remove', { value: function(){ _drawer.style.display='block'; DOMTokenList.prototype.remove.apply(this, arguments);} });
+        Object.defineProperty(_drawer.classList, 'add',    { value: function(){ _drawer.style.display='none';  DOMTokenList.prototype.add.apply(this, arguments);} });
+      }
+    </script>
+
     <!-- Step 3: Pricing -->
     <section class="card" id="step3" style="display:none;">
       <h2>Step 3 — Pricing</h2>
