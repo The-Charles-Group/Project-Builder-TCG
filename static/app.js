@@ -1208,40 +1208,106 @@ function initStep2() {
     }));
   }
 
-  // ---------- Components drawer ----------
+  // ---------- Components drawer (Fixed with hour control) ----------
   async function openComponents(code, name) {
     try {
       const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}`);
       const data = await r.json();
       const items = data.items || [];
-      const current = S2.selectedComponentsMap[code] || new Set();
+      
+      // Initialize component map structure for granular control
+      if (!S2.selectedComponentsMap[code]) {
+        S2.selectedComponentsMap[code] = {}; // name -> {selected: bool, hours: number}
+      }
+      const current = S2.selectedComponentsMap[code];
+      
       S2.els.compTitle.textContent = `Components — ${name}`;
-      S2.els.compList.innerHTML = items.map(c => `
-        <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
-          <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}" ${current.has(c.name)?'checked':''}/>
-          <span>${c.name}</span>
-          <small style="margin-left:auto;opacity:.75">${Math.round(c.hours)}h</small>
-        </label>`).join('') || '<div style="opacity:.7;padding:8px">No components for this deliverable.</div>';
+      S2.els.compList.innerHTML = items.map(c => {
+        const isSelected = current[c.name]?.selected || false;
+        const customHours = current[c.name]?.hours || c.hours;
+        return `
+        <div class="comp-row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">
+          <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}" ${isSelected?'checked':''}/>
+          <span style="flex:1">${c.name}</span>
+          <input type="number" class="comp-hours" data-code="${code}" data-name="${c.name}" 
+                 value="${customHours}" min="0" max="999" step="0.5" 
+                 style="width:70px;text-align:center;background:#222;border:1px solid #444;color:#fff;padding:2px;border-radius:3px" 
+                 ${!isSelected ? 'disabled' : ''} />
+          <small style="opacity:.75;min-width:20px">h</small>
+        </div>`;
+      }).join('') || '<div style="opacity:.7;padding:8px">No components for this deliverable.</div>';
+      
       S2.els.compDrawer.style.display = 'block';
+      
+      // Bind component selection events
       S2.els.compList.querySelectorAll('.s2compchk').forEach(chk => {
         chk.addEventListener('change', e => {
           const k = e.target.dataset.code, n = e.target.dataset.name;
-          if (!S2.selectedComponentsMap[k]) S2.selectedComponentsMap[k] = new Set();
-          e.target.checked ? S2.selectedComponentsMap[k].add(n) : S2.selectedComponentsMap[k].delete(n);
+          if (!S2.selectedComponentsMap[k]) S2.selectedComponentsMap[k] = {};
+          
+          const hoursInput = S2.els.compList.querySelector(`.comp-hours[data-code="${k}"][data-name="${n}"]`);
+          
+          if (e.target.checked) {
+            S2.selectedComponentsMap[k][n] = {
+              selected: true,
+              hours: parseFloat(hoursInput.value) || 0
+            };
+            hoursInput.disabled = false;
+          } else {
+            S2.selectedComponentsMap[k][n] = {
+              selected: false,
+              hours: parseFloat(hoursInput.value) || 0
+            };
+            hoursInput.disabled = true;
+          }
+          console.log('Component selection updated:', S2.selectedComponentsMap);
         });
       });
+      
+      // Bind hour input events
+      S2.els.compList.querySelectorAll('.comp-hours').forEach(input => {
+        input.addEventListener('change', e => {
+          const k = e.target.dataset.code, n = e.target.dataset.name;
+          const chk = S2.els.compList.querySelector(`.s2compchk[data-code="${k}"][data-name="${n}"]`);
+          
+          if (!S2.selectedComponentsMap[k]) S2.selectedComponentsMap[k] = {};
+          S2.selectedComponentsMap[k][n] = {
+            selected: chk.checked,
+            hours: parseFloat(e.target.value) || 0
+          };
+          console.log('Component hours updated:', S2.selectedComponentsMap);
+        });
+      });
+      
     } catch (err) {
       console.error(err); alert('Could not load components.');
     }
   }
   S2.els.compDone?.addEventListener('click', () => S2.els.compDrawer.style.display = 'none');
 
-  // ---------- Apply selection: BUILD ----------
+  // ---------- Apply selection: BUILD (Fixed with proper component threading) ----------
   S2.els.btnApply?.addEventListener('click', async () => {
     const codes = Array.from(S2.selectedCodes);
     if (!codes.length) { alert('Please select at least one deliverable.'); return; }
-    const compMap = Object.fromEntries(Object.entries(S2.selectedComponentsMap)
-                      .map(([k,set]) => [k, Array.from(set || [])]));
+    
+    // Convert component map from {code: {name: {selected, hours}}} to {code: {name: hours}} for backend
+    const compMap = {};
+    Object.entries(S2.selectedComponentsMap).forEach(([code, components]) => {
+      const selectedComponentsWithHours = {};
+      Object.entries(components).forEach(([name, config]) => {
+        if (config.selected && config.hours > 0) {
+          selectedComponentsWithHours[name] = config.hours;
+        }
+      });
+      if (Object.keys(selectedComponentsWithHours).length > 0) {
+        compMap[code] = selectedComponentsWithHours;
+      }
+    });
+    
+    console.log('Build payload - Selected codes:', codes);
+    console.log('Build payload - Component map:', compMap);
+    console.log('Build payload - Full component state:', S2.selectedComponentsMap);
+    
     // knobs from Step 1 (safe defaults)
     const pricingMode  = document.querySelector('#pricingMode')?.value || 'Flat_Blended';
     const blendedRate  = Number(document.querySelector('#blendedRate')?.value || 195);
@@ -1268,14 +1334,32 @@ function initStep2() {
       slack_global_pct: slackPct,
       project_start: projectStart
     };
-    const res = await fetch('/api/build', {
-      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
-    }).then(r=>r.json());
-    window.__lastBuild = res; // used by pricing/export
-    console.log('Build completed:', res);
-    // Optional: enable Proceed button now that we have a build
-    document.querySelector('#btnProceed, #proceedPricing')?.removeAttribute('disabled');
-    alert('Build completed! You can now proceed to pricing.');
+    
+    console.log('Build API call - Full payload:', payload);
+    
+    try {
+      const res = await fetch('/api/build', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+      }).then(r=>r.json());
+      
+      window.__lastBuild = res; // used by pricing/export
+      SCENARIOS = res; // update global scenarios
+      
+      console.log('Build completed successfully:', res);
+      
+      // Update legacy selectedCodes for compatibility
+      selectedCodes = codes;
+      window.selectedCodes = codes;
+      if (window.appState) window.appState.selectedCodes = codes;
+      
+      // Show success and enable next step
+      document.querySelector('#btnProceed, #proceedPricing, #btnProceedToStep3')?.removeAttribute('disabled');
+      alert(`Build completed! Scenarios generated with ${codes.length} deliverables and ${Object.keys(compMap).length} having component selections.`);
+      
+    } catch (error) {
+      console.error('Build failed:', error);
+      alert('Build failed: ' + error.message);
+    }
   });
 }
 

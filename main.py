@@ -1,5 +1,5 @@
 import os, re, io, math, json, datetime, urllib.parse, tempfile
-from typing import List, Optional, Dict, Any, Tuple, Set
+from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from zoneinfo import ZoneInfo  # Python 3.9+
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
@@ -1847,8 +1847,8 @@ class BuildPayload(BaseModel):
     project_start: Optional[str] = None     # "YYYY-MM-DD"
     # NEW: monthly retainers selected on the second screen
     retainers: Optional[List[RetainerSelection]] = []
-    # NEW: component-level selection per deliverable
-    selected_components_map: Optional[Dict[str, List[str]]] = None
+    # NEW: component-level selection per deliverable (supports both formats)
+    selected_components_map: Optional[Dict[str, Union[List[str], Dict[str, float]]]] = None
 
 class AutoBuildPayload(BaseModel):
     rfp_text: str
@@ -2400,7 +2400,7 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
                               pricing_mode: str, blended_rate: Optional[float], rate_band: str,
                               use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
                               project_start: Optional[str], scenario_letter: str,
-                              retainer_months: int = 0, selected_components: Optional[List[str]] = None) -> Dict[str, Any]:
+                              retainer_months: int = 0, selected_components: Optional[Union[List[str], Dict[str, Optional[float]]]] = None) -> Dict[str, Any]:
     # Which task groups to include?
     if spec["mode"] == "bundle":
         included = DB.included_task_groups(category, spec["bundle"])
@@ -2412,13 +2412,34 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
     complexity, tier = spec["complexity"], spec["tier"]
     scen_col = DB.scenario_hours_col(complexity, tier)
     
-    # Handle component-level selection
+    # Handle component-level selection (both old and new formats)
     if selected_components:
         frames = []
-        for comp in selected_components:
+        
+        # Handle both old format (list) and new format (dict)
+        if isinstance(selected_components, list):
+            # Old format: ["component1", "component2"]
+            component_dict = {comp: None for comp in selected_components}  # None = use default hours
+        else:
+            # New format: {"component1": 5.5, "component2": None} 
+            component_dict = selected_components
+            
+        print(f"DEBUG Component processing for {deliv_code}: {component_dict}")
+        
+        for comp, custom_hours in component_dict.items():
             try:
                 fr = DB.hours_by_role_for_component(deliv_code, comp, included, scen_col)
                 if fr is not None and not fr.empty:
+                    # Apply custom hours if provided
+                    if custom_hours is not None:
+                        # Scale the role distribution proportionally to match custom hours
+                        original_total = fr["Hours"].sum()
+                        if original_total > 0:
+                            scale_factor = custom_hours / original_total
+                            fr = fr.copy()  # Avoid modifying original
+                            fr["Hours"] = fr["Hours"] * scale_factor
+                            print(f"DEBUG Scaled component '{comp}' from {original_total}h to {custom_hours}h (factor: {scale_factor:.3f})")
+                    
                     frames.append(fr)
             except Exception:
                 # Fallback: get data for this component directly from all_rows
@@ -2431,6 +2452,15 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
                     # Group by Resource_Title, Seniority and sum hours
                     grouped = sub.groupby(["Resource_Title", "Seniority"])[scen_col].sum().reset_index()
                     grouped.columns = ["Resource_Title", "Seniority", "Hours"]
+                    
+                    # Apply custom hours if provided
+                    if custom_hours is not None:
+                        original_total = grouped["Hours"].sum()
+                        if original_total > 0:
+                            scale_factor = custom_hours / original_total
+                            grouped["Hours"] = grouped["Hours"] * scale_factor
+                            print(f"DEBUG Scaled component '{comp}' (fallback) from {original_total}h to {custom_hours}h")
+                    
                     frames.append(grouped)
         
         hrs_by_role = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
@@ -2521,8 +2551,19 @@ def api_build(payload: BuildPayload):
     # Build retainer map
     ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
     
-    # Build component selection map
-    comp_map = {str(k): [str(x) for x in (v or [])] for (k,v) in (payload.selected_components_map or {}).items()}
+    # Build component selection map (supports both formats)
+    comp_map = {}
+    for k, v in (payload.selected_components_map or {}).items():
+        if isinstance(v, list):
+            # Old format: ["component1", "component2"]
+            comp_map[str(k)] = {str(x): None for x in v}  # None means use default hours
+        elif isinstance(v, dict):
+            # New format: {"component1": 5.5, "component2": 10.0}
+            comp_map[str(k)] = {str(name): float(hours) for name, hours in v.items()}
+        else:
+            comp_map[str(k)] = {}
+    
+    print(f"DEBUG Build: Component map processed: {comp_map}")
 
     # Build scenarios
     scenarios = {}
@@ -2540,14 +2581,14 @@ def api_build(payload: BuildPayload):
             
             spec_resolved = _resolve_scenario(spec_in, cat)
             months = int(ret_map.get(code, 0))
-            selected_components = comp_map.get(str(code))
+            selected_components_dict = comp_map.get(str(code), {})
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 pricing_mode, blended_rate, rate_band,
                 use_slack, slack_i, slack_c, slack_pct, project_start,
                 scenario_letter=letter,
                 retainer_months=months,   # NEW
-                selected_components=selected_components  # NEW
+                selected_components=selected_components_dict  # NEW
             )
             # Add names for readability
             out["deliverable"] = deliverable_name
