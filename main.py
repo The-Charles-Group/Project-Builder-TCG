@@ -1566,8 +1566,20 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             run += int(duration_by_tg.get(tg, 1))
         total_deliv_duration = run
 
+        # Derive hours_by_role if missing (robustness fix)
+        hrs_df = pd.DataFrame(d.get("hours_by_role") or [])
+        if hrs_df.empty:
+            scen_col_resolved = DB.scenario_hours_col(d.get("complexity","Advanced"), d.get("tier","T2_MediumVolume"))
+            hrs_df = DB.hours_by_role_for_deliverable(dcode, included, scen_col_resolved)
+            d["hours_by_role"] = hrs_df.to_dict("records")
+        
+        # Ensure total_hours is calculated correctly
+        calculated_total = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
+        if not d.get("total_hours") or float(d.get("total_hours", 0.0)) == 0.0:
+            d["total_hours"] = calculated_total
+        
         # hours (use exact for pricing, round for display)
-        parent_hours_exact = float(d.get("total_hours", 0.0))
+        parent_hours_exact = float(d.get("total_hours", calculated_total))
         parent_hours_display = int(round(parent_hours_exact))
 
         months = int((d.get("retainer") or {}).get("months", 0))
@@ -1835,6 +1847,8 @@ class BuildPayload(BaseModel):
     project_start: Optional[str] = None     # "YYYY-MM-DD"
     # NEW: monthly retainers selected on the second screen
     retainers: Optional[List[RetainerSelection]] = []
+    # NEW: component-level selection per deliverable
+    selected_components_map: Optional[Dict[str, List[str]]] = None
 
 class AutoBuildPayload(BaseModel):
     rfp_text: str
@@ -2273,6 +2287,38 @@ def api_resolve_deliverables(p: ResolveDeliverablesPayload):
         })
     return {"resolved": out}
 
+@app.get("/api/components_for")
+def api_components_for(deliverable_code: str, complexity: str="Advanced", tier: str="T2_MediumVolume"):
+    """List components for a deliverable with hours breakdown."""
+    if not DB.loaded: DB.load()
+    
+    # Get included task groups for this deliverable
+    try:
+        # Use the database method to get task groups for deliverable
+        sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)]
+        included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+    except Exception:
+        included = []
+    
+    if not included:
+        return {"items": []}
+    
+    scen_col = DB.scenario_hours_col(complexity, tier)
+    
+    # Get components list 
+    comp_names = sorted(c for c in set(sub.get("Component","").astype(str)) if c and c!="nan")
+    
+    # Hours by component
+    try:
+        hours_map = DB.hours_by_component(deliverable_code, included, scen_col)
+    except Exception:
+        # Fallback: sum directly
+        g = (sub[sub["task_group"].isin(included)]
+             .groupby("Component")[scen_col].sum(numeric_only=True))
+        hours_map = {k: float(v) for k, v in g.items()}
+    
+    return {"items": [{"name": c, "hours": float(hours_map.get(c, 0.0))} for c in comp_names]}
+
 @app.get("/api/db/status")
 def db_status():
     if not DB.loaded: DB.load()
@@ -2354,7 +2400,7 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
                               pricing_mode: str, blended_rate: Optional[float], rate_band: str,
                               use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
                               project_start: Optional[str], scenario_letter: str,
-                              retainer_months: int = 0) -> Dict[str, Any]:
+                              retainer_months: int = 0, selected_components: Optional[List[str]] = None) -> Dict[str, Any]:
     # Which task groups to include?
     if spec["mode"] == "bundle":
         included = DB.included_task_groups(category, spec["bundle"])
@@ -2365,7 +2411,33 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
 
     complexity, tier = spec["complexity"], spec["tier"]
     scen_col = DB.scenario_hours_col(complexity, tier)
-    hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
+    
+    # Handle component-level selection
+    if selected_components:
+        frames = []
+        for comp in selected_components:
+            try:
+                fr = DB.hours_by_role_for_component(deliv_code, comp, included, scen_col)
+                if fr is not None and not fr.empty:
+                    frames.append(fr)
+            except Exception:
+                # Fallback: get data for this component directly from all_rows
+                sub = DB.all_rows[
+                    (DB.all_rows["Deliverable_Code"].astype(str)==str(deliv_code)) &
+                    (DB.all_rows["Component"].astype(str)==str(comp)) &
+                    (DB.all_rows["task_group"].isin(included))
+                ]
+                if not sub.empty:
+                    # Group by Resource_Title, Seniority and sum hours
+                    grouped = sub.groupby(["Resource_Title", "Seniority"])[scen_col].sum().reset_index()
+                    grouped.columns = ["Resource_Title", "Seniority", "Hours"]
+                    frames.append(grouped)
+        
+        hrs_by_role = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        if not hrs_by_role.empty:
+            hrs_by_role = hrs_by_role.groupby(["Resource_Title","Seniority"], as_index=False)["Hours"].sum()
+    else:
+        hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
     
     # ---- after total_hours is computed - RETAINER-AWARE PRICING ----
     total_hours_raw = float(hrs_by_role["Hours"].sum()) if not hrs_by_role.empty else 0.0
@@ -2395,6 +2467,22 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         scenario_letter=scenario_letter
     )
 
+    # Expose components for UI
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliv_code)]
+    comp_names = sorted(set(sub["Component"].astype(str))) if not sub.empty else []
+    comp_names = [c for c in comp_names if c and c != "nan"]
+    
+    try:
+        comp_hours = DB.hours_by_component(deliv_code, included, scen_col)
+    except Exception:
+        # Fallback: calculate from raw data
+        comp_hours = {}
+        if not sub.empty:
+            comp_sub = sub[sub["task_group"].isin(included)]
+            for comp in comp_names:
+                comp_data = comp_sub[comp_sub["Component"].astype(str)==str(comp)]
+                comp_hours[comp] = float(comp_data[scen_col].sum()) if not comp_data.empty else 0.0
+    
     return {
         "deliverable_code": deliv_code,
         "included_task_groups": included,
@@ -2410,6 +2498,7 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         "retainer": {"months": months} if months > 0 else None,
         "monthly_hours": monthly_hours_int if months > 0 else None,
         "monthly_price": monthly_price_int if months > 0 else None,
+        "components": [{"name": c, "hours": float(comp_hours.get(c,0.0)), "selected": (not selected_components or c in selected_components)} for c in comp_names]
     }
 
 @app.post("/api/build")
@@ -2431,6 +2520,9 @@ def api_build(payload: BuildPayload):
 
     # Build retainer map
     ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
+    
+    # Build component selection map
+    comp_map = {str(k): [str(x) for x in (v or [])] for (k,v) in (payload.selected_components_map or {}).items()}
 
     # Build scenarios
     scenarios = {}
@@ -2448,12 +2540,14 @@ def api_build(payload: BuildPayload):
             
             spec_resolved = _resolve_scenario(spec_in, cat)
             months = int(ret_map.get(code, 0))
+            selected_components = comp_map.get(str(code))
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 pricing_mode, blended_rate, rate_band,
                 use_slack, slack_i, slack_c, slack_pct, project_start,
                 scenario_letter=letter,
-                retainer_months=months   # NEW
+                retainer_months=months,   # NEW
+                selected_components=selected_components  # NEW
             )
             # Add names for readability
             out["deliverable"] = deliverable_name
@@ -2576,12 +2670,14 @@ def api_build_scenario_c(payload: BuildScenarioCPayload):
         spec_resolved = {"mode": "template", "complexity": complexity, "tier": tier}
         
         months = int(ret_map.get(code, 0))
+        # For Scenario C, no component selection yet - use default
         out = _scenario_for_deliverable(
             code, cat, spec_resolved,
             payload.pricing_mode, payload.blended_rate, payload.rate_band,
             use_slack, slack_i, slack_c, slack_pct, project_start,
             scenario_letter="C",
-            retainer_months=months   # NEW
+            retainer_months=months,   # NEW
+            selected_components=None  # No component selection for Scenario C yet
         )
         # Add names for readability
         out["deliverable"] = str(row["Deliverable"].iloc[0])

@@ -1,0 +1,175 @@
+Below are drop‑in patches to (1) add component‑level selection in Step 2, and (2) guarantee the exporter expands deliverables into components/tasks even if the client forgets to send them—so the XML matches the deep v2.7 structure.
+
+A) Step 2: add component‑level selection (server + UI)
+1) API to list components for a deliverable
+
+Add this route (it derives component names + hours from the DB; no schema changes required):
+
+@app.get("/api/components_for")
+def api_components_for(deliverable_code: str, complexity: str="Advanced", tier: str="T2_MediumVolume"):
+    if not DB.loaded: DB.load()
+    # included task groups for this deliverable (v3/v4 data)
+    try:
+        included = DB.task_groups_for_deliverable(deliverable_code)
+    except Exception:
+        sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)]
+        included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+    scen_col = DB.scenario_hours_col(complexity, tier)
+    # components list
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)]
+    comp_names = sorted(c for c in set(sub.get("Component","").astype(str)) if c and c!="nan")
+    # hours by component (fallback: sum directly)
+    try:
+        hours_map = DB.hours_by_component(deliverable_code, included, scen_col)
+    except Exception:
+        g = (sub[sub["task_group"].isin(included)]
+             .groupby("Component")[scen_col].sum(numeric_only=True))
+        hours_map = {k: float(v) for k, v in g.items()}
+    return {"items": [{"name": c, "hours": float(hours_map.get(c, 0.0))} for c in comp_names]}
+
+
+The v2.8 loader already standardizes Component (from Component_Task_L1) and service department in v3 so lookups work reliably. 
+
+v2.8 prod
+
+ 
+
+v2.8 prod
+
+2) Let /api/build accept per‑deliverable components
+
+Add a field to your BuildPayload:
+
+from typing import Dict, List, Optional
+
+class BuildPayload(BaseModel):
+    ...
+    selected_components_map: Optional[Dict[str, List[str]]] = None  # NEW
+
+
+Then thread it into your build loop for Scenario A/B:
+
+comp_map = {str(k): [str(x) for x in (v or [])] for (k,v) in (payload.selected_components_map or {}).items()}
+
+for code in payload.selected_deliverable_codes:
+    ...
+    selected_components = comp_map.get(str(code))
+    out = _scenario_for_deliverable(
+        code, cat, spec_resolved,
+        pricing_mode, blended_rate, rate_band,
+        use_slack, slack_i, slack_c, slack_pct, project_start,
+        scenario_letter=letter, retainer_months=months,
+        selected_components=selected_components,                  # NEW
+    )
+
+
+Update _scenario_for_deliverable(...) to honor that list:
+
+def _scenario_for_deliverable(..., selected_components: Optional[list[str]]=None):
+    included = included or DB.included_task_groups(category, spec["bundle"]) if spec["mode"]=="bundle" else ...
+    scen_col = DB.scenario_hours_col(complexity, tier)
+
+    if selected_components:
+        frames = []
+        for comp in selected_components:
+            fr = DB.hours_by_role_for_component(deliv_code, comp, included, scen_col)
+            if fr is not None and not fr.empty:
+                frames.append(fr)
+        hrs_by_role = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        if not hrs_by_role.empty:
+            hrs_by_role = hrs_by_role.groupby(["Resource_Title","Seniority"], as_index=False)["Hours"].sum()
+    else:
+        hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
+
+    # ... existing pricing + schedule logic ...
+    # expose components for UI:
+    comp_names = sorted(set(DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliv_code)]["Component"].astype(str)))
+    comp_hours = DB.hours_by_component(deliv_code, included, scen_col)
+    return { ..., "components": [{"name": c, "hours": float(comp_hours.get(c,0.0)), "selected": (not selected_components or c in selected_components)} for c in comp_names] }
+
+
+The v2.8 codebase already computes hours per component/role and contains the normalized component column; this just narrows the sums to what the user picked. 
+
+v2.8 prod
+
+3) UI (Step 2)
+
+Add a “Components…” button next to each deliverable in “Your Selection.” When clicked, call /api/components_for?deliverable_code=…, render checkboxes, and keep a client map:
+
+const selectedComponentsMap = {}; // { DELIV_CODE: Set([...component names...]) }
+
+async function openComponentPicker(code, name){
+  const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}`);
+  const data = await r.json();
+  const comps = data.items || [];
+  // ...render a small drawer/modal with checkbox rows...
+  // on change:
+  if (!selectedComponentsMap[code]) selectedComponentsMap[code] = new Set();
+  e.target.checked ? selectedComponentsMap[code].add(compName) : selectedComponentsMap[code].delete(compName);
+}
+
+// When building from Step 2:
+const payload = {
+  ...existingPayload,
+  selected_deliverable_codes: Array.from(selectedCodes),
+  selected_components_map: Object.fromEntries(Object.entries(selectedComponentsMap).map(([k,v]) => [k, Array.from(v || [])]))
+};
+await fetch('/api/build', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+
+
+This gives Bradley what he asked for: add/remove at Deliverable level and also at Component (sub‑task) level before pricing/export. (You can still keep the AI “Add/Delete” panel for hints.)
+
+B) Make exports always deep (even if the client forgets to send components)
+
+Today’s shallow 5‑task XML is produced because the “WBS builder” receives items without included_task_groups and without a schedule, so it writes only a deliverable line per item. That’s why you get the 5 leaf rows, Summary=0 under the project, and no assignments. 
+
+Casa-Dragones-Digital-MKT-RFP -…
+
+Add two safe fallbacks inside your WBS builder (build_wbs_dataframe_from_scenario(...) / build_wbs_with_pricing(...)—same idea in v2.8):
+
+# A) ensure included task-groups
+included = [str(x) for x in d.get("included_task_groups", [])]
+if not included:
+    # derive from DB for this deliverable
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(dcode)]
+    included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+
+# B) synthesize a schedule if missing
+schedule = d.get("schedule", [])
+if not schedule:
+    comp = d.get("complexity", "Advanced")
+    tier = d.get("tier", "T2_MediumVolume")
+    schedule = DB.build_schedule(
+        deliverable_code=dcode,
+        included_task_groups=included,
+        complexity=comp, tier=tier,
+        use_slack=scenario.get("use_slack", True),
+        slack_after_internal=scenario.get("slack_after_internal", 1),
+        slack_after_client=scenario.get("slack_after_client", 2),
+        slack_global_pct=scenario.get("slack_global_pct", 0.05),
+        project_start=scenario.get("project_start"),
+        scenario_letter=scenario.get("scenario_label", "A"),
+    )
+
+
+Result: even if the client sends a “thin” scenario, the server expands it back to the deep hierarchy (components/tasks with dates/durations), just like v2.7.
+
+Also make the exporter never leave names/hours blank (prevents “Unnamed Task”, “Work=PT0M”):
+
+# resolve deliverable name
+if not d.get("deliverable"):
+    row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(dcode)]
+    d["deliverable"] = str(row["Deliverable"].iloc[0]) if not row.empty else f"Deliverable {i}"
+
+# derive hours-by-role if missing
+hrs_df = pd.DataFrame(d.get("hours_by_role") or [])
+if hrs_df.empty:
+    scen_col = DB.scenario_hours_col(d.get("complexity","Advanced"), d.get("tier","T2_MediumVolume"))
+    hrs_df = DB.hours_by_role_for_deliverable(dcode, included, scen_col)
+    d["hours_by_role"] = hrs_df.to_dict("records")
+d["total_hours"] = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
+
+
+Your v2.8 code already defines the Workfront columns and the XML converter—once the DataFrame has the proper rows, the XML will be indented with correct OutlineLevels and Summary flags, and you’ll also keep the Service Department column you added to the WBS. 
+
+v2.8 prod
