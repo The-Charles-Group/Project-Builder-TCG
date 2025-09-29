@@ -2,21 +2,10 @@ let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
 
-// ---- Step 2 state ---- (GPT 5 Pro Implementation)
-const S2 = {
-  allDeliverables: [],                // from /api/options
-  selectedCodes: new Set(),           // codes the user checked
-  selectedMeta: new Map(),            // code -> {name, category}
-  selectedComponentsMap: {},          // code -> Set(component names)
-  els: {} // Will be populated after DOM is ready
-};
-
 // Legacy compatibility
 let selectedCodes = [];
 let removedCodes = [];
 let addedCodes = [];
-const selectedComponentsMap = S2.selectedComponentsMap;
-window.selectedComponentsMap = selectedComponentsMap;
 
 async function api(path, opts={}) {
   const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
@@ -1115,5 +1104,179 @@ async function s2ApplyAndBuild() {
 }
 
 // Event listeners are now set up in s2SetupEventListeners()
+
+// Complete Step 2 Implementation (v2.8 Fix)
+document.addEventListener('DOMContentLoaded', () => {
+  initStep2();
+});
+
+function initStep2() {
+  const S2 = window.S2 = {
+    allDeliverables: [],
+    selectedCodes: new Set(),
+    selectedMeta: new Map(),       // code -> {name, category}
+    selectedComponentsMap: {},     // code -> Set(component names)
+    els: {
+      listRight: document.querySelector('#deliverableList'),
+      search: document.querySelector('#delivSearch'),
+      btnApply: document.querySelector('#applySelection'),
+      btnSelectAll: document.querySelector('#delivSelectAll'),
+      btnClear: document.querySelector('#delivClear'),
+      yourSel: document.querySelector('#yourSelection'),
+      compDrawer: document.getElementById('compDrawer'),
+      compList: document.getElementById('compList'),
+      compTitle: document.getElementById('compTitle'),
+      compDone: document.getElementById('compDone'),
+    }
+  };
+
+  // Load deliverables for the picker
+  fetch('/api/options').then(r=>r.json()).then(data => {
+    S2.allDeliverables = data.deliverables || [];
+    renderRight('');
+  });
+
+  // ---------- Right panel ----------
+  function renderRight(filter) {
+    const host = S2.els.listRight; if (!host) return;
+    const q = (filter || '').toLowerCase();
+    const items = S2.allDeliverables.filter(d =>
+      !q ||
+      String(d.Deliverable).toLowerCase().includes(q) ||
+      String(d.Category||'').toLowerCase().includes(q) ||
+      String(d.Deliverable_Code).toLowerCase().includes(q)
+    );
+    host.innerHTML = items.map(d => `
+      <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+        <input type="checkbox" class="s2chk"
+          data-code="${d.Deliverable_Code}"
+          data-name="${d.Deliverable}"
+          data-cat="${d.Category}"
+          ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+        <span>${d.Deliverable}</span>
+        <small style="margin-left:auto;opacity:.75">${d.Category||''}</small>
+      </label>
+    `).join('') || '<div style="opacity:.7;padding:8px">No deliverables</div>';
+    host.querySelectorAll('.s2chk').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const code = e.target.dataset.code, name = e.target.dataset.name, cat = e.target.dataset.cat;
+        if (e.target.checked) {
+          S2.selectedCodes.add(code);
+          S2.selectedMeta.set(code, {name, category: cat});
+        } else {
+          S2.selectedCodes.delete(code);
+          S2.selectedMeta.delete(code);
+        }
+        renderLeft();
+      });
+    });
+  }
+  S2.els.search?.addEventListener('input', e => renderRight(e.target.value));
+  S2.els.btnSelectAll?.addEventListener('click', () => {
+    S2.allDeliverables.forEach(d => {
+      const code = String(d.Deliverable_Code);
+      S2.selectedCodes.add(code);
+      S2.selectedMeta.set(code, {name:d.Deliverable, category:d.Category});
+    });
+    renderRight(S2.els.search?.value || ''); renderLeft();
+  });
+  S2.els.btnClear?.addEventListener('click', () => {
+    S2.selectedCodes.clear(); S2.selectedMeta.clear();
+    renderRight(S2.els.search?.value || ''); renderLeft();
+  });
+
+  // ---------- Left panel ("Your Selection") ----------
+  function renderLeft() {
+    const host = S2.els.yourSel; if (!host) return;
+    const rows = Array.from(S2.selectedCodes).map(code => {
+      const meta = S2.selectedMeta.get(code) || {name: code, category: ''};
+      return `<div class="row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.06)">
+        <strong>${meta.name}</strong>
+        <small style="opacity:.75">${meta.category||''}</small>
+        <button class="btn small s2-comp" data-code="${code}" data-name="${meta.name}" style="margin-left:auto">Components…</button>
+        <button class="btn small s2-remove" data-code="${code}">✕</button>
+      </div>`;
+    });
+    host.innerHTML = rows.join('') || '<div style="opacity:.7;padding:8px">No deliverables selected yet.</div>';
+    host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
+      const code = e.target.dataset.code;
+      S2.selectedCodes.delete(code); S2.selectedMeta.delete(code);
+      renderRight(S2.els.search?.value || ''); renderLeft();
+    }));
+    host.querySelectorAll('.s2-comp').forEach(btn => btn.addEventListener('click', e => {
+      openComponents(e.target.dataset.code, e.target.dataset.name);
+    }));
+  }
+
+  // ---------- Components drawer ----------
+  async function openComponents(code, name) {
+    try {
+      const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}`);
+      const data = await r.json();
+      const items = data.items || [];
+      const current = S2.selectedComponentsMap[code] || new Set();
+      S2.els.compTitle.textContent = `Components — ${name}`;
+      S2.els.compList.innerHTML = items.map(c => `
+        <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+          <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}" ${current.has(c.name)?'checked':''}/>
+          <span>${c.name}</span>
+          <small style="margin-left:auto;opacity:.75">${Math.round(c.hours)}h</small>
+        </label>`).join('') || '<div style="opacity:.7;padding:8px">No components for this deliverable.</div>';
+      S2.els.compDrawer.style.display = 'block';
+      S2.els.compList.querySelectorAll('.s2compchk').forEach(chk => {
+        chk.addEventListener('change', e => {
+          const k = e.target.dataset.code, n = e.target.dataset.name;
+          if (!S2.selectedComponentsMap[k]) S2.selectedComponentsMap[k] = new Set();
+          e.target.checked ? S2.selectedComponentsMap[k].add(n) : S2.selectedComponentsMap[k].delete(n);
+        });
+      });
+    } catch (err) {
+      console.error(err); alert('Could not load components.');
+    }
+  }
+  S2.els.compDone?.addEventListener('click', () => S2.els.compDrawer.style.display = 'none');
+
+  // ---------- Apply selection: BUILD ----------
+  S2.els.btnApply?.addEventListener('click', async () => {
+    const codes = Array.from(S2.selectedCodes);
+    if (!codes.length) { alert('Please select at least one deliverable.'); return; }
+    const compMap = Object.fromEntries(Object.entries(S2.selectedComponentsMap)
+                      .map(([k,set]) => [k, Array.from(set || [])]));
+    // knobs from Step 1 (safe defaults)
+    const pricingMode  = document.querySelector('#pricingMode')?.value || 'Flat_Blended';
+    const blendedRate  = Number(document.querySelector('#blendedRate')?.value || 195);
+    const rateBand     = document.querySelector('#rateBand')?.value || 'Standard_US';
+    const useSlack     = (document.querySelector('#useSlack')?.checked ?? true);
+    const slackI       = Number(document.querySelector('#slackAfterInternal')?.value || 1);
+    const slackC       = Number(document.querySelector('#slackAfterClient')?.value   || 2);
+    const slackPct     = Number(document.querySelector('#slackGlobalPct')?.value     || 0.05);
+    const projectStart = document.querySelector('#projectStart')?.value || null;
+    const scenA        = document.querySelector('#scenarioA')?.value || 'MED_LOW';
+    const scenB        = document.querySelector('#scenarioB')?.value || 'MED_HIGH';
+
+    const payload = {
+      selected_deliverable_codes: codes,
+      selected_components_map: compMap,
+      scenario_a: { mode:'template', scenario_key: scenA },
+      scenario_b: { mode:'template', scenario_key: scenB },
+      pricing_mode: pricingMode,
+      blended_rate: pricingMode==='Flat_Blended' ? blendedRate : undefined,
+      rate_band: rateBand,
+      use_slack: useSlack,
+      slack_after_internal: slackI,
+      slack_after_client: slackC,
+      slack_global_pct: slackPct,
+      project_start: projectStart
+    };
+    const res = await fetch('/api/build', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+    }).then(r=>r.json());
+    window.__lastBuild = res; // used by pricing/export
+    console.log('Build completed:', res);
+    // Optional: enable Proceed button now that we have a build
+    document.querySelector('#btnProceed, #proceedPricing')?.removeAttribute('disabled');
+    alert('Build completed! You can now proceed to pricing.');
+  });
+}
 
 window.addEventListener("load", boot);
