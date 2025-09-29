@@ -1,0 +1,52 @@
+Two quick, safe fixes (server‑side)
+
+You can make v2.8 robust regardless of what the client sends by adding fallbacks in the WBS builder. This keeps exports correct even if Step‑2 hasn’t re‑built scenarios before exporting.
+
+1) Default the included task‑groups when missing
+
+Inside build_wbs_dataframe_from_scenario(...), right after we read included:
+
+included = [str(x) for x in d.get("included_task_groups", [])]
+if not included:
+    # derive from the database for this deliverable
+    included = DB.task_groups_for_deliverable(dcode)
+
+
+Why: components_for_deliverable and all roll‑downs rely on the set of included task groups; when it’s empty the builder intentionally skips components/tasks (the continue you saw).【turn8file4†v2.8 prod.docx†L1-L13】
+
+2) Synthesize a schedule when missing
+
+Right after we read schedule:
+
+schedule = d.get("schedule", [])
+if not schedule:
+    complexity = d.get("complexity", "Advanced")
+    tier = d.get("tier", "T2_MediumVolume")
+    schedule = DB.build_schedule(
+        deliverable_code=dcode,
+        included_task_groups=included,
+        complexity=complexity,
+        tier=tier,
+        use_slack=scenario.get("use_slack", True),
+        slack_after_internal=scenario.get("slack_after_internal", 1),
+        slack_after_client=scenario.get("slack_after_client", 2),
+        slack_global_pct=scenario.get("slack_global_pct", 0.05),
+        project_start=scenario.get("project_start"),
+        scenario_letter=scenario.get("scenario_label", "A")
+    )
+
+
+Why: WBS durations/offsets are computed from schedule. When it’s empty, deliverables get zero or default durations and, again, no children. DB.build_schedule already computes a per‑TG schedule from the v3 timeline drivers.【turn16file18†v2.8 prod.docx†L1-L23】
+
+These two fallbacks alone make the export deterministic: even if the UI sends a minimal scenario, the server will expand it into the same deep hierarchy you saw in v2.7.
+
+Optional guard in the export routes (extra safety)
+
+If you want to make it impossible to export a shallow sheet, add a simple pre‑check in /api/export_xml and /api/export_workbook_xml:
+
+def _assert_has_items(scen: dict, label: str):
+    if not scen or not scen.get("items"):
+        raise HTTPException(400, f"No build context for {label}. Run Build once in Step 1.")
+
+
+Call it before build_wbs_dataframe_from_scenario(...). Today those routes just use payload.scenario* directly.【turn15file2†v2.8 prod.docx†L1-L19】【turn15file1†v2.8 prod.docx†L1-L9】

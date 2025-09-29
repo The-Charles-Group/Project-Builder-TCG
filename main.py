@@ -1525,6 +1525,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         dcode = str(d.get("deliverable_code", d.get("code", f"DELIV_{i}")))
         scen_col = d.get("scenario_col", "MED_LOW")
         included = [str(x) for x in d.get("included_task_groups", [])]
+        if not included:
+            # derive from the database for this deliverable
+            sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str) == str(dcode)]
+            included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
 
         # Get deliverable name - try from scenario first, then lookup from database
         deliv_label = str(d.get("deliverable", "")).strip()
@@ -1538,6 +1542,21 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
         # schedule offsets/durations by task_group
         schedule = d.get("schedule", [])
+        if not schedule:
+            complexity = d.get("complexity", "Advanced")
+            tier = d.get("tier", "T2_MediumVolume")
+            schedule = DB.build_schedule(
+                deliverable_code=dcode,
+                included_task_groups=included,
+                complexity=complexity,
+                tier=tier,
+                use_slack=scenario.get("use_slack", True),
+                slack_after_internal=scenario.get("slack_after_internal", 1),
+                slack_after_client=scenario.get("slack_after_client", 2),
+                slack_global_pct=scenario.get("slack_global_pct", 0.05),
+                project_start=scenario.get("project_start"),
+                scenario_letter=scenario.get("scenario_label", "A")
+            )
         tg_order = sorted(included, key=lambda tg: order_map.get(tg, 999))
         duration_by_tg = {str(t["task_group"]): int(t["duration_days"]) for t in schedule}
         offset_by_tg = {}
@@ -2771,6 +2790,11 @@ def api_export_workbook_abc(payload: ExportWorkbookABCPayload):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+def _assert_has_items(scen: dict, label: str):
+    """Guard to ensure scenario has items before export"""
+    if not scen or not scen.get("items"):
+        raise HTTPException(400, f"No build context for {label}. Run Build once in Step 3.")
+
 @app.post("/api/export_xml")
 def api_export_xml(payload: ExportXMLPayload):
     """
@@ -2784,6 +2808,9 @@ def api_export_xml(payload: ExportXMLPayload):
                     or _upload_title_default()
                     or f"Proposal {datetime.date.today().isoformat()}")
 
+    # Guard: ensure scenario has items
+    _assert_has_items(payload.scenario or {}, "XML export")
+    
     # Build WBS DataFrame
     df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
     df = _ensure_v3_ae_columns(df)
@@ -2834,6 +2861,10 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
     project = (payload.project_name
                or _upload_title_default()
                or f"Proposal {datetime.date.today().isoformat()}").strip()
+    
+    # Guard: ensure scenarios have items
+    _assert_has_items(payload.scenario_a or {}, "Scenario A XML export")
+    _assert_has_items(payload.scenario_b or {}, "Scenario B XML export")
     
     # Build DataFrames
     dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
