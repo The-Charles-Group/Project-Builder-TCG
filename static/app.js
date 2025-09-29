@@ -7,6 +7,16 @@ let selectedCodes = [];
 let removedCodes = [];
 let addedCodes = [];
 
+// ===== S2 State (v2.8 Production) =====
+const S2 = {
+  selectedCodes: new Set(),                    // deliverable codes
+  compMap: {},                                 // code -> Set(componentName)
+  options: { complexity: 'Core', tier: 'T2_MediumVolume' },  // current drivers
+};
+
+// Catalog for deliverable name lookup
+window.catalog = {};
+
 async function api(path, opts={}) {
   const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
   if(!res.ok){ throw new Error(await res.text()); }
@@ -42,6 +52,13 @@ async function boot() {
   DELIVERABLES = OPTIONS.deliverables;
   renderDeliverableList(DELIVERABLES);
 
+  // Build catalog for S2 name lookup
+  window.catalog = {};
+  window.deliverablesFullList = OPTIONS.deliverables || [];
+  OPTIONS.deliverables.forEach(d => {
+    window.catalog[d.deliverable_code] = d;
+  });
+
   // Initialize Step 2 state
   selectedCodes = [];
   removedCodes = [];
@@ -49,6 +66,7 @@ async function boot() {
   renderStep2UI();
   
   // Initialize S2 system
+  initS2();
   s2LoadDeliverables();
 
   // Pricing default blended - with null check
@@ -892,113 +910,211 @@ document.addEventListener('click', e => {
   selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
 });
 
-// ---- S2 Functions (GPT 5 Pro Implementation) ----
+// ===== S2 Functions (v2.8 Production) =====
 
-// ---- Initialize S2 elements and load deliverables ----
-async function s2LoadDeliverables() {
-  // First, populate the elements object now that DOM is ready
-  S2.els = {
-    listRight: document.querySelector('#s2-deliv-list') || document.querySelector('#deliverableList'),
-    search: document.querySelector('#s2-deliv-search') || document.querySelector('#delivSearch'),
-    btnApply: document.querySelector('#s2-apply') || document.querySelector('#applySelection, #btnApplySelection'),
-    btnSelectAll: document.querySelector('#s2-deliv-selectall') || document.querySelector('#delivSelectAll'),
-    btnClear: document.querySelector('#s2-deliv-clear') || document.querySelector('#delivClear'),
-    yourSel: document.querySelector('#yourSelection') || document.querySelector('#s2-your-list, #yourSelectionList'),
-    compDrawer: document.getElementById('compDrawer'),
-    compList: document.getElementById('compList'),
-    compTitle: document.getElementById('compTitle'),
-    compDone: document.getElementById('compDone'),
+// Initialize S2 system
+function initS2() {
+  const search = document.getElementById('s2-deliv-search');
+  const btnApply = document.getElementById('s2-apply');
+  const btnSelectAll = document.getElementById('s2-select-all');
+  const btnClear = document.getElementById('s2-clear');
+  const btnProceed = document.getElementById('s2-proceed');
+  const modal = document.getElementById('components-modal');
+  
+  if (search) {
+    search.oninput = debounceS2(async (e) => {
+      const q = e.target.value.trim();
+      let items;
+      if (q) {
+        const res = await fetch(`/api/search_deliverables?q=${encodeURIComponent(q)}`);
+        const data = await res.json();
+        items = data.items || [];
+      } else {
+        items = window.deliverablesFullList || [];
+      }
+      renderDeliverablePicker(items);
+    }, 120);
+  }
+  
+  if (btnSelectAll) {
+    btnSelectAll.onclick = () => {
+      document.querySelectorAll('#s2-deliv-list input[type=checkbox]').forEach(cb => cb.checked = true);
+    };
+  }
+  
+  if (btnClear) {
+    btnClear.onclick = () => {
+      document.querySelectorAll('#s2-deliv-list input[type=checkbox]').forEach(cb => cb.checked = false);
+    };
+  }
+  
+  if (btnApply) {
+    btnApply.onclick = async () => {
+      const checked = [...document.querySelectorAll('#s2-deliv-list input[type=checkbox]:checked')]
+        .map(el => el.dataset.code);
+      
+      if (!checked.length) {
+        alert('Pick at least one deliverable.');
+        return;
+      }
+      
+      S2.selectedCodes = new Set(checked);
+      
+      // Preload components for each selected deliverable and default-select ALL
+      for (const code of checked) {
+        if (!S2.compMap[code]) {
+          const res = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${encodeURIComponent(S2.options.complexity)}&tier=${encodeURIComponent(S2.options.tier)}`);
+          const data = await res.json();
+          S2.compMap[code] = new Set((data.items || []).map(i => i.name)); // default: ALL selected
+        }
+      }
+      
+      renderSelection();
+    };
+  }
+  
+  if (btnProceed) {
+    btnProceed.onclick = async () => {
+      if (!S2.selectedCodes.size) {
+        alert('Pick at least one deliverable.');
+        return;
+      }
+      
+      // Build and proceed - call existing build function
+      if (window.buildScenariosAB) {
+        await window.buildScenariosAB();
+      }
+    };
+  }
+  
+  // Modal controls
+  if (modal) {
+    modal.querySelector('[data-action="close"]')?.addEventListener('click', () => modal.close());
+    modal.querySelector('[data-action="cancel"]')?.addEventListener('click', () => modal.close());
+  }
+  
+  // Initial render
+  if (window.deliverablesFullList) {
+    renderDeliverablePicker(window.deliverablesFullList);
+  }
+}
+
+// Render deliverable picker
+function renderDeliverablePicker(items) {
+  const box = document.getElementById('s2-deliv-list');
+  if (!box) return;
+  
+  box.innerHTML = items.map(d => `
+    <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+      <input type="checkbox" data-code="${d.deliverable_code}" />
+      <span>${d.deliverable}</span>
+      <small style="margin-left:auto;opacity:.7">${d.category || ''}</small>
+    </label>
+  `).join('') || '<div style="padding:8px;opacity:.7">No deliverables</div>';
+}
+
+// Render "Your Selection" with Components... buttons
+function renderSelection() {
+  const box = document.getElementById('s2-selected-list');
+  if (!box) return;
+  
+  box.innerHTML = '';
+  
+  [...S2.selectedCodes].forEach(code => {
+    const el = document.createElement('div');
+    el.className = 'sel-row';
+    
+    const name = window.catalog[code]?.deliverable || code;
+    const compCount = (S2.compMap[code] || new Set()).size;
+    
+    el.innerHTML = `
+      <div class="row">
+        <strong>${name}</strong>
+        <div class="actions">
+          <button class="btn" data-code="${code}" data-role="components">Components... (${compCount} selected)</button>
+          <button class="btn subtle" data-code="${code}" data-role="remove">Remove</button>
+        </div>
+      </div>
+    `;
+    box.appendChild(el);
+  });
+  
+  // Wire up buttons
+  box.querySelectorAll('button[data-role="remove"]').forEach(b => {
+    b.onclick = () => {
+      S2.selectedCodes.delete(b.dataset.code);
+      renderSelection();
+    };
+  });
+  
+  box.querySelectorAll('button[data-role="components"]').forEach(b => {
+    b.onclick = () => openComponentsModal(b.dataset.code);
+  });
+}
+
+// Open components modal
+async function openComponentsModal(code) {
+  // Ensure we have the list
+  if (!S2.compMap[code]) {
+    const res = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${encodeURIComponent(S2.options.complexity)}&tier=${encodeURIComponent(S2.options.tier)}`);
+    const data = await res.json();
+    S2.compMap[code] = new Set((data.items || []).map(i => i.name));
+  }
+  
+  const { items } = await (await fetch(`/api/components_for?deliverable_code=${code}&complexity=${S2.options.complexity}&tier=${S2.options.tier}`)).json();
+  
+  const modal = document.getElementById('components-modal');
+  if (!modal) return;
+  
+  const list = modal.querySelector('.comp-list');
+  list.innerHTML = (items || []).map(i => `
+    <label class="comp-row">
+      <input type="checkbox" data-name="${i.name}" ${S2.compMap[code].has(i.name) ? 'checked' : ''} />
+      <span>${i.name}</span>
+      <small>${Math.round(i.hours)}h</small>
+    </label>
+  `).join('');
+  
+  modal.querySelector('[data-action="select-all"]').onclick = () => {
+    S2.compMap[code] = new Set((items || []).map(i => i.name));
+    openComponentsModal(code); // rerender
   };
   
-  console.log('S2 Elements found:', {
-    listRight: !!S2.els.listRight,
-    search: !!S2.els.search,
-    btnApply: !!S2.els.btnApply,
-    btnSelectAll: !!S2.els.btnSelectAll,
-    btnClear: !!S2.els.btnClear,
-    yourSel: !!S2.els.yourSel
-  });
+  modal.querySelector('[data-action="unselect-all"]').onclick = () => {
+    S2.compMap[code] = new Set();
+    openComponentsModal(code);
+  };
   
-  const r = await fetch('/api/options');   // server returns deliverables + templates
-  const data = await r.json();
-  S2.allDeliverables = data.deliverables || [];
-  s2RenderRight('');
-  s2SetupEventListeners();
+  modal.querySelector('[data-action="save"]').onclick = () => {
+    const chosen = [...list.querySelectorAll('input[type=checkbox]')]
+      .filter(x => x.checked).map(x => x.dataset.name);
+    S2.compMap[code] = new Set(chosen);
+    modal.close();
+    renderSelection();
+  };
+  
+  modal.showModal();
 }
 
-function s2RenderRight(filter) {
-  const host = S2.els.listRight;
-  if (!host) return;
-  const q = (filter || '').toLowerCase();
-  const items = S2.allDeliverables.filter(d =>
-    !q ||
-    String(d.Deliverable).toLowerCase().includes(q) ||
-    String(d.Category || '').toLowerCase().includes(q) ||
-    String(d.Deliverable_Code).toLowerCase().includes(q)
-  );
-  host.innerHTML = items.map(d => `
-    <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
-      <input type="checkbox" class="s2chk"
-        data-code="${d.Deliverable_Code}"
-        data-name="${d.Deliverable}"
-        data-cat="${d.Category}"
-        ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
-      <span>${d.Deliverable}</span>
-      <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
-    </label>
-  `).join('') || '<div style="opacity:.7;padding:8px">No deliverables</div>';
-
-  host.querySelectorAll('.s2chk').forEach(cb => {
-    cb.addEventListener('change', e => {
-      const code = e.target.dataset.code, name = e.target.dataset.name, cat = e.target.dataset.cat;
-      if (e.target.checked) {
-        S2.selectedCodes.add(code);
-        S2.selectedMeta.set(code, {name, category: cat});
-      } else {
-        S2.selectedCodes.delete(code);
-        S2.selectedMeta.delete(code);
-      }
-      s2RenderLeft();
-    });
-  });
+// Debounce helper for S2
+function debounceS2(func, wait) {
+  let timeout;
+  return function(...args) {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => func.apply(this, args), wait);
+  };
 }
 
-// Setup event listeners (called after elements are found)
-function s2SetupEventListeners() {
-  if (S2.els.search) {
-    S2.els.search.addEventListener('input', e => s2RenderRight(e.target.value));
+// Export selected_components_map helper
+function getSelectedComponentsMap() {
+  const map = {};
+  for (const code of S2.selectedCodes) {
+    map[code] = [...(S2.compMap[code] || new Set())];
   }
-  
-  if (S2.els.btnSelectAll) {
-    S2.els.btnSelectAll.addEventListener('click', () => {
-      S2.allDeliverables.forEach(d => {
-        S2.selectedCodes.add(String(d.Deliverable_Code));
-        S2.selectedMeta.set(String(d.Deliverable_Code), {name: d.Deliverable, category: d.Category});
-      });
-      s2RenderRight(S2.els.search?.value || '');
-      s2RenderLeft();
-    });
-  }
-  
-  if (S2.els.btnClear) {
-    S2.els.btnClear.addEventListener('click', () => {
-      S2.selectedCodes.clear();
-      S2.selectedMeta.clear();
-      s2RenderRight(S2.els.search?.value || '');
-      s2RenderLeft();
-    });
-  }
-  
-  if (S2.els.btnApply) {
-    S2.els.btnApply.addEventListener('click', s2ApplyAndBuild);
-  }
-  
-  if (S2.els.compDone) {
-    S2.els.compDone.addEventListener('click', () => S2.els.compDrawer.classList.add('hidden'));
-  }
+  return map;
 }
 
-// ---- Left panel ("Your Selection") with Components… buttons ----
+// ---- Legacy S2 compatibility (keeping old function names) ----
 function s2RenderLeft() {
   const host = S2.els.yourSel;
   if (!host) return;

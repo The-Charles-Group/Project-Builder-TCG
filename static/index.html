@@ -757,14 +757,33 @@
     async function buildScenariosAB() {
       // Make this function globally accessible
       window.buildScenariosAB = buildScenariosAB;
-      // Check all possible sources of selected deliverables
-      const selectedFromAppState = appState.selectedCodes || [];
-      const selectedFromGlobal = window.selectedCodes || [];
-      const selectedFromScenarios = window.SCENARIOS ? 
-        Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
-      const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
       
-      console.log("buildScenariosAB validation:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
+      // Use S2 state if available (v2.8), otherwise fallback to legacy state
+      let allSelected;
+      let selectedComponentsPayload = {};
+      
+      if (window.S2 && window.S2.selectedCodes && window.S2.selectedCodes.size > 0) {
+        // v2.8 Production: Use S2 state
+        allSelected = [...window.S2.selectedCodes];
+        // Convert S2.compMap to payload format
+        for (const code of window.S2.selectedCodes) {
+          selectedComponentsPayload[code] = [...(window.S2.compMap[code] || new Set())];
+        }
+        console.log('buildScenariosAB using S2 state:', { allSelected, selectedComponentsPayload });
+      } else {
+        // Legacy fallback
+        const selectedFromAppState = appState.selectedCodes || [];
+        const selectedFromGlobal = window.selectedCodes || [];
+        const selectedFromScenarios = window.SCENARIOS ? 
+          Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
+        allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
+        
+        // Legacy component map
+        selectedComponentsPayload = Object.fromEntries(
+          Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
+        );
+        console.log("buildScenariosAB using legacy state:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
+      }
       
       if (allSelected.length === 0) {
         alert('No deliverables selected. Please complete Step 2 first.');
@@ -777,11 +796,6 @@
 
       // Collect retainer data from UI
       const retainers = collectRetainerData();
-
-      // Prepare component selections for payload
-      const selectedComponentsPayload = Object.fromEntries(
-        Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
-      );
       
       const payload = {
         selected_deliverable_codes: appState.selectedCodes,          // <- required
