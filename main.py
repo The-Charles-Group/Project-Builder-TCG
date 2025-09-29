@@ -788,7 +788,7 @@ class AgencyDB:
             (self.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)) &
             (self.all_rows["task_group"].isin(included_task_groups))
         ]
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         g = g.rename(columns={scenario_col:"Hours"})
@@ -917,7 +917,7 @@ class AgencyDB:
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].isin(included))
         ]
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return {}
         g = sub.groupby(["task_group"], as_index=False)[scenario_col].sum()
         return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
@@ -927,7 +927,7 @@ class AgencyDB:
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str) == str(task_group))
         ]
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return ("","")
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         r = g.sort_values(scenario_col, ascending=False).iloc[0]
@@ -973,7 +973,7 @@ class AgencyDB:
         sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
         # Only attach 'General' to rows that are actually blank
         sub.loc[sub["Component"] == "", "Component"] = "General"
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return {}
         g = sub.groupby("Component", as_index=False)[scenario_col].sum()
         return {str(r["Component"]): float(r[scenario_col]) for _, r in g.iterrows()}
@@ -991,7 +991,7 @@ class AgencyDB:
         comp_key = (component or "").strip() or "General"
         sub = sub[sub["Component"] == comp_key]
 
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return {}
         g = sub.groupby("task_group", as_index=False)[scenario_col].sum()
         return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
@@ -1124,7 +1124,7 @@ class AgencyDB:
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
         ].copy()
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         return g.rename(columns={scenario_col: "Hours"})
@@ -1141,7 +1141,7 @@ class AgencyDB:
             sub = sub[sub["Component"] == component]
         else:
             sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         return g.rename(columns={scenario_col: "Hours"})
@@ -1158,7 +1158,7 @@ class AgencyDB:
             sub = sub[sub["Component"] == component]
         else:
             sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         return g.rename(columns={scenario_col: "Hours"})
@@ -1201,7 +1201,7 @@ class AgencyDB:
         return self._svc_mode(sub["Service Department"])
 
     def _majority_by_hours(self, sub: pd.DataFrame, col: str, scenario_col: str) -> str:
-        if sub.empty or col not in sub.columns:
+        if sub.empty or col not in sub.columns or scenario_col not in sub.columns:
             return ""
         g = sub.groupby(col, as_index=False)[scenario_col].sum()
         g = g[g[col].astype(str).str.strip() != ""]
@@ -1238,7 +1238,7 @@ class AgencyDB:
         if "Component" in sub.columns and str(component).strip():
             sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
             sub = sub[sub["Component"] == str(component).strip()]
-        if sub.empty:
+        if sub.empty or scenario_col not in sub.columns:
             return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         return g.rename(columns={scenario_col: "Hours"})
