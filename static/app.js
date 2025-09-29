@@ -6,6 +6,8 @@ let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
 let selectedCodes = [];   // The authoritative list passed to /api/build
 let removedCodes = [];    // "soft delete" items (show in "Removed" bucket with Undo)
 let addedCodes = [];      // Track what the user explicitly added (optional, for UX badges/telemetry)
+const selectedComponentsMap = {}; // { DELIV_CODE: Set([...component names...]) }
+window.selectedComponentsMap = selectedComponentsMap; // Make it globally accessible
 
 async function api(path, opts={}) {
   const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
@@ -355,13 +357,19 @@ function renderYourSelection() {
     const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
     if (!deliverable) return;
     
+    const selectedComps = selectedComponentsMap[code] || new Set();
+    const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size} components)` : '';
+    
     const item = el(`
       <div class="row">
         <div>
-          <strong>${deliverable.Deliverable}</strong> 
+          <strong>${deliverable.Deliverable}</strong>${compCountText}
           <small class="badge">${deliverable.Category}</small>
         </div>
-        <button onclick="onRemove('${code}')" class="remove-btn">×</button>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button onclick="openComponentPicker('${code}', '${deliverable.Deliverable}')" class="btn-small" style="padding: 4px 8px; font-size: 12px;">Components...</button>
+          <button onclick="onRemove('${code}')" class="remove-btn">×</button>
+        </div>
       </div>
     `);
     box.append(item);
@@ -657,6 +665,86 @@ async function onExport(which){
   a.download = `workfront_export_${which}.csv`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
+}
+
+// Component Selection Functionality
+async function openComponentPicker(code, name) {
+  try {
+    const complexity = document.querySelector('#complexity')?.value || 'Advanced';
+    const tier = document.querySelector('#tier')?.value || 'T2_MediumVolume';
+    
+    const response = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${complexity}&tier=${tier}`);
+    const data = await response.json();
+    const components = data.items || [];
+    
+    if (components.length === 0) {
+      alert(`No components found for ${name}`);
+      return;
+    }
+    
+    // Initialize selection for this deliverable if not exists
+    if (!selectedComponentsMap[code]) selectedComponentsMap[code] = new Set();
+    
+    // Create modal
+    const modal = el(`
+      <div id="component-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+        <div style="background: var(--card); padding: 24px; border-radius: 8px; max-width: 500px; width: 90%; max-height: 80%; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin: 0;">Components for ${name}</h3>
+            <button onclick="closeComponentPicker()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
+          </div>
+          <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
+          <div id="component-list"></div>
+          <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
+            <button onclick="closeComponentPicker()" class="btn-secondary">Cancel</button>
+            <button onclick="saveComponentSelection('${code}')" class="btn-primary">Save Selection</button>
+          </div>
+        </div>
+      </div>
+    `);
+    
+    document.body.appendChild(modal);
+    
+    // Populate component list
+    const list = document.getElementById('component-list');
+    components.forEach(comp => {
+      const isSelected = selectedComponentsMap[code].has(comp.name);
+      const item = el(`
+        <label style="display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); margin-bottom: 4px; border-radius: 4px; cursor: pointer;">
+          <input type="checkbox" data-component="${comp.name}" ${isSelected ? 'checked' : ''}>
+          <div style="flex: 1;">
+            <div style="font-weight: 500;">${comp.name}</div>
+            <div style="font-size: 12px; color: var(--muted);">${comp.hours} hours</div>
+          </div>
+        </label>
+      `);
+      list.appendChild(item);
+    });
+    
+  } catch (error) {
+    console.error('Error loading components:', error);
+    alert('Error loading components. Please try again.');
+  }
+}
+
+function closeComponentPicker() {
+  const modal = document.getElementById('component-modal');
+  if (modal) modal.remove();
+}
+
+function saveComponentSelection(code) {
+  const modal = document.getElementById('component-modal');
+  const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+  
+  selectedComponentsMap[code] = new Set();
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      selectedComponentsMap[code].add(cb.dataset.component);
+    }
+  });
+  
+  closeComponentPicker();
+  renderYourSelection(); // Refresh the display to show component count
 }
 
 // Timeline functionality
