@@ -33,45 +33,33 @@
       <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
     </section>
 
-    <!-- Step 2: Deliverable Selection (Blueprint Wireframe) -->
+    <!-- Step 2: Deliverable Selection (v2.8 Fixed Structure) -->
     <section class="card" id="step2" style="display:none;">
       <h2>Step 2 — Select & Manage Deliverables</h2>
       
       <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-        <!-- Left Panel: Your Selection + Removed Items -->
-        <div class="left-panel">
-          <div id="yourSelection">
-            <h3>Your Selection</h3>
-            <p>No deliverables selected yet.</p>
-          </div>
-          <div id="removedItems" style="margin-top: 20px;">
-            <!-- Removed items will appear here -->
-          </div>
+        <!-- Left Panel: Your Selection -->
+        <div class="col">
+          <h4>Your Selection</h4>
+          <div id="yourSelection"></div>
         </div>
 
         <!-- Middle Panel: AI Suggestions -->
-        <div class="middle-panel">
-          <h3>AI Suggestions</h3>
-          <div id="aiSuggestions">
-            <p>Run AI analysis to get suggestions.</p>
-          </div>
+        <div class="col">
+          <h4>AI Suggestions</h4>
+          <div id="aiSuggestions"></div>
         </div>
 
-        <!-- Right Panel: Deliverables Selection -->
-        <div class="right-panel">
-          <!-- Step 2 — Deliverables (select) -->
-          <div class="card" id="s2-deliv-card" style="margin-top:12px;">
-            <div class="card-title">Deliverables (select)</div>
-            <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-              <input id="s2-deliv-search" placeholder="Search deliverables…" style="flex:1;" />
-              <button id="s2-deliv-selectall" type="button">Select all</button>
-              <button id="s2-deliv-clear" type="button">Clear</button>
-            </div>
-            <div id="s2-deliv-list" style="border:1px solid #2a2a2a; border-radius:6px; height:260px; overflow:auto;"></div>
-            <div style="margin-top:10px; display:flex; gap:8px;">
-              <button id="s2-apply" class="btn btn-primary" style="flex:1;">Apply selection</button>
-            </div>
+        <!-- Right Panel: Deliverables (select) -->
+        <div class="col">
+          <h4>Deliverables (select)</h4>
+          <input id="delivSearch" placeholder="Search deliverables..." />
+          <div style="display:flex;gap:8px;margin:8px 0">
+            <button id="delivSelectAll">Select all</button>
+            <button id="delivClear">Clear</button>
           </div>
+          <div id="deliverableList" style="height:320px;overflow:auto;border:1px solid #222;border-radius:6px;"></div>
+          <button id="applySelection" class="primary" style="margin-top:12px;width:100%;">Apply selection</button>
         </div>
       </div>
 
@@ -1446,5 +1434,14 @@
     loadOptions();
   </script>
   <script src="/static/app.js" defer></script>
+  
+  <!-- Components drawer -->
+  <div id="compDrawer" style="display:none;position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;z-index:9999;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <strong id="compTitle" style="flex:1">Components</strong>
+      <button id="compDone">Done</button>
+    </div>
+    <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
+  </div>
 </body>
 </html>
