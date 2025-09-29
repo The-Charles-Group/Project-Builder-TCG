@@ -8,18 +8,7 @@ const S2 = {
   selectedCodes: new Set(),           // codes the user checked
   selectedMeta: new Map(),            // code -> {name, category}
   selectedComponentsMap: {},          // code -> Set(component names)
-  els: {
-    listRight: document.querySelector('#s2-deliv-list, #deliverableList'),
-    search: document.querySelector('#s2-deliv-search, #delivSearch'),
-    btnApply: document.querySelector('#s2-apply, #applySelection, #btnApplySelection'),
-    btnSelectAll: document.querySelector('#s2-deliv-selectall, #delivSelectAll'),
-    btnClear: document.querySelector('#s2-deliv-clear, #delivClear'),
-    yourSel: document.querySelector('#s2-your-list, #yourSelection, #yourSelectionList'),
-    compDrawer: document.getElementById('compDrawer'),
-    compList: document.getElementById('compList'),
-    compTitle: document.getElementById('compTitle'),
-    compDone: document.getElementById('compDone'),
-  }
+  els: {} // Will be populated after DOM is ready
 };
 
 // Legacy compatibility
@@ -916,12 +905,36 @@ document.addEventListener('click', e => {
 
 // ---- S2 Functions (GPT 5 Pro Implementation) ----
 
-// ---- Load options and render right-hand list ----
+// ---- Initialize S2 elements and load deliverables ----
 async function s2LoadDeliverables() {
+  // First, populate the elements object now that DOM is ready
+  S2.els = {
+    listRight: document.querySelector('#s2-deliv-list') || document.querySelector('#deliverableList'),
+    search: document.querySelector('#s2-deliv-search') || document.querySelector('#delivSearch'),
+    btnApply: document.querySelector('#s2-apply') || document.querySelector('#applySelection, #btnApplySelection'),
+    btnSelectAll: document.querySelector('#s2-deliv-selectall') || document.querySelector('#delivSelectAll'),
+    btnClear: document.querySelector('#s2-deliv-clear') || document.querySelector('#delivClear'),
+    yourSel: document.querySelector('#yourSelection') || document.querySelector('#s2-your-list, #yourSelectionList'),
+    compDrawer: document.getElementById('compDrawer'),
+    compList: document.getElementById('compList'),
+    compTitle: document.getElementById('compTitle'),
+    compDone: document.getElementById('compDone'),
+  };
+  
+  console.log('S2 Elements found:', {
+    listRight: !!S2.els.listRight,
+    search: !!S2.els.search,
+    btnApply: !!S2.els.btnApply,
+    btnSelectAll: !!S2.els.btnSelectAll,
+    btnClear: !!S2.els.btnClear,
+    yourSel: !!S2.els.yourSel
+  });
+  
   const r = await fetch('/api/options');   // server returns deliverables + templates
   const data = await r.json();
   S2.allDeliverables = data.deliverables || [];
   s2RenderRight('');
+  s2SetupEventListeners();
 }
 
 function s2RenderRight(filter) {
@@ -961,21 +974,40 @@ function s2RenderRight(filter) {
   });
 }
 
-S2.els.search?.addEventListener('input', e => s2RenderRight(e.target.value));
-S2.els.btnSelectAll?.addEventListener('click', () => {
-  S2.allDeliverables.forEach(d => {
-    S2.selectedCodes.add(String(d.Deliverable_Code));
-    S2.selectedMeta.set(String(d.Deliverable_Code), {name: d.Deliverable, category: d.Category});
-  });
-  s2RenderRight(S2.els.search?.value || '');
-  s2RenderLeft();
-});
-S2.els.btnClear?.addEventListener('click', () => {
-  S2.selectedCodes.clear();
-  S2.selectedMeta.clear();
-  s2RenderRight(S2.els.search?.value || '');
-  s2RenderLeft();
-});
+// Setup event listeners (called after elements are found)
+function s2SetupEventListeners() {
+  if (S2.els.search) {
+    S2.els.search.addEventListener('input', e => s2RenderRight(e.target.value));
+  }
+  
+  if (S2.els.btnSelectAll) {
+    S2.els.btnSelectAll.addEventListener('click', () => {
+      S2.allDeliverables.forEach(d => {
+        S2.selectedCodes.add(String(d.Deliverable_Code));
+        S2.selectedMeta.set(String(d.Deliverable_Code), {name: d.Deliverable, category: d.Category});
+      });
+      s2RenderRight(S2.els.search?.value || '');
+      s2RenderLeft();
+    });
+  }
+  
+  if (S2.els.btnClear) {
+    S2.els.btnClear.addEventListener('click', () => {
+      S2.selectedCodes.clear();
+      S2.selectedMeta.clear();
+      s2RenderRight(S2.els.search?.value || '');
+      s2RenderLeft();
+    });
+  }
+  
+  if (S2.els.btnApply) {
+    S2.els.btnApply.addEventListener('click', s2ApplyAndBuild);
+  }
+  
+  if (S2.els.compDone) {
+    S2.els.compDone.addEventListener('click', () => S2.els.compDrawer.classList.add('hidden'));
+  }
+}
 
 // ---- Left panel ("Your Selection") with Components… buttons ----
 function s2RenderLeft() {
@@ -1035,7 +1067,7 @@ async function s2OpenComponents(code, name) {
     });
   });
 }
-S2.els.compDone?.addEventListener('click', () => S2.els.compDrawer.classList.add('hidden'));
+// Component Done event listener moved to s2SetupEventListeners()
 
 // ---- Build Scenarios directly from Step 2 ----
 async function s2ApplyAndBuild() {
@@ -1082,7 +1114,6 @@ async function s2ApplyAndBuild() {
   // s2RenderTotals(res); // if you have one
 }
 
-// Bind buttons
-S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
+// Event listeners are now set up in s2SetupEventListeners()
 
 window.addEventListener("load", boot);
