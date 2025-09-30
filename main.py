@@ -3386,7 +3386,8 @@ def convert_excel_to_mspdi(
     allow_unassigned: bool = True,
     include_audits: bool = True,
     audits_dir: Optional[str] = None,
-    merge_identical_children: bool = False   # <— toggle for multi-resource merge
+    merge_identical_children: bool = False,   # <— toggle for multi-resource merge
+    project_name: Optional[str] = None
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -3815,7 +3816,7 @@ def convert_excel_to_mspdi(
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
         # Project info
-        SubElement(project, "Name").text = f"Project from {sheet_name}"
+        SubElement(project, "Name").text = project_name or f"Project from {sheet_name}"
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
@@ -3870,7 +3871,7 @@ def convert_excel_to_mspdi(
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             # Summary task flag
-            is_summary = r["WBS"] in summary_set
+            is_summary = r["UID"] in summary_set
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # Only set Duration/Work for non-summary tasks (let Workfront compute for summaries)
