@@ -49,6 +49,63 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .totals{display:flex;gap:24px}
 .hint{color:var(--muted);font-size:12px;margin-top:10px}
 
+/* Step 2 Help Note */
+.help-note{
+  background:#0b0e13;border:1px solid var(--border);border-radius:8px;
+  padding:12px 16px;margin:12px 0 20px;color:var(--muted);font-size:13px;line-height:1.6;
+}
+.help-note strong{color:var(--text)}
+.help-note em{color:var(--accent);font-style:normal}
+
+/* Step 2 Grid Layout */
+.s2-grid{
+  display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:16px;
+}
+@media (max-width:1200px){ .s2-grid{grid-template-columns:1fr;gap:12px} }
+
+.s2-grid .panel{
+  border:1px solid var(--border);border-radius:8px;padding:16px;background:#0b0e13;
+}
+.s2-grid .panel h3{
+  margin:0 0 12px;font-size:15px;color:var(--accent);font-weight:600;
+}
+.s2-grid .list{
+  min-height:200px;max-height:400px;overflow-y:auto;
+  border:1px solid var(--border);border-radius:6px;padding:8px;margin:12px 0;
+  background:var(--card);
+}
+.s2-grid .row{
+  display:flex;align-items:center;gap:10px;padding:8px;
+  border-bottom:1px solid #1d2430;
+}
+.s2-grid .row:last-child{border-bottom:none}
+.s2-grid .input{width:100%;margin-bottom:8px}
+.s2-grid .btns{display:flex;gap:8px}
+.s2-grid .btn{font-size:13px;padding:6px 12px}
+.s2-grid .btn.primary{background:var(--accent2);border-color:var(--accent2);margin-top:12px}
+
+/* Component Dialog */
+.dialog{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:var(--card);border:1px solid var(--border);border-radius:12px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);z-index:1000;
+  width:90%;max-width:500px;max-height:80vh;overflow:hidden;
+}
+.dialog .card{border:none;margin:0;padding:20px}
+.dialog .header{
+  display:flex;justify-content:space-between;align-items:center;
+  padding-bottom:12px;border-bottom:1px solid var(--border);margin-bottom:12px;
+}
+.dialog .body{
+  max-height:50vh;overflow-y:auto;
+}
+.dialog .row{
+  display:flex;align-items:center;gap:10px;padding:8px;
+  border-bottom:1px solid #1d2430;
+}
+.dialog .name{flex:1}
+.dialog .muted{color:var(--muted);font-size:12px}
+
 /* Stage 2 Three Panel Layout */
 .stage2-grid{display:grid;grid-template-columns:2fr 3fr 2fr;gap:16px;margin-top:16px}
 @media (max-width:1200px){ .stage2-grid{grid-template-columns:1fr;gap:12px} }

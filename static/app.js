@@ -33,7 +33,7 @@ function wireStep2Handlers() {
   search && search.addEventListener('input', () => renderDeliverableList(search.value.trim().toLowerCase()));
 
   document.addEventListener('click', async (e) => {
-    // Delegated buttons
+    // Deliverable picker buttons
     if (e.target.closest('#s2-select-all')) {
       document.querySelectorAll('#s2-deliv-list input[type=checkbox]').forEach(cb => cb.checked = true);
     }
@@ -51,13 +51,43 @@ function wireStep2Handlers() {
       openComponentsDialog(code);
     }
 
-    // Unselect‑all components button inside dialog
+    // Remove button in "Your Selection"
+    const removeBtn = e.target.closest('[data-action="remove"]');
+    if (removeBtn) {
+      const code = removeBtn.getAttribute('data-code');
+      S2.selectedCodes.delete(code);
+      delete S2.componentsByDeliv[code];
+      renderSelectionPanel();
+    }
+
+    // Component dialog: Select all
+    const selectAll = e.target.closest('[data-action="comp-select-all"]');
+    if (selectAll) {
+      const code = selectAll.getAttribute('data-code');
+      document.querySelectorAll(`#comp-dialog .comp-checkbox[data-code="${code}"]`).forEach(cb => {
+        cb.checked = true;
+        const n = cb.getAttribute('data-name');
+        S2.componentsByDeliv[code] = S2.componentsByDeliv[code] || new Set();
+        S2.componentsByDeliv[code].add(n);
+      });
+    }
+
+    // Component dialog: Unselect all
     const unselectAll = e.target.closest('[data-action="comp-unselect-all"]');
     if (unselectAll) {
       const code = unselectAll.getAttribute('data-code');
-      document.querySelectorAll(`#comp-dialog [data-code="${code}"] input[type=checkbox]`).forEach(cb => cb.checked = false);
-      // Persist immediately:
+      document.querySelectorAll(`#comp-dialog .comp-checkbox[data-code="${code}"]`).forEach(cb => {
+        cb.checked = false;
+      });
       S2.componentsByDeliv[code] = new Set();
+    }
+
+    // Component dialog: Close
+    const closeBtn = e.target.closest('[data-action="comp-close"]');
+    if (closeBtn) {
+      document.getElementById('comp-backdrop')?.remove();
+      document.getElementById('comp-dialog')?.remove();
+      renderSelectionPanel();
     }
   });
 }
@@ -113,14 +143,17 @@ function renderSelectionPanel() {
 
   const rows = Array.from(S2.selectedCodes).map(code => {
     const d = byCode[code] || { Deliverable: code, Category: '' };
+    const compCount = S2.componentsByDeliv[code] === 'ALL' ? 'all' : 
+                      (S2.componentsByDeliv[code] instanceof Set ? S2.componentsByDeliv[code].size : 'all');
     return `
       <div class="row">
-        <div>
+        <div style="flex:1">
           <div class="name">${d.Deliverable}</div>
           <div class="muted">${d.Category}</div>
         </div>
-        <div class="end">
-          <button class="btn small" data-action="components" data-code="${code}">Components…</button>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn small" data-action="components" data-code="${code}">Components… (${compCount})</button>
+          <button class="btn small" data-action="remove" data-code="${code}" style="background:#b00020;border-color:#b00020;padding:4px 8px">✕</button>
         </div>
       </div>`;
   });
@@ -174,9 +207,23 @@ async function openComponentsDialog(code) {
   if (selected === 'ALL') { selected = new Set(items.map(i => i.name)); S2.componentsByDeliv[code] = selected; }
   if (!selected) selected = new Set();
 
-  // Render a barebones dialog panel
+  // Get deliverable name for display
+  const byCode = indexDeliverablesByCode();
+  const delivName = byCode[code]?.Deliverable || code;
+
+  // Render dialog with backdrop
   const dlgId = 'comp-dialog';
+  let backdrop = document.getElementById('comp-backdrop');
   let dlg = document.getElementById(dlgId);
+  
+  if (!backdrop) {
+    backdrop = document.createElement('div');
+    backdrop.id = 'comp-backdrop';
+    backdrop.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:999';
+    backdrop.onclick = () => { backdrop.remove(); dlg?.remove(); renderSelectionPanel(); };
+    document.body.appendChild(backdrop);
+  }
+  
   if (!dlg) {
     dlg = document.createElement('div');
     dlg.id = dlgId;
@@ -187,10 +234,11 @@ async function openComponentsDialog(code) {
   dlg.innerHTML = `
     <div class="card">
       <div class="header">
-        <div><strong>Components</strong> — ${code}</div>
-        <div class="end">
+        <div><strong>Components</strong> — ${delivName}</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn small" data-action="comp-select-all" data-code="${code}">Select all</button>
           <button class="btn small" data-action="comp-unselect-all" data-code="${code}">Unselect all</button>
-          <button class="btn small" onclick="document.getElementById('${dlgId}').remove()">Close</button>
+          <button class="btn small" data-action="comp-close">Close</button>
         </div>
       </div>
       <div class="body">
@@ -198,12 +246,7 @@ async function openComponentsDialog(code) {
           <label class="row">
             <input type="checkbox" ${selected.has(i.name) ? 'checked' : ''} 
                    data-code="${code}" data-name="${i.name}"
-                   onchange="(function(cb){
-                     const c = cb.getAttribute('data-code');
-                     const n = cb.getAttribute('data-name');
-                     S2.componentsByDeliv[c] = S2.componentsByDeliv[c] || new Set();
-                     if (cb.checked) { S2.componentsByDeliv[c].add(n); } else { S2.componentsByDeliv[c].delete(n); }
-                   })(this)" />
+                   class="comp-checkbox" />
             <span class="name">${i.name}</span>
             <span class="muted">${Number(i.hours).toFixed(1)} h</span>
           </label>
@@ -211,6 +254,20 @@ async function openComponentsDialog(code) {
       </div>
     </div>
   `;
+  
+  // Wire up checkbox handlers
+  dlg.querySelectorAll('.comp-checkbox').forEach(cb => {
+    cb.addEventListener('change', function() {
+      const c = this.getAttribute('data-code');
+      const n = this.getAttribute('data-name');
+      S2.componentsByDeliv[c] = S2.componentsByDeliv[c] || new Set();
+      if (this.checked) { 
+        S2.componentsByDeliv[c].add(n); 
+      } else { 
+        S2.componentsByDeliv[c].delete(n); 
+      }
+    });
+  });
 }
 
 async function api(path, opts={}) {
