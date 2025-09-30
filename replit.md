@@ -10,6 +10,18 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### XML Export Bug Fixes (September 30, 2025)
+- **Summary Detection Bug Fixed**: Corrected XML exporter to use UID instead of WBS for summary task detection
+  - Issue: Summary tasks were incorrectly flagged because WBS strings were compared against UID set
+  - Fix: Changed `is_summary = r["WBS"] in summary_set` to `is_summary = r["UID"] in summary_set`
+  - Result: Summary tasks now correctly exclude Work/Duration/Constraint fields, preventing Workfront import errors
+
+- **Project Name Parameter Added**: Enhanced convert_excel_to_mspdi to accept custom project names
+  - Added `project_name` parameter to function signature
+  - Updated XML `<Name>` element to use `project_name or f"Project from {sheet_name}"`
+  - Threaded project_name through both `/api/export_xml` and `/api/export_workbook_xml` endpoints
+  - Result: Exported XMLs now show user-specified project names instead of "Project from Scenario A"
+
 ### Step 2 Workflow Redesign (September 30, 2025)
 - **Removed Confusing "Get AI Suggestions" Button**: Eliminated the secondary button that required analysis data (which should already exist after Step 1)
 - **Streamlined AI Integration**: Step 1 now calls `/api/auto_build` to get both scenarios AND AI suggestions in one call
