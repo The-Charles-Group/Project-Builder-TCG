@@ -10,6 +10,17 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Step 2 Workflow Redesign (September 30, 2025)
+- **Removed Confusing "Get AI Suggestions" Button**: Eliminated the secondary button that required analysis data (which should already exist after Step 1)
+- **Streamlined AI Integration**: Step 1 now calls `/api/auto_build` to get both scenarios AND AI suggestions in one call
+- **Three-Panel Design**:
+  - Left: Deliverable picker (all database deliverables with search/filter)
+  - Middle: Your Selection (final merged selection with component controls)
+  - Right: AI Suggestions (pre-populated from Step 1 analysis, with checkboxes)
+- **Clear Merge Workflow**: "Apply selection" merges Left + Right panels into Middle (Your Selection)
+- **Single Source of Truth**: "Proceed to Pricing" builds only from Middle panel selections
+- **Improved Help Text**: Updated Step 2 instructions to reflect new workflow: select left → check AI right → apply → configure components → proceed
+
 ### Step 2 Production Integration Complete (September 30, 2025)
 - **Single Source of Truth**: Established S2 object as authoritative state for deliverable selection and component granularity
   - S2.selectedCodes (Set) tracks selected deliverable codes
