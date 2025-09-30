@@ -1,0 +1,125 @@
+What the backend expects (and already supports):
+
+/api/build consumes selected_components_map per deliverable. It accepts either:
+
+a list of component names, or
+
+a dict {componentName: hours} if you want to override hours at the component level. 
+
+v2.8 prod
+
+ 
+
+v2.8 prod
+
+ 
+
+v2.8 prod
+
+If you omit a deliverable from selected_components_map, the server treats it as “all components selected” and marks them selected: true in the scenario response. 
+
+v2.8 prod
+
+Action (frontend patch):
+
+Persist component picks on modal close
+Make the Components modal the single source of truth:
+
+// Global Step-2 state
+const S2 = {
+  selectedCodes: [],                     // deliverable codes in "Your Selection"
+  componentsByDeliv: Object.create(null) // { [delivCode]: 'ALL' | Set<string> | {name: hours}}
+};
+
+// When opening the modal
+async function openComponentsModal(code) {
+  // fetch the list (and default hours) for this deliverable
+  const res = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${S2.complexity}&tier=${S2.tier}`);
+  const data = await res.json(); // {items: [{name, hours}]}
+  // ...render checkboxes all **checked by default**
+}
+
+// On any checkbox change in the modal
+function onComponentToggle(code, compName, checked) {
+  const prev = S2.componentsByDeliv[code];
+  if (!prev || prev === 'ALL') S2.componentsByDeliv[code] = new Set(); // becomes explicit
+  const set = S2.componentsByDeliv[code];
+  checked ? set.add(compName) : set.delete(compName);
+  if (set.size === 0) delete S2.componentsByDeliv[code]; // fall back to 'ALL'
+}
+
+// On modal close (Save/Close button)
+function saveComponentsFor(code) {
+  // nothing else needed: S2.componentsByDeliv already reflects picks
+  // Update button label to show count
+  const pick = S2.componentsByDeliv[code];
+  const count = !pick || pick === 'ALL' ? 'all' : `${pick.size}`;
+  updateComponentsButton(code, count);
+}
+
+
+Build payload from the state (not from the DOM)
+When you click Proceed to Pricing (or Get AI Suggestions), compile the payload like this:
+
+function buildPayloadForApi() {
+  const selected_deliverable_codes = [...S2.selectedCodes];
+
+  const selected_components_map = {};
+  for (const code of selected_deliverable_codes) {
+    const pick = S2.componentsByDeliv[code];
+    if (!pick || pick === 'ALL') continue;                 // omit -> backend uses all components
+    if (pick instanceof Set) selected_components_map[code] = [...pick]; // list format
+    else selected_components_map[code] = pick;             // dict {name: hours}
+  }
+
+  return {
+    selected_deliverable_codes,
+    selected_components_map,
+    scenario_a: S2.scenarioA, scenario_b: S2.scenarioB,
+    pricing_mode: S2.pricingMode, blended_rate: S2.blendedRate, rate_band: S2.rateBand,
+    use_slack: S2.useSlack, slack_after_internal: S2.slackAfterInternal,
+    slack_after_client: S2.slackAfterClient, slack_global_pct: S2.slackGlobalPct,
+    project_start: S2.projectStart,
+    retainers: S2.retainers // if you’re using them
+  };
+}
+
+
+Why this fixes the toast: the count should be derived from S2.componentsByDeliv. If you keep the toast, compute compCount from that object after the modal saves.
+
+Backend evidence for this contract: /api/build loops only over payload.selected_deliverable_codes and reads selected_components_map to mark components as selected; anything omitted is treated as “all selected.” 
+
+v2.8 prod
+
+ 
+
+v2.8 prod
+
+Why Step 4 showed 6 deliverables when you selected 3
+
+Root cause (client-side):
+One build path still merges “AI Adds” or a template default set into the build list. The server does not add anything on its own—it strictly iterates the codes you send in selected_deliverable_codes. 
+
+v2.8 prod
+
+Action (frontend patch):
+
+Make sure the build call only uses S2.selectedCodes:
+
+async function proceedToPricing() {
+  const payload = buildPayloadForApi();    // uses ONLY S2.selectedCodes
+  const res = await fetch('/api/build', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  const data = await res.json();
+  // ...render Step 3/4 from data.scenarios
+}
+
+
+Remove any code that does something like:
+
+// ❌ Do not silently union AI suggestions or template defaults here
+const merged = new Set(S2.selectedCodes);
+AI.add.forEach(s => s.preselect && merged.add(s.code));
+payload.selected_deliverable_codes = [...merged];
+
+
+If you want a one-click “apply AI adds,” keep it as an explicit button that updates S2.selectedCodes visibly in Your Selection.
