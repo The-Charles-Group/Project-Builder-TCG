@@ -3962,8 +3962,28 @@ def convert_excel_to_mspdi(
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
             SubElement(task, "Name").text = r["Name"]
-            SubElement(task, "WBS").text = r["WBS"]
-            SubElement(task, "OutlineNumber").text = r["WBS"]
+            
+            # ---- WBS canonicalization ----
+            wbs_raw = str(r["WBS"]).strip()
+            
+            # remove any trailing ".0" segments at the end (e.g., "1.0" -> "1")
+            # and collapse any ".0" inside (rare but safe)
+            import re
+            wbs = re.sub(r'(?:\.0)+$', '', wbs_raw)      # strip trailing .0s
+            wbs = re.sub(r'\.0\.', '.', wbs)             # strip inner .0 segments if present
+            
+            # if the string ended up empty (super defensive), force root "1"
+            if not wbs:
+                wbs = "1"
+            
+            # Write MSPDI fields
+            SubElement(task, "WBS").text = wbs
+            SubElement(task, "OutlineNumber").text = wbs
+            
+            # OutlineLevel = number of segments in WBS (1 for "1", 2 for "1.1", etc.)
+            outline_level = len(wbs.split('.'))
+            SubElement(task, "OutlineLevel").text = str(outline_level)
+            # ---- end canonicalization ----
             
             # Summary task flag
             is_summary = r["UID"] in summary_set
@@ -4002,10 +4022,6 @@ def convert_excel_to_mspdi(
             
             # Use ASAP constraint (let Workfront schedule based on dependencies)
             SubElement(task, "ConstraintType").text = "0"  # ASAP (As Soon As Possible)
-            
-            # Outline level (based on WBS hierarchy depth, count('.') + 1)
-            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
-            SubElement(task, "OutlineLevel").text = str(outline_level)
 
         # Assignments
         assignments_elem = SubElement(project, "Assignments")

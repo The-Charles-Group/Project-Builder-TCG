@@ -1,217 +1,74 @@
 # Agency Project Builder
 
 ## Overview
-
-This is a web-based Agency Project Builder that helps agencies create project estimates and timelines from RFPs (Request for Proposals). The system analyzes RFP content, suggests relevant deliverables, builds project scenarios with different complexity/tier combinations, calculates pricing based on role rates and hours, and generates timeline projections with slack considerations. It's designed to streamline the proposal creation process for creative and digital agencies.
+This web-based Agency Project Builder streamlines the proposal creation process for creative and digital agencies. It analyzes RFPs to suggest deliverables, builds project scenarios with varying complexity and tiers, calculates pricing based on role rates and hours, and generates timeline projections with slack. The system aims to provide comprehensive project estimates and timelines efficiently.
 
 ## User Preferences
-
 Preferred communication style: Simple, everyday language.
-
-## Recent Changes
-
-### XML Export v2.9 Validations (September 30, 2025)
-- **Units ≤ 1.0 Enforcement**: Automatic duration adjustment to prevent over-allocation
-  - Analyzes all role assignments per task to find maximum work hours
-  - Automatically increases duration (in whole-day increments) if any assignment would exceed 100% allocation
-  - Result: All resource units stay within Workfront's 0.01-1.0 valid range, preventing import errors
-
-- **Ceil Rounding Policy**: Conservative duration estimation using math.ceil
-  - When `round_to_whole_days=True`, uses ceiling function instead of standard rounding
-  - Ensures durations never underestimate time requirements (always rounds UP)
-  - Example: 1.2 days → 2 days (480min → 960min)
-  - Result: More accurate timeline estimates that account for partial days
-
-- **Cycle Detection & Removal**: Dependency graph validation using Kahn's algorithm
-  - Implements topological sort to detect circular dependencies
-  - Automatically removes problematic edges (highest in-degree first) to break cycles
-  - Recursive validation ensures completely acyclic dependency graph
-  - Result: Clean dependency chains that Workfront can schedule without conflicts
-
-- **Leaf-Only Predecessor Links**: Strict validation of task relationships
-  - Filters out any dependency involving summary/parent tasks
-  - Converts summary task references to their representative leaf tasks (first/last child)
-  - Removes duplicate edges after normalization
-  - Result: Only valid leaf→leaf predecessor links in exported XML
-
-- **Smart Date Handling**: Start/Finish dates only on summary tasks
-  - Leaf tasks omit Start/Finish dates and rely on Duration + PredecessorLinks for scheduling
-  - Workfront computes leaf task dates based on dependencies and project calendar
-  - Eliminates contradictions like "finish tomorrow with a 3-week duration"
-  - Result: Consistent, scheduler-driven task dates that respect dependencies
-
-### XML Export v2.8 Enhancements (September 30, 2025)
-- **WBS Tree Structure Fixes**: Proper summary task handling with MSP/Workfront compatibility
-  - Summary tasks now have `<Summary>1</Summary>` and `<Work>PT0M</Work>` (no direct work assignments)
-  - Only leaf tasks receive work assignments and resource allocations
-  - Fixed assignment creation to check `r["UID"] in summary_set` instead of incorrect WBS check
-  - Result: Parent tasks properly roll up child task values, preventing import errors
-
-- **Constraint Type Changes**: Removed aggressive task pinning for better scheduling flexibility
-  - Changed all tasks from ConstraintType=4 (SNET - Start No Earlier Than) to ConstraintType=0 (ASAP)
-  - Removed ConstraintDate fields that were pinning every task to specific dates
-  - Result: Workfront/MSP can now properly schedule tasks based on dependencies and project calendar
-
-- **Duration Rounding Feature**: Optional whole-day duration display
-  - Added `round_to_whole_days` parameter to `convert_excel_to_mspdi` function
-  - When enabled: rounds durations to whole days (480 minutes = 1 day) for cleaner display
-  - When disabled: preserves exact hour-based durations from calculations
-  - Result: Producers can toggle between precise hours and clean day-based displays
-
-- **Date/Duration Consistency**: Ensured Finish = Start + Duration calculations
-  - Verified date calculations use consistent MinutesPerDay = 480 (8-hour business day)
-  - Start dates calculated from project_start + StartOffset
-  - End dates calculated from Start + Duration (in hours)
-  - Result: No more mismatched date windows vs duration values
-
-### XML Export Bug Fixes (September 30, 2025)
-- **Summary Detection Bug Fixed**: Corrected XML exporter to use UID instead of WBS for summary task detection
-  - Issue: Summary tasks were incorrectly flagged because WBS strings were compared against UID set
-  - Fix: Changed `is_summary = r["WBS"] in summary_set` to `is_summary = r["UID"] in summary_set`
-  - Result: Summary tasks now correctly exclude Work/Duration/Constraint fields, preventing Workfront import errors
-
-- **Project Name Parameter Added**: Enhanced convert_excel_to_mspdi to accept custom project names
-  - Added `project_name` parameter to function signature
-  - Updated XML `<Name>` element to use `project_name or f"Project from {sheet_name}"`
-  - Threaded project_name through both `/api/export_xml` and `/api/export_workbook_xml` endpoints
-  - Result: Exported XMLs now show user-specified project names instead of "Project from Scenario A"
-
-### Step 2 Workflow Redesign (September 30, 2025)
-- **Removed Confusing "Get AI Suggestions" Button**: Eliminated the secondary button that required analysis data (which should already exist after Step 1)
-- **Streamlined AI Integration**: Step 1 now calls `/api/auto_build` to get both scenarios AND AI suggestions in one call
-- **Three-Panel Design**:
-  - Left: Deliverable picker (all database deliverables with search/filter)
-  - Middle: Your Selection (final merged selection with component controls)
-  - Right: AI Suggestions (pre-populated from Step 1 analysis, with checkboxes)
-- **Clear Merge Workflow**: "Apply selection" merges Left + Right panels into Middle (Your Selection)
-- **Single Source of Truth**: "Proceed to Pricing" builds only from Middle panel selections
-- **Improved Help Text**: Updated Step 2 instructions to reflect new workflow: select left → check AI right → apply → configure components → proceed
-
-### Step 2 Production Integration Complete (September 30, 2025)
-- **Single Source of Truth**: Established S2 object as authoritative state for deliverable selection and component granularity
-  - S2.selectedCodes (Set) tracks selected deliverable codes
-  - S2.componentsByDeliv (Map) tracks per-deliverable component selections ('ALL' or Set)
-  - Made globally accessible via window.S2 for cross-file integration
-
-- **State Flow Integration**: Complete bidirectional synchronization across workflow
-  - AI suggestions → S2 hydration on initStep2() with automatic component defaults
-  - S2 → appState sync on every selection change (apply/remove)
-  - Pre-checked deliverables rendering based on S2.selectedCodes
-  - Component modal with Set-based selection and array serialization for API
-
-- **Unified Payload Building**: Single buildPayloadForApi() function eliminates code duplication
-  - Accepts optional overrides for scenario specs, retainers, and pricing settings
-  - Uses helper functions for Slack settings (getSlack*FromUI) ensuring consistency
-  - Globally accessible for reuse across Step 2 and Step 3 build flows
-  - buildScenariosAB() now uses unified builder instead of manual payload construction
-
-- **Step 2 Action Bar**: Primary workflow controls with sticky positioning
-  - "Proceed to Pricing" button builds scenarios directly from S2 state (no silent AI merges)
-  - "Get AI Suggestions" button calls /api/reconcile for ADD/DELETE recommendations
-  - AI suggestions render in right panel with explicit Apply button for user control
-  - Console logging tracks selected_deliverable_codes and selected_components_map for debugging
-
-- **Bug Fixes and Cleanup**: Resolved critical state management issues
-  - Removed legacy renderDeliverableList(items) function causing override collision
-  - Fixed Set.length → Set.size for proper collection size checks
-  - Changed implicit global to explicit window.selectedCodes declaration
-  - Eliminated 700+ lines of conflicting legacy Step 2 code
-
-- **Developer Experience**: Added console verification helper
-  - verifyS2() function for real-time state inspection
-  - Shows selected deliverables, component selections, and payload preview
-  - Accessible from browser console for QA and debugging
-
-### Component-Level Selection & Export Robustness (September 2025)
-- **Component-Level Selection Feature**: Complete implementation of granular deliverable component control in Step 2
-  - Added `/api/components_for` endpoint for retrieving components with hours breakdown by deliverable
-  - Enhanced BuildPayload model with `selected_components_map` field for per-deliverable component selections
-  - Updated backend logic to filter scenarios based on selected components with intelligent fallbacks
-  - Implemented modal picker UI with "Components..." button showing checkboxes and hour counts
-  - Global `selectedComponentsMap` state management across all build operations
-  - Component count display in deliverable selection UI when components are chosen
-
-- **Export Robustness Enhancements**: Bulletproof XML/Excel exports with automatic data synthesis
-  - Auto-generation of missing task groups from database when scenario data is incomplete
-  - Schedule synthesis using `DB.build_schedule` when schedules are missing from scenarios
-  - Hours by role derivation from raw database when scenario calculations are incomplete
-  - Enhanced deliverable name resolution with robust database fallbacks
-  - Export validation guards to prevent empty scenario exports
-  - WBS builder guarantees detailed structure generation (1,000+ lines, 28+ resources)
-
-### v3 Drivers Support Implementation Complete (September 2025)
-- **Backend Implementation**: Added v3 Drivers support with complete token normalization and mapping functionality
-  - Added helper methods to AgencyDB class: `_norm_token`, `_v4_complexity_tokens`, `_v4_tier_tokens`, `_map_to_v4_token`, and `drivers_complexities_tiers_v3`
-  - Updated `/api/options` endpoint to provide exactly 3 standardized options each for complexity, tiers, and rate bands
-  - Enhanced `scenario_hours_col` method to handle v3 labels mapping to v4 columns with intelligent fallback
-  - Implemented robust fallback logic when no v3 Excel file is available, using v4 data with 3-option limits
-
-- **Frontend Enhancement**: Complete UI integration for v3 Drivers functionality  
-  - Converted Rate Band input field to dropdown and added Complexity and Volume Tier dropdowns
-  - Updated JavaScript to populate all dropdowns from `/api/options` API data with smart defaults
-  - Modified `buildFromSuggestions` and `regenerateWithEdits` functions to send selected values to `/api/build`
-  - All dropdowns now provide exactly 3 options: Complexities (Core/Advanced/Complex), Tiers (T1/T2/T3), Rate Bands (Standard_US/Premium_US/Nearshore_Value)
-
-- **Integration Testing**: Full end-to-end validation confirms proper functionality
-  - API returns exactly 3 options per category as designed
-  - Backend correctly processes complexity and tier overrides in scenario specifications
-  - Pricing calculations work correctly with v3 parameter combinations  
-  - System maintains backward compatibility through intelligent v4 column mapping
 
 ## System Architecture
 
 ### Backend Architecture
-- **Framework**: FastAPI with Python for REST API backend
-- **Data Processing**: Pandas DataFrames for Excel/CSV data manipulation and calculations
-- **File Handling**: Support for document parsing (PDF, DOCX) and Excel file uploads
-- **CORS**: Configured for cross-origin requests to support frontend-backend separation
+- **Framework**: FastAPI with Python.
+- **Data Processing**: Pandas DataFrames for Excel/CSV manipulation.
+- **File Handling**: Supports PDF and DOCX parsing, and Excel file uploads.
+- **CORS**: Configured for cross-origin requests.
 
-### Frontend Architecture  
-- **Technology**: Vanilla JavaScript with HTML/CSS (no framework dependencies)
-- **UI Pattern**: Single-page application with step-based workflow
-- **Styling**: CSS custom properties for theming with dark mode design
-- **State Management**: Client-side caching of options and scenarios data
+### Frontend Architecture
+- **Technology**: Vanilla JavaScript, HTML, and CSS (framework-agnostic).
+- **UI Pattern**: Single-page application with a step-based workflow.
+- **Styling**: CSS custom properties for theming, including dark mode.
+- **State Management**: Client-side caching for options and scenario data.
 
 ### Data Storage Pattern
-- **Primary Storage**: Excel/CSV files containing business rules and configuration data
-- **Data Models**: In-memory DataFrames loaded from spreadsheets including:
-  - Task and deliverable definitions
-  - Pricing rules and rate cards  
-  - Timeline parameters and scaling factors
-  - Bundle configurations and hour allocations
-  - Scenario templates and defaults
+- **Primary Storage**: Excel/CSV files for business rules and configurations.
+- **Data Models**: In-memory DataFrames loaded from spreadsheets, defining tasks, deliverables, pricing, timelines, bundles, and scenarios.
 
 ### Core Business Logic
-- **RFP Analysis**: Text parsing to suggest relevant deliverables
-- **Scenario Building**: Multiple complexity/tier combinations (e.g., MED_LOW vs MED_HIGH)
-- **Pricing Engine**: Support for blended rates or role-based rate bands
-- **Timeline Calculation**: Project duration with configurable slack factors
-- **Export Capability**: Workfront-compatible project structure generation
+- **RFP Analysis**: Extracts key information from RFPs to suggest deliverables.
+- **Scenario Building**: Generates project scenarios with different complexity and tier combinations.
+- **Pricing Engine**: Calculates costs using blended or role-based rate cards.
+- **Timeline Calculation**: Determines project durations, incorporating configurable slack factors.
+- **Export Capability**: Generates Workfront-compatible project structures.
 
 ### API Design
-- RESTful endpoints for data loading, options retrieval, and scenario generation
-- File upload support for RFP documents and Excel configuration files
-- JSON responses for configuration data and calculated scenarios
-- Static file serving for frontend assets
+- **Endpoints**: RESTful API for data loading, options retrieval, and scenario generation.
+- **File Uploads**: Supports RFP documents and Excel configuration files.
+- **Responses**: JSON format for configuration and calculated scenario data.
+- **Static Files**: Serves frontend assets.
+
+### UI/UX Decisions
+- **Step-based workflow**: Guides users through the proposal creation process.
+- **Three-Panel Design for Step 2**: Left for deliverable picker, Middle for selected items, Right for AI suggestions.
+- **Granular Component Selection**: Allows detailed control over deliverable components within Step 2.
+
+### Technical Implementations
+- **XML Export Validations**: Includes rigorous checks for Workfront compatibility, such as unit allocation, duration rounding (ceil), cycle detection in dependencies, leaf-only predecessor links, smart date handling, and WBS canonicalization.
+- **XML Export Enhancements**: Proper summary task handling, removal of aggressive task pinning (ConstraintType=0), optional whole-day duration rounding, and consistent date/duration calculations.
+- **v3 Drivers Support**: Implemented for token normalization and mapping in the backend, with a corresponding UI integration for complexity, tiers, and rate bands.
+
+### Feature Specifications
+- **Component-Level Selection**: Enables users to select specific components within deliverables, impacting scenario generation.
+- **Export Robustness**: Automatic data synthesis for missing task groups, schedules, and hours by role, ensuring complete and valid exports.
 
 ## External Dependencies
 
 ### Python Libraries
-- **FastAPI**: Web framework for API development
-- **Pandas**: Data manipulation and analysis for Excel/CSV processing
-- **NumPy**: Numerical computing support
-- **OpenPyXL**: Excel file reading and writing
-- **PDFPlumber**: PDF document text extraction
-- **python-docx**: Word document processing
-- **Jinja2**: Template engine for report generation
-- **Uvicorn**: ASGI server for FastAPI deployment
+- **FastAPI**: For web framework.
+- **Pandas**: For data manipulation.
+- **NumPy**: For numerical operations.
+- **OpenPyXL**: For Excel file I/O.
+- **PDFPlumber**: For PDF text extraction.
+- **python-docx**: For Word document processing.
+- **Jinja2**: For templating.
+- **Uvicorn**: For ASGI server.
 
 ### File Format Support
-- **Excel/CSV**: Primary data source for business rules and configurations
-- **PDF/DOCX**: RFP document parsing for automated deliverable suggestion
-- **JSON**: API data exchange format
+- **Excel/CSV**: Primary data source.
+- **PDF/DOCX**: For RFP document parsing.
+- **JSON**: For API data exchange.
 
 ### Deployment Requirements
-- **Static File Serving**: Frontend assets served through FastAPI
-- **File Upload Handling**: Multipart form data processing for document uploads
-- **Cross-Origin Support**: CORS middleware for browser compatibility
+- **Static File Serving**.
+- **File Upload Handling**.
+- **Cross-Origin Support**.
