@@ -288,7 +288,12 @@ async function proceedToPricing() {
 // Get AI Suggestions (from Step 2)
 async function getAISuggestions() {
   if (!window.appState || !window.appState.aiSummary) {
-    alert('Enter RFP text or upload a file, then click "Analyze with AI" in Step 1 first.');
+    alert('AI analysis data is missing. Please go back to Step 1 and click "Analyze with AI" to reload your RFP analysis.');
+    return;
+  }
+
+  if (!window.appState.aiSummary.deliverables || window.appState.aiSummary.deliverables.length === 0) {
+    alert('No deliverables found in your RFP analysis. The AI may not have identified any specific deliverables in the uploaded document.');
     return;
   }
 
