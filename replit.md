@@ -10,30 +10,6 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### XML Export v2.8 Enhancements (September 30, 2025)
-- **WBS Tree Structure Fixes**: Proper summary task handling with MSP/Workfront compatibility
-  - Summary tasks now have `<Summary>1</Summary>` and `<Work>PT0M</Work>` (no direct work assignments)
-  - Only leaf tasks receive work assignments and resource allocations
-  - Fixed assignment creation to check `r["UID"] in summary_set` instead of incorrect WBS check
-  - Result: Parent tasks properly roll up child task values, preventing import errors
-
-- **Constraint Type Changes**: Removed aggressive task pinning for better scheduling flexibility
-  - Changed all tasks from ConstraintType=4 (SNET - Start No Earlier Than) to ConstraintType=0 (ASAP)
-  - Removed ConstraintDate fields that were pinning every task to specific dates
-  - Result: Workfront/MSP can now properly schedule tasks based on dependencies and project calendar
-
-- **Duration Rounding Feature**: Optional whole-day duration display
-  - Added `round_to_whole_days` parameter to `convert_excel_to_mspdi` function
-  - When enabled: rounds durations to whole days (480 minutes = 1 day) for cleaner display
-  - When disabled: preserves exact hour-based durations from calculations
-  - Result: Producers can toggle between precise hours and clean day-based displays
-
-- **Date/Duration Consistency**: Ensured Finish = Start + Duration calculations
-  - Verified date calculations use consistent MinutesPerDay = 480 (8-hour business day)
-  - Start dates calculated from project_start + StartOffset
-  - End dates calculated from Start + Duration (in hours)
-  - Result: No more mismatched date windows vs duration values
-
 ### XML Export Bug Fixes (September 30, 2025)
 - **Summary Detection Bug Fixed**: Corrected XML exporter to use UID instead of WBS for summary task detection
   - Issue: Summary tasks were incorrectly flagged because WBS strings were compared against UID set
