@@ -1,0 +1,138 @@
+1) Why Step 2 shows no AI suggestions after “Analyze with AI”
+
+Root cause (frontend wiring):
+Your backend already returns suggested deliverables; you’re just not calling the suggestion endpoint after Step 1 completes.
+
+/api/suggest_by_text and /api/suggest_by_file return the ranked list the UI needs. The heavier /api/auto_build also returns {"suggested": [...], "scenarios": ...} if you want suggestions + a first pass of scenarios in one call.
+
+What to change (frontend):
+
+Hook the Step 1 handlers so they always populate the rightmost “AI Suggestions” column when Step 1 finishes, without requiring a separate button.
+
+Replit, do this in your client JS (where Analyze with AI is bound):
+
+After a successful POST /api/summarize (text) or POST /api/summarize_by_file (file), immediately call one of:
+
+POST /api/suggest_by_text with { rfp_text, strict: true }, or
+
+POST /api/auto_build with { rfp_text, strict: true, selected_deliverable_codes: [], ... }
+(This returns both suggested and early scenarios.)
+Use the suggested array to render the Step 2 AI column.
+
+Make sure you store the last RFP text server-side or client-side; /api/auto_build already builds suggestion lists from the RFP you pass. It returns {"suggested": suggestions, "scenarios": {...}}.
+
+Remove or hide the “Get AI Suggestions” button. We’ll show suggestions automatically after Step 1.
+
+Rendering note
+The suggestion objects come with deliverable_code, deliverable, category, confidence, matches. Render each with a checkbox so the user can “Apply selection” into the middle column, just like the picker on the left.
+
+2) Why the XML import is rejected by Workfront (and how to fix)
+
+I inspected your latest XML (…2025‑09‑30 01.04PM EST.xml). Two specific issues stand out.
+
+A. Summary detection bug (main reason import fails)
+
+In convert_excel_to_mspdi you changed the roll‑up mapping to be UID‑based, but the “is this a summary task?” check still compares WBS strings to a set of UIDs:
+
+# mapping is now UID→children (you build summary_set from UID keys)
+summary_set = set(children_by_parent.keys())
+
+# BUG: still testing WBS against a UID set
+is_summary = r["WBS"] in summary_set
+
+
+Result: every task is treated as a leaf, so the exporter writes Work/Duration/ConstraintType even on summary tasks (including the project summary). You can see that in your XML—the top task (summary) has ConstraintType and ConstraintDate, which should never be present on summaries and can cause Workfront/MS Project to choke.
+
+Fix (backend):
+
+Replit, in convert_excel_to_mspdi where you create tasks, replace the summary check:
+
+# OLD
+is_summary = r["WBS"] in summary_set
+
+# NEW
+is_summary = r["UID"] in summary_set
+
+
+Keep the “only set Work/Duration/Constraint* for non-summary” logic exactly as you already have it—just make sure is_summary is computed by UID. (That one-line change aligns the new UID roll‑up with the summary check.)
+
+B. Project Name mismatch (“Project from Scenario A”)
+
+The <Project><Name> is hard-coded from the Excel sheet name:
+
+SubElement(project, "Name").text = f"Project from {sheet_name}"
+
+
+That’s why Workfront shows “Project from Scenario A.” You set project_name elsewhere, but this exporter ignores it.
+
+Fix (backend):
+
+Replit, let convert_excel_to_mspdi accept a project_name parameter and set <Name> from it:
+
+def convert_excel_to_mspdi(..., project_name=None, sheet_name="Scenario A", ...):
+    ...
+    SubElement(project, "Name").text = (project_name or f"Project from {sheet_name}")
+
+
+Then pass project_name from the export endpoints (/api/export_xml, /api/export_workbook_xml). The endpoints already compute project_name from the UI/file title—just thread it through to the converter.
+
+C. (FYI) OutlineLevel values
+
+You compute OutlineLevel from WBS depth (count('.') + 1), so the top task is 2 when the first WBS row is 1.0. That’s acceptable and not the cause of the import failure by itself. The real problem is the summary/leaf confusion described above.
+
+3) Quick sanity checks you can run immediately
+
+Replit, after applying the two backend fixes:
+
+Export any scenario to XML again.
+
+Inspect the top <Task> (project summary). It must have:
+
+<Summary>1</Summary>
+
+No <Work>, No <Duration>, No <ConstraintType> / <ConstraintDate>.
+
+Spot-check a mid-level parent (e.g., “Development”). It should also be Summary=1 and no Work/Duration/Constraint fields.
+
+Leaf tasks should have Work/Duration and the “Start No Earlier Than” constraint your code adds.
+
+If those look right, Workfront import should succeed.
+
+4) Small UX tweaks you asked for (Step 2)
+
+We can keep your new layout and make it self-explanatory:
+
+How to use note (already added): keep the banner:
+“1) Select deliverables on the left → 2) In ‘Your Selection’, click Components… for each (all selected by default) → 3) Click Apply selection → 4) Proceed to Pricing.”
+
+Default component state: backend already returns component lists; default them all checked. Add Unselect all inside the Components modal and leave individual toggles.
+
+Buttons at the bottom: keep Proceed to Pricing and remove Get AI Suggestions once suggestions auto-fill as described in §1.
+
+5) Why durations show as hours (minutes in XML) vs days
+
+This is expected. MSPDI stores duration and work in minutes (PT####M). Workfront displays durations as days because it applies its 8‑hour business calendar. Your XML already sets MinutesPerDay=480 and calendar blocks (8–12 & 13–17). That’s correct and consistent.
+
+Copy‑paste patch summary for Replit
+
+Step 2 AI suggestions (frontend)
+
+After Analyze with AI completes, call:
+
+POST /api/suggest_by_text with { rfp_text, strict: true } (or POST /api/auto_build), then render the returned suggested list in the right column.
+
+Remove the “Get AI Suggestions” button.
+
+XML exporter (backend)
+
+In convert_excel_to_mspdi change summary check to UID:
+is_summary = r["UID"] in summary_set (not WBS).
+
+Pass project_name into the converter and set:
+SubElement(project, "Name").text = project_name or f"Project from {sheet_name}".
+
+QA
+
+Export XML; verify summaries have no Work/Duration/Constraint fields.
+
+Import to Workfront—should be accepted.
