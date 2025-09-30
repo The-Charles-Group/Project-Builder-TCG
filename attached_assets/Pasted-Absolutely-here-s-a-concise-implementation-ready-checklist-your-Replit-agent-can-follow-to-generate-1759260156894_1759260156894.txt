@@ -1,0 +1,201 @@
+Absolutely—here’s a concise, implementation‑ready checklist your Replit agent can follow to generate Workfront‑friendly MSPDI XML (and a matching Kick‑Start XLSX), incorporating all the fixes we discussed—including rounding durations to whole days.
+
+0) Config (constants your agent should expose)
+
+HOURS_PER_DAY = 8
+
+MINUTES_PER_DAY = HOURS_PER_DAY * 60 # 480
+
+ROUND_DURATION_POLICY = "ceil" (“ceil” to whole days avoids under‑estimating time; allow “nearest” if desired)
+
+DEFAULT_CALENDAR = Standard (Mon–Fri, 09:00–17:00)
+
+DEFAULT_CONSTRAINT = ASAP (ConstraintType=0)
+
+DEFAULT_LINK_TYPE = FS (Type=1)
+
+ALLOW_SUMMARY_ASSIGNMENTS = False
+
+1) Build a task‑centric, role‑aware export view
+
+From your database/XLSX, materialize one table (or DataFrame) with one row per leaf task per role:
+
+Columns (suggested):
+Project_Name, WBS_ID, Parent_WBS_ID, Task_Name, Role, Planned_Hours, Duration_Days (optional), Dependencies (IDs), Notes
+
+Hierarchy: Produce WBS_ID and Parent_WBS_ID for a stable tree.
+
+Assignments: Sum Planned_Hours at (Task, Role) granularity.
+
+Dependencies: Only link leaf→leaf (no parent↔child links).
+
+If your source only has total task hours, create a single assignment to Unassigned so hours aren’t lost (but prefer real roles).
+
+2) Normalize roles → resources
+
+Map your role titles to Resource Names (e.g., via a Role_Map).
+
+If a role cannot be mapped and fallback is not desired → fail the build with a clear message.
+
+3) Compute clean durations (round to whole days)
+
+For each leaf task:
+
+Base duration:
+
+If Duration_Days provided → duration_minutes = Duration_Days * MINUTES_PER_DAY.
+
+Else infer from total planned hours work_h = Σ role.hours using a baseline utilization assumption (e.g., duration_minutes = max(1, ceil(work_h / HOURS_PER_DAY)) * MINUTES_PER_DAY).
+
+Rounding to days (if not multiple of 480):
+
+If policy "ceil" → duration_minutes = ceil(duration_minutes / 480) * 480
+
+If policy "nearest" → duration_minutes = round(duration_minutes / 480) * 480
+
+Units per assignment (keep ≤ 1.0):
+
+For each (task, role) assignment:
+
+duration_hours = duration_minutes / 60
+units = work_h / duration_hours
+
+
+If any units > 1.0: increase duration by whole‑day steps until max(units) ≤ 1.0 (or split the task if you prefer parallelization).
+
+Summary tasks: set Duration = 0 (roll‑up only).
+
+4) Clean dependencies
+
+Remove any link where predecessor or successor is a summary task.
+
+Remove cycles: run a topo‑sort; on cycle detection, drop the newest edge in the cycle (log it).
+
+Keep Type=FS and LinkLag=0 unless your data specifies otherwise.
+
+5) Strip conflicting dates / constraints
+
+For all tasks:
+
+ConstraintType = ASAP (0), remove ConstraintDate.
+
+Remove explicit Start/Finish/ActualStart/ActualFinish.
+
+Let Duration + Predecessors + Calendar drive the schedule.
+
+Keep milestone dates only if explicitly required (and consistent with duration = 0d).
+
+6) Generate MSPDI XML (key structure)
+
+Project header
+
+Title (non‑empty), StartDate (optional anchor), MinutesPerDay=480, MinutesPerWeek=2400, DaysPerMonth=20, DefaultStartTime=09:00:00, DefaultFinishTime=17:00:00, DurationFormat=7 (days), WorkFormat=2 (hours).
+
+Calendars: include a Standard base calendar (Mon–Fri, 09:00–17:00).
+
+Tasks
+
+Insert Project Summary (UID=0): OutlineLevel=0, Summary=1, Duration=PT0M.
+
+For each task:
+
+UID, ID (stable, unique, positive), Name, OutlineLevel, Summary (1 if it has children, else 0),
+
+Duration as ISO 8601 (e.g., PT960M for 2d),
+
+PredecessorLink for each predecessor: <PredecessorUID>, <Type>1</Type>, <LinkLag>0</LinkLag>.
+
+No dates (unless milestone with 0 duration and you truly require date pins).
+
+Resources
+
+One <Resource> per role name (avoid Unassigned if possible).
+
+UID, ID, Name, Type=1, CalendarUID=1.
+
+Assignments
+
+One <Assignment> per (task, role) pair:
+
+TaskUID, ResourceUID, Units (computed), Work as ISO duration (PT{minutes}M).
+
+Omit timephased data unless you intentionally model it.
+
+7) Validations (fail fast)
+
+Hierarchy: every parent has Summary=1 and no assignments.
+
+Durations: leaf durations are multiples of 480 (after rounding).
+
+Units: 0 < Units ≤ 1.0; if not, increase duration (whole days) or split the task.
+
+Work math: for each assignment, abs(Work - Units*Duration) < ε (tolerate small float drift).
+
+Predecessors: all PredecessorUID exist and point to leaf tasks; graph is acyclic.
+
+Counts: UID uniqueness; no empty task names; resource UIDs used by assignments exist.
+
+Project: header fields present; calendar present; UID=0 present.
+
+8) Optional outputs
+
+Kick‑Start XLSX
+
+PROJ Project + TASK Task tabs mirroring your template.
+
+TASK Task.setWorkRequired = Σ assignment hours per task.
+
+Include ASGN Assignment tab: #setTaskID TASK ID, #setRoleID ROLE name, setPlannedHours.
+
+Smoke test generator
+
+Keep a small, import‑fast subset: pick N leaf tasks, include their ancestors, preserve only internal predecessor links, filter assignments/resources accordingly.
+
+9) Pseudocode sketch (agent’s main pipeline)
+tasks, roles = load_export_view()  # one row per leaf task per role
+tree = build_tree(tasks)           # WBS_ID -> children, OutlineLevel
+mark_summary_vs_leaf(tree)
+
+# Assignments per task
+assign_by_task = groupby_task_role_sum(tasks)
+
+# Durations (in minutes) rounded to days
+for task in leaf_tasks(tree):
+    dur_min = infer_or_read_duration(task)
+    dur_min = round_to_days(dur_min, policy="ceil")
+    # ensure Units ≤ 1.0
+    while max( work_h / (dur_min/60) for work_h in assignment_hours(task) ) > 1.0:
+        dur_min += MINUTES_PER_DAY
+    task.duration_minutes = dur_min
+
+# Clean dependencies
+links = build_links_leaf_to_leaf(tasks)
+links = remove_summary_links(links, tree)
+links = break_cycles(links)
+
+# Build XML
+xml = ProjectXML()
+xml.add_project_header(title, calendar=STANDARD, minutes_per_day=480, work_format=2, duration_format=7)
+xml.add_project_summary_task(uid=0)
+
+res_uid = xml.add_resources(unique_role_names(roles))
+for t in topo_order(tree):                 # parents before children to preserve outline
+    xml.add_task(t, duration=t.duration_minutes, outline=outline_level(t), summary=is_summary(t))
+    for pred in links[t]:
+        xml.add_predecessor(t.uid, pred.uid, type="FS", lag=0)
+    if is_leaf(t):
+        for (role, hours) in assign_by_task[t]:
+            units = hours / (t.duration_minutes/60)
+            xml.add_assignment(task_uid=t.uid, res_uid=res_uid[role],
+                               work_minutes=int(round(hours*60)), units=units)
+
+# Validations
+validate(xml)
+
+# Write files
+write_mspdi(xml, "Project.xml")
+write_kickstart(tasks, assign_by_task, "Kickstart.xlsx")
+
+10) Import‑scale safety
+
+If import time approaches limits, split by top‑level phase: generate multiple XMLs that preserve internal links; drop cross‑phase links or replace them with phase‑completion gates.
