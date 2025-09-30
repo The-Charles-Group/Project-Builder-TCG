@@ -46,7 +46,7 @@ async function boot() {
   selectedCodes = [];
   removedCodes = [];
   addedCodes = [];
-  // renderStep2UI(); // Using mountStep2() v2.8 instead
+  renderStep2UI();
   
   // Initialize S2 system
   s2LoadDeliverables();
@@ -223,12 +223,12 @@ async function onRunReconcile() {
         suggestions.append(item);
       });
       
-      // Auto-add disabled - User must explicitly add suggestions (v2.8 spec)
-      // data.suggested.forEach(s => {
-      //   if (s.confidence >= 0.7 && !selectedCodes.includes(s.deliverable_code)) {
-      //     onAdd(s.deliverable_code);
-      //   }
-      // });
+      // Auto-add highly confident suggestions
+      data.suggested.forEach(s => {
+        if (s.confidence >= 0.7 && !selectedCodes.includes(s.deliverable_code)) {
+          onAdd(s.deliverable_code);
+        }
+      });
     } else {
       suggestions.append(el(`<p>No AI suggestions found. Try using the search function on the right.</p>`));
     }
@@ -308,7 +308,7 @@ function onRemove(code) {
   if (!removedCodes.includes(code)) {
     removedCodes = [...removedCodes, code];
   }
-  // renderStep2UI(); // Using mountStep2() v2.8 instead
+  renderStep2UI();
 }
 
 function onRestore(code) {
@@ -316,7 +316,7 @@ function onRestore(code) {
   if (!selectedCodes.includes(code)) {
     selectedCodes = [...selectedCodes, code];
   }
-  // renderStep2UI(); // Using mountStep2() v2.8 instead
+  renderStep2UI();
 }
 
 function onAdd(code) {
@@ -327,7 +327,7 @@ function onAdd(code) {
   if (!addedCodes.includes(code)) {
     addedCodes = [...addedCodes, code];
   }
-  // renderStep2UI(); // Using mountStep2() v2.8 instead
+  renderStep2UI();
 }
 
 function selectedDeliverables(){
@@ -335,48 +335,47 @@ function selectedDeliverables(){
   return selectedCodes;
 }
 
-// LEGACY Step 2 UI - DISABLED (using mountStep2() v2.8 instead)
 // Initialize Step 2 UI when DOM is ready
-// document.addEventListener('DOMContentLoaded', function() {
-//   if (document.querySelector('#yourSelection')) {
-//     renderStep2UI();
-//   }
-// });
+document.addEventListener('DOMContentLoaded', function() {
+  if (document.querySelector('#yourSelection')) {
+    renderStep2UI();
+  }
+});
 
-// New Step 2 UI renderer (blueprint wireframe) - DISABLED
-// function renderStep2UI() {
-//   renderYourSelection();
-//   renderRemovedItems();
-//   renderSearchAndAdd();
-// }
+// New Step 2 UI renderer (blueprint wireframe)
+function renderStep2UI() {
+  renderYourSelection();
+  renderRemovedItems();
+  renderSearchAndAdd();
+}
 
-// function renderYourSelection() {
-//   const box = document.querySelector("#yourSelection");
-//   if (!box) return;
-//   box.innerHTML = "<h3>Your Selection</h3>";
-//   
-//   selectedCodes.forEach(code => {
-//     const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
-//     if (!deliverable) return;
-//     
-//     const selectedComps = selectedComponentsMap[code] || new Set();
-//     const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size} components)` : '';
-//     
-//     const item = el(`
-//       <div class="row">
-//         <div>
-//           <strong>${deliverable.Deliverable}</strong>${compCountText}
-//           <small class="badge">${deliverable.Category}</small>
-//         </div>
-//         <div style="display: flex; gap: 8px; align-items: center;">
-//           <button onclick="openComponentPicker('${code}', '${deliverable.Deliverable}')" class="btn-small" style="padding: 4px 8px; font-size: 12px;">Components...</button>
-//           <button onclick="onRemove('${code}')" class="remove-btn">×</button>
-//         </div>
-//       </div>
-//     `);
-//     box.append(item);
-//   });
-// }
+function renderYourSelection() {
+  const box = document.querySelector("#yourSelection");
+  if (!box) return;
+  box.innerHTML = "<h3>Your Selection</h3>";
+  
+  selectedCodes.forEach(code => {
+    const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
+    if (!deliverable) return;
+    
+    const selectedComps = selectedComponentsMap[code] || new Set();
+    const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size} components)` : '';
+    
+    const item = el(`
+      <div class="row">
+        <div>
+          <strong>${deliverable.Deliverable}</strong>${compCountText}
+          <small class="badge">${deliverable.Category}</small>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button onclick="openComponentPicker('${code}', '${deliverable.Deliverable}')" class="btn-small" style="padding: 4px 8px; font-size: 12px;">Components...</button>
+          <button onclick="onRemove('${code}')" class="remove-btn">×</button>
+        </div>
+      </div>
+    `);
+    box.append(item);
+  });
+}
 
 function renderRemovedItems() {
   const box = document.querySelector("#removedItems");
@@ -669,86 +668,85 @@ async function onExport(which){
   URL.revokeObjectURL(url);
 }
 
-// LEGACY Component Selection - DISABLED (using mountStep2() v2.8 instead)
 // Component Selection Functionality
-// async function openComponentPicker(code, name) {
-//   try {
-//     const complexity = document.querySelector('#complexity')?.value || 'Advanced';
-//     const tier = document.querySelector('#tier')?.value || 'T2_MediumVolume';
-//     
-//     const response = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${complexity}&tier=${tier}`);
-//     const data = await response.json();
-//     const components = data.items || [];
-//     
-//     if (components.length === 0) {
-//       alert(`No components found for ${name}`);
-//       return;
-//     }
-//     
-//     // Initialize selection for this deliverable if not exists
-//     if (!selectedComponentsMap[code]) selectedComponentsMap[code] = new Set();
-//     
-//     // Create modal
-//     const modal = el(`
-//       <div id="component-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
-//         <div style="background: var(--card); padding: 24px; border-radius: 8px; max-width: 500px; width: 90%; max-height: 80%; overflow-y: auto;">
-//           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-//             <h3 style="margin: 0;">Components for ${name}</h3>
-//             <button onclick="closeComponentPicker()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
-//           </div>
-//           <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
-//           <div id="component-list"></div>
-//           <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
-//             <button onclick="closeComponentPicker()" class="btn-secondary">Cancel</button>
-//             <button onclick="saveComponentSelection('${code}')" class="btn-primary">Save Selection</button>
-//           </div>
-//         </div>
-//       </div>
-//     `);
-//     
-//     document.body.appendChild(modal);
-//     
-//     // Populate component list
-//     const list = document.getElementById('component-list');
-//     components.forEach(comp => {
-//       const isSelected = selectedComponentsMap[code].has(comp.name);
-//       const item = el(`
-//         <label style="display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); margin-bottom: 4px; border-radius: 4px; cursor: pointer;">
-//           <input type="checkbox" data-component="${comp.name}" ${isSelected ? 'checked' : ''}>
-//           <div style="flex: 1;">
-//             <div style="font-weight: 500;">${comp.name}</div>
-//             <div style="font-size: 12px; color: var(--muted);">${comp.hours} hours</div>
-//           </div>
-//         </label>
-//       `);
-//       list.appendChild(item);
-//     });
-//     
-//   } catch (error) {
-//     console.error('Error loading components:', error);
-//     alert('Error loading components. Please try again.');
-//   }
-// }
+async function openComponentPicker(code, name) {
+  try {
+    const complexity = document.querySelector('#complexity')?.value || 'Advanced';
+    const tier = document.querySelector('#tier')?.value || 'T2_MediumVolume';
+    
+    const response = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${complexity}&tier=${tier}`);
+    const data = await response.json();
+    const components = data.items || [];
+    
+    if (components.length === 0) {
+      alert(`No components found for ${name}`);
+      return;
+    }
+    
+    // Initialize selection for this deliverable if not exists
+    if (!selectedComponentsMap[code]) selectedComponentsMap[code] = new Set();
+    
+    // Create modal
+    const modal = el(`
+      <div id="component-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+        <div style="background: var(--card); padding: 24px; border-radius: 8px; max-width: 500px; width: 90%; max-height: 80%; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin: 0;">Components for ${name}</h3>
+            <button onclick="closeComponentPicker()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
+          </div>
+          <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
+          <div id="component-list"></div>
+          <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
+            <button onclick="closeComponentPicker()" class="btn-secondary">Cancel</button>
+            <button onclick="saveComponentSelection('${code}')" class="btn-primary">Save Selection</button>
+          </div>
+        </div>
+      </div>
+    `);
+    
+    document.body.appendChild(modal);
+    
+    // Populate component list
+    const list = document.getElementById('component-list');
+    components.forEach(comp => {
+      const isSelected = selectedComponentsMap[code].has(comp.name);
+      const item = el(`
+        <label style="display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); margin-bottom: 4px; border-radius: 4px; cursor: pointer;">
+          <input type="checkbox" data-component="${comp.name}" ${isSelected ? 'checked' : ''}>
+          <div style="flex: 1;">
+            <div style="font-weight: 500;">${comp.name}</div>
+            <div style="font-size: 12px; color: var(--muted);">${comp.hours} hours</div>
+          </div>
+        </label>
+      `);
+      list.appendChild(item);
+    });
+    
+  } catch (error) {
+    console.error('Error loading components:', error);
+    alert('Error loading components. Please try again.');
+  }
+}
 
-// function closeComponentPicker() {
-//   const modal = document.getElementById('component-modal');
-//   if (modal) modal.remove();
-// }
+function closeComponentPicker() {
+  const modal = document.getElementById('component-modal');
+  if (modal) modal.remove();
+}
 
-// function saveComponentSelection(code) {
-//   const modal = document.getElementById('component-modal');
-//   const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
-//   
-//   selectedComponentsMap[code] = new Set();
-//   checkboxes.forEach(cb => {
-//     if (cb.checked) {
-//       selectedComponentsMap[code].add(cb.dataset.component);
-//     }
-//   });
-//   
-//   closeComponentPicker();
-//   renderYourSelection(); // Refresh the display to show component count
-// }
+function saveComponentSelection(code) {
+  const modal = document.getElementById('component-modal');
+  const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+  
+  selectedComponentsMap[code] = new Set();
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      selectedComponentsMap[code].add(cb.dataset.component);
+    }
+  });
+  
+  closeComponentPicker();
+  renderYourSelection(); // Refresh the display to show component count
+}
 
 // Timeline functionality
 function getScenario(letter) {
@@ -1399,8 +1397,8 @@ function mountStep2() {
   const S2 = window.S2 || {
     allDeliverables: [],
     selectedCodes: new Set(),
-    selectedMeta: new Map(),        // code -> {name, category}
-    componentsByDeliv: Object.create(null),  // code -> 'ALL' | Set(component names) | {name: hours}
+    selectedMeta: new Map(),      // code -> {name, category}
+    selectedComponentsMap: {},    // code -> Set(component names)
   };
   window.S2 = S2;
 
@@ -1440,7 +1438,7 @@ function mountStep2() {
         } else {
           S2.selectedCodes.delete(code);
           S2.selectedMeta.delete(code);
-          delete S2.componentsByDeliv[code];
+          delete S2.selectedComponentsMap[code];
         }
         renderLeft();
         syncProceedButton();
@@ -1458,7 +1456,7 @@ function mountStep2() {
     renderRight(els.search?.value || ''); renderLeft(); syncProceedButton();
   });
   els.btnClear?.addEventListener('click', () => {
-    S2.selectedCodes.clear(); S2.selectedMeta.clear(); S2.componentsByDeliv = Object.create(null);
+    S2.selectedCodes.clear(); S2.selectedMeta.clear(); S2.selectedComponentsMap = {};
     renderRight(els.search?.value || ''); renderLeft(); syncProceedButton();
   });
 
@@ -1467,12 +1465,10 @@ function mountStep2() {
     const host = els.yourSel;
     const rows = Array.from(S2.selectedCodes).map(code => {
       const meta = S2.selectedMeta.get(code) || { name: code, category: '' };
-      const pick = S2.componentsByDeliv[code];
-      const count = !pick || pick === 'ALL' ? 'all' : (pick instanceof Set ? pick.size : Object.keys(pick).length);
       return `<div class="row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.06)">
         <strong>${meta.name}</strong>
         <small style="opacity:.75">${meta.category || ''}</small>
-        <button class="btn small s2-comp" data-code="${code}" data-name="${meta.name}" style="margin-left:auto">Components (${count})…</button>
+        <button class="btn small s2-comp" data-code="${code}" data-name="${meta.name}" style="margin-left:auto">Components…</button>
         <button class="btn small s2-remove" data-code="${code}">✕</button>
       </div>`;
     });
@@ -1480,7 +1476,7 @@ function mountStep2() {
 
     host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
       const code = e.target.dataset.code;
-      S2.selectedCodes.delete(code); S2.selectedMeta.delete(code); delete S2.componentsByDeliv[code];
+      S2.selectedCodes.delete(code); S2.selectedMeta.delete(code); delete S2.selectedComponentsMap[code];
       renderRight(els.search?.value || ''); renderLeft(); syncProceedButton();
     }));
     host.querySelectorAll('.s2-comp').forEach(btn => btn.addEventListener('click', e => {
@@ -1493,66 +1489,36 @@ function mountStep2() {
     const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}`);
     const data = await r.json();
     const items = data.items || [];
-    
-    // Get current selection or default to 'ALL' (all checked)
-    const current = S2.componentsByDeliv[code];
-    const isAllSelected = !current || current === 'ALL';
-    
+    const current = S2.selectedComponentsMap[code] || new Set();
     els.compTitle.textContent = `Components — ${name}`;
     els.compList.innerHTML = items.map(c => `
       <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
-        <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}" 
-          ${isAllSelected || (current instanceof Set && current.has(c.name)) ? 'checked' : ''}/>
+        <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}" ${current.has(c.name) ? 'checked' : ''}/>
         <span>${c.name}</span>
         <small style="margin-left:auto;opacity:.75">${Math.round(c.hours)}h</small>
       </label>`).join('') || '<div style="opacity:.7;padding:8px">No components for this deliverable.</div>';
     els.compDrawer.style.display = 'block';
 
-    // Track changes
     els.compList.querySelectorAll('.s2compchk').forEach(chk => {
       chk.addEventListener('change', e => {
         const k = e.target.dataset.code, n = e.target.dataset.name;
-        const prev = S2.componentsByDeliv[k];
-        
-        // Convert from 'ALL' to explicit Set on first change
-        if (!prev || prev === 'ALL') {
-          S2.componentsByDeliv[k] = new Set(items.map(c => c.name));
-        }
-        
-        const set = S2.componentsByDeliv[k];
-        e.target.checked ? set.add(n) : set.delete(n);
-        
-        // If all unchecked, remove entry (falls back to 'ALL')
-        if (set.size === 0) delete S2.componentsByDeliv[k];
+        if (!S2.selectedComponentsMap[k]) S2.selectedComponentsMap[k] = new Set();
+        e.target.checked ? S2.selectedComponentsMap[k].add(n) : S2.selectedComponentsMap[k].delete(n);
       });
     });
   }
-  
-  // Save component state and update button label on close
-  els.compDone?.addEventListener('click', () => {
-    els.compDrawer.style.display = 'none';
-    renderLeft();  // Update button labels with new counts
-  });
+  els.compDone?.addEventListener('click', () => els.compDrawer.style.display = 'none');
 
-  // ---- Apply selection → BUILD scenarios (from S2 state only, no merging) ----
+  // ---- Apply selection → BUILD scenarios ----
   els.btnApply?.addEventListener('click', async () => {
     if (S2.selectedCodes.size === 0) { alert('Please select at least one deliverable.'); return; }
 
-    // Build component map from state (omit 'ALL' entries, backend treats missing as 'all components')
-    const selected_components_map = {};
-    for (const code of S2.selectedCodes) {
-      const pick = S2.componentsByDeliv[code];
-      if (!pick || pick === 'ALL') continue;  // omit -> backend uses all components
-      if (pick instanceof Set) {
-        selected_components_map[code] = Array.from(pick);  // list format
-      } else {
-        selected_components_map[code] = pick;  // dict {name: hours}
-      }
-    }
+    const compMap = Object.fromEntries(Object.entries(S2.selectedComponentsMap)
+                      .map(([k, set]) => [k, Array.from(set || [])]));
 
     const payload = {
-      selected_deliverable_codes: Array.from(S2.selectedCodes),  // ONLY explicitly selected codes
-      selected_components_map,
+      selected_deliverable_codes: Array.from(S2.selectedCodes),
+      selected_components_map: compMap,                               // components included in build
       scenario_a: { mode: 'template', scenario_key: document.querySelector('#scenarioA')?.value || 'MED_LOW' },
       scenario_b: { mode: 'template', scenario_key: document.querySelector('#scenarioB')?.value || 'MED_HIGH' },
       pricing_mode: document.querySelector('#pricingMode')?.value || 'Flat_Blended',
@@ -1567,8 +1533,8 @@ function mountStep2() {
 
     const res = await fetch('/api/build', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
       .then(r => r.json());
-    window.__lastBuild = res;  // used by pricing/export
-    syncProceedButton(true);   // now safe to proceed
+    window.__lastBuild = res;                                         // used by pricing/export
+    syncProceedButton(true);                                          // now safe to proceed
   });
 
   // ---- Proceed button guard (prevents the alert you saw) ----

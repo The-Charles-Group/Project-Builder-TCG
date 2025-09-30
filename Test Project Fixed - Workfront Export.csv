@@ -1,0 +1,48 @@
+Project_Name,WBS_ID,Parent_WBS_ID,Task_Name,Deliverable,Component,Task,Role,Seniority,Planned_Hours,Start_Offset_Days,Duration_Days,Dependencies,Assignee_External_ID,Notes,Rate_USD,Price_USD
+Test Project Fixed,1,,Test Project Fixed,,Project,,,,,0,,,,,,
+Test Project Fixed,1.1,1,Development,Development,,,,,227,0,22,,,Core/T2_MediumVolume,150.0,34093.5
+Test Project Fixed,1.1.1,1.1,ADA Compliance,Development,ADA Compliance,,,,50,0,15,1.1,,,150.0,7522.5
+Test Project Fixed,1.1.1.1,1.1.1,Accessibility Audit,Development,ADA Compliance,Accessibility Audit,Accessibility Specialist,Mid,2,0,3,1.1.1,,,150.0,255.0
+Test Project Fixed,1.1.1.2,1.1.1,Accessibility QA,Development,ADA Compliance,Accessibility QA,QA Engineer,Mid,4,10,2,1.1.1.1,,,150.0,637.5
+Test Project Fixed,1.1.1.3,1.1.1,Code Review,Development,ADA Compliance,Code Review,Frontend Engineer,Mid,44,12,10,1.1.1.2,,,150.0,6630.0
+Test Project Fixed,1.1.2,1.1,Audit & Requirement gathering,Development,Audit & Requirement gathering,,,,17,0,3,1.1.1,,,150.0,2550.0
+Test Project Fixed,1.1.2.1,1.1.2,Analytics Audit,Development,Audit & Requirement gathering,Analytics Audit,Business Analyst,Mid,17,0,3,1.1.2,,,150.0,2550.0
+Test Project Fixed,1.1.3,1.1,Audit existing UA Property,Development,Audit existing UA Property,,,,17,0,3,1.1.2,,,150.0,2550.0
+Test Project Fixed,1.1.3.1,1.1.3,Documentation,Development,Audit existing UA Property,Documentation,Business Analyst,Mid,17,0,3,1.1.3,,,150.0,2550.0
+Test Project Fixed,1.1.4,1.1,Footer CTA,Development,Footer CTA,,,,43,3,19,1.1.3,,,150.0,6438.0
+Test Project Fixed,1.1.4.1,1.1.4,Design Consult,Development,Footer CTA,Design Consult,UI Designer,Mid,3,3,7,1.1.4,,,150.0,510.0
+Test Project Fixed,1.1.4.2,1.1.4,Accessibility QA,Development,Footer CTA,Accessibility QA,QA Engineer,Mid,6,10,2,1.1.4.1,,,150.0,828.0
+Test Project Fixed,1.1.4.3,1.1.4,Code Review,Development,Footer CTA,Code Review,Backend Engineer,Mid,34,12,10,1.1.4.2,,,150.0,5100.0
+Test Project Fixed,1.1.5,1.1,Header & Footer Navigation,Development,Header & Footer Navigation,,,,43,3,19,1.1.4,,,150.0,6438.0
+Test Project Fixed,1.1.5.1,1.1.5,Design Consult,Development,Header & Footer Navigation,Design Consult,UI Designer,Mid,3,3,7,1.1.5,,,150.0,510.0
+Test Project Fixed,1.1.5.2,1.1.5,Accessibility QA,Development,Header & Footer Navigation,Accessibility QA,QA Engineer,Mid,6,10,2,1.1.5.1,,,150.0,828.0
+Test Project Fixed,1.1.5.3,1.1.5,Code Review,Development,Header & Footer Navigation,Code Review,Backend Engineer,Mid,34,12,10,1.1.5.2,,,150.0,5100.0
+Test Project Fixed,1.1.6,1.1,Additional Goals Setup,Development,Additional Goals Setup,,,,7,10,12,1.1.5,,,150.0,1018.5
+Test Project Fixed,1.1.6.1,1.1.6,QA Cycle,Development,Additional Goals Setup,QA Cycle,QA Engineer,Mid,3,10,2,1.1.6,,,150.0,382.5
+Test Project Fixed,1.1.6.2,1.1.6,Define & Configure Goals,Development,Additional Goals Setup,Define & Configure Goals,Data/Analytics Engineer,Mid,4,12,10,1.1.6.1,,,150.0,636.0
+Test Project Fixed,1.1.7,1.1,Custom Event Tracking,Development,Custom Event Tracking,,,,7,10,12,1.1.6,,,150.0,1018.5
+Test Project Fixed,1.1.7.1,1.1.7,QA Cycle,Development,Custom Event Tracking,QA Cycle,QA Engineer,Mid,3,10,2,1.1.7,,,150.0,382.5
+Test Project Fixed,1.1.7.2,1.1.7,Event Schema & Tagging,Development,Custom Event Tracking,Event Schema & Tagging,Data/Analytics Engineer,Mid,4,12,10,1.1.7.1,,,150.0,636.0
+Test Project Fixed,1.1.8,1.1,Implement Paid Media Pixel on website w GTM-Google Ads,Development,Implement Paid Media Pixel on website w GTM-Google Ads,,,,5,10,12,1.1.7,,,150.0,700.5
+Test Project Fixed,1.1.8.1,1.1.8,Spec QA,Development,Implement Paid Media Pixel on website w GTM-Google Ads,Spec QA,QA Engineer,Mid,3,10,2,1.1.8,,,150.0,382.5
+Test Project Fixed,1.1.8.2,1.1.8,Pixel Setup (GTM),Development,Implement Paid Media Pixel on website w GTM-Google Ads,Pixel Setup (GTM),Data/Analytics Engineer,Mid,2,12,10,1.1.8.1,,,150.0,318.0
+Test Project Fixed,1.1.9,1.1,Implement goals listed in UA as Conversions in G4,Development,Implement goals listed in UA as Conversions in G4,,,,7,10,12,1.1.8,,,150.0,1018.5
+Test Project Fixed,1.1.9.1,1.1.9,QA Cycle,Development,Implement goals listed in UA as Conversions in G4,QA Cycle,QA Engineer,Mid,3,10,2,1.1.9,,,150.0,382.5
+Test Project Fixed,1.1.9.2,1.1.9,Migrate UA Goals → GA4 Conversions,Development,Implement goals listed in UA as Conversions in G4,Migrate UA Goals → GA4 Conversions,Data/Analytics Engineer,Mid,4,12,10,1.1.9.1,,,150.0,636.0
+Test Project Fixed,1.1.10,1.1,Implementation,Development,Implementation,,,,7,10,12,1.1.9,,,150.0,1018.5
+Test Project Fixed,1.1.10.1,1.1.10,QA Cycle,Development,Implementation,QA Cycle,QA Engineer,Mid,3,10,2,1.1.10,,,150.0,382.5
+Test Project Fixed,1.1.10.2,1.1.10,Implement Tags/Events,Development,Implementation,Implement Tags/Events,Data/Analytics Engineer,Mid,4,12,10,1.1.10.1,,,150.0,636.0
+Test Project Fixed,1.1.11,1.1,Outbound link clicks,Development,Outbound link clicks,,,,5,10,12,1.1.10,,,150.0,700.5
+Test Project Fixed,1.1.11.1,1.1.11,QA,Development,Outbound link clicks,QA,QA Engineer,Mid,3,10,2,1.1.11,,,150.0,382.5
+Test Project Fixed,1.1.11.2,1.1.11,Event Config,Development,Outbound link clicks,Event Config,Data/Analytics Engineer,Mid,2,12,10,1.1.11.1,,,150.0,318.0
+Test Project Fixed,1.1.12,1.1,"Publishing tags, Testing and Auditing",Development,"Publishing tags, Testing and Auditing",,,,4,10,2,1.1.11,,,150.0,700.5
+Test Project Fixed,1.1.12.1,1.1.12,Publish & Smoke Test,Development,"Publishing tags, Testing and Auditing",Publish & Smoke Test,QA Engineer,Mid,4,10,2,1.1.12,,,150.0,700.5
+Test Project Fixed,1.1.13,1.1,Setup cross-domain tracking,Development,Setup cross-domain tracking,,,,4,10,12,1.1.12,,,150.0,700.5
+Test Project Fixed,1.1.13.1,1.1.13,QA,Development,Setup cross-domain tracking,QA,QA Engineer,Mid,2,10,2,1.1.13,,,150.0,382.5
+Test Project Fixed,1.1.13.2,1.1.13,Cross-domain Config,Development,Setup cross-domain tracking,Cross-domain Config,Data/Analytics Engineer,Mid,2,12,10,1.1.13.1,,,150.0,318.0
+Test Project Fixed,1.1.14,1.1,Setup eCommerce tracking,Development,Setup eCommerce tracking,,,,4,10,12,1.1.13,,,150.0,700.5
+Test Project Fixed,1.1.14.1,1.1.14,QA,Development,Setup eCommerce tracking,QA,QA Engineer,Mid,2,10,2,1.1.14,,,150.0,382.5
+Test Project Fixed,1.1.14.2,1.1.14,Ecommerce Data Layer,Development,Setup eCommerce tracking,Ecommerce Data Layer,Data/Analytics Engineer,Mid,2,12,10,1.1.14.1,,,150.0,318.0
+Test Project Fixed,1.1.15,1.1,Setup new GA4 acct for Caledera House,Development,Setup new GA4 acct for Caledera House,,,,7,10,12,1.1.14,,,150.0,1018.5
+Test Project Fixed,1.1.15.1,1.1.15,QA Cycle,Development,Setup new GA4 acct for Caledera House,QA Cycle,QA Engineer,Mid,3,10,2,1.1.15,,,150.0,382.5
+Test Project Fixed,1.1.15.2,1.1.15,GA4 Property Setup,Development,Setup new GA4 acct for Caledera House,GA4 Property Setup,Data/Analytics Engineer,Mid,4,12,10,1.1.15.1,,,150.0,636.0
