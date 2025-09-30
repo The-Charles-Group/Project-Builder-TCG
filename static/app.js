@@ -1182,5 +1182,3 @@ document.addEventListener('click', e => {
   selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
 });
 
-// ---- S2 Functions (GPT 5 Pro Implementation) ----
-
