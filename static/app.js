@@ -5,13 +5,18 @@ let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
 // ---------- Step 2 state ----------
 const S2 = {
   options: null,                  // { deliverables: [...] } from /api/options
-  selectedCodes: new Set(),       // deliverable codes
-  // componentsByDeliv: { DELIV_CODE: Set([...component names...]) }
-  componentsByDeliv: {},
+  suggested: [],                  // AI suggestions from Step 1: [{ deliverable_code, label }, ...]
+  suggestedChecked: new Set(),    // codes currently checked in AI panel  
+  selectedCodes: new Set(),       // deliverable codes in "Your Selection"
+  componentsByDeliv: {},          // { DELIV_CODE: 'ALL' | Set([...component names...]) }
+  scenarios: null,                // latest built scenarios
+  aiSummary: null                 // AI summary from Step 1
 };
 
 // Make S2 globally accessible for buildScenariosAB in index.html
 window.S2 = S2;
+// Also expose as APB for compatibility with patch plan
+window.APB = S2;
 
 // Ensure init only runs once
 let s2Inited = false;
@@ -110,9 +115,6 @@ function wireStep2Handlers() {
     if (e.target.closest('#s2-to-pricing')) {
       proceedToPricing();
     }
-    if (e.target.closest('#s2-run-ai')) {
-      getAISuggestions();
-    }
   });
 }
 
@@ -145,25 +147,35 @@ function renderDeliverableList(filter = '') {
 }
 
 function applySelection() {
-  const picked = Array.from(document.querySelectorAll('#s2-deliv-list input[type=checkbox]:checked'))
+  // Get checked from left panel
+  const leftChecked = Array.from(document.querySelectorAll('#s2-deliv-list input[type=checkbox]:checked'))
     .map(cb => cb.getAttribute('data-code'))
     .filter(Boolean);
 
-  if (!picked.length) {
-    alert('Please select at least one deliverable before proceeding to pricing.');
+  // Get checked from AI suggestions panel
+  const aiChecked = Array.from(S2.suggestedChecked || []);
+
+  // Merge both (no duplicates)
+  const merged = Array.from(new Set([...leftChecked, ...aiChecked]));
+
+  if (merged.length === 0) {
+    alert('Please select at least one deliverable.');
     return;
   }
 
-  // Merge into selection, maintain insertion order
-  picked.forEach(code => S2.selectedCodes.add(code));
+  // Update selected codes with merged set
+  S2.selectedCodes = new Set(merged);
 
   // Default: when a deliverable is added, pre‑select **all** components (can unselect later).
-  picked.forEach(code => { if (!S2.componentsByDeliv[code]) S2.componentsByDeliv[code] = 'ALL'; });
+  merged.forEach(code => { if (!S2.componentsByDeliv[code]) S2.componentsByDeliv[code] = 'ALL'; });
 
   // Sync S2 state to appState for Step 3 compatibility
   if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
 
   renderSelectionPanel();
+  
+  // Update left panel checkboxes to reflect merged selection
+  renderDeliverableList();
 }
 
 function renderSelectionPanel() {
@@ -285,92 +297,61 @@ async function proceedToPricing() {
   console.log(`Build completed with ${S2.selectedCodes.size} deliverables`);
 }
 
-// Get AI Suggestions (from Step 2)
-async function getAISuggestions() {
-  if (!window.appState || !window.appState.aiSummary) {
-    alert('AI analysis data is missing. Please go back to Step 1 and click "Analyze with AI" to reload your RFP analysis.');
+// Render AI suggestions in right panel (Step 2)
+function renderAISuggestions() {
+  const box = document.getElementById("s2-ai-list");
+  if (!box) return;
+
+  // If user hasn't run Step 1 yet
+  if (!S2.suggested || S2.suggested.length === 0) {
+    box.innerHTML = `<div class="muted">Run <b>Analyze with AI</b> in Step 1 to populate suggestions.</div>`;
     return;
   }
 
-  if (!window.appState.aiSummary.deliverables || window.appState.aiSummary.deliverables.length === 0) {
-    alert('No deliverables found in your RFP analysis. The AI may not have identified any specific deliverables in the uploaded document.');
-    return;
-  }
+  // Build list with checkboxes
+  const rows = S2.suggested.map(s => {
+    const code = String(s.deliverable_code);
+    const name = s.label || mapCodeToName(code);
+    const checked = S2.suggestedChecked.has(code) ? "checked" : "";
+    return `
+      <label class="row" style="display:flex;gap:8px;padding:4px;cursor:pointer">
+        <input type="checkbox" data-ai-suggest-code="${code}" ${checked}>
+        <span>${name}</span>
+      </label>`;
+  }).join("");
 
-  const payload = {
-    summary_deliverables: window.appState.aiSummary.deliverables?.map(d => d.label) || [],
-    db_selected_deliverable_codes: Array.from(S2.selectedCodes)
-  };
+  box.innerHTML = `
+    <div class="btns" style="margin-bottom:8px">
+      <button id="s2-ai-selall" class="btn">Select all</button>
+      <button id="s2-ai-clear" class="btn">Clear</button>
+    </div>
+    <div class="list scroll">${rows}</div>
+  `;
 
-  const res = await fetch('/api/reconcile', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+  // Wire checkbox events
+  box.querySelectorAll('input[type="checkbox"][data-ai-suggest-code]').forEach(inp => {
+    inp.addEventListener("change", (e) => {
+      const code = e.target.getAttribute("data-ai-suggest-code");
+      if (e.target.checked) S2.suggestedChecked.add(code);
+      else S2.suggestedChecked.delete(code);
+    });
   });
   
-  if (!res.ok) {
-    alert('Could not get AI suggestions. Please try again.');
-    return;
-  }
-  
-  const data = await res.json();
-
-  // Render into the right panel (ADD / DELETE buckets)
-  renderAISuggestions(data);
+  // Wire button events
+  box.querySelector("#s2-ai-selall")?.addEventListener("click", () => {
+    S2.suggested.forEach(s => S2.suggestedChecked.add(String(s.deliverable_code)));
+    renderAISuggestions();
+  });
+  box.querySelector("#s2-ai-clear")?.addEventListener("click", () => {
+    S2.suggestedChecked.clear();
+    renderAISuggestions();
+  });
 }
 
-// Render AI suggestions in right panel
-function renderAISuggestions(data) {
-  const panel = document.querySelector('#s2-ai-list');
-  if (!panel) return;
-
-  const addRows = (data.add || []).map(s =>
-    `<label style="display:flex;gap:8px;padding:4px;cursor:pointer">
-      <input type="checkbox" class="ai-add" data-code="${s.code}" checked> 
-      <span><strong>${s.label}</strong> — ${s.reason}</span>
-    </label>`
-  );
-  
-  const delRows = (data.delete || []).map(s =>
-    `<label style="display:flex;gap:8px;padding:4px;cursor:pointer;color:#ff6b6b">
-      <input type="checkbox" class="ai-del" data-code="${s.code}" checked> 
-      <span><strong>${s.label}</strong> — ${s.reason}</span>
-    </label>`
-  );
-
-  const addSection = addRows.length ? 
-    `<div><h4 style="margin:8px 0;color:var(--accent2)">Add</h4>${addRows.join('')}</div>` : '';
-  
-  const delSection = delRows.length ? 
-    `<div><h4 style="margin:8px 0;color:#ff6b6b">Delete</h4>${delRows.join('')}</div>` : '';
-
-  const applyBtn = (addRows.length + delRows.length > 0) ?
-    '<button id="s2-apply-ai" class="btn primary" style="width:100%;margin-top:12px">Apply AI Changes</button>' : '';
-
-  panel.innerHTML = addSection + delSection + applyBtn || 
-    '<div class="muted">No changes suggested</div>';
-
-  // Wire apply button
-  const applyAiBtn = document.getElementById('s2-apply-ai');
-  if (applyAiBtn) {
-    applyAiBtn.onclick = () => {
-      document.querySelectorAll('.ai-add:checked').forEach(cb => {
-        S2.selectedCodes.add(cb.dataset.code);
-        if (!S2.componentsByDeliv[cb.dataset.code]) S2.componentsByDeliv[cb.dataset.code] = 'ALL';
-      });
-      document.querySelectorAll('.ai-del:checked').forEach(cb => {
-        S2.selectedCodes.delete(cb.dataset.code);
-        delete S2.componentsByDeliv[cb.dataset.code];
-      });
-      
-      // Sync to appState
-      if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
-      
-      renderSelectionPanel();
-      renderDeliverableList();
-      panel.innerHTML = '<div class="muted">Changes applied</div>';
-    };
-  }
+// Helper: map deliverable code to name
+function mapCodeToName(code) {
+  const d = (S2.options?.deliverables || []).find(x => String(x.Deliverable_Code) === String(code));
+  return d ? d.Deliverable : String(code);
 }
 
 // Modal/dialog for components (inline simple version)

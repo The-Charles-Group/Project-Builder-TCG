@@ -1,0 +1,221 @@
+Below is a tight patch plan Replit can apply now. I’m using the IDs we already have in v2.8. I’ll show exactly what to change and why.
+
+What the backend already gives us (we’ll use this)
+
+POST /api/auto_build returns:
+
+{ "suggested": [ { "deliverable_code": "...", "label": "..." }, ... ],
+  "scenarios": { "A": {...}, "B": {...} } }
+
+
+The suggestions come from DB.suggest_deliverables_from_text(...). We can call this right after Step 1 analysis and stash suggested in the client to render in Step 2.
+
+Reconcile (optional) endpoint exists, but we don’t need it for this UI behavior change. It’s there if we later want “why” explanations for adds/deletes.
+
+Goal behavior
+
+User enters RFP (paste or upload) → clicks Analyze with AI (Step 1).
+
+We call /api/auto_build and store payload.suggested.
+
+Step 2 opens with three columns:
+
+Left: Deliverables (select) – search/Select‑all/Clear + checkboxes.
+
+Middle: Your Selection – chosen deliverables (each with Components… button, and an ❌ remove).
+
+Right: AI Suggestions – a checklist of the suggested deliverables from Step 1 (pre‑checked).
+
+Apply selection merges Left + checked Suggestions into Your Selection (no duplicates).
+
+Proceed to Pricing builds A/B with exactly what’s in Your Selection.
+
+Front‑end patches
+1) Remove the extra button and reorder the columns (HTML)
+
+In static/index.html, in the Step 2 block:
+
+Delete the old “Get AI Suggestions” button block.
+
+Re‑order the panes to Left: Deliverables (select), Middle: Your Selection, Right: AI Suggestions (as in your latest screenshot).
+
+Keep the Apply selection button under the Left pane (it applies the merged set).
+
+If you prefer a quick hide instead of deletion:
+
+<!-- Remove this if it still exists -->
+<button id="btn-ai-suggest" style="display:none"></button>
+
+2) Capture suggestions at the end of Step 1 (JS)
+
+In static/app.js, where your Step 1 “Analyze with AI” handlers live (the functions that currently move the app to Step 2), replace the old summarize/build call with auto_build and store the suggestions:
+
+// Global-ish UI state
+window.APB = window.APB || {};
+APB.suggested = [];          // array of { deliverable_code, label }
+APB.selectedCodes = new Set();
+APB.suggestedChecked = new Set(); // to track toggles in the right column
+
+async function analyzeWithAI() {
+  const rfpText = getRfpInputText();      // your existing getter (text or extracted text from upload)
+  // Build payload consistent with your Step 1 controls
+  const payload = {
+    rfp_text: rfpText,
+    scenario_a: { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" },
+    scenario_b: { mode: "template", complexity: "Advanced", tier: "T1_LargeVolume" },
+    pricing_mode: "Flat_Blended",
+    blended_rate: 195,
+    rate_band: "Standard_US",
+    use_slack: true,
+    slack_after_internal: 1,
+    slack_after_client: 2,
+    slack_global_pct: 0.05,
+    project_start: APB.projectStart || null
+  };
+
+  const res = await fetch("/api/auto_build", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json(); // { suggested: [...], scenarios: {...} }
+
+  // Stash the suggestions for Step 2
+  APB.suggested = Array.isArray(data.suggested) ? data.suggested : [];
+  APB.suggestedChecked = new Set(APB.suggested.map(s => String(s.deliverable_code)));
+
+  // (Optional) stash scenarios A/B if you show totals right away
+  APB.scenarios = data.scenarios || {};
+
+  showStep2();          // your existing step switch
+  renderAISuggestions();// <- new (below)
+  renderYourSelection();// ensure the middle column syncs
+}
+
+
+Why this endpoint: it already returns suggested we need (see server code returning {"suggested": suggestions, ...}).
+
+3) Render the AI Suggestions checklist (JS)
+
+Add this renderer after your other Step 2 functions:
+
+function mapCodeToName(code) {
+  // options.deliverables is loaded from /api/options at init
+  const d = (APB.options?.deliverables || []).find(x => String(x.Deliverable_Code) === String(code));
+  return d ? d.Deliverable : String(code);
+}
+
+function renderAISuggestions() {
+  const box = document.getElementById("s2-ai-suggest"); // right column container
+  if (!box) return;
+
+  // If user hasn’t run Step 1 yet
+  if (!APB.suggested || APB.suggested.length === 0) {
+    box.innerHTML = `<div class="muted">Run <b>Analyze with AI</b> in Step 1 to populate suggestions.</div>`;
+    return;
+  }
+
+  // Build list with checkboxes
+  const rows = APB.suggested.map(s => {
+    const code = String(s.deliverable_code);
+    const name = s.label || mapCodeToName(code);
+    const checked = APB.suggestedChecked.has(code) ? "checked" : "";
+    return `
+      <label class="row chk">
+        <input type="checkbox" data-ai-suggest-code="${code}" ${checked}>
+        <span>${name}</span>
+      </label>`;
+  }).join("");
+
+  box.innerHTML = `
+    <div class="toolbar">
+      <button id="s2-ai-selall" class="btn btn-xs">Select all</button>
+      <button id="s2-ai-clear"  class="btn btn-xs">Clear</button>
+    </div>
+    <div class="list scroll">${rows}</div>
+  `;
+
+  // Wire events
+  box.querySelectorAll('input[type="checkbox"][data-ai-suggest-code]').forEach(inp => {
+    inp.addEventListener("change", (e) => {
+      const code = e.target.getAttribute("data-ai-suggest-code");
+      if (e.target.checked) APB.suggestedChecked.add(code);
+      else APB.suggestedChecked.delete(code);
+    });
+  });
+  box.querySelector("#s2-ai-selall")?.addEventListener("click", () => {
+    APB.suggested.forEach(s => APB.suggestedChecked.add(String(s.deliverable_code)));
+    renderAISuggestions();
+  });
+  box.querySelector("#s2-ai-clear")?.addEventListener("click", () => {
+    APB.suggestedChecked.clear();
+    renderAISuggestions();
+  });
+}
+
+4) Merge Left + AI when Apply selection is clicked (JS)
+
+Make sure your existing “Apply selection” handler adds the checked AI suggestions before painting Your Selection:
+
+function getLeftPanelCheckedCodes() {
+  const list = document.getElementById("s2-deliv-list");
+  if (!list) return [];
+  const out = [];
+  list.querySelectorAll('input[type="checkbox"][data-deliv-code]:checked').forEach(inp => {
+    out.push(String(inp.getAttribute("data-deliv-code")));
+  });
+  return out;
+}
+
+document.getElementById("s2-apply")?.addEventListener("click", () => {
+  const left = getLeftPanelCheckedCodes();
+  const ai = Array.from(APB.suggestedChecked || []);
+  const merged = Array.from(new Set([ ...left, ...ai ]));
+
+  if (merged.length === 0) {
+    alert("Please select at least one deliverable.");
+    return;
+  }
+
+  APB.selectedCodes = new Set(merged);
+
+  // Repaint "Your Selection" (middle column)
+  renderYourSelection();
+
+  // Optional UX: scroll to the middle column, flash success, etc.
+});
+
+5) Middle column (“Your Selection”) remains the source of truth
+
+Your “Proceed to Pricing” should always read from APB.selectedCodes and POST to /api/build with only these codes:
+
+async function proceedToPricing() {
+  const selectedCodes = Array.from(APB.selectedCodes || []);
+  const payload = {
+    selected_deliverable_codes: selectedCodes,
+    scenario_a: { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" },
+    scenario_b: { mode: "template", complexity: "Advanced", tier: "T1_LargeVolume" },
+    pricing_mode: "Flat_Blended",
+    blended_rate: 195,
+    rate_band: "Standard_US",
+    use_slack: true,
+    slack_after_internal: 1,
+    slack_after_client: 2,
+    slack_global_pct: 0.05,
+    project_start: APB.projectStart || null,
+    // plus per‑deliverable "included components" map if user changed components
+    included_map: APB.includedMap || {}
+  };
+  const res = await fetch("/api/build", { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload) });
+  const data = await res.json();
+  APB.scenarios = data.scenarios || data; // whatever your current shape is
+  goToStep3Or4(); // continue flow
+}
+
+Small UI copy to guide users
+
+Add the helper line you asked for (at the top of Step 2):
+
+How to use: 1) Select deliverables on the left → 2) In “Your Selection”, click Components… for each deliverable (all are selected by default) → 3) Click Apply selection → 4) Proceed to Pricing.
+
+(We already render Components… with all sub‑components checked by default; users can “Unselect all” inside the modal and tick back individual ones.)

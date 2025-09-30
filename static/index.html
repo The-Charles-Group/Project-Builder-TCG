@@ -40,9 +40,10 @@
       <p class="help-note">
         <strong>How to use:</strong>
         1) Select deliverables on the left → 
-        2) In "Your Selection", click <em>Components…</em> for each deliverable and adjust (all are selected by default) → 
-        3) Click <em>Apply selection</em> → 
-        4) Proceed to Pricing (or Get AI Suggestions first).
+        2) Check AI suggestions on the right → 
+        3) Click <em>Apply selection</em> to merge both into "Your Selection" → 
+        4) Click <em>Components…</em> for each deliverable to adjust (all selected by default) → 
+        5) Click <em>Proceed to Pricing</em>.
       </p>
 
       <div class="s2-grid">
@@ -76,7 +77,6 @@
       <!-- Step 2 Actions -->
       <div id="s2-actions" class="s2-actions">
         <button id="s2-to-pricing" class="btn primary">Proceed to Pricing</button>
-        <button id="s2-run-ai" class="btn">Get AI Suggestions</button>
       </div>
     </section>
 
@@ -358,20 +358,14 @@
 
     // Stage 2: AI Analysis
     async function analyzeRfp() {
-      console.log('[ANALYZE] Button clicked!');
       const fileEl = document.getElementById('rfpFile');
       const textArea = document.getElementById('rfpText');
       
-      console.log('[ANALYZE] File:', fileEl.files?.length || 0, 'Text:', textArea.value.length);
-      
       if (fileEl.files && fileEl.files.length > 0) {
-        console.log('[ANALYZE] Analyzing from file...');
         await analyzeFromFile();
       } else if (textArea.value.trim()) {
-        console.log('[ANALYZE] Analyzing from text...');
         await analyzeFromText();
       } else {
-        console.log('[ANALYZE] No content provided');
         alert('Please provide RFP content either by uploading a file or pasting text.');
         return;
       }
@@ -385,81 +379,56 @@
       btn.textContent = 'Analyzing...';
 
       try {
-        ensureStage2Dom();
-
+        // Extract text from file first
         const fd = new FormData();
         fd.append('file', fileEl.files[0]);
-
-        // 1) AI Summary (right panel, GPT-5 only)
-        const sum = await fetch('/api/summarize_by_file', { method: 'POST', body: fd }).then(r => r.json());
-        appState.aiSummary = sum;
-
-        setText('wordcount', `${sum.word_count}/500 words`);
-        setText('summary', sum.summary_text);
-
-        // 2) DB suggestions (left) strictly from rules
-        const sugg = await fetch('/api/suggest_by_file', { method: 'POST', body: fd }).then(r => r.json());
-        const selectedCodes = (sugg?.suggested || []).map(s => s.deliverable_code);
-        appState.selectedCodes = selectedCodes;
         
-        // Store retainer suggestions
-        appState.retainerSuggestions = (sugg?.suggested || []).filter(s => s.retainer_hint);
-        displayRetainerHints(appState.retainerSuggestions);
+        const extractRes = await fetch('/api/summarize_by_file', { method: 'POST', body: fd });
+        const summary = await extractRes.json();
         
-        // Auto-populate project name field from uploaded filename
-        appState.uploadFilename = sugg.filename || appState.uploadFilename;
-        const base = (appState.uploadFilename || '').replace(/\.[^.]+$/, ''); // strip extension only
-        const projectInput = document.getElementById('projectName');
-        if (projectInput && !projectInput.value) projectInput.value = base;
+        S2.aiSummary = summary;
+        const rfpText = summary.text || '';
 
-        // 3) Build Average scenario now to populate left panel with pricing
-        const scenarios = await fetch('/api/build', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({
-            selected_deliverable_codes: selectedCodes,
-            pricing_mode: 'Flat_Blended',
-            blended_rate: 195,
-            rate_band: 'Standard_US',
-            scenario_a: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
-            scenario_b: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'}
-          })
-        }).then(r => r.json());
-
-        // Render left panel (Average = Scenario A)
-        renderLeftPanel(scenarios.A.items || [], scenarios.A.totals || {price_total:0});
-
-        // 4) Reconcile (middle panel) using AI labels vs selected codes
-        const aiLabels = (sum.deliverables || []).map(d => d.label);
-        const recon = await fetch('/api/reconcile', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({
-            summary_deliverables: aiLabels,
-            db_selected_deliverable_codes: appState.selectedCodes    // keep panels in sync
-          })
-        }).then(r => r.json());
-
-        // --- NEW: auto-adopt AI "ADD" when DB gave nothing ---
-        if ((!appState.selectedCodes?.length) && (recon.add?.length)) {
-          appState.selectedCodes = recon.add.map(s => s.code);
-        }
-
-        appState.reconciliation = recon;
-        renderReconcile(recon);
-
-        // Set project name from filename
+        // Auto-populate project name from filename
         const baseName = (fileEl.files[0].name || '').replace(/\.[^.]+$/, '').trim();
-        if (baseName && !$('projectName').value) {
-          $('projectName').value = baseName;
-        }
+        const projectInput = document.getElementById('projectName');
+        if (projectInput && !projectInput.value) projectInput.value = baseName;
 
-        // Show Step 2 (deliverable selection) and initialize
+        // Call /api/auto_build with the extracted text
+        const payload = {
+          rfp_text: rfpText,
+          scenario_a: { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" },
+          scenario_b: { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" },
+          pricing_mode: "Flat_Blended",
+          blended_rate: 195,
+          rate_band: "Standard_US",
+          use_slack: true,
+          slack_after_internal: 1,
+          slack_after_client: 2,
+          slack_global_pct: 0.05
+        };
+
+        const res = await fetch("/api/auto_build", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        
+        const data = await res.json();
+
+        // Store AI suggestions for Step 2
+        S2.suggested = Array.isArray(data.suggested) ? data.suggested : [];
+        S2.suggestedChecked = new Set(S2.suggested.map(s => String(s.deliverable_code)));
+        S2.scenarios = data.scenarios || {};
+
+        // Show Step 2 and render AI suggestions
         await initStep2();
-        $('step2').scrollIntoView({ behavior: 'smooth' });
+        renderAISuggestions();
+        document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
         
       } catch (error) {
         alert('Error analyzing file: ' + error.message);
+        console.error('[ERROR]', error);
       } finally {
         btn.disabled = false;
         btn.textContent = 'Analyze with AI';
@@ -470,29 +439,47 @@
       const textArea = document.getElementById('rfpText');
       const btn = document.getElementById('btnAnalyze');
       
-      appState.currentRfpText = textArea.value.trim();
+      const rfpText = textArea.value.trim();
       
       btn.disabled = true;
       btn.textContent = 'Analyzing...';
 
       try {
-        // Call AI Summary endpoint
-        const summaryRes = await fetch('/api/summarize', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ rfp_text: appState.currentRfpText })
+        // Call /api/auto_build with the text
+        const payload = {
+          rfp_text: rfpText,
+          scenario_a: { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" },
+          scenario_b: { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" },
+          pricing_mode: "Flat_Blended",
+          blended_rate: 195,
+          rate_band: "Standard_US",
+          use_slack: true,
+          slack_after_internal: 1,
+          slack_after_client: 2,
+          slack_global_pct: 0.05
+        };
+
+        const res = await fetch("/api/auto_build", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
         });
         
-        if (!summaryRes.ok) {
-          throw new Error(`AI Analysis failed: ${summaryRes.status}`);
-        }
+        const data = await res.json();
 
-        appState.aiSummary = await summaryRes.json();
+        // Store AI suggestions for Step 2
+        S2.suggested = Array.isArray(data.suggested) ? data.suggested : [];
+        S2.suggestedChecked = new Set(S2.suggested.map(s => String(s.deliverable_code)));
+        S2.scenarios = data.scenarios || {};
 
-        await performReconciliation();
+        // Show Step 2 and render AI suggestions
+        await initStep2();
+        renderAISuggestions();
+        document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
         
       } catch (error) {
         alert('Error analyzing text: ' + error.message);
+        console.error('[ERROR]', error);
       } finally {
         btn.disabled = false;
         btn.textContent = 'Analyze with AI';
@@ -1314,15 +1301,8 @@
 
     // Event listeners - ensure DOM is loaded first
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('[INIT] DOM loaded, attaching event listeners...');
-      
       const btnAnalyze = document.getElementById('btnAnalyze');
-      if (btnAnalyze) {
-        btnAnalyze.onclick = analyzeRfp;
-        console.log('[INIT] Analyze button listener attached');
-      } else {
-        console.error('[INIT] Analyze button NOT found!');
-      }
+      if (btnAnalyze) btnAnalyze.onclick = analyzeRfp;
       
       const applyBtn = document.getElementById('apply-btn');
       if (applyBtn) applyBtn.onclick = applySelection;
@@ -1332,8 +1312,6 @@
       
       const btnBuildC = document.getElementById('btn-build-c');
       if (btnBuildC) btnBuildC.onclick = buildScenarioC;
-      
-      // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
     });
     document.querySelector('#c-base')?.addEventListener('change', renderUpsellList);
     
