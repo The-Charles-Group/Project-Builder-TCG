@@ -105,6 +105,14 @@ function wireStep2Handlers() {
       document.getElementById('comp-dialog')?.remove();
       renderSelectionPanel();
     }
+
+    // Step 2 action buttons
+    if (e.target.closest('#s2-to-pricing')) {
+      proceedToPricing();
+    }
+    if (e.target.closest('#s2-run-ai')) {
+      getAISuggestions();
+    }
   });
 }
 
@@ -229,6 +237,136 @@ function buildPayloadForApi(overrides = {}) {
 
 // Make buildPayloadForApi globally accessible
 window.buildPayloadForApi = buildPayloadForApi;
+
+// Proceed to Pricing / Build
+async function proceedToPricing() {
+  const payload = buildPayloadForApi();
+
+  if (!payload.selected_deliverable_codes.length) {
+    alert('Please select at least one deliverable.');
+    return;
+  }
+
+  // Sanity check in the console (helps diagnose if extra codes ever creep in)
+  console.log('[BUILD] selected_deliverable_codes:', payload.selected_deliverable_codes);
+  console.log('[BUILD] selected_components_map:', payload.selected_components_map);
+
+  const res = await fetch('/api/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  
+  if (!res.ok) {
+    alert('Build failed. Please try again.');
+    return;
+  }
+  
+  const data = await res.json();
+  
+  // Store in window for compatibility with Step 3/4
+  window.appState = window.appState || {};
+  window.appState.scenarios = data;
+  window.latestScenarios = data;
+  
+  // Navigate to Step 3 (pricing display)
+  const step3 = document.querySelector('#step3');
+  if (step3) {
+    step3.style.display = 'block';
+    step3.scrollIntoView({ behavior: 'smooth' });
+  }
+  
+  // Render scenarios if elements exist
+  if (typeof renderScenario === 'function') {
+    renderScenario('scenarioA', data.A);
+    renderScenario('scenarioB', data.B);
+  }
+  
+  console.log(`Build completed with ${S2.selectedCodes.size} deliverables`);
+}
+
+// Get AI Suggestions (from Step 2)
+async function getAISuggestions() {
+  if (!window.appState || !window.appState.aiSummary) {
+    alert('Enter RFP text or upload a file, then click "Analyze with AI" in Step 1 first.');
+    return;
+  }
+
+  const payload = {
+    summary_deliverables: window.appState.aiSummary.deliverables?.map(d => d.label) || [],
+    db_selected_deliverable_codes: Array.from(S2.selectedCodes)
+  };
+
+  const res = await fetch('/api/reconcile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  
+  if (!res.ok) {
+    alert('Could not get AI suggestions. Please try again.');
+    return;
+  }
+  
+  const data = await res.json();
+
+  // Render into the right panel (ADD / DELETE buckets)
+  renderAISuggestions(data);
+}
+
+// Render AI suggestions in right panel
+function renderAISuggestions(data) {
+  const panel = document.querySelector('#s2-ai-list');
+  if (!panel) return;
+
+  const addRows = (data.add || []).map(s =>
+    `<label style="display:flex;gap:8px;padding:4px;cursor:pointer">
+      <input type="checkbox" class="ai-add" data-code="${s.code}" checked> 
+      <span><strong>${s.label}</strong> — ${s.reason}</span>
+    </label>`
+  );
+  
+  const delRows = (data.delete || []).map(s =>
+    `<label style="display:flex;gap:8px;padding:4px;cursor:pointer;color:#ff6b6b">
+      <input type="checkbox" class="ai-del" data-code="${s.code}" checked> 
+      <span><strong>${s.label}</strong> — ${s.reason}</span>
+    </label>`
+  );
+
+  const addSection = addRows.length ? 
+    `<div><h4 style="margin:8px 0;color:var(--accent2)">Add</h4>${addRows.join('')}</div>` : '';
+  
+  const delSection = delRows.length ? 
+    `<div><h4 style="margin:8px 0;color:#ff6b6b">Delete</h4>${delRows.join('')}</div>` : '';
+
+  const applyBtn = (addRows.length + delRows.length > 0) ?
+    '<button id="s2-apply-ai" class="btn primary" style="width:100%;margin-top:12px">Apply AI Changes</button>' : '';
+
+  panel.innerHTML = addSection + delSection + applyBtn || 
+    '<div class="muted">No changes suggested</div>';
+
+  // Wire apply button
+  const applyAiBtn = document.getElementById('s2-apply-ai');
+  if (applyAiBtn) {
+    applyAiBtn.onclick = () => {
+      document.querySelectorAll('.ai-add:checked').forEach(cb => {
+        S2.selectedCodes.add(cb.dataset.code);
+        if (!S2.componentsByDeliv[cb.dataset.code]) S2.componentsByDeliv[cb.dataset.code] = 'ALL';
+      });
+      document.querySelectorAll('.ai-del:checked').forEach(cb => {
+        S2.selectedCodes.delete(cb.dataset.code);
+        delete S2.componentsByDeliv[cb.dataset.code];
+      });
+      
+      // Sync to appState
+      if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
+      
+      renderSelectionPanel();
+      renderDeliverableList();
+      panel.innerHTML = '<div class="muted">Changes applied</div>';
+    };
+  }
+}
 
 // Modal/dialog for components (inline simple version)
 async function openComponentsDialog(code) {

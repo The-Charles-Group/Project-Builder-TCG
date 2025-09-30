@@ -28,6 +28,12 @@ Preferred communication style: Simple, everyday language.
   - Globally accessible for reuse across Step 2 and Step 3 build flows
   - buildScenariosAB() now uses unified builder instead of manual payload construction
 
+- **Step 2 Action Bar**: Primary workflow controls with sticky positioning
+  - "Proceed to Pricing" button builds scenarios directly from S2 state (no silent AI merges)
+  - "Get AI Suggestions" button calls /api/reconcile for ADD/DELETE recommendations
+  - AI suggestions render in right panel with explicit Apply button for user control
+  - Console logging tracks selected_deliverable_codes and selected_components_map for debugging
+
 - **Bug Fixes and Cleanup**: Resolved critical state management issues
   - Removed legacy renderDeliverableList(items) function causing override collision
   - Fixed Set.length → Set.size for proper collection size checks

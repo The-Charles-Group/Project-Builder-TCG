@@ -84,6 +84,15 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .s2-grid .btn{font-size:13px;padding:6px 12px}
 .s2-grid .btn.primary{background:var(--accent2);border-color:var(--accent2);margin-top:12px}
 
+/* Step 2 Actions */
+.s2-actions{
+  display:flex;gap:12px;justify-content:flex-start;align-items:center;
+  margin-top:14px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08);
+}
+@media (min-width:1100px){
+  .s2-actions{position:sticky;bottom:0;background:transparent;padding-bottom:6px}
+}
+
 /* Component Dialog */
 .dialog{
   position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);

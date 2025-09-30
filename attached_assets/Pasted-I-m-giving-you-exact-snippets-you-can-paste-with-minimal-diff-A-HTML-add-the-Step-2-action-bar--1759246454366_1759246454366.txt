@@ -1,0 +1,170 @@
+I’m giving you exact snippets you can paste with minimal diff.
+
+A) HTML — add the Step 2 action bar
+
+Place this inside your Step 2 section (under the three columns), or just after the middle/right panels:
+
+<!-- Step 2 Actions -->
+<div id="s2-actions" class="s2-actions">
+  <button id="s2-to-pricing" class="btn primary">Proceed to Pricing</button>
+  <button id="s2-run-ai" class="btn">Get AI Suggestions</button>
+</div>
+
+
+Optional CSS (keeps it tidy and sticky on wide screens):
+
+.s2-actions {
+  display:flex; gap:12px; justify-content:flex-start; align-items:center;
+  margin-top:14px; padding-top:8px; border-top:1px solid rgba(255,255,255,.08);
+}
+@media (min-width: 1100px) {
+  .s2-actions { position: sticky; bottom: 0; background: transparent; padding-bottom: 6px; }
+}
+
+B) JS — wire the buttons (robust, layout‑proof)
+
+Add these to your Step 2 controller (where you wired the other handlers):
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#s2-to-pricing')) {
+    proceedToPricing();
+  }
+  if (e.target.closest('#s2-run-ai')) {
+    getAISuggestions();
+  }
+});
+
+C) Build payload strictly from Step 2 state
+
+This guarantees Step 4 shows only what the user selected (no silent AI/template add‑ins).
+
+function buildPayloadForApi() {
+  // selected deliverables from "Your Selection"
+  const selected_deliverable_codes = Array.from(S2.selectedCodes);
+
+  // map of chosen components (omit a code -> backend assumes "all components")
+  const selected_components_map = {};
+  for (const code of selected_deliverable_codes) {
+    const pick = S2.componentsByDeliv[code];
+    if (!pick || pick === 'ALL') continue;
+    selected_components_map[code] = pick instanceof Set ? Array.from(pick) : pick; // supports list or {name:hours}
+  }
+
+  return {
+    selected_deliverable_codes,
+    selected_components_map,
+    scenario_a: S2.scenarioA,            // whatever you store (e.g., {mode:"template", scenario_key:"MED_LOW"})
+    scenario_b: S2.scenarioB,
+    pricing_mode: S2.pricingMode,
+    blended_rate: S2.blendedRate,
+    rate_band: S2.rateBand,
+    use_slack: S2.useSlack,
+    slack_after_internal: S2.slackAfterInternal,
+    slack_after_client: S2.slackAfterClient,
+    slack_global_pct: S2.slackGlobalPct,
+    project_start: S2.projectStart,
+    retainers: S2.retainers
+  };
+}
+
+Proceed → Pricing / Build
+async function proceedToPricing() {
+  const payload = buildPayloadForApi();
+
+  if (!payload.selected_deliverable_codes.length) {
+    alert('Please select at least one deliverable.');
+    return;
+  }
+
+  // Sanity check in the console (helps diagnose if extra codes ever creep in)
+  console.log('[BUILD] selected_deliverable_codes:', payload.selected_deliverable_codes);
+  console.log('[BUILD] selected_components_map:', payload.selected_components_map);
+
+  const res = await fetch('/api/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    alert('Build failed. Please try again.');
+    return;
+  }
+  const data = await res.json();
+
+  // TODO: navigate to Step 3/4 using your existing app flow
+  // e.g., setAppState({ step: 3, build: data }) then render
+}
+
+
+This uses only the user’s chosen deliverables/components. If you previously merged AI “adds” into the payload, remove that code; keep “apply AI adds” as an explicit user action, not automatic.
+
+D) “Get AI Suggestions” (from Step 2)
+
+If the user has already run Analyze with AI in Step 1, you likely store an App.aiSummary (or raw RFP text/file). Use that to ask the server for adds/deletes against what’s currently selected:
+
+async function getAISuggestions() {
+  if (!App || !App.aiSummary) {
+    alert('Enter RFP text or upload a file, then click “Analyze with AI” in Step 1 first.');
+    return;
+  }
+
+  const payload = {
+    selected_deliverable_codes: Array.from(S2.selectedCodes),
+    ai_summary: App.aiSummary
+  };
+
+  const res = await fetch('/api/reconcile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    alert('Could not get AI suggestions. Please try again.');
+    return;
+  }
+  const data = await res.json();
+
+  // Render into the right panel (ADD / DELETE buckets with checkboxes & apply buttons)
+  renderAISuggestions(data);
+}
+
+
+Notes
+
+If your backend takes rfp_text or a file handle instead of ai_summary, adjust the payload accordingly.
+
+In the suggestions panel, keep Apply buttons that explicitly add/remove items by editing S2.selectedCodes (don’t silently merge them into pricing).
+
+E) Keep the Step 2 “How to use” note (you already added it)
+
+Your screenshot shows this; great. It’s exactly what reduces mis‑clicks:
+
+How to use: 1) Select deliverables on the left → 2) In “Your Selection”, click Components… for each deliverable and adjust (all are selected by default) → 3) Click Apply selection → 4) Proceed to Pricing (or Get AI Suggestions first).
+
+If you want the “Apply selection” button to confirm how many deliverables/components will be built, you can make the label dynamic:
+
+function updateApplyLabel() {
+  const codes = Array.from(S2.selectedCodes);
+  let comps = 0;
+  for (const c of codes) {
+    const pick = S2.componentsByDeliv[c];
+    comps += (!pick || pick === 'ALL') ? -1 : pick.size; // -1 means "all" (don’t count individually)
+  }
+  const btn = document.getElementById('s2-apply');
+  if (btn) btn.textContent = 'Apply selection';
+}
+
+
+(You can replace the label with something like: “Apply selection (3 deliverables)” if you prefer.)
+
+F) Quick QA checklist (repeatable)
+
+Pick 2–3 deliverables (left) → Apply selection → they appear in Your Selection.
+
+For each deliverable, open Components… → all checked by default → uncheck a few → Close → pill shows “(N)” or “(all)”.
+
+Click Proceed to Pricing → Step 4 shows exactly your 2–3 deliverables (no extras).
+
+Click Get AI Suggestions → right panel fills with ADD/DELETE; clicking Apply changes Your Selection only when you accept.
+
+Export to Workfront → titles, durations, and component selections should match the A/B build.
