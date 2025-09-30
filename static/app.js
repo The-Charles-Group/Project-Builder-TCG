@@ -7,6 +7,130 @@ let selectedCodes = [];
 let removedCodes = [];
 let addedCodes = [];
 
+// Global Step-2 state (v2.8 fix)
+const S2 = {
+  selectedCodes: [],                     // deliverable codes in "Your Selection"
+  componentsByDeliv: Object.create(null), // { [delivCode]: 'ALL' | Set<string> | {name: hours}}
+  complexity: 'Advanced',
+  tier: 'T2_MediumVolume',
+  scenarioA: 'MED_LOW',
+  scenarioB: 'MED_HIGH',
+  pricingMode: 'Flat_Blended',
+  blendedRate: 195,
+  rateBand: 'Standard_US',
+  useSlack: true,
+  slackAfterInternal: 1,
+  slackAfterClient: 2,
+  slackGlobalPct: 0.05,
+  projectStart: null,
+  retainers: {},
+  // Helper methods for array operations
+  _addCode(code) {
+    if (!this.selectedCodes.includes(code)) {
+      this.selectedCodes.push(code);
+    }
+  },
+  _removeCode(code) {
+    const idx = this.selectedCodes.indexOf(code);
+    if (idx !== -1) {
+      this.selectedCodes.splice(idx, 1);
+    }
+  }
+};
+
+// Component modal functions (v2.8 fix)
+async function openComponentsModal(code) {
+  const res = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${S2.complexity}&tier=${S2.tier}`);
+  const data = await res.json();
+  const items = data.items || [];
+  
+  const drawer = document.getElementById('compDrawer');
+  const title = document.getElementById('compTitle');
+  const list = document.getElementById('compList');
+  
+  if (!drawer || !title || !list) return;
+  
+  const delivName = DELIVERABLES.find(d => d.Deliverable_Code === code)?.Deliverable || code;
+  title.textContent = `Components — ${delivName}`;
+  
+  // Render checkboxes all checked by default
+  list.innerHTML = items.map(c => `
+    <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">
+      <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}" checked/>
+      <span style="flex:1">${c.name}</span>
+      <small style="opacity:.75">${Math.round(c.hours)}h</small>
+    </label>
+  `).join('') || '<div style="opacity:.7;padding:8px">No components.</div>';
+  
+  // If we have previous selections, restore them
+  const prev = S2.componentsByDeliv[code];
+  if (prev && prev !== 'ALL' && prev instanceof Set) {
+    list.querySelectorAll('.s2compchk').forEach(chk => {
+      chk.checked = prev.has(chk.dataset.name);
+    });
+  }
+  
+  // Bind checkbox change events
+  list.querySelectorAll('.s2compchk').forEach(chk => {
+    chk.addEventListener('change', (e) => {
+      const delivCode = e.target.dataset.code;
+      const compName = e.target.dataset.name;
+      onComponentToggle(delivCode, compName, e.target.checked);
+    });
+  });
+  
+  drawer.style.display = 'block';
+}
+
+function onComponentToggle(code, compName, checked) {
+  const prev = S2.componentsByDeliv[code];
+  if (!prev || prev === 'ALL') S2.componentsByDeliv[code] = new Set();
+  const set = S2.componentsByDeliv[code];
+  checked ? set.add(compName) : set.delete(compName);
+  if (set.size === 0) delete S2.componentsByDeliv[code]; // fall back to 'ALL'
+}
+
+function saveComponentsFor(code) {
+  const pick = S2.componentsByDeliv[code];
+  const count = !pick || pick === 'ALL' ? 'all' : `${pick.size}`;
+  updateComponentsButton(code, count);
+}
+
+function updateComponentsButton(code, count) {
+  const btn = document.querySelector(`.s2-comp[data-code="${code}"]`);
+  if (btn) {
+    btn.textContent = `Components... (${count})`;
+  }
+}
+
+function buildPayloadForApi() {
+  const selected_deliverable_codes = [...S2.selectedCodes];
+  
+  const selected_components_map = {};
+  for (const code of selected_deliverable_codes) {
+    const pick = S2.componentsByDeliv[code];
+    if (!pick || pick === 'ALL') continue; // omit -> backend uses all components
+    if (pick instanceof Set) selected_components_map[code] = [...pick]; // list format
+    else selected_components_map[code] = pick; // dict {name: hours}
+  }
+  
+  return {
+    selected_deliverable_codes,
+    selected_components_map,
+    scenario_a: { mode: 'template', scenario_key: S2.scenarioA },
+    scenario_b: { mode: 'template', scenario_key: S2.scenarioB },
+    pricing_mode: S2.pricingMode,
+    blended_rate: S2.pricingMode === 'Flat_Blended' ? S2.blendedRate : undefined,
+    rate_band: S2.rateBand,
+    use_slack: S2.useSlack,
+    slack_after_internal: S2.slackAfterInternal,
+    slack_after_client: S2.slackAfterClient,
+    slack_global_pct: S2.slackGlobalPct,
+    project_start: S2.projectStart,
+    retainers: S2.retainers
+  };
+}
+
 async function api(path, opts={}) {
   const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
   if(!res.ok){ throw new Error(await res.text()); }
@@ -47,14 +171,32 @@ async function boot() {
   removedCodes = [];
   addedCodes = [];
   renderStep2UI();
-  
-  // Initialize S2 system
-  s2LoadDeliverables();
 
   // Pricing default blended - with null check
   const ps = OPTIONS.pricing_settings.find(x => x.Key==="Default_Blended_Rate");
   const blendedRateEl = document.querySelector("#blendedRate");
-  if(ps && blendedRateEl) blendedRateEl.value = ps.Default;
+  if(ps && blendedRateEl) {
+    blendedRateEl.value = ps.Default;
+    S2.blendedRate = ps.Default;
+    // Sync on change
+    blendedRateEl.addEventListener('change', () => { S2.blendedRate = Number(blendedRateEl.value); });
+  }
+  
+  // Sync rate band
+  const rateBandEl = document.querySelector("#rateBand");
+  if (rateBandEl) {
+    rateBandEl.addEventListener('change', () => { S2.rateBand = rateBandEl.value; });
+  }
+  
+  // Sync scenario templates
+  const scenarioAEl = document.querySelector("#scenarioA");
+  const scenarioBEl = document.querySelector("#scenarioB");
+  if (scenarioAEl) {
+    scenarioAEl.addEventListener('change', () => { S2.scenarioA = scenarioAEl.value; });
+  }
+  if (scenarioBEl) {
+    scenarioBEl.addEventListener('change', () => { S2.scenarioB = scenarioBEl.value; });
+  }
 
   // Slack defaults - with null checks
   const ss = Object.fromEntries(OPTIONS.slack_settings.map(x => [x.Key, x.Default]));
@@ -99,6 +241,28 @@ async function boot() {
   
   const reconcileBtn = document.querySelector("#btnRunReconcile");
   if (reconcileBtn) reconcileBtn.onclick = onRunReconcile;
+  
+  // Wire up component drawer Done button
+  const compDoneBtn = document.getElementById('compDone');
+  if (compDoneBtn) {
+    compDoneBtn.addEventListener('click', () => {
+      const drawer = document.getElementById('compDrawer');
+      if (drawer) drawer.style.display = 'none';
+      
+      // Save component selections for the current deliverable being edited
+      const title = document.getElementById('compTitle');
+      if (title && title.textContent) {
+        const match = title.textContent.match(/Components — (.+)/);
+        if (match) {
+          const delivName = match[1];
+          const code = DELIVERABLES.find(d => d.Deliverable === delivName)?.Deliverable_Code;
+          if (code) {
+            saveComponentsFor(code);
+          }
+        }
+      }
+    });
+  }
 
   onPricingModeChanged();
 }
@@ -107,6 +271,9 @@ function onPricingModeChanged(){
   const pricingMode = document.querySelector("#pricingMode");
   if (!pricingMode) return;
   const mode = pricingMode.value;
+  
+  // Sync to S2 state
+  S2.pricingMode = mode;
   
   const blendedWrap = document.querySelector("#blendedWrap");
   if (blendedWrap) blendedWrap.classList.toggle("hidden", mode!=="Flat_Blended");
@@ -138,34 +305,37 @@ function renderDeliverableList(items){
 
 // Step 2 workflow functions
 async function onProceedToStep3() {
-  // Check both old and new selection systems and sync them
-  const step2Selected = window.appState?.selectedCodes || [];
-  const pickerSelected = window.selectedCodes || [];
-  const allSelected = [...new Set([...step2Selected, ...pickerSelected])];
-  
-  if (allSelected.length === 0) {
+  // Use only S2.selectedCodes - no AI merge
+  if (S2.selectedCodes.length === 0) {
     alert("Please select at least one deliverable before proceeding to pricing.");
     return;
   }
   
-  // Sync the selection state
-  selectedCodes = allSelected;
-  if (window.appState) window.appState.selectedCodes = allSelected;
+  // Sync legacy state for compatibility
+  selectedCodes = [...S2.selectedCodes];
+  if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
   
-  // Build scenarios for Step 3 if we don't have them already
-  if (!SCENARIOS || Object.keys(SCENARIOS).length === 0) {
-    try {
-      // Use the working buildScenariosAB function from index.html
-      if (window.buildScenariosAB) {
-        await window.buildScenariosAB();
-      } else {
-        console.log("buildScenariosAB not available, scenarios will be built when user clicks Build button in Step 3");
-      }
-    } catch (error) {
-      console.error("Failed to build scenarios:", error);
-      alert("Failed to build scenarios. Please try again.");
-      return;
+  // Build scenarios using buildPayloadForApi
+  try {
+    const payload = buildPayloadForApi();
+    const res = await fetch('/api/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!res.ok) {
+      throw new Error(`Build failed: ${await res.text()}`);
     }
+    
+    const data = await res.json();
+    SCENARIOS = data.scenarios || {};
+    
+    console.log(`Build completed with ${S2.selectedCodes.length} deliverables`);
+  } catch (error) {
+    console.error("Failed to build scenarios:", error);
+    alert("Failed to build scenarios. Please try again.");
+    return;
   }
   
   // Show Step 3 while keeping Step 2 visible
@@ -942,7 +1112,7 @@ function s2RenderRight(filter) {
         data-code="${d.Deliverable_Code}"
         data-name="${d.Deliverable}"
         data-cat="${d.Category}"
-        ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+        ${S2.selectedCodes.includes(String(d.Deliverable_Code)) ? 'checked' : ''}/>
       <span>${d.Deliverable}</span>
       <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
     </label>
@@ -952,10 +1122,10 @@ function s2RenderRight(filter) {
     cb.addEventListener('change', e => {
       const code = e.target.dataset.code, name = e.target.dataset.name, cat = e.target.dataset.cat;
       if (e.target.checked) {
-        S2.selectedCodes.add(code);
+        S2._addCode(code);
         S2.selectedMeta.set(code, {name, category: cat});
       } else {
-        S2.selectedCodes.delete(code);
+        S2._removeCode(code);
         S2.selectedMeta.delete(code);
       }
       s2RenderLeft();
@@ -972,7 +1142,7 @@ function s2SetupEventListeners() {
   if (S2.els.btnSelectAll) {
     S2.els.btnSelectAll.addEventListener('click', () => {
       S2.allDeliverables.forEach(d => {
-        S2.selectedCodes.add(String(d.Deliverable_Code));
+        S2._addCode(String(d.Deliverable_Code));
         S2.selectedMeta.set(String(d.Deliverable_Code), {name: d.Deliverable, category: d.Category});
       });
       s2RenderRight(S2.els.search?.value || '');
@@ -1016,14 +1186,14 @@ function s2RenderLeft() {
 
   host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
     const code = e.target.dataset.code;
-    S2.selectedCodes.delete(code);
+    S2._removeCode(code);
     S2.selectedMeta.delete(code);
     s2RenderRight(S2.els.search?.value || '');
     s2RenderLeft();
   }));
 
   host.querySelectorAll('.s2-comp').forEach(btn => btn.addEventListener('click', e => {
-    s2OpenComponents(e.target.dataset.code, e.target.dataset.name);
+    openComponentsModal(e.target.dataset.code);
   }));
 }
 
@@ -1152,7 +1322,7 @@ function initStep2() {
           data-code="${d.Deliverable_Code}"
           data-name="${d.Deliverable}"
           data-cat="${d.Category}"
-          ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+          ${S2.selectedCodes.includes(String(d.Deliverable_Code)) ? 'checked' : ''}/>
         <span>${d.Deliverable}</span>
         <small style="margin-left:auto;opacity:.75">${d.Category||''}</small>
       </label>
@@ -1164,7 +1334,7 @@ function initStep2() {
           S2.selectedCodes.add(code);
           S2.selectedMeta.set(code, {name, category: cat});
         } else {
-          S2.selectedCodes.delete(code);
+          S2._removeCode(code);
           S2.selectedMeta.delete(code);
         }
         renderLeft();
@@ -1200,11 +1370,11 @@ function initStep2() {
     host.innerHTML = rows.join('') || '<div style="opacity:.7;padding:8px">No deliverables selected yet.</div>';
     host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
       const code = e.target.dataset.code;
-      S2.selectedCodes.delete(code); S2.selectedMeta.delete(code);
+      S2._removeCode(code); S2.selectedMeta.delete(code);
       renderRight(S2.els.search?.value || ''); renderLeft();
     }));
     host.querySelectorAll('.s2-comp').forEach(btn => btn.addEventListener('click', e => {
-      openComponents(e.target.dataset.code, e.target.dataset.name);
+      openComponentsModal(e.target.dataset.code);
     }));
   }
 
@@ -1423,7 +1593,7 @@ function mountStep2() {
           data-code="${d.Deliverable_Code}"
           data-name="${d.Deliverable}"
           data-cat="${d.Category}"
-          ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+          ${S2.selectedCodes.includes(String(d.Deliverable_Code)) ? 'checked' : ''}/>
         <span>${d.Deliverable}</span>
         <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
       </label>
@@ -1436,7 +1606,7 @@ function mountStep2() {
           S2.selectedCodes.add(code);
           S2.selectedMeta.set(code, { name, category: cat });
         } else {
-          S2.selectedCodes.delete(code);
+          S2._removeCode(code);
           S2.selectedMeta.delete(code);
           delete S2.selectedComponentsMap[code];
         }
@@ -1476,11 +1646,11 @@ function mountStep2() {
 
     host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
       const code = e.target.dataset.code;
-      S2.selectedCodes.delete(code); S2.selectedMeta.delete(code); delete S2.selectedComponentsMap[code];
+      S2._removeCode(code); S2.selectedMeta.delete(code); delete S2.selectedComponentsMap[code];
       renderRight(els.search?.value || ''); renderLeft(); syncProceedButton();
     }));
     host.querySelectorAll('.s2-comp').forEach(btn => btn.addEventListener('click', e => {
-      openComponents(e.target.dataset.code, e.target.dataset.name);
+      openComponentsModal(e.target.dataset.code);
     }));
   }
 
@@ -1511,7 +1681,7 @@ function mountStep2() {
 
   // ---- Apply selection → BUILD scenarios ----
   els.btnApply?.addEventListener('click', async () => {
-    if (S2.selectedCodes.size === 0) { alert('Please select at least one deliverable.'); return; }
+    if (S2.selectedCodes.length === 0) { alert('Please select at least one deliverable.'); return; }
 
     const compMap = Object.fromEntries(Object.entries(S2.selectedComponentsMap)
                       .map(([k, set]) => [k, Array.from(set || [])]));
@@ -1541,7 +1711,7 @@ function mountStep2() {
   function syncProceedButton(hasBuild) {
     const btnProceed = document.querySelector('#proceedPricing, #btnProceed, [data-action="proceed-pricing"]');
     if (!btnProceed) return;
-    const enabled = hasBuild || (window.__lastBuild && S2.selectedCodes.size > 0);
+    const enabled = hasBuild || (window.__lastBuild && S2.selectedCodes.length > 0);
     if (enabled) { btnProceed.removeAttribute('disabled'); btnProceed.classList.remove('disabled'); }
     else { btnProceed.setAttribute('disabled','disabled'); btnProceed.classList.add('disabled'); }
   }
