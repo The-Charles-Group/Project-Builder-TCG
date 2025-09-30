@@ -10,6 +10,9 @@ const S2 = {
   componentsByDeliv: {},
 };
 
+// Make S2 globally accessible for buildScenariosAB in index.html
+window.S2 = S2;
+
 // Ensure init only runs once
 let s2Inited = false;
 
@@ -22,7 +25,17 @@ async function initStep2() {
   const data = await res.json();
   S2.options = data || { deliverables: [] };
 
+  // Hydrate S2 from AI suggestions (appState.selectedCodes)
+  if (window.appState?.selectedCodes?.length) {
+    S2.selectedCodes = new Set(window.appState.selectedCodes);
+    // Default all components to 'ALL' for each pre-selected deliverable
+    window.appState.selectedCodes.forEach(code => {
+      if (!S2.componentsByDeliv[code]) S2.componentsByDeliv[code] = 'ALL';
+    });
+  }
+
   renderDeliverableList();
+  renderSelectionPanel();  // Show pre-selected items
   wireStep2Handlers();
   document.querySelector('#step2')?.style && (document.querySelector('#step2').style.display = 'block');
 }
@@ -57,7 +70,10 @@ function wireStep2Handlers() {
       const code = removeBtn.getAttribute('data-code');
       S2.selectedCodes.delete(code);
       delete S2.componentsByDeliv[code];
+      // Sync back to appState
+      if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
       renderSelectionPanel();
+      renderDeliverableList();  // Re-render to uncheck in left panel
     }
 
     // Component dialog: Select all
@@ -105,13 +121,16 @@ function renderDeliverableList(filter = '') {
         String(d.Deliverable_Code).toLowerCase().includes(filter)
       );
     })
-    .map(d => `
-      <label class="row">
-        <input type="checkbox" data-code="${d.Deliverable_Code}" />
-        <span class="name">${d.Deliverable}</span>
-        <span class="pill">${d.Category}</span>
-      </label>
-    `)
+    .map(d => {
+      const checked = S2.selectedCodes.has(d.Deliverable_Code) ? 'checked' : '';
+      return `
+        <label class="row">
+          <input type="checkbox" data-code="${d.Deliverable_Code}" ${checked} />
+          <span class="name">${d.Deliverable}</span>
+          <span class="pill">${d.Category}</span>
+        </label>
+      `;
+    })
     .join('');
 
   box.innerHTML = items || `<div class="muted">No deliverables found.</div>`;
@@ -132,6 +151,9 @@ function applySelection() {
 
   // Default: when a deliverable is added, pre‑select **all** components (can unselect later).
   picked.forEach(code => { if (!S2.componentsByDeliv[code]) S2.componentsByDeliv[code] = 'ALL'; });
+
+  // Sync S2 state to appState for Step 3 compatibility
+  if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
 
   renderSelectionPanel();
 }
@@ -168,7 +190,8 @@ function indexDeliverablesByCode() {
 }
 
 // Build API payload from S2 state and form inputs
-function buildPayloadForApi() {
+// overrides: optional object to override specific fields (scenario_a, scenario_b, retainers, etc.)
+function buildPayloadForApi(overrides = {}) {
   const selected_deliverable_codes = Array.from(S2.selectedCodes);
   
   const selected_components_map = {};
@@ -179,7 +202,13 @@ function buildPayloadForApi() {
     else selected_components_map[code] = pick; // dict {name: hours}
   }
   
-  return {
+  // Use helper functions from index.html when available, fall back to defaults
+  const getUseSlack = window.getUseSlackFromUI || (() => true);
+  const getSlackInternal = window.getSlackInternalFromUI || (() => 1);
+  const getSlackClient = window.getSlackClientFromUI || (() => 2);
+  const getSlackPct = window.getSlackPctFromUI || (() => 0.05);
+  
+  const basePayload = {
     selected_deliverable_codes,
     selected_components_map,
     scenario_a: { mode: 'template', scenario_key: document.querySelector('#scenarioA')?.value || 'MED_LOW' },
@@ -187,13 +216,19 @@ function buildPayloadForApi() {
     pricing_mode: document.querySelector('#pricingMode')?.value || 'Flat_Blended',
     blended_rate: Number(document.querySelector('#blendedRate')?.value || 195),
     rate_band: document.querySelector('#rateBand')?.value || 'Standard_US',
-    use_slack: (document.querySelector('#useSlack')?.checked ?? true),
-    slack_after_internal: Number(document.querySelector('#slackAfterInternal')?.value || 1),
-    slack_after_client: Number(document.querySelector('#slackAfterClient')?.value || 2),
-    slack_global_pct: Number(document.querySelector('#slackGlobalPct')?.value || 0.05),
+    use_slack: getUseSlack(),
+    slack_after_internal: getSlackInternal(),
+    slack_after_client: getSlackClient(),
+    slack_global_pct: getSlackPct(),
     project_start: document.querySelector('#projectStart')?.value || null
   };
+  
+  // Apply overrides (for buildScenariosAB to pass retainers, custom scenarios, etc.)
+  return { ...basePayload, ...overrides };
 }
+
+// Make buildPayloadForApi globally accessible
+window.buildPayloadForApi = buildPayloadForApi;
 
 // Modal/dialog for components (inline simple version)
 async function openComponentsDialog(code) {
@@ -401,31 +436,16 @@ function onScenarioTypeChanged(){
   document.querySelector("#bundleRow").classList.toggle("hidden", useTemplates);
 }
 
-function renderDeliverableList(items){
-  const box = document.querySelector("#deliverableList");
-  if (!box) return; // Element doesn't exist, skip rendering
-  box.innerHTML = "";
-  items.forEach(d => {
-    const id = `deliv_${d.Deliverable_Code}`;
-    box.append(el(`
-      <div class="row">
-        <input type="checkbox" id="${id}" data-code="${d.Deliverable_Code}"/>
-        <label for="${id}"><strong>${d.Deliverable}</strong> <small class="badge">${d.Category}</small></label>
-      </div>
-    `));
-  });
-}
-
 // Step 2 workflow functions
 async function onProceedToStep3() {
   // Use only S2.selectedCodes - no AI merge
-  if (S2.selectedCodes.length === 0) {
+  if (S2.selectedCodes.size === 0) {
     alert("Please select at least one deliverable before proceeding to pricing.");
     return;
   }
   
   // Sync legacy state for compatibility
-  selectedCodes = [...S2.selectedCodes];
+  window.selectedCodes = [...S2.selectedCodes];
   if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
   
   // Build scenarios using buildPayloadForApi
@@ -444,7 +464,7 @@ async function onProceedToStep3() {
     const data = await res.json();
     SCENARIOS = data.scenarios || {};
     
-    console.log(`Build completed with ${S2.selectedCodes.length} deliverables`);
+    console.log(`Build completed with ${S2.selectedCodes.size} deliverables`);
   } catch (error) {
     console.error("Failed to build scenarios:", error);
     alert("Failed to build scenarios. Please try again.");

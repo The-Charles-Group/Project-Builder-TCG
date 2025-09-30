@@ -753,47 +753,40 @@
     async function buildScenariosAB() {
       // Make this function globally accessible
       window.buildScenariosAB = buildScenariosAB;
-      // Check all possible sources of selected deliverables
-      const selectedFromAppState = appState.selectedCodes || [];
-      const selectedFromGlobal = window.selectedCodes || [];
-      const selectedFromScenarios = window.SCENARIOS ? 
-        Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
-      const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
       
-      console.log("buildScenariosAB validation:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
+      // Use S2.selectedCodes as the single source of truth (Step 2 state)
+      const selectedCodes = window.S2?.selectedCodes ? [...window.S2.selectedCodes] : (appState.selectedCodes || []);
       
-      if (allSelected.length === 0) {
+      console.log("buildScenariosAB using S2 state:", { 
+        s2Codes: selectedCodes, 
+        s2Components: window.S2?.componentsByDeliv 
+      });
+      
+      if (!selectedCodes.length) {
         alert('No deliverables selected. Please complete Step 2 first.');
         return;
       }
       
-      // Sync the selection to ensure consistency
-      appState.selectedCodes = allSelected;
-      window.selectedCodes = allSelected;
+      // Sync to appState for consistency
+      appState.selectedCodes = selectedCodes;
 
       // Collect retainer data from UI
       const retainers = collectRetainerData();
 
-      // Prepare component selections for payload
-      const selectedComponentsPayload = Object.fromEntries(
-        Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
-      );
-      
-      const payload = {
-        selected_deliverable_codes: appState.selectedCodes,          // <- required
-        selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
-        pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
-        blended_rate: getBlendedRateFromUI(),                        // number or null
-        rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
+      // Use unified payload builder with UI-specific overrides
+      const payload = window.buildPayloadForApi({
+        pricing_mode: getPricingModeFromUI(),
+        blended_rate: getBlendedRateFromUI(),
+        rate_band: getRateBandFromUI(),
         use_slack: getUseSlackFromUI(),
         slack_after_internal: getSlackInternalFromUI(),
         slack_after_client: getSlackClientFromUI(),
         slack_global_pct: getSlackPctFromUI(),
         project_start: getProjectStartFromUI() || null,
-        scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
+        scenario_a: getScenarioSpecAFromUI(),
         scenario_b: getScenarioSpecBFromUI(),
-        retainers: retainers  // Include retainer data
-      };
+        retainers: retainers
+      });
 
       const resp = await fetch('/api/build', {
         method: 'POST',
