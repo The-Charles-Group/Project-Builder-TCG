@@ -3963,12 +3963,16 @@ def convert_excel_to_mspdi(
             SubElement(task, "ID").text = str(task_id)
             SubElement(task, "Name").text = r["Name"]
             SubElement(task, "WBS").text = r["WBS"]
-            SubElement(task, "OutlineNumber").text = r["WBS"] 
-            SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
-            SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
+            SubElement(task, "OutlineNumber").text = r["WBS"]
+            
             # Summary task flag
             is_summary = r["UID"] in summary_set
             SubElement(task, "Summary").text = "1" if is_summary else "0"
+            
+            # Start/Finish: Only write for summary tasks (let Workfront compute for leaf tasks)
+            if is_summary:
+                SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
+                SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             
             # Work and Duration handling
             if is_summary:

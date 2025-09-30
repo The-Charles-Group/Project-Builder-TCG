@@ -34,6 +34,12 @@ Preferred communication style: Simple, everyday language.
   - Removes duplicate edges after normalization
   - Result: Only valid leaf→leaf predecessor links in exported XML
 
+- **Smart Date Handling**: Start/Finish dates only on summary tasks
+  - Leaf tasks omit Start/Finish dates and rely on Duration + PredecessorLinks for scheduling
+  - Workfront computes leaf task dates based on dependencies and project calendar
+  - Eliminates contradictions like "finish tomorrow with a 3-week duration"
+  - Result: Consistent, scheduler-driven task dates that respect dependencies
+
 ### XML Export v2.8 Enhancements (September 30, 2025)
 - **WBS Tree Structure Fixes**: Proper summary task handling with MSP/Workfront compatibility
   - Summary tasks now have `<Summary>1</Summary>` and `<Work>PT0M</Work>` (no direct work assignments)
