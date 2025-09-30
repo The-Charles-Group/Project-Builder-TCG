@@ -10,13 +10,22 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Step 2 Consolidation & UI Cleanup (September 30, 2025)
+- **Step 2 Single Source of Truth**: Consolidated to mountStep2() v2.8 system only
+  - Disabled all legacy Step 2 code (renderStep2UI, renderYourSelection, openComponentPicker)
+  - Removed all active calls to disabled functions preventing boot-time errors
+  - Component selection now uses S2.componentsByDeliv with 'ALL' tracking instead of selectedComponentsMap
+  - Components default to all checked when opening modal
+  - Button labels dynamically show "Components (all)..." or "Components (3)..." based on selection
+  - Build payload strictly from S2.selectedCodes with no AI suggestion auto-merge
+  - Disabled confidence ≥ 0.7 auto-add to enforce explicit user selection only
+
 ### Component-Level Selection & Export Robustness (September 2025)
 - **Component-Level Selection Feature**: Complete implementation of granular deliverable component control in Step 2
   - Added `/api/components_for` endpoint for retrieving components with hours breakdown by deliverable
   - Enhanced BuildPayload model with `selected_components_map` field for per-deliverable component selections
   - Updated backend logic to filter scenarios based on selected components with intelligent fallbacks
   - Implemented modal picker UI with "Components..." button showing checkboxes and hour counts
-  - Global `selectedComponentsMap` state management across all build operations
   - Component count display in deliverable selection UI when components are chosen
 
 - **Export Robustness Enhancements**: Bulletproof XML/Excel exports with automatic data synthesis

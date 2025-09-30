@@ -1,3 +1,0 @@
-Row_ID,Deliverable_Code,Task_Code,Service_Department,Deliverable,Project_Name,WBS_ID,Parent_WBS_ID,Task_Name,Component,Task,Role,Seniority,Planned_Hours,Start_Offset_Days,Duration_Days,Dependencies,Assignee_External_ID,Notes,Rate_USD,Price_USD
-,,,,,Final Test,1,,Final Test,Project,,,,0,0,,,,,0.0,0
-,DEL-0024,,,Reporting,Final Test,1.1,1,Reporting,,,,,20,0,7,,,/,195.0,3900
