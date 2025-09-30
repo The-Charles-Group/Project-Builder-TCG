@@ -10,6 +10,30 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### XML Export v2.9 Validations (September 30, 2025)
+- **Units ≤ 1.0 Enforcement**: Automatic duration adjustment to prevent over-allocation
+  - Analyzes all role assignments per task to find maximum work hours
+  - Automatically increases duration (in whole-day increments) if any assignment would exceed 100% allocation
+  - Result: All resource units stay within Workfront's 0.01-1.0 valid range, preventing import errors
+
+- **Ceil Rounding Policy**: Conservative duration estimation using math.ceil
+  - When `round_to_whole_days=True`, uses ceiling function instead of standard rounding
+  - Ensures durations never underestimate time requirements (always rounds UP)
+  - Example: 1.2 days → 2 days (480min → 960min)
+  - Result: More accurate timeline estimates that account for partial days
+
+- **Cycle Detection & Removal**: Dependency graph validation using Kahn's algorithm
+  - Implements topological sort to detect circular dependencies
+  - Automatically removes problematic edges (highest in-degree first) to break cycles
+  - Recursive validation ensures completely acyclic dependency graph
+  - Result: Clean dependency chains that Workfront can schedule without conflicts
+
+- **Leaf-Only Predecessor Links**: Strict validation of task relationships
+  - Filters out any dependency involving summary/parent tasks
+  - Converts summary task references to their representative leaf tasks (first/last child)
+  - Removes duplicate edges after normalization
+  - Result: Only valid leaf→leaf predecessor links in exported XML
+
 ### XML Export v2.8 Enhancements (September 30, 2025)
 - **WBS Tree Structure Fixes**: Proper summary task handling with MSP/Workfront compatibility
   - Summary tasks now have `<Summary>1</Summary>` and `<Work>PT0M</Work>` (no direct work assignments)
