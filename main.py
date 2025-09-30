@@ -3390,7 +3390,8 @@ def convert_excel_to_mspdi(
     include_audits: bool = True,
     audits_dir: Optional[str] = None,
     merge_identical_children: bool = False,   # <— toggle for multi-resource merge
-    project_name: Optional[str] = None
+    project_name: Optional[str] = None,
+    round_to_whole_days: bool = False  # <— toggle for whole-day duration rounding
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -3744,7 +3745,7 @@ def convert_excel_to_mspdi(
         assignments = []
         assign_uid = 1
         for r in rows:
-            if r["WBS"] in summary_set:
+            if r["UID"] in summary_set:
                 continue
 
             task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
@@ -3877,18 +3878,34 @@ def convert_excel_to_mspdi(
             is_summary = r["UID"] in summary_set
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
-            # Only set Duration/Work for non-summary tasks (let Workfront compute for summaries)
-            if not is_summary:
-                # Safe int conversion for time values using rolled-up duration
+            # Work and Duration handling
+            if is_summary:
+                # Summary tasks: set Work to PT0M (Workfront will compute from children)
+                SubElement(task, "Work").text = "PT0M"
+                # Duration will be rolled up by Workfront, but we can include the computed value
+                dur_hours = uid_to_sched[r['UID']]['DurationHours']
+                if round_to_whole_days:
+                    # Round to whole days (8 hours per day = 480 minutes)
+                    dur_minutes = int(round(dur_hours / 8.0) * 480)
+                else:
+                    dur_minutes = int(round(dur_hours * 60))
+                SubElement(task, "Duration").text = f"PT{dur_minutes}M"
+            else:
+                # Leaf tasks: set Work and Duration from planned hours
                 planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
-                dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
+                dur_hours = uid_to_sched[r['UID']]['DurationHours']
+                
+                if round_to_whole_days:
+                    # Round to whole days (8 hours per day = 480 minutes)
+                    dur_minutes = int(round(dur_hours / 8.0) * 480)
+                else:
+                    dur_minutes = int(round(dur_hours * 60))
                 
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
-                
-                # Pin leaf tasks to prevent drift - "Start No Earlier Than" constraint
-                SubElement(task, "ConstraintType").text = "4"  # Start No Earlier Than
-                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+            
+            # Use ASAP constraint (let Workfront schedule based on dependencies)
+            SubElement(task, "ConstraintType").text = "0"  # ASAP (As Soon As Possible)
             
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
