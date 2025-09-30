@@ -33,39 +33,32 @@
       <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
     </section>
 
-    <!-- Step 2: Deliverable Selection (v2.8 Fixed Structure) -->
-    <section class="card" id="step2" style="display:none;">
-      <h2>Step 2 — Select & Manage Deliverables</h2>
-      
-      <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-        <!-- Left Panel: Your Selection -->
-        <div class="col">
-          <h4>Your Selection</h4>
-          <div id="yourSelection"></div>
-        </div>
-
-        <!-- Middle Panel: AI Suggestions -->
-        <div class="col">
-          <h4>AI Suggestions</h4>
-          <div id="aiSuggestions"></div>
-        </div>
-
-        <!-- Right Panel: Deliverables (select) -->
-        <div class="col">
-          <h4>Deliverables (select)</h4>
-          <input id="delivSearch" placeholder="Search deliverables..." />
-          <div style="display:flex;gap:8px;margin:8px 0">
-            <button id="delivSelectAll">Select all</button>
-            <button id="delivClear">Clear</button>
+    <!-- Step 2: Deliverable Selection -->
+    <section id="step2" class="s2-grid" style="display:none">
+      <!-- Left: Deliverable picker -->
+      <div class="panel" id="s2-picker">
+        <h3>Deliverables (select)</h3>
+        <div class="row">
+          <input id="s2-deliv-search" class="input" placeholder="Search deliverables..." />
+          <div class="btns">
+            <button id="s2-select-all" class="btn">Select all</button>
+            <button id="s2-clear" class="btn">Clear</button>
           </div>
-          <div id="deliverableList" style="height:320px;overflow:auto;border:1px solid #222;border-radius:6px;"></div>
-          <button id="applySelection" class="primary" style="margin-top:12px;width:100%;">Apply selection</button>
         </div>
+        <div id="s2-deliv-list" class="list"></div>
+        <button id="s2-apply" class="btn primary" style="width:100%">Apply selection</button>
       </div>
 
-      <div class="actions">
-        <button id="btnProceedToStep3">Proceed to Pricing</button>
-        <button id="btnRunReconcile">Get AI Suggestions</button>
+      <!-- Middle: Your selection -->
+      <div class="panel" id="s2-selection">
+        <h3>Your Selection</h3>
+        <div id="s2-selected-list" class="list"></div>
+      </div>
+
+      <!-- Right: AI suggestions -->
+      <div class="panel" id="s2-ai">
+        <h3>AI Suggestions</h3>
+        <div id="s2-ai-list" class="list muted">Run analysis to see suggestions.</div>
       </div>
     </section>
 
@@ -437,14 +430,9 @@
           $('projectName').value = baseName;
         }
 
-        // Show Step 2 (deliverable selection) instead of Stage 2
-        $('step2').style.display = 'block';
+        // Show Step 2 (deliverable selection) and initialize
+        await initStep2();
         $('step2').scrollIntoView({ behavior: 'smooth' });
-        
-        // Initialize Step 2 picker with the built scenarios
-        if (window.initStep2DeliverablePicker) {
-          await window.initStep2DeliverablePicker(scenarios);
-        }
         
       } catch (error) {
         alert('Error analyzing file: ' + error.message);
@@ -553,14 +541,9 @@
         renderLeftPanel(autoData.scenarios.A.items, autoData.scenarios.A.totals);
         renderReconcile(appState.reconciliation);
         
-        // Show Step 2 (deliverable selection) instead of Stage 2
-        document.getElementById('step2').style.display = 'block';
+        // Show Step 2 (deliverable selection) and initialize
+        await initStep2();
         document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
-        
-        // Initialize Step 2 picker with the built scenarios
-        if (window.initStep2DeliverablePicker) {
-          await window.initStep2DeliverablePicker(autoData.scenarios);
-        }
         
       } catch (error) {
         alert('Error performing reconciliation: ' + error.message);
