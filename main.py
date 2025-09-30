@@ -3591,14 +3591,73 @@ def convert_excel_to_mspdi(
             if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
                 continue
                 
-            # Convert summary tasks to their representative leaves
-            if actual_pred in summary_set:
-                actual_pred = last_leaf(actual_pred)
-            if actual_succ in summary_set:
-                actual_succ = first_leaf(actual_succ)
+            # Only allow leaf→leaf links (filter out any summary task involvement)
+            if actual_pred in summary_set or actual_succ in summary_set:
+                # Convert summary tasks to their representative leaves
+                if actual_pred in summary_set:
+                    actual_pred = last_leaf(actual_pred)
+                if actual_succ in summary_set:
+                    actual_succ = first_leaf(actual_succ)
                 
             if actual_pred != actual_succ:
                 normalized_edges.append((actual_pred, actual_succ))
+        
+        # Remove duplicate edges
+        normalized_edges = list(set(normalized_edges))
+        
+        # Detect and remove cycles using topological sort approach
+        def has_cycle_and_remove(edges):
+            """Detect cycles and remove problematic edges to make graph acyclic"""
+            from collections import defaultdict, deque
+            
+            # Build adjacency list
+            graph = defaultdict(list)
+            in_degree = defaultdict(int)
+            all_nodes = set()
+            
+            for pred, succ in edges:
+                graph[pred].append(succ)
+                in_degree[succ] += 1
+                all_nodes.add(pred)
+                all_nodes.add(succ)
+            
+            # Initialize nodes with no incoming edges
+            for node in all_nodes:
+                if node not in in_degree:
+                    in_degree[node] = 0
+            
+            # Kahn's algorithm for topological sort
+            queue = deque([node for node in all_nodes if in_degree[node] == 0])
+            sorted_count = 0
+            
+            while queue:
+                node = queue.popleft()
+                sorted_count += 1
+                
+                for neighbor in graph[node]:
+                    in_degree[neighbor] -= 1
+                    if in_degree[neighbor] == 0:
+                        queue.append(neighbor)
+            
+            # If sorted_count < total nodes, there's a cycle
+            if sorted_count < len(all_nodes):
+                # Remove edges that are part of cycles (simple heuristic: remove edges with highest in-degree target)
+                cycle_edges = []
+                for pred, succ in edges:
+                    if in_degree[succ] > 0:
+                        cycle_edges.append((pred, succ, in_degree[succ]))
+                
+                # Sort by in-degree and remove the most problematic edge
+                if cycle_edges:
+                    cycle_edges.sort(key=lambda x: x[2], reverse=True)
+                    edge_to_remove = (cycle_edges[0][0], cycle_edges[0][1])
+                    edges_cleaned = [e for e in edges if e != edge_to_remove]
+                    # Recursive call to check if more cycles exist
+                    return has_cycle_and_remove(edges_cleaned)
+            
+            return edges
+        
+        normalized_edges = has_cycle_and_remove(normalized_edges)
 
         # Calculate project start date
         if fixed_start_iso:
@@ -3741,7 +3800,43 @@ def convert_excel_to_mspdi(
                 if uid:
                     prealloc_by_task_uid[uid] = role_hours
 
-        # Create assignments
+        # Validate and adjust durations to ensure Units ≤ 1.0 for all assignments
+        MINUTES_PER_DAY = 480
+        for r in rows:
+            if r["UID"] in summary_set:
+                continue
+            
+            task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
+            if task_hours <= 0.0001:
+                continue
+            
+            # Collect all role assignments for this task
+            role_hours_list = []
+            alloc = prealloc_by_task_uid.get(r["UID"])
+            if alloc:
+                role_hours_list = list(alloc.values())
+            else:
+                role_list = r["RoleList"] if r["RoleList"] else ["Unassigned"]
+                if roles_split_rule == "even":
+                    hours_per_role = task_hours / len(role_list)
+                    role_hours_list = [hours_per_role] * len(role_list)
+                elif roles_split_rule == "weighted" and role_weights:
+                    total_weight = sum(role_weights.get(role, 1.0) for role in role_list)
+                    role_hours_list = [(task_hours * role_weights.get(role, 1.0) / total_weight) for role in role_list]
+                else:
+                    role_hours_list = [task_hours]
+            
+            # Calculate required duration to keep all Units ≤ 1.0
+            max_work_hours = max(role_hours_list) if role_hours_list else task_hours
+            current_dur_hours = uid_to_sched[r["UID"]]["DurationHours"]
+            
+            # Ensure duration is at least as long as the longest assignment
+            if current_dur_hours < max_work_hours:
+                # Increase duration to whole days (ceil)
+                required_days = math.ceil(max_work_hours / 8.0)
+                uid_to_sched[r["UID"]]["DurationHours"] = required_days * 8.0
+
+        # Create assignments with validated Units
         assignments = []
         assign_uid = 1
         for r in rows:
@@ -3752,10 +3847,7 @@ def convert_excel_to_mspdi(
             if task_hours <= 0.0001:
                 continue
 
-            # Duration basis for Units
-            task_dur_h = uid_to_sched[r["UID"]]["DurationHours"] if uid_to_sched[r["UID"]]["DurationHours"] > 0 else task_hours
-            if uid_to_sched[r["UID"]]["DurationHours"] <= 0.0001 and task_hours > 0:
-                uid_to_sched[r["UID"]]["DurationHours"] = task_hours
+            task_dur_h = uid_to_sched[r["UID"]]["DurationHours"]
 
             # --- Use precomputed role->hours if merged
             alloc = prealloc_by_task_uid.get(r["UID"])
@@ -3763,7 +3855,7 @@ def convert_excel_to_mspdi(
                 for role, work_h in alloc.items():
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (work_h / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.05, min(units, 2.0))
+                    units = max(0.01, min(units, 1.0))  # Cap at 1.0
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -3774,7 +3866,7 @@ def convert_excel_to_mspdi(
                         "WorkHours": work_h
                     })
                     assign_uid += 1
-                continue  # done with this task
+                continue
 
             # else: fall back to existing split-by-role behavior
             role_list = r["RoleList"]
@@ -3786,7 +3878,7 @@ def convert_excel_to_mspdi(
                 for role in role_list:
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (hours_per_role / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.05, min(units, 2.0))
+                    units = max(0.01, min(units, 1.0))  # Cap at 1.0
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -3804,7 +3896,7 @@ def convert_excel_to_mspdi(
                     hours_for_role = task_hours * (weight / total_weight)
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (hours_for_role / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.05, min(units, 2.0))
+                    units = max(0.01, min(units, 1.0))  # Cap at 1.0
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -3885,8 +3977,8 @@ def convert_excel_to_mspdi(
                 # Duration will be rolled up by Workfront, but we can include the computed value
                 dur_hours = uid_to_sched[r['UID']]['DurationHours']
                 if round_to_whole_days:
-                    # Round to whole days (8 hours per day = 480 minutes)
-                    dur_minutes = int(round(dur_hours / 8.0) * 480)
+                    # Round UP to whole days (8 hours per day = 480 minutes) - ceil policy
+                    dur_minutes = int(math.ceil(dur_hours / 8.0) * 480)
                 else:
                     dur_minutes = int(round(dur_hours * 60))
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
@@ -3896,8 +3988,8 @@ def convert_excel_to_mspdi(
                 dur_hours = uid_to_sched[r['UID']]['DurationHours']
                 
                 if round_to_whole_days:
-                    # Round to whole days (8 hours per day = 480 minutes)
-                    dur_minutes = int(round(dur_hours / 8.0) * 480)
+                    # Round UP to whole days (8 hours per day = 480 minutes) - ceil policy
+                    dur_minutes = int(math.ceil(dur_hours / 8.0) * 480)
                 else:
                     dur_minutes = int(round(dur_hours * 60))
                 
