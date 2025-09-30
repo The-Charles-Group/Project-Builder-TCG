@@ -358,14 +358,20 @@
 
     // Stage 2: AI Analysis
     async function analyzeRfp() {
+      console.log('[ANALYZE] Button clicked!');
       const fileEl = document.getElementById('rfpFile');
       const textArea = document.getElementById('rfpText');
       
+      console.log('[ANALYZE] File:', fileEl.files?.length || 0, 'Text:', textArea.value.length);
+      
       if (fileEl.files && fileEl.files.length > 0) {
+        console.log('[ANALYZE] Analyzing from file...');
         await analyzeFromFile();
       } else if (textArea.value.trim()) {
+        console.log('[ANALYZE] Analyzing from text...');
         await analyzeFromText();
       } else {
+        console.log('[ANALYZE] No content provided');
         alert('Please provide RFP content either by uploading a file or pasting text.');
         return;
       }
@@ -1308,8 +1314,15 @@
 
     // Event listeners - ensure DOM is loaded first
     document.addEventListener('DOMContentLoaded', function() {
+      console.log('[INIT] DOM loaded, attaching event listeners...');
+      
       const btnAnalyze = document.getElementById('btnAnalyze');
-      if (btnAnalyze) btnAnalyze.onclick = analyzeRfp;
+      if (btnAnalyze) {
+        btnAnalyze.onclick = analyzeRfp;
+        console.log('[INIT] Analyze button listener attached');
+      } else {
+        console.error('[INIT] Analyze button NOT found!');
+      }
       
       const applyBtn = document.getElementById('apply-btn');
       if (applyBtn) applyBtn.onclick = applySelection;
