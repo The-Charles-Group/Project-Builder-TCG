@@ -1424,7 +1424,26 @@ async function s2OpenComponents(code, name) {
   const res = await fetch(compUrl);
   const data = await res.json();
   const items = data.items || [];
-  const current = S2.selectedComponentsMap[code] || new Set();
+  
+  // Handle different types: "__ALL__" sentinel, Set, object/dict, or undefined
+  let current;
+  const stored = S2.selectedComponentsMap[code];
+  if (!stored || stored === "__ALL__") {
+    // Default to all components selected
+    current = new Set(items.map(c => c.name));
+    S2.selectedComponentsMap[code] = current;
+  } else if (stored instanceof Set) {
+    current = stored;
+  } else if (typeof stored === 'object') {
+    // Convert object/dict keys to Set
+    current = new Set(Object.keys(stored));
+    S2.selectedComponentsMap[code] = current;
+  } else {
+    // Fallback: select all by default
+    current = new Set(items.map(c => c.name));
+    S2.selectedComponentsMap[code] = current;
+  }
+  
   if (!S2.els.compDrawer) {
     alert('Component picker UI not mounted (add #compDrawer).');
     return;
@@ -1466,6 +1485,28 @@ S2.els.compDone?.addEventListener('click', () => {
     s2RenderLeft();
   }
   S2.els.compDrawer.classList.add('hidden');
+});
+
+// Select All button handler
+document.getElementById('compSelectAll')?.addEventListener('click', () => {
+  const checkboxes = S2.els.compList.querySelectorAll('input[type="checkbox"]');
+  const delivCode = S2.els.compDrawer.getAttribute('data-active-code');
+  if (!S2.selectedComponentsMap[delivCode]) S2.selectedComponentsMap[delivCode] = new Set();
+  checkboxes.forEach(chk => {
+    chk.checked = true;
+    S2.selectedComponentsMap[delivCode].add(chk.dataset.name);
+  });
+});
+
+// Unselect All button handler
+document.getElementById('compUnselectAll')?.addEventListener('click', () => {
+  const checkboxes = S2.els.compList.querySelectorAll('input[type="checkbox"]');
+  const delivCode = S2.els.compDrawer.getAttribute('data-active-code');
+  if (!S2.selectedComponentsMap[delivCode]) S2.selectedComponentsMap[delivCode] = new Set();
+  checkboxes.forEach(chk => {
+    chk.checked = false;
+    S2.selectedComponentsMap[delivCode].delete(chk.dataset.name);
+  });
 });
 
 // ---- Build Scenarios directly from Step 2 ----

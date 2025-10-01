@@ -293,7 +293,11 @@
       <strong id="compTitle" style="flex:1">Components</strong>
       <button id="compDone" class="btn small">Done</button>
     </div>
-    <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <button id="compSelectAll" class="btn small" style="flex:1">Select All</button>
+      <button id="compUnselectAll" class="btn small" style="flex:1">Unselect All</button>
+    </div>
+    <div id="compList" style="height:calc(70vh - 120px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
   </div>
   <script>
     // show/hide helpers for the component drawer
@@ -1489,6 +1493,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.0" defer></script>
+  <script src="/static/app.js?v=5.1" defer></script>
 </body>
 </html>
