@@ -27,11 +27,13 @@ Preferred communication style: Simple, everyday language.
   - Ensures AI and manual flows produce consistent structure
   - User can still manually select specific components via "Components..." button
 
-- **XML Export Department Hierarchy**: Partial implementation (needs indentation fix)
+- **XML Export Department Hierarchy**: Complete implementation ✓
   - WBS builder enriches deliverables with Service Department metadata
-  - Department summary rows added to export structure
-  - Known issue: Deliverable processing code needs re-indentation to nest properly under department loop
-  - Once fixed, XML exports will show: Department > Deliverable > Component > Task hierarchy
+  - Department summary rows added to export structure (WBS level 2: 1.1, 1.2, etc.)
+  - Deliverables properly nested under departments (WBS level 3: 1.1.1, 1.1.2, etc.)
+  - Components and tasks maintain full hierarchy depth
+  - XML exports now show full structure: Department → Deliverable → Component → Task → Role
+  - Fixed 250+ lines of indentation to properly nest all loops
 
 ### AI Summary & Enhanced Suggestions (October 2025)
 - **AI Summary Panel**: Added comprehensive RFP summary display in Step 2
