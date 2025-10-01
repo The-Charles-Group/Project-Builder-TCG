@@ -261,6 +261,34 @@
     </section>
   </main>
 
+  <!-- Component Drawer for Step 2 -->
+  <div id="compDrawer" class="drawer hidden" style="position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;display:none;z-index:1000;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <strong id="compTitle" style="flex:1">Components</strong>
+      <button id="compDone" class="btn small">Done</button>
+    </div>
+    <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
+  </div>
+  <script>
+    // show/hide helpers for the component drawer
+    const _drawer = document.getElementById('compDrawer');
+    if (_drawer) {
+      _drawer.classList.add('hidden');
+      Object.defineProperty(_drawer.classList, 'remove', { 
+        value: function(){ 
+          _drawer.style.display='block'; 
+          DOMTokenList.prototype.remove.apply(this, arguments);
+        } 
+      });
+      Object.defineProperty(_drawer.classList, 'add', { 
+        value: function(){ 
+          _drawer.style.display='none';  
+          DOMTokenList.prototype.add.apply(this, arguments);
+        } 
+      });
+    }
+  </script>
+
   <script>
     // --- Safe DOM helpers ---
     const $ = (id) => document.getElementById(id);
@@ -1427,6 +1455,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=2.8" defer></script>
 </body>
 </html>

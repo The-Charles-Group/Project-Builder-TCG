@@ -376,7 +376,10 @@ function renderYourSelection() {
   if (!box) return;
   box.innerHTML = "<h3>Your Selection</h3>";
   
-  selectedCodes.forEach(code => {
+  // Sync legacy selectedCodes array with S2.selectedCodes Set
+  const codes = S2.selectedCodes.size > 0 ? Array.from(S2.selectedCodes) : selectedCodes || [];
+  
+  codes.forEach(code => {
     const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
     if (!deliverable) return;
     
