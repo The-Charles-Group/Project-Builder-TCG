@@ -321,20 +321,39 @@ async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
   const rfpText = (textEl?.value || '').trim();
+  const btnAnalyze = document.querySelector('#btnAnalyze');
 
   let summary;
   try {
     if (fileEl?.files?.length) {
+      // Disable button and show loading state
+      if (btnAnalyze) {
+        btnAnalyze.disabled = true;
+        btnAnalyze.textContent = 'Analyzing...';
+      }
+      
       const form = new FormData();
       form.append('file', fileEl.files[0]);
       const res = await fetch('/api/summarize_by_file', { method: 'POST', body: form });
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status} ${res.statusText}`);
+      }
       summary = await res.json(); // { summary_text, deliverables: [{label, short_desc, tasks}], word_count }
     } else if (rfpText) {
+      // Disable button and show loading state
+      if (btnAnalyze) {
+        btnAnalyze.disabled = true;
+        btnAnalyze.textContent = 'Analyzing...';
+      }
+      
       const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rfp_text: rfpText })
       });
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status} ${res.statusText}`);
+      }
       summary = await res.json();
     } else {
       alert('Please enter RFP text or upload a file first.');
@@ -360,6 +379,12 @@ async function onRunReconcile() {
   } catch (error) {
     console.error('Error analyzing RFP:', error);
     alert(`Error getting AI analysis: ${error.message}`);
+  } finally {
+    // Re-enable button
+    if (btnAnalyze) {
+      btnAnalyze.disabled = false;
+      btnAnalyze.textContent = 'Analyze with AI';
+    }
   }
 }
 

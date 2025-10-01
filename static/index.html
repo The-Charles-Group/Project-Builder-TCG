@@ -1371,16 +1371,7 @@
 
     // Event listeners - ensure DOM is loaded first
     document.addEventListener('DOMContentLoaded', function() {
-      const btnAnalyze = document.getElementById('btnAnalyze');
-      if (btnAnalyze) {
-        btnAnalyze.onclick = () => {
-          if (window.onRunReconcile) {
-            window.onRunReconcile();
-          } else {
-            analyzeRfp(); // fallback to legacy
-          }
-        };
-      }
+      // Note: btnAnalyze is wired in app.js boot() function
       
       const applyBtn = document.getElementById('apply-btn');
       if (applyBtn) applyBtn.onclick = applySelection;
@@ -1498,6 +1489,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=4.6" defer></script>
+  <script src="/static/app.js?v=4.8" defer></script>
 </body>
 </html>
