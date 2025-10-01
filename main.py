@@ -2971,8 +2971,7 @@ def api_export_xml(payload: ExportXMLPayload):
             start_date_mode=payload.start_date_mode,
             fixed_start_iso=payload.fixed_start_iso,
             hours_per_day=payload.hours_per_day,
-            merge_identical_children=False,
-            project_name=project_name
+            merge_identical_children=False
         )
 
         return FileResponse(
@@ -3028,8 +3027,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             input_xlsx=temp_xlsx_a,
             output_xml=output_xml_a,
             sheet_name="Scenario A",
-            merge_identical_children=False,
-            project_name=project
+            merge_identical_children=False
         )
         
         # Create XML for Scenario B
@@ -3045,8 +3043,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             input_xlsx=temp_xlsx_b,
             output_xml=output_xml_b,
             sheet_name="Scenario B",
-            merge_identical_children=False,
-            project_name=project
+            merge_identical_children=False
         )
         
         # Create zip file with both XMLs
@@ -3389,9 +3386,7 @@ def convert_excel_to_mspdi(
     allow_unassigned: bool = True,
     include_audits: bool = True,
     audits_dir: Optional[str] = None,
-    merge_identical_children: bool = False,   # <— toggle for multi-resource merge
-    project_name: Optional[str] = None,
-    round_to_whole_days: bool = False  # <— toggle for whole-day duration rounding
+    merge_identical_children: bool = False   # <— toggle for multi-resource merge
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -3591,73 +3586,14 @@ def convert_excel_to_mspdi(
             if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
                 continue
                 
-            # Only allow leaf→leaf links (filter out any summary task involvement)
-            if actual_pred in summary_set or actual_succ in summary_set:
-                # Convert summary tasks to their representative leaves
-                if actual_pred in summary_set:
-                    actual_pred = last_leaf(actual_pred)
-                if actual_succ in summary_set:
-                    actual_succ = first_leaf(actual_succ)
+            # Convert summary tasks to their representative leaves
+            if actual_pred in summary_set:
+                actual_pred = last_leaf(actual_pred)
+            if actual_succ in summary_set:
+                actual_succ = first_leaf(actual_succ)
                 
             if actual_pred != actual_succ:
                 normalized_edges.append((actual_pred, actual_succ))
-        
-        # Remove duplicate edges
-        normalized_edges = list(set(normalized_edges))
-        
-        # Detect and remove cycles using topological sort approach
-        def has_cycle_and_remove(edges):
-            """Detect cycles and remove problematic edges to make graph acyclic"""
-            from collections import defaultdict, deque
-            
-            # Build adjacency list
-            graph = defaultdict(list)
-            in_degree = defaultdict(int)
-            all_nodes = set()
-            
-            for pred, succ in edges:
-                graph[pred].append(succ)
-                in_degree[succ] += 1
-                all_nodes.add(pred)
-                all_nodes.add(succ)
-            
-            # Initialize nodes with no incoming edges
-            for node in all_nodes:
-                if node not in in_degree:
-                    in_degree[node] = 0
-            
-            # Kahn's algorithm for topological sort
-            queue = deque([node for node in all_nodes if in_degree[node] == 0])
-            sorted_count = 0
-            
-            while queue:
-                node = queue.popleft()
-                sorted_count += 1
-                
-                for neighbor in graph[node]:
-                    in_degree[neighbor] -= 1
-                    if in_degree[neighbor] == 0:
-                        queue.append(neighbor)
-            
-            # If sorted_count < total nodes, there's a cycle
-            if sorted_count < len(all_nodes):
-                # Remove edges that are part of cycles (simple heuristic: remove edges with highest in-degree target)
-                cycle_edges = []
-                for pred, succ in edges:
-                    if in_degree[succ] > 0:
-                        cycle_edges.append((pred, succ, in_degree[succ]))
-                
-                # Sort by in-degree and remove the most problematic edge
-                if cycle_edges:
-                    cycle_edges.sort(key=lambda x: x[2], reverse=True)
-                    edge_to_remove = (cycle_edges[0][0], cycle_edges[0][1])
-                    edges_cleaned = [e for e in edges if e != edge_to_remove]
-                    # Recursive call to check if more cycles exist
-                    return has_cycle_and_remove(edges_cleaned)
-            
-            return edges
-        
-        normalized_edges = has_cycle_and_remove(normalized_edges)
 
         # Calculate project start date
         if fixed_start_iso:
@@ -3733,13 +3669,12 @@ def convert_excel_to_mspdi(
         # Build UID-based children mapping for rollup (as expected by patch)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         wbs_children = children_by_parent  # Save original WBS-based mapping
-        wbs_summary_set = summary_set  # Save WBS-based summary set
         children_by_parent = {}  # UID-based mapping for rollup
         for wbs, child_wbs_list in wbs_children.items():
             parent_uid = wbs_to_uid.get(wbs)
             if parent_uid:
                 children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
-        uid_summary_set = set(children_by_parent.keys())
+        summary_set = set(children_by_parent.keys())
 
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
@@ -3748,19 +3683,19 @@ def convert_excel_to_mspdi(
                 return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
             starts, finishes = [], []
             for k in kids:
-                s,f = rollup_summary(k) if k in uid_summary_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
+                s,f = rollup_summary(k) if k in summary_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
                 starts.append(s); finishes.append(f)
             uid_to_sched[uid]["Start"]  = min(starts)
             uid_to_sched[uid]["Finish"] = max(finishes)
             return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
 
         # Call it on every summary
-        for uid in list(uid_summary_set):
+        for uid in list(summary_set):
             rollup_summary(uid)
 
         # Also roll up the very top project row if you have one (UID of the first row)
         top_uid = min(uid_to_sched.keys())
-        if top_uid in uid_summary_set:
+        if top_uid in summary_set:
             rollup_summary(top_uid)
 
         # 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)
@@ -3801,54 +3736,21 @@ def convert_excel_to_mspdi(
                 if uid:
                     prealloc_by_task_uid[uid] = role_hours
 
-        # Validate and adjust durations to ensure Units ≤ 1.0 for all assignments
-        MINUTES_PER_DAY = 480
-        for r in rows:
-            if r["WBS"] in wbs_summary_set:
-                continue
-            
-            task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
-            if task_hours <= 0.0001:
-                continue
-            
-            # Collect all role assignments for this task
-            role_hours_list = []
-            alloc = prealloc_by_task_uid.get(r["UID"])
-            if alloc:
-                role_hours_list = list(alloc.values())
-            else:
-                role_list = r["RoleList"] if r["RoleList"] else ["Unassigned"]
-                if roles_split_rule == "even":
-                    hours_per_role = task_hours / len(role_list)
-                    role_hours_list = [hours_per_role] * len(role_list)
-                elif roles_split_rule == "weighted" and role_weights:
-                    total_weight = sum(role_weights.get(role, 1.0) for role in role_list)
-                    role_hours_list = [(task_hours * role_weights.get(role, 1.0) / total_weight) for role in role_list]
-                else:
-                    role_hours_list = [task_hours]
-            
-            # Calculate required duration to keep all Units ≤ 1.0
-            max_work_hours = max(role_hours_list) if role_hours_list else task_hours
-            current_dur_hours = uid_to_sched[r["UID"]]["DurationHours"]
-            
-            # Ensure duration is at least as long as the longest assignment
-            if current_dur_hours < max_work_hours:
-                # Increase duration to whole days (ceil)
-                required_days = math.ceil(max_work_hours / 8.0)
-                uid_to_sched[r["UID"]]["DurationHours"] = required_days * 8.0
-
-        # Create assignments with validated Units
+        # Create assignments
         assignments = []
         assign_uid = 1
         for r in rows:
-            if r["WBS"] in wbs_summary_set:
+            if r["WBS"] in summary_set:
                 continue
 
             task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
             if task_hours <= 0.0001:
                 continue
 
-            task_dur_h = uid_to_sched[r["UID"]]["DurationHours"]
+            # Duration basis for Units
+            task_dur_h = uid_to_sched[r["UID"]]["DurationHours"] if uid_to_sched[r["UID"]]["DurationHours"] > 0 else task_hours
+            if uid_to_sched[r["UID"]]["DurationHours"] <= 0.0001 and task_hours > 0:
+                uid_to_sched[r["UID"]]["DurationHours"] = task_hours
 
             # --- Use precomputed role->hours if merged
             alloc = prealloc_by_task_uid.get(r["UID"])
@@ -3856,7 +3758,7 @@ def convert_excel_to_mspdi(
                 for role, work_h in alloc.items():
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (work_h / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.01, min(units, 1.0))  # Cap at 1.0
+                    units = max(0.05, min(units, 2.0))
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -3867,7 +3769,7 @@ def convert_excel_to_mspdi(
                         "WorkHours": work_h
                     })
                     assign_uid += 1
-                continue
+                continue  # done with this task
 
             # else: fall back to existing split-by-role behavior
             role_list = r["RoleList"]
@@ -3879,7 +3781,7 @@ def convert_excel_to_mspdi(
                 for role in role_list:
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (hours_per_role / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.01, min(units, 1.0))  # Cap at 1.0
+                    units = max(0.05, min(units, 2.0))
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -3897,7 +3799,7 @@ def convert_excel_to_mspdi(
                     hours_for_role = task_hours * (weight / total_weight)
                     res_uid = res_name_to_uid.get(role) or res_name_to_uid.get("Unassigned")
                     units = (hours_for_role / task_dur_h) if task_dur_h > 0 else 1.0
-                    units = max(0.01, min(units, 1.0))  # Cap at 1.0
+                    units = max(0.05, min(units, 2.0))
                     assignments.append({
                         "UID": assign_uid,
                         "TaskUID": r["UID"],
@@ -3913,7 +3815,7 @@ def convert_excel_to_mspdi(
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
         # Project info
-        SubElement(project, "Name").text = project_name or f"Project from {sheet_name}"
+        SubElement(project, "Name").text = f"Project from {sheet_name}"
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
@@ -3963,53 +3865,30 @@ def convert_excel_to_mspdi(
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
             SubElement(task, "Name").text = r["Name"]
-            
-            # ---- WBS canonicalization ----
-            # Normalize '1.0' → '1', '1.0.1' → '1.1', remove empty/zero segments
-            # Ensures MSPDI-friendly outline numbers like '1', '1.1', '1.1.1'
-            wbs_raw = str(r["WBS"]).strip()
-            parts = [p for p in wbs_raw.split('.') if p not in ('', '0')]
-            wbs = '.'.join(parts) if parts else '1'
-            
-            # Write MSPDI fields
-            SubElement(task, "WBS").text = wbs
-            SubElement(task, "OutlineNumber").text = wbs
-            
-            # OutlineLevel = 1-based (root "1" -> 1; "1.1" -> 2; "1.1.1" -> 3)
-            outline_level = wbs.count('.') + 1
-            SubElement(task, "OutlineLevel").text = str(outline_level)
-            # ---- end canonicalization ----
-            
-            # Summary task flag - check if this WBS has children
-            is_summary = wbs in wbs_summary_set
+            SubElement(task, "WBS").text = r["WBS"]
+            SubElement(task, "OutlineNumber").text = r["WBS"] 
+            SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
+            SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
+            # Summary task flag
+            is_summary = r["WBS"] in summary_set
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
-            # Start/Finish: Only write for summary tasks (let Workfront compute for leaf tasks)
-            if is_summary:
-                SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
-                SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
-            
-            # Work and Duration handling
-            if is_summary:
-                # Summary tasks: set Work to PT0M (Workfront will compute from children)
-                # Do NOT add Duration, Constraints - let Workfront roll them up
-                SubElement(task, "Work").text = "PT0M"
-            else:
-                # Leaf tasks: set Work and Duration from planned hours
+            # Only set Duration/Work for non-summary tasks (let Workfront compute for summaries)
+            if not is_summary:
+                # Safe int conversion for time values using rolled-up duration
                 planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
-                dur_hours = uid_to_sched[r['UID']]['DurationHours']
-                
-                if round_to_whole_days:
-                    # Round UP to whole days (8 hours per day = 480 minutes) - ceil policy
-                    dur_minutes = int(math.ceil(dur_hours / 8.0) * 480)
-                else:
-                    dur_minutes = int(round(dur_hours * 60))
+                dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
                 
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
-                # Use ASAP constraint (let Workfront schedule based on dependencies)
-                SubElement(task, "ConstraintType").text = "0"  # ASAP (As Soon As Possible)
+                # Pin leaf tasks to prevent drift - "Start No Earlier Than" constraint
+                SubElement(task, "ConstraintType").text = "4"  # Start No Earlier Than
+                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+            
+            # Outline level (based on WBS hierarchy depth, count('.') + 1)
+            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
+            SubElement(task, "OutlineLevel").text = str(outline_level)
 
         # Assignments
         assignments_elem = SubElement(project, "Assignments")
