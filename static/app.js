@@ -160,19 +160,23 @@ function renderDeliverableList(items){
 
 // Step 2 workflow functions
 async function onProceedToStep3() {
-  // Check both old and new selection systems and sync them
+  // Check all selection systems and sync them (S2, appState, legacy)
+  const s2Selected = S2?.selectedCodes ? Array.from(S2.selectedCodes) : [];
   const step2Selected = window.appState?.selectedCodes || [];
   const pickerSelected = window.selectedCodes || [];
-  const allSelected = [...new Set([...step2Selected, ...pickerSelected])];
+  const allSelected = [...new Set([...s2Selected, ...step2Selected, ...pickerSelected])];
   
   if (allSelected.length === 0) {
     alert("Please select at least one deliverable before proceeding to pricing.");
     return;
   }
   
-  // Sync the selection state
+  // Sync the selection state across all systems
   selectedCodes = allSelected;
   if (window.appState) window.appState.selectedCodes = allSelected;
+  if (S2?.selectedCodes) {
+    allSelected.forEach(code => S2.selectedCodes.add(code));
+  }
   
   // Build scenarios for Step 3 if we don't have them already
   if (!SCENARIOS || Object.keys(SCENARIOS).length === 0) {
