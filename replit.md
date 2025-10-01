@@ -43,8 +43,15 @@ Preferred communication style: Simple, everyday language.
 - **Granular Component Selection**: Allows detailed control over deliverable components within Step 2.
 
 ### Technical Implementations
-- **XML Export Validations**: Includes rigorous checks for Workfront compatibility, such as unit allocation, duration rounding (ceil), cycle detection in dependencies, leaf-only predecessor links, smart date handling, and WBS canonicalization.
-- **XML Export Enhancements**: Proper summary task handling, removal of aggressive task pinning (ConstraintType=0), optional whole-day duration rounding, and consistent date/duration calculations.
+- **XML Export Validations (v2.9)**: Includes rigorous checks for Workfront compatibility:
+  - Units ≤ 1.0 enforcement with automatic duration adjustment
+  - Ceil rounding policy for whole-day durations
+  - Cycle detection and removal using Kahn's algorithm
+  - Leaf-only predecessor links (summary tasks filtered)
+  - Smart date handling (Start/Finish only on summary tasks)
+  - WBS canonicalization with correct OutlineLevel calculation
+  - Proper MSPDI hierarchy: root (level 0) → deliverables (level 1) → components (level 2+)
+- **XML Export Enhancements**: Proper summary task handling (Summary=1 for parents, Work=PT0M), ASAP constraints (ConstraintType=0), optional whole-day duration rounding, and consistent date/duration calculations.
 - **v3 Drivers Support**: Implemented for token normalization and mapping in the backend, with a corresponding UI integration for complexity, tiers, and rate bands.
 
 ### Feature Specifications

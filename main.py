@@ -3733,12 +3733,13 @@ def convert_excel_to_mspdi(
         # Build UID-based children mapping for rollup (as expected by patch)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         wbs_children = children_by_parent  # Save original WBS-based mapping
+        wbs_summary_set = summary_set  # Save WBS-based summary set
         children_by_parent = {}  # UID-based mapping for rollup
         for wbs, child_wbs_list in wbs_children.items():
             parent_uid = wbs_to_uid.get(wbs)
             if parent_uid:
                 children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
-        summary_set = set(children_by_parent.keys())
+        uid_summary_set = set(children_by_parent.keys())
 
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
@@ -3747,19 +3748,19 @@ def convert_excel_to_mspdi(
                 return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
             starts, finishes = [], []
             for k in kids:
-                s,f = rollup_summary(k) if k in summary_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
+                s,f = rollup_summary(k) if k in uid_summary_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
                 starts.append(s); finishes.append(f)
             uid_to_sched[uid]["Start"]  = min(starts)
             uid_to_sched[uid]["Finish"] = max(finishes)
             return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
 
         # Call it on every summary
-        for uid in list(summary_set):
+        for uid in list(uid_summary_set):
             rollup_summary(uid)
 
         # Also roll up the very top project row if you have one (UID of the first row)
         top_uid = min(uid_to_sched.keys())
-        if top_uid in summary_set:
+        if top_uid in uid_summary_set:
             rollup_summary(top_uid)
 
         # 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)
@@ -3803,7 +3804,7 @@ def convert_excel_to_mspdi(
         # Validate and adjust durations to ensure Units ≤ 1.0 for all assignments
         MINUTES_PER_DAY = 480
         for r in rows:
-            if r["UID"] in summary_set:
+            if r["WBS"] in wbs_summary_set:
                 continue
             
             task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
@@ -3840,7 +3841,7 @@ def convert_excel_to_mspdi(
         assignments = []
         assign_uid = 1
         for r in rows:
-            if r["UID"] in summary_set:
+            if r["WBS"] in wbs_summary_set:
                 continue
 
             task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
@@ -3980,13 +3981,13 @@ def convert_excel_to_mspdi(
             SubElement(task, "WBS").text = wbs
             SubElement(task, "OutlineNumber").text = wbs
             
-            # OutlineLevel = number of segments in WBS (1 for "1", 2 for "1.1", etc.)
-            outline_level = len(wbs.split('.'))
+            # OutlineLevel = count of dots (root "1" -> 0; "1.1" -> 1; "1.1.1" -> 2)
+            outline_level = wbs.count('.')
             SubElement(task, "OutlineLevel").text = str(outline_level)
             # ---- end canonicalization ----
             
-            # Summary task flag
-            is_summary = r["UID"] in summary_set
+            # Summary task flag - check if this WBS has children
+            is_summary = wbs in wbs_summary_set
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # Start/Finish: Only write for summary tasks (let Workfront compute for leaf tasks)

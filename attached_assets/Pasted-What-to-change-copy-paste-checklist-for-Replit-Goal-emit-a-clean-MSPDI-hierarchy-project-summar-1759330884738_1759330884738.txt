@@ -1,0 +1,51 @@
+What to change (copy/paste checklist for Replit)
+
+Goal: emit a clean MSPDI hierarchy: project summary (level 0) → deliverables (level 1, Summary=1) → components (level 2, Summary=0, or 1 when they themselves have children).
+
+A. Mark parents correctly
+In the XML builder (the function that creates <Tasks>), before you emit <Task> nodes:
+
+# df must contain WBS_ID and Parent_WBS_ID in the build order
+children_by_parent = {}
+for _, r in df.iterrows():
+    parent = str(r["Parent_WBS_ID"]) if "Parent_WBS_ID" in r else ""
+    child  = str(r["WBS_ID"])
+    children_by_parent.setdefault(parent, []).append(child)
+
+def is_parent(wbs_id: str) -> bool:
+    return wbs_id in children_by_parent
+
+
+When you write each task:
+
+wbs = str(row["WBS_ID"])
+level = wbs.count('.')            # root '1' -> 0; '1.1' -> 1; '1.1.1' -> 2
+
+SubElement(task, "WBS").text            = wbs
+SubElement(task, "OutlineNumber").text  = wbs
+SubElement(task, "OutlineLevel").text   = str(level)
+
+SubElement(task, "Summary").text = "1" if is_parent(wbs) else "0"
+
+# Good practice: don't assign resources or Work to summary tasks
+if is_parent(wbs):
+    SubElement(task, "Work").text     = "PT0M"
+    # skip resource Assignments for this UID
+
+
+Why: v2.8 currently sets Summary=1 only for the project task after computing min/max dates; deliverable rows are left as 0. This change sets the flag for every parent row.
+
+B. Fix the base outline level
+Make sure the project summary (UID 1) is emitted with:
+
+SubElement(project_task, "OutlineLevel").text = "0"
+SubElement(project_task, "Summary").text      = "1"
+
+
+…and deliverables compute level = wbs.count('.') as shown above so they land at 1, components at 2. Your 5:12 PM file uses OutlineLevel=1 for the root; switch to 0.
+
+C. Keep the order stable
+Write tasks in ascending WBS order (e.g., 1, 1.1, 1.1.1, 1.1.2, 1.2, …). That’s what the v2.7 file did and Workfront uses this to rebuild the tree.
+
+D. (Optional now, recommended next) Relax the constraints & date math
+Prefer ConstraintType=0 (ASAP) for most tasks and let Workfront compute Start/Finish from Duration + links. If you do set dates, ensure Finish = Start + Duration (calendar-aware)—otherwise UIs will show hours and scheduling can look off.
