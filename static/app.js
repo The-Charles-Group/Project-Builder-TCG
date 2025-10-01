@@ -110,8 +110,8 @@ async function boot() {
   if (slackGlobalEl) slackGlobalEl.value = ss["Slack_Global_Percent"] ?? 0.05;
 
   // UI wiring (original) - with null checks
-  const btnSuggest = document.querySelector("#btnSuggest");
-  if (btnSuggest) btnSuggest.onclick = onSuggest;
+  const btnAnalyze = document.querySelector("#btnAnalyze");
+  if (btnAnalyze) btnAnalyze.onclick = onRunReconcile;
   
   // Remove double binding - Step 3 uses buildScenariosAB from index.html
   // const btnBuild = document.querySelector("#btnBuild");
@@ -415,26 +415,29 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
     const right = document.createElement('div');
     right.style = 'display:flex;gap:8px;align-items:center;';
 
-    // Check if already selected
-    const isSel = (S2.selectedCodes || new Set()).has(sug.code);
-    if (isSel) {
-      const badge = document.createElement('span');
-      badge.style = 'background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75em;';
-      badge.textContent = 'Selected ✓';
-      right.appendChild(badge);
+    // Only add action buttons if we have a code
+    if (sug.code) {
+      // Check if already selected
+      const isSel = (S2.selectedCodes || new Set()).has(sug.code);
+      if (isSel) {
+        const badge = document.createElement('span');
+        badge.style = 'background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75em;';
+        badge.textContent = 'Selected ✓';
+        right.appendChild(badge);
 
-      const rm = document.createElement('button');
-      rm.className = 'btn-sm';
-      rm.textContent = 'Remove';
-      rm.style = 'background:var(--danger);';
-      rm.onclick = () => s2onRemove(sug.code);
-      right.appendChild(rm);
-    } else {
-      const addBtn = document.createElement('button');
-      addBtn.className = 'btn-sm';
-      addBtn.textContent = 'Add';
-      addBtn.onclick = () => s2onAdd(sug.code);
-      right.appendChild(addBtn);
+        const rm = document.createElement('button');
+        rm.className = 'btn-sm';
+        rm.textContent = 'Remove';
+        rm.style = 'background:var(--danger);';
+        rm.onclick = () => s2onRemove(sug.code);
+        right.appendChild(rm);
+      } else {
+        const addBtn = document.createElement('button');
+        addBtn.className = 'btn-sm';
+        addBtn.textContent = 'Add';
+        addBtn.onclick = () => s2onAdd(sug.code);
+        right.appendChild(addBtn);
+      }
     }
 
     row.appendChild(left); 
