@@ -10,6 +10,25 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Robust Component Handling Implementation (October 2025)
+- **Client-Side Enhancement**: Ensured all selected deliverables send component data to backend
+  - Updated `buildFromCurrentSelection()` to explicitly handle all deliverable codes
+  - Sends "__ALL__" sentinel value for deliverables without specific component selections
+  - Preserves explicit component selections in dictionary format with proper instanceof check
+  - Fixed precedence bug in instanceof operator with proper parentheses
+  
+- **Server-Side Schema Update**: Enhanced BuildPayload model to accept sentinel values
+  - Updated `selected_components_map` type to `Optional[Dict[str, Union[str, List[str], Dict[str, Optional[float]]]]]`
+  - Now accepts "__ALL__" string sentinel in addition to legacy list and dict formats
+  - Handler converts "__ALL__" → {} for downstream "include all" semantics
+  
+- **Defensive Inflation System**: Automatic task group population for incomplete scenario data
+  - Added `DB.task_groups_for_deliverable()` helper method for database retrieval
+  - Implemented `_inflate_components_if_missing()` function that populates missing `included_task_groups`
+  - Integrated inflation into `/api/build` (pre-storage) and all export endpoints
+  - Prevents flat exports by guaranteeing hierarchical deliverable→component→task structure
+  - WBS builder now guaranteed to produce detailed structure (1,000+ lines) for all scenarios
+
 ### Component-Level Selection & Export Robustness (September 2025)
 - **Component-Level Selection Feature**: Complete implementation of granular deliverable component control in Step 2
   - Added `/api/components_for` endpoint for retrieving components with hours breakdown by deliverable
