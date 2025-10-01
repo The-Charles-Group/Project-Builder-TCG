@@ -17,12 +17,21 @@ Preferred communication style: Simple, everyday language.
   - Helper functions labelFor(code) and categoryFor(code) provide safe access
   - Fallback to displaying raw code if lookup misses
 
+- **Defensive Lookup Pattern**: Added case-insensitive fallback for robustness
+  - DELIV_INDEX_LO provides lowercase key lookup for mixed-case codes
+  - key(s) function normalizes strings (trim + lowercase)
+  - fromAny(code) tries exact match first, then case-insensitive
+  - Handles legacy slugs, trimming, and case differences gracefully
+
 - **Fixed AI Suggestions Display**: AI-suggested deliverables now show friendly names
   - Previously showed codes (DEL-00xx) instead of names in "Your Selection" panel
   - renderYourSelection() updated to use helper functions instead of array.find()
   - renderRemovedItems() also updated for consistency
+  - s2RenderLeft() uses labelFor()/categoryFor() instead of S2.selectedMeta
+  - codeToName() in retainer panel uses labelFor() with defensive fallback
   - Works for both AI-suggested and manually selected deliverables
   - Proper escaping of single quotes in onclick attributes
+  - DELIV_INDEX is now single source of truth for all deliverable display names
 
 ### Department Grouping & UI Enhancements (October 2025)
 - **Search Functionality**: Added instant search to Step 2 deliverables panel

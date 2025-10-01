@@ -2,6 +2,7 @@ let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
 let DELIV_INDEX = {};     // code -> deliverable object lookup for fast rendering
+let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ---- Step 2 state ---- (GPT 5 Pro Implementation)
 const S2 = {
@@ -30,14 +31,24 @@ let addedCodes = [];
 const selectedComponentsMap = S2.selectedComponentsMap;
 window.selectedComponentsMap = selectedComponentsMap;
 
+// Helper to normalize keys for defensive lookup
+function key(s) {
+  return String(s).trim().toLowerCase();
+}
+
+// Defensive lookup that handles case differences
+function fromAny(code) {
+  return DELIV_INDEX[String(code)] || DELIV_INDEX_LO[key(code)] || null;
+}
+
 // Helper functions to get deliverable info from code
 function labelFor(code) {
-  const row = DELIV_INDEX[String(code).trim()];
+  const row = fromAny(code);
   return row ? row.Deliverable : String(code);
 }
 
 function categoryFor(code) {
-  const row = DELIV_INDEX[String(code).trim()];
+  const row = fromAny(code);
   return row ? row.Category : "";
 }
 
@@ -94,8 +105,11 @@ async function boot() {
   
   // Build code→deliverable index for fast lookups
   DELIV_INDEX = {};
+  DELIV_INDEX_LO = {};
   for (const d of (OPTIONS.deliverables || [])) {
-    DELIV_INDEX[String(d.Deliverable_Code).trim()] = d;
+    const code = String(d.Deliverable_Code).trim();
+    DELIV_INDEX[code] = d;
+    DELIV_INDEX_LO[key(code)] = d;
   }
   
   renderDeliverableList(DELIVERABLES);
@@ -1246,8 +1260,11 @@ async function s2LoadDeliverables() {
   
   // Build code→deliverable index for fast lookups
   DELIV_INDEX = {};
+  DELIV_INDEX_LO = {};
   for (const d of (data.deliverables || [])) {
-    DELIV_INDEX[String(d.Deliverable_Code).trim()] = d;
+    const code = String(d.Deliverable_Code).trim();
+    DELIV_INDEX[code] = d;
+    DELIV_INDEX_LO[key(code)] = d;
   }
   
   s2RenderRight('');
@@ -1344,17 +1361,19 @@ function s2RenderLeft() {
   const host = S2.els.yourSel;
   if (!host) return;
   const rows = Array.from(S2.selectedCodes).map(code => {
-    const meta = S2.selectedMeta.get(code) || {name: code, category: ''};
+    // Use helper functions for consistent lookup with defensive fallback
+    const name = labelFor(code);
+    const category = categoryFor(code);
     const selectedComps = S2.selectedComponentsMap[code] || new Set();
     const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
     return `
       <div class="selection-item">
         <div class="selection-item-left">
-          <div class="selection-item-name">${meta.name}</div>
-          <div class="selection-item-category">${meta.category || ''}</div>
+          <div class="selection-item-name">${name}</div>
+          <div class="selection-item-category">${category || ''}</div>
         </div>
         <div class="selection-item-right">
-          <button class="btn-component s2-comp" data-code="${code}" data-name="${meta.name}">Components...${compCountText}</button>
+          <button class="btn-component s2-comp" data-code="${code}" data-name="${name.replace(/'/g, "\\'")}">Components...${compCountText}</button>
           <button class="btn-remove s2-remove" data-code="${code}">×</button>
         </div>
       </div>`;
