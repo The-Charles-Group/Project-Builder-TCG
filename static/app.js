@@ -480,6 +480,10 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
 function s2onAdd(code) {
   if (!code) return;
   S2.selectedCodes.add(code);
+  // AI-suggested deliverables default to ALL components unless user manually edits
+  if (!S2.selectedComponentsMap[code]) {
+    S2.selectedComponentsMap[code] = 'ALL';
+  }
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
   // Refresh suggestions to update badges
@@ -1229,19 +1233,52 @@ function s2RenderRight(filter) {
     !q ||
     String(d.Deliverable).toLowerCase().includes(q) ||
     String(d.Category || '').toLowerCase().includes(q) ||
+    String(d['Service Department'] || '').toLowerCase().includes(q) ||
     String(d.Deliverable_Code).toLowerCase().includes(q)
   );
-  host.innerHTML = items.map(d => `
-    <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
-      <input type="checkbox" class="s2chk"
-        data-code="${d.Deliverable_Code}"
-        data-name="${d.Deliverable}"
-        data-cat="${d.Category}"
-        ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
-      <span>${d.Deliverable}</span>
-      <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
-    </label>
-  `).join('') || '<div style="opacity:.7;padding:8px">No deliverables</div>';
+  
+  // Group by Service Department
+  const DEPT_ORDER = ['Strategy', 'Creative', 'Content', 'Production', 'Technology', 'PM', 'Other'];
+  const grouped = {};
+  items.forEach(d => {
+    const dept = d['Service Department'] || 'Other';
+    if (!grouped[dept]) grouped[dept] = [];
+    grouped[dept].push(d);
+  });
+  
+  // Sort departments by defined order
+  const sortedDepts = Object.keys(grouped).sort((a, b) => {
+    const aIdx = DEPT_ORDER.indexOf(a);
+    const bIdx = DEPT_ORDER.indexOf(b);
+    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
+  });
+  
+  // Render grouped deliverables
+  const html = sortedDepts.map(dept => {
+    const deptItems = grouped[dept].sort((a, b) => {
+      const sortA = a.Sort_Order ?? 999;
+      const sortB = b.Sort_Order ?? 999;
+      if (sortA !== sortB) return sortA - sortB;
+      return (a.Deliverable || '').localeCompare(b.Deliverable || '');
+    });
+    
+    const deptHeader = `<div style="font-weight:600; padding:8px 8px 4px; color:var(--accent); border-top:1px solid rgba(255,255,255,0.1); margin-top:4px; background:rgba(139,92,246,0.05);">${dept}</div>`;
+    const deptRows = deptItems.map(d => `
+      <label class="row" data-deliv-row="1" data-search="${(d.Deliverable + ' ' + (d.Category || '') + ' ' + (d['Service Department'] || '')).toLowerCase()}" 
+             style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+        <input type="checkbox" class="s2chk"
+          data-code="${d.Deliverable_Code}"
+          data-name="${d.Deliverable}"
+          data-cat="${d.Category}"
+          ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+        <span>${d.Deliverable}</span>
+        <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+      </label>
+    `).join('');
+    return deptHeader + deptRows;
+  }).join('');
+  
+  host.innerHTML = html || '<div style="opacity:.7;padding:8px">No deliverables</div>';
 
   host.querySelectorAll('.s2chk').forEach(cb => {
     cb.addEventListener('change', e => {

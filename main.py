@@ -2267,7 +2267,16 @@ def api_options():
 
     rate_bands = DB.rate_bands["Band_Name"].head(3).tolist()  # 3 bands max
     pricing_modes = ["Flat_Blended","Per_Resource"]
-    deliverables = DB.deliverables[["Deliverable_Code","Deliverable","Category"]].to_dict(orient="records")
+    
+    # Include Service Department and Sort_Order for grouping/ordering
+    deliv_cols = ["Deliverable_Code", "Deliverable", "Category"]
+    if "Service Department" in DB.deliverables.columns:
+        deliv_cols.append("Service Department")
+    
+    deliverables_df = DB.deliverables[deliv_cols].copy()
+    # Add sort order (use DataFrame index if no explicit sort column exists)
+    deliverables_df["Sort_Order"] = deliverables_df.index
+    deliverables = deliverables_df.to_dict(orient="records")
 
     return {
         "complexities": v3_complexities,
