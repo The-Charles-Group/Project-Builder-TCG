@@ -33,32 +33,51 @@
       <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
     </section>
 
-    <!-- Step 2: Deliverable Selection -->
-    <section id="step2" class="s2-grid" style="display:none">
-      <!-- Left: Deliverable picker -->
-      <div class="panel" id="s2-picker">
-        <h3>Deliverables (select)</h3>
-        <div class="row">
-          <input id="s2-deliv-search" class="input" placeholder="Search deliverables..." />
-          <div class="btns">
-            <button id="s2-select-all" class="btn">Select all</button>
-            <button id="s2-clear" class="btn">Clear</button>
+    <!-- Step 2: Deliverable Selection (Blueprint Wireframe) -->
+    <section class="card" id="step2" style="display:none;">
+      <h2>Step 2 — Select & Manage Deliverables</h2>
+      
+      <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
+        <!-- Left Panel: Your Selection + Removed Items -->
+        <div class="left-panel">
+          <div id="yourSelection">
+            <h3>Your Selection</h3>
+            <p>No deliverables selected yet.</p>
+          </div>
+          <div id="removedItems" style="margin-top: 20px;">
+            <!-- Removed items will appear here -->
           </div>
         </div>
-        <div id="s2-deliv-list" class="list"></div>
-        <button id="s2-apply" class="btn primary" style="width:100%">Apply selection</button>
+
+        <!-- Middle Panel: AI Suggestions -->
+        <div class="middle-panel">
+          <h3>AI Suggestions</h3>
+          <div id="aiSuggestions">
+            <p>Run AI analysis to get suggestions.</p>
+          </div>
+        </div>
+
+        <!-- Right Panel: Deliverables Selection -->
+        <div class="right-panel">
+          <!-- Step 2 — Deliverables (select) -->
+          <div class="card" id="s2-deliv-card" style="margin-top:12px;">
+            <div class="card-title">Deliverables (select)</div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+              <input id="s2-deliv-search" placeholder="Search deliverables…" style="flex:1;" />
+              <button id="s2-deliv-selectall" type="button">Select all</button>
+              <button id="s2-deliv-clear" type="button">Clear</button>
+            </div>
+            <div id="s2-deliv-list" style="border:1px solid #2a2a2a; border-radius:6px; height:260px; overflow:auto;"></div>
+            <div style="margin-top:10px; display:flex; gap:8px;">
+              <button id="s2-apply" class="btn btn-primary" style="flex:1;">Apply selection</button>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <!-- Middle: Your selection -->
-      <div class="panel" id="s2-selection">
-        <h3>Your Selection</h3>
-        <div id="s2-selected-list" class="list"></div>
-      </div>
-
-      <!-- Right: AI suggestions -->
-      <div class="panel" id="s2-ai">
-        <h3>AI Suggestions</h3>
-        <div id="s2-ai-list" class="list muted">Run analysis to see suggestions.</div>
+      <div class="actions">
+        <button id="btnProceedToStep3">Proceed to Pricing</button>
+        <button id="btnRunReconcile">Get AI Suggestions</button>
       </div>
     </section>
 
@@ -107,24 +126,6 @@
         </section>
       </div>
     </section>
-
-    <!-- Component Drawer (GPT 5 Pro Implementation) -->
-    <div id="compDrawer" class="drawer hidden" style="position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;display:none;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <strong id="compTitle" style="flex:1">Components</strong>
-        <button id="compDone" class="btn small">Done</button>
-      </div>
-      <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
-    </div>
-    <script>
-      // show/hide helpers for the inline styles above
-      const _drawer = document.getElementById('compDrawer');
-      if (_drawer) {
-        _drawer.classList.add('hidden');
-        Object.defineProperty(_drawer.classList, 'remove', { value: function(){ _drawer.style.display='block'; DOMTokenList.prototype.remove.apply(this, arguments);} });
-        Object.defineProperty(_drawer.classList, 'add',    { value: function(){ _drawer.style.display='none';  DOMTokenList.prototype.add.apply(this, arguments);} });
-      }
-    </script>
 
     <!-- Step 3: Pricing -->
     <section class="card" id="step3" style="display:none;">
@@ -430,9 +431,14 @@
           $('projectName').value = baseName;
         }
 
-        // Show Step 2 (deliverable selection) and initialize
-        await initStep2();
+        // Show Step 2 (deliverable selection) instead of Stage 2
+        $('step2').style.display = 'block';
         $('step2').scrollIntoView({ behavior: 'smooth' });
+        
+        // Initialize Step 2 picker with the built scenarios
+        if (window.initStep2DeliverablePicker) {
+          await window.initStep2DeliverablePicker(scenarios);
+        }
         
       } catch (error) {
         alert('Error analyzing file: ' + error.message);
@@ -541,9 +547,14 @@
         renderLeftPanel(autoData.scenarios.A.items, autoData.scenarios.A.totals);
         renderReconcile(appState.reconciliation);
         
-        // Show Step 2 (deliverable selection) and initialize
-        await initStep2();
+        // Show Step 2 (deliverable selection) instead of Stage 2
+        document.getElementById('step2').style.display = 'block';
         document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
+        
+        // Initialize Step 2 picker with the built scenarios
+        if (window.initStep2DeliverablePicker) {
+          await window.initStep2DeliverablePicker(autoData.scenarios);
+        }
         
       } catch (error) {
         alert('Error performing reconciliation: ' + error.message);
@@ -1417,14 +1428,5 @@
     loadOptions();
   </script>
   <script src="/static/app.js" defer></script>
-  
-  <!-- Components drawer -->
-  <div id="compDrawer" style="display:none;position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;z-index:9999;">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-      <strong id="compTitle" style="flex:1">Components</strong>
-      <button id="compDone">Done</button>
-    </div>
-    <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
-  </div>
 </body>
 </html>
