@@ -1487,18 +1487,31 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
     """
     Defensive fallback: if scenario items lack included_task_groups/components,
     auto-expand from DB so exports never go flat.
+    Handles both empty lists and "__ALL__" sentinel values.
     """
     for item in scenario.get("items", []):
         dcode = str(item.get("deliverable_code") or item.get("Deliverable_Code") or "").strip()
         if not dcode:
             continue
         
-        # If no component info, fetch all task groups/components from DB
+        # Check if task groups need to be populated
         included = item.get("included_task_groups") or []
-        if not included:
+        comp_map = item.get("included_task_groups_map", {})
+        
+        # Populate if empty OR if the map contains "__ALL__" sentinel
+        needs_inflation = (
+            not included or 
+            comp_map == "__ALL__" or 
+            (isinstance(comp_map, dict) and not comp_map)
+        )
+        
+        if needs_inflation:
             # Derive all task groups for this deliverable from DB
             included = DB.task_groups_for_deliverable(dcode)
             item["included_task_groups"] = included
+            # Also convert "__ALL__" sentinel to empty dict for downstream code
+            if comp_map == "__ALL__":
+                item["included_task_groups_map"] = {}
     
     return scenario
 
