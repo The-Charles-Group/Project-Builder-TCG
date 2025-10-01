@@ -61,11 +61,27 @@
           </div>
         </div>
 
-        <!-- Right Panel: AI Suggestions -->
+        <!-- Right Panel: AI Suggestions & Summary -->
         <div class="right-panel">
           <h3>AI Suggestions</h3>
-          <div id="aiSuggestions" style="min-height: 360px;">
+          <div id="s2-ai-suggest" style="min-height: 240px;">
             <p style="color: var(--muted);">Run analysis to see suggestions.</p>
+          </div>
+          
+          <!-- AI Summary Panel -->
+          <div id="s2-ai-summary" class="card" style="margin-top:12px; background: rgba(255,255,255,0.03);">
+            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <div>
+                <strong>AI Summary</strong>
+                <small id="s2-ai-summary-count" style="opacity:.7; margin-left:8px;"></small>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <button id="s2-ai-summary-copy" class="btn-sm">Copy</button>
+                <button id="s2-ai-summary-toggle" class="btn-sm">Hide</button>
+              </div>
+            </div>
+            <div class="card-body" id="s2-ai-summary-body"
+                 style="white-space:pre-wrap; max-height:220px; overflow:auto; padding: 12px;"></div>
           </div>
         </div>
       </div>
@@ -1472,6 +1488,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=3.8" defer></script>
+  <script src="/static/app.js?v=3.9" defer></script>
 </body>
 </html>

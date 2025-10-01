@@ -140,7 +140,8 @@ async function boot() {
   if (reconcileBtn) {
     reconcileBtn.onclick = (e) => {
       e.preventDefault();
-      onRunReconcile();
+      // Refresh suggestions with current selection
+      initAISummaryAndSuggestions();
     };
   }
 
@@ -282,26 +283,26 @@ async function buildFromCurrentSelection() {
 // Alias for backward compatibility
 const onProceedToStep3 = buildFromCurrentSelection;
 
-// Step 1: Analyze with AI (updated to pre-populate Step 2)
+// Step 1: Analyze with AI (updated to use summarize endpoints and show Step 2)
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
   const rfpText = (textEl?.value || '').trim();
 
-  let data;
+  let summary;
   try {
     if (fileEl?.files?.length) {
       const form = new FormData();
       form.append('file', fileEl.files[0]);
-      const res = await fetch('/api/suggest_by_file', { method: 'POST', body: form });
-      data = await res.json(); // { suggested: [...] }
+      const res = await fetch('/api/summarize_by_file', { method: 'POST', body: form });
+      summary = await res.json(); // { summary_text, deliverables: [{label, short_desc, tasks}], word_count }
     } else if (rfpText) {
-      const res = await fetch('/api/suggest_by_text', {
+      const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rfp_text: rfpText })
       });
-      data = await res.json(); // { suggested: [...] }
+      summary = await res.json();
     } else {
       alert('Please enter RFP text or upload a file first.');
       return;
@@ -310,7 +311,8 @@ async function onRunReconcile() {
     // Persist for Step 2
     window.APP = window.APP || {};
     window.APP.rfpText = rfpText;
-    window.APP.aiSuggestions = data?.suggested || [];
+    window.APP.summary = summary;
+    sessionStorage.setItem('apb:rfpSummary', JSON.stringify(summary));
 
     // Show Step 2
     const step2 = document.getElementById('step2');
@@ -319,67 +321,177 @@ async function onRunReconcile() {
       step2.scrollIntoView({ behavior: 'smooth' });
     }
 
-    // Render AI suggestions in the AI panel (or auto-add high confidence ones)
-    renderAISuggestions(window.APP.aiSuggestions);
+    // Render summary & suggestions on Step 2
+    initAISummaryAndSuggestions();
     
   } catch (error) {
     console.error('Error analyzing RFP:', error);
-    alert(`Error getting AI suggestions: ${error.message}`);
+    alert(`Error getting AI analysis: ${error.message}`);
   }
 }
 
-// Render AI suggestions and auto-add high confidence ones to S2
-function renderAISuggestions(suggestions) {
-  if (!suggestions || suggestions.length === 0) {
-    console.log('No AI suggestions to render');
+// Initialize AI Summary and Suggestions on Step 2
+function initAISummaryAndSuggestions() {
+  // Hydrate from memory or session
+  const sum = window.APP?.summary || JSON.parse(sessionStorage.getItem('apb:rfpSummary') || 'null');
+  if (!sum) {
+    // No analysis yet – keep UI available but empty
+    renderAISummary(null);
+    renderNewAISuggestions([]);
+    return;
+  }
+  renderAISummary(sum);
+  // Build suggestions from AI deliverable labels vs current selection
+  const labels = (sum.deliverables || []).map(d => d.label).filter(Boolean);
+  const selCodes = Array.from(S2.selectedCodes || []);
+  reconcileAndRender(labels, selCodes);
+}
+
+// Render AI Summary panel
+function renderAISummary(sum) {
+  const body  = document.querySelector('#s2-ai-summary-body');
+  const count = document.querySelector('#s2-ai-summary-count');
+  const copy  = document.querySelector('#s2-ai-summary-copy');
+  const tog   = document.querySelector('#s2-ai-summary-toggle');
+
+  if (!body) return;
+  if (!sum) {
+    body.textContent = 'Run analysis to see summary.';
+    if (count) count.textContent = '';
+    if (copy) copy.onclick = null;
+    if (tog) tog.onclick = null;
     return;
   }
 
-  // Render the visible list in the AI Suggestions panel
-  const aiPanel = document.querySelector('#aiSuggestions');
-  if (aiPanel) {
-    aiPanel.innerHTML = '<h4 style="margin-bottom: 12px;">AI-Suggested Deliverables</h4>';
-    
-    suggestions.forEach(s => {
-      const code = String(s.deliverable_code);
-      const isAutoAdded = s.confidence >= 0.7;
-      const isSelected = S2.selectedCodes.has(code);
-      
-      const suggestionEl = document.createElement('div');
-      suggestionEl.style.cssText = 'padding: 8px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 4px; background: rgba(139, 92, 246, 0.05);';
-      suggestionEl.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <strong>${s.deliverable || code}</strong>
-            <small style="margin-left: 8px; color: var(--muted);">${s.category || ''}</small>
-            <br>
-            <small style="color: var(--muted);">Confidence: ${(s.confidence * 100).toFixed(0)}%</small>
-            ${isAutoAdded ? ' <span style="color: var(--accent2);">✓ Auto-added</span>' : ''}
-          </div>
-          ${isSelected ? '<span style="color: var(--accent2);">✓ Selected</span>' : ''}
-        </div>
-      `;
-      aiPanel.appendChild(suggestionEl);
+  body.textContent = sum.summary_text || '';
+  if (count) count.textContent = sum.word_count ? `${sum.word_count}/500 words` : '';
+  if (copy) copy.onclick = () => navigator.clipboard.writeText(sum.summary_text || '');
+  let hidden = false;
+  if (tog) {
+    tog.onclick = () => {
+      hidden = !hidden;
+      body.style.display = hidden ? 'none' : 'block';
+      tog.textContent = hidden ? 'Show' : 'Hide';
+    };
+  }
+}
+
+// Call reconcile API and render suggestions
+async function reconcileAndRender(aiLabels, selectedCodes) {
+  try {
+    const res = await fetch('/api/reconcile', {
+      method: 'POST', 
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        summary_deliverables: aiLabels,
+        db_selected_deliverable_codes: selectedCodes,
+        rfp_text: window.APP?.rfpText || ''
+      })
     });
+    const data = await res.json(); // { add, delete, unchanged, db_used_codes, db_used_labels }
+    renderNewAISuggestions(data.add || [], data.delete || [], data.unchanged || []);
+  } catch (e) {
+    console.error('Reconcile error:', e);
+    renderNewAISuggestions([]);
+  }
+}
+
+// Render AI Suggestions with Accept/Remove buttons
+function renderNewAISuggestions(add = [], del = [], unchanged = []) {
+  const root = document.querySelector('#s2-ai-suggest');
+  if (!root) return;
+
+  const mkRow = (sug, type) => {
+    const row = document.createElement('div');
+    row.style = 'display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);';
+
+    const left = document.createElement('div');
+    left.innerHTML = `<strong>${sug.label || sug}</strong> <span style="opacity:.65;">${
+      type === 'add' ? '• suggested' : 
+      type === 'del' ? '• not in AI' : 
+      '• unchanged'
+    }</span>`;
+
+    const right = document.createElement('div');
+    right.style = 'display:flex;gap:8px;align-items:center;';
+
+    // Check if already selected
+    const isSel = (S2.selectedCodes || new Set()).has(sug.code);
+    if (isSel) {
+      const badge = document.createElement('span');
+      badge.style = 'background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75em;';
+      badge.textContent = 'Selected ✓';
+      right.appendChild(badge);
+
+      const rm = document.createElement('button');
+      rm.className = 'btn-sm';
+      rm.textContent = 'Remove';
+      rm.style = 'background:var(--danger);';
+      rm.onclick = () => s2onRemove(sug.code);
+      right.appendChild(rm);
+    } else {
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn-sm';
+      addBtn.textContent = 'Add';
+      addBtn.onclick = () => s2onAdd(sug.code);
+      right.appendChild(addBtn);
+    }
+
+    row.appendChild(left); 
+    row.appendChild(right);
+    return row;
+  };
+
+  root.innerHTML = '';
+  if (!add.length && !del.length && !unchanged.length) {
+    root.innerHTML = '<div style="opacity:.7;">Run analysis to see suggestions.</div>';
+    return;
   }
 
-  // Auto-add high confidence suggestions (>= 0.7) to S2
-  suggestions.forEach(s => {
-    if (s.confidence >= 0.7 && s.deliverable_code) {
-      const code = String(s.deliverable_code);
-      S2.selectedCodes.add(code);
-      S2.selectedMeta.set(code, {
-        name: s.deliverable || code,
-        category: s.category || ''
-      });
-    }
-  });
+  if (add.length) {
+    const h = document.createElement('div'); 
+    h.style = 'font-weight:600;margin-top:8px;margin-bottom:4px;';
+    h.textContent = 'AI-Suggested Deliverables';
+    root.appendChild(h);
+    add.forEach(s => root.appendChild(mkRow(s, 'add')));
+  }
+  if (del.length) {
+    const h = document.createElement('div'); 
+    h.style = 'font-weight:600;margin-top:12px;margin-bottom:4px;';
+    h.textContent = 'Consider Removing';
+    root.appendChild(h);
+    del.forEach(s => root.appendChild(mkRow(s, 'del')));
+  }
+  if (unchanged.length) {
+    const h = document.createElement('div'); 
+    h.style = 'font-weight:600;margin-top:12px;margin-bottom:4px;';
+    h.textContent = 'Unchanged';
+    root.appendChild(h);
+    unchanged.forEach(lbl => {
+      root.appendChild(mkRow({ code: '', label: lbl }, 'unchanged'));
+    });
+  }
+}
 
-  // Re-render the left and right panels
+// Add deliverable from AI suggestions
+function s2onAdd(code) {
+  if (!code) return;
+  S2.selectedCodes.add(code);
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
-  
-  console.log(`AI suggestions processed: ${suggestions.length} total, auto-added high confidence items`);
+  // Refresh suggestions to update badges
+  initAISummaryAndSuggestions();
+}
+
+// Remove deliverable from AI suggestions
+function s2onRemove(code) {
+  if (!code) return;
+  S2.selectedCodes.delete(code);
+  S2.selectedComponentsMap[code] = undefined;
+  s2RenderLeft();
+  s2RenderRight(S2.els.search?.value || '');
+  // Refresh suggestions to update badges
+  initAISummaryAndSuggestions();
 }
 
 // Retainer toggle handler
