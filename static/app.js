@@ -625,9 +625,9 @@ function renderRetainerPanel(retainers) {
 
   retainerConfig.style.display = 'block';
   
-  // Create input fields for each retainer
+  // Create input fields for each retainer using defensive labelFor() lookup
   retainerListControls.innerHTML = retainers.map(r => {
-    const delivName = S2.selectedMeta.get(r.deliverable_code)?.name || r.deliverable_code;
+    const delivName = labelFor(r.deliverable_code);
     return `
       <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
         <label style="flex: 1; font-weight: 500;">${delivName}</label>
