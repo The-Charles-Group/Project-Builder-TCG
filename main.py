@@ -3965,24 +3965,18 @@ def convert_excel_to_mspdi(
             SubElement(task, "Name").text = r["Name"]
             
             # ---- WBS canonicalization ----
+            # Normalize '1.0' → '1', '1.0.1' → '1.1', remove empty/zero segments
+            # Ensures MSPDI-friendly outline numbers like '1', '1.1', '1.1.1'
             wbs_raw = str(r["WBS"]).strip()
-            
-            # remove any trailing ".0" segments at the end (e.g., "1.0" -> "1")
-            # and collapse any ".0" inside (rare but safe)
-            import re
-            wbs = re.sub(r'(?:\.0)+$', '', wbs_raw)      # strip trailing .0s
-            wbs = re.sub(r'\.0\.', '.', wbs)             # strip inner .0 segments if present
-            
-            # if the string ended up empty (super defensive), force root "1"
-            if not wbs:
-                wbs = "1"
+            parts = [p for p in wbs_raw.split('.') if p not in ('', '0')]
+            wbs = '.'.join(parts) if parts else '1'
             
             # Write MSPDI fields
             SubElement(task, "WBS").text = wbs
             SubElement(task, "OutlineNumber").text = wbs
             
-            # OutlineLevel = count of dots (root "1" -> 0; "1.1" -> 1; "1.1.1" -> 2)
-            outline_level = wbs.count('.')
+            # OutlineLevel = 1-based (root "1" -> 1; "1.1" -> 2; "1.1.1" -> 3)
+            outline_level = wbs.count('.') + 1
             SubElement(task, "OutlineLevel").text = str(outline_level)
             # ---- end canonicalization ----
             

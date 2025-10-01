@@ -49,8 +49,8 @@ Preferred communication style: Simple, everyday language.
   - Cycle detection and removal using Kahn's algorithm
   - Leaf-only predecessor links (summary tasks filtered)
   - Smart date handling (Start/Finish only on summary tasks)
-  - WBS canonicalization with correct OutlineLevel calculation
-  - Proper MSPDI hierarchy: root (level 0) → deliverables (level 1) → components (level 2+)
+  - WBS canonicalization with 1-based OutlineLevel calculation (root=1, deliverable=2, component=3)
+  - Proper MSPDI hierarchy with correct indentation in Workfront
 - **XML Export Enhancements**: Proper summary task handling (Summary=1 for parents, Work=PT0M), ASAP constraints (ConstraintType=0), optional whole-day duration rounding, and consistent date/duration calculations.
 - **v3 Drivers Support**: Implemented for token normalization and mapping in the backend, with a corresponding UI integration for complexity, tiers, and rate bands.
 
