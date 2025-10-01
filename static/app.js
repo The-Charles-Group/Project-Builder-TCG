@@ -29,6 +29,23 @@ let addedCodes = [];
 const selectedComponentsMap = S2.selectedComponentsMap;
 window.selectedComponentsMap = selectedComponentsMap;
 
+// Read currently chosen deliverables from the Your Selection column
+function readSelectedCodesFromUI() {
+  return Array.from(S2.selectedCodes);
+}
+
+// Save component choices for a deliverable
+// If "all" are selected or empty, remove the key so server includes all by default
+function setComponentsFor(delivCode, labelsArray) {
+  if (!labelsArray || !labelsArray.length) {
+    delete S2.selectedComponentsMap[delivCode];
+    return;
+  }
+  const dict = Object.create(null);
+  labelsArray.forEach(label => { dict[label] = null; });
+  S2.selectedComponentsMap[delivCode] = dict;
+}
+
 async function api(path, opts={}) {
   const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
   if(!res.ok){ throw new Error(await res.text()); }
@@ -158,50 +175,85 @@ function renderDeliverableList(items){
   });
 }
 
-// Step 2 workflow functions
-async function onProceedToStep3() {
-  // Check all selection systems and sync them (S2, appState, legacy)
-  const s2Selected = S2?.selectedCodes ? Array.from(S2.selectedCodes) : [];
-  const step2Selected = window.appState?.selectedCodes || [];
-  const pickerSelected = window.selectedCodes || [];
-  const allSelected = [...new Set([...s2Selected, ...step2Selected, ...pickerSelected])];
+// Build from current S2 selection (surgical patch implementation)
+async function buildFromCurrentSelection() {
+  const codes = readSelectedCodesFromUI();
+  if (!codes.length) {
+    alert("Pick at least one deliverable before proceeding to pricing.");
+    return;
+  }
+
+  // Sync legacy state for compatibility
+  selectedCodes = codes;
+  if (window.appState) window.appState.selectedCodes = codes;
+  window.selectedCodes = codes;
+
+  // Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
+  const selectedComponentsPayload = {};
+  for (const [code, compSet] of Object.entries(S2.selectedComponentsMap)) {
+    if (compSet instanceof Set) {
+      if (compSet.size > 0) {
+        const dict = Object.create(null);
+        compSet.forEach(label => { dict[label] = null; });
+        selectedComponentsPayload[code] = dict;
+      }
+    } else if (compSet && typeof compSet === 'object') {
+      selectedComponentsPayload[code] = compSet;
+    }
+  }
+
+  const payload = {
+    selected_deliverable_codes: codes,
+    selected_components_map: selectedComponentsPayload,
+    pricing_mode: window.getPricingModeFromUI?.() || 'Flat_Blended',
+    blended_rate: window.getBlendedRateFromUI?.() || 195,
+    rate_band: window.getRateBandFromUI?.() || 'Standard_US',
+    use_slack: window.getUseSlackFromUI?.() || false,
+    slack_after_internal: window.getSlackInternalFromUI?.() || 1,
+    slack_after_client: window.getSlackClientFromUI?.() || 2,
+    slack_global_pct: window.getSlackPctFromUI?.() || 0.05,
+    project_start: window.getProjectStartFromUI?.() || null,
+    scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
+    scenario_b: window.getScenarioSpecBFromUI?.() || { mode: 'template', scenario_key: 'MED_HIGH' }
+  };
+
+  const res = await fetch('/api/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
   
-  if (allSelected.length === 0) {
-    alert("Please select at least one deliverable before proceeding to pricing.");
+  if (!res.ok) {
+    const txt = await res.text();
+    alert(`Build failed: ${txt}`);
     return;
   }
   
-  // Sync the selection state across all systems
-  selectedCodes = allSelected;
-  if (window.appState) window.appState.selectedCodes = allSelected;
-  if (S2?.selectedCodes) {
-    allSelected.forEach(code => S2.selectedCodes.add(code));
-  }
+  const data = await res.json();
   
-  // Build scenarios for Step 3 if we don't have them already
-  if (!SCENARIOS || Object.keys(SCENARIOS).length === 0) {
-    try {
-      // Use the working buildScenariosAB function from index.html
-      if (window.buildScenariosAB) {
-        await window.buildScenariosAB();
-      } else {
-        console.log("buildScenariosAB not available, scenarios will be built when user clicks Build button in Step 3");
-      }
-    } catch (error) {
-      console.error("Failed to build scenarios:", error);
-      alert("Failed to build scenarios. Please try again.");
-      return;
-    }
-  }
-  
-  // Show Step 3 while keeping Step 2 visible
+  // Store globally for Step 3 and exports
+  window.BUILD = data;
+  window.appState = window.appState || {};
+  window.appState.scenarios = data;
+  window.latestScenarios = data;
+  SCENARIOS = data;
+
+  // Show Step 3 and scroll
   const step3 = document.querySelector("#step3");
-  
   if (step3) {
     step3.style.display = "block";
     step3.scrollIntoView({ behavior: "smooth" });
   }
+
+  // Render scenarios if function exists
+  if (window.renderScenario) {
+    window.renderScenario('scenarioA', data.A);
+    window.renderScenario('scenarioB', data.B);
+  }
 }
+
+// Alias for backward compatibility
+const onProceedToStep3 = buildFromCurrentSelection;
 
 async function onRunReconcile() {
   // Check if we're in Step 2 with existing analysis or Step 1 needing text input
@@ -1053,8 +1105,27 @@ async function s2OpenComponents(code, name) {
       e.target.checked ? S2.selectedComponentsMap[c].add(n) : S2.selectedComponentsMap[c].delete(n);
     });
   });
+  
+  // Store the deliverable code on the drawer for the close handler
+  S2.els.compDrawer.setAttribute('data-active-code', code);
 }
-S2.els.compDone?.addEventListener('click', () => S2.els.compDrawer.classList.add('hidden'));
+
+// Component drawer close handler - saves selection and updates UI
+S2.els.compDone?.addEventListener('click', () => {
+  const delivCode = S2.els.compDrawer.getAttribute('data-active-code');
+  if (delivCode) {
+    const checked = Array.from(S2.els.compList.querySelectorAll('input[type="checkbox"]:checked'))
+      .map(x => x.dataset.name)
+      .filter(Boolean);
+    
+    // Save using setComponentsFor (removes key if empty = "all")
+    setComponentsFor(delivCode, checked);
+    
+    // Re-render the left panel to update the component count button
+    s2RenderLeft();
+  }
+  S2.els.compDrawer.classList.add('hidden');
+});
 
 // ---- Build Scenarios directly from Step 2 ----
 async function s2ApplyAndBuild() {

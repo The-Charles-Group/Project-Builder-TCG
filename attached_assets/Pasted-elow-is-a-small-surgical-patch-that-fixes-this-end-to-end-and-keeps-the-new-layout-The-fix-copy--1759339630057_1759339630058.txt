@@ -1,0 +1,146 @@
+elow is a small, surgical patch that fixes this end‑to‑end and keeps the new layout.
+
+The fix (copy/paste)
+
+Files: your front‑end JS (the file that wires Step 2 and Step 3; in Replit it’s typically static/app.js).
+What it does:
+
+Collects the codes from the Your Selection column (not from the picker).
+
+Threads the selected components map per deliverable.
+
+Calls /api/build with those two and your Step 3 knobs.
+
+Makes Step 3 render from the fresh build.
+
+1) Centralize Step 2 state and readers
+
+Add near the top of your JS:
+
+// ---- Step 2 in-memory state
+const S2 = {
+  selectedCodes: [],                    // ["1001","1020",...]
+  componentsByDeliv: Object.create(null) // { "1001": { "Content Pillars": null, "Planning Recommendations": null }, ... }
+};
+
+// Read currently chosen deliverables from the **Your Selection** column.
+function readSelectedCodesFromUI() {
+  const rows = document.querySelectorAll('#s2-selection [data-code]');
+  const codes = [];
+  rows.forEach(row => {
+    const code = row.getAttribute('data-code');
+    if (code) codes.push(code);
+  });
+  S2.selectedCodes = codes;
+  return codes;
+}
+
+// Save component choices for a deliverable. Pass a Map/Array of labels.
+// If "all" are selected, *remove* the key so the server includes all by default.
+function setComponentsFor(delivCode, labelsArray) {
+  if (!labelsArray || !labelsArray.length) {
+    delete S2.componentsByDeliv[delivCode];   // none → include all
+    return;
+  }
+  const dict = Object.create(null);
+  labelsArray.forEach(label => { dict[label] = null; }); // null = use default hours
+  S2.componentsByDeliv[delivCode] = dict;
+}
+
+
+Why “remove the key to mean all”? On the back‑end, component‑level logic only kicks in when a selection is provided; otherwise it includes all components for the deliverable (that’s exactly how _scenario_for_deliverable is written).
+
+2) Wire the Components… modal to setComponentsFor
+
+Where you build the Components modal, after the user clicks Close (or Apply) add:
+
+document.getElementById('comp-close').addEventListener('click', () => {
+  const delivCode = document.getElementById('comp-modal').getAttribute('data-code');
+  const checked = Array.from(document.querySelectorAll('#comp-modal input[type="checkbox"]:checked'))
+                       .map(x => x.value.trim())
+                       .filter(Boolean);
+  setComponentsFor(delivCode, checked);
+  // optional: update the "(all)" / "(n)" badge on the button
+  const btn = document.querySelector(`#s2-selection [data-code="${delivCode}"] .comp-btn`);
+  if (btn) btn.textContent = checked.length ? `Components… (${checked.length})` : 'Components… (all)';
+});
+
+
+Note: by default all components are selected; the modal shows them checked, and “Unselect all” clears them. This matches the server’s default‑include‑all behavior.
+
+3) Make Apply selection actually build with the chosen items
+
+Replace the old handler (the one that was reading the right‑hand checklist) with:
+
+async function buildFromCurrentSelection() {
+  const codes = readSelectedCodesFromUI();
+  if (!codes.length) {
+    alert("Pick at least one deliverable before applying selection.");
+    return;
+  }
+
+  // Collect Step 3 knobs from the page
+  const pricingMode   = document.querySelector('#pricingMode')?.value || 'Flat_Blended';
+  const blendedRate   = Number(document.querySelector('#blendedRate')?.value || 0) || undefined;
+  const rateBand      = document.querySelector('#rateBand')?.value || 'Standard_US';
+  const scenarioASpec = getScenarioSpec('A'); // your existing reader
+  const scenarioBSpec = getScenarioSpec('B');
+  const useSlack      = !!document.querySelector('#useSlack')?.checked;
+  const slackI        = Number(document.querySelector('#slackInternalDays')?.value || 1);
+  const slackC        = Number(document.querySelector('#slackClientDays')?.value || 2);
+  const slackPct      = Number(document.querySelector('#slackGlobalPct')?.value || 0.05);
+  const projectStart  = document.querySelector('#projectStart')?.value || undefined;
+  const projectName   = document.querySelector('#projectName')?.value || undefined;
+
+  const payload = {
+    selected_deliverable_codes: codes,
+    selected_components_map: S2.componentsByDeliv,   // only where user changed from “all”
+    scenario_a: scenarioASpec,
+    scenario_b: scenarioBSpec,
+    pricing_mode: pricingMode,
+    blended_rate: blendedRate,
+    rate_band: rateBand,
+    use_slack: useSlack,
+    slack_after_internal: slackI,
+    slack_after_client: slackC,
+    slack_global_pct: slackPct,
+    project_start: projectStart,
+    project_name: projectName
+  };
+
+  const res = await fetch('/api/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    alert(`Build failed: ${txt}`);
+    return;
+  }
+  const data = await res.json();
+
+  // Persist to app state used by Step 3 (your app already expects this)
+  window.BUILD = data;
+
+  // Optionally auto-advance to Step 3
+  document.querySelector('#stage3')?.scrollIntoView({ behavior: 'smooth' });
+  renderPricing(data);   // your existing renderer for the “TCG App pricing / Producer-edited” panels
+}
+
+// Buttons
+document.getElementById('s2-apply')?.addEventListener('click', buildFromCurrentSelection);
+document.getElementById('btnProceedToPricing')?.addEventListener('click', buildFromCurrentSelection);
+
+
+The server will now build the scenarios exactly for the codes you chose, and it will honor any component overrides you set; that logic lives in _scenario_for_deliverable where per‑component hours are computed and (optionally) scaled.
+
+4) (Optional but recommended) make the server refuse empty selections
+
+In your FastAPI /api/build route, right after parsing the payload:
+
+if not payload.selected_deliverable_codes:
+    raise HTTPException(status_code=400, detail="No deliverables selected — please pick at least one in Step 2.")
+
+
+That prevents a silent fall‑back to defaults the next time someone clicks Build without a selection.
