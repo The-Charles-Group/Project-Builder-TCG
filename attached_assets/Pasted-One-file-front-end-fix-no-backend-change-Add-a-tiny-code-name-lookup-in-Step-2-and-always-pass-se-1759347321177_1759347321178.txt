@@ -1,0 +1,82 @@
+One‑file front‑end fix (no backend change)
+
+Add a tiny code→name lookup in Step 2 and always pass selection around as codes, but render using names from /api/options.
+
+1) Build a code→deliverable index once, when you load options
+
+// after fetching /api/options
+let DELIV_INDEX = {};
+function setOptions(data) {
+  DELIV_INDEX = {};
+  for (const d of (data.deliverables || [])) {
+    DELIV_INDEX[String(d.Deliverable_Code).trim()] = d;   // {code -> {Deliverable, Category, ...}}
+  }
+  // ... existing code that renders the right-hand list
+}
+
+
+2) Helper to get the friendly name (and category)
+
+function labelFor(code) {
+  const row = DELIV_INDEX[String(code).trim()];
+  return row ? row.Deliverable : String(code);
+}
+function categoryFor(code) {
+  const row = DELIV_INDEX[String(code).trim()];
+  return row ? row.Category : "";
+}
+
+
+3) Always store selection as codes, hydrate when rendering
+
+// selectedCodes is your current selection store (array of 'DEL-00xx')
+function renderYourSelection(selectedCodes) {
+  const box = document.querySelector('#yourSelection'); // your middle column container
+  box.innerHTML = '';
+  selectedCodes.forEach(code => {
+    const li = document.createElement('div');
+    li.className = 'sel-row';
+    li.innerHTML = `
+      <div class="title">${labelFor(code)}</div>
+      <div class="pill">${categoryFor(code) || ''}</div>
+      <button class="btn components" data-code="${code}">Components… (all)</button>
+      <button class="btn remove" data-code="${code}">✕</button>
+    `;
+    box.appendChild(li);
+  });
+}
+
+
+4) When adding from AI suggestions, push the code, then re‑render
+
+function addFromAiSuggestion(code) {
+  if (!selectedCodes.includes(code)) selectedCodes.push(code);
+  renderYourSelection(selectedCodes);
+}
+
+
+5) When the user ticks/unticks the right‑hand list and presses “Apply selection”, keep the same rule
+
+function applyManualSelection() {
+  selectedCodes = getCheckedDeliverableCodes(); // returns array of codes
+  renderYourSelection(selectedCodes);
+}
+
+
+That’s it—after this, “Your Selection” will always show the friendly names, even when items came from the AI column as codes. (Components still work because those buttons carry the data-code.)
+
+If you prefer a tiny backend assist (optional)
+
+You can also decorate AI suggestions with labels right in the API so the UI has both the code and the name without doing a lookup:
+
+# After you compute `suggestions` in /api/auto_build or /api/suggest_by_text
+db = DB.deliverables[["Deliverable_Code","Deliverable"]].copy()
+db["Deliverable_Code"] = db["Deliverable_Code"].astype(str)
+code_to_name = {r["Deliverable_Code"]: r["Deliverable"] for _, r in db.iterrows()}
+
+for s in suggestions:
+    c = str(s.get("deliverable_code",""))
+    s["deliverable"] = code_to_name.get(c, c)
+
+
+You already use this pattern elsewhere (mapping codes to names before returning data).

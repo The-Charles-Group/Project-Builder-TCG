@@ -10,6 +10,20 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Front-End Deliverable Lookup Fix (October 2025)
+- **Code→Name Lookup Index**: Implemented DELIV_INDEX for O(1) deliverable lookups
+  - Global object maps deliverable codes to full deliverable data
+  - Built during both boot() and s2LoadDeliverables() initialization
+  - Helper functions labelFor(code) and categoryFor(code) provide safe access
+  - Fallback to displaying raw code if lookup misses
+
+- **Fixed AI Suggestions Display**: AI-suggested deliverables now show friendly names
+  - Previously showed codes (DEL-00xx) instead of names in "Your Selection" panel
+  - renderYourSelection() updated to use helper functions instead of array.find()
+  - renderRemovedItems() also updated for consistency
+  - Works for both AI-suggested and manually selected deliverables
+  - Proper escaping of single quotes in onclick attributes
+
 ### Department Grouping & UI Enhancements (October 2025)
 - **Search Functionality**: Added instant search to Step 2 deliverables panel
   - Search input filters by deliverable name, category, and service department

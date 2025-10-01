@@ -1,6 +1,7 @@
 let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
+let DELIV_INDEX = {};     // code -> deliverable object lookup for fast rendering
 
 // ---- Step 2 state ---- (GPT 5 Pro Implementation)
 const S2 = {
@@ -28,6 +29,17 @@ let removedCodes = [];
 let addedCodes = [];
 const selectedComponentsMap = S2.selectedComponentsMap;
 window.selectedComponentsMap = selectedComponentsMap;
+
+// Helper functions to get deliverable info from code
+function labelFor(code) {
+  const row = DELIV_INDEX[String(code).trim()];
+  return row ? row.Deliverable : String(code);
+}
+
+function categoryFor(code) {
+  const row = DELIV_INDEX[String(code).trim()];
+  return row ? row.Category : "";
+}
 
 // Read currently chosen deliverables from the Your Selection column
 function readSelectedCodesFromUI() {
@@ -79,6 +91,13 @@ async function boot() {
 
   // Deliverables list
   DELIVERABLES = OPTIONS.deliverables;
+  
+  // Build code→deliverable index for fast lookups
+  DELIV_INDEX = {};
+  for (const d of (OPTIONS.deliverables || [])) {
+    DELIV_INDEX[String(d.Deliverable_Code).trim()] = d;
+  }
+  
   renderDeliverableList(DELIVERABLES);
 
   // Initialize Step 2 state
@@ -678,8 +697,9 @@ function renderYourSelection() {
   box.innerHTML = "";
   
   codes.forEach(code => {
-    const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
-    if (!deliverable) return;
+    // Use helper functions for lookups - works with both AI-suggested and manually selected deliverables
+    const name = labelFor(code);
+    const category = categoryFor(code);
     
     const selectedComps = selectedComponentsMap[code] || new Set();
     const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
@@ -687,11 +707,11 @@ function renderYourSelection() {
     const item = el(`
       <div class="selection-item">
         <div class="selection-item-left">
-          <div class="selection-item-name">${deliverable.Deliverable}</div>
-          <div class="selection-item-category">${deliverable.Category}</div>
+          <div class="selection-item-name">${name}</div>
+          <div class="selection-item-category">${category}</div>
         </div>
         <div class="selection-item-right">
-          <button onclick="openComponentPicker('${code}', '${deliverable.Deliverable}')" class="btn-component">Components...${compCountText}</button>
+          <button onclick="openComponentPicker('${code}', '${name.replace(/'/g, "\\'")}')" class="btn-component">Components...${compCountText}</button>
           <button onclick="onRemove('${code}')" class="btn-remove">×</button>
         </div>
       </div>
@@ -711,14 +731,15 @@ function renderRemovedItems() {
   
   box.innerHTML = "<h3>Removed</h3>";
   removedCodes.forEach(code => {
-    const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
-    if (!deliverable) return;
+    // Use helper functions for lookups
+    const name = labelFor(code);
+    const category = categoryFor(code);
     
     const item = el(`
       <div class="row">
         <div>
-          <strong>${deliverable.Deliverable}</strong> 
-          <small class="badge">${deliverable.Category}</small>
+          <strong>${name}</strong> 
+          <small class="badge">${category}</small>
         </div>
         <button onclick="onRestore('${code}')" class="restore-btn">Restore</button>
       </div>
@@ -1222,6 +1243,13 @@ async function s2LoadDeliverables() {
   const r = await fetch('/api/options');   // server returns deliverables + templates
   const data = await r.json();
   S2.allDeliverables = data.deliverables || [];
+  
+  // Build code→deliverable index for fast lookups
+  DELIV_INDEX = {};
+  for (const d of (data.deliverables || [])) {
+    DELIV_INDEX[String(d.Deliverable_Code).trim()] = d;
+  }
+  
   s2RenderRight('');
 }
 
