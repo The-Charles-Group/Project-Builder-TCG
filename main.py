@@ -2318,6 +2318,11 @@ def api_load():
         DB.load()
     return {"ok": True, "src": DB.src}
 
+@app.get("/api/last_upload_name")
+def api_last_upload_name():
+    """Return the sanitized project name default from the most recent file upload."""
+    return {"project_name_default": _upload_title_default() or ""}
+
 @app.get("/api/options")
 def api_options():
     if not DB.loaded:
