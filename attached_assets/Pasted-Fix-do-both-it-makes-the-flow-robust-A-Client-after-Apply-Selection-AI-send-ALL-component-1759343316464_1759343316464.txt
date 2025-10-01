@@ -1,0 +1,61 @@
+Fix (do both; it makes the flow robust)
+A) Client: after “Apply Selection (AI)”, send “ALL components” for each deliverable
+
+Right after your existing “Apply Selection” handler in Step 2:
+
+// pseudo: take the set of deliverables created by Apply Selection (AI)
+const codes = Array.from(selectedCodes); // e.g., ["REPORTING", "DEVELOPMENT", "POST_PROD", ...]
+
+// Build a components map that means “all components”
+const selectedComponentsMap = {};
+for (const code of codes) selectedComponentsMap[code] = "__ALL__"; // sentinel meaning all
+
+// Persist this in app state so Step 3 → /api/build receives it
+state.selectedComponentsMap = selectedComponentsMap;
+
+
+And when you call Build Scenarios (Step 3), include it:
+
+await fetch("/api/build", {
+  method: "POST",
+  headers: {"Content-Type":"application/json"},
+  body: JSON.stringify({
+    selected_deliverable_codes: codes,
+    selected_components_map: state.selectedComponentsMap, // <-- new
+    pricing_mode, blended_rate, rate_band,
+    complexity, tier, project_name,
+    use_slack, slack_after_internal, slack_after_client, slack_global_pct, project_start
+  })
+});
+
+
+The exporter already expects a full scenario and turns it into a hierarchical MSPDI; we only need to make sure components are present. (The WBS builder iterates deliverable → component → task → role.)
+
+B) Server: defensive fallback—inflate components if they’re missing
+
+Add a small guard before we build the WBS (e.g., at the start of the export or in your scenario builder). If a scenario item lacks included_task_groups/components, auto‑expand from the DB so exports never go flat:
+
+def _inflate_components_if_missing(scen: dict) -> dict:
+    for item in scen.get("items", []):
+        dcode = str(item.get("deliverable_code") or item.get("Deliverable_Code") or "").strip()
+        if not dcode:
+            continue
+        # If no component info, fetch all task groups/components from DB
+        included = item.get("included_task_groups") or []
+        if not included:
+            # Derive all task groups for this deliverable (DB knows how) and keep order by driver
+            included = DB.task_groups_for_deliverable(dcode)
+            item["included_task_groups"] = included
+
+        # If components missing, the WBS builder will still create them using included/tg order.
+        # (It reads included groups, sorts them, and then enumerates components and tasks.)
+    return scen
+
+
+Then call it just before building the WBS (or inside /api/build right after composing the scenario):
+
+scenario = _inflate_components_if_missing(scenario)
+df, resources, sched = build_wbs_with_pricing(scenario, project_name)  # this function creates the hierarchy
+
+
+build_wbs_with_pricing already uses included_task_groups to order and then emits component and task rows with hierarchical WBS IDs; ensuring included_task_groups isn’t empty guarantees children get created

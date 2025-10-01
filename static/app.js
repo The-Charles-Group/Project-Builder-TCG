@@ -205,17 +205,24 @@ async function buildFromCurrentSelection() {
 
   // Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
   const selectedComponentsPayload = {};
-  for (const [code, compSet] of Object.entries(S2.selectedComponentsMap)) {
-    if (compSet instanceof Set) {
-      if (compSet.size > 0) {
-        const dict = Object.create(null);
-        compSet.forEach(label => { dict[label] = null; });
-        selectedComponentsPayload[code] = dict;
-      }
-    } else if (compSet && typeof compSet === 'object') {
+  
+  // For all selected deliverables, ensure we have component info
+  codes.forEach(code => {
+    const compSet = S2.selectedComponentsMap[code];
+    
+    if (compSet instanceof Set && compSet.size > 0) {
+      // User has selected specific components
+      const dict = Object.create(null);
+      compSet.forEach(label => { dict[label] = null; });
+      selectedComponentsPayload[code] = dict;
+    } else if (compSet && typeof compSet === 'object' && !(compSet instanceof Set)) {
+      // Already in object format (fix: proper parentheses for instanceof)
       selectedComponentsPayload[code] = compSet;
+    } else {
+      // No specific components selected - send "__ALL__" sentinel to include all
+      selectedComponentsPayload[code] = "__ALL__";
     }
-  }
+  });
 
   // Include retainers if toggle is enabled
   const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;

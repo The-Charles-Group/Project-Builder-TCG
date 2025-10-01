@@ -781,6 +781,13 @@ class AgencyDB:
             raise HTTPException(400, f"Scenario column not found for ({complexity}, {tier}).")
         return col2
 
+    def task_groups_for_deliverable(self, deliverable_code: str) -> List[str]:
+        """Get all task groups for a deliverable from the database."""
+        sub = self.all_rows[self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)]
+        if sub.empty:
+            return []
+        return sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+
     def hours_by_role_for_deliverable(
         self, deliverable_code: str, included_task_groups: List[str], scenario_col: str
     ) -> pd.DataFrame:
@@ -1476,6 +1483,25 @@ def _band_multiplier(rate_band: str) -> float:
 def _wbs_order_mode():
     return "timeline"
 
+def _inflate_components_if_missing(scenario: dict) -> dict:
+    """
+    Defensive fallback: if scenario items lack included_task_groups/components,
+    auto-expand from DB so exports never go flat.
+    """
+    for item in scenario.get("items", []):
+        dcode = str(item.get("deliverable_code") or item.get("Deliverable_Code") or "").strip()
+        if not dcode:
+            continue
+        
+        # If no component info, fetch all task groups/components from DB
+        included = item.get("included_task_groups") or []
+        if not included:
+            # Derive all task groups for this deliverable from DB
+            included = DB.task_groups_for_deliverable(dcode)
+            item["included_task_groups"] = included
+    
+    return scenario
+
 def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     """
     Adds Rate_USD and Price_USD at deliverable/component/task level.
@@ -1847,8 +1873,8 @@ class BuildPayload(BaseModel):
     project_start: Optional[str] = None     # "YYYY-MM-DD"
     # NEW: monthly retainers selected on the second screen
     retainers: Optional[List[RetainerSelection]] = []
-    # NEW: component-level selection per deliverable (supports both formats)
-    selected_components_map: Optional[Dict[str, Union[List[str], Dict[str, float]]]] = None
+    # NEW: component-level selection per deliverable (supports multiple formats including "__ALL__" sentinel)
+    selected_components_map: Optional[Dict[str, Union[str, List[str], Dict[str, Optional[float]]]]] = None
 
 class AutoBuildPayload(BaseModel):
     rfp_text: str
@@ -2554,7 +2580,10 @@ def api_build(payload: BuildPayload):
     # Build component selection map (supports both formats)
     comp_map = {}
     for k, v in (payload.selected_components_map or {}).items():
-        if isinstance(v, list):
+        if isinstance(v, str) and v == "__ALL__":
+            # Sentinel value meaning "include all components" - pass empty dict to include all
+            comp_map[str(k)] = {}
+        elif isinstance(v, list):
             # Old format: ["component1", "component2"]
             comp_map[str(k)] = {str(x): None for x in v}  # None means use default hours
         elif isinstance(v, dict):
@@ -2652,6 +2681,9 @@ def api_build(payload: BuildPayload):
             scenario_out["user_order"] = list(scenario_out["ai_order"])
             scenario_out["manual_order_locked"] = False
 
+        # Inflate components if missing (defensive fallback for exports)
+        scenario_out = _inflate_components_if_missing(scenario_out)
+        
         scenarios[letter] = scenario_out
 
     # Store scenarios globally for reordering
@@ -2835,7 +2867,10 @@ def api_export(payload: ExportPayload):
                     or _upload_title_default()
                     or f"Proposal {datetime.date.today().isoformat()}")
 
-    df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
+    # Inflate components if missing (defensive fallback)
+    scenario = _inflate_components_if_missing(payload.scenario or {})
+    
+    df = build_wbs_dataframe_from_scenario(scenario, project_name)
     # <<< force A–E to the left and guarantee presence
     df = _ensure_v3_ae_columns(df)
 
@@ -2867,8 +2902,13 @@ def api_export_workbook(payload: ExportWorkbookPayload):
     project = (payload.project_name
                or _upload_title_default()
                or f"Proposal {datetime.date.today().isoformat()}").strip()
-    dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
-    dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
+    
+    # Inflate components if missing (defensive fallback)
+    scenario_a = _inflate_components_if_missing(payload.scenario_a or {})
+    scenario_b = _inflate_components_if_missing(payload.scenario_b or {})
+    
+    dfA = build_wbs_dataframe_from_scenario(scenario_a, project)
+    dfB = build_wbs_dataframe_from_scenario(scenario_b, project)
     
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
@@ -2897,10 +2937,15 @@ def api_export_workbook_abc(payload: ExportWorkbookABCPayload):
                or _upload_title_default()
                or f"Proposal {datetime.date.today().isoformat()}").strip()
     
+    # Inflate components if missing (defensive fallback)
+    scenario_a = _inflate_components_if_missing(payload.scenario_a or {})
+    scenario_b = _inflate_components_if_missing(payload.scenario_b or {})
+    scenario_c = _inflate_components_if_missing(payload.scenario_c or {})
+    
     # Build DataFrames for all three scenarios
-    dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
-    dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
-    dfC = build_wbs_dataframe_from_scenario(payload.scenario_c or {}, project)
+    dfA = build_wbs_dataframe_from_scenario(scenario_a, project)
+    dfB = build_wbs_dataframe_from_scenario(scenario_b, project)
+    dfC = build_wbs_dataframe_from_scenario(scenario_c, project)
     
     # Ensure consistent column formatting
     dfA = _ensure_v3_ae_columns(dfA)
@@ -2948,8 +2993,11 @@ def api_export_xml(payload: ExportXMLPayload):
     # Guard: ensure scenario has items
     _assert_has_items(payload.scenario or {}, "XML export")
     
+    # Inflate components if missing (defensive fallback)
+    scenario = _inflate_components_if_missing(payload.scenario or {})
+    
     # Build WBS DataFrame
-    df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
+    df = build_wbs_dataframe_from_scenario(scenario, project_name)
     df = _ensure_v3_ae_columns(df)
 
     # Create temporary Excel file for MSPDI conversion
@@ -3003,9 +3051,13 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
     _assert_has_items(payload.scenario_a or {}, "Scenario A XML export")
     _assert_has_items(payload.scenario_b or {}, "Scenario B XML export")
     
+    # Inflate components if missing (defensive fallback)
+    scenario_a = _inflate_components_if_missing(payload.scenario_a or {})
+    scenario_b = _inflate_components_if_missing(payload.scenario_b or {})
+    
     # Build DataFrames
-    dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
-    dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
+    dfA = build_wbs_dataframe_from_scenario(scenario_a, project)
+    dfB = build_wbs_dataframe_from_scenario(scenario_b, project)
     
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
