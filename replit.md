@@ -10,6 +10,29 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Department Grouping & UI Enhancements (October 2025)
+- **Search Functionality**: Added instant search to Step 2 deliverables panel
+  - Search input filters by deliverable name, category, and service department
+  - Real-time filtering with data-search attributes for fast performance
+  - Wired through existing S2.els.search infrastructure
+
+- **Service Department Grouping**: Deliverables organized by department in UI
+  - Added Service Department and Sort_Order fields to /api/options endpoint
+  - Step 2 left panel groups deliverables by department with visual headers
+  - Departments ordered: Strategy, Creative, Content, Production, Technology, PM, Other
+  - Within each department, deliverables sorted by Sort_Order then name
+
+- **AI Component Defaults**: Auto-selected deliverables include all components by default
+  - When adding deliverables from AI suggestions, sets component map to '__ALL__' sentinel
+  - Ensures AI and manual flows produce consistent structure
+  - User can still manually select specific components via "Components..." button
+
+- **XML Export Department Hierarchy**: Partial implementation (needs indentation fix)
+  - WBS builder enriches deliverables with Service Department metadata
+  - Department summary rows added to export structure
+  - Known issue: Deliverable processing code needs re-indentation to nest properly under department loop
+  - Once fixed, XML exports will show: Department > Deliverable > Component > Task hierarchy
+
 ### AI Summary & Enhanced Suggestions (October 2025)
 - **AI Summary Panel**: Added comprehensive RFP summary display in Step 2
   - Shows 500-word prose summary generated from RFP analysis

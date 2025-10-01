@@ -1535,20 +1535,72 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     items = scenario.get("items", [])
     order_map = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
 
+    # Enrich items with Service Department for grouping
+    DEPT_ORDER = ['Strategy', 'Creative', 'Content', 'Production', 'Technology', 'PM', 'Other']
+    for item in items:
+        dcode = str(item.get("deliverable_code", item.get("code", "")))
+        tgs = [str(x) for x in item.get("included_task_groups", [])]
+        scen_col = item.get("scenario_col", "MED_LOW")
+        dept = DB.service_dept_for_deliverable(dcode, tgs, scen_col) if dcode else "Other"
+        item["_service_department"] = dept or "Other"
+        item["_dept_order"] = DEPT_ORDER.index(dept) if dept in DEPT_ORDER else 999
+
+    # Sort by department, then timeline/deliverable name
     if _wbs_order_mode() == "timeline":
         def deliv_key(d):
             tgs = [str(x) for x in d.get("included_task_groups", [])]
             idxs = [order_map.get(tg, 999) for tg in tgs]
-            return (min(idxs) if idxs else 999, str(d.get("deliverable","")))
+            return (d.get("_dept_order", 999), min(idxs) if idxs else 999, str(d.get("deliverable","")))
         items_sorted = sorted(items, key=deliv_key)
     else:
-        items_sorted = list(scenario.get("items", []))
+        items_sorted = sorted(items, key=lambda d: (d.get("_dept_order", 999), str(d.get("deliverable",""))))
+
+    # Group items by department
+    from itertools import groupby
+    items_by_dept = {}
+    for dept, group in groupby(items_sorted, key=lambda x: x["_service_department"]):
+        items_by_dept[dept] = list(group)
 
     day_cursor = 0
     prev_deliv_wbs = ""
+    dept_counter = 0
+    deliv_counter_global = 0
 
-    for i, d in enumerate(items_sorted, start=1):
-        dcode = str(d.get("deliverable_code", d.get("code", f"DELIV_{i}")))
+    # Process each department
+    for dept in sorted(items_by_dept.keys(), key=lambda d: DEPT_ORDER.index(d) if d in DEPT_ORDER else 999):
+        dept_counter += 1
+        dept_items = items_by_dept[dept]
+        
+        # Add department summary row
+        wbs_dept = f"1.{dept_counter}"
+        rows.append({
+            "Row_ID": "",
+            "Deliverable_Code": "",
+            "Task_Code": "",
+            "Service_Department": dept,
+            "Deliverable": "",
+            "Project_Name": project_name,
+            "WBS_ID": wbs_dept,
+            "Parent_WBS_ID": "1",
+            "Task_Name": dept,
+            "Component": "",
+            "Task": "",
+            "Role": "",
+            "Seniority": "",
+            "Planned_Hours": "",
+            "Start_Offset_Days": 0,
+            "Duration_Days": "",
+            "Dependencies": "",
+            "Assignee_External_ID": "",
+            "Notes": f"{dept} Department",
+            "Rate_USD": "",
+            "Price_USD": ""
+        })
+        
+        # Process deliverables within this department
+        for dept_deliv_idx, d in enumerate(dept_items, start=1):
+            deliv_counter_global += 1
+            dcode = str(d.get("deliverable_code", d.get("code", f"DELIV_{deliv_counter_global}")))
         scen_col = d.get("scenario_col", "MED_LOW")
         included = [str(x) for x in d.get("included_task_groups", [])]
         if not included:
