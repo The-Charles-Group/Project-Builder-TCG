@@ -10,6 +10,26 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### XML Export Component Hierarchy Fix & UI Enhancements (October 2025)
+- **XML Export Fix**: Updated `_inflate_components_if_missing()` to handle `"__ALL__"` sentinel values
+  - Function now populates `included_task_groups` when component map is empty or contains `"__ALL__"`
+  - Ensures all exports contain full 6-level hierarchy: Project → Department → Deliverable → Component → Task → Role
+  - Prevents flat exports with only deliverable-level data
+  - Converts `"__ALL__"` sentinel to empty dict for downstream processing
+
+- **Project Name Defaults**: Added `/api/last_upload_name` endpoint
+  - Returns sanitized project name from most recent file upload
+  - Uses existing `_upload_title_default()` helper for safe filename extraction
+  - Frontend can prefill project name input in Step 3 with uploaded filename
+
+- **Existing UI Features Verified**: Confirmed all component selection, search, and retainer functionality working
+  - Component picker modal with event delegation on "Components..." buttons
+  - Build payload correctly sends `selected_components_map` with `"__ALL__"` support
+  - Deliverable names display using defensive `labelFor()` helper across all UI surfaces
+  - Search bar filtering in Step 2 left panel
+  - Retainer configuration panel using `labelFor()` for name resolution
+  - Loading states on "Analyze with AI" button with disable/enable
+
 ### Front-End Deliverable Lookup Fix (October 2025)
 - **Code→Name Lookup Index**: Implemented DELIV_INDEX for O(1) deliverable lookups
   - Global object maps deliverable codes to full deliverable data
