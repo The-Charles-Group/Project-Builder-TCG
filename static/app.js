@@ -137,9 +137,24 @@ async function boot() {
   if (proceedBtn) proceedBtn.onclick = onProceedToStep3;
   
   const reconcileBtn = document.querySelector("#btnRunReconcile");
-  if (reconcileBtn) reconcileBtn.onclick = onRunReconcile;
+  if (reconcileBtn) {
+    reconcileBtn.onclick = (e) => {
+      e.preventDefault();
+      onRunReconcile();
+    };
+  }
 
   onPricingModeChanged();
+  
+  // Wire up retainer toggle
+  const retainersToggle = document.querySelector("#retainersToggle");
+  if (retainersToggle) {
+    retainersToggle.addEventListener('change', onToggleRetainers);
+  }
+  
+  // Export functions globally for index.html
+  window.onRunReconcile = onRunReconcile;
+  window.buildFromCurrentSelection = buildFromCurrentSelection;
 }
 
 function onPricingModeChanged(){
@@ -202,6 +217,10 @@ async function buildFromCurrentSelection() {
     }
   }
 
+  // Include retainers if toggle is enabled
+  const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
+  const retainersPayload = retainersEnabled ? (window.APP?.retainers || []) : [];
+
   const payload = {
     selected_deliverable_codes: codes,
     selected_components_map: selectedComponentsPayload,
@@ -214,7 +233,8 @@ async function buildFromCurrentSelection() {
     slack_global_pct: window.getSlackPctFromUI?.() || 0.05,
     project_start: window.getProjectStartFromUI?.() || null,
     scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
-    scenario_b: window.getScenarioSpecBFromUI?.() || { mode: 'template', scenario_key: 'MED_HIGH' }
+    scenario_b: window.getScenarioSpecBFromUI?.() || { mode: 'template', scenario_key: 'MED_HIGH' },
+    retainers: retainersPayload
   };
 
   const res = await fetch('/api/build', {
@@ -255,116 +275,203 @@ async function buildFromCurrentSelection() {
 // Alias for backward compatibility
 const onProceedToStep3 = buildFromCurrentSelection;
 
+// Step 1: Analyze with AI (updated to pre-populate Step 2)
 async function onRunReconcile() {
-  // Check if we're in Step 2 with existing analysis or Step 1 needing text input
-  const step2Visible = document.getElementById('step2')?.style.display !== 'none';
-  const txt = document.querySelector("#rfpText")?.value || "";
-  const hasAnalysis = window.appState && window.appState.aiSummary;
-  
-  console.log("onRunReconcile debug:", { step2Visible, hasText: !!txt.trim(), hasAnalysis, appState: window.appState });
-  
-  // If Step 2 is visible, we already have analysis - just show Stage 2
-  if (step2Visible) {
-    document.getElementById('stage2').style.display = 'block';
-    document.getElementById('stage2').scrollIntoView({ behavior: 'smooth' });
-    return;
+  const fileEl = document.querySelector('#rfpFile');
+  const textEl = document.querySelector('#rfpText');
+  const rfpText = (textEl?.value || '').trim();
+
+  let data;
+  try {
+    if (fileEl?.files?.length) {
+      const form = new FormData();
+      form.append('file', fileEl.files[0]);
+      const res = await fetch('/api/suggest_by_file', { method: 'POST', body: form });
+      data = await res.json(); // { suggested: [...] }
+    } else if (rfpText) {
+      const res = await fetch('/api/suggest_by_text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rfp_text: rfpText })
+      });
+      data = await res.json(); // { suggested: [...] }
+    } else {
+      alert('Please enter RFP text or upload a file first.');
+      return;
+    }
+
+    // Persist for Step 2
+    window.APP = window.APP || {};
+    window.APP.rfpText = rfpText;
+    window.APP.aiSuggestions = data?.suggested || [];
+
+    // Show Step 2
+    const step2 = document.getElementById('step2');
+    if (step2) {
+      step2.style.display = 'block';
+      step2.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // Render AI suggestions in the AI panel (or auto-add high confidence ones)
+    renderAISuggestions(window.APP.aiSuggestions);
+    
+  } catch (error) {
+    console.error('Error analyzing RFP:', error);
+    alert(`Error getting AI suggestions: ${error.message}`);
   }
-  
-  // Otherwise we need RFP text first  
-  if (!txt.trim() && !hasAnalysis) {
-    alert("Please enter RFP text first to get AI suggestions.");
+}
+
+// Render AI suggestions and auto-add high confidence ones to S2
+function renderAISuggestions(suggestions) {
+  if (!suggestions || suggestions.length === 0) {
+    console.log('No AI suggestions to render');
     return;
   }
 
-  try {
-    // Get AI suggestions
-    const data = await api("/api/suggest_by_text", {method:"POST", body:JSON.stringify({rfp_text:txt})});
+  // Render the visible list in the AI Suggestions panel
+  const aiPanel = document.querySelector('#aiSuggestions');
+  if (aiPanel) {
+    aiPanel.innerHTML = '<h4 style="margin-bottom: 12px;">AI-Suggested Deliverables</h4>';
     
-    // Update AI Suggestions panel
-    const suggestions = document.querySelector("#aiSuggestions");
-    suggestions.innerHTML = "<h3>AI Suggestions</h3>";
-    
-    if (data.suggested && data.suggested.length > 0) {
-      data.suggested.forEach(s => {
-        const isSelected = selectedCodes.includes(s.deliverable_code);
-        const item = el(`
-          <div class="row ${isSelected ? 'selected' : ''}">
-            <div>
-              <strong>${s.deliverable}</strong> 
-              <small class="badge">${s.category}</small>
-              <br><small>Confidence: ${s.confidence}</small>
-            </div>
-            ${isSelected ? '<span class="already-selected">✓ Selected</span>' : 
-              `<button onclick="onAdd('${s.deliverable_code}')" class="add-btn">Add</button>`}
-          </div>
-        `);
-        suggestions.append(item);
-      });
+    suggestions.forEach(s => {
+      const code = String(s.deliverable_code);
+      const isAutoAdded = s.confidence >= 0.7;
+      const isSelected = S2.selectedCodes.has(code);
       
-      // Auto-add highly confident suggestions
-      data.suggested.forEach(s => {
-        if (s.confidence >= 0.7 && !selectedCodes.includes(s.deliverable_code)) {
-          onAdd(s.deliverable_code);
-        }
+      const suggestionEl = document.createElement('div');
+      suggestionEl.style.cssText = 'padding: 8px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 4px; background: rgba(139, 92, 246, 0.05);';
+      suggestionEl.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong>${s.deliverable || code}</strong>
+            <small style="margin-left: 8px; color: var(--muted);">${s.category || ''}</small>
+            <br>
+            <small style="color: var(--muted);">Confidence: ${(s.confidence * 100).toFixed(0)}%</small>
+            ${isAutoAdded ? ' <span style="color: var(--accent2);">✓ Auto-added</span>' : ''}
+          </div>
+          ${isSelected ? '<span style="color: var(--accent2);">✓ Selected</span>' : ''}
+        </div>
+      `;
+      aiPanel.appendChild(suggestionEl);
+    });
+  }
+
+  // Auto-add high confidence suggestions (>= 0.7) to S2
+  suggestions.forEach(s => {
+    if (s.confidence >= 0.7 && s.deliverable_code) {
+      const code = String(s.deliverable_code);
+      S2.selectedCodes.add(code);
+      S2.selectedMeta.set(code, {
+        name: s.deliverable || code,
+        category: s.category || ''
       });
-    } else {
-      suggestions.append(el(`<p>No AI suggestions found. Try using the search function on the right.</p>`));
     }
-    
-    // Call reconcile API for additional suggestions  
-    const reconData = await api("/api/reconcile", {
-      method:"POST", 
-      body:JSON.stringify({
-        summary_deliverables: data.suggested ? data.suggested.map(s => s.deliverable) : [],
-        db_selected_deliverable_codes: selectedCodes
-      })
+  });
+
+  // Re-render the left and right panels
+  s2RenderLeft();
+  s2RenderRight(S2.els.search?.value || '');
+  
+  console.log(`AI suggestions processed: ${suggestions.length} total, auto-added high confidence items`);
+}
+
+// Retainer toggle handler
+async function onToggleRetainers(e) {
+  const enabled = e.target.checked;
+  window.APP = window.APP || {};
+  
+  if (!enabled) {
+    window.APP.retainers = [];
+    renderRetainerPanel([]);
+    return;
+  }
+
+  // Get current selection from S2
+  const selectedCodes = Array.from(S2.selectedCodes);
+  
+  if (selectedCodes.length === 0) {
+    alert('Please select deliverables first before enabling retainers.');
+    e.target.checked = false;
+    return;
+  }
+
+  const payload = {
+    rfp_text: window.APP.rfpText || '',
+    deliverable_codes: selectedCodes
+  };
+
+  try {
+    const res = await fetch('/api/retainer_detect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
     });
     
-    // Add reconcile suggestions to the middle panel
-    if (reconData.add && reconData.add.length > 0) {
-      const addSection = el(`<div style="margin-top: 16px;"><h4>Additional Suggestions</h4></div>`);
-      suggestions.append(addSection);
-      
-      reconData.add.forEach(item => {
-        const isSelected = selectedCodes.includes(item.code);
-        const reconItem = el(`
-          <div class="row ${isSelected ? 'selected' : ''}">
-            <div>
-              <strong>${item.label}</strong>
-              <br><small>${item.reason}</small>
-            </div>
-            ${isSelected ? '<span class="already-selected">✓ Selected</span>' : 
-              `<button onclick="onAdd('${item.code}')" class="add-btn">Add</button>`}
-          </div>
-        `);
-        suggestions.append(reconItem);
-      });
-    }
+    const rec = await res.json(); // { retainers: [{deliverable_code, suggested_months, ...}] }
+
+    // Persist and render
+    window.APP.retainers = (rec.retainers || []).map(r => ({
+      deliverable_code: r.deliverable_code,
+      months: r.suggested_months || 12
+    }));
     
-    if (reconData.delete && reconData.delete.length > 0) {
-      const deleteSection = el(`<div style="margin-top: 16px;"><h4>Consider Removing</h4></div>`);
-      suggestions.append(deleteSection);
-      
-      reconData.delete.forEach(item => {
-        const isSelected = selectedCodes.includes(item.code);
-        if (isSelected) {
-          const deleteItem = el(`
-            <div class="row danger">
-              <div>
-                <strong>${item.label}</strong>
-                <br><small>${item.reason}</small>
-              </div>
-              <button onclick="onRemove('${item.code}')" class="remove-btn">Remove</button>
-            </div>
-          `);
-          suggestions.append(deleteItem);
-        }
-      });
-    }
-    
+    renderRetainerPanel(window.APP.retainers);
   } catch (error) {
-    alert("Error getting AI suggestions: " + error.message);
+    console.error('Error detecting retainers:', error);
+    alert(`Failed to detect retainers: ${error.message}`);
+    e.target.checked = false;
   }
+}
+
+// Render the retainer configuration panel
+function renderRetainerPanel(retainers) {
+  const retainerConfig = document.getElementById('retainer-config');
+  const retainerListControls = document.getElementById('retainer-list-controls');
+  
+  if (!retainerConfig || !retainerListControls) {
+    console.warn('Retainer config elements not found');
+    return;
+  }
+
+  if (!retainers || retainers.length === 0) {
+    retainerConfig.style.display = 'none';
+    retainerListControls.innerHTML = '';
+    return;
+  }
+
+  retainerConfig.style.display = 'block';
+  
+  // Create input fields for each retainer
+  retainerListControls.innerHTML = retainers.map(r => {
+    const delivName = S2.selectedMeta.get(r.deliverable_code)?.name || r.deliverable_code;
+    return `
+      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
+        <label style="flex: 1; font-weight: 500;">${delivName}</label>
+        <input 
+          type="number" 
+          min="1" 
+          max="60" 
+          value="${r.months}" 
+          data-code="${r.deliverable_code}"
+          class="retainer-months-input"
+          style="width: 80px; padding: 6px; border: 1px solid var(--muted); border-radius: 4px; background: var(--bg); color: var(--fg);"
+        />
+        <span style="color: var(--muted); font-size: 0.9em;">months</span>
+      </div>
+    `;
+  }).join('');
+
+  // Update retainer months when inputs change
+  retainerListControls.querySelectorAll('.retainer-months-input').forEach(input => {
+    input.addEventListener('change', e => {
+      const code = e.target.dataset.code;
+      const months = parseInt(e.target.value) || 12;
+      const retainerIdx = window.APP.retainers.findIndex(r => r.deliverable_code === code);
+      if (retainerIdx >= 0) {
+        window.APP.retainers[retainerIdx].months = months;
+      }
+    });
+  });
 }
 
 async function onSuggest(){
@@ -415,6 +522,9 @@ function selectedDeliverables(){
 
 // Initialize Step 2 UI when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
+  // Call boot to initialize everything
+  boot();
+  
   if (document.querySelector('#yourSelection')) {
     renderStep2UI();
   }

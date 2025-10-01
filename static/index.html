@@ -72,7 +72,9 @@
 
       <div class="actions" style="margin-top: 20px;">
         <button id="btnProceedToStep3" class="btn-primary">Proceed to Pricing</button>
-        <button id="btnRunReconcile" class="btn-secondary">Get AI Suggestions</button>
+        <a href="#" id="btnRunReconcile" style="margin-left: 16px; font-size: 0.9em; color: var(--muted); text-decoration: none;">
+          🔄 Refresh AI Suggestions
+        </a>
       </div>
     </section>
 
@@ -125,6 +127,17 @@
     <!-- Step 3: Pricing -->
     <section class="card" id="step3" style="display:none;">
       <h2>Step 3 — Pricing</h2>
+      
+      <!-- Retainer Toggle -->
+      <div style="margin-bottom: 20px; padding: 12px; background: rgba(139, 92, 246, 0.1); border-radius: 6px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <input id="retainersToggle" type="checkbox" style="width: 18px; height: 18px;">
+          <span style="font-weight: 500;">Use retainers for selected deliverables</span>
+        </label>
+        <small style="color: var(--muted); display: block; margin-top: 6px; margin-left: 26px;">
+          Retainers repeat a deliverable's components each month and multiply hours and price by the number of months.
+        </small>
+      </div>
       
       <div class="grid" style="margin-bottom:16px;">
         <div>
@@ -793,8 +806,9 @@
       appState.selectedCodes = allSelected;
       window.selectedCodes = allSelected;
 
-      // Collect retainer data from UI
-      const retainers = collectRetainerData();
+      // Include retainers if toggle is enabled (new system)
+      const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
+      const retainers = retainersEnabled ? (window.APP?.retainers || []) : [];
 
       // Prepare component selections for payload
       const selectedComponentsPayload = Object.fromEntries(
@@ -814,7 +828,7 @@
         project_start: getProjectStartFromUI() || null,
         scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
         scenario_b: getScenarioSpecBFromUI(),
-        retainers: retainers  // Include retainer data
+        retainers: retainers  // Include retainer data from new toggle system
       };
 
       const resp = await fetch('/api/build', {
@@ -1332,7 +1346,15 @@
     // Event listeners - ensure DOM is loaded first
     document.addEventListener('DOMContentLoaded', function() {
       const btnAnalyze = document.getElementById('btnAnalyze');
-      if (btnAnalyze) btnAnalyze.onclick = analyzeRfp;
+      if (btnAnalyze) {
+        btnAnalyze.onclick = () => {
+          if (window.onRunReconcile) {
+            window.onRunReconcile();
+          } else {
+            analyzeRfp(); // fallback to legacy
+          }
+        };
+      }
       
       const applyBtn = document.getElementById('apply-btn');
       if (applyBtn) applyBtn.onclick = applySelection;
@@ -1450,6 +1472,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=3.2" defer></script>
+  <script src="/static/app.js?v=3.6" defer></script>
 </body>
 </html>
