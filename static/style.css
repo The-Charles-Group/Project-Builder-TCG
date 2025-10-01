@@ -20,6 +20,42 @@ input,select{border-radius:8px;border:1px solid var(--border);background:#0b0e13
 button{padding:10px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#08121e;cursor:pointer;font-weight:600}
 button.ghost{background:transparent;color:var(--accent)}
 button:disabled{opacity:.6;cursor:not-allowed}
+.btn-sm{padding:6px 12px;font-size:13px;background:#1a2332;border:1px solid #2a3a4a;color:var(--text)}
+.btn-primary{background:var(--accent2);border:1px solid var(--accent2);color:#08121e}
+.btn-secondary{background:transparent;border:1px solid var(--accent);color:var(--accent)}
+.btn-component{padding:4px 10px;font-size:12px;background:var(--accent);border:1px solid var(--accent);color:#08121e;margin-left:8px;border-radius:6px}
+.btn-remove{padding:2px 8px;font-size:12px;background:#dc3545;border:1px solid #dc3545;color:#fff;margin-left:8px;border-radius:4px}
+
+/* Step 2 Selection Styles */
+.selection-item{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding:10px 12px;
+  margin-bottom:8px;
+  background:#1a2332;
+  border:1px solid #2a3a4a;
+  border-radius:6px;
+}
+.selection-item-left{
+  display:flex;
+  flex-direction:column;
+  flex:1;
+}
+.selection-item-name{
+  font-weight:500;
+  color:var(--text);
+}
+.selection-item-category{
+  font-size:12px;
+  color:var(--muted);
+  margin-top:2px;
+}
+.selection-item-right{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
 
 /* Timeline controls */
 #timeline-controls{margin-bottom:16px}

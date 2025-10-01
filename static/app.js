@@ -374,27 +374,33 @@ function renderStep2UI() {
 function renderYourSelection() {
   const box = document.querySelector("#yourSelection");
   if (!box) return;
-  box.innerHTML = "<h3>Your Selection</h3>";
   
   // Sync legacy selectedCodes array with S2.selectedCodes Set
   const codes = S2.selectedCodes.size > 0 ? Array.from(S2.selectedCodes) : selectedCodes || [];
+  
+  if (codes.length === 0) {
+    box.innerHTML = '<p style="color: var(--muted);">No deliverables selected yet.</p>';
+    return;
+  }
+  
+  box.innerHTML = "";
   
   codes.forEach(code => {
     const deliverable = DELIVERABLES.find(d => d.Deliverable_Code === code);
     if (!deliverable) return;
     
     const selectedComps = selectedComponentsMap[code] || new Set();
-    const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size} components)` : '';
+    const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
     
     const item = el(`
-      <div class="row">
-        <div>
-          <strong>${deliverable.Deliverable}</strong>${compCountText}
-          <small class="badge">${deliverable.Category}</small>
+      <div class="selection-item">
+        <div class="selection-item-left">
+          <div class="selection-item-name">${deliverable.Deliverable}</div>
+          <div class="selection-item-category">${deliverable.Category}</div>
         </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <button onclick="openComponentPicker('${code}', '${deliverable.Deliverable}')" class="btn-small" style="padding: 4px 8px; font-size: 12px;">Components...</button>
-          <button onclick="onRemove('${code}')" class="remove-btn">×</button>
+        <div class="selection-item-right">
+          <button onclick="openComponentPicker('${code}', '${deliverable.Deliverable}')" class="btn-component">Components...${compCountText}</button>
+          <button onclick="onRemove('${code}')" class="btn-remove">×</button>
         </div>
       </div>
     `);
@@ -986,15 +992,21 @@ function s2RenderLeft() {
   if (!host) return;
   const rows = Array.from(S2.selectedCodes).map(code => {
     const meta = S2.selectedMeta.get(code) || {name: code, category: ''};
+    const selectedComps = S2.selectedComponentsMap[code] || new Set();
+    const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
     return `
-      <div class="row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.06)">
-        <strong>${meta.name}</strong>
-        <small style="opacity:.75">${meta.category || ''}</small>
-        <button class="btn small s2-comp" data-code="${code}" data-name="${meta.name}" style="margin-left:auto">Components…</button>
-        <button class="btn small s2-remove" data-code="${code}">✕</button>
+      <div class="selection-item">
+        <div class="selection-item-left">
+          <div class="selection-item-name">${meta.name}</div>
+          <div class="selection-item-category">${meta.category || ''}</div>
+        </div>
+        <div class="selection-item-right">
+          <button class="btn-component s2-comp" data-code="${code}" data-name="${meta.name}">Components...${compCountText}</button>
+          <button class="btn-remove s2-remove" data-code="${code}">×</button>
+        </div>
       </div>`;
   });
-  host.innerHTML = rows.join('') || '<div style="opacity:.7;padding:8px">No deliverables selected yet.</div>';
+  host.innerHTML = rows.join('') || '<p style="color: var(--muted);">No deliverables selected yet.</p>';
 
   host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
     const code = e.target.dataset.code;
