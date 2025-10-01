@@ -10,6 +10,28 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### AI Summary & Enhanced Suggestions (October 2025)
+- **AI Summary Panel**: Added comprehensive RFP summary display in Step 2
+  - Shows 500-word prose summary generated from RFP analysis
+  - Word count display to track summary length
+  - Copy to clipboard functionality for easy sharing
+  - Collapsible panel with Hide/Show toggle
+  - Persistent storage in sessionStorage for cross-reload availability
+
+- **Enhanced AI Suggestions**: Upgraded reconciliation interface with interactive controls
+  - Replaced simple suggestion list with categorized Add/Delete/Unchanged groups
+  - Accept/Remove buttons for each suggestion with real-time selection sync
+  - "Selected ✓" badges show current selection state
+  - Integrated with `/api/reconcile` endpoint for intelligent deliverable matching
+  - AI deliverable labels compared against current DB selection
+  - Refresh functionality updates suggestions based on current selections
+
+- **Workflow Integration**: Seamless Step 1 → Step 2 transition
+  - "Analyze with AI" button calls `/api/summarize` or `/api/summarize_by_file`
+  - Summary and deliverable labels persisted for Step 2 rendering
+  - Direct button wiring in boot() ensures reliable event handling
+  - Reconciliation automatically runs when AI analysis completes
+
 ### Robust Component Handling Implementation (October 2025)
 - **Client-Side Enhancement**: Ensured all selected deliverables send component data to backend
   - Updated `buildFromCurrentSelection()` to explicitly handle all deliverable codes
