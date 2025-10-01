@@ -3992,15 +3992,8 @@ def convert_excel_to_mspdi(
             # Work and Duration handling
             if is_summary:
                 # Summary tasks: set Work to PT0M (Workfront will compute from children)
+                # Do NOT add Duration, Constraints - let Workfront roll them up
                 SubElement(task, "Work").text = "PT0M"
-                # Duration will be rolled up by Workfront, but we can include the computed value
-                dur_hours = uid_to_sched[r['UID']]['DurationHours']
-                if round_to_whole_days:
-                    # Round UP to whole days (8 hours per day = 480 minutes) - ceil policy
-                    dur_minutes = int(math.ceil(dur_hours / 8.0) * 480)
-                else:
-                    dur_minutes = int(round(dur_hours * 60))
-                SubElement(task, "Duration").text = f"PT{dur_minutes}M"
             else:
                 # Leaf tasks: set Work and Duration from planned hours
                 planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
@@ -4014,9 +4007,9 @@ def convert_excel_to_mspdi(
                 
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
-            
-            # Use ASAP constraint (let Workfront schedule based on dependencies)
-            SubElement(task, "ConstraintType").text = "0"  # ASAP (As Soon As Possible)
+                
+                # Use ASAP constraint (let Workfront schedule based on dependencies)
+                SubElement(task, "ConstraintType").text = "0"  # ASAP (As Soon As Possible)
 
         # Assignments
         assignments_elem = SubElement(project, "Assignments")
