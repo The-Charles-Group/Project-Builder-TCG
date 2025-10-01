@@ -10,41 +10,6 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### Step 2 Production Integration Complete (September 30, 2025)
-- **Single Source of Truth**: Established S2 object as authoritative state for deliverable selection and component granularity
-  - S2.selectedCodes (Set) tracks selected deliverable codes
-  - S2.componentsByDeliv (Map) tracks per-deliverable component selections ('ALL' or Set)
-  - Made globally accessible via window.S2 for cross-file integration
-
-- **State Flow Integration**: Complete bidirectional synchronization across workflow
-  - AI suggestions → S2 hydration on initStep2() with automatic component defaults
-  - S2 → appState sync on every selection change (apply/remove)
-  - Pre-checked deliverables rendering based on S2.selectedCodes
-  - Component modal with Set-based selection and array serialization for API
-
-- **Unified Payload Building**: Single buildPayloadForApi() function eliminates code duplication
-  - Accepts optional overrides for scenario specs, retainers, and pricing settings
-  - Uses helper functions for Slack settings (getSlack*FromUI) ensuring consistency
-  - Globally accessible for reuse across Step 2 and Step 3 build flows
-  - buildScenariosAB() now uses unified builder instead of manual payload construction
-
-- **Step 2 Action Bar**: Primary workflow controls with sticky positioning
-  - "Proceed to Pricing" button builds scenarios directly from S2 state (no silent AI merges)
-  - "Get AI Suggestions" button calls /api/reconcile for ADD/DELETE recommendations
-  - AI suggestions render in right panel with explicit Apply button for user control
-  - Console logging tracks selected_deliverable_codes and selected_components_map for debugging
-
-- **Bug Fixes and Cleanup**: Resolved critical state management issues
-  - Removed legacy renderDeliverableList(items) function causing override collision
-  - Fixed Set.length → Set.size for proper collection size checks
-  - Changed implicit global to explicit window.selectedCodes declaration
-  - Eliminated 700+ lines of conflicting legacy Step 2 code
-
-- **Developer Experience**: Added console verification helper
-  - verifyS2() function for real-time state inspection
-  - Shows selected deliverables, component selections, and payload preview
-  - Accessible from browser console for QA and debugging
-
 ### Component-Level Selection & Export Robustness (September 2025)
 - **Component-Level Selection Feature**: Complete implementation of granular deliverable component control in Step 2
   - Added `/api/components_for` endpoint for retrieving components with hours breakdown by deliverable

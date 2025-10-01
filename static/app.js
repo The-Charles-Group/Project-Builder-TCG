@@ -10,9 +10,6 @@ const S2 = {
   componentsByDeliv: {},
 };
 
-// Make S2 globally accessible for buildScenariosAB in index.html
-window.S2 = S2;
-
 // Ensure init only runs once
 let s2Inited = false;
 
@@ -25,17 +22,7 @@ async function initStep2() {
   const data = await res.json();
   S2.options = data || { deliverables: [] };
 
-  // Hydrate S2 from AI suggestions (appState.selectedCodes)
-  if (window.appState?.selectedCodes?.length) {
-    S2.selectedCodes = new Set(window.appState.selectedCodes);
-    // Default all components to 'ALL' for each pre-selected deliverable
-    window.appState.selectedCodes.forEach(code => {
-      if (!S2.componentsByDeliv[code]) S2.componentsByDeliv[code] = 'ALL';
-    });
-  }
-
   renderDeliverableList();
-  renderSelectionPanel();  // Show pre-selected items
   wireStep2Handlers();
   document.querySelector('#step2')?.style && (document.querySelector('#step2').style.display = 'block');
 }
@@ -46,7 +33,7 @@ function wireStep2Handlers() {
   search && search.addEventListener('input', () => renderDeliverableList(search.value.trim().toLowerCase()));
 
   document.addEventListener('click', async (e) => {
-    // Deliverable picker buttons
+    // Delegated buttons
     if (e.target.closest('#s2-select-all')) {
       document.querySelectorAll('#s2-deliv-list input[type=checkbox]').forEach(cb => cb.checked = true);
     }
@@ -64,54 +51,13 @@ function wireStep2Handlers() {
       openComponentsDialog(code);
     }
 
-    // Remove button in "Your Selection"
-    const removeBtn = e.target.closest('[data-action="remove"]');
-    if (removeBtn) {
-      const code = removeBtn.getAttribute('data-code');
-      S2.selectedCodes.delete(code);
-      delete S2.componentsByDeliv[code];
-      // Sync back to appState
-      if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
-      renderSelectionPanel();
-      renderDeliverableList();  // Re-render to uncheck in left panel
-    }
-
-    // Component dialog: Select all
-    const selectAll = e.target.closest('[data-action="comp-select-all"]');
-    if (selectAll) {
-      const code = selectAll.getAttribute('data-code');
-      document.querySelectorAll(`#comp-dialog .comp-checkbox[data-code="${code}"]`).forEach(cb => {
-        cb.checked = true;
-        const n = cb.getAttribute('data-name');
-        S2.componentsByDeliv[code] = S2.componentsByDeliv[code] || new Set();
-        S2.componentsByDeliv[code].add(n);
-      });
-    }
-
-    // Component dialog: Unselect all
+    // Unselect‑all components button inside dialog
     const unselectAll = e.target.closest('[data-action="comp-unselect-all"]');
     if (unselectAll) {
       const code = unselectAll.getAttribute('data-code');
-      document.querySelectorAll(`#comp-dialog .comp-checkbox[data-code="${code}"]`).forEach(cb => {
-        cb.checked = false;
-      });
+      document.querySelectorAll(`#comp-dialog [data-code="${code}"] input[type=checkbox]`).forEach(cb => cb.checked = false);
+      // Persist immediately:
       S2.componentsByDeliv[code] = new Set();
-    }
-
-    // Component dialog: Close
-    const closeBtn = e.target.closest('[data-action="comp-close"]');
-    if (closeBtn) {
-      document.getElementById('comp-backdrop')?.remove();
-      document.getElementById('comp-dialog')?.remove();
-      renderSelectionPanel();
-    }
-
-    // Step 2 action buttons
-    if (e.target.closest('#s2-to-pricing')) {
-      proceedToPricing();
-    }
-    if (e.target.closest('#s2-run-ai')) {
-      getAISuggestions();
     }
   });
 }
@@ -129,16 +75,13 @@ function renderDeliverableList(filter = '') {
         String(d.Deliverable_Code).toLowerCase().includes(filter)
       );
     })
-    .map(d => {
-      const checked = S2.selectedCodes.has(d.Deliverable_Code) ? 'checked' : '';
-      return `
-        <label class="row">
-          <input type="checkbox" data-code="${d.Deliverable_Code}" ${checked} />
-          <span class="name">${d.Deliverable}</span>
-          <span class="pill">${d.Category}</span>
-        </label>
-      `;
-    })
+    .map(d => `
+      <label class="row">
+        <input type="checkbox" data-code="${d.Deliverable_Code}" />
+        <span class="name">${d.Deliverable}</span>
+        <span class="pill">${d.Category}</span>
+      </label>
+    `)
     .join('');
 
   box.innerHTML = items || `<div class="muted">No deliverables found.</div>`;
@@ -160,9 +103,6 @@ function applySelection() {
   // Default: when a deliverable is added, pre‑select **all** components (can unselect later).
   picked.forEach(code => { if (!S2.componentsByDeliv[code]) S2.componentsByDeliv[code] = 'ALL'; });
 
-  // Sync S2 state to appState for Step 3 compatibility
-  if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
-
   renderSelectionPanel();
 }
 
@@ -173,17 +113,14 @@ function renderSelectionPanel() {
 
   const rows = Array.from(S2.selectedCodes).map(code => {
     const d = byCode[code] || { Deliverable: code, Category: '' };
-    const compCount = S2.componentsByDeliv[code] === 'ALL' ? 'all' : 
-                      (S2.componentsByDeliv[code] instanceof Set ? S2.componentsByDeliv[code].size : 'all');
     return `
       <div class="row">
-        <div style="flex:1">
+        <div>
           <div class="name">${d.Deliverable}</div>
           <div class="muted">${d.Category}</div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn small" data-action="components" data-code="${code}">Components… (${compCount})</button>
-          <button class="btn small" data-action="remove" data-code="${code}" style="background:#b00020;border-color:#b00020;padding:4px 8px">✕</button>
+        <div class="end">
+          <button class="btn small" data-action="components" data-code="${code}">Components…</button>
         </div>
       </div>`;
   });
@@ -198,8 +135,7 @@ function indexDeliverablesByCode() {
 }
 
 // Build API payload from S2 state and form inputs
-// overrides: optional object to override specific fields (scenario_a, scenario_b, retainers, etc.)
-function buildPayloadForApi(overrides = {}) {
+function buildPayloadForApi() {
   const selected_deliverable_codes = Array.from(S2.selectedCodes);
   
   const selected_components_map = {};
@@ -210,13 +146,7 @@ function buildPayloadForApi(overrides = {}) {
     else selected_components_map[code] = pick; // dict {name: hours}
   }
   
-  // Use helper functions from index.html when available, fall back to defaults
-  const getUseSlack = window.getUseSlackFromUI || (() => true);
-  const getSlackInternal = window.getSlackInternalFromUI || (() => 1);
-  const getSlackClient = window.getSlackClientFromUI || (() => 2);
-  const getSlackPct = window.getSlackPctFromUI || (() => 0.05);
-  
-  const basePayload = {
+  return {
     selected_deliverable_codes,
     selected_components_map,
     scenario_a: { mode: 'template', scenario_key: document.querySelector('#scenarioA')?.value || 'MED_LOW' },
@@ -224,148 +154,12 @@ function buildPayloadForApi(overrides = {}) {
     pricing_mode: document.querySelector('#pricingMode')?.value || 'Flat_Blended',
     blended_rate: Number(document.querySelector('#blendedRate')?.value || 195),
     rate_band: document.querySelector('#rateBand')?.value || 'Standard_US',
-    use_slack: getUseSlack(),
-    slack_after_internal: getSlackInternal(),
-    slack_after_client: getSlackClient(),
-    slack_global_pct: getSlackPct(),
+    use_slack: (document.querySelector('#useSlack')?.checked ?? true),
+    slack_after_internal: Number(document.querySelector('#slackAfterInternal')?.value || 1),
+    slack_after_client: Number(document.querySelector('#slackAfterClient')?.value || 2),
+    slack_global_pct: Number(document.querySelector('#slackGlobalPct')?.value || 0.05),
     project_start: document.querySelector('#projectStart')?.value || null
   };
-  
-  // Apply overrides (for buildScenariosAB to pass retainers, custom scenarios, etc.)
-  return { ...basePayload, ...overrides };
-}
-
-// Make buildPayloadForApi globally accessible
-window.buildPayloadForApi = buildPayloadForApi;
-
-// Proceed to Pricing / Build
-async function proceedToPricing() {
-  const payload = buildPayloadForApi();
-
-  if (!payload.selected_deliverable_codes.length) {
-    alert('Please select at least one deliverable.');
-    return;
-  }
-
-  // Sanity check in the console (helps diagnose if extra codes ever creep in)
-  console.log('[BUILD] selected_deliverable_codes:', payload.selected_deliverable_codes);
-  console.log('[BUILD] selected_components_map:', payload.selected_components_map);
-
-  const res = await fetch('/api/build', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  
-  if (!res.ok) {
-    alert('Build failed. Please try again.');
-    return;
-  }
-  
-  const data = await res.json();
-  
-  // Store in window for compatibility with Step 3/4
-  window.appState = window.appState || {};
-  window.appState.scenarios = data;
-  window.latestScenarios = data;
-  
-  // Navigate to Step 3 (pricing display)
-  const step3 = document.querySelector('#step3');
-  if (step3) {
-    step3.style.display = 'block';
-    step3.scrollIntoView({ behavior: 'smooth' });
-  }
-  
-  // Render scenarios if elements exist
-  if (typeof renderScenario === 'function') {
-    renderScenario('scenarioA', data.A);
-    renderScenario('scenarioB', data.B);
-  }
-  
-  console.log(`Build completed with ${S2.selectedCodes.size} deliverables`);
-}
-
-// Get AI Suggestions (from Step 2)
-async function getAISuggestions() {
-  if (!window.appState || !window.appState.aiSummary) {
-    alert('Enter RFP text or upload a file, then click "Analyze with AI" in Step 1 first.');
-    return;
-  }
-
-  const payload = {
-    summary_deliverables: window.appState.aiSummary.deliverables?.map(d => d.label) || [],
-    db_selected_deliverable_codes: Array.from(S2.selectedCodes)
-  };
-
-  const res = await fetch('/api/reconcile', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  
-  if (!res.ok) {
-    alert('Could not get AI suggestions. Please try again.');
-    return;
-  }
-  
-  const data = await res.json();
-
-  // Render into the right panel (ADD / DELETE buckets)
-  renderAISuggestions(data);
-}
-
-// Render AI suggestions in right panel
-function renderAISuggestions(data) {
-  const panel = document.querySelector('#s2-ai-list');
-  if (!panel) return;
-
-  const addRows = (data.add || []).map(s =>
-    `<label style="display:flex;gap:8px;padding:4px;cursor:pointer">
-      <input type="checkbox" class="ai-add" data-code="${s.code}" checked> 
-      <span><strong>${s.label}</strong> — ${s.reason}</span>
-    </label>`
-  );
-  
-  const delRows = (data.delete || []).map(s =>
-    `<label style="display:flex;gap:8px;padding:4px;cursor:pointer;color:#ff6b6b">
-      <input type="checkbox" class="ai-del" data-code="${s.code}" checked> 
-      <span><strong>${s.label}</strong> — ${s.reason}</span>
-    </label>`
-  );
-
-  const addSection = addRows.length ? 
-    `<div><h4 style="margin:8px 0;color:var(--accent2)">Add</h4>${addRows.join('')}</div>` : '';
-  
-  const delSection = delRows.length ? 
-    `<div><h4 style="margin:8px 0;color:#ff6b6b">Delete</h4>${delRows.join('')}</div>` : '';
-
-  const applyBtn = (addRows.length + delRows.length > 0) ?
-    '<button id="s2-apply-ai" class="btn primary" style="width:100%;margin-top:12px">Apply AI Changes</button>' : '';
-
-  panel.innerHTML = addSection + delSection + applyBtn || 
-    '<div class="muted">No changes suggested</div>';
-
-  // Wire apply button
-  const applyAiBtn = document.getElementById('s2-apply-ai');
-  if (applyAiBtn) {
-    applyAiBtn.onclick = () => {
-      document.querySelectorAll('.ai-add:checked').forEach(cb => {
-        S2.selectedCodes.add(cb.dataset.code);
-        if (!S2.componentsByDeliv[cb.dataset.code]) S2.componentsByDeliv[cb.dataset.code] = 'ALL';
-      });
-      document.querySelectorAll('.ai-del:checked').forEach(cb => {
-        S2.selectedCodes.delete(cb.dataset.code);
-        delete S2.componentsByDeliv[cb.dataset.code];
-      });
-      
-      // Sync to appState
-      if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
-      
-      renderSelectionPanel();
-      renderDeliverableList();
-      panel.innerHTML = '<div class="muted">Changes applied</div>';
-    };
-  }
 }
 
 // Modal/dialog for components (inline simple version)
@@ -380,23 +174,9 @@ async function openComponentsDialog(code) {
   if (selected === 'ALL') { selected = new Set(items.map(i => i.name)); S2.componentsByDeliv[code] = selected; }
   if (!selected) selected = new Set();
 
-  // Get deliverable name for display
-  const byCode = indexDeliverablesByCode();
-  const delivName = byCode[code]?.Deliverable || code;
-
-  // Render dialog with backdrop
+  // Render a barebones dialog panel
   const dlgId = 'comp-dialog';
-  let backdrop = document.getElementById('comp-backdrop');
   let dlg = document.getElementById(dlgId);
-  
-  if (!backdrop) {
-    backdrop = document.createElement('div');
-    backdrop.id = 'comp-backdrop';
-    backdrop.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:999';
-    backdrop.onclick = () => { backdrop.remove(); dlg?.remove(); renderSelectionPanel(); };
-    document.body.appendChild(backdrop);
-  }
-  
   if (!dlg) {
     dlg = document.createElement('div');
     dlg.id = dlgId;
@@ -407,11 +187,10 @@ async function openComponentsDialog(code) {
   dlg.innerHTML = `
     <div class="card">
       <div class="header">
-        <div><strong>Components</strong> — ${delivName}</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn small" data-action="comp-select-all" data-code="${code}">Select all</button>
+        <div><strong>Components</strong> — ${code}</div>
+        <div class="end">
           <button class="btn small" data-action="comp-unselect-all" data-code="${code}">Unselect all</button>
-          <button class="btn small" data-action="comp-close">Close</button>
+          <button class="btn small" onclick="document.getElementById('${dlgId}').remove()">Close</button>
         </div>
       </div>
       <div class="body">
@@ -419,7 +198,12 @@ async function openComponentsDialog(code) {
           <label class="row">
             <input type="checkbox" ${selected.has(i.name) ? 'checked' : ''} 
                    data-code="${code}" data-name="${i.name}"
-                   class="comp-checkbox" />
+                   onchange="(function(cb){
+                     const c = cb.getAttribute('data-code');
+                     const n = cb.getAttribute('data-name');
+                     S2.componentsByDeliv[c] = S2.componentsByDeliv[c] || new Set();
+                     if (cb.checked) { S2.componentsByDeliv[c].add(n); } else { S2.componentsByDeliv[c].delete(n); }
+                   })(this)" />
             <span class="name">${i.name}</span>
             <span class="muted">${Number(i.hours).toFixed(1)} h</span>
           </label>
@@ -427,20 +211,6 @@ async function openComponentsDialog(code) {
       </div>
     </div>
   `;
-  
-  // Wire up checkbox handlers
-  dlg.querySelectorAll('.comp-checkbox').forEach(cb => {
-    cb.addEventListener('change', function() {
-      const c = this.getAttribute('data-code');
-      const n = this.getAttribute('data-name');
-      S2.componentsByDeliv[c] = S2.componentsByDeliv[c] || new Set();
-      if (this.checked) { 
-        S2.componentsByDeliv[c].add(n); 
-      } else { 
-        S2.componentsByDeliv[c].delete(n); 
-      }
-    });
-  });
 }
 
 async function api(path, opts={}) {
@@ -574,16 +344,31 @@ function onScenarioTypeChanged(){
   document.querySelector("#bundleRow").classList.toggle("hidden", useTemplates);
 }
 
+function renderDeliverableList(items){
+  const box = document.querySelector("#deliverableList");
+  if (!box) return; // Element doesn't exist, skip rendering
+  box.innerHTML = "";
+  items.forEach(d => {
+    const id = `deliv_${d.Deliverable_Code}`;
+    box.append(el(`
+      <div class="row">
+        <input type="checkbox" id="${id}" data-code="${d.Deliverable_Code}"/>
+        <label for="${id}"><strong>${d.Deliverable}</strong> <small class="badge">${d.Category}</small></label>
+      </div>
+    `));
+  });
+}
+
 // Step 2 workflow functions
 async function onProceedToStep3() {
   // Use only S2.selectedCodes - no AI merge
-  if (S2.selectedCodes.size === 0) {
+  if (S2.selectedCodes.length === 0) {
     alert("Please select at least one deliverable before proceeding to pricing.");
     return;
   }
   
   // Sync legacy state for compatibility
-  window.selectedCodes = [...S2.selectedCodes];
+  selectedCodes = [...S2.selectedCodes];
   if (window.appState) window.appState.selectedCodes = [...S2.selectedCodes];
   
   // Build scenarios using buildPayloadForApi
@@ -602,7 +387,7 @@ async function onProceedToStep3() {
     const data = await res.json();
     SCENARIOS = data.scenarios || {};
     
-    console.log(`Build completed with ${S2.selectedCodes.size} deliverables`);
+    console.log(`Build completed with ${S2.selectedCodes.length} deliverables`);
   } catch (error) {
     console.error("Failed to build scenarios:", error);
     alert("Failed to build scenarios. Please try again.");
