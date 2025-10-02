@@ -1145,6 +1145,11 @@ function renderScenarios(data){
   document.querySelector("#totB").innerText = currency(data.B.totals.price);
 }
 
+// Window-accessible renderPricing - accepts scenarios A and B separately
+window.renderPricing = function(scenarioA, scenarioB) {
+  renderScenarios({ A: scenarioA, B: scenarioB });
+};
+
 async function onExport(which){
   if(!SCENARIOS){ alert("Build scenarios first."); return; }
   const res = await fetch("/api/export", {
