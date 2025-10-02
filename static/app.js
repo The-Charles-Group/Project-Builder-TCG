@@ -84,18 +84,20 @@ function currency(n){ return `$${Number(n||0).toLocaleString()}`; }
 async function boot() {
   await api("/api/load");
   OPTIONS = await api("/api/options");
-  // Populate dropdowns
+  // Populate dropdowns using replaceChildren() to avoid duplicates
   const pricingMode = document.querySelector("#pricingMode");
-  OPTIONS.pricing_modes.forEach(m => pricingMode.append(el(`<option>${m}</option>`)));
+  pricingMode.replaceChildren(...OPTIONS.pricing_modes.map(m => el(`<option>${m}</option>`)));
   const rateBand = document.querySelector("#rateBand");
-  OPTIONS.rate_bands.forEach(b => rateBand.append(el(`<option>${b}</option>`)));
+  rateBand.replaceChildren(...OPTIONS.rate_bands.map(b => el(`<option>${b}</option>`)));
   // Scenario templates
   const sA = document.querySelector("#scenarioA");
   const sB = document.querySelector("#scenarioB");
-  OPTIONS.scenario_templates.forEach(s => {
-    sA.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
-    sB.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
-  });
+  sA.replaceChildren(...OPTIONS.scenario_templates.map(s => 
+    el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`)
+  ));
+  sB.replaceChildren(...OPTIONS.scenario_templates.map(s => 
+    el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`)
+  ));
   // Defaults: MED_LOW / MED_HIGH
   if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_LOW")) sA.value="MED_LOW";
   if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_HIGH")) sB.value="MED_HIGH";
