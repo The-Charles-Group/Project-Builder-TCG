@@ -22,6 +22,8 @@ Preferred communication style: Simple, everyday language.
   - Fixed `selected_components_map` payload in `s2ApplyAndBuild()` to properly send `"__ALL__"` sentinel for non-customized deliverables
   - Ensured consistent `"__ALL__"` sentinel handling between `buildFromCurrentSelection()` and `s2ApplyAndBuild()`
   - Verified AI spinner, search functionality, and component defaults all working correctly
+  - Implemented "Refresh AI Suggestions" link to call `/api/suggest_by_text` using stored RFP text without re-upload
+  - Enhanced AI Summary panel with Copy button (clipboard), Hide/Show toggle, and refresh functionality
 
 - **Key Improvements**:
   - Prevents flat exports by ensuring all deliverables have component data before WBS building
