@@ -744,6 +744,86 @@ function selectedDeliverables(){
   return selectedCodes;
 }
 
+// Open components bubble dialog for a deliverable
+async function openComponentsBubble(deliv) {
+  const dlg = document.getElementById('componentsDialog');
+  if (!dlg) return;
+  
+  document.getElementById('compTitle').textContent = `Components – ${deliv.deliverable}`;
+  const box = document.getElementById('componentsContainer');
+  box.innerHTML = 'Loading…';
+  
+  try {
+    const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(deliv.code)}`);
+    const data = await r.json();
+    const comps = data.items || [];
+    
+    if (comps.length === 0) {
+      box.innerHTML = '<p style="color: var(--muted);">No components available.</p>';
+      dlg.showModal();
+      return;
+    }
+    
+    box.innerHTML = comps.map(c =>
+      `<label style="display: block; margin: 8px 0; cursor: pointer;">
+        <input class="compChk" type="checkbox" data-name="${c.name}" checked>
+        ${c.name} <small style="color: var(--muted);">(${Math.round(c.hours)} h)</small>
+      </label>`
+    ).join('');
+    
+    S2.selectedComponentsMap[deliv.code] = "__ALL__";
+    
+    document.getElementById('selectAllComps').onclick = () => {
+      for (const chk of box.querySelectorAll('.compChk')) chk.checked = true;
+      S2.selectedComponentsMap[deliv.code] = "__ALL__";
+    };
+    
+    document.getElementById('unselectAllComps').onclick = () => {
+      for (const chk of box.querySelectorAll('.compChk')) chk.checked = false;
+      S2.selectedComponentsMap[deliv.code] = {};
+    };
+    
+    box.addEventListener('change', () => {
+      const checked = [...box.querySelectorAll('.compChk')].filter(c => c.checked).map(c => c.dataset.name);
+      S2.selectedComponentsMap[deliv.code] = checked.length === comps.length
+        ? "__ALL__"
+        : Object.fromEntries(checked.map(n => [n, null]));
+    });
+    
+    dlg.showModal();
+  } catch (e) {
+    console.error('Error loading components:', e);
+    box.innerHTML = '<p style="color: red;">Error loading components.</p>';
+    dlg.showModal();
+  }
+}
+
+// Populate select element and remove duplicates
+function populateSelect(selectEl, items) {
+  if (!selectEl) return;
+  const unique = [...new Set(items)];
+  selectEl.innerHTML = '';
+  unique.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = opt.textContent = v;
+    selectEl.appendChild(opt);
+  });
+}
+
+// Auto-fill project name from uploaded file
+async function defaultProjectName() {
+  try {
+    const r = await fetch('/api/last_upload_name');
+    const data = await r.json();
+    const el = document.getElementById('projectName');
+    if (data.project_name_default && el && !el.value) {
+      el.value = data.project_name_default;
+    }
+  } catch (e) {
+    console.error('Error fetching default project name:', e);
+  }
+}
+
 // Initialize Step 2 UI when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
   // Call boot to initialize everything
