@@ -1556,8 +1556,15 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     for item in items:
         dcode = str(item.get("deliverable_code", item.get("code", "")))
         tgs = [str(x) for x in item.get("included_task_groups", [])]
-        scen_col = item.get("scenario_col", "MED_LOW")
-        dept = DB.service_dept_for_deliverable(dcode, tgs, scen_col) if dcode else "Other"
+        # Resolve scenario_col from item; if missing/invalid, derive from complexity & tier
+        scen_col = item.get("scenario_col")
+        if not scen_col or scen_col not in DB.all_rows.columns:
+            scen_col = DB.scenario_hours_col(item.get("complexity", "Advanced"),
+                                             item.get("tier", "T2_MediumVolume"))
+        # Prefer v3 (doesn't need scen_col), then fall back to v2
+        dept = (DB.service_department_for_deliverable(dcode, tgs)
+                or DB.service_dept_for_deliverable(dcode, tgs, scen_col)
+                or "Other") if dcode else "Other"
         item["_service_department"] = dept or "Other"
         item["_dept_order"] = DEPT_ORDER.index(dept) if dept in DEPT_ORDER else 999
 
@@ -1617,7 +1624,11 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         for dept_deliv_idx, d in enumerate(dept_items, start=1):
             deliv_counter_global += 1
             dcode = str(d.get("deliverable_code", d.get("code", f"DELIV_{deliv_counter_global}")))
-            scen_col = d.get("scenario_col", "MED_LOW")
+            # Resolve scenario_col from item; if missing/invalid, derive from complexity & tier
+            scen_col = d.get("scenario_col")
+            if not scen_col or scen_col not in DB.all_rows.columns:
+                scen_col = DB.scenario_hours_col(d.get("complexity", "Advanced"),
+                                                 d.get("tier", "T2_MediumVolume"))
             included = [str(x) for x in d.get("included_task_groups", [])]
             if not included:
                 # derive from the database for this deliverable
@@ -1693,7 +1704,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
             # Build deliverable node - nest under department
             wbs_deliv = f"{wbs_dept}.{dept_deliv_idx}"
-            svc_deliv = DB.service_dept_for_deliverable(dcode, tg_order, scen_col)
+            svc_deliv = (DB.service_department_for_deliverable(dcode, tg_order)
+                         or DB.service_dept_for_deliverable(dcode, tg_order, scen_col))
             # deliv_label already set above with database fallback - don't override it
             deliv_notes = f'{d.get("complexity","")}/{d.get("tier","")}' + (f' | Retainer x{months} months' if months else '')
             total_deliv_duration = sum(int(t["duration_days"]) for t in schedule)  # one-cycle length
@@ -1753,7 +1765,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     comp_price = round(comp_price_month * (months if months else 1), 2)
 
                 wbs_comp = f"{wbs_deliv}.{j}"
-                svc_comp = DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col)
+                svc_comp = (DB.service_department_for_component(dcode, comp, tg_in_comp)
+                            or DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col))
                 rows.append({
                     "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                     "Deliverable": deliv_label,
@@ -1826,7 +1839,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             if h <= 0:
                                 continue
                             r_index += 1
-                            row_id, task_code, svc_task = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
+                            row_id, task_code, svc_task_v2 = DB.codes_for_component_task_role(dcode, comp, tg, role or "", sen or "", scen_col)
+                            # Prefer v3 service_department_for_task (no scen_col dependency)
+                            svc_task = DB.service_department_for_task(dcode, comp, tg) or svc_task_v2
                             wbs_role = f"{wbs_task}.{r_index}"
 
                             # Compute role rate

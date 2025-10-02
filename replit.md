@@ -69,6 +69,24 @@ Preferred communication style: Simple, everyday language.
   - Prevents invalid `{'__ALL__': null}` payloads that would drop all tasks
   - Proper transitions: all selected (key deleted) → partial (object map) → none (empty object)
 
+### AI-Suggested Items & Department Grouping Fixes (October 2025)
+- **Scenario Column Validation**: Enhanced scenario_col resolution in build_wbs_with_pricing
+  - Validates scenario_col exists in database columns before using it
+  - Falls back to deriving from complexity & tier when missing or invalid
+  - Applied to both "enrich items" pass and deliverable processing loop
+  - Ensures AI-suggested items align with valid hour columns
+
+- **V3 Department Inference Priority**: Updated all department lookups to prefer v3 methods
+  - Deliverable level: Calls `service_department_for_deliverable` (v3) before `service_dept_for_deliverable` (v2)
+  - Component level: Calls `service_department_for_component` (v3) before `service_dept_for_component` (v2)
+  - Task level: Calls `service_department_for_task` (v3) before v2 fallback
+  - V3 methods don't require scenario_col parameter, preventing "Other" department collapse for AI items
+
+- **Benefits**:
+  - AI-suggested deliverables now properly grouped by Service Department in exports
+  - Prevents all AI items from defaulting to "Other" department
+  - Maintains backward compatibility with v2 methods as fallback
+
 ## System Architecture
 
 ### Backend Architecture
