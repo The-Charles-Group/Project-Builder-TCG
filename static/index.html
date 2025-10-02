@@ -383,23 +383,14 @@
       const select = document.getElementById(elementId);
       if (!select) return;
       
-      let matchFound = false;
-      const newOptions = options.map((option, idx) => {
+      select.innerHTML = '';
+      options.forEach(option => {
         const optEl = document.createElement('option');
         optEl.value = option;
         optEl.textContent = option;
-        if (option === defaultValue) {
-          optEl.selected = true;
-          matchFound = true;
-        }
-        return optEl;
+        if (option === defaultValue) optEl.selected = true;
+        select.appendChild(optEl);
       });
-      
-      if (!matchFound && newOptions.length > 0) {
-        newOptions[0].selected = true;
-      }
-      
-      select.replaceChildren(...newOptions);
     }
 
     function codeToName(code) {

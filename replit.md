@@ -10,7 +10,7 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### UI Enhancements & Code Quality Improvements (October 2025)
+### UI Enhancements: AI Throbber & Search Filter (October 2025)
 - **AI Loading Indicator**: Added animated spinner that displays during RFP analysis (both file and text modes)
   - Shows immediately when analysis starts, hides when complete or on error
   - Implemented using CSS-only animation with spinning border for accessibility
@@ -18,11 +18,6 @@ Preferred communication style: Simple, everyday language.
   - Search box filters deliverables in real-time as user types
   - Filters by deliverable name, category, and code
   - Implementation in app.js (line 953) re-renders list with filtered results
-- **Dropdown Population Enhancement**: Updated `populateDropdown()` to use `replaceChildren()` instead of `innerHTML = ''`
-  - Prevents duplicate options from appearing in dropdowns
-  - Always ensures a valid selection (defaultValue or first option)
-  - Handles edge cases: missing defaultValue, defaultValue not in options list, empty arrays
-  - Uses matchFound flag to guarantee fallback to first option when needed
 - **Cache Busting**: Updated static assets to v=5.5 to ensure browser reload of new features
 - **Data Attributes**: Added null-safe `data-name` attribute to deliverable list items for consistency
 
