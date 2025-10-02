@@ -347,8 +347,8 @@
     }
     document.addEventListener('DOMContentLoaded', ensureStage2Dom);
 
-    // App state management
-    const appState = {
+    // App state management - initialize directly on window for global access
+    window.appState = window.appState || {
       selectedCodes: [],        // critical for Step 3 build
       currentRfpText: '',       // current RFP content
       aiSummary: null,          // AI analysis results
@@ -357,14 +357,17 @@
       scenarios: null           // built scenarios (moved to appState)
     };
     
+    // Local alias for convenience
+    const appState = window.appState;
+    
     // Legacy compatibility alias for latestScenarios
-    window.appState = window.appState || {};
     Object.defineProperty(window, 'latestScenarios', {
       get() { return window.appState.scenarios; },
       set(v) { window.appState.scenarios = v; }
     });
     
-    // Note: window.apb is now initialized in app.js with proper structure
+    // Alias for state management (per fix document)
+    window.apb = window.appState;
     
     // Global data
     let allDeliverables = [];   // from /api/options
@@ -384,15 +387,14 @@
       const select = document.getElementById(elementId);
       if (!select) return;
       
-      // Use replaceChildren() with all options at once for better performance
-      const optEls = options.map(option => {
+      select.replaceChildren();
+      options.forEach(option => {
         const optEl = document.createElement('option');
         optEl.value = option;
         optEl.textContent = option;
         if (option === defaultValue) optEl.selected = true;
-        return optEl;
+        select.appendChild(optEl);
       });
-      select.replaceChildren(...optEls);
     }
 
     function codeToName(code) {
