@@ -383,14 +383,14 @@
       const select = document.getElementById(elementId);
       if (!select) return;
       
-      select.innerHTML = '';
-      options.forEach(option => {
+      const newOptions = options.map(option => {
         const optEl = document.createElement('option');
         optEl.value = option;
         optEl.textContent = option;
         if (option === defaultValue) optEl.selected = true;
-        select.appendChild(optEl);
+        return optEl;
       });
+      select.replaceChildren(...newOptions);
     }
 
     function codeToName(code) {
