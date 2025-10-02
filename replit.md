@@ -10,6 +10,13 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Step 3 Payload Improvements (October 2025)
+- **Simplified buildScenariosAB Function**: Refactored to read selected deliverables directly from DOM via `#yourSelection [data-code]` selector
+- **data-code Attributes**: Added to selection items in `renderYourSelection()` for reliable DOM-based selection reading
+- **Retainer Payload Fix**: Corrected retainer selector to `#retainer-list-controls input[type=number][data-code]` to properly capture configured months
+- **Dropdown De-duplication**: Already implemented via `populateDropdown()` clearing innerHTML before re-populating
+- **Auto-populated Project Names**: Already implemented to set project name from uploaded filename when input is empty
+
 ### GPT-5 Patches Implementation (October 2025)
 - **Backend Enhancements**:
   - Added component inflation at start of `build_wbs_with_pricing()` to ensure AI picks always include full component trees
