@@ -84,11 +84,11 @@ function currency(n){ return `$${Number(n||0).toLocaleString()}`; }
 async function boot() {
   await api("/api/load");
   OPTIONS = await api("/api/options");
-  // Populate dropdowns
+  // Populate dropdowns (with duplicate removal)
   const pricingMode = document.querySelector("#pricingMode");
-  OPTIONS.pricing_modes.forEach(m => pricingMode.append(el(`<option>${m}</option>`)));
+  if (pricingMode) populateSelect(pricingMode, OPTIONS.pricing_modes);
   const rateBand = document.querySelector("#rateBand");
-  OPTIONS.rate_bands.forEach(b => rateBand.append(el(`<option>${b}</option>`)));
+  if (rateBand) populateSelect(rateBand, OPTIONS.rate_bands);
   // Scenario templates
   const sA = document.querySelector("#scenarioA");
   const sB = document.querySelector("#scenarioB");
