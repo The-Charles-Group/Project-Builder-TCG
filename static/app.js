@@ -326,6 +326,7 @@ async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
   
   // Store in apb for reference (this is the API format, not the UI format)
   window.apb.selectedComponentsMap = selectedComponentsPayload;
+  window.apb.includedMap = selectedComponentsPayload;
 
   // 4) Retainers - always sync window.apb.retainers with window.APP.retainers
   let retainersPayload = [];
