@@ -771,23 +771,33 @@ async function openComponentsBubble(deliv) {
       </label>`
     ).join('');
     
-    S2.selectedComponentsMap[deliv.code] = "__ALL__";
+    // Default: all selected, so delete key (backend includes all)
+    delete S2.selectedComponentsMap[deliv.code];
     
     document.getElementById('selectAllComps').onclick = () => {
       for (const chk of box.querySelectorAll('.compChk')) chk.checked = true;
-      S2.selectedComponentsMap[deliv.code] = "__ALL__";
+      // All selected: delete key to signal backend to include all
+      delete S2.selectedComponentsMap[deliv.code];
     };
     
     document.getElementById('unselectAllComps').onclick = () => {
       for (const chk of box.querySelectorAll('.compChk')) chk.checked = false;
+      // None selected: empty object
       S2.selectedComponentsMap[deliv.code] = {};
     };
     
     box.addEventListener('change', () => {
       const checked = [...box.querySelectorAll('.compChk')].filter(c => c.checked).map(c => c.dataset.name);
-      S2.selectedComponentsMap[deliv.code] = checked.length === comps.length
-        ? "__ALL__"
-        : Object.fromEntries(checked.map(n => [n, null]));
+      if (checked.length === comps.length) {
+        // All selected: delete key to signal backend to include all
+        delete S2.selectedComponentsMap[deliv.code];
+      } else if (checked.length === 0) {
+        // None selected: empty object
+        S2.selectedComponentsMap[deliv.code] = {};
+      } else {
+        // Partial selection: store as object with null values
+        S2.selectedComponentsMap[deliv.code] = Object.fromEntries(checked.map(n => [n, null]));
+      }
     });
     
     dlg.showModal();
