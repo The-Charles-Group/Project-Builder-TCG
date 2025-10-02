@@ -880,7 +880,7 @@ function renderSearchAndAdd() {
       String(d.Deliverable_Code).toLowerCase().includes(q)
     );
     el.list.innerHTML = items.map(d => `
-      <label style="display:flex; gap:8px; align-items:center; padding:8px;" data-name="${(d.Deliverable||'').toLowerCase()}" data-code="${d.Deliverable_Code}" data-category="${d.Category}">
+      <label style="display:flex; gap:8px; align-items:center; padding:8px;">
         <input type="checkbox" data-code="${d.Deliverable_Code}"
                ${state.selected.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
         <span>${d.Deliverable}</span>

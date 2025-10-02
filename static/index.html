@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Agency Project Builder</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/static/style.css?v=5.5" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header>
@@ -29,7 +29,6 @@
       
       <div class="actions">
         <button id="btnAnalyze">Analyze with AI</button>
-        <div id="ai-busy" class="busy hidden" aria-live="polite" style="margin-left: 16px;">Analyzing…</div>
       </div>
       <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
     </section>
@@ -424,11 +423,9 @@
     async function analyzeFromFile() {
       const fileEl = document.getElementById('rfpFile');
       const btn = document.getElementById('btnAnalyze');
-      const busyEl = document.getElementById('ai-busy');
       
       btn.disabled = true;
       btn.textContent = 'Analyzing...';
-      if (busyEl) busyEl.classList.remove('hidden');
 
       try {
         ensureStage2Dom();
@@ -514,20 +511,17 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Analyze with AI';
-        if (busyEl) busyEl.classList.add('hidden');
       }
     }
 
     async function analyzeFromText() {
       const textArea = document.getElementById('rfpText');
       const btn = document.getElementById('btnAnalyze');
-      const busyEl = document.getElementById('ai-busy');
       
       appState.currentRfpText = textArea.value.trim();
       
       btn.disabled = true;
       btn.textContent = 'Analyzing...';
-      if (busyEl) busyEl.classList.remove('hidden');
 
       try {
         // Call AI Summary endpoint
@@ -550,7 +544,6 @@
       } finally {
         btn.disabled = false;
         btn.textContent = 'Analyze with AI';
-        if (busyEl) busyEl.classList.add('hidden');
       }
     }
 
@@ -1398,7 +1391,6 @@
       const btnBuildC = document.getElementById('btn-build-c');
       if (btnBuildC) btnBuildC.onclick = buildScenarioC;
       
-      // Note: Step 2 deliverable search filter is handled in app.js (line 953)
       // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
     });
     document.querySelector('#c-base')?.addEventListener('change', renderUpsellList);
@@ -1506,6 +1498,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.5" defer></script>
+  <script src="/static/app.js?v=5.4" defer></script>
 </body>
 </html>
