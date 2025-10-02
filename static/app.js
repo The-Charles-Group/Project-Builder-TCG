@@ -296,19 +296,15 @@ async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
   // Store in apb for reference (this is the API format, not the UI format)
   window.apb.selectedComponentsMap = selectedComponentsPayload;
 
-  // 4) Retainers - sync window.APP.retainers with window.apb as source of truth
+  // 4) Retainers - always sync window.apb.retainers with window.APP.retainers
   let retainersPayload = [];
   if (useRetainers) {
-    // Ensure retainers are stored in window.apb first
-    if (!window.apb.retainers || window.apb.retainers.length === 0) {
-      // Read from window.APP if apb is empty
-      window.apb.retainers = window.APP?.retainers || [];
-    }
+    // Always refresh window.apb.retainers from window.APP to get latest values
+    window.apb.retainers = (window.APP?.retainers || []).slice(); // defensive copy
     retainersPayload = window.apb.retainers;
-    
-    // Sync back to window.APP for compatibility
-    window.APP = window.APP || {};
-    window.APP.retainers = retainersPayload;
+  } else {
+    // Clear retainers when not using them
+    window.apb.retainers = [];
   }
 
   // 5) Build payload with all settings

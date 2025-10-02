@@ -10,6 +10,14 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Sanity Check Verification (October 2025)
+- **Centralized buildAB Function**: Verified window.buildAB exists (app.js line 375), called from Step 3 button (index.html line 826) and Step 2 button (app.js lines 378-383)
+- **State Management**: Confirmed window.apb stores selectedCodes (line 271), selectedComponentsMap (line 297), retainers (lines 302-311), scenarios (line 347)
+- **Table Clearing**: renderScenario properly clears via innerHTML replacement (index.html line 1042)
+- **Dropdown De-duplication**: populateDropdown uses replaceChildren() (index.html line 390)
+- **Project Name Auto-fill**: Implemented at lines 453-456 in index.html
+- **Step 2 Search Filter**: Input exists (line 48), event handlers wired (app.js lines 993, 1448), filter functions implemented (lines 914, 1378)
+
 ### Retainer & Component Inflation Fixes (October 2025)
 - **Retainer Zero-Month Fix**: Changed retainer map to use `max(0, min(12, ...))` instead of `max(1, ...)` to allow months=0 (one-time deliverables) without zeroing hours
 - **Component Inflation**: Already implemented - `_inflate_components_if_missing()` called in `/api/build` (line 2767) and `build_wbs_with_pricing()` (line 1525) to prevent flat exports
