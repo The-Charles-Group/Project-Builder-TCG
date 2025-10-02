@@ -1,38 +1,3 @@
-// --- universal helpers -------------------------------------------------------
-// Only define if not already declared (to avoid conflicts with index.html)
-if (typeof $$ === 'undefined') {
-  window.$$ = (s, root=document) => Array.from(root.querySelectorAll(s));
-}
-if (typeof $ === 'undefined') {
-  window.$ = (s, root=document) => root.querySelector(s);
-}
-if (typeof pick === 'undefined') {
-  window.pick = (...candidates) => candidates.map(s => {
-    // Handle both getElementById and querySelector style
-    return typeof s === 'string' ? (document.getElementById(s) || document.querySelector(s)) : s;
-  }).find(Boolean);
-}
-
-function fillSelect(selectEl, options, {clear=true}={}) {
-  if (!selectEl) return;
-  if (clear) selectEl.innerHTML = "";
-  const frag = document.createDocumentFragment();
-  options.forEach(v => {
-    const opt = document.createElement('option');
-    opt.value = v;
-    opt.textContent = v;
-    frag.appendChild(opt);
-  });
-  selectEl.appendChild(frag);
-}
-
-// --- kill the throbber forever ----------------------------------------------
-(function removeThrobber() {
-  const th = pick('#throbber', '.throbber', '[data-role="throbber"]');
-  if (th && th.remove) th.remove();
-  window.showThrobber = window.hideThrobber = () => {};
-})();
-
 let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
@@ -119,20 +84,18 @@ function currency(n){ return `$${Number(n||0).toLocaleString()}`; }
 async function boot() {
   await api("/api/load");
   OPTIONS = await api("/api/options");
-  // Populate dropdowns using replaceChildren() to avoid duplicates
+  // Populate dropdowns
   const pricingMode = document.querySelector("#pricingMode");
-  pricingMode.replaceChildren(...OPTIONS.pricing_modes.map(m => el(`<option>${m}</option>`)));
+  OPTIONS.pricing_modes.forEach(m => pricingMode.append(el(`<option>${m}</option>`)));
   const rateBand = document.querySelector("#rateBand");
-  rateBand.replaceChildren(...OPTIONS.rate_bands.map(b => el(`<option>${b}</option>`)));
+  OPTIONS.rate_bands.forEach(b => rateBand.append(el(`<option>${b}</option>`)));
   // Scenario templates
   const sA = document.querySelector("#scenarioA");
   const sB = document.querySelector("#scenarioB");
-  sA.replaceChildren(...OPTIONS.scenario_templates.map(s => 
-    el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`)
-  ));
-  sB.replaceChildren(...OPTIONS.scenario_templates.map(s => 
-    el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`)
-  ));
+  OPTIONS.scenario_templates.forEach(s => {
+    sA.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
+    sB.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
+  });
   // Defaults: MED_LOW / MED_HIGH
   if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_LOW")) sA.value="MED_LOW";
   if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_HIGH")) sB.value="MED_HIGH";
@@ -252,9 +215,6 @@ async function boot() {
   // Export functions globally for index.html
   window.onRunReconcile = onRunReconcile;
   window.buildFromCurrentSelection = buildFromCurrentSelection;
-  
-  // Initialize Step 3 pricing panel with new logic
-  initPricingStep();
 }
 
 function onPricingModeChanged(){
@@ -290,66 +250,44 @@ function renderDeliverableList(items){
   });
 }
 
-// Centralized state management
-window.apb = window.apb || {
-  selectedCodes: [],
-  selectedComponentsMap: {},
-  includedMap: {},
-  retainers: [],
-  scenarios: null
-};
-
-// Centralized buildAB function - single source of truth for building scenarios
-async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
-  // 1) Get selected deliverables from UI
+// Build from current S2 selection (surgical patch implementation)
+async function buildFromCurrentSelection() {
   const codes = readSelectedCodesFromUI();
   if (!codes.length) {
     alert("Pick at least one deliverable before proceeding to pricing.");
     return;
   }
 
-  // 2) Store in centralized state
-  window.apb.selectedCodes = codes;
-  
   // Sync legacy state for compatibility
   selectedCodes = codes;
   if (window.appState) window.appState.selectedCodes = codes;
   window.selectedCodes = codes;
 
-  // 3) Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
-  // IMPORTANT: Do NOT mutate S2.selectedComponentsMap - only read from it for payload
+  // Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
   const selectedComponentsPayload = {};
   
+  // For all selected deliverables, ensure we have component info
   codes.forEach(code => {
     const compSet = S2.selectedComponentsMap[code];
     
     if (compSet instanceof Set && compSet.size > 0) {
+      // User has selected specific components
       const dict = Object.create(null);
       compSet.forEach(label => { dict[label] = null; });
       selectedComponentsPayload[code] = dict;
     } else if (compSet && typeof compSet === 'object' && !(compSet instanceof Set)) {
+      // Already in object format (fix: proper parentheses for instanceof)
       selectedComponentsPayload[code] = compSet;
     } else {
+      // No specific components selected - send "__ALL__" sentinel to include all
       selectedComponentsPayload[code] = "__ALL__";
     }
   });
-  
-  // Store in apb for reference (this is the API format, not the UI format)
-  window.apb.selectedComponentsMap = selectedComponentsPayload;
-  window.apb.includedMap = selectedComponentsPayload;
 
-  // 4) Retainers - always sync window.apb.retainers with window.APP.retainers
-  let retainersPayload = [];
-  if (useRetainers) {
-    // Always refresh window.apb.retainers from window.APP to get latest values
-    window.apb.retainers = (window.APP?.retainers || []).slice(); // defensive copy
-    retainersPayload = window.apb.retainers;
-  } else {
-    // Clear retainers when not using them
-    window.apb.retainers = [];
-  }
+  // Include retainers if toggle is enabled
+  const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
+  const retainersPayload = retainersEnabled ? (window.APP?.retainers || []) : [];
 
-  // 5) Build payload with all settings
   const payload = {
     selected_deliverable_codes: codes,
     selected_components_map: selectedComponentsPayload,
@@ -366,7 +304,6 @@ async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
     retainers: retainersPayload
   };
 
-  // 6) POST /api/build
   const res = await fetch('/api/build', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -381,43 +318,25 @@ async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
   
   const data = await res.json();
   
-  // 7) Store in centralized state
-  window.apb.scenarios = data;
-  
-  // Sync legacy state for compatibility
+  // Store globally for Step 3 and exports
   window.BUILD = data;
   window.appState = window.appState || {};
   window.appState.scenarios = data;
   window.latestScenarios = data;
   SCENARIOS = data;
 
-  // 8) Render scenarios using centralized renderPricing
-  if (window.renderPricing) {
-    window.renderPricing(data.A, data.B);
-  } else if (window.renderScenario) {
-    // Fallback to individual rendering
+  // Show Step 3 and scroll
+  const step3 = document.querySelector("#step3");
+  if (step3) {
+    step3.style.display = "block";
+    step3.scrollIntoView({ behavior: "smooth" });
+  }
+
+  // Render scenarios if function exists
+  if (window.renderScenario) {
     window.renderScenario('scenarioA', data.A);
     window.renderScenario('scenarioB', data.B);
   }
-
-  // 9) Show Step 3 if requested (for "Proceed to Pricing" workflow)
-  if (showStep3) {
-    const step3 = document.querySelector("#step3");
-    if (step3) {
-      step3.style.display = "block";
-      step3.scrollIntoView({ behavior: "smooth" });
-    }
-  }
-  
-  return data;
-}
-
-// Make globally accessible
-window.buildAB = buildAB;
-
-// Step 2 "Proceed to Pricing" - calls buildAB with useRetainers:false
-async function buildFromCurrentSelection() {
-  return buildAB({ useRetainers: false, showStep3: true });
 }
 
 // Alias for backward compatibility
@@ -865,7 +784,7 @@ function renderYourSelection() {
     const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
     
     const item = el(`
-      <div class="selection-item" data-code="${code}">
+      <div class="selection-item">
         <div class="selection-item-left">
           <div class="selection-item-name">${name}</div>
           <div class="selection-item-category">${category}</div>
@@ -1154,11 +1073,6 @@ function renderScenarios(data){
   document.querySelector("#totA").innerText = currency(data.A.totals.price);
   document.querySelector("#totB").innerText = currency(data.B.totals.price);
 }
-
-// Window-accessible renderPricing - accepts scenarios A and B separately
-window.renderPricing = function(scenarioA, scenarioB) {
-  renderScenarios({ A: scenarioA, B: scenarioB });
-};
 
 async function onExport(which){
   if(!SCENARIOS){ alert("Build scenarios first."); return; }
@@ -1698,111 +1612,5 @@ async function s2ApplyAndBuild() {
 
 // Bind buttons
 S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
-
-// --- step 3 wiring -----------------------------------------------------------
-async function initPricingStep() {
-  // grab controls (handle both new/old ids—only first hit is used)
-  const $pricingMode = pick('#pricingMode', '#pricing-mode', '[name="pricingMode"]');
-  const $rateBand    = pick('#rateBand',    '#rate-band',    '[name="rateBand"]');
-  const $tier        = pick('#volumeTier',  '#volume-tier',  '[name="volumeTier"]');
-  const $complexity  = pick('#complexity',  '#complexitySel','[name="complexity"]');
-  const $projName    = pick('#projectName', '#project-name', '[name="projectName"]');
-  const $useRet      = pick('#useRetainers', '#retainerToggle', '[name="useRetainers"]');
-  const $retPanel    = pick('#retainerPanel', '[data-panel="retainers"]');
-  const $buildAB     = pick('#buildAB', '#btnBuildAB', 'button[data-action="buildAB"]');
-
-  // 1) load options ONCE and fill selects (no duplicates)
-  if ($pricingMode && !$pricingMode.dataset.filled) {
-    const res = await fetch('/api/options');       // has pricing_modes, rate_bands, tiers
-    const opts = await res.json();                 // backend limits to top 3; no dupes server-side
-    // Populate selects; clear first to avoid client-side duplication
-    fillSelect($pricingMode, opts.pricing_modes || []);
-    fillSelect($rateBand,    opts.rate_bands    || []);
-    fillSelect($tier,        opts.tiers         || []);
-    // Complexity may come from v3 drivers
-    fillSelect($complexity,  opts.complexities  || []);
-    $pricingMode.dataset.filled = $rateBand.dataset.filled =
-    $tier.dataset.filled = $complexity.dataset.filled = "1";
-  }
-
-  // 2) default project name from last upload (safe endpoint already exists)
-  if ($projName && !$projName.value) {
-    try {
-      const r = await fetch('/api/last_upload_name');
-      const j = await r.json();
-      if (j && j.project_name_default) $projName.value = j.project_name_default;
-    } catch (_) {}
-  }
-
-  // 3) toggle retainer UI – showing/hiding panel never affects scope math itself
-  if ($useRet && $retPanel) {
-    const onToggle = () => $retPanel.style.display = $useRet.checked ? 'block' : 'none';
-    $useRet.addEventListener('change', onToggle);
-    onToggle();
-  }
-
-  // 4) Build Scenarios A & B - centralized through window.buildAB
-  if ($buildAB) {
-    $buildAB.onclick = async () => {
-      await window.buildAB({ useRetainers: !!($useRet && $useRet.checked) });
-    };
-  }
-}
-
-// read retainer months from the panel; return [{deliverable_code, months}, ...]
-function gatherRetainers(panelEl) {
-  if (!panelEl || panelEl.style.display === 'none') return [];
-  const rows = $$('[data-ret-deliverable]', panelEl);
-  return rows.map(row => {
-    const code = row.getAttribute('data-ret-deliverable');
-    const inp  = $('input[type="number"]', row);
-    const months = Math.max(1, Math.min(12, parseInt((inp?.value || '0'),10) || 0));
-    return { deliverable_code: code, months };
-  }).filter(r => !!r.deliverable_code);
-}
-
-// pull the latest Step‑2 selection (codes only)
-function getSelectedCodes() {
-  // Your app already tracks the selection; prefer the canonical in-memory copy.
-  // Try the common places we've seen in your builds:
-  if (window.App && Array.isArray(App.selectedCodes)) return App.selectedCodes;
-  if (window.selectedCodes && Array.isArray(window.selectedCodes)) return window.selectedCodes;
-  if (S2.selectedCodes instanceof Set) return Array.from(S2.selectedCodes);
-  // Fallback: scrape the middle column "Your Selection" buttons
-  return $$('[data-deliverable-code]').map(el => el.getAttribute('data-deliverable-code'));
-}
-
-// pull the component choices per deliverable (used when building hourly totals)
-function getSelectedComponentsMap() {
-  // Common stores we've seen:
-  if (window.App && App.componentsByCode) return App.componentsByCode;
-  if (window.componentsByCode) return window.componentsByCode;
-  if (S2.selectedComponentsMap && Object.keys(S2.selectedComponentsMap).length > 0) {
-    // Convert Sets to the proper format if needed
-    const result = {};
-    for (const code in S2.selectedComponentsMap) {
-      const value = S2.selectedComponentsMap[code];
-      if (value instanceof Set && value.size > 0) {
-        const dict = Object.create(null);
-        value.forEach(label => { dict[label] = null; });
-        result[code] = dict;
-      } else if (value === 'ALL' || value === '__ALL__') {
-        result[code] = '__ALL__';
-      } else if (value && typeof value === 'object') {
-        result[code] = value;
-      } else {
-        result[code] = '__ALL__';
-      }
-    }
-    return result;
-  }
-  // Fallback: treat every deliverable as "all components selected"
-  const m = {};
-  getSelectedCodes().forEach(code => { m[code] = '__ALL__'; });
-  return m;
-}
-
-// Make globally accessible
-window.initPricingStep = initPricingStep;
 
 window.addEventListener("load", boot);

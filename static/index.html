@@ -347,8 +347,8 @@
     }
     document.addEventListener('DOMContentLoaded', ensureStage2Dom);
 
-    // App state management - initialize directly on window for global access
-    window.appState = window.appState || {
+    // App state management
+    const appState = {
       selectedCodes: [],        // critical for Step 3 build
       currentRfpText: '',       // current RFP content
       aiSummary: null,          // AI analysis results
@@ -357,17 +357,12 @@
       scenarios: null           // built scenarios (moved to appState)
     };
     
-    // Local alias for convenience
-    const appState = window.appState;
-    
     // Legacy compatibility alias for latestScenarios
+    window.appState = window.appState || {};
     Object.defineProperty(window, 'latestScenarios', {
       get() { return window.appState.scenarios; },
       set(v) { window.appState.scenarios = v; }
     });
-    
-    // Alias for state management (per fix document)
-    window.apb = window.appState;
     
     // Global data
     let allDeliverables = [];   // from /api/options
@@ -387,7 +382,7 @@
       const select = document.getElementById(elementId);
       if (!select) return;
       
-      select.replaceChildren();
+      select.innerHTML = '';
       options.forEach(option => {
         const optEl = document.createElement('option');
         optEl.value = option;
@@ -819,30 +814,82 @@
       }
     }
     
-    // Step 3 "Build Scenarios A & B" button - calls centralized buildAB with retainers toggle
+    // Step 3 — make the Build button work (as specified)
     async function buildScenariosAB() {
-      // Check retainer toggle to determine if retainers should be included
+      // Make this function globally accessible
+      window.buildScenariosAB = buildScenariosAB;
+      // Check all possible sources of selected deliverables
+      const selectedFromAppState = appState.selectedCodes || [];
+      const selectedFromGlobal = window.selectedCodes || [];
+      const selectedFromScenarios = window.SCENARIOS ? 
+        Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
+      const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
+      
+      console.log("buildScenariosAB validation:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
+      
+      if (allSelected.length === 0) {
+        alert('No deliverables selected. Please complete Step 2 first.');
+        return;
+      }
+      
+      // Sync the selection to ensure consistency
+      appState.selectedCodes = allSelected;
+      window.selectedCodes = allSelected;
+
+      // Include retainers if toggle is enabled (new system)
       const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
+      const retainers = retainersEnabled ? (window.APP?.retainers || []) : [];
+
+      // Prepare component selections for payload
+      const selectedComponentsPayload = Object.fromEntries(
+        Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
+      );
       
-      // Call centralized buildAB function
-      const scenarios = await window.buildAB({ useRetainers: retainersEnabled, showStep3: false });
+      const payload = {
+        selected_deliverable_codes: appState.selectedCodes,          // <- required
+        selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
+        pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
+        blended_rate: getBlendedRateFromUI(),                        // number or null
+        rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
+        use_slack: getUseSlackFromUI(),
+        slack_after_internal: getSlackInternalFromUI(),
+        slack_after_client: getSlackClientFromUI(),
+        slack_global_pct: getSlackPctFromUI(),
+        project_start: getProjectStartFromUI() || null,
+        scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
+        scenario_b: getScenarioSpecBFromUI(),
+        retainers: retainers  // Include retainer data from new toggle system
+      };
+
+      const resp = await fetch('/api/build', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+
+      const scenarios = await resp.json();
       
-      if (!scenarios) return; // Build failed, error already shown
+      // Store scenarios globally for timeline and export
+      window.appState = window.appState || {};
+      appState.scenarios = scenarios;      // canonical
+      window.latestScenarios = scenarios;  // legacy alias (works with older code)
+      
+      renderScenario('scenarioA', scenarios.A);
+      renderScenario('scenarioB', scenarios.B);
       
       // Enable Scenario C controls after A/B are built
       renderUpsellList();
       document.getElementById('btn-build-c').disabled = false;
       
-      // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline
+      // Call once after /api/build succeeds:
+      // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
       const step5 = document.getElementById('step5');
       if (step5) step5.style.display = 'block';
       
+      // Only show Step 4 if the timeline elements are ready
       const step4 = document.getElementById('step4');
       if (step4) showStep4('A');
     }
-    
-    // Make globally accessible
-    window.buildScenariosAB = buildScenariosAB;
     
     // Legacy function name for backward compatibility
     const buildScenariosLegacy = buildScenariosAB;
@@ -989,14 +1036,8 @@
 
     // Enhanced scenario rendering function with retainer support
     function renderScenario(targetId, scenario) {
-      const target = document.getElementById(targetId);
-      if (!target) return;
-      
-      // Explicitly clear the table first
-      target.innerHTML = '';
-      
       if (!scenario || !scenario.items || !scenario.items.length) {
-        target.innerHTML = '<p>(No data)</p>';
+        document.getElementById(targetId).innerHTML = '<p>(No data)</p>';
         return;
       }
       
@@ -1045,25 +1086,8 @@
           </tbody>
         </table>
       `;
-      target.innerHTML = html;
+      document.getElementById(targetId).innerHTML = html;
     }
-
-    // Centralized renderPricing - clears BOTH tables before writing
-    function renderPricing(scenarioA, scenarioB) {
-      // Clear both tables first
-      const targetA = document.getElementById('scenarioA');
-      const targetB = document.getElementById('scenarioB');
-      
-      if (targetA) targetA.innerHTML = '';
-      if (targetB) targetB.innerHTML = '';
-      
-      // Render both scenarios
-      if (scenarioA) renderScenario('scenarioA', scenarioA);
-      if (scenarioB) renderScenario('scenarioB', scenarioB);
-    }
-    
-    // Expose globally
-    window.renderPricing = renderPricing;
 
     // Safe render functions using DOM helpers
     function renderLeftPanel(items, totals) {
@@ -1469,6 +1493,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.6" defer></script>
+  <script src="/static/app.js?v=5.3" defer></script>
 </body>
 </html>
