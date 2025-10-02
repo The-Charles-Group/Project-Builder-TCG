@@ -1,0 +1,166 @@
+Fix: always include selected_deliverable_codes in every /api/build call (normal build and retainer build), never rely on any prior server state.
+
+// 🔧 centralize this on Step 3
+async function buildAB({useRetainers}) {
+  const selectedCodes = Array.from(window.apb?.selectedCodes || []); // comes from Step 2 “Apply selection”
+  if (!selectedCodes.length) { alert("Pick deliverables in Step 2 first."); return; }
+
+  // collect retainer months (if the toggle is on)
+  const retainers = useRetainers
+    ? Array.from(document.querySelectorAll('[data-retain-code]')).map(inp => ({
+        deliverable_code: inp.dataset.retainCode,
+        months: Number(inp.value || 0)
+      }))
+    : [];
+
+  const payload = {
+    selected_deliverable_codes: selectedCodes,       // ⬅️ NEVER omit this
+    scenario_a: {mode: "template", scenario_key: window.apb?.scenarioAKey || "MED_LOW"},
+    scenario_b: {mode: "template", scenario_key: window.apb?.scenarioBKey || "MED_HIGH"},
+    pricing_mode: document.getElementById('pricingMode').value,
+    blended_rate: Number(document.getElementById('blendedRate').value || 0),
+    rate_band: document.getElementById('rateBand').value,
+    use_slack: true,
+    slack_after_internal: 1,
+    slack_after_client: 2,
+    slack_global_pct: 0.05,
+    project_start: document.getElementById('projectStart').value || null,
+    // NEW: keep explicit component choices from Step 2 (or '__ALL__' sentinel)
+    included_task_groups_map: window.apb?.includedMap || "__ALL__",
+    // NEW: retainers
+    retainers
+  };
+
+  const r = await fetch("/api/build", {method:"POST", headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+  const data = await r.json();
+  window.apb.scenarios = data.scenarios;     // replace (do not merge)
+  renderPricing(data.scenarios);
+}
+
+
+Why this matters: the server does not fall back to any previous selection. If you don’t send the codes again, it builds an empty scenario and you get zeros. (The server totals you saw are literally the sum over per_deliv, which is empty if selected_deliverable_codes is empty. )
+
+Root cause 2 — We’re appending instead of replacing after a rebuild
+
+When you click Build Scenarios A & B after toggling retainers, the UI is concatenating the new items with the old tables (hence the duplicate “Meetings / Reporting / Post‑Production”).
+
+Fix: when a new /api/build response arrives, wipe both Scenario tables before re‑rendering.
+
+function renderPricing(scenarios){
+  const A = scenarios.A, B = scenarios.B;
+  // 🔧 clear before render to avoid duplication
+  document.getElementById('pricingA').innerHTML = "";
+  document.getElementById('pricingB').innerHTML = "";
+  drawScenarioPanel('pricingA', A);
+  drawScenarioPanel('pricingB', B);
+}
+
+Root cause 3 — Dropdown duplication
+
+The “Pricing mode” and “Rate band” <select> options are being appended on each navigation to Step 3 instead of being reset.
+
+Fix: always clear the <select> before adding options.
+
+function hydratePricingOptions(opts){
+  const pm = document.getElementById('pricingMode');
+  const rb = document.getElementById('rateBand');
+
+  pm.replaceChildren();   // ⬅️ prevents duplicates
+  rb.replaceChildren();
+
+  for (const v of (opts.pricing_modes || ["Flat_Blended","Per_Resource"])) {
+    pm.append(new Option(v.replace("_"," "), v));
+  }
+  for (const v of (opts.rate_bands || ["Standard_US"])) {
+    rb.append(new Option(v, v));
+  }
+}
+
+
+(Your backend returns unique lists; duplicates are a front‑end rendering bug.)
+
+Why price or tasks sometimes looked “filled” even when hours were 0
+
+The panel code prints the task keywords column from a static string on each deliverable row. When the scenario is empty the UI still showed that static list, which looked like “activity,” while totals were 0. The fix above (replace, don’t append) + hiding the task column when items.length===0 removes that confusion.
+
+Retainer math that zeroed everything out
+
+When Use retainers is turned on but you haven’t sent a valid months map (or you built without selected_deliverable_codes), the server constructs an empty scenario and you get 0/0. With the buildAB patch above we always re‑send:
+
+the selected codes
+
+the component selection map (included_task_groups_map), and
+
+the per‑deliverable retainers (months).
+
+That keeps totals non‑zero and prevents the “flip to zero” you saw.
+
+Components → XML “flatness”
+
+Your export routes already inflate components defensively so XML never goes flat:
+
+Single‑scenario XML: the server inflates missing components before converting to MSPDI.
+
+Workbook A/B XML: both scenarios are inflated before the A/B ZIP is produced.
+
+If you still see a flat file, it means the client is exporting a scenario built with no items (the same omission discussed above). Once we always send selected_deliverable_codes and the included_task_groups_map ("__ALL__" is accepted and expanded during export), XML will include the hierarchy/components. The inflation routine explicitly expands when the map is empty or equals "__ALL__".
+
+Three additional small but important fixes
+1) Project name auto‑populate from the upload
+
+The backend exposes a sanitized base title of the latest upload (_upload_title_default()), which we can use to auto‑fill the “Project name” field.
+
+Option A (no backend change): after Analyze with AI completes, set the input from the file input’s name (strip extension, sanitize).
+Option B (cleaner): add a tiny endpoint:
+
+# server (add near /api/load)
+@app.get("/api/upload_title")
+def api_upload_title():
+    return {"title": _upload_title_default() or ""}
+
+
+Then in the client:
+
+const t = await fetch('/api/upload_title').then(r=>r.json());
+if (t.title) document.getElementById('projectName').value = t.title;
+
+2) Bring back the Step‑2 search box
+
+The left panel’s list lost its filter input during refactor. Re‑add a debounced filter:
+
+document.getElementById('s2-deliv-search').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase();
+  document.querySelectorAll('#s2-deliv-list [data-name]').forEach(li => {
+    li.style.display = li.dataset.name.includes(q) ? '' : 'none';
+  });
+});
+
+3) “Analyze with AI” throbber (Step 1)
+
+A lightweight, accessible throbber so users get a visual cue while AI runs:
+
+<div id="ai-busy" class="busy hidden" aria-live="polite">Analyzing…</div>
+<style>
+  .busy{display:flex;align-items:center;gap:.6rem;font-size:.9rem}
+  .busy::before{content:"";width:16px;height:16px;border-radius:50%;
+    border:2px solid #7aa0ff;border-top-color:transparent;animation:spin 1s linear infinite}
+  .hidden{display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+<script>
+async function analyzeWithAI(){
+  const el=document.getElementById('ai-busy'); el.classList.remove('hidden');
+  try { /* existing analyze code */ }
+  finally { el.classList.add('hidden'); }
+}
+</script>
+
+“Why are dropdowns and tables duplicated / inconsistent?” (summary)
+
+Duplicates in selects: options were appended every time; fixed with replaceChildren().
+
+Duplicates in scenario tables: old rows weren’t cleared; fixed by wiping containers before rendering.
+
+0 hours / 0 price: /api/build was called without selected_deliverable_codes; fixed by always sending them (and the component/retainer maps).
+
+Flat XML after AI: happens only when you exported an empty scenario; export routes do inflate components defensively.

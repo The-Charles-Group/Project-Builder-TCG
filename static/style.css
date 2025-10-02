@@ -75,6 +75,13 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .row small{color:var(--muted)}
 
 .hidden{display:none}
+
+/* AI busy indicator */
+.busy{display:flex;align-items:center;gap:.6rem;font-size:.9rem}
+.busy::before{content:"";width:16px;height:16px;border-radius:50%;
+  border:2px solid #7aa0ff;border-top-color:transparent;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 .scenarios{display:grid;gap:16px;grid-template-columns:1fr 1fr}
 .scenario{border:1px solid var(--border);border-radius:10px;padding:12px;background:#0b0e13}
 .scenario h3{margin:0 0 8px}
