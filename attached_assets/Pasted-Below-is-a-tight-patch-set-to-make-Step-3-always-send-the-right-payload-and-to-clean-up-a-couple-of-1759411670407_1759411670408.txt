@@ -1,0 +1,98 @@
+Below is a tight patch set to make Step‑3 always send the right payload (and to clean up a couple of Step‑3 issues you’ve mentioned earlier: duplicate options, missing default project name).
+
+What to change (front‑end)
+
+Goal: make the “Build Scenarios A & B” click compile the Step‑2 selection into a payload like the backend expects:
+selected_deliverable_codes: string[], optional retainers: [{deliverable_code, months}], plus pricing knobs.
+
+1) Wire “Build Scenarios A & B” to the actual Step‑2 selection
+
+Make sure this handler exists (or replace the current one). It reads the codes directly from the Your Selection list and (optionally) the retainers boxes, then posts to /api/build.
+
+// app.js — Step 3
+async function buildScenariosAB() {
+  // 1) Pull selected deliverables from Step 2
+  const selectedCodes = Array
+    .from(document.querySelectorAll('#s2-yourSelection [data-code]'))
+    .map(el => el.dataset.code);
+
+  if (!selectedCodes.length) {
+    alert('Please select at least one deliverable in Step 2 and click “Apply selection”.');
+    return;
+  }
+
+  // 2) Retainers (if the green box is visible)
+  const retainers = Array.from(
+    document.querySelectorAll('#s3-retainers [data-code] input[type=number]')
+  )
+  .map(inp => ({ deliverable_code: inp.closest('[data-code]').dataset.code,
+                 months: Number(inp.value || 0) }))
+  .filter(r => r.months > 0);
+
+  // 3) Build payload
+  const payload = {
+    selected_deliverable_codes: selectedCodes,
+    scenario_a: readScenarioSpec('A'),    // whatever you use for A (template/bundle)
+    scenario_b: readScenarioSpec('B'),    // same for B
+    pricing_mode: document.querySelector('#s3-pricingMode').value,
+    blended_rate: Number(document.querySelector('#s3-blendedRate').value || 0) || null,
+    rate_band: document.querySelector('#s3-rateBand').value,
+    use_slack: true,
+    slack_after_internal: 1,
+    slack_after_client: 2,
+    slack_global_pct: 0.05,
+    project_start: document.querySelector('#s3-projectStart')?.value || null,
+    retainers
+  };
+
+  // 4) POST /api/build
+  const res = await fetch('/api/build', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const scenarios = await res.json();
+
+  // 5) Render A/B panels with results (hours & price will now be non‑zero)
+  renderScenariosAB(scenarios);
+}
+document.querySelector('#btn-buildAB').onclick = buildScenariosAB;
+
+
+Why this fixes it: the backend totals only what you pass in selected_deliverable_codes and returns hours/price by summing each deliverable’s buildout. With an empty list, it produces 0/0; with your real list, it fills items and the totals block (that’s how /api/build and the inlined logic in the suggest/build helpers are written).
+
+2) Prevent duplicate options on the Step‑3 selects
+
+If you re-enter Step‑3, your code is re‑appending options without clearing first. Before (re)populating pricing mode and rate band, clear them:
+
+function populateStep3Selects(opts) {
+  const rateBand = document.querySelector('#s3-rateBand');
+  const pricing  = document.querySelector('#s3-pricingMode');
+
+  // clear first to avoid duplicates
+  rateBand.innerHTML = '';
+  pricing.innerHTML = '';
+
+  ['Standard_US','Premium_US','Nearshore_Value'].forEach(v => {
+    const o = new Option(v, v); rateBand.add(o);
+  });
+
+  ['Flat_Blended','Per_Resource'].forEach(v => {
+    const o = new Option(v, v); pricing.add(o);
+  });
+}
+
+
+(Your backend only needs the chosen string; the duplication is purely a UI re-render issue.)
+
+3) Auto‑populate the project name
+
+After you call /api/analyze_upload, you already store the uploaded filename server‑side (used later by export). Set the input when you land on Step‑3:
+
+// right after analyze completes (or when entering Step 3)
+if (data.filename) {
+  document.querySelector('#s3-projectName').value = data.filename.replace(/\.[^.]+$/, '');
+}
+
+
+The server will also fall back to its upload‑based default if you don’t send a name (see _upload_title_default() in export).

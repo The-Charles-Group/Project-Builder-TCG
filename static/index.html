@@ -818,49 +818,55 @@
     async function buildScenariosAB() {
       // Make this function globally accessible
       window.buildScenariosAB = buildScenariosAB;
-      // Check all possible sources of selected deliverables
-      const selectedFromAppState = appState.selectedCodes || [];
-      const selectedFromGlobal = window.selectedCodes || [];
-      const selectedFromScenarios = window.SCENARIOS ? 
-        Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
-      const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
       
-      console.log("buildScenariosAB validation:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
+      // 1) Pull selected deliverables from Step 2 "Your Selection" list
+      const selectedCodes = Array
+        .from(document.querySelectorAll('#yourSelection [data-code]'))
+        .map(el => el.dataset.code);
       
-      if (allSelected.length === 0) {
-        alert('No deliverables selected. Please complete Step 2 first.');
+      if (!selectedCodes.length) {
+        alert('Please select at least one deliverable in Step 2 and click "Apply selection".');
         return;
       }
       
       // Sync the selection to ensure consistency
-      appState.selectedCodes = allSelected;
-      window.selectedCodes = allSelected;
+      appState.selectedCodes = selectedCodes;
+      window.selectedCodes = selectedCodes;
 
-      // Include retainers if toggle is enabled (new system)
+      // 2) Retainers (if the toggle is enabled and retainer inputs exist)
       const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
-      const retainers = retainersEnabled ? (window.APP?.retainers || []) : [];
+      const retainers = retainersEnabled ? Array.from(
+        document.querySelectorAll('#retainer-list-controls input[type=number][data-code]')
+      )
+      .map(inp => ({ 
+        deliverable_code: inp.dataset.code,
+        months: Number(inp.value || 0) 
+      }))
+      .filter(r => r.months > 0) : [];
 
-      // Prepare component selections for payload
+      // 3) Prepare component selections for payload
       const selectedComponentsPayload = Object.fromEntries(
         Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
       );
       
+      // 4) Build payload
       const payload = {
-        selected_deliverable_codes: appState.selectedCodes,          // <- required
-        selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
-        pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
-        blended_rate: getBlendedRateFromUI(),                        // number or null
-        rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
+        selected_deliverable_codes: selectedCodes,
+        selected_components_map: selectedComponentsPayload,
+        pricing_mode: getPricingModeFromUI(),
+        blended_rate: getBlendedRateFromUI(),
+        rate_band: getRateBandFromUI(),
         use_slack: getUseSlackFromUI(),
         slack_after_internal: getSlackInternalFromUI(),
         slack_after_client: getSlackClientFromUI(),
         slack_global_pct: getSlackPctFromUI(),
         project_start: getProjectStartFromUI() || null,
-        scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
+        scenario_a: getScenarioSpecAFromUI(),
         scenario_b: getScenarioSpecBFromUI(),
-        retainers: retainers  // Include retainer data from new toggle system
+        retainers: retainers
       };
 
+      // 5) POST /api/build
       const resp = await fetch('/api/build', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -869,11 +875,12 @@
 
       const scenarios = await resp.json();
       
-      // Store scenarios globally for timeline and export
+      // 6) Store scenarios globally for timeline and export
       window.appState = window.appState || {};
-      appState.scenarios = scenarios;      // canonical
-      window.latestScenarios = scenarios;  // legacy alias (works with older code)
+      appState.scenarios = scenarios;
+      window.latestScenarios = scenarios;
       
+      // 7) Render A/B panels with results (hours & price will now be non-zero)
       renderScenario('scenarioA', scenarios.A);
       renderScenario('scenarioB', scenarios.B);
       
@@ -881,12 +888,10 @@
       renderUpsellList();
       document.getElementById('btn-build-c').disabled = false;
       
-      // Call once after /api/build succeeds:
       // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
       const step5 = document.getElementById('step5');
       if (step5) step5.style.display = 'block';
       
-      // Only show Step 4 if the timeline elements are ready
       const step4 = document.getElementById('step4');
       if (step4) showStep4('A');
     }
@@ -1493,6 +1498,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.3" defer></script>
+  <script src="/static/app.js?v=5.4" defer></script>
 </body>
 </html>

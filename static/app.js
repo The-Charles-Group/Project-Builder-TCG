@@ -784,7 +784,7 @@ function renderYourSelection() {
     const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
     
     const item = el(`
-      <div class="selection-item">
+      <div class="selection-item" data-code="${code}">
         <div class="selection-item-left">
           <div class="selection-item-name">${name}</div>
           <div class="selection-item-category">${category}</div>
