@@ -1679,4 +1679,134 @@ async function s2ApplyAndBuild() {
 // Bind buttons
 S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
+// --- step 3 wiring -----------------------------------------------------------
+async function initPricingStep() {
+  // grab controls (handle both new/old ids—only first hit is used)
+  const $pricingMode = pick('#pricingMode', '#pricing-mode', '[name="pricingMode"]');
+  const $rateBand    = pick('#rateBand',    '#rate-band',    '[name="rateBand"]');
+  const $tier        = pick('#volumeTier',  '#volume-tier',  '[name="volumeTier"]');
+  const $complexity  = pick('#complexity',  '#complexitySel','[name="complexity"]');
+  const $projName    = pick('#projectName', '#project-name', '[name="projectName"]');
+  const $useRet      = pick('#useRetainers', '#retainerToggle', '[name="useRetainers"]');
+  const $retPanel    = pick('#retainerPanel', '[data-panel="retainers"]');
+  const $buildAB     = pick('#buildAB', '#btnBuildAB', 'button[data-action="buildAB"]');
+
+  // 1) load options ONCE and fill selects (no duplicates)
+  if ($pricingMode && !$pricingMode.dataset.filled) {
+    const res = await fetch('/api/options');       // has pricing_modes, rate_bands, tiers
+    const opts = await res.json();                 // backend limits to top 3; no dupes server-side
+    // Populate selects; clear first to avoid client-side duplication
+    fillSelect($pricingMode, opts.pricing_modes || []);
+    fillSelect($rateBand,    opts.rate_bands    || []);
+    fillSelect($tier,        opts.tiers         || []);
+    // Complexity may come from v3 drivers
+    fillSelect($complexity,  opts.complexities  || []);
+    $pricingMode.dataset.filled = $rateBand.dataset.filled =
+    $tier.dataset.filled = $complexity.dataset.filled = "1";
+  }
+
+  // 2) default project name from last upload (safe endpoint already exists)
+  if ($projName && !$projName.value) {
+    try {
+      const r = await fetch('/api/last_upload_name');
+      const j = await r.json();
+      if (j && j.project_name_default) $projName.value = j.project_name_default;
+    } catch (_) {}
+  }
+
+  // 3) toggle retainer UI – showing/hiding panel never affects scope math itself
+  if ($useRet && $retPanel) {
+    const onToggle = () => $retPanel.style.display = $useRet.checked ? 'block' : 'none';
+    $useRet.addEventListener('change', onToggle);
+    onToggle();
+  }
+
+  // 4) Build Scenarios A & B
+  if ($buildAB) {
+    $buildAB.onclick = async () => {
+      const payload = {
+        pricing_mode: ($pricingMode?.value || 'Flat_Blended'),
+        rate_band:    ($rateBand?.value    || 'Standard_US'),
+        tier:         ($tier?.value        || 'T2_MediumVolume'),
+        complexity:   ($complexity?.value  || 'Advanced'),
+        project_name: ($projName?.value || '').trim(),
+        use_retainers: !!($useRet && $useRet.checked),
+        retainers: gatherRetainers($retPanel),              // [] when none/hidden => scope-only
+        selected_deliverable_codes: getSelectedCodes(),     // pulled from your Step‑2 selection
+        selected_components_map:   getSelectedComponentsMap()
+      };
+
+      // Defensive: never send undefined
+      payload.retainers = payload.retainers || [];
+      payload.selected_deliverable_codes = payload.selected_deliverable_codes || [];
+      payload.selected_components_map = payload.selected_components_map || {};
+
+      // Post to server and render
+      const resp = await fetch('/api/build', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await resp.json(); // expects {A:{items,totals}, B:{items,totals}}
+      renderScenariosAB(data);        // your existing renderer
+    };
+  }
+}
+
+// read retainer months from the panel; return [{deliverable_code, months}, ...]
+function gatherRetainers(panelEl) {
+  if (!panelEl || panelEl.style.display === 'none') return [];
+  const rows = $$('[data-ret-deliverable]', panelEl);
+  return rows.map(row => {
+    const code = row.getAttribute('data-ret-deliverable');
+    const inp  = $('input[type="number"]', row);
+    const months = Math.max(1, Math.min(12, parseInt((inp?.value || '0'),10) || 0));
+    return { deliverable_code: code, months };
+  }).filter(r => !!r.deliverable_code);
+}
+
+// pull the latest Step‑2 selection (codes only)
+function getSelectedCodes() {
+  // Your app already tracks the selection; prefer the canonical in-memory copy.
+  // Try the common places we've seen in your builds:
+  if (window.App && Array.isArray(App.selectedCodes)) return App.selectedCodes;
+  if (window.selectedCodes && Array.isArray(window.selectedCodes)) return window.selectedCodes;
+  if (S2.selectedCodes instanceof Set) return Array.from(S2.selectedCodes);
+  // Fallback: scrape the middle column "Your Selection" buttons
+  return $$('[data-deliverable-code]').map(el => el.getAttribute('data-deliverable-code'));
+}
+
+// pull the component choices per deliverable (used when building hourly totals)
+function getSelectedComponentsMap() {
+  // Common stores we've seen:
+  if (window.App && App.componentsByCode) return App.componentsByCode;
+  if (window.componentsByCode) return window.componentsByCode;
+  if (S2.selectedComponentsMap && Object.keys(S2.selectedComponentsMap).length > 0) {
+    // Convert Sets to the proper format if needed
+    const result = {};
+    for (const code in S2.selectedComponentsMap) {
+      const value = S2.selectedComponentsMap[code];
+      if (value instanceof Set && value.size > 0) {
+        const dict = Object.create(null);
+        value.forEach(label => { dict[label] = null; });
+        result[code] = dict;
+      } else if (value === 'ALL' || value === '__ALL__') {
+        result[code] = '__ALL__';
+      } else if (value && typeof value === 'object') {
+        result[code] = value;
+      } else {
+        result[code] = '__ALL__';
+      }
+    }
+    return result;
+  }
+  // Fallback: treat every deliverable as "all components selected"
+  const m = {};
+  getSelectedCodes().forEach(code => { m[code] = '__ALL__'; });
+  return m;
+}
+
+// Make globally accessible
+window.initPricingStep = initPricingStep;
+
 window.addEventListener("load", boot);
