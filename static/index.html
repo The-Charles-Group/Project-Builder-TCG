@@ -94,6 +94,21 @@
           🔄 Refresh AI Suggestions
         </a>
       </div>
+
+      <!-- Component bubble dialog -->
+      <dialog id="componentsDialog" style="border: 1px solid #2a2a2a; border-radius: 8px; background: #1a1a1a; color: #fff; padding: 20px; max-width: 500px;">
+        <form method="dialog">
+          <h3 id="compTitle" style="margin-top: 0;">Components</h3>
+          <div class="controls" style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <button id="selectAllComps" type="button" class="btn-sm">Select all</button>
+            <button id="unselectAllComps" type="button" class="btn-sm">Unselect all</button>
+          </div>
+          <div id="componentsContainer" style="max-height: 400px; overflow-y: auto; margin-bottom: 16px; padding: 8px; border: 1px solid #2a2a2a; border-radius: 4px; background: rgba(255,255,255,0.03);"></div>
+          <div style="display: flex; justify-content: flex-end; gap: 8px;">
+            <button value="close" class="btn-primary">Close</button>
+          </div>
+        </form>
+      </dialog>
     </section>
 
     <!-- Stage 2: AI Analysis & Reconciliation (Original) -->
