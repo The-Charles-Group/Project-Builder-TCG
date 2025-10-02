@@ -10,19 +10,26 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### renderPricing() Implementation (October 2025)
-- **Critical Fix**: Added missing `renderPricing()` function to clear BOTH pricing tables before rendering (index.html lines 1055-1069)
-- **Function Purpose**: Centralized pricing table renderer that clears #scenarioA and #scenarioB divs before delegating to renderScenario()
-- **buildAB Integration**: Updated buildAB to call renderPricing(data.A, data.B) instead of calling renderScenario() twice (app.js lines 358-364)
-- **All Sanity Check Items Now Complete**:
-  - ✅ Centralized buildAB function (app.js line 262)
-  - ✅ Step 3 calls with retainers toggle (index.html line 828)
-  - ✅ Step 2 calls with useRetainers:false (app.js line 377)
-  - ✅ window.apb state management (lines 254-259, 271, 297, 345)
-  - ✅ renderPricing() clears BOTH tables (index.html lines 1055-1069)
-  - ✅ replaceChildren() for dropdowns (line 390)
-  - ✅ Project name auto-fill (lines 458-461)
-  - ✅ Step 2 search filter (handlers at lines 991, 1446)
+### Sanity Check Implementation & Optimization (October 2025)
+- **renderScenario() Enhancement** (static/index.html, lines 993-1052):
+  - Added explicit table clearing with `target.innerHTML = ''` before rendering scenarios
+  - Ensures both scenario tables (TCG App pricing and Producer-edited) are always cleared before writing new content
+  - Added null check for target element to prevent errors if element doesn't exist
+
+- **Dropdown Population Optimization** (static/app.js, lines 87-106):
+  - Changed from `.append()` to `.replaceChildren()` for Pricing Mode and Rate Band select dropdowns
+  - Prevents duplicate options if `boot()` function is called multiple times
+  - Uses spread operator with `.map()` for efficient option element creation
+
+- **All Sanity Check Items Verified**:
+  - ✅ Centralized buildAB function (app.js lines 261-368)
+  - ✅ Step 3 calls with retainers toggle (index.html line 823-842, calls buildAB with retainersEnabled from toggle)
+  - ✅ Step 2 "Proceed to Pricing" calls with useRetainers:false (app.js lines 374-376)
+  - ✅ window.apb state management (app.js lines 254-259, stores selectedCodes and selectedComponentsMap with "__ALL__" sentinel)
+  - ✅ renderScenario() explicitly clears BOTH tables (index.html line 999)
+  - ✅ replaceChildren() for dropdowns (app.js lines 92, 94, 98-103)
+  - ✅ Project name auto-fill from upload (index.html lines 457-461, 499-503)
+  - ✅ Step 2 search filter working (index.html line 48, app.js line 1446)
 
 ### Centralized Build & State Management (October 2025)
 - **Centralized buildAB Function**: Created single `window.buildAB({useRetainers, showStep3})` function in app.js (lines 265-362)
