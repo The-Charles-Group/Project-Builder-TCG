@@ -1715,6 +1715,13 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             })
 
             comps = DB.components_for_deliverable(dcode, tg_order)
+            # Robust fallback if DB returns no components
+            if not comps:
+                sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(dcode)]
+                if not sub.empty:
+                    comps = sorted({str(x) for x in sub["Component"].dropna().astype(str) if str(x).strip() and str(x).strip() != "nan"})
+                if not comps:
+                    comps = ["Work Package"]
             # Per-month hours by component (exact) and rounded for display
             comp_hours_map_month = DB.hours_by_component(dcode, tg_order, scen_col)
             # If not a retainer, treat "month" as the whole
