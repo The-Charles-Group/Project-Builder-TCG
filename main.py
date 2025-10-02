@@ -2486,6 +2486,20 @@ async def api_suggest_by_file(file: UploadFile = File(...)):
     LAST_UPLOAD_FILENAME = file.filename
     return {"suggested": recs, "filename": file.filename}
 
+def _safe_retainer_map(retainers) -> dict:
+    out = {}
+    for r in (retainers or []):
+        code = (getattr(r, "deliverable_code", "") or (r.get("deliverable_code") if isinstance(r, dict) else "")).strip()
+        raw = getattr(r, "months", None) if not isinstance(r, dict) else r.get("months")
+        try:
+            m = int(raw) if raw is not None else 0
+        except Exception:
+            m = 0
+        m = max(1, min(12, m)) if m > 0 else 0
+        if code:
+            out[code] = m
+    return out
+
 def _resolve_scenario(spec: ScenarioSpec, category: str) -> Dict[str, Any]:
     if spec.mode == "template":
         # either use key or explicit complexity/tier
@@ -2657,7 +2671,7 @@ def api_build(payload: BuildPayload):
     project_start = payload.project_start
 
     # Build retainer map
-    ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
+    ret_map = _safe_retainer_map(payload.retainers)
     
     # Build component selection map (supports both formats)
     comp_map = {}
@@ -2877,7 +2891,7 @@ def api_auto_build(payload: AutoBuildPayload):
     selected_codes = [s["deliverable_code"] for s in suggestions]
 
     # Build retainer map
-    ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
+    ret_map = _safe_retainer_map(payload.retainers)
 
     # 2) If nothing matched, return an empty set so frontend can prompt to add
     if not selected_codes:
