@@ -10,6 +10,11 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Retainer & Component Inflation Fixes (October 2025)
+- **Retainer Zero-Month Fix**: Changed retainer map to use `max(0, min(12, ...))` instead of `max(1, ...)` to allow months=0 (one-time deliverables) without zeroing hours
+- **Component Inflation**: Already implemented - `_inflate_components_if_missing()` called in `/api/build` (line 2767) and `build_wbs_with_pricing()` (line 1525) to prevent flat exports
+- **None Hours Handling**: Added defensive check for None values in component hours dict (line 2676)
+
 ### Step 3 Payload Improvements (October 2025)
 - **Simplified buildScenariosAB Function**: Refactored to read selected deliverables directly from DOM via `#yourSelection [data-code]` selector
 - **data-code Attributes**: Added to selection items in `renderYourSelection()` for reliable DOM-based selection reading
