@@ -1048,6 +1048,23 @@
       target.innerHTML = html;
     }
 
+    // Centralized renderPricing - clears BOTH tables before writing
+    function renderPricing(scenarioA, scenarioB) {
+      // Clear both tables first
+      const targetA = document.getElementById('scenarioA');
+      const targetB = document.getElementById('scenarioB');
+      
+      if (targetA) targetA.innerHTML = '';
+      if (targetB) targetB.innerHTML = '';
+      
+      // Render both scenarios
+      if (scenarioA) renderScenario('scenarioA', scenarioA);
+      if (scenarioB) renderScenario('scenarioB', scenarioB);
+    }
+    
+    // Expose globally
+    window.renderPricing = renderPricing;
+
     // Safe render functions using DOM helpers
     function renderLeftPanel(items, totals) {
       const rows = (items || []).map(i =>
