@@ -1111,7 +1111,7 @@ class AgencyDB:
             if not still_missing.empty:
                 # Apply band-aware default rate as last resort
                 ps = self.pricing_settings[self.pricing_settings["Key"]=="Default_Blended_Rate"]
-                base_default = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+                base_default = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
                 band = self.rate_bands[self.rate_bands["Band_Name"] == rate_band]
                 mult = float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
                 default_rate = base_default * mult
@@ -1531,7 +1531,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     if blended_rate is None:
         # fallback to default from Pricing_Settings already loaded in v2
         ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
-        blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+        blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
     blended_rate = float(blended_rate)
 
     # project parent
@@ -1836,7 +1836,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                                         role_rate = float(match2["Rate_USD"].iloc[0])
                                     else:
                                         ps = DB.pricing_settings[DB.pricing_settings["Key"] == "Default_Blended_Rate"]
-                                        base_default = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+                                        base_default = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
                                         role_rate = base_default * _band_multiplier(rate_band)
 
                             row_hours = int(h)
@@ -3234,7 +3234,7 @@ def api_audit_pricing(p: AuditPricingPayload):
             # default blended rate if omitted
             if p.blended_rate is None:
                 ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
-                p.blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+                p.blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
             expected = billable_total * float(p.blended_rate)
             missing_roles = []
         else:
