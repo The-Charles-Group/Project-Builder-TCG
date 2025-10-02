@@ -351,8 +351,11 @@ async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
   window.latestScenarios = data;
   SCENARIOS = data;
 
-  // 8) Render scenarios
-  if (window.renderScenario) {
+  // 8) Render scenarios using centralized renderPricing
+  if (window.renderPricing) {
+    window.renderPricing(data.A, data.B);
+  } else if (window.renderScenario) {
+    // Fallback to individual rendering
     window.renderScenario('scenarioA', data.A);
     window.renderScenario('scenarioB', data.B);
   }
