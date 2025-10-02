@@ -284,6 +284,7 @@ function renderDeliverableList(items){
 window.apb = window.apb || {
   selectedCodes: [],
   selectedComponentsMap: {},
+  includedMap: {},
   retainers: [],
   scenarios: null
 };
