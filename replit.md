@@ -10,17 +10,6 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### UI Enhancements: AI Throbber & Search Filter (October 2025)
-- **AI Loading Indicator**: Added animated spinner that displays during RFP analysis (both file and text modes)
-  - Shows immediately when analysis starts, hides when complete or on error
-  - Implemented using CSS-only animation with spinning border for accessibility
-- **Step 2 Search Filter**: Verified existing search functionality in deliverables picker
-  - Search box filters deliverables in real-time as user types
-  - Filters by deliverable name, category, and code
-  - Implementation in app.js (line 953) re-renders list with filtered results
-- **Cache Busting**: Updated static assets to v=5.5 to ensure browser reload of new features
-- **Data Attributes**: Added null-safe `data-name` attribute to deliverable list items for consistency
-
 ### Retainer & Component Inflation Fixes (October 2025)
 - **Retainer Zero-Month Fix**: Changed retainer map to use `max(0, min(12, ...))` instead of `max(1, ...)` to allow months=0 (one-time deliverables) without zeroing hours
 - **Component Inflation**: Already implemented - `_inflate_components_if_missing()` called in `/api/build` (line 2767) and `build_wbs_with_pricing()` (line 1525) to prevent flat exports
