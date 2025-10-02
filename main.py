@@ -2656,8 +2656,8 @@ def api_build(payload: BuildPayload):
     slack_pct = float(payload.slack_global_pct or 0)
     project_start = payload.project_start
 
-    # Build retainer map
-    ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
+    # Build retainer map (0 months = one-time, not retainer)
+    ret_map = {r.deliverable_code: max(0, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
     
     # Build component selection map (supports both formats)
     comp_map = {}
@@ -2876,8 +2876,8 @@ def api_auto_build(payload: AutoBuildPayload):
     suggestions = DB.suggest_deliverables_from_text(payload.rfp_text or "")
     selected_codes = [s["deliverable_code"] for s in suggestions]
 
-    # Build retainer map
-    ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
+    # Build retainer map (0 months = one-time, not retainer)
+    ret_map = {r.deliverable_code: max(0, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
 
     # 2) If nothing matched, return an empty set so frontend can prompt to add
     if not selected_codes:
