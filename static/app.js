@@ -250,44 +250,55 @@ function renderDeliverableList(items){
   });
 }
 
-// Build from current S2 selection (surgical patch implementation)
-async function buildFromCurrentSelection() {
+// Centralized state management
+window.apb = window.apb || {
+  selectedCodes: [],
+  selectedComponentsMap: {},
+  retainers: [],
+  scenarios: null
+};
+
+// Centralized buildAB function - single source of truth for building scenarios
+async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
+  // 1) Get selected deliverables from UI
   const codes = readSelectedCodesFromUI();
   if (!codes.length) {
     alert("Pick at least one deliverable before proceeding to pricing.");
     return;
   }
 
+  // 2) Store in centralized state
+  window.apb.selectedCodes = codes;
+  
   // Sync legacy state for compatibility
   selectedCodes = codes;
   if (window.appState) window.appState.selectedCodes = codes;
   window.selectedCodes = codes;
 
-  // Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
+  // 3) Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
   const selectedComponentsPayload = {};
   
-  // For all selected deliverables, ensure we have component info
   codes.forEach(code => {
     const compSet = S2.selectedComponentsMap[code];
     
     if (compSet instanceof Set && compSet.size > 0) {
-      // User has selected specific components
       const dict = Object.create(null);
       compSet.forEach(label => { dict[label] = null; });
       selectedComponentsPayload[code] = dict;
     } else if (compSet && typeof compSet === 'object' && !(compSet instanceof Set)) {
-      // Already in object format (fix: proper parentheses for instanceof)
       selectedComponentsPayload[code] = compSet;
     } else {
-      // No specific components selected - send "__ALL__" sentinel to include all
       selectedComponentsPayload[code] = "__ALL__";
     }
   });
+  
+  window.apb.selectedComponentsMap = selectedComponentsPayload;
 
-  // Include retainers if toggle is enabled
-  const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
-  const retainersPayload = retainersEnabled ? (window.APP?.retainers || []) : [];
+  // 4) Retainers (use parameter to determine if retainers should be included)
+  const retainersPayload = useRetainers ? (window.APP?.retainers || []) : [];
+  window.apb.retainers = retainersPayload;
 
+  // 5) Build payload with all settings
   const payload = {
     selected_deliverable_codes: codes,
     selected_components_map: selectedComponentsPayload,
@@ -304,6 +315,7 @@ async function buildFromCurrentSelection() {
     retainers: retainersPayload
   };
 
+  // 6) POST /api/build
   const res = await fetch('/api/build', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -318,25 +330,40 @@ async function buildFromCurrentSelection() {
   
   const data = await res.json();
   
-  // Store globally for Step 3 and exports
+  // 7) Store in centralized state
+  window.apb.scenarios = data;
+  
+  // Sync legacy state for compatibility
   window.BUILD = data;
   window.appState = window.appState || {};
   window.appState.scenarios = data;
   window.latestScenarios = data;
   SCENARIOS = data;
 
-  // Show Step 3 and scroll
-  const step3 = document.querySelector("#step3");
-  if (step3) {
-    step3.style.display = "block";
-    step3.scrollIntoView({ behavior: "smooth" });
-  }
-
-  // Render scenarios if function exists
+  // 8) Render scenarios
   if (window.renderScenario) {
     window.renderScenario('scenarioA', data.A);
     window.renderScenario('scenarioB', data.B);
   }
+
+  // 9) Show Step 3 if requested (for "Proceed to Pricing" workflow)
+  if (showStep3) {
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = "block";
+      step3.scrollIntoView({ behavior: "smooth" });
+    }
+  }
+  
+  return data;
+}
+
+// Make globally accessible
+window.buildAB = buildAB;
+
+// Step 2 "Proceed to Pricing" - calls buildAB with useRetainers:false
+async function buildFromCurrentSelection() {
+  return buildAB({ useRetainers: false, showStep3: true });
 }
 
 // Alias for backward compatibility

@@ -817,87 +817,30 @@
       }
     }
     
-    // Step 3 — make the Build button work (as specified)
+    // Step 3 "Build Scenarios A & B" button - calls centralized buildAB with retainers toggle
     async function buildScenariosAB() {
-      // Make this function globally accessible
-      window.buildScenariosAB = buildScenariosAB;
-      
-      // 1) Pull selected deliverables from Step 2 "Your Selection" list
-      const selectedCodes = Array
-        .from(document.querySelectorAll('#yourSelection [data-code]'))
-        .map(el => el.dataset.code);
-      
-      if (!selectedCodes.length) {
-        alert('Please select at least one deliverable in Step 2 and click "Apply selection".');
-        return;
-      }
-      
-      // Sync the selection to ensure consistency
-      appState.selectedCodes = selectedCodes;
-      window.selectedCodes = selectedCodes;
-
-      // 2) Retainers (if the toggle is enabled and retainer inputs exist)
+      // Check retainer toggle to determine if retainers should be included
       const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
-      const retainers = retainersEnabled ? Array.from(
-        document.querySelectorAll('#retainer-list-controls input[type=number][data-code]')
-      )
-      .map(inp => ({ 
-        deliverable_code: inp.dataset.code,
-        months: Number(inp.value || 0) 
-      }))
-      .filter(r => r.months > 0) : [];
-
-      // 3) Prepare component selections for payload
-      const selectedComponentsPayload = Object.fromEntries(
-        Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
-      );
       
-      // 4) Build payload
-      const payload = {
-        selected_deliverable_codes: selectedCodes,
-        selected_components_map: selectedComponentsPayload,
-        pricing_mode: getPricingModeFromUI(),
-        blended_rate: getBlendedRateFromUI(),
-        rate_band: getRateBandFromUI(),
-        use_slack: getUseSlackFromUI(),
-        slack_after_internal: getSlackInternalFromUI(),
-        slack_after_client: getSlackClientFromUI(),
-        slack_global_pct: getSlackPctFromUI(),
-        project_start: getProjectStartFromUI() || null,
-        scenario_a: getScenarioSpecAFromUI(),
-        scenario_b: getScenarioSpecBFromUI(),
-        retainers: retainers
-      };
-
-      // 5) POST /api/build
-      const resp = await fetch('/api/build', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
-      });
-
-      const scenarios = await resp.json();
+      // Call centralized buildAB function
+      const scenarios = await window.buildAB({ useRetainers: retainersEnabled, showStep3: false });
       
-      // 6) Store scenarios globally for timeline and export
-      window.appState = window.appState || {};
-      appState.scenarios = scenarios;
-      window.latestScenarios = scenarios;
-      
-      // 7) Render A/B panels with results (hours & price will now be non-zero)
-      renderScenario('scenarioA', scenarios.A);
-      renderScenario('scenarioB', scenarios.B);
+      if (!scenarios) return; // Build failed, error already shown
       
       // Enable Scenario C controls after A/B are built
       renderUpsellList();
       document.getElementById('btn-build-c').disabled = false;
       
-      // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
+      // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline
       const step5 = document.getElementById('step5');
       if (step5) step5.style.display = 'block';
       
       const step4 = document.getElementById('step4');
       if (step4) showStep4('A');
     }
+    
+    // Make globally accessible
+    window.buildScenariosAB = buildScenariosAB;
     
     // Legacy function name for backward compatibility
     const buildScenariosLegacy = buildScenariosAB;
