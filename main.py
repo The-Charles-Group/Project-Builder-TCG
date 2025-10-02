@@ -2670,7 +2670,7 @@ def api_build(payload: BuildPayload):
             comp_map[str(k)] = {str(x): None for x in v}  # None means use default hours
         elif isinstance(v, dict):
             # New format: {"component1": 5.5, "component2": 10.0}
-            comp_map[str(k)] = {str(name): float(hours) for name, hours in v.items()}
+            comp_map[str(k)] = {str(name): (float(hours) if hours is not None else None) for name, hours in v.items()}
         else:
             comp_map[str(k)] = {}
     
