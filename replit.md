@@ -48,6 +48,27 @@ Preferred communication style: Simple, everyday language.
   - User can then unselect specific components if needed
   - Aligns with `"__ALL__"` sentinel pattern used throughout the application
 
+### Defensive Component Selection Handling (October 2025)
+- **Backend Sanitization in /api/build**: Enhanced component map processing to prevent invalid hours
+  - Treats hours <= 0 as "unselected" and drops them from component selection
+  - Preserves None values to signal "use default hours for this component"
+  - Prevents accidental "all selected but all at 0h" payloads from reaching calculations
+
+- **Zero-Hours Fallback in _scenario_for_deliverable**: Added safety net for component selections
+  - If selected components total 0 hours after scaling, automatically falls back to deliverable-level defaults
+  - Prevents zeroed deliverables from appearing in scenarios due to invalid component selections
+  - Logs fallback events for debugging: "component selection totals 0h -> fallback to deliverable defaults"
+
+- **WBS Export Guard**: Enhanced export robustness to handle edge cases
+  - Extended empty-hours check to also catch hours_by_role that totals 0
+  - Recomputes from database when hours sum is 0 or less
+  - Makes XML exports resilient even if older scenarios contain 0-hour items
+
+- **Sentinel State Management**: Fixed frontend to delete map keys when all components selected
+  - Select All now deletes the deliverable key instead of storing "__ALL__" string
+  - Prevents invalid `{'__ALL__': null}` payloads that would drop all tasks
+  - Proper transitions: all selected (key deleted) → partial (object map) → none (empty object)
+
 ## System Architecture
 
 ### Backend Architecture

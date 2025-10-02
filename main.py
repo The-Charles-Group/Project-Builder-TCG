@@ -1662,7 +1662,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
             # Derive hours_by_role if missing (robustness fix)
             hrs_df = pd.DataFrame(d.get("hours_by_role") or [])
-            if hrs_df.empty:
+            if hrs_df.empty or float(hrs_df.get("Hours", pd.Series([], dtype=float)).sum()) <= 0.0:
                 scen_col_resolved = DB.scenario_hours_col(d.get("complexity","Advanced"), d.get("tier","T2_MediumVolume"))
                 hrs_df = DB.hours_by_role_for_deliverable(dcode, included, scen_col_resolved)
                 d["hours_by_role"] = hrs_df.to_dict("records")
@@ -2595,6 +2595,12 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         hrs_by_role = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
         if not hrs_by_role.empty:
             hrs_by_role = hrs_by_role.groupby(["Resource_Title","Seniority"], as_index=False)["Hours"].sum()
+        
+        # NEW: if the selected components sum to 0 hours (e.g., front-end sent 0s),
+        # fall back to the deliverable-level hours to avoid a zeroed deliverable.
+        if hrs_by_role.empty or float(hrs_by_role["Hours"].sum()) <= 0.0:
+            print(f"DEBUG {deliv_code}: component selection totals 0h -> fallback to deliverable defaults")
+            hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
     else:
         hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
     
@@ -2690,8 +2696,22 @@ def api_build(payload: BuildPayload):
             # Old format: ["component1", "component2"]
             comp_map[str(k)] = {str(x): None for x in v}  # None means use default hours
         elif isinstance(v, dict):
-            # New format: {"component1": 5.5, "component2": 10.0}
-            comp_map[str(k)] = {str(name): (float(hours) if hours is not None else None) for name, hours in v.items()}
+            # New format: {"component": hours or None}
+            # Sanitize: treat <= 0 as "unselected" (drop); keep None to mean "use default hours"
+            cleaned: dict[str, Optional[float]] = {}
+            for name, hours in v.items():
+                try:
+                    if hours is None:
+                        cleaned[str(name)] = None
+                    else:
+                        h = float(hours)
+                        if h > 0:
+                            cleaned[str(name)] = h
+                        # <= 0 -> dropped (unselected)
+                except Exception:
+                    # ignore bad values
+                    continue
+            comp_map[str(k)] = cleaned
         else:
             comp_map[str(k)] = {}
     
