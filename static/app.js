@@ -299,6 +299,7 @@ async function buildFromCurrentSelection() {
     slack_after_client: window.getSlackClientFromUI?.() || 2,
     slack_global_pct: window.getSlackPctFromUI?.() || 0.05,
     project_start: window.getProjectStartFromUI?.() || null,
+    client_budget_usd: window.getClientBudgetFromUI?.() || null,
     scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
     scenario_b: window.getScenarioSpecBFromUI?.() || { mode: 'template', scenario_key: 'MED_HIGH' },
     retainers: retainersPayload

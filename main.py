@@ -1960,7 +1960,8 @@ class BuildPayload(BaseModel):
     slack_after_internal: int = 1
     slack_after_client: int = 2
     slack_global_pct: float = 0.05
-    project_start: Optional[str] = None     # "YYYY-MM-DD"
+    project_start: Optional[str] = None     # ISO8601 format (e.g., "2025-10-06T09:00:00" or "YYYY-MM-DD")
+    client_budget_usd: Optional[float] = None  # Client budget for budget analysis
     # NEW: monthly retainers selected on the second screen
     retainers: Optional[List[RetainerSelection]] = []
     # NEW: component-level selection per deliverable (supports multiple formats including "__ALL__" sentinel)
@@ -1977,7 +1978,8 @@ class AutoBuildPayload(BaseModel):
     slack_after_internal: int = 1
     slack_after_client: int = 2
     slack_global_pct: float = 0.05
-    project_start: Optional[str] = None     # "YYYY-MM-DD"
+    project_start: Optional[str] = None     # ISO8601 format (e.g., "2025-10-06T09:00:00" or "YYYY-MM-DD")
+    client_budget_usd: Optional[float] = None  # Client budget for budget analysis
     # NEW: optional retainers alongside auto suggestions
     retainers: Optional[List[RetainerSelection]] = []
 
@@ -2012,7 +2014,7 @@ class ExportXMLPayload(BaseModel):
     scenario_label: Optional[str] = None
     sheet_name: str = "Scenario A"
     start_date_mode: str = "next_monday"
-    fixed_start_iso: Optional[str] = None
+    fixed_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
     hours_per_day: float = 8.0
     merge_identical_children: bool = False
 
@@ -2020,6 +2022,7 @@ class ExportWorkbookXMLPayload(BaseModel):
     scenario_a: Optional[Dict[str, Any]] = None
     scenario_b: Optional[Dict[str, Any]] = None  
     project_name: Optional[str] = None
+    project_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
     merge_identical_children: bool = False
 
 class AuditPricingPayload(BaseModel):
@@ -2041,7 +2044,8 @@ class BuildScenarioCPayload(BaseModel):
     slack_after_internal: Optional[int] = None
     slack_after_client: Optional[int] = None
     slack_global_pct: Optional[float] = None
-    project_start: Optional[str] = None     # "YYYY-MM-DD"
+    project_start: Optional[str] = None     # ISO8601 format (e.g., "2025-10-06T09:00:00" or "YYYY-MM-DD")
+    client_budget_usd: Optional[float] = None  # Client budget for budget analysis
     # NEW: override or inherit from base scenario
     retainers: Optional[List[RetainerSelection]] = []
 
@@ -2697,6 +2701,7 @@ def api_build(payload: BuildPayload):
     slack_c   = int(payload.slack_after_client)
     slack_pct = float(payload.slack_global_pct or 0)
     project_start = payload.project_start
+    client_budget_usd = payload.client_budget_usd
 
     # Build retainer map
     ret_map = _safe_retainer_map(payload.retainers)
@@ -2827,6 +2832,22 @@ def api_build(payload: BuildPayload):
     # Store scenarios globally for reordering
     global _CURRENT_SCENARIOS
     _CURRENT_SCENARIOS.update(scenarios)
+    
+    # Add budget metrics if client_budget_usd was provided
+    if client_budget_usd and client_budget_usd > 0:
+        for letter in scenarios:
+            scenario_price = scenarios[letter]["totals"]["price"]
+            budget_delta = scenario_price - client_budget_usd
+            coverage_pct = (scenario_price / client_budget_usd) * 100 if client_budget_usd > 0 else 0
+            scale_factor = client_budget_usd / scenario_price if scenario_price > 0 else 1.0
+            
+            scenarios[letter]["budget_info"] = {
+                "client_budget_usd": client_budget_usd,
+                "total_price": scenario_price,
+                "budget_delta": budget_delta,
+                "coverage_pct": round(coverage_pct, 1),
+                "scale_factor_if_fit": round(scale_factor, 3)
+            }
     
     return scenarios
 
@@ -3150,12 +3171,15 @@ def api_export_xml(payload: ExportXMLPayload):
             _apply_number_formats(xw.sheets[payload.sheet_name], df)
 
         # Convert to MSPDI XML
+        # Use fixed_start_iso from payload, or fall back to project_start from scenario
+        project_start_iso = payload.fixed_start_iso or scenario.get("project_start")
+        
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
             sheet_name=payload.sheet_name,
             start_date_mode=payload.start_date_mode,
-            fixed_start_iso=payload.fixed_start_iso,
+            fixed_start_iso=project_start_iso,
             hours_per_day=payload.hours_per_day,
             merge_identical_children=False
         )
@@ -3213,10 +3237,14 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             dfA.to_excel(xw, sheet_name="Scenario A", index=False)
             _apply_number_formats(xw.sheets["Scenario A"], dfA)
         
+        # Use project_start_iso from payload or scenario_a
+        project_start_iso = payload.project_start_iso or scenario_a.get("project_start")
+        
         stats_a = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx_a,
             output_xml=output_xml_a,
             sheet_name="Scenario A",
+            fixed_start_iso=project_start_iso,
             merge_identical_children=False
         )
         
@@ -3229,10 +3257,14 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             dfB.to_excel(xw, sheet_name="Scenario B", index=False)
             _apply_number_formats(xw.sheets["Scenario B"], dfB)
         
+        # Use project_start_iso from payload or scenario_b
+        project_start_iso_b = payload.project_start_iso or scenario_b.get("project_start")
+        
         stats_b = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx_b,
             output_xml=output_xml_b,
             sheet_name="Scenario B",
+            fixed_start_iso=project_start_iso_b,
             merge_identical_children=False
         )
         
@@ -4089,6 +4121,9 @@ def convert_excel_to_mspdi(
             is_summary = r["WBS"] in summary_set
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
+            # Emit DurationFormat=7 (Days) for all tasks
+            SubElement(task, "DurationFormat").text = "7"
+            
             # Only set Duration/Work for non-summary tasks (let Workfront compute for summaries)
             if not is_summary:
                 # Safe int conversion for time values using rolled-up duration
@@ -4101,9 +4136,18 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
-                # Pin leaf tasks to prevent drift - "Start No Earlier Than" constraint
-                SubElement(task, "ConstraintType").text = "4"  # Start No Earlier Than
-                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                # Set leaf tasks as Fixed Duration (Type=1) so duration is canonical
+                SubElement(task, "Type").text = "1"  # Fixed Duration
+                SubElement(task, "IsEffortDriven").text = "0"
+                
+                # Use ASAP constraints for non-root tasks, Must Start On only for the very first task
+                if r["WBS"] == "1":
+                    # Root/project task: Must Start On with project_start_iso
+                    SubElement(task, "ConstraintType").text = "4"  # Must Start On
+                    SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                else:
+                    # All other tasks: As Soon As Possible (rely on predecessors + calendar)
+                    SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
@@ -4114,12 +4158,23 @@ def convert_excel_to_mspdi(
         for assign in assignments:
             assignment = SubElement(assignments_elem, "Assignment")
             SubElement(assignment, "UID").text = str(assign["UID"])
-            SubElement(assignment, "TaskUID").text = str(assign["TaskUID"])
+            task_uid = assign["TaskUID"]
+            SubElement(assignment, "TaskUID").text = str(task_uid)
             SubElement(assignment, "ResourceUID").text = str(assign["ResourceUID"])
             SubElement(assignment, "Start").text = assign["Start"]
             SubElement(assignment, "Finish").text = assign["Finish"]
-            SubElement(assignment, "Units").text = str(assign["Units"])
-            SubElement(assignment, "Work").text = f"PT{int(assign['WorkHours'] * 60)}M"
+            
+            # Compute Units = work_min / dur_min for Fixed Duration tasks
+            work_min = assign['WorkHours'] * 60
+            # Get duration from the task schedule
+            dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
+            dur_min = dur_hours * 60
+            # Snap to 480-minute blocks as done in tasks
+            dur_min = ((int(dur_min) + 479) // 480) * 480
+            units = 0 if dur_min == 0 else work_min / dur_min
+            
+            SubElement(assignment, "Units").text = str(units)
+            SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
 
         # Add PredecessorLinks for dependencies
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}

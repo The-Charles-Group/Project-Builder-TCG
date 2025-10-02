@@ -174,6 +174,19 @@
       
       <div class="grid" style="margin-bottom:16px;">
         <div>
+          <label for="projectStart">Project start</label>
+          <input id="projectStart" type="datetime-local" />
+          <small style="color: var(--muted); display: block; margin-top: 4px;">Defaults to next Monday 09:00 local</small>
+        </div>
+        <div>
+          <label for="projectName">Project name</label>
+          <input id="projectName" type="text" placeholder="e.g., Casa Dragones" />
+        </div>
+        <div>
+          <label for="clientBudget">Client budget (USD)</label>
+          <input id="clientBudget" type="number" step="1000" placeholder="e.g., 150000" />
+        </div>
+        <div>
           <label for="pricingMode">Pricing mode</label>
           <select id="pricingMode">
             <option value="Flat_Blended">Flat_Blended</option>
@@ -201,10 +214,6 @@
           <select id="volumeTier">
             <!-- Options populated from API -->
           </select>
-        </div>
-        <div>
-          <label for="projectName">Project name</label>
-          <input id="projectName" type="text" placeholder="e.g., Casa Dragones" />
         </div>
       </div>
 
@@ -829,6 +838,37 @@
       }
     }
     
+    function displayBudgetInfo(scenarios) {
+      const clientBudget = getClientBudgetFromUI();
+      if (!clientBudget) return;
+      
+      const scenarioA = scenarios.A;
+      if (!scenarioA || !scenarioA.totals) return;
+      
+      const totalPrice = scenarioA.totals.price || 0;
+      const delta = totalPrice - clientBudget;
+      const pct = ((delta / clientBudget) * 100).toFixed(1);
+      
+      let html = '<div style="margin: 16px 0; padding: 12px; border-radius: 6px; background: rgba(255,255,255,0.05);">';
+      html += '<strong>Budget Analysis:</strong> ';
+      if (delta > 0) {
+        html += `<span style="color: #ef4444;">Over budget by $${delta.toLocaleString()} (${pct}%)</span>`;
+      } else {
+        html += `<span style="color: #10b981;">Under budget by $${Math.abs(delta).toLocaleString()} (${Math.abs(pct)}%)</span>`;
+      }
+      html += '</div>';
+      
+      const scenarioADiv = document.getElementById('scenarioA');
+      if (scenarioADiv) {
+        const existing = scenarioADiv.querySelector('.budget-info');
+        if (existing) existing.remove();
+        const div = document.createElement('div');
+        div.className = 'budget-info';
+        div.innerHTML = html;
+        scenarioADiv.insertBefore(div, scenarioADiv.firstChild);
+      }
+    }
+    
     // Step 3 — make the Build button work (as specified)
     async function buildScenariosAB() {
       // Make this function globally accessible
@@ -871,6 +911,7 @@
         slack_after_client: getSlackClientFromUI(),
         slack_global_pct: getSlackPctFromUI(),
         project_start: getProjectStartFromUI() || null,
+        client_budget_usd: getClientBudgetFromUI() || null,
         scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
         scenario_b: getScenarioSpecBFromUI(),
         retainers: retainers  // Include retainer data from new toggle system
@@ -891,6 +932,9 @@
       
       renderScenario('scenarioA', scenarios.A);
       renderScenario('scenarioB', scenarios.B);
+      
+      // Display budget information if provided
+      displayBudgetInfo(scenarios);
       
       // Enable Scenario C controls after A/B are built
       renderUpsellList();
@@ -1155,7 +1199,19 @@
     }
     
     function getProjectStartFromUI() {
-      return null; // default
+      const input = document.getElementById('projectStart');
+      if (!input || !input.value) return null;
+      try {
+        const dt = new Date(input.value);
+        return dt.toISOString();
+      } catch {
+        return null;
+      }
+    }
+    
+    function getClientBudgetFromUI() {
+      const val = document.getElementById('clientBudget')?.value;
+      return val ? Number(val) : null;
     }
     
     function getScenarioSpecAFromUI() {
@@ -1391,6 +1447,23 @@
     // Event listeners - ensure DOM is loaded first
     document.addEventListener('DOMContentLoaded', function() {
       // Note: btnAnalyze is wired in app.js boot() function
+      
+      // Initialize project start date to next Monday 09:00 local
+      const projectStartInput = document.getElementById('projectStart');
+      if (projectStartInput && !projectStartInput.value) {
+        const now = new Date();
+        const dayOfWeek = now.getDay();
+        const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
+        const nextMonday = new Date(now);
+        nextMonday.setDate(now.getDate() + daysUntilMonday);
+        nextMonday.setHours(9, 0, 0, 0);
+        const isoLocal = nextMonday.getFullYear() + '-' +
+          String(nextMonday.getMonth() + 1).padStart(2, '0') + '-' +
+          String(nextMonday.getDate()).padStart(2, '0') + 'T' +
+          String(nextMonday.getHours()).padStart(2, '0') + ':' +
+          String(nextMonday.getMinutes()).padStart(2, '0');
+        projectStartInput.value = isoLocal;
+      }
       
       const applyBtn = document.getElementById('apply-btn');
       if (applyBtn) applyBtn.onclick = applySelection;
