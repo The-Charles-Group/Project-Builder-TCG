@@ -1,3 +1,28 @@
+// --- universal helpers -------------------------------------------------------
+const $$ = (s, root=document) => Array.from(root.querySelectorAll(s));
+const $  = (s, root=document) => root.querySelector(s);
+const pick = (...candidates) => candidates.map(s => $(s)).find(Boolean);
+
+function fillSelect(selectEl, options, {clear=true}={}) {
+  if (!selectEl) return;
+  if (clear) selectEl.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  options.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    frag.appendChild(opt);
+  });
+  selectEl.appendChild(frag);
+}
+
+// --- kill the throbber forever ----------------------------------------------
+(function removeThrobber() {
+  const th = pick('#throbber', '.throbber', '[data-role="throbber"]');
+  if (th && th.remove) th.remove();
+  window.showThrobber = window.hideThrobber = () => {};
+})();
+
 let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
