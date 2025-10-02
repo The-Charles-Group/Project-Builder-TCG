@@ -8,6 +8,44 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+### GPT-5 Patches Implementation (October 2025)
+- **Backend Enhancements**:
+  - Added component inflation at start of `build_wbs_with_pricing()` to ensure AI picks always include full component trees
+  - Implemented 480-minute (8-hour day) duration snapping for Workfront compatibility: `((minutes + 479) // 480) * 480`
+  - Verified XML export hierarchy with Summary=1 for parents, OutlineLevel based on WBS depth, and no assignments on summary tasks
+  - Confirmed retainer months properly multiply hours/price/duration through month-by-month repetition
+
+- **Frontend Enhancements**:
+  - Added project name auto-fill from `/api/last_upload_name` endpoint after AI analysis
+  - Fixed `selected_components_map` payload in `s2ApplyAndBuild()` to properly send `"__ALL__"` sentinel for non-customized deliverables
+  - Ensured consistent `"__ALL__"` sentinel handling between `buildFromCurrentSelection()` and `s2ApplyAndBuild()`
+  - Verified AI spinner, search functionality, and component defaults all working correctly
+
+- **Key Improvements**:
+  - Prevents flat exports by ensuring all deliverables have component data before WBS building
+  - Workfront-compatible durations eliminate fractional day display (e.g., "1.875d" now shows as "2d")
+  - Project names auto-populate from uploaded filename without overriding user input
+  - Component selection payload format matches backend expectations for proper inflation
+
+### Component Selection Modal Fixes (October 2025)
+- **Fixed TypeError Bug**: Resolved `current.has is not a function` error when opening component picker
+  - Added type checking to handle `"__ALL__"` sentinel, Set objects, plain objects, and undefined values
+  - Converts stored component selections to Set when opening modal
+  - Defaults to all components selected when opening modal for first time or with `"__ALL__"` sentinel
+
+- **Added Select All/Unselect All Buttons**: Enhanced component picker modal with bulk selection controls
+  - Added "Select All" button to check all component checkboxes at once
+  - Added "Unselect All" button to clear all component checkboxes
+  - Both buttons update the internal `selectedComponentsMap` state in real-time
+  - Modal now includes: title bar with Done button, Select All/Unselect All row, scrollable component list
+
+- **Default Behavior**: Components are now pre-selected by default when opening the modal
+  - Improves user experience by showing all components checked initially
+  - User can then unselect specific components if needed
+  - Aligns with `"__ALL__"` sentinel pattern used throughout the application
+
 ## System Architecture
 
 ### Backend Architecture
