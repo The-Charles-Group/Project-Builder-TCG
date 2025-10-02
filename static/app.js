@@ -376,6 +376,20 @@ async function onRunReconcile() {
     // Render summary & suggestions on Step 2
     initAISummaryAndSuggestions();
     
+    // PATCH: Auto-fill project name from last upload
+    try {
+      const nameRes = await fetch('/api/last_upload_name');
+      if (nameRes.ok) {
+        const {project_name_default} = await nameRes.json();
+        const projectInput = document.querySelector('#projectName');
+        if (projectInput && project_name_default && !projectInput.value) {
+          projectInput.value = project_name_default;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch project name default:', e);
+    }
+    
   } catch (error) {
     console.error('Error analyzing RFP:', error);
     alert(`Error getting AI analysis: ${error.message}`);
@@ -1526,12 +1540,28 @@ async function s2ApplyAndBuild() {
   const scenA        = document.querySelector('#scenarioA')?.value || 'MED_LOW';
   const scenB        = document.querySelector('#scenarioB')?.value || 'MED_HIGH';
 
-  const compMap = Object.fromEntries(Object.entries(S2.selectedComponentsMap)
-                      .map(([k, set]) => [k, Array.from(set || [])]));
+  // Convert component selections to proper format (handle "__ALL__" sentinel)
+  const compMap = {};
+  codes.forEach(code => {
+    const compSet = S2.selectedComponentsMap[code];
+    
+    if (compSet instanceof Set && compSet.size > 0) {
+      // User has selected specific components - convert Set to object
+      const dict = Object.create(null);
+      compSet.forEach(label => { dict[label] = null; });
+      compMap[code] = dict;
+    } else if (compSet && typeof compSet === 'object' && !(compSet instanceof Set)) {
+      // Already in object format
+      compMap[code] = compSet;
+    } else {
+      // No specific components selected - send "__ALL__" sentinel
+      compMap[code] = "__ALL__";
+    }
+  });
 
   const payload = {
     selected_deliverable_codes: codes,
-    selected_components_map: compMap,                        // <-- NEW
+    selected_components_map: compMap,
     scenario_a: { mode: 'template', scenario_key: scenA },
     scenario_b: { mode: 'template', scenario_key: scenB },
     pricing_mode: pricingMode,

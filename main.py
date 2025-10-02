@@ -1521,6 +1521,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     Flat_Blended -> uses blended_rate
     Per_Resource -> weighted effective per level
     """
+    # PATCH A: Ensure components are inflated for AI picks (handle "__ALL__" sentinel)
+    scenario = _inflate_components_if_missing(scenario)
+    
     rows = []
     pricing_mode = (scenario.get("pricing_mode") or "Flat_Blended").strip()
     rate_band    = (scenario.get("rate_band") or "Standard_US").strip()
@@ -4009,6 +4012,9 @@ def convert_excel_to_mspdi(
                 # Safe int conversion for time values using rolled-up duration
                 planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
                 dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
+                
+                # PATCH D: Snap duration to 480-minute (8-hour day) blocks for Workfront compatibility
+                dur_minutes = ((dur_minutes + 479) // 480) * 480
                 
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
