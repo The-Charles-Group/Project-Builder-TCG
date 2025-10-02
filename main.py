@@ -3217,6 +3217,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             input_xlsx=temp_xlsx_a,
             output_xml=output_xml_a,
             sheet_name="Scenario A",
+            project_name=project,
             merge_identical_children=False
         )
         
@@ -3233,6 +3234,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             input_xlsx=temp_xlsx_b,
             output_xml=output_xml_b,
             sheet_name="Scenario B",
+            project_name=project,
             merge_identical_children=False
         )
         
@@ -3566,6 +3568,7 @@ def convert_excel_to_mspdi(
     input_xlsx: str,
     output_xml: str,
     sheet_name: str = "Scenario A",
+    project_name: Optional[str] = None,
     start_date_mode: str = "next_monday",
     fixed_start_iso: Optional[str] = None,
     hours_per_day: float = 8.0,
@@ -4005,7 +4008,8 @@ def convert_excel_to_mspdi(
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
         # Project info
-        SubElement(project, "Name").text = f"Project from {sheet_name}"
+        # Prefer the explicit project name coming from Step 3; fall back to sheet name
+        SubElement(project, "Name").text = (project_name or sheet_name or "Project")
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
