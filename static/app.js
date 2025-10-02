@@ -1724,34 +1724,10 @@ async function initPricingStep() {
     onToggle();
   }
 
-  // 4) Build Scenarios A & B
+  // 4) Build Scenarios A & B - centralized through window.buildAB
   if ($buildAB) {
     $buildAB.onclick = async () => {
-      const payload = {
-        pricing_mode: ($pricingMode?.value || 'Flat_Blended'),
-        rate_band:    ($rateBand?.value    || 'Standard_US'),
-        tier:         ($tier?.value        || 'T2_MediumVolume'),
-        complexity:   ($complexity?.value  || 'Advanced'),
-        project_name: ($projName?.value || '').trim(),
-        use_retainers: !!($useRet && $useRet.checked),
-        retainers: gatherRetainers($retPanel),              // [] when none/hidden => scope-only
-        selected_deliverable_codes: getSelectedCodes(),     // pulled from your Step‑2 selection
-        selected_components_map:   getSelectedComponentsMap()
-      };
-
-      // Defensive: never send undefined
-      payload.retainers = payload.retainers || [];
-      payload.selected_deliverable_codes = payload.selected_deliverable_codes || [];
-      payload.selected_components_map = payload.selected_components_map || {};
-
-      // Post to server and render
-      const resp = await fetch('/api/build', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      });
-      const data = await resp.json(); // expects {A:{items,totals}, B:{items,totals}}
-      renderScenariosAB(data);        // your existing renderer
+      await window.buildAB({ useRetainers: !!($useRet && $useRet.checked) });
     };
   }
 }
