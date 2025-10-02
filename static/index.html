@@ -383,13 +383,22 @@
       const select = document.getElementById(elementId);
       if (!select) return;
       
-      const newOptions = options.map(option => {
+      let matchFound = false;
+      const newOptions = options.map((option, idx) => {
         const optEl = document.createElement('option');
         optEl.value = option;
         optEl.textContent = option;
-        if (option === defaultValue) optEl.selected = true;
+        if (option === defaultValue) {
+          optEl.selected = true;
+          matchFound = true;
+        }
         return optEl;
       });
+      
+      if (!matchFound && newOptions.length > 0) {
+        newOptions[0].selected = true;
+      }
+      
       select.replaceChildren(...newOptions);
     }
 
