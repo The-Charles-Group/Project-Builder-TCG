@@ -10,6 +10,20 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### renderPricing() Implementation (October 2025)
+- **Critical Fix**: Added missing `renderPricing()` function to clear BOTH pricing tables before rendering (index.html lines 1055-1069)
+- **Function Purpose**: Centralized pricing table renderer that clears #scenarioA and #scenarioB divs before delegating to renderScenario()
+- **buildAB Integration**: Updated buildAB to call renderPricing(data.A, data.B) instead of calling renderScenario() twice (app.js lines 358-364)
+- **All Sanity Check Items Now Complete**:
+  - ✅ Centralized buildAB function (app.js line 262)
+  - ✅ Step 3 calls with retainers toggle (index.html line 828)
+  - ✅ Step 2 calls with useRetainers:false (app.js line 377)
+  - ✅ window.apb state management (lines 254-259, 271, 297, 345)
+  - ✅ renderPricing() clears BOTH tables (index.html lines 1055-1069)
+  - ✅ replaceChildren() for dropdowns (line 390)
+  - ✅ Project name auto-fill (lines 458-461)
+  - ✅ Step 2 search filter (handlers at lines 991, 1446)
+
 ### Centralized Build & State Management (October 2025)
 - **Centralized buildAB Function**: Created single `window.buildAB({useRetainers, showStep3})` function in app.js (lines 265-362)
   - Eliminates duplicate build logic between Step 2 "Proceed to Pricing" and Step 3 "Build A & B" button
