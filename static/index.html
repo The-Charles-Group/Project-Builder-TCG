@@ -364,6 +364,9 @@
       set(v) { window.appState.scenarios = v; }
     });
     
+    // Alias for state management (per fix document)
+    window.apb = window.appState;
+    
     // Global data
     let allDeliverables = [];   // from /api/options
 
@@ -382,7 +385,7 @@
       const select = document.getElementById(elementId);
       if (!select) return;
       
-      select.innerHTML = '';
+      select.replaceChildren();
       options.forEach(option => {
         const optEl = document.createElement('option');
         optEl.value = option;
