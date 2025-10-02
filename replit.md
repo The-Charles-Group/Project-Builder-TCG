@@ -10,13 +10,22 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
-### Sanity Check Verification (October 2025)
-- **Centralized buildAB Function**: Verified window.buildAB exists (app.js line 375), called from Step 3 button (index.html line 826) and Step 2 button (app.js lines 378-383)
-- **State Management**: Confirmed window.apb stores selectedCodes (line 271), selectedComponentsMap (line 297), retainers (lines 302-311), scenarios (line 347)
-- **Table Clearing**: renderScenario properly clears via innerHTML replacement (index.html line 1042)
-- **Dropdown De-duplication**: populateDropdown uses replaceChildren() (index.html line 390)
-- **Project Name Auto-fill**: Implemented at lines 453-456 in index.html
-- **Step 2 Search Filter**: Input exists (line 48), event handlers wired (app.js lines 993, 1448), filter functions implemented (lines 914, 1378)
+### Centralized Build & State Management (October 2025)
+- **Centralized buildAB Function**: Created single `window.buildAB({useRetainers, showStep3})` function in app.js (lines 265-362)
+  - Eliminates duplicate build logic between Step 2 "Proceed to Pricing" and Step 3 "Build A & B" button
+  - Step 2 calls with `useRetainers: false, showStep3: true` to show scenarios without retainers
+  - Step 3 calls with `useRetainers: retainerToggle, showStep3: false` to include retainers based on toggle
+  - Single source of truth for all /api/build API calls
+- **window.apb State Object**: Centralized state management structure (lines 257-262)
+  - Structure: `{selectedCodes: [], selectedComponentsMap: {}, retainers: [], scenarios: null}`
+  - S2.selectedComponentsMap preserved as Set-based UI state (read-only, never mutated by build process)
+  - Retainer sync always reflects current window.APP.retainers state with defensive copying to prevent stale data
+  - Maintains backward compatibility with window.appState and window.selectedCodes
+- **populateDropdown Optimization**: Updated to use `replaceChildren(...optEls)` for efficient single-operation DOM updates (index.html lines 386-399)
+- **Table Clearing**: renderScenario properly clears via innerHTML replacement (index.html line 1101)
+- **Project Name Auto-fill**: Already working via /api/last_upload_name endpoint (app.js line 407)
+- **Step 2 Search Filter**: Already working via app.js event listener (line 953)
+- **Cache Version**: Updated to v=5.6
 
 ### Retainer & Component Inflation Fixes (October 2025)
 - **Retainer Zero-Month Fix**: Changed retainer map to use `max(0, min(12, ...))` instead of `max(1, ...)` to allow months=0 (one-time deliverables) without zeroing hours
