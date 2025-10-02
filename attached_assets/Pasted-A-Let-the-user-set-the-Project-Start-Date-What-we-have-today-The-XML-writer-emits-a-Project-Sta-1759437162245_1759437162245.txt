@@ -1,0 +1,134 @@
+A. Let the user set the Project Start Date
+
+What we have today
+
+The XML writer emits a <Project><StartDate> (09:00) and we stamp every task with a Start/Finish plus a constraint. You can see <StartDate>2025‑10‑06T09:00:00</StartDate> and the Standard calendar being written now.
+
+We’re not exposing a UI control to override the start date; the backend also assumes a start date when building the WBS.
+
+Frontend (Step 3, above “Project name”)
+
+Add a date picker Project start (timezone aware) defaulting to next Monday 09:00 local. Persist it in scenario state as project_start_iso.
+
+Backend
+
+Accept project_start_iso: str | None in:
+
+/api/build (so Step 4 uses it) and
+
+/api/export_xml + /api/export_workbook_xml (so the XML header uses the same start).
+
+When building the WBS (where you already compute Start_Offset_Days / Duration_Days), derive absolute Start = project_start_iso + offset, and compute Finish from Start + duration using the Standard calendar (08–12 / 13–17). The calendar is already serialized correctly: <MinutesPerDay>480</MinutesPerDay>, <MinutesPerWeek>2400</MinutesPerWeek>, <DaysPerMonth>20</DaysPerMonth>, and the 8–12, 13–17 working windows.
+
+In convert_excel_to_mspdi(...), write:
+
+SubElement(project, "StartDate").text = project_start_iso  # ISO8601 with time
+
+
+(Replace the current hardcoded start if present.)
+
+B. Show durations as days in Workfront
+
+What we have today
+
+Project header has <DurationFormat>7</DurationFormat> (project‑level), and all task <Duration>s are emitted in minutes (PT960M = 2 days given 480 min/day). Workfront is currently showing “hours” for many tasks even though earlier imports displayed “days.” The header exists, but we don’t emit per‑task DurationFormat, and many parent rows aren’t flagged as summaries.
+
+Change
+
+Emit per‑task DurationFormat = Days
+In the task writer loop inside convert_excel_to_mspdi(...), add:
+
+SubElement(task, "DurationFormat").text = "7"  # Days (MSPDI enum)
+
+
+(We already set project‑level to 7; setting it at the task level removes ambiguity for Workfront.)
+
+Mark true summaries
+Rows that have children must be Summary=1 and shouldn’t carry their own Work/Duration—let Workfront roll them up. You can see some “parent‑like” rows in your XML are not summaries (Summary>0</Summary> appears only on the very top row). Fixing this stabilizes how durations display.
+
+C. Make app timeline duration = Workfront duration
+
+This is the heart of the 87‑days vs 446‑days discrepancy.
+
+Why it happens
+
+In MSP/Workfront the identity is Duration = Work / Units (for Fixed Units tasks).
+
+Our XML currently doesn’t set a task Type. The default is treated as Fixed Units, and we also export fractional assignment units (e.g., 0.31, 0.44). Example from the export: Work PT4920M with Units ≈ 0.31 yields Duration PT15840M — that’s 33 days at 8h/day, much longer than your Step 4 plan. You can see the fractional Units in Assignments for Scenario A.
+
+Fix
+
+Export leaf tasks as Fixed Duration so the Duration you computed in Step 4 becomes canonical, and let “Units” float to whatever value makes Work = Duration × Units.
+
+Set task type to Fixed Duration
+In the task writer loop (leaf tasks only), add:
+
+SubElement(task, "Type").text = "1"          # 1 = Fixed Duration
+SubElement(task, "IsEffortDriven").text = "0" # avoid effort-driven recalcs
+
+
+Write Duration from Step 4
+Keep using your Step 4 Duration_Days → PT{days*480}M (minutes). We already write minute durations; just ensure we’re writing the Step 4 value for leaves and not letting it be recomputed on import.
+
+Compute assignment Units consistently
+For each leaf task:
+
+work_min = planned_hours * 60
+dur_min  = duration_days * 480
+units    = 0 if dur_min == 0 else work_min / dur_min   # may be >1.0; that’s ok
+SubElement(assignment, "Units").text = str(units)
+SubElement(assignment, "Work").text  = f"PT{work_min}M"
+
+
+Because the task is Fixed Duration, Workfront will keep your duration and set resource loading to the computed Units rather than stretching the dates. In your current XML, fractional units under “Fixed Units” are what balloon durations (see the 0.3106 units example).
+
+Use “ASAP” constraints everywhere except the project’s first task
+We currently stamp every task with ConstraintType>4</ConstraintType> and a ConstraintDate at its start—pinning tasks unnecessarily. Switch non‑root tasks to As Soon As Possible and rely on predecessors + the calendar for placement. Only the very first task needs a “Must Start On” at project_start_iso. That keeps Workfront’s scheduler from adding artificial lags. (You already serialize the FS predecessor links correctly.)
+
+D. Budget: let users enter Client Budget and (optionally) fit the scope
+
+Frontend (Step 3)
+
+Add Client budget (USD) input. Show a pill next to totals:
+
+“Over budget by $X (Y%)” in red, or
+
+“Under by $Z (Y%)” in green.
+
+Add 2 actions:
+
+Create Scenario C to fit budget — clones Scenario A, scales all component hours by a single factor budget/price, and recomputes price/dates.
+
+Suggest trims — compute the least‑impact components to drop to meet budget (just list with hours/$ impact; keep the user in control).
+
+Backend
+
+Let /api/build accept optional client_budget_usd. Return total_price, budget_delta, coverage_pct, and a suggested scale_factor_if_fit = client_budget_usd / total_price.
+
+When Create Scenario C to fit budget is clicked, send apply_scale_factor=true. Scale each deliverable’s hours_by_role by that factor, respecting minimums (e.g., never drop a role below 0.25h). Re‑price and rebuild Step 4 with the scaled hours. (Retainers multiply after scaling.)
+
+This avoids the “$1M plan vs $150k budget” mismatch and keeps A/B pristine while giving a client‑aligned C.
+
+Minimal code diffs (server)
+
+In convert_excel_to_mspdi(...):
+
+- SubElement(project, "StartDate").text = "..."   # <- remove any hardcode
++ if project_start_iso:
++     SubElement(project, "StartDate").text = project_start_iso
+
+# In the per-task loop (summary detection you already compute via outline):
++ SubElement(task, "DurationFormat").text = "7"   # Days
++ if is_leaf_task:
++     SubElement(task, "Type").text = "1"         # Fixed Duration
++     SubElement(task, "IsEffortDriven").text = "0"
++     # For non-root tasks prefer ASAP constraints
++     SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
++     # (Only the first/root task uses Must Start On with project_start_iso)
+
+# When writing Assignments for leaves:
+- SubElement(assignment, "Units").text = str(existing_units)
++ SubElement(assignment, "Units").text = str(planned_hours*60 / max(1, duration_days*480))
+
+
+(The constants match the XML you already generate for calendars and durations; the only additions are per‑task DurationFormat, task Type, and how we compute Units.)
