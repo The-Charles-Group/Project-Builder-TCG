@@ -836,7 +836,9 @@ class AgencyDB:
 
         # Start date
         if project_start:
-            start_date = datetime.datetime.strptime(project_start, "%Y-%m-%d").date()
+            # Handle both ISO8601 format (2025-10-07T01:00:00.000Z) and date-only format (2025-10-07)
+            date_str = project_start.split('T')[0] if 'T' in project_start else project_start
+            start_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
         else:
             start_date = datetime.date.today()
 

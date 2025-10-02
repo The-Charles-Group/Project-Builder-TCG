@@ -10,6 +10,31 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### Project Start Date & Budget Features (October 2025)
+- **Feature A - Project Start Date**: Added user-settable project start date for Workfront XML exports
+  - Frontend: Date-time picker in Step 3 with ISO8601 format, defaults to next Monday at 9:00 AM
+  - Backend: Updated API models and endpoints to accept `project_start_iso` parameter
+  - XML Export: `convert_excel_to_mspdi` now writes user-specified start date to Project StartDate element
+  
+- **Feature B - Duration Display**: Task durations now display as days in Workfront
+  - All tasks use DurationFormat=7 (Days) in XML export
+  - Parent tasks properly marked with Summary=1 to distinguish from leaf tasks
+  
+- **Feature C - Fixed Duration Tasks**: Application timeline now matches Workfront duration exactly
+  - Leaf tasks set as Fixed Duration (Type=1) with IsEffortDriven=0
+  - Assignment Units calculated as work_minutes / duration_minutes for proper resource loading
+  - Non-root tasks use ASAP constraints (ConstraintType=0) for flexible scheduling
+  
+- **Feature D - Client Budget Tracking**: Added budget comparison and metrics
+  - Frontend: Client budget input field with over/under budget display
+  - Backend: Per-scenario budget metrics (coverage_pct, budget_delta, scale_factor)
+  - Each scenario calculates its own budget metrics independently
+  
+- **Bug Fix - ISO8601 Date Parsing**: Fixed "Internal Server Error" when building scenarios
+  - Updated `build_schedule()` to handle ISO8601 timestamps (e.g., "2025-10-07T01:00:00.000Z")
+  - Extracts date portion before parsing to support both ISO8601 and simple date formats
+  - Prevents ValueError: "unconverted data remains" error
+
 ### GPT-5 Patches Implementation (October 2025)
 - **Backend Enhancements**:
   - Added component inflation at start of `build_wbs_with_pricing()` to ensure AI picks always include full component trees
