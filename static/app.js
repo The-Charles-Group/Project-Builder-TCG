@@ -1,7 +1,17 @@
 // --- universal helpers -------------------------------------------------------
-const $$ = (s, root=document) => Array.from(root.querySelectorAll(s));
-const $  = (s, root=document) => root.querySelector(s);
-const pick = (...candidates) => candidates.map(s => $(s)).find(Boolean);
+// Only define if not already declared (to avoid conflicts with index.html)
+if (typeof $$ === 'undefined') {
+  window.$$ = (s, root=document) => Array.from(root.querySelectorAll(s));
+}
+if (typeof $ === 'undefined') {
+  window.$ = (s, root=document) => root.querySelector(s);
+}
+if (typeof pick === 'undefined') {
+  window.pick = (...candidates) => candidates.map(s => {
+    // Handle both getElementById and querySelector style
+    return typeof s === 'string' ? (document.getElementById(s) || document.querySelector(s)) : s;
+  }).find(Boolean);
+}
 
 function fillSelect(selectEl, options, {clear=true}={}) {
   if (!selectEl) return;
