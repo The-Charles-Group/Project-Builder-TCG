@@ -242,6 +242,9 @@ async function boot() {
   // Export functions globally for index.html
   window.onRunReconcile = onRunReconcile;
   window.buildFromCurrentSelection = buildFromCurrentSelection;
+  
+  // Initialize Step 3 pricing panel with new logic
+  initPricingStep();
 }
 
 function onPricingModeChanged(){
