@@ -171,10 +171,36 @@ async function boot() {
   
   const reconcileBtn = document.querySelector("#btnRunReconcile");
   if (reconcileBtn) {
-    reconcileBtn.onclick = (e) => {
+    reconcileBtn.onclick = async (e) => {
       e.preventDefault();
-      // Refresh suggestions with current selection
-      initAISummaryAndSuggestions();
+      // Refresh AI suggestions using stored RFP text (no re-upload needed)
+      const rfpText = window.APP?.rfpText || '';
+      if (!rfpText) {
+        alert('No RFP text available. Please run AI analysis first.');
+        return;
+      }
+      
+      try {
+        const res = await fetch('/api/suggest_by_text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rfp_text: rfpText })
+        });
+        
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        
+        const data = await res.json();
+        // Update stored summary with new suggestions
+        window.APP = window.APP || {};
+        window.APP.summary = data;
+        sessionStorage.setItem('apb:rfpSummary', JSON.stringify(data));
+        
+        // Re-render AI summary and suggestions
+        initAISummaryAndSuggestions();
+      } catch (error) {
+        console.error('Refresh error:', error);
+        alert(`Failed to refresh suggestions: ${error.message}`);
+      }
     };
   }
 
