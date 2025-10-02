@@ -3587,6 +3587,32 @@ def convert_excel_to_mspdi(
         # Load Excel data
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
         
+        # --- Derive a proper project title for the MSPDI <Project><Name> ---
+        project_title = None
+        try:
+            # Prefer the root row (WBS_ID == "1") Task_Name if present
+            if "WBS_ID" in df.columns and "Task_Name" in df.columns:
+                root = df[df["WBS_ID"].astype(str).str.strip() == "1"]
+                if not root.empty:
+                    t = str(root["Task_Name"].iloc[0]).strip()
+                    # Treat empty strings and literal "nan"/"none" as missing
+                    if t and t.lower() not in ['nan', 'none', '']:
+                        project_title = t
+            # Fallback: iterate through Project_Name values to find first valid entry
+            if not project_title and "Project_Name" in df.columns:
+                pn_series = df["Project_Name"].dropna().astype(str)
+                for val in pn_series:
+                    t = str(val).strip()
+                    # Treat empty strings and literal "nan"/"none" as missing
+                    if t and t.lower() not in ['nan', 'none', '']:
+                        project_title = t
+                        break
+        except Exception:
+            project_title = None
+        
+        if not project_title:
+            project_title = str(sheet_name).strip() or "Project"
+        
         # Convert DataFrame to list of row dictionaries for processing
         rows = []
         for _, row in df.iterrows():
@@ -4005,7 +4031,7 @@ def convert_excel_to_mspdi(
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
         # Project info
-        SubElement(project, "Name").text = f"Project from {sheet_name}"
+        SubElement(project, "Name").text = project_title
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         

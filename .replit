@@ -51,6 +51,10 @@ externalPort = 3001
 localPort = 39865
 externalPort = 3003
 
+[[ports]]
+localPort = 42939
+externalPort = 4200
+
 [deployment]
 deploymentTarget = "autoscale"
 run = ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
