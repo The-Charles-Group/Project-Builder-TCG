@@ -364,8 +364,7 @@
       set(v) { window.appState.scenarios = v; }
     });
     
-    // Alias for state management (per fix document)
-    window.apb = window.appState;
+    // Note: window.apb is now initialized in app.js with proper structure
     
     // Global data
     let allDeliverables = [];   // from /api/options
