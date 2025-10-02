@@ -989,8 +989,14 @@
 
     // Enhanced scenario rendering function with retainer support
     function renderScenario(targetId, scenario) {
+      const target = document.getElementById(targetId);
+      if (!target) return;
+      
+      // Explicitly clear the table first
+      target.innerHTML = '';
+      
       if (!scenario || !scenario.items || !scenario.items.length) {
-        document.getElementById(targetId).innerHTML = '<p>(No data)</p>';
+        target.innerHTML = '<p>(No data)</p>';
         return;
       }
       
@@ -1039,7 +1045,7 @@
           </tbody>
         </table>
       `;
-      document.getElementById(targetId).innerHTML = html;
+      target.innerHTML = html;
     }
 
     // Safe render functions using DOM helpers
