@@ -276,6 +276,7 @@ async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
   window.selectedCodes = codes;
 
   // 3) Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
+  // IMPORTANT: Do NOT mutate S2.selectedComponentsMap - only read from it for payload
   const selectedComponentsPayload = {};
   
   codes.forEach(code => {
@@ -292,11 +293,23 @@ async function buildAB({ useRetainers = false, showStep3 = false } = {}) {
     }
   });
   
+  // Store in apb for reference (this is the API format, not the UI format)
   window.apb.selectedComponentsMap = selectedComponentsPayload;
 
-  // 4) Retainers (use parameter to determine if retainers should be included)
-  const retainersPayload = useRetainers ? (window.APP?.retainers || []) : [];
-  window.apb.retainers = retainersPayload;
+  // 4) Retainers - sync window.APP.retainers with window.apb as source of truth
+  let retainersPayload = [];
+  if (useRetainers) {
+    // Ensure retainers are stored in window.apb first
+    if (!window.apb.retainers || window.apb.retainers.length === 0) {
+      // Read from window.APP if apb is empty
+      window.apb.retainers = window.APP?.retainers || [];
+    }
+    retainersPayload = window.apb.retainers;
+    
+    // Sync back to window.APP for compatibility
+    window.APP = window.APP || {};
+    window.APP.retainers = retainersPayload;
+  }
 
   // 5) Build payload with all settings
   const payload = {
