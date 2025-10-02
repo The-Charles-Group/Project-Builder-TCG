@@ -384,14 +384,15 @@
       const select = document.getElementById(elementId);
       if (!select) return;
       
-      select.replaceChildren();
-      options.forEach(option => {
+      // Use replaceChildren() with all options at once for better performance
+      const optEls = options.map(option => {
         const optEl = document.createElement('option');
         optEl.value = option;
         optEl.textContent = option;
         if (option === defaultValue) optEl.selected = true;
-        select.appendChild(optEl);
+        return optEl;
       });
+      select.replaceChildren(...optEls);
     }
 
     function codeToName(code) {
