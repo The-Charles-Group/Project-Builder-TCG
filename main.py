@@ -2475,6 +2475,23 @@ def db_status():
         "v3_sheets": {"drivers": ok(DB.drivers_v3), "all_rows": ok(DB.v3_all_rows)}
     }
 
+@app.get("/api/download/{filename}")
+def download_file(filename: str):
+    """Download exported database files"""
+    allowed_files = ["DB_v3_export.xlsx", "DB_v4_export.xlsx"]
+    if filename not in allowed_files:
+        raise HTTPException(404, f"File not found: {filename}")
+    
+    filepath = os.path.join(os.getcwd(), filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(404, f"File not found: {filename}")
+    
+    return FileResponse(
+        path=filepath,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
 @app.post("/api/db/reload")
 def db_reload():
     DB.loaded = False
