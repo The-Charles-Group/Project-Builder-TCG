@@ -1,0 +1,294 @@
+Backend patches (main.py)
+
+All changes are additive/backwards‑compatible.
+
+A) Make the XML header use the Step‑3 project name and force the first task to “Project Summary”
+
+1. Update the MSPDI converter signature to accept project_name and use it for <Project><Name>; make the root task’s <Name> fixed to “Project Summary”.
+
+Search for the function convert_excel_to_mspdi( (it already exists). Change the signature and the two spots marked below.
+Current function ref (for context): it writes <Project><Name> and the task loop; see these places in your code.
+
+# --- BEFORE ---
+def convert_excel_to_mspdi(
+    input_xlsx: str,
+    output_xml: str,
+    sheet_name: str = "Scenario A",
+    start_date_mode: str = "next_monday",
+    fixed_start_iso: Optional[str] = None,
+    hours_per_day: float = 8.0,
+    calendar_blocks: List[Tuple[str, str]] = [("08:00:00","12:00:00"), ("13:00:00","17:00:00")],
+    roles_split_rule: str = "even",
+    role_weights: Optional[Dict[str, float]] = None,
+    preserve_predecessors: str = "normalize",
+    allow_unassigned: bool = True,
+    include_audits: bool = True,
+    audits_dir: Optional[str] = None,
+    merge_identical_children: bool = False
+) -> Dict[str, int]:
+    ...
+    SubElement(project, "Name").text = f"Project from {sheet_name}"
+
+# --- AFTER ---
+def convert_excel_to_mspdi(
+    input_xlsx: str,
+    output_xml: str,
+    sheet_name: str = "Scenario A",
+    start_date_mode: str = "next_monday",
+    fixed_start_iso: Optional[str] = None,
+    hours_per_day: float = 8.0,
+    calendar_blocks: List[Tuple[str, str]] = [("08:00:00","12:00:00"), ("13:00:00","17:00:00")],
+    roles_split_rule: str = "even",
+    role_weights: Optional[Dict[str, float]] = None,
+    preserve_predecessors: str = "normalize",
+    allow_unassigned: bool = True,
+    include_audits: bool = True,
+    audits_dir: Optional[str] = None,
+    merge_identical_children: bool = False,
+    project_name: Optional[str] = None,     # <— NEW
+) -> Dict[str, int]:
+    ...
+    # Use the explicit project name if provided, otherwise fall back
+    SubElement(project, "Name").text = (project_name or f"Project from {sheet_name}")
+
+
+In the task loop, replace the line that writes the <Name> with a conditional:
+
+# inside: for task_id, r in enumerate(rows, 1):
+is_root = r["WBS"] == "1"
+name_txt = "Project Summary" if is_root else r["Name"]   # <— NEW
+SubElement(task, "Name").text = name_txt
+
+
+The rest of your converter (incl. the “roll up project summary dates from children” block) can stay as‑is.
+
+2. Pass project_name everywhere we call the converter.
+
+Single XML: in /api/export_xml add project_name=project_name to the convert_excel_to_mspdi(...) call.
+
+A & B Zip: in /api/export_workbook_xml add project_name=project for both A and B calls.
+
+Example (A call):
+
+stats_a = convert_excel_to_mspdi(
+    input_xlsx=temp_xlsx_a,
+    output_xml=output_xml_a,
+    sheet_name="Scenario A",
+    fixed_start_iso=project_start_iso,
+    merge_identical_children=False,
+    project_name=project                  # <— NEW
+)
+
+B) Add a three‑scenario XML zip endpoint
+
+You already have /api/export_workbook_abc for Excel with three sheets. Mirror that behavior for XML with a new route:
+
+@app.post("/api/export_workbook_xml_abc")
+def api_export_workbook_xml_abc(payload: ExportWorkbookXMLABCPayload):
+    if not DB.loaded:
+        DB.load()
+
+    project = (payload.project_name or _upload_title_default() or f"Proposal {datetime.date.today().isoformat()}").strip()
+
+    # Guards
+    _assert_has_items(payload.scenario_a or {}, "Scenario A XML export")
+    _assert_has_items(payload.scenario_b or {}, "Scenario B XML export")
+    _assert_has_items(payload.scenario_c or {}, "Scenario C XML export")
+
+    # Inflate
+    scen_a = _inflate_components_if_missing(payload.scenario_a or {})
+    scen_b = _inflate_components_if_missing(payload.scenario_b or {})
+    scen_c = _inflate_components_if_missing(payload.scenario_c or {})
+
+    # Build WBS
+    dfA = build_wbs_dataframe_from_scenario(scen_a, project)
+    dfB = build_wbs_dataframe_from_scenario(scen_b, project)
+    dfC = build_wbs_dataframe_from_scenario(scen_c, project)
+    dfA = _ensure_v3_ae_columns(dfA); dfB = _ensure_v3_ae_columns(dfB); dfC = _ensure_v3_ae_columns(dfC)
+
+    base = _export_basename(project, "Scenarios A, B & C XML")
+    tmp = []
+
+    try:
+        # A
+        tmp_xa, out_xa = f"{base}_A_temp.xlsx", f"{base}_Scenario_A.xml"
+        tmp += [tmp_xa, out_xa]
+        with pd.ExcelWriter(tmp_xa, engine="openpyxl") as xw:
+            dfA.to_excel(xw, sheet_name="Scenario A", index=False); _apply_number_formats(xw.sheets["Scenario A"], dfA)
+        stats_a = convert_excel_to_mspdi(input_xlsx=tmp_xa, output_xml=out_xa, sheet_name="Scenario A",
+                                         merge_identical_children=False, project_name=project)
+
+        # B
+        tmp_xb, out_xb = f"{base}_B_temp.xlsx", f"{base}_Scenario_B.xml"
+        tmp += [tmp_xb, out_xb]
+        with pd.ExcelWriter(tmp_xb, engine="openpyxl") as xw:
+            dfB.to_excel(xw, sheet_name="Scenario B", index=False); _apply_number_formats(xw.sheets["Scenario B"], dfB)
+        stats_b = convert_excel_to_mspdi(input_xlsx=tmp_xb, output_xml=out_xb, sheet_name="Scenario B",
+                                         merge_identical_children=False, project_name=project)
+
+        # C
+        tmp_xc, out_xc = f"{base}_C_temp.xlsx", f"{base}_Scenario_C.xml"
+        tmp += [tmp_xc, out_xc]
+        with pd.ExcelWriter(tmp_xc, engine="openpyxl") as xw:
+            dfC.to_excel(xw, sheet_name="Scenario C", index=False); _apply_number_formats(xw.sheets["Scenario C"], dfC)
+        stats_c = convert_excel_to_mspdi(input_xlsx=tmp_xc, output_xml=out_xc, sheet_name="Scenario C",
+                                         merge_identical_children=False, project_name=project)
+
+        import zipfile, json, os
+        zip_path = f"{base}.zip"
+        with zipfile.ZipFile(zip_path, 'w') as z:
+            z.write(out_xa, "Scenario_A.xml")
+            z.write(out_xb, "Scenario_B.xml")
+            z.write(out_xc, "Scenario_C.xml")
+            z.writestr("export_stats.json", json.dumps({"A": stats_a, "B": stats_b, "C": stats_c}, indent=2))
+        return FileResponse(zip_path, filename=os.path.basename(zip_path), media_type="application/zip")
+    finally:
+        for f in tmp:
+            if os.path.exists(f): os.remove(f)
+
+
+This mirrors your existing A&B exporter; it just adds the C branch and zips all three. (See how the A&B version presently works for reference.)
+
+C) Nothing to change for budget math
+
+Your /api/build attaches budget_info to every scenario in the returned map when client_budget_usd is provided, and /api/build_scenario_c does the same for C. If you’re only seeing the chip on Scenario A, that’s purely a front‑end render.
+
+Front‑end patches
+
+Filenames assume static/index.html and static/app.js. Adjust if yours differ.
+
+1) Step 4 – add the Scenario C timeline tab and hook reordering to letter "C"
+
+index.html (Step 4 header buttons)
+
+<!-- BEFORE -->
+<div class="btn-group">
+  <button id="tlA" class="btn btn--small btn--secondary">Scenario A</button>
+  <button id="tlB" class="btn btn--small">Scenario B</button>
+  <button id="saveOrder" class="btn btn--small">Save Order</button>
+</div>
+
+<!-- AFTER -->
+<div class="btn-group">
+  <button id="tlA" class="btn btn--small btn--secondary">Scenario A</button>
+  <button id="tlB" class="btn btn--small">Scenario B</button>
+  <button id="tlC" class="btn btn--small">Scenario C</button> <!-- NEW -->
+  <button id="saveOrder" class="btn btn--small">Save Order</button>
+</div>
+
+
+app.js
+
+Add a letter‑aware render and wire the buttons:
+
+let currentTimelineLetter = "A";
+
+function renderTimeline(letter = "A") {
+  currentTimelineLetter = letter;
+  const scen = state.scenarios[letter];   // A/B/C are populated in Step 3
+  // ...existing code that paints rows using scen.items[].schedule...
+}
+
+document.getElementById("tlA").onclick = () => { renderTimeline("A"); };
+document.getElementById("tlB").onclick = () => { renderTimeline("B"); };
+document.getElementById("tlC").onclick = () => { renderTimeline("C"); }; // NEW
+
+
+Update Save Order to post scenario_letter:
+
+document.getElementById("saveOrder").onclick = async () => {
+  const codesInOrder = readCodesFromTimelineDOM(); // your existing util
+  const payload = {
+    scenario_letter: currentTimelineLetter,                 // NEW
+    deliverable_codes: codesInOrder,
+    included_map: buildIncludedMapForLetter(currentTimelineLetter), // if you keep TGs per deliv
+    project_start: state.projectStartISO,
+    complexity: state.spec[currentTimelineLetter]?.complexity || state.spec.A.complexity,
+    tier:        state.spec[currentTimelineLetter]?.tier        || state.spec.A.tier,
+    use_slack: state.useSlack,
+    slack_after_internal: state.slackI,
+    slack_after_client: state.slackC,
+    slack_global_pct: state.slackPct
+  };
+  await fetch("/api/reorder_timeline", {method:"POST", headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+  // Refresh the timeline UI
+  renderTimeline(currentTimelineLetter);
+};
+
+
+Backend expects exactly these fields, including scenario_letter.
+
+2) Export buttons for Scenario C + ABC zip
+
+Add buttons wherever you export A/B now:
+
+<button id="exportXmlA">Export XML A</button>
+<button id="exportXmlB">Export XML B</button>
+<button id="exportXmlC">Export XML C</button>          <!-- NEW -->
+<button id="exportXmlABC">Export XML A+B+C (zip)</button> <!-- NEW -->
+
+
+In app.js, use the existing single‑scenario exporter for A/B and call it for C, then add a call for the new zip route:
+
+async function exportXml(letter) {
+  const scen = state.scenarios[letter];
+  const body = {
+    project_name: document.querySelector("#projectName").value,
+    scenario: scen,
+    scenario_label: `Scenario ${letter}`,
+    sheet_name: `Scenario ${letter}`,
+    start_date_mode: "fixed",
+    fixed_start_iso: state.projectStartISO,
+    hours_per_day: 8
+  };
+  const res = await fetch("/api/export_xml", {method:"POST", headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  downloadBlob(await res.blob(), getFilenameFromCD(res) || `Scenario_${letter}.xml`);
+}
+
+document.getElementById("exportXmlA").onclick = () => exportXml("A");
+document.getElementById("exportXmlB").onclick = () => exportXml("B");
+document.getElementById("exportXmlC").onclick = () => exportXml("C");  // NEW
+
+document.getElementById("exportXmlABC").onclick = async () => {
+  const body = {
+    project_name: document.querySelector("#projectName").value,
+    scenario_a: state.scenarios.A,
+    scenario_b: state.scenarios.B,
+    scenario_c: state.scenarios.C
+  };
+  const res = await fetch("/api/export_workbook_xml_abc", {method:"POST", headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  downloadBlob(await res.blob(), getFilenameFromCD(res) || "Scenarios_A_B_C_XML.zip");
+};
+
+
+FYI: the three‑sheet Excel export (/api/export_workbook_abc) already exists on the backend; this change is only for XML.
+
+3) Step 2 – remove the Apply section and auto‑apply component selection
+
+Delete the “Apply” block in Step 2 HTML.
+
+In the component checklist onchange handler, update state.selectedComponentsMap[deliverableCode] immediately and do not require an extra click. When the user presses Proceed to Pricing, include selected_components_map in the /api/build payload:
+
+const buildPayload = {
+  selected_deliverable_codes: Array.from(state.selectedDeliverableCodes),
+  scenario_a: state.scenarioA,
+  scenario_b: state.scenarioB,
+  pricing_mode: state.pricingMode,
+  blended_rate: state.blendedRate,
+  rate_band: state.rateBand,
+  use_slack: state.useSlack,
+  slack_after_internal: state.slackI,
+  slack_after_client: state.slackC,
+  slack_global_pct: state.slackPct,
+  project_start: state.projectStartISO,
+  retainers: state.retainers,
+  selected_components_map: state.selectedComponentsMap  // <— pass inline
+};
+await fetch("/api/build", { method:"POST", headers:{'Content-Type':'application/json'}, body: JSON.stringify(buildPayload) });
+
+
+The server model already supports selected_components_map.
+
+4) Budget chip for B and C
+
+After each build call updates state.scenarios, surface scenarios.B.budget_info and scenarios.C.budget_info using the same renderer as A (you’re already calculating the metrics on the backend).

@@ -3207,7 +3207,8 @@ def api_export_xml(payload: ExportXMLPayload):
             start_date_mode=payload.start_date_mode,
             fixed_start_iso=project_start_iso,
             hours_per_day=payload.hours_per_day,
-            merge_identical_children=False
+            merge_identical_children=False,
+            project_name=payload.project_name
         )
 
         return FileResponse(
@@ -3271,7 +3272,8 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             output_xml=output_xml_a,
             sheet_name="Scenario A",
             fixed_start_iso=project_start_iso,
-            merge_identical_children=False
+            merge_identical_children=False,
+            project_name=project
         )
         
         # Create XML for Scenario B
@@ -3291,7 +3293,8 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             output_xml=output_xml_b,
             sheet_name="Scenario B",
             fixed_start_iso=project_start_iso_b,
-            merge_identical_children=False
+            merge_identical_children=False,
+            project_name=project
         )
         
         # Create zip file with both XMLs
@@ -3363,7 +3366,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         stats_a = convert_excel_to_mspdi(
             input_xlsx=tmp_xlsx_a, output_xml=out_xml_a, sheet_name="Scenario A",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
-            hours_per_day=p.hours_per_day, merge_identical_children=False
+            hours_per_day=p.hours_per_day, merge_identical_children=False,
+            project_name=project
         )
         xml_files.append(("Scenario_A.xml", out_xml_a, stats_a))
 
@@ -3377,7 +3381,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         stats_b = convert_excel_to_mspdi(
             input_xlsx=tmp_xlsx_b, output_xml=out_xml_b, sheet_name="Scenario B",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
-            hours_per_day=p.hours_per_day, merge_identical_children=False
+            hours_per_day=p.hours_per_day, merge_identical_children=False,
+            project_name=project
         )
         xml_files.append(("Scenario_B.xml", out_xml_b, stats_b))
 
@@ -3391,7 +3396,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         stats_c = convert_excel_to_mspdi(
             input_xlsx=tmp_xlsx_c, output_xml=out_xml_c, sheet_name="Scenario C",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
-            hours_per_day=p.hours_per_day, merge_identical_children=False
+            hours_per_day=p.hours_per_day, merge_identical_children=False,
+            project_name=project
         )
         xml_files.append(("Scenario_C.xml", out_xml_c, stats_c))
 
@@ -3731,7 +3737,8 @@ def convert_excel_to_mspdi(
     allow_unassigned: bool = True,
     include_audits: bool = True,
     audits_dir: Optional[str] = None,
-    merge_identical_children: bool = False   # <— toggle for multi-resource merge
+    merge_identical_children: bool = False,  # <— toggle for multi-resource merge
+    project_name: Optional[str] = None       # <— NEW: explicit project name override
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -4185,8 +4192,8 @@ def convert_excel_to_mspdi(
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
-        # Project info
-        SubElement(project, "Name").text = project_title
+        # Project info - use explicit project_name if provided, otherwise fall back to derived title
+        SubElement(project, "Name").text = (project_name or project_title)
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
@@ -4235,13 +4242,15 @@ def convert_excel_to_mspdi(
             task = SubElement(tasks_elem, "Task")
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
-            SubElement(task, "Name").text = r["Name"]
+            # Use "Project Summary" for root task, otherwise use the actual name
+            is_root = r["WBS"] == "1"
+            name_txt = "Project Summary" if is_root else r["Name"]
+            SubElement(task, "Name").text = name_txt
             SubElement(task, "WBS").text = r["WBS"]
             SubElement(task, "OutlineNumber").text = r["WBS"] 
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             # Summary task flag
-            is_root = r["WBS"] == "1"
             is_summary = r["WBS"] in summary_set or is_root
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
