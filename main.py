@@ -11,8 +11,6 @@ from pydantic import BaseModel
 import pandas as pd
 import numpy as np
 
-from post_export import post_process_xml
-
 try:
     from docx import Document  # pip install python-docx
 except Exception:
@@ -2354,48 +2352,6 @@ def root():
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
-@app.get("/downloads", response_class=HTMLResponse)
-def downloads_page():
-    """Simple download page for exported database files"""
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Database Downloads</title>
-        <style>
-            body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-            h1 { color: #333; }
-            .download-box { background: #f5f5f5; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin: 20px 0; }
-            .download-btn { display: inline-block; background: #007bff; color: white; padding: 12px 24px; 
-                           text-decoration: none; border-radius: 4px; margin: 10px 0; font-weight: 500; }
-            .download-btn:hover { background: #0056b3; }
-            .info { color: #666; font-size: 0.9em; margin-top: 10px; }
-        </style>
-    </head>
-    <body>
-        <h1>📊 Database Exports</h1>
-        <p>Download your exported database files below:</p>
-        
-        <div class="download-box">
-            <h3>Version 4 Database Export</h3>
-            <a href="/api/download/DB_v4_export.xlsx" class="download-btn" download>⬇️ Download DB_v4_export.xlsx</a>
-            <div class="info">Contains 17 sheets with all v4 database tables including tasks, deliverables, bundles, rates, and timeline parameters.</div>
-        </div>
-        
-        <div class="download-box">
-            <h3>Version 3 Database Export</h3>
-            <a href="/api/download/DB_v3_export.xlsx" class="download-btn" download>⬇️ Download DB_v3_export.xlsx</a>
-            <div class="info">Contains All_Task_Rows and Drivers sheets from the v3 database.</div>
-        </div>
-        
-        <p style="margin-top: 40px; color: #999; font-size: 0.85em;">
-            <a href="/" style="color: #007bff;">← Back to Agency Project Builder</a>
-        </p>
-    </body>
-    </html>
-    """
-    return html
-
 @app.get("/api/load")
 def api_load():
     if not DB.loaded:
@@ -2518,23 +2474,6 @@ def db_status():
         "has_v3": ok(DB.v3_all_rows),
         "v3_sheets": {"drivers": ok(DB.drivers_v3), "all_rows": ok(DB.v3_all_rows)}
     }
-
-@app.get("/api/download/{filename}")
-def download_file(filename: str):
-    """Download exported database files"""
-    allowed_files = ["DB_v3_export.xlsx", "DB_v4_export.xlsx"]
-    if filename not in allowed_files:
-        raise HTTPException(404, f"File not found: {filename}")
-    
-    filepath = os.path.join(os.getcwd(), filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(404, f"File not found: {filename}")
-    
-    return FileResponse(
-        path=filepath,
-        filename=filename,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
 
 @app.post("/api/db/reload")
 def db_reload():
@@ -3272,14 +3211,9 @@ def api_export_xml(payload: ExportXMLPayload):
             project_name=payload.project_name
         )
 
-        # Post-process XML to parallelize same-name tasks (optional)
-        final_xml = output_xml
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
-            final_xml = post_process_xml(output_xml)
-
         return FileResponse(
-            final_xml,
-            filename=os.path.basename(final_xml),
+            output_xml,
+            filename=os.path.basename(output_xml),
             media_type="application/xml",
             headers={"X-Export-Stats": json.dumps(stats)}
         )
@@ -3342,12 +3276,6 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project
         )
         
-        # Post-process Scenario A XML
-        final_xml_a = output_xml_a
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
-            final_xml_a = post_process_xml(output_xml_a)
-            temp_files.append(final_xml_a)
-        
         # Create XML for Scenario B
         temp_xlsx_b = f"{base}_B_temp.xlsx"
         output_xml_b = f"{base}_Scenario_B.xml"
@@ -3369,18 +3297,12 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project
         )
         
-        # Post-process Scenario B XML
-        final_xml_b = output_xml_b
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
-            final_xml_b = post_process_xml(output_xml_b)
-            temp_files.append(final_xml_b)
-        
         # Create zip file with both XMLs
         import zipfile
         zip_path = f"{base}.zip"
         with zipfile.ZipFile(zip_path, 'w') as zipf:
-            zipf.write(final_xml_a, f"Scenario_A.xml")
-            zipf.write(final_xml_b, f"Scenario_B.xml")
+            zipf.write(output_xml_a, f"Scenario_A.xml")
+            zipf.write(output_xml_b, f"Scenario_B.xml")
             # Add stats as JSON file
             stats_json = json.dumps({
                 "scenario_a": stats_a,
@@ -3447,12 +3369,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project
         )
-        # Post-process Scenario A XML
-        final_xml_a = out_xml_a
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
-            final_xml_a = post_process_xml(out_xml_a)
-            temp_files.append(final_xml_a)
-        xml_files.append(("Scenario_A.xml", final_xml_a, stats_a))
+        xml_files.append(("Scenario_A.xml", out_xml_a, stats_a))
 
         # B
         tmp_xlsx_b = f"{base}_B_temp.xlsx"
@@ -3467,12 +3384,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project
         )
-        # Post-process Scenario B XML
-        final_xml_b = out_xml_b
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
-            final_xml_b = post_process_xml(out_xml_b)
-            temp_files.append(final_xml_b)
-        xml_files.append(("Scenario_B.xml", final_xml_b, stats_b))
+        xml_files.append(("Scenario_B.xml", out_xml_b, stats_b))
 
         # C
         tmp_xlsx_c = f"{base}_C_temp.xlsx"
@@ -3487,12 +3399,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project
         )
-        # Post-process Scenario C XML
-        final_xml_c = out_xml_c
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
-            final_xml_c = post_process_xml(out_xml_c)
-            temp_files.append(final_xml_c)
-        xml_files.append(("Scenario_C.xml", final_xml_c, stats_c))
+        xml_files.append(("Scenario_C.xml", out_xml_c, stats_c))
 
         # Zip all 3
         import zipfile
