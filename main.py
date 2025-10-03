@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from zoneinfo import ZoneInfo  # Python 3.9+
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
+from post_export import post_process_xml
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -3210,10 +3211,15 @@ def api_export_xml(payload: ExportXMLPayload):
             merge_identical_children=False,
             project_name=payload.project_name
         )
+        
+        # Post-process XML to parallelize identical task names (optional)
+        final_xml = output_xml
+        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+            final_xml = post_process_xml(output_xml)
 
         return FileResponse(
-            output_xml,
-            filename=os.path.basename(output_xml),
+            final_xml,
+            filename=os.path.basename(final_xml),
             media_type="application/xml",
             headers={"X-Export-Stats": json.dumps(stats)}
         )
@@ -3276,6 +3282,12 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project
         )
         
+        # Post-process Scenario A XML
+        final_xml_a = output_xml_a
+        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+            final_xml_a = post_process_xml(output_xml_a)
+            temp_files.append(final_xml_a)
+        
         # Create XML for Scenario B
         temp_xlsx_b = f"{base}_B_temp.xlsx"
         output_xml_b = f"{base}_Scenario_B.xml"
@@ -3297,12 +3309,18 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project
         )
         
+        # Post-process Scenario B XML
+        final_xml_b = output_xml_b
+        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+            final_xml_b = post_process_xml(output_xml_b)
+            temp_files.append(final_xml_b)
+        
         # Create zip file with both XMLs
         import zipfile
         zip_path = f"{base}.zip"
         with zipfile.ZipFile(zip_path, 'w') as zipf:
-            zipf.write(output_xml_a, f"Scenario_A.xml")
-            zipf.write(output_xml_b, f"Scenario_B.xml")
+            zipf.write(final_xml_a, f"Scenario_A.xml")
+            zipf.write(final_xml_b, f"Scenario_B.xml")
             # Add stats as JSON file
             stats_json = json.dumps({
                 "scenario_a": stats_a,
@@ -3369,7 +3387,12 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project
         )
-        xml_files.append(("Scenario_A.xml", out_xml_a, stats_a))
+        # Post-process Scenario A XML
+        final_xml_a = out_xml_a
+        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+            final_xml_a = post_process_xml(out_xml_a)
+            temp_files.append(final_xml_a)
+        xml_files.append(("Scenario_A.xml", final_xml_a, stats_a))
 
         # B
         tmp_xlsx_b = f"{base}_B_temp.xlsx"
@@ -3384,7 +3407,12 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project
         )
-        xml_files.append(("Scenario_B.xml", out_xml_b, stats_b))
+        # Post-process Scenario B XML
+        final_xml_b = out_xml_b
+        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+            final_xml_b = post_process_xml(out_xml_b)
+            temp_files.append(final_xml_b)
+        xml_files.append(("Scenario_B.xml", final_xml_b, stats_b))
 
         # C
         tmp_xlsx_c = f"{base}_C_temp.xlsx"
@@ -3399,7 +3427,12 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project
         )
-        xml_files.append(("Scenario_C.xml", out_xml_c, stats_c))
+        # Post-process Scenario C XML
+        final_xml_c = out_xml_c
+        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+            final_xml_c = post_process_xml(out_xml_c)
+            temp_files.append(final_xml_c)
+        xml_files.append(("Scenario_C.xml", final_xml_c, stats_c))
 
         # Zip all 3
         import zipfile
