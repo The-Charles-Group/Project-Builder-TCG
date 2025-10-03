@@ -2352,6 +2352,48 @@ def root():
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
+@app.get("/downloads", response_class=HTMLResponse)
+def downloads_page():
+    """Simple download page for exported database files"""
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Database Downloads</title>
+        <style>
+            body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+            h1 { color: #333; }
+            .download-box { background: #f5f5f5; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin: 20px 0; }
+            .download-btn { display: inline-block; background: #007bff; color: white; padding: 12px 24px; 
+                           text-decoration: none; border-radius: 4px; margin: 10px 0; font-weight: 500; }
+            .download-btn:hover { background: #0056b3; }
+            .info { color: #666; font-size: 0.9em; margin-top: 10px; }
+        </style>
+    </head>
+    <body>
+        <h1>📊 Database Exports</h1>
+        <p>Download your exported database files below:</p>
+        
+        <div class="download-box">
+            <h3>Version 4 Database Export</h3>
+            <a href="/api/download/DB_v4_export.xlsx" class="download-btn" download>⬇️ Download DB_v4_export.xlsx</a>
+            <div class="info">Contains 17 sheets with all v4 database tables including tasks, deliverables, bundles, rates, and timeline parameters.</div>
+        </div>
+        
+        <div class="download-box">
+            <h3>Version 3 Database Export</h3>
+            <a href="/api/download/DB_v3_export.xlsx" class="download-btn" download>⬇️ Download DB_v3_export.xlsx</a>
+            <div class="info">Contains All_Task_Rows and Drivers sheets from the v3 database.</div>
+        </div>
+        
+        <p style="margin-top: 40px; color: #999; font-size: 0.85em;">
+            <a href="/" style="color: #007bff;">← Back to Agency Project Builder</a>
+        </p>
+    </body>
+    </html>
+    """
+    return html
+
 @app.get("/api/load")
 def api_load():
     if not DB.loaded:
