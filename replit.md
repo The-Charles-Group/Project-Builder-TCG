@@ -15,6 +15,7 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data, calculations, and manipulations.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
+- **XML Post-Processing**: Automatically parallelizes same-name tasks in MSPDI XML exports to prevent artificial serialization of parallel work streams.
 - **CORS**: Configured to allow cross-origin requests.
 
 ### Frontend Architecture
@@ -49,3 +50,11 @@ Preferred communication style: Simple, everyday language.
 - **Excel/CSV**: Core data source.
 - **PDF/DOCX**: For RFP document parsing.
 - **JSON**: For API data exchange.
+- **MSPDI XML**: Microsoft Project format with automatic parallelization post-processing.
+
+## Recent Changes
+
+### October 2025
+- **Database Export Tool**: Added `export_db_v3_v4.py` script to export v3 and v4 databases to Excel workbooks (accessible via `/downloads` endpoint).
+- **XML Parallelization**: Integrated automatic post-processing of XML exports to remove same-name task dependencies, enabling parallel execution of duplicate task names (e.g., multiple "Examples per Pillar" tasks). Controlled by `PARALLELIZE_IDENTICAL_NAMES` environment variable (default: enabled).
+- **Download Endpoint**: Added `/downloads` page for easy browser-based downloading of exported database files.
