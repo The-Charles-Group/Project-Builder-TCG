@@ -1122,6 +1122,27 @@ async function onSearchDeliverables() {
 
 // onBuild function removed - using buildScenariosAB from index.html instead
 
+// Helper function to render budget pill
+function renderBudgetPill(el, scenarioTotalsPrice, clientBudget) {
+  const budget = Number(clientBudget || 0);
+  el.innerHTML = "";
+  el.className = "budget-pill";
+  if (!budget || !scenarioTotalsPrice) return;
+
+  const delta = budget - scenarioTotalsPrice;
+  const pct = scenarioTotalsPrice / budget;
+  const span = document.createElement("span");
+
+  if (delta >= 0) {
+    span.textContent = `Under budget by $${delta.toLocaleString()} (${(100*(1-pct)).toFixed(1)}%)`;
+    el.classList.add("under");
+  } else {
+    span.textContent = `Over budget by $${Math.abs(delta).toLocaleString()} (${(100*(pct-1)).toFixed(1)}%)`;
+    el.classList.add("over");
+  }
+  el.appendChild(span);
+}
+
 function renderScenarios(data){
   const box = document.querySelector("#scenarios");
   box.innerHTML = "";

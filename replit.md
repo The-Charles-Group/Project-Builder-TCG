@@ -42,6 +42,17 @@ Preferred communication style: Simple, everyday language.
   - **WBS DataFrame**: Root row now has Planned_Hours=0 and Duration_Days=0 (not empty strings)
   - **Workfront Display**: Workfront header now shows the actual project name, with clean roll-up from child tasks
 
+### Scenario C (Upsell) Enhancements (October 2025)
+- **Backend - XML Export for A, B, C**: Added `/api/export_workbook_xml_abc` endpoint
+  - Exports all three scenarios (A, B, C) as separate XML files in a zip archive
+  - Uses same MSPDI conversion and formatting as A/B exports
+  - Includes export stats JSON for all three scenarios
+  
+- **Frontend - Budget Analysis for All Scenarios**: Enhanced budget display functionality
+  - Added `renderBudgetPill()` helper function for consistent budget display across scenarios
+  - Budget pills now show over/under budget amounts and percentages for A, B, and C
+  - Real-time updates when client budget input changes
+
 ### GPT-5 Patches Implementation (October 2025)
 - **Backend Enhancements**:
   - Added component inflation at start of `build_wbs_with_pricing()` to ensure AI picks always include full component trees

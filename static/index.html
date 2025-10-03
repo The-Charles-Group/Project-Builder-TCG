@@ -306,7 +306,9 @@
         <small style="color: var(--muted); display: block; margin-bottom: 4px;">📊 Microsoft Project XML Export:</small>
         <button id="btn-export-xml-a">Export XML Scenario A</button>
         <button id="btn-export-xml-b">Export XML Scenario B</button>
+        <button id="btn-export-xml-c">Export XML Scenario C</button>
         <button id="btn-export-xml-ab">Export XML A & B (zip)</button>
+        <button id="btn-export-xml-abc">Export XML A, B & C (zip)</button>
       </div>
     </section>
   </main>
@@ -1079,10 +1081,30 @@
         scenario_a: A,
         scenario_b: B,
         project_name: getProjectName(),
+        project_start_iso: document.getElementById('projectStartInput')?.value,
         merge_identical_children: false
       };
       await downloadFromEndpoint('/api/export_workbook_xml', payload,
         'Project_Scenarios_A_and_B.zip');
+    }
+
+    async function onExportXMLWorkbookABC() {
+      const A = window.getScenario('A');
+      const B = window.getScenario('B');
+      const C = window.getScenario('C');
+      if (!A || !B || !C) { alert('Build scenarios A, B & C first.'); return; }
+
+      const payload = {
+        scenario_a: A,
+        scenario_b: B,
+        scenario_c: C,
+        project_name: getProjectName(),
+        start_date_mode: 'fixed',
+        fixed_start_iso: document.getElementById('projectStartInput')?.value,
+        hours_per_day: 8.0
+      };
+      await downloadFromEndpoint('/api/export_workbook_xml_abc', payload,
+        'Project_Scenarios_A_B_and_C.zip');
     }
 
     // Legacy function removed - use Step 5 exports instead
@@ -1488,7 +1510,9 @@
     // XML Export buttons
     document.querySelector('#btn-export-xml-a')?.addEventListener('click', () => onExportXMLScenario('A'));
     document.querySelector('#btn-export-xml-b')?.addEventListener('click', () => onExportXMLScenario('B'));
+    document.querySelector('#btn-export-xml-c')?.addEventListener('click', () => onExportXMLScenario('C'));
     document.querySelector('#btn-export-xml-ab')?.addEventListener('click', onExportXMLWorkbook);
+    document.querySelector('#btn-export-xml-abc')?.addEventListener('click', onExportXMLWorkbookABC);
 
     // Legacy format tracking (remove old handlers)
     // Note: New export format handling is in Step 5
