@@ -1319,7 +1319,13 @@
       // show Scenario C button if C exists
       const hasC = !!(window.appState?.scenarios?.C?.items?.length);
       const btnC = document.getElementById('tl-sel-C');
-      if (btnC) btnC.style.display = hasC ? '' : 'none';
+      console.log('[showStep4] Checking Scenario C button. hasC:', hasC, 'button:', !!btnC, 'C items:', window.appState?.scenarios?.C?.items?.length);
+      if (btnC) {
+        btnC.style.display = hasC ? '' : 'none';
+        if (!hasC) {
+          console.log('[showStep4] Hid Scenario C button');
+        }
+      }
 
       // render and scroll (with safety check for missing timeline elements)
       try {
@@ -1500,6 +1506,7 @@
         
         // Update app state and render scenario C
         appState.scenarios = { ...(appState.scenarios || {}), ...result };
+        console.log('[Scenario C] Built successfully. C items:', appState.scenarios.C?.items?.length);
         renderScenario('scenarioC', appState.scenarios.C);
         
         // Display budget info for Scenario C
@@ -1512,7 +1519,13 @@
         
         // show Step 4 and render C; also make the "Scenario C" button visible
         const btnC = document.getElementById('tl-sel-C');
-        if (btnC) btnC.style.display = '';
+        console.log('[Scenario C] Button element found:', !!btnC, btnC);
+        if (btnC) {
+          btnC.style.display = '';
+          btnC.classList.remove('hidden');
+          console.log('[Scenario C] Button classes after remove:', btnC.className);
+          console.log('[Scenario C] Button display style:', btnC.style.display);
+        }
         showStep4('C');
         
       } catch (error) {
