@@ -2948,6 +2948,21 @@ def api_build_scenario_c(payload: BuildScenarioCPayload):
         "items": per_deliv,
         "totals": {"hours": int(hours_sum), "price": int(price_sum)}
     }
+    
+    # Add budget metrics if client_budget_usd was provided
+    if payload.client_budget_usd and payload.client_budget_usd > 0:
+        scenario_price = int(price_sum)
+        budget_delta = scenario_price - payload.client_budget_usd
+        coverage_pct = (scenario_price / payload.client_budget_usd) * 100 if payload.client_budget_usd > 0 else 0
+        scale_factor = payload.client_budget_usd / scenario_price if scenario_price > 0 else 1.0
+        
+        scenario_c["budget_info"] = {
+            "client_budget_usd": payload.client_budget_usd,
+            "total_price": scenario_price,
+            "budget_delta": budget_delta,
+            "coverage_pct": round(coverage_pct, 1),
+            "scale_factor_if_fit": round(scale_factor, 3)
+        }
 
     # 6) Store/update in memory next to A/B for this session
     global _CURRENT_SCENARIOS
