@@ -270,16 +270,22 @@ async function buildFromCurrentSelection() {
   codes.forEach(code => {
     const compSet = S2.selectedComponentsMap[code];
     
-    if (compSet instanceof Set && compSet.size > 0) {
-      // User has selected specific components
-      const dict = Object.create(null);
-      compSet.forEach(label => { dict[label] = null; });
-      selectedComponentsPayload[code] = dict;
-    } else if (compSet && typeof compSet === 'object' && !(compSet instanceof Set)) {
-      // Already in object format (fix: proper parentheses for instanceof)
+    if (compSet instanceof Set) {
+      // User has customized component selection (could be all, some, or none)
+      if (compSet.size > 0) {
+        // User has selected specific components
+        const dict = Object.create(null);
+        compSet.forEach(label => { dict[label] = null; });
+        selectedComponentsPayload[code] = dict;
+      } else {
+        // Empty Set means user unchecked all - send empty object
+        selectedComponentsPayload[code] = {};
+      }
+    } else if (compSet && typeof compSet === 'object') {
+      // Already in object format
       selectedComponentsPayload[code] = compSet;
     } else {
-      // No specific components selected - send "__ALL__" sentinel to include all
+      // No customization - send "__ALL__" sentinel to include all default components
       selectedComponentsPayload[code] = "__ALL__";
     }
   });
@@ -933,7 +939,6 @@ function renderSearchAndAdd() {
     list: document.getElementById('s2-deliv-list'),
     btnAll: document.getElementById('s2-deliv-selectall'),
     btnClear: document.getElementById('s2-deliv-clear'),
-    btnApply: document.getElementById('s2-apply'),
   };
   if (!el.card) return; // card not present on this page
 
@@ -1056,7 +1061,6 @@ function renderSearchAndAdd() {
     window.selectedCodes = Array.from(state.selected);
     if (window.appState) window.appState.selectedCodes = window.selectedCodes;
   });
-  el.btnApply.addEventListener('click', applySelection);
 
   // 6) Public init for Step 2; call this right after Step 2 renders scenarios
   window.initStep2DeliverablePicker = async function initStep2DeliverablePicker(scenarios) {
@@ -1218,8 +1222,9 @@ async function openComponentPicker(code, name) {
       return;
     }
     
-    // Initialize selection for this deliverable if not exists
-    if (!selectedComponentsMap[code]) selectedComponentsMap[code] = new Set();
+    // Check if this deliverable has been customized before
+    // If not, initialize with undefined (not an empty Set) to indicate "use all defaults"
+    const hasCustomSelection = selectedComponentsMap[code] && selectedComponentsMap[code] instanceof Set;
     
     // Create modal
     const modal = el(`
@@ -1232,8 +1237,7 @@ async function openComponentPicker(code, name) {
           <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
           <div id="component-list"></div>
           <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
-            <button onclick="closeComponentPicker()" class="btn-secondary">Cancel</button>
-            <button onclick="saveComponentSelection('${code}')" class="btn-primary">Save Selection</button>
+            <button onclick="closeComponentPicker()" class="btn-primary">Done</button>
           </div>
         </div>
       </div>
@@ -1241,10 +1245,11 @@ async function openComponentPicker(code, name) {
     
     document.body.appendChild(modal);
     
-    // Populate component list
+    // Populate component list with auto-apply on change
     const list = document.getElementById('component-list');
     components.forEach(comp => {
-      const isSelected = selectedComponentsMap[code].has(comp.name);
+      // Default to checked if no custom selection exists, otherwise check if component is in the Set
+      const isSelected = hasCustomSelection ? selectedComponentsMap[code].has(comp.name) : true;
       const item = el(`
         <label style="display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); margin-bottom: 4px; border-radius: 4px; cursor: pointer;">
           <input type="checkbox" data-component="${comp.name}" ${isSelected ? 'checked' : ''}>
@@ -1254,6 +1259,35 @@ async function openComponentPicker(code, name) {
           </div>
         </label>
       `);
+      
+      // Auto-apply changes when checkbox changes
+      const checkbox = item.querySelector('input[type="checkbox"]');
+      checkbox.addEventListener('change', (e) => {
+        // Initialize Set with ALL components when user makes first change
+        if (!selectedComponentsMap[code] || !(selectedComponentsMap[code] instanceof Set)) {
+          selectedComponentsMap[code] = new Set(components.map(c => c.name));
+        }
+        
+        if (e.target.checked) {
+          selectedComponentsMap[code].add(comp.name);
+        } else {
+          selectedComponentsMap[code].delete(comp.name);
+        }
+        
+        // IMPORTANT: Keep the empty Set in the map (don't delete the key)
+        // This ensures empty Sets are sent as {} in the payload, not "__ALL__"
+        
+        // Also ensure S2.selectedComponentsMap is updated (should be same reference but being defensive)
+        if (S2.selectedComponentsMap) {
+          S2.selectedComponentsMap[code] = selectedComponentsMap[code];
+        }
+        
+        // Optionally refresh the display to update component count
+        if (window.renderYourSelection) {
+          renderYourSelection();
+        }
+      });
+      
       list.appendChild(item);
     });
     
