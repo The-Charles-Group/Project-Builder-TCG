@@ -74,6 +74,16 @@ WF_COLUMNS = [
     "Rate_USD", "Price_USD"
 ]
 
+# at top, near other env helpers
+PRIMARY = os.getenv("APB_PRIMARY_DB_VERSION", "v4").lower()  # 'v3' or 'v4'
+
+# Scenario multipliers for A/B/C differentiation
+SCENARIO_MULT = {
+    "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True},
+    "B": {"hours_mult": 1.15, "qa_pct": 0.07, "pm_pct": 0.12, "strip_optional": False},
+    "C": {"hours_mult": 1.30, "qa_pct": 0.10, "pm_pct": 0.15, "include_addons": True}
+}
+
 # Helper to find v3 database by environment or common paths
 def _find_v3_path() -> str | None:
     for p in [
@@ -84,6 +94,22 @@ def _find_v3_path() -> str | None:
     ]:
         if p and os.path.exists(p):
             return p
+    return None
+
+def _find_v4_path() -> str | None:
+    import glob
+    # Check for xlsx files first
+    for p in [
+        "Replit_App_DB_READABLE_FullRows_v4b.xlsx",
+        "Replit_App_DB_READABLE_FullRows_v4.xlsx",
+    ]:
+        if os.path.exists(p):
+            return p
+    # Check for CSV bundle directory (canonical and timestamped variants)
+    # Filter to only return directories, not ZIP files
+    csv_dirs = [d for d in glob.glob("Replit_App_DB_READABLE_FullRows_v4_csvs*") if os.path.isdir(d)]
+    if csv_dirs:
+        return csv_dirs[0]  # return first match
     return None
 
 # ---------- OpenAI Integration (Stage 2) ----------
@@ -123,28 +149,140 @@ class AgencyDB:
         return f"{complexity}__{tier}_Hours"
 
     def load(self):
-        # Try Excel v4b first, then v4, else CSV bundle, else create mock data
-        xlsx_candidates = ["Replit_App_DB_READABLE_FullRows_v4b.xlsx",
-                          "Replit_App_DB_READABLE_FullRows_v4.xlsx"]
-        xlsx_name = None
-        for name in xlsx_candidates:
-            if os.path.exists(name):
-                xlsx_name = name
-                break
+        prefer_v3 = (PRIMARY == "v3")
+
+        v3_path = _find_v3_path()
+        v4_path = _find_v4_path()
+
+        if prefer_v3 and v3_path:
+            self._load_from_v3_primary(v3_path, v4_path)
+        elif v4_path:
+            self._load_from_v4_primary(v4_path, v3_path)
+        elif v3_path:
+            # Fallback to v3 when v4 is not available
+            self._load_from_v3_primary(v3_path, None)
+        else:
+            # No database files found, create mock data
+            self._create_mock_data()
+        self.loaded = True
+        return True
+
+    def _load_from_v3_primary(self, v3_path: str, v4_path: str | None):
+        # --- base: v3 ---
+        read_v3 = lambda sh: pd.read_excel(v3_path, sheet_name=sh)
+        self.src            = v3_path
+        self.all_rows       = read_v3("All_Task_Rows")
         
-        csv_dir  = "Replit_App_DB_READABLE_FullRows_v4_csvs"
-        if xlsx_name:
-            xls = pd.ExcelFile(xlsx_name)
-            read = lambda sh: pd.read_excel(xlsx_name, sheet_name=sh)
-            self.src = xlsx_name
-        elif os.path.exists(csv_dir):
+        v3_book = pd.ExcelFile(v3_path)
+        self.deliverables   = read_v3("Deliverable_Index") if "Deliverable_Index" in v3_book.sheet_names else None
+        self.role_rate_card = read_v3("Role_Rate_Card")   if "Role_Rate_Card"   in v3_book.sheet_names else None
+        self.drivers_v3     = read_v3("Drivers")          if "Drivers"          in v3_book.sheet_names else None
+        
+        # optional v3 sheets:
+        def _maybe(sh): 
+            try: return read_v3(sh)
+            except: return None
+        self.b_rules           = _maybe("Bundle_Rules_Table")
+        self.b_defaults        = _maybe("Bundle_Scenario_Defaults")
+        self.b_by_deliv        = _maybe("Bundles_By_Deliverable")
+        self.b_hours_by_role   = _maybe("Bundles_Hours_By_Role")
+        self.rate_matrix       = _maybe("Role_Rate_Matrix")
+        self.rate_bands        = _maybe("Rate_Bands")
+        self.timeline_params   = _maybe("Timeline_Params")
+        self.timeline_scaling  = _maybe("Timeline_Scaling")
+        self.timeline_weighting= _maybe("Timeline_Weighting")
+        self.slack_settings    = _maybe("Slack_Settings")
+        self.pricing_settings  = _maybe("Pricing_Settings")
+        self.scenario_templates= _maybe("Scenario_Templates")
+        self.ui_options        = _maybe("UI_Options")
+        self.rfp_rules         = _maybe("RFP_Matching_Rules")
+
+        # --- overlay: v4 for any sheet missing in v3 ---
+        if v4_path:
+            if v4_path.endswith(".xlsx"):
+                read_v4 = lambda sh: pd.read_excel(v4_path, sheet_name=sh)
+                v4_book = pd.ExcelFile(v4_path)
+                def fill(attr, sh):
+                    if getattr(self, attr) is None and sh in v4_book.sheet_names:
+                        setattr(self, attr, read_v4(sh))
+                for attr, sh in [
+                    ("deliverables","Deliverable_Index"),
+                    ("b_rules","Bundle_Rules_Table"),
+                    ("b_defaults","Bundle_Scenario_Defaults"),
+                    ("b_by_deliv","Bundles_By_Deliverable"),
+                    ("b_hours_by_role","Bundles_Hours_By_Role"),
+                    ("role_rate_card","Role_Rate_Card"),
+                    ("rate_matrix","Role_Rate_Matrix"),
+                    ("rate_bands","Rate_Bands"),
+                    ("timeline_params","Timeline_Params"),
+                    ("timeline_scaling","Timeline_Scaling"),
+                    ("timeline_weighting","Timeline_Weighting"),
+                    ("slack_settings","Slack_Settings"),
+                    ("pricing_settings","Pricing_Settings"),
+                    ("scenario_templates","Scenario_Templates"),
+                    ("ui_options","UI_Options"),
+                    ("rfp_rules","RFP_Matching_Rules"),
+                ]:
+                    fill(attr, sh)
+            elif os.path.isdir(v4_path):
+                # Handle CSV bundle overlay
+                def read_v4_csv(sh):
+                    csv_path = os.path.join(v4_path, f"{sh}.csv")
+                    if os.path.exists(csv_path):
+                        return pd.read_csv(csv_path)
+                    return None
+                
+                for attr, sh in [
+                    ("deliverables","Deliverable_Index"),
+                    ("b_rules","Bundle_Rules_Table"),
+                    ("b_defaults","Bundle_Scenario_Defaults"),
+                    ("b_by_deliv","Bundles_By_Deliverable"),
+                    ("b_hours_by_role","Bundles_Hours_By_Role"),
+                    ("role_rate_card","Role_Rate_Card"),
+                    ("rate_matrix","Role_Rate_Matrix"),
+                    ("rate_bands","Rate_Bands"),
+                    ("timeline_params","Timeline_Params"),
+                    ("timeline_scaling","Timeline_Scaling"),
+                    ("timeline_weighting","Timeline_Weighting"),
+                    ("slack_settings","Slack_Settings"),
+                    ("pricing_settings","Pricing_Settings"),
+                    ("scenario_templates","Scenario_Templates"),
+                    ("ui_options","UI_Options"),
+                    ("rfp_rules","RFP_Matching_Rules"),
+                ]:
+                    if getattr(self, attr) is None:
+                        v4_data = read_v4_csv(sh)
+                        if v4_data is not None:
+                            setattr(self, attr, v4_data)
+
+        # v3_all_rows is same as all_rows in v3-primary mode
+        self.v3_all_rows = self.all_rows
+        
+        # normalize & code‑path compat (uses existing helpers)
+        self._normalize_component_column()
+        self._normalize_task_label_column()
+        self._normalize_v3_service_department()
+        self._normalize_code_columns()
+        self._normalize_role_and_seniority_columns()
+        self._normalize_rate_card_seniority()
+        
+        print(f"[DB] v3-primary loaded from: {v3_path}")
+
+    def _load_from_v4_primary(self, v4_path: str | None, v3_path: str | None):
+        # Use the provided v4_path or fall back to searching for files
+        if v4_path and v4_path.endswith(".xlsx"):
+            # Excel file
+            self.src = v4_path
+            read = lambda sh: pd.read_excel(v4_path, sheet_name=sh)
+        elif v4_path and os.path.isdir(v4_path):
+            # CSV bundle directory
             def read_csv(sh):
-                path = os.path.join(csv_dir, f"{sh}.csv")
+                path = os.path.join(v4_path, f"{sh}.csv")
                 if not os.path.exists(path):
                     raise FileNotFoundError(path)
                 return pd.read_csv(path)
             read = read_csv
-            self.src = csv_dir
+            self.src = v4_path
         else:
             # Create minimal mock data for demo purposes
             self._create_mock_data()
@@ -184,7 +322,6 @@ class AgencyDB:
         self._normalize_rate_card_seniority()
         
         # Try to read v3 data using path-aware helper
-        v3_path = _find_v3_path()
         if v3_path:
             try:
                 self.drivers_v3 = pd.read_excel(v3_path, sheet_name="Drivers")
@@ -205,8 +342,7 @@ class AgencyDB:
         # normalize code columns from v4/v4b for canonical naming
         self._normalize_code_columns()
         
-        self.loaded = True
-        return True
+        print(f"[DB] v4-primary loaded from: {self.src}")
 
     def _normalize_component_column(self):
         """
@@ -2808,7 +2944,16 @@ def api_build(payload: BuildPayload):
             # Default behavior when user hasn't locked a timeline yet
             per_deliv = _sort_deliverables(per_deliv, letter)
 
-        # Totals after order is finalized
+        # Apply scenario-specific multipliers and add PM/QA overhead
+        spec_resolved = _resolve_scenario(spec_in, "General")  # Get resolved spec for complexity/tier
+        per_deliv = _apply_scenario_knobs(
+            per_deliv, letter, 
+            spec_resolved.get("complexity", "Advanced"), 
+            spec_resolved.get("tier", "T2_MediumVolume"),
+            pricing_mode, rate_band, DB, blended_rate
+        )
+
+        # Totals after order is finalized and scenario knobs applied
         price_sum = sum(int(x["price"]) for x in per_deliv)
         hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
 
@@ -2930,6 +3075,13 @@ def api_build_scenario_c(payload: BuildScenarioCPayload):
 
     # Sort deliverables by phase order
     per_deliv = _sort_deliverables(per_deliv, "C")
+    
+    # Apply scenario-specific multipliers and add PM/QA overhead
+    per_deliv = _apply_scenario_knobs(
+        per_deliv, "C", complexity, tier,
+        payload.pricing_mode, payload.rate_band, DB, payload.blended_rate
+    )
+    
     price_sum = sum(int(x["price"]) for x in per_deliv)
     hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
 
@@ -3209,7 +3361,10 @@ def api_export_xml(payload: ExportXMLPayload):
             fixed_start_iso=project_start_iso,
             hours_per_day=payload.hours_per_day,
             merge_identical_children=False,
-            project_name=payload.project_name
+            project_name=payload.project_name,
+            pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenario.get("rate_band", "Standard_US"),
+            blended_rate=scenario.get("blended_rate")
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -3279,7 +3434,10 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             sheet_name="Scenario A",
             fixed_start_iso=project_start_iso,
             merge_identical_children=False,
-            project_name=project
+            project_name=project,
+            pricing_mode=scenario_a.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenario_a.get("rate_band", "Standard_US"),
+            blended_rate=scenario_a.get("blended_rate")
         )
         
         # Post-process Scenario A XML
@@ -3306,7 +3464,10 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             sheet_name="Scenario B",
             fixed_start_iso=project_start_iso_b,
             merge_identical_children=False,
-            project_name=project
+            project_name=project,
+            pricing_mode=scenario_b.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenario_b.get("rate_band", "Standard_US"),
+            blended_rate=scenario_b.get("blended_rate")
         )
         
         # Post-process Scenario B XML
@@ -3385,7 +3546,10 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             input_xlsx=tmp_xlsx_a, output_xml=out_xml_a, sheet_name="Scenario A",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
             hours_per_day=p.hours_per_day, merge_identical_children=False,
-            project_name=project
+            project_name=project,
+            pricing_mode=scenA.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenA.get("rate_band", "Standard_US"),
+            blended_rate=scenA.get("blended_rate")
         )
         # Post-process Scenario A XML
         final_xml_a = out_xml_a
@@ -3405,7 +3569,10 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             input_xlsx=tmp_xlsx_b, output_xml=out_xml_b, sheet_name="Scenario B",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
             hours_per_day=p.hours_per_day, merge_identical_children=False,
-            project_name=project
+            project_name=project,
+            pricing_mode=scenB.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenB.get("rate_band", "Standard_US"),
+            blended_rate=scenB.get("blended_rate")
         )
         # Post-process Scenario B XML
         final_xml_b = out_xml_b
@@ -3425,7 +3592,10 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             input_xlsx=tmp_xlsx_c, output_xml=out_xml_c, sheet_name="Scenario C",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
             hours_per_day=p.hours_per_day, merge_identical_children=False,
-            project_name=project
+            project_name=project,
+            pricing_mode=scenC.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenC.get("rate_band", "Standard_US"),
+            blended_rate=scenC.get("blended_rate")
         )
         # Post-process Scenario C XML
         final_xml_c = out_xml_c
@@ -3755,7 +3925,86 @@ def api_reorder_timeline(p: ReorderPayload):
             "scenario": scen}
 
 
+# ---------- Scenario Differentiation Helpers ----------
+def _resolve_global_multipliers(db: AgencyDB, complexity: str, tier: str) -> tuple[float,float]:
+    cm = 1.0; vm = 1.0
+    try:
+        ps = db.pricing_settings
+        if ps is not None:
+            cm_row = ps[ps["Key"].str.lower()==f"complexity.{complexity.lower()}"]
+            vm_row = ps[ps["Key"].str.lower()==f"volume.{tier.lower()}"]
+            if not cm_row.empty: cm = float(cm_row["Value"].iloc[0])
+            if not vm_row.empty: vm = float(vm_row["Value"].iloc[0])
+    except Exception:
+        pass
+    return cm, vm
+
+def _apply_multipliers(row_hours, complexity, tier, letter, db):
+    cm, vm = _resolve_global_multipliers(db, complexity, tier)
+    sm = SCENARIO_MULT[letter]["hours_mult"]
+    return max(0.5, min(2.0, row_hours * cm * vm * sm))
+
+def _make_overhead_item(name: str, hours: float) -> dict:
+    return {
+        "deliverable_code": f"OVERHEAD-{name.upper().replace(' ', '-')}",
+        "deliverable": name,
+        "category": "PM",
+        "included_task_groups": [name],
+        "hours_by_role": [{"role": "Account Manager", "seniority": "Senior", "hours": hours}],
+        "total_hours": hours,
+        "effective_rate": 0,
+        "price": 0,
+        "components": [],
+        "schedule": []
+    }
+
+def _apply_scenario_knobs(items, letter, complexity, tier, pricing_mode, rate_band, db, blended_rate=None):
+    knobs = SCENARIO_MULT.get(letter, SCENARIO_MULT["A"])
+    for it in items:
+        # Apply hours multiplier to each role
+        for r in it.get("hours_by_role", []):
+            r["hours"] = r["hours"] * knobs["hours_mult"]
+        # Update total hours
+        if "total_hours" in it:
+            it["total_hours"] = it["total_hours"] * knobs["hours_mult"]
+        # Strip/augment components
+        if knobs.get("strip_optional"):
+            it["components"] = [c for c in it.get("components", []) if not c.get("optional")]
+        if knobs.get("include_addons"):
+            it["components"].extend(it.get("addons", []))
+    
+    # Add PM/QA overhead as explicit task groups
+    total_hours = sum(sum(r.get("hours", 0) for r in it.get("hours_by_role", [])) for it in items)
+    pm_hours = total_hours * knobs.get("pm_pct", 0)
+    qa_hours = total_hours * knobs.get("qa_pct", 0)
+    if pm_hours > 0:
+        items.append(_make_overhead_item("Project Management", pm_hours))
+    if qa_hours > 0:
+        items.append(_make_overhead_item("QA / Reporting", qa_hours))
+    return items
+
 # ---------- MSPDI Export Function ----------
+def _std_rate_for(role: str, mode: str, band: str, blended: float, db: AgencyDB) -> float:
+    if mode == "Flat_Blended" and blended:
+        return float(blended)
+    # per-resource lookup
+    try:
+        # prefer matrix; fallback to role_rate_card
+        m = db.rate_matrix
+        if m is not None:
+            row = m[(m["Role"].str.strip().str.lower()==role.strip().lower()) &
+                    (m["Band"].str.strip().str.lower()==band.strip().lower())]
+            if not row.empty:
+                return float(row["USD_per_hour"].iloc[0])
+        rc = db.role_rate_card
+        if rc is not None:
+            row = rc[rc["Role"].str.strip().str.lower()==role.strip().lower()]
+            if not row.empty:
+                return float(row[band].iloc[0])  # columns like Standard_US, Premium_US
+    except Exception:
+        pass
+    return float(blended or 0)
+
 def convert_excel_to_mspdi(
     input_xlsx: str,
     output_xml: str,
@@ -3771,7 +4020,10 @@ def convert_excel_to_mspdi(
     include_audits: bool = True,
     audits_dir: Optional[str] = None,
     merge_identical_children: bool = False,  # <— toggle for multi-resource merge
-    project_name: Optional[str] = None       # <— NEW: explicit project name override
+    project_name: Optional[str] = None,      # <— explicit project name override
+    pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
+    rate_band: str = "Standard_US",          # <— NEW: rate band
+    blended_rate: Optional[float] = None     # <— NEW: blended rate
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -4268,6 +4520,10 @@ def convert_excel_to_mspdi(
             SubElement(resource, "ID").text = str(res["ID"])
             SubElement(resource, "Name").text = res["Name"]
             SubElement(resource, "Type").text = "1"  # Work resource
+            # Add StandardRate for pricing
+            role = res.get("Name", "Unassigned")
+            rate = _std_rate_for(role, pricing_mode, rate_band, blended_rate or 0, DB)
+            SubElement(resource, "StandardRate").text = f"{rate:.2f}"
 
         # Tasks
         tasks_elem = SubElement(project, "Tasks")
@@ -4327,12 +4583,14 @@ def convert_excel_to_mspdi(
             SubElement(assignment, "UID").text = str(assign["UID"])
             task_uid = assign["TaskUID"]
             SubElement(assignment, "TaskUID").text = str(task_uid)
-            SubElement(assignment, "ResourceUID").text = str(assign["ResourceUID"])
+            res_uid = assign["ResourceUID"]
+            SubElement(assignment, "ResourceUID").text = str(res_uid)
             SubElement(assignment, "Start").text = assign["Start"]
             SubElement(assignment, "Finish").text = assign["Finish"]
             
             # Compute Units = work_min / dur_min for Fixed Duration tasks
-            work_min = assign['WorkHours'] * 60
+            work_hours = assign['WorkHours']
+            work_min = work_hours * 60
             # Get duration from the task schedule
             dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
             dur_min = dur_hours * 60
@@ -4342,6 +4600,12 @@ def convert_excel_to_mspdi(
             
             SubElement(assignment, "Units").text = str(units)
             SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+            
+            # Add Cost = rate * hours
+            res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
+            rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate or 0, DB)
+            cost = work_hours * rate
+            SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
         # Add PredecessorLinks for dependencies
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
