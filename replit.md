@@ -102,6 +102,15 @@ Preferred communication style: Simple, everyday language.
   - User can then unselect specific components if needed
   - Aligns with `"__ALL__"` sentinel pattern used throughout the application
 
+### Error Handling Improvements (October 2025)
+- **Build Scenario C**: Enhanced error handling to show actual backend validation errors instead of generic "Bad Request"
+  - Frontend now displays detailed error messages from server response body
+  - Helps diagnose payload validation issues when building Scenario C
+  
+- **Reorder Timeline**: Added proper error handling for timeline reordering endpoint
+  - Displays specific error messages when reordering fails
+  - Prevents silent failures when timeline operations encounter validation errors
+
 ### Defensive Component Selection Handling (October 2025)
 - **Backend Sanitization in /api/build**: Enhanced component map processing to prevent invalid hours
   - Treats hours <= 0 as "unselected" and drops them from component selection

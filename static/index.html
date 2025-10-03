@@ -1424,10 +1424,18 @@
         tier:                (scen.items?.[0]?.tier || 'T2_MediumVolume')
       };
 
-      const res = await fetch('/api/reorder_timeline', {
+      const response = await fetch('/api/reorder_timeline', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify(payload)
-      }).then(r => r.json());
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        alert(`Failed to reorder timeline: ${errorText || response.statusText}`);
+        return;
+      }
+      
+      const res = await response.json();
 
       if(res?.items?.length){
         const byCode = new Map(res.items.map(i=>[i.deliverable_code, i.schedule]));
@@ -1484,7 +1492,8 @@
         });
         
         if (!res.ok) {
-          throw new Error(`Failed to build Scenario C: ${res.statusText}`);
+          const errorText = await res.text();
+          throw new Error(`Failed to build Scenario C: ${errorText || res.statusText}`);
         }
         
         const result = await res.json();
