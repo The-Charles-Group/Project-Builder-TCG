@@ -1320,11 +1320,15 @@
       // show Scenario C button if C exists
       const hasC = !!(window.appState?.scenarios?.C?.items?.length);
       const btnC = document.getElementById('tl-sel-C');
+      console.log('[showStep4] Checking Scenario C button. hasC:', hasC, 'button:', !!btnC);
       if (btnC) {
         if (hasC) {
           btnC.classList.remove('hidden');
+          btnC.style.removeProperty('display');
+          console.log('[showStep4] Showed Scenario C button');
         } else {
           btnC.classList.add('hidden');
+          console.log('[showStep4] Hid Scenario C button');
         }
       }
 
@@ -1510,8 +1514,14 @@
         
         // show Step 4 and render C; also make the "Scenario C" button visible
         const btnC = document.getElementById('tl-sel-C');
+        console.log('[Scenario C] Button element found:', !!btnC, btnC);
         if (btnC) {
           btnC.classList.remove('hidden');
+          btnC.style.removeProperty('display'); // Remove any inline display styles
+          console.log('[Scenario C] Button classes after remove:', btnC.className);
+          console.log('[Scenario C] Button display style:', window.getComputedStyle(btnC).display);
+        } else {
+          console.error('[Scenario C] Button #tl-sel-C not found in DOM!');
         }
         showStep4('C');
         
@@ -1659,6 +1669,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.5" defer></script>
+  <script src="/static/app.js?v=5.6" defer></script>
 </body>
 </html>
