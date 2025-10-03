@@ -1512,7 +1512,10 @@
         const cTotal = appState.scenarios.C?.totals?.price || 0;
         document.getElementById('c-delta').textContent = `Δ vs Scenario ${base}: $${(cTotal - baseTotal).toLocaleString()}`;
         
-        // show Step 4 and render C; also make the "Scenario C" button visible
+        // show Step 4 and render C first
+        showStep4('C');
+        
+        // THEN make the "Scenario C" button visible (after showStep4 which might hide it)
         const btnC = document.getElementById('tl-sel-C');
         console.log('[Scenario C] Button element found:', !!btnC, btnC);
         if (btnC) {
@@ -1523,7 +1526,6 @@
         } else {
           console.error('[Scenario C] Button #tl-sel-C not found in DOM!');
         }
-        showStep4('C');
         
       } catch (error) {
         alert('Error building Scenario C: ' + error.message);
@@ -1669,6 +1671,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.6" defer></script>
+  <script src="/static/app.js?v=5.7" defer></script>
 </body>
 </html>
