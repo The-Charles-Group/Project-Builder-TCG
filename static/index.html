@@ -267,7 +267,7 @@
       <div id="timeline-controls">
         <button type="button" data-timeline-sel="A" id="tl-sel-A">Scenario A</button>
         <button type="button" data-timeline-sel="B" id="tl-sel-B">Scenario B</button>
-        <button type="button" data-timeline-sel="C" id="tl-sel-C" style="display:none">Scenario C</button>
+        <button type="button" data-timeline-sel="C" id="tl-sel-C" class="hidden">Scenario C</button>
       </div>
       <table id="tl-table" class="table-compact" style="width:100%">
         <thead>
@@ -1320,7 +1320,13 @@
       // show Scenario C button if C exists
       const hasC = !!(window.appState?.scenarios?.C?.items?.length);
       const btnC = document.getElementById('tl-sel-C');
-      if (btnC) btnC.style.display = hasC ? 'inline-block' : 'none';
+      if (btnC) {
+        if (hasC) {
+          btnC.classList.remove('hidden');
+        } else {
+          btnC.classList.add('hidden');
+        }
+      }
 
       // render and scroll (with safety check for missing timeline elements)
       try {
@@ -1504,12 +1510,8 @@
         
         // show Step 4 and render C; also make the "Scenario C" button visible
         const btnC = document.getElementById('tl-sel-C');
-        console.log('Scenario C built, button element:', btnC);
         if (btnC) {
-          btnC.style.display = 'inline-block';
-          console.log('Set Scenario C button display to inline-block');
-        } else {
-          console.error('Scenario C button not found!');
+          btnC.classList.remove('hidden');
         }
         showStep4('C');
         
@@ -1657,6 +1659,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.4" defer></script>
+  <script src="/static/app.js?v=5.5" defer></script>
 </body>
 </html>
