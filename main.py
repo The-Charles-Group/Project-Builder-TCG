@@ -1544,7 +1544,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         "Service_Department": "",
         "Deliverable": "",
         "Project_Name": project_name, "WBS_ID": "1", "Parent_WBS_ID": "",
-        "Task_Name": project_name, "Component": "Project", "Task": "",
+        "Task_Name": "Project Summary", "Component": "", "Task": "",
         "Role": "", "Seniority": "", "Planned_Hours": 0, "Start_Offset_Days": 0, "Duration_Days": 0,
         "Dependencies": "", "Assignee_External_ID": "", "Notes": "",
         "Rate_USD": "", "Price_USD": ""
