@@ -306,7 +306,9 @@
         <small style="color: var(--muted); display: block; margin-bottom: 4px;">📊 Microsoft Project XML Export:</small>
         <button id="btn-export-xml-a">Export XML Scenario A</button>
         <button id="btn-export-xml-b">Export XML Scenario B</button>
+        <button id="btn-export-xml-c">Export XML Scenario C</button>
         <button id="btn-export-xml-ab">Export XML A & B (zip)</button>
+        <button id="btn-export-xml-abc">Export XML A, B & C (zip)</button>
       </div>
     </section>
   </main>
@@ -842,30 +844,72 @@
       const clientBudget = getClientBudgetFromUI();
       if (!clientBudget) return;
       
-      const scenarioA = scenarios.A;
-      if (!scenarioA || !scenarioA.totals) return;
-      
-      const totalPrice = scenarioA.totals.price || 0;
-      const delta = totalPrice - clientBudget;
-      const pct = ((delta / clientBudget) * 100).toFixed(1);
-      
-      let html = '<div style="margin: 16px 0; padding: 12px; border-radius: 6px; background: rgba(255,255,255,0.05);">';
-      html += '<strong>Budget Analysis:</strong> ';
-      if (delta > 0) {
-        html += `<span style="color: #ef4444;">Over budget by $${delta.toLocaleString()} (${pct}%)</span>`;
-      } else {
-        html += `<span style="color: #10b981;">Under budget by $${Math.abs(delta).toLocaleString()} (${Math.abs(pct)}%)</span>`;
+      // Helper function to render budget pill for a scenario
+      function renderBudgetPill(scenario) {
+        if (!scenario || !scenario.budget_info) return '';
+        
+        const budgetInfo = scenario.budget_info;
+        const delta = budgetInfo.budget_delta || 0;
+        const pct = budgetInfo.coverage_pct || 0;
+        const deltaPct = ((delta / clientBudget) * 100).toFixed(1);
+        
+        let html = '<div style="margin: 16px 0; padding: 12px; border-radius: 6px; background: rgba(255,255,255,0.05);">';
+        html += '<strong>Budget Analysis:</strong> ';
+        if (delta > 0) {
+          html += `<span style="color: #ef4444;">Over budget by $${Math.abs(delta).toLocaleString()} (${Math.abs(deltaPct)}%)</span>`;
+        } else {
+          html += `<span style="color: #10b981;">Under budget by $${Math.abs(delta).toLocaleString()} (${Math.abs(deltaPct)}%)</span>`;
+        }
+        html += '</div>';
+        return html;
       }
-      html += '</div>';
       
-      const scenarioADiv = document.getElementById('scenarioA');
-      if (scenarioADiv) {
-        const existing = scenarioADiv.querySelector('.budget-info');
-        if (existing) existing.remove();
-        const div = document.createElement('div');
-        div.className = 'budget-info';
-        div.innerHTML = html;
-        scenarioADiv.insertBefore(div, scenarioADiv.firstChild);
+      // Display budget info for Scenario A
+      if (scenarios.A) {
+        const scenarioADiv = document.getElementById('scenarioA');
+        if (scenarioADiv) {
+          const existing = scenarioADiv.querySelector('.budget-info');
+          if (existing) existing.remove();
+          const html = renderBudgetPill(scenarios.A);
+          if (html) {
+            const div = document.createElement('div');
+            div.className = 'budget-info';
+            div.innerHTML = html;
+            scenarioADiv.insertBefore(div, scenarioADiv.firstChild);
+          }
+        }
+      }
+      
+      // Display budget info for Scenario B
+      if (scenarios.B) {
+        const scenarioBDiv = document.getElementById('scenarioB');
+        if (scenarioBDiv) {
+          const existing = scenarioBDiv.querySelector('.budget-info');
+          if (existing) existing.remove();
+          const html = renderBudgetPill(scenarios.B);
+          if (html) {
+            const div = document.createElement('div');
+            div.className = 'budget-info';
+            div.innerHTML = html;
+            scenarioBDiv.insertBefore(div, scenarioBDiv.firstChild);
+          }
+        }
+      }
+      
+      // Display budget info for Scenario C (if available)
+      if (scenarios.C) {
+        const scenarioCDiv = document.getElementById('scenarioC');
+        if (scenarioCDiv) {
+          const existing = scenarioCDiv.querySelector('.budget-info');
+          if (existing) existing.remove();
+          const html = renderBudgetPill(scenarios.C);
+          if (html) {
+            const div = document.createElement('div');
+            div.className = 'budget-info';
+            div.innerHTML = html;
+            scenarioCDiv.insertBefore(div, scenarioCDiv.firstChild);
+          }
+        }
       }
     }
     
@@ -1079,10 +1123,30 @@
         scenario_a: A,
         scenario_b: B,
         project_name: getProjectName(),
+        project_start_iso: document.getElementById('projectStartInput')?.value,
         merge_identical_children: false
       };
       await downloadFromEndpoint('/api/export_workbook_xml', payload,
         'Project_Scenarios_A_and_B.zip');
+    }
+
+    async function onExportXMLWorkbookABC() {
+      const A = window.getScenario('A');
+      const B = window.getScenario('B');
+      const C = window.getScenario('C');
+      if (!A || !B || !C) { alert('Build scenarios A, B & C first.'); return; }
+
+      const payload = {
+        scenario_a: A,
+        scenario_b: B,
+        scenario_c: C,
+        project_name: getProjectName(),
+        start_date_mode: 'fixed',
+        fixed_start_iso: document.getElementById('projectStartInput')?.value,
+        hours_per_day: 8.0
+      };
+      await downloadFromEndpoint('/api/export_workbook_xml_abc', payload,
+        'Project_Scenarios_A_B_and_C.zip');
     }
 
     // Legacy function removed - use Step 5 exports instead
@@ -1409,7 +1473,8 @@
         slack_after_internal: getSlackInternalFromUI(),
         slack_after_client: getSlackClientFromUI(),
         slack_global_pct: getSlackPctFromUI(),
-        project_start: getProjectStartFromUI()
+        project_start: getProjectStartFromUI(),
+        client_budget_usd: getClientBudgetFromUI() || null
       };
 
       try {
@@ -1428,6 +1493,9 @@
         // Update app state and render scenario C
         appState.scenarios = { ...(appState.scenarios || {}), ...result };
         renderScenario('scenarioC', appState.scenarios.C);
+        
+        // Display budget info for Scenario C
+        displayBudgetInfo(appState.scenarios);
         
         // Show delta vs base
         const baseTotal = appState.scenarios[base]?.totals?.price || 0;
@@ -1488,7 +1556,9 @@
     // XML Export buttons
     document.querySelector('#btn-export-xml-a')?.addEventListener('click', () => onExportXMLScenario('A'));
     document.querySelector('#btn-export-xml-b')?.addEventListener('click', () => onExportXMLScenario('B'));
+    document.querySelector('#btn-export-xml-c')?.addEventListener('click', () => onExportXMLScenario('C'));
     document.querySelector('#btn-export-xml-ab')?.addEventListener('click', onExportXMLWorkbook);
+    document.querySelector('#btn-export-xml-abc')?.addEventListener('click', onExportXMLWorkbookABC);
 
     // Legacy format tracking (remove old handlers)
     // Note: New export format handling is in Step 5

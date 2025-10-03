@@ -2027,6 +2027,15 @@ class ExportWorkbookXMLPayload(BaseModel):
     project_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
     merge_identical_children: bool = False
 
+class ExportWorkbookXMLABCPayload(BaseModel):
+    scenario_a: Optional[Dict[str, Any]] = None
+    scenario_b: Optional[Dict[str, Any]] = None
+    scenario_c: Optional[Dict[str, Any]] = None
+    project_name: Optional[str] = None
+    start_date_mode: str = "next_monday"   # "next_monday" | "fixed"
+    fixed_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
+    hours_per_day: float = 8.0
+
 class AuditPricingPayload(BaseModel):
     scenario: Dict[str, Any]           # scenario object from /api/build
     pricing_mode: str                  # "Flat_Blended" | "Per_Resource"
@@ -2939,6 +2948,21 @@ def api_build_scenario_c(payload: BuildScenarioCPayload):
         "items": per_deliv,
         "totals": {"hours": int(hours_sum), "price": int(price_sum)}
     }
+    
+    # Add budget metrics if client_budget_usd was provided
+    if payload.client_budget_usd and payload.client_budget_usd > 0:
+        scenario_price = int(price_sum)
+        budget_delta = scenario_price - payload.client_budget_usd
+        coverage_pct = (scenario_price / payload.client_budget_usd) * 100 if payload.client_budget_usd > 0 else 0
+        scale_factor = payload.client_budget_usd / scenario_price if scenario_price > 0 else 1.0
+        
+        scenario_c["budget_info"] = {
+            "client_budget_usd": payload.client_budget_usd,
+            "total_price": scenario_price,
+            "budget_delta": budget_delta,
+            "coverage_pct": round(coverage_pct, 1),
+            "scale_factor_if_fit": round(scale_factor, 3)
+        }
 
     # 6) Store/update in memory next to A/B for this session
     global _CURRENT_SCENARIOS
@@ -3294,6 +3318,103 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
         for temp_file in temp_files:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
+
+@app.post("/api/export_workbook_xml_abc")
+def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
+    """
+    Export scenarios A, B, and C to separate XML files in a zip archive.
+    Each XML uses the convert_excel_to_mspdi function.
+    """
+    if not DB.loaded:
+        DB.load()
+
+    project = (p.project_name or _upload_title_default() or
+               f"Proposal {datetime.date.today().isoformat()}").strip()
+
+    # Guard: ensure scenarios exist
+    _assert_has_items(p.scenario_a or {}, "Scenario A XML export")
+    _assert_has_items(p.scenario_b or {}, "Scenario B XML export")
+    _assert_has_items(p.scenario_c or {}, "Scenario C XML export")
+
+    # Inflate components just like A/B route
+    scenA = _inflate_components_if_missing(p.scenario_a or {})
+    scenB = _inflate_components_if_missing(p.scenario_b or {})
+    scenC = _inflate_components_if_missing(p.scenario_c or {})
+
+    # Build WBS dataframes
+    dfA = build_wbs_dataframe_from_scenario(scenA, project)
+    dfB = build_wbs_dataframe_from_scenario(scenB, project)
+    dfC = build_wbs_dataframe_from_scenario(scenC, project)
+    dfA = _ensure_v3_ae_columns(dfA)
+    dfB = _ensure_v3_ae_columns(dfB)
+    dfC = _ensure_v3_ae_columns(dfC)
+
+    base = _export_basename(project, "Scenarios A, B & C XML")
+    temp_files, xml_files = [], []
+
+    try:
+        # A
+        tmp_xlsx_a = f"{base}_A_temp.xlsx"
+        out_xml_a = f"{base}_Scenario_A.xml"
+        temp_files += [tmp_xlsx_a, out_xml_a]
+        with pd.ExcelWriter(tmp_xlsx_a, engine="openpyxl") as xw:
+            dfA.to_excel(xw, sheet_name="Scenario A", index=False)
+            _apply_number_formats(xw.sheets["Scenario A"], dfA)
+        stats_a = convert_excel_to_mspdi(
+            input_xlsx=tmp_xlsx_a, output_xml=out_xml_a, sheet_name="Scenario A",
+            start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
+            hours_per_day=p.hours_per_day, merge_identical_children=False
+        )
+        xml_files.append(("Scenario_A.xml", out_xml_a, stats_a))
+
+        # B
+        tmp_xlsx_b = f"{base}_B_temp.xlsx"
+        out_xml_b = f"{base}_Scenario_B.xml"
+        temp_files += [tmp_xlsx_b, out_xml_b]
+        with pd.ExcelWriter(tmp_xlsx_b, engine="openpyxl") as xw:
+            dfB.to_excel(xw, sheet_name="Scenario B", index=False)
+            _apply_number_formats(xw.sheets["Scenario B"], dfB)
+        stats_b = convert_excel_to_mspdi(
+            input_xlsx=tmp_xlsx_b, output_xml=out_xml_b, sheet_name="Scenario B",
+            start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
+            hours_per_day=p.hours_per_day, merge_identical_children=False
+        )
+        xml_files.append(("Scenario_B.xml", out_xml_b, stats_b))
+
+        # C
+        tmp_xlsx_c = f"{base}_C_temp.xlsx"
+        out_xml_c = f"{base}_Scenario_C.xml"
+        temp_files += [tmp_xlsx_c, out_xml_c]
+        with pd.ExcelWriter(tmp_xlsx_c, engine="openpyxl") as xw:
+            dfC.to_excel(xw, sheet_name="Scenario C", index=False)
+            _apply_number_formats(xw.sheets["Scenario C"], dfC)
+        stats_c = convert_excel_to_mspdi(
+            input_xlsx=tmp_xlsx_c, output_xml=out_xml_c, sheet_name="Scenario C",
+            start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
+            hours_per_day=p.hours_per_day, merge_identical_children=False
+        )
+        xml_files.append(("Scenario_C.xml", out_xml_c, stats_c))
+
+        # Zip all 3
+        import zipfile
+        zip_path = f"{base}.zip"
+        with zipfile.ZipFile(zip_path, "w") as z:
+            for alias, real, _ in xml_files:
+                z.write(real, alias)
+            z.writestr("export_stats.json", json.dumps({
+                "scenario_a": xml_files[0][2],
+                "scenario_b": xml_files[1][2],
+                "scenario_c": xml_files[2][2],
+            }, indent=2))
+        return FileResponse(zip_path, filename=os.path.basename(zip_path),
+                            media_type="application/zip")
+    finally:
+        for f in temp_files:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except:
+                    pass
 
 @app.post("/api/audit_pricing")
 def api_audit_pricing(p: AuditPricingPayload):
