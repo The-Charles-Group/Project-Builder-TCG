@@ -1504,7 +1504,13 @@
         
         // show Step 4 and render C; also make the "Scenario C" button visible
         const btnC = document.getElementById('tl-sel-C');
-        if (btnC) btnC.style.display = 'inline-block';
+        console.log('Scenario C built, button element:', btnC);
+        if (btnC) {
+          btnC.style.display = 'inline-block';
+          console.log('Set Scenario C button display to inline-block');
+        } else {
+          console.error('Scenario C button not found!');
+        }
         showStep4('C');
         
       } catch (error) {
@@ -1651,6 +1657,6 @@
     // Initialize
     loadOptions();
   </script>
-  <script src="/static/app.js?v=5.3" defer></script>
+  <script src="/static/app.js?v=5.4" defer></script>
 </body>
 </html>
