@@ -35,6 +35,13 @@ Preferred communication style: Simple, everyday language.
   - Extracts date portion before parsing to support both ISO8601 and simple date formats
   - Prevents ValueError: "unconverted data remains" error
 
+- **XML Project Name & Summary Task Fixes**: Corrected MSPDI project naming and root task structure
+  - **Project Name**: XML <Project><Name> now uses user-entered project name (from Step 3) instead of "Scenario A/B"
+  - **Name Derivation**: Extracts project title from root WBS row (WBS_ID "1") Task_Name, with fallback to Project_Name column
+  - **Root Task**: First task row is now a proper Project Summary task with Summary=1, PT0M Work/Duration
+  - **WBS DataFrame**: Root row now has Planned_Hours=0 and Duration_Days=0 (not empty strings)
+  - **Workfront Display**: Workfront header now shows the actual project name, with clean roll-up from child tasks
+
 ### GPT-5 Patches Implementation (October 2025)
 - **Backend Enhancements**:
   - Added component inflation at start of `build_wbs_with_pricing()` to ensure AI picks always include full component trees

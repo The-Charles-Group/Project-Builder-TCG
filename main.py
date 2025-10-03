@@ -1536,7 +1536,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
     blended_rate = float(blended_rate)
 
-    # project parent
+    # project parent - set to 0 for proper Project Summary task
     rows.append({
         "Row_ID": "",
         "Deliverable_Code": "",
@@ -1545,7 +1545,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         "Deliverable": "",
         "Project_Name": project_name, "WBS_ID": "1", "Parent_WBS_ID": "",
         "Task_Name": project_name, "Component": "Project", "Task": "",
-        "Role": "", "Seniority": "", "Planned_Hours": "", "Start_Offset_Days": 0, "Duration_Days": "",
+        "Role": "", "Seniority": "", "Planned_Hours": 0, "Start_Offset_Days": 0, "Duration_Days": 0,
         "Dependencies": "", "Assignee_External_ID": "", "Notes": "",
         "Rate_USD": "", "Price_USD": ""
     })
@@ -4120,14 +4120,22 @@ def convert_excel_to_mspdi(
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             # Summary task flag
-            is_summary = r["WBS"] in summary_set
+            is_root = r["WBS"] == "1"
+            is_summary = r["WBS"] in summary_set or is_root
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # Emit DurationFormat=7 (Days) for all tasks
             SubElement(task, "DurationFormat").text = "7"
             
-            # Only set Duration/Work for non-summary tasks (let Workfront compute for summaries)
-            if not is_summary:
+            # Root task gets PT0M for Work/Duration (Workfront will roll up from children)
+            if is_root:
+                SubElement(task, "Work").text = "PT0M"
+                SubElement(task, "Duration").text = "PT0M"
+                # Root task uses Must Start On constraint
+                SubElement(task, "ConstraintType").text = "4"  # Must Start On
+                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+            # Only set Duration/Work for non-summary leaf tasks
+            elif not is_summary:
                 # Safe int conversion for time values using rolled-up duration
                 planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
                 dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
@@ -4142,14 +4150,8 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
                 
-                # Use ASAP constraints for non-root tasks, Must Start On only for the very first task
-                if r["WBS"] == "1":
-                    # Root/project task: Must Start On with project_start_iso
-                    SubElement(task, "ConstraintType").text = "4"  # Must Start On
-                    SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
-                else:
-                    # All other tasks: As Soon As Possible (rely on predecessors + calendar)
-                    SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
+                # All non-root tasks: As Soon As Possible (rely on predecessors + calendar)
+                SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
