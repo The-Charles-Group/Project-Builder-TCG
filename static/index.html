@@ -1320,7 +1320,7 @@
       // show Scenario C button if C exists
       const hasC = !!(window.appState?.scenarios?.C?.items?.length);
       const btnC = document.getElementById('tl-sel-C');
-      if (btnC) btnC.style.display = hasC ? '' : 'none';
+      if (btnC) btnC.style.display = hasC ? 'inline-block' : 'none';
 
       // render and scroll (with safety check for missing timeline elements)
       try {
@@ -1504,7 +1504,7 @@
         
         // show Step 4 and render C; also make the "Scenario C" button visible
         const btnC = document.getElementById('tl-sel-C');
-        if (btnC) btnC.style.display = '';
+        if (btnC) btnC.style.display = 'inline-block';
         showStep4('C');
         
       } catch (error) {
