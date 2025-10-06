@@ -4102,7 +4102,9 @@ def convert_excel_to_mspdi(
                 "Dependencies": str(row.get("Dependencies", "")),
                 "RoleList": [role],
                 "RoleStr": role,
-                "UID": 0  # Will be assigned later
+                "UID": 0,  # Will be assigned later
+                "DeliverableCode": str(row.get("Deliverable_Code", "")),
+                "Component": str(row.get("Component", ""))
             }
             rows.append(task_row)
         
@@ -4226,6 +4228,119 @@ def convert_excel_to_mspdi(
                     return last_leaf(children[-1])
             return wbs
 
+        # === WORKFRONT SEQUENCING ENRICHMENT ===
+        # Add anchor tasks per deliverable and chain components properly
+        def enrich_wbs_for_workfront(rows):
+            enriched = []
+            anchor_id_counter = [90000]  # Start high to avoid conflicts with existing WBS IDs
+            
+            # Group rows by deliverable (excluding Project Summary WBS=1)
+            deliverables = {}
+            root_row = None
+            other_rows = []  # Rows without DeliverableCode
+            for r in rows:
+                if r["WBS"] == "1":
+                    root_row = r
+                    continue
+                dcode = r.get("DeliverableCode", "").strip()
+                if dcode:
+                    deliverables.setdefault(dcode, []).append(r)
+                else:
+                    other_rows.append(r)
+            
+            # Add root row first
+            if root_row:
+                enriched.append(root_row)
+            
+            prev_deliv_end_wbs = None
+            
+            for dcode in sorted(deliverables.keys()):
+                deliv_rows = deliverables[dcode]
+                if not deliv_rows:
+                    continue
+                
+                # Create START anchor
+                start_wbs = f"ANCHOR_{anchor_id_counter[0]}"
+                anchor_id_counter[0] += 1
+                start_anchor = {
+                    "WBS": start_wbs,
+                    "ParentWBS": "1",
+                    "Name": f"[{dcode}] START",
+                    "PlannedHours": 0,
+                    "StartOffset": 0,
+                    "Duration": 0,
+                    "Dependencies": prev_deliv_end_wbs if prev_deliv_end_wbs else "",
+                    "RoleList": [],
+                    "RoleStr": "",
+                    "UID": 0,
+                    "DeliverableCode": dcode,
+                    "Component": ""
+                }
+                enriched.append(start_anchor)
+                
+                # Group deliverable rows by component
+                components = {}
+                for r in deliv_rows:
+                    comp = r.get("Component", "").strip() or "General"
+                    components.setdefault(comp, []).append(r)
+                
+                prev_comp_last_wbs = start_wbs
+                
+                # Add components in order
+                for comp in sorted(components.keys()):
+                    comp_rows = components[comp]
+                    
+                    # Add predecessor to all rows in this component
+                    for i, r in enumerate(comp_rows):
+                        if not r.get("Dependencies"):
+                            r["Dependencies"] = prev_comp_last_wbs
+                        enriched.append(r)
+                    
+                    # Last row of this component becomes predecessor for next
+                    if comp_rows:
+                        prev_comp_last_wbs = comp_rows[-1]["WBS"]
+                
+                # Create END anchor
+                end_wbs = f"ANCHOR_{anchor_id_counter[0]}"
+                anchor_id_counter[0] += 1
+                end_anchor = {
+                    "WBS": end_wbs,
+                    "ParentWBS": "1",
+                    "Name": f"[{dcode}] END",
+                    "PlannedHours": 0,
+                    "StartOffset": 0,
+                    "Duration": 0,
+                    "Dependencies": prev_comp_last_wbs,
+                    "RoleList": [],
+                    "RoleStr": "",
+                    "UID": 0,
+                    "DeliverableCode": dcode,
+                    "Component": ""
+                }
+                enriched.append(end_anchor)
+                prev_deliv_end_wbs = end_wbs
+            
+            # Append rows without DeliverableCode (preserve all original rows)
+            enriched.extend(other_rows)
+            
+            # Reassign UIDs
+            for i, r in enumerate(enriched, 1):
+                r["UID"] = i
+            
+            return enriched
+        
+        # Apply enrichment
+        rows = enrich_wbs_for_workfront(rows)
+        
+        # Rebuild indices after enrichment
+        by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+        children_by_parent = {}
+        for r in rows:
+            p = r["ParentWBS"]
+            if p:
+                children_by_parent.setdefault(p, []).append(r["WBS"])
+        summary_set = set(children_by_parent.keys())
+        
         # Normalize dependencies & drop unsafe hierarchy edges
         init_edges = []
         for r in rows:
