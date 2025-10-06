@@ -3963,7 +3963,8 @@ def _apply_scenario_knobs(items, letter, complexity, tier, pricing_mode, rate_ba
     for it in items:
         # Apply hours multiplier to each role
         for r in it.get("hours_by_role", []):
-            r["hours"] = r["hours"] * knobs["hours_mult"]
+            if "hours" in r:
+                r["hours"] = r["hours"] * knobs["hours_mult"]
         # Update total hours
         if "total_hours" in it:
             it["total_hours"] = it["total_hours"] * knobs["hours_mult"]
