@@ -4248,6 +4248,10 @@ def convert_excel_to_mspdi(
             if not role or role.lower() in ['nan', 'none', '']:
                 role = "Unassigned"
                 
+            # TASK 16: Extract Rate_USD and Price_USD from scenario pricing (no re-computation)
+            rate_usd = safe_float(row.get("Rate_USD"), None)
+            price_usd = safe_float(row.get("Price_USD"), None)
+            
             task_row = {
                 "WBS": str(row.get("WBS_ID", "")),
                 "ParentWBS": str(row.get("Parent_WBS_ID", "")),
@@ -4260,13 +4264,18 @@ def convert_excel_to_mspdi(
                 "RoleStr": role,
                 "UID": 0,  # Will be assigned later
                 "DeliverableCode": str(row.get("Deliverable_Code", "")),
-                "Component": str(row.get("Component", ""))
+                "Component": str(row.get("Component", "")),
+                "Rate_USD": rate_usd,   # From scenario pricing
+                "Price_USD": price_usd  # From scenario pricing
             }
             rows.append(task_row)
         
         # Assign UIDs
         for i, row in enumerate(rows, 1):
             row["UID"] = i
+        
+        # TASK 16: Create UID -> Rate_USD lookup for assignment cost calculation
+        uid_to_rate = {r["UID"]: r.get("Rate_USD") for r in rows}
         
         # --- NEW: merge siblings with the same name into their parent as multi-assignments
         prealloc_by_parent_wbs: Dict[str, Dict[str, float]] = {}
@@ -4900,9 +4909,17 @@ def convert_excel_to_mspdi(
             SubElement(assignment, "Units").text = str(units)
             SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
             
-            # Add Cost = rate * hours
-            res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
-            rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate or 0, DB)
+            # TASK 16: Use stored Rate_USD from scenario pricing instead of re-computing
+            task_uid = assign["TaskUID"]
+            stored_rate = uid_to_rate.get(task_uid)
+            
+            # If stored rate exists, use it; otherwise fallback to re-computation for safety
+            if stored_rate is not None and stored_rate > 0:
+                rate = stored_rate
+            else:
+                res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
+                rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate or 0, DB)
+            
             cost = work_hours * rate
             SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
