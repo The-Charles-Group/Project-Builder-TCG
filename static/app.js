@@ -4,32 +4,43 @@ let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
 let DELIV_INDEX = {};     // code -> deliverable object lookup for fast rendering
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
-// ---- Step 2 state ---- (GPT 5 Pro Implementation)
-const S2 = {
-  allDeliverables: [],                // from /api/options
-  selectedCodes: new Set(),           // codes the user checked
-  selectedMeta: new Map(),            // code -> {name, category}
-  selectedComponentsMap: {},          // code -> Set(component names)
-  els: {
-    listRight: document.querySelector('#s2-deliv-list, #deliverableList'),
-    search: document.querySelector('#s2-deliv-search, #delivSearch'),
-    btnApply: document.querySelector('#s2-apply, #applySelection, #btnApplySelection'),
-    btnSelectAll: document.querySelector('#s2-deliv-selectall, #delivSelectAll'),
-    btnClear: document.querySelector('#s2-deliv-clear, #delivClear'),
-    yourSel: document.querySelector('#s2-your-list, #yourSelection, #yourSelectionList'),
-    compDrawer: document.getElementById('compDrawer'),
-    compList: document.getElementById('compList'),
-    compTitle: document.getElementById('compTitle'),
-    compDone: document.getElementById('compDone'),
+// ================================================================================
+// Centralized Step 2 State - Single Source of Truth
+// ================================================================================
+window.APB = window.APB || {};
+window.APB.step2 = {
+  rfpText: '',                                   // filled from Step 1 or sessionStorage
+  selectedCodes: new Set(),                      // deliverable codes
+  selectedComponentsByCode: new Map(),           // code -> Set(component names)
+  selectedL3ByKey: new Map(),                    // `${code}::${component}` -> Set(l3 labels)
+  complexity: 'Advanced',                        // default complexity
+  tier: 'T2_MediumVolume',                       // default tier
+  activeDeliverableCode: null,                   // currently active deliverable in Components panel
+  activeComponentName: null,                     // currently active component in L3 panel
+  allDeliverables: [],                           // from /api/options
+  els: {                                         // DOM element references
+    listRight: null,
+    search: null,
+    btnApply: null,
+    btnSelectAll: null,
+    btnClear: null,
+    yourSel: null,
+    compDrawer: null,
+    compList: null,
+    compTitle: null,
+    compDone: null,
   }
 };
+
+// Aliases for compatibility with existing code
+const S2 = window.APB.step2;
+const selectedComponentsMap = S2.selectedComponentsByCode;
+window.selectedComponentsMap = selectedComponentsMap;
 
 // Legacy compatibility
 let selectedCodes = [];
 let removedCodes = [];
 let addedCodes = [];
-const selectedComponentsMap = S2.selectedComponentsMap;
-window.selectedComponentsMap = selectedComponentsMap;
 
 // Cache for component data per deliverable code
 const componentDataCache = {};
@@ -91,6 +102,23 @@ function currency(n){ return `$${Number(n||0).toLocaleString()}`; }
 async function boot() {
   await api("/api/load");
   OPTIONS = await api("/api/options");
+  
+  // Initialize APB.step2 state
+  APB.step2.rfpText = sessionStorage.getItem('apb.rfp_text') || '';
+  APB.step2.allDeliverables = OPTIONS.deliverables || [];
+  
+  // Initialize DOM element references for Step 2
+  APB.step2.els.listRight = document.querySelector('#s2-deliv-list, #deliverableList');
+  APB.step2.els.search = document.querySelector('#s2-deliv-search, #delivSearch');
+  APB.step2.els.btnApply = document.querySelector('#s2-apply, #applySelection, #btnApplySelection');
+  APB.step2.els.btnSelectAll = document.querySelector('#s2-deliv-selectall, #delivSelectAll');
+  APB.step2.els.btnClear = document.querySelector('#s2-deliv-clear, #delivClear');
+  APB.step2.els.yourSel = document.querySelector('#s2-your-list, #yourSelection, #yourSelectionList');
+  APB.step2.els.compDrawer = document.getElementById('compDrawer');
+  APB.step2.els.compList = document.getElementById('compList');
+  APB.step2.els.compTitle = document.getElementById('compTitle');
+  APB.step2.els.compDone = document.getElementById('compDone');
+  
   // Populate dropdowns (with duplicate removal)
   const pricingMode = document.querySelector("#pricingMode");
   if (pricingMode) populateSelect(pricingMode, OPTIONS.pricing_modes);
@@ -125,7 +153,6 @@ async function boot() {
   selectedCodes = [];
   removedCodes = [];
   addedCodes = [];
-  renderStep2UI();
   
   // Initialize S2 system
   s2LoadDeliverables();

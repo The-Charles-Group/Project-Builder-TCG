@@ -1,0 +1,168 @@
+Back‑end: nothing new to build
+
+Endpoints you should wire to (already present):
+
+Resolve text → deliverable codes (POST /api/resolve_deliverables) for any free‑text re‑adds.
+
+List components (GET /api/components_for) and list L3 (GET /api/l3_for).
+
+(There is also /api/auto_build and scenario build endpoints used in later steps; not needed for Step 2 wiring.)
+
+Front‑end: implement exactly these changes
+
+Assumes the Step‑2 UI is in static/ (vanilla JS). If you’re using a bundler or React, keep the same names/IDs and adapt the event wiring.
+
+1) Single source of truth for Step‑2 selection
+
+Create a central state object (global or module):
+
+// static/step2-state.js
+window.APB = window.APB || {};
+APB.step2 = {
+  rfpText: '',                      // filled on load from Step 1
+  selectedCodes: new Set(),         // deliverable codes
+  selectedComponentsByCode: new Map(), // code -> Set(component names)
+  selectedL3ByKey: new Map(),       // `${code}::${component}` -> Set(l3 labels)
+  complexity: 'Advanced',
+  tier: 'T2_MediumVolume'
+};
+
+
+On Step‑2 mount, set APB.step2.rfpText = sessionStorage.getItem('apb.rfp_text') || '';
+
+When you navigate from Step‑1, always save the full, raw RFP text to sessionStorage.setItem('apb.rfp_text', text).
+
+2) Wire the AI Suggestions rows
+
+Each row should have an idempotent button that toggles “Add/Remove” without disappearing:
+
+async function toggleSuggestedDeliverable(rowEl, code, add) {
+  if (add) {
+    APB.step2.selectedCodes.add(code);
+    rowEl.querySelector('.btn-suggest').textContent = 'Remove';
+    rowEl.querySelector('.btn-suggest').dataset.mode = 'remove';
+  } else {
+    APB.step2.selectedCodes.delete(code);
+    rowEl.querySelector('.btn-suggest').textContent = 'Add';
+    rowEl.querySelector('.btn-suggest').dataset.mode = 'add';
+  }
+  renderDeliverablesPanel();        // refresh left panel (selected go on top)
+  await refreshComponentsPanel();   // re-fetch components for the current selection
+  updateSummaryCounts();
+}
+
+
+Never delete the suggestion row; only flip the button mode.
+
+3) Deliverables panel behavior
+
+The list is always sectioned:
+Selected (pinned to top) → Other.
+Implement this by sorting with isSelected first.
+
+Clicking the checkbox must:
+
+Update APB.step2.selectedCodes.
+
+Call refreshComponentsPanel().
+
+Update the Summary counts.
+
+function renderDeliverablesPanel() {
+  const list = getAllDeliverablesFromDBIndex(); // your cached index
+  const selected = [], other = [];
+  list.forEach(d => (APB.step2.selectedCodes.has(d.code) ? selected : other).push(d));
+
+  // …render "Selected" group then "Other" group
+  // attach checkbox handlers to call onDeliverableToggle(code, checked)
+}
+
+async function onDeliverableToggle(code, checked) {
+  if (checked) APB.step2.selectedCodes.add(code);
+  else         APB.step2.selectedCodes.delete(code);
+  renderDeliverablesPanel();        // re-group/pin
+  await refreshComponentsPanel();   // fetch for the active deliverable in the components dropdown
+  updateSummaryCounts();
+}
+
+4) Components panel wiring
+
+Dropdown “Select a deliverable first…” should target the currently active deliverable (e.g., the most recently clicked selected code or the first from selectedCodes).
+
+On change (deliverable), call /api/components_for with the complexity & tier that Pricing will use.
+
+async function refreshComponentsPanel() {
+  const code = getActiveDeliverableCode();
+  const { complexity, tier } = APB.step2;
+  const res = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${encodeURIComponent(complexity)}&tier=${encodeURIComponent(tier)}`);
+  const json = await res.json(); // { items: [{name, hours}] }
+  renderComponentsChecklist(code, json.items);
+}
+
+
+“Select All / Clear” update selectedComponentsByCode and Summary counts.
+
+5) L3 panel wiring
+
+The L3 dropdown depends on both the active deliverable and the selected component.
+
+Call /api/l3_for?deliverable_code=CODE&component_name=COMP and render a checkbox list.
+
+async function onComponentClicked(componentName) {
+  const code = getActiveDeliverableCode();
+  const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component_name=${encodeURIComponent(componentName)}`);
+  const { items } = await res.json(); // [{Task_Label}]
+  renderL3Checklist(code, componentName, items.map(i => i.Task_Label));
+}
+
+
+Provide Select All / Clear in L3 as well.
+
+6) Fix the bogus “Upload RFP first” gate
+
+Remove any Step‑2 guard that blocks on !rfpText.
+Instead:
+
+If rfpText is empty, keep the Refresh AI Suggestions button enabled and show a small tip: “No RFP text in memory; suggestions will be blank until you paste or re‑run Step 1.” Do not block the panel.
+
+For Refresh AI Suggestions, always use:
+
+const rfp = APB.step2.rfpText || '';
+const payload = { rfp_text: rfp, retainers: {}, /* keep other fields empty */ };
+// You can call a light endpoint that returns suggestions OR reuse /api/auto_build and ignore scenarios.
+
+
+(The backend already parses rfp_text to suggest deliverables.)
+
+7) “Chosen deliverables on top with a tick box”
+
+Already covered by the Selected section and sort. Also, duplicate the Add/Remove logic:
+
+Ticking a selected checkbox should flip the corresponding Suggestion row button to “Add”.
+
+Unticking should flip it to “Remove”.
+
+8) Summary panel
+
+Counts = size of selectedCodes, sum of selected components across those codes, and sum of L3 across selected components.
+
+Recompute in updateSummaryCounts() after every toggle.
+
+Minimal HTML hook‑ups (IDs/classes)
+
+Make sure these exist so the functions above can bind:
+
+#ai-suggestions — container. Each row has:
+<button class="btn-suggest" data-mode="add" data-code="deck_strategy">Add</button>
+
+#deliverables-list — left panel list.
+
+#components-dropdown + #components-list — components panel.
+
+#l3-dropdown + #l3-list — L3 panel.
+
+#btn-select-all-components, #btn-clear-components, #btn-select-all-l3, #btn-clear-l3
+
+#btn-refresh-ai — refresh suggestions.
+
+#btn-proceed-pricing — disabled until selectedCodes.size > 0.
