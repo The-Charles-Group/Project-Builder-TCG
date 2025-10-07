@@ -112,8 +112,8 @@ async function boot() {
   await api("/api/load");
   OPTIONS = await api("/api/options");
   
-  // Initialize APB.step2 state
-  APB.step2.rfpText = sessionStorage.getItem('apb.rfp_text') || '';
+  // Initialize APB.step2 state - load RFP text from sessionStorage or localStorage
+  APB.step2.rfpText = sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
   APB.step2.allDeliverables = OPTIONS.deliverables || [];
   
   // Initialize DOM element references for Step 2
@@ -218,7 +218,7 @@ async function boot() {
       e.preventDefault();
       
       // Get RFP text from multiple sources (never block in Step 2)
-      let rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || '';
+      let rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
       
       // If still no text, check if we have a stored analysis summary
       if (!rfpText && sessionStorage.getItem('apb:rfpSummary')) {
@@ -468,6 +468,9 @@ async function onRunReconcile() {
     window.APP.summary = summary;
     sessionStorage.setItem('apb:rfpSummary', JSON.stringify(summary));
     sessionStorage.setItem('apb.rfp_text', rfpText);
+    
+    // Also persist to localStorage for reliability across refreshes
+    localStorage.setItem('apb.rfpText.v1', rfpText);
     
     // Update centralized state
     APB.step2.rfpText = rfpText;
