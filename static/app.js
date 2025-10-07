@@ -858,152 +858,343 @@ document.addEventListener('DOMContentLoaded', function() {
   }
 });
 
-// New Step 2 UI renderer (blueprint wireframe)
-function renderStep2UI() {
-  renderYourSelection();
-  renderRemovedItems();
-  renderSearchAndAdd();
+// ========== NEW STEP 2 UI (4-Column Layout) ==========
+
+// State for new Step 2 UI
+const step2State = {
+  currentDeliverable: null,     // Currently selected deliverable for viewing components
+  currentComponent: null,        // Currently selected component for viewing L3 subtasks
+  selectedL3Map: {},             // { deliverableCode: { componentName: Set([l3labels...]) } }
+};
+window.step2State = step2State;
+
+// Update summary panel with current selection counts
+function updateStep2Summary() {
+  const delivCount = window.step2PickerState?.selected?.size || 0;
+  document.getElementById('s2-summary-deliverables').textContent = delivCount;
+  
+  // Count total components selected across all deliverables
+  let compCount = 0;
+  const selectedCodes = Array.from(window.step2PickerState?.selected || []);
+  selectedCodes.forEach(code => {
+    const rawSel = selectedComponentsMap[code];
+    if (!rawSel || rawSel === '__ALL__' || rawSel === 'ALL') {
+      // All components selected
+      compCount += (componentDataCache[code] || []).length;
+    } else if (rawSel instanceof Set) {
+      compCount += rawSel.size;
+    } else if (Array.isArray(rawSel)) {
+      compCount += rawSel.length;
+    } else if (typeof rawSel === 'object') {
+      compCount += Object.keys(rawSel).length;
+    }
+  });
+  document.getElementById('s2-summary-components').textContent = compCount;
+  
+  // Count L3 subtasks
+  let l3Count = 0;
+  Object.values(step2State.selectedL3Map).forEach(compMap => {
+    Object.values(compMap).forEach(l3Set => {
+      if (l3Set instanceof Set) l3Count += l3Set.size;
+      else if (Array.isArray(l3Set)) l3Count += l3Set.length;
+    });
+  });
+  document.getElementById('s2-summary-l3').textContent = l3Count;
+  
+  // Update status message
+  const statusEl = document.getElementById('s2-summary-status');
+  if (delivCount === 0) {
+    statusEl.textContent = 'No deliverables selected';
+    statusEl.style.color = 'var(--muted)';
+  } else {
+    statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
+    statusEl.style.color = 'var(--accent)';
+  }
 }
 
-async function renderYourSelection() {
-  const box = document.querySelector("#yourSelection");
-  if (!box) return;
+// Populate Components panel dropdown with selected deliverables
+function populateComponentsDeliverableDropdown() {
+  const select = document.getElementById('s2-comp-deliverable');
+  if (!select) return;
   
-  // Increment token to invalidate previous renders
-  const myToken = ++renderYourSelectionToken;
+  const selectedCodes = Array.from(window.step2PickerState?.selected || []);
   
-  // Sync legacy selectedCodes array with S2.selectedCodes Set
-  const codes = S2.selectedCodes.size > 0 ? Array.from(S2.selectedCodes) : selectedCodes || [];
-  
-  if (codes.length === 0) {
-    box.innerHTML = '<p style="color: var(--muted);">No deliverables selected yet.</p>';
+  if (selectedCodes.length === 0) {
+    select.innerHTML = '<option value="">Select a deliverable first...</option>';
+    select.disabled = true;
     return;
   }
   
-  box.innerHTML = "";
+  select.disabled = false;
+  select.innerHTML = '<option value="">Choose deliverable...</option>' +
+    selectedCodes.map(code => {
+      const name = labelFor(code);
+      return `<option value="${code}">${name}</option>`;
+    }).join('');
+}
+
+// Render Components panel for selected deliverable
+async function renderComponentsPanel(deliverableCode) {
+  const listEl = document.getElementById('s2-comp-list');
+  const btnAll = document.getElementById('s2-comp-selectall');
+  const btnClear = document.getElementById('s2-comp-clear');
   
-  // Fetch component data for all deliverables in parallel
-  await Promise.all(codes.map(async code => {
-    if (!componentDataCache[code]) {
+  if (!deliverableCode) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a deliverable to view components</p>';
+    btnAll.disabled = true;
+    btnClear.disabled = true;
+    return;
+  }
+  
+  step2State.currentDeliverable = deliverableCode;
+  
+  // Fetch components if not cached
+  if (!componentDataCache[deliverableCode]) {
+    try {
+      const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(deliverableCode)}`);
+      const data = await r.json();
+      componentDataCache[deliverableCode] = data.items || [];
+    } catch (e) {
+      console.error(`Error fetching components for ${deliverableCode}:`, e);
+      componentDataCache[deliverableCode] = [];
+    }
+  }
+  
+  const allComponents = componentDataCache[deliverableCode] || [];
+  
+  if (allComponents.length === 0) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No components available</p>';
+    btnAll.disabled = true;
+    btnClear.disabled = true;
+    return;
+  }
+  
+  btnAll.disabled = false;
+  btnClear.disabled = false;
+  
+  // Initialize selection if not exists
+  if (!selectedComponentsMap[deliverableCode] || 
+      selectedComponentsMap[deliverableCode] === '__ALL__' || 
+      selectedComponentsMap[deliverableCode] === 'ALL') {
+    selectedComponentsMap[deliverableCode] = new Set(allComponents.map(c => c.name));
+  } else if (!(selectedComponentsMap[deliverableCode] instanceof Set)) {
+    // Convert to Set if needed
+    const raw = selectedComponentsMap[deliverableCode];
+    if (Array.isArray(raw)) {
+      selectedComponentsMap[deliverableCode] = new Set(raw);
+    } else if (typeof raw === 'object') {
+      selectedComponentsMap[deliverableCode] = new Set(Object.keys(raw));
+    } else {
+      selectedComponentsMap[deliverableCode] = new Set();
+    }
+  }
+  
+  const selectedSet = selectedComponentsMap[deliverableCode];
+  
+  // Render checkboxes
+  listEl.innerHTML = allComponents.map(comp => `
+    <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px;" 
+           class="comp-checkbox-label">
+      <input type="checkbox" data-comp="${comp.name}" 
+             ${selectedSet.has(comp.name) ? 'checked' : ''}
+             style="cursor:pointer;"/>
+      <span style="font-size:0.9em;">${comp.name}</span>
+    </label>
+  `).join('');
+  
+  // Add change listeners
+  listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const compName = e.target.getAttribute('data-comp');
+      if (e.target.checked) {
+        selectedSet.add(compName);
+      } else {
+        selectedSet.delete(compName);
+      }
+      updateStep2Summary();
+      populateL3ComponentDropdown();
+    });
+  });
+  
+  updateStep2Summary();
+  populateL3ComponentDropdown();
+}
+
+// Populate L3 panel dropdown with selected components
+function populateL3ComponentDropdown() {
+  const select = document.getElementById('s2-l3-component');
+  if (!select) return;
+  
+  if (!step2State.currentDeliverable) {
+    select.innerHTML = '<option value="">Select a component first...</option>';
+    select.disabled = true;
+    return;
+  }
+  
+  const selectedComps = selectedComponentsMap[step2State.currentDeliverable];
+  if (!selectedComps || (selectedComps instanceof Set && selectedComps.size === 0)) {
+    select.innerHTML = '<option value="">No components selected...</option>';
+    select.disabled = true;
+    return;
+  }
+  
+  const compNames = selectedComps instanceof Set ? Array.from(selectedComps) : 
+                    Array.isArray(selectedComps) ? selectedComps : Object.keys(selectedComps);
+  
+  select.disabled = false;
+  select.innerHTML = '<option value="">Choose component...</option>' +
+    compNames.map(name => `<option value="${name}">${name}</option>`).join('');
+}
+
+// Render L3 Subtasks panel for selected component
+async function renderL3Panel(componentName) {
+  const listEl = document.getElementById('s2-l3-list');
+  const btnAll = document.getElementById('s2-l3-selectall');
+  const btnClear = document.getElementById('s2-l3-clear');
+  
+  if (!componentName || !step2State.currentDeliverable) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view subtasks</p>';
+    btnAll.disabled = true;
+    btnClear.disabled = true;
+    return;
+  }
+  
+  step2State.currentComponent = componentName;
+  
+  // Fetch L3 data from API
+  try {
+    const r = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(step2State.currentDeliverable)}&component_name=${encodeURIComponent(componentName)}`);
+    const data = await r.json();
+    const l3Items = data.items || [];
+    
+    if (l3Items.length === 0) {
+      listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L3 subtasks available</p>';
+      btnAll.disabled = true;
+      btnClear.disabled = true;
+      return;
+    }
+    
+    btnAll.disabled = false;
+    btnClear.disabled = false;
+    
+    // Initialize L3 selection
+    if (!step2State.selectedL3Map[step2State.currentDeliverable]) {
+      step2State.selectedL3Map[step2State.currentDeliverable] = {};
+    }
+    if (!step2State.selectedL3Map[step2State.currentDeliverable][componentName]) {
+      // Default: all L3 selected
+      step2State.selectedL3Map[step2State.currentDeliverable][componentName] = 
+        new Set(l3Items.map(item => item.Task_Label));
+    }
+    
+    const selectedSet = step2State.selectedL3Map[step2State.currentDeliverable][componentName];
+    
+    // Render checkboxes
+    listEl.innerHTML = l3Items.map(item => `
+      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px;" 
+             class="l3-checkbox-label">
+        <input type="checkbox" data-label="${item.Task_Label}" 
+               ${selectedSet.has(item.Task_Label) ? 'checked' : ''}
+               style="cursor:pointer;"/>
+        <span style="font-size:0.9em;">${item.Task_Label}</span>
+      </label>
+    `).join('');
+    
+    // Add change listeners
+    listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.addEventListener('change', e => {
+        const label = e.target.getAttribute('data-label');
+        if (e.target.checked) {
+          selectedSet.add(label);
+        } else {
+          selectedSet.delete(label);
+        }
+        updateStep2Summary();
+      });
+    });
+    
+    updateStep2Summary();
+    
+  } catch (e) {
+    console.error('Error fetching L3 data:', e);
+    listEl.innerHTML = '<p style="color: #f88; text-align: center; padding-top: 40px; font-size: 0.9em;">Error loading subtasks</p>';
+    btnAll.disabled = true;
+    btnClear.disabled = true;
+  }
+}
+
+// Wire up new Step 2 UI controls
+document.addEventListener('DOMContentLoaded', function() {
+  // Components panel controls
+  const compDelivSelect = document.getElementById('s2-comp-deliverable');
+  const compBtnAll = document.getElementById('s2-comp-selectall');
+  const compBtnClear = document.getElementById('s2-comp-clear');
+  
+  if (compDelivSelect) {
+    compDelivSelect.addEventListener('change', e => {
+      renderComponentsPanel(e.target.value);
+    });
+  }
+  
+  if (compBtnAll) {
+    compBtnAll.addEventListener('click', () => {
+      if (!step2State.currentDeliverable) return;
+      const allComps = componentDataCache[step2State.currentDeliverable] || [];
+      selectedComponentsMap[step2State.currentDeliverable] = new Set(allComps.map(c => c.name));
+      renderComponentsPanel(step2State.currentDeliverable);
+    });
+  }
+  
+  if (compBtnClear) {
+    compBtnClear.addEventListener('click', () => {
+      if (!step2State.currentDeliverable) return;
+      selectedComponentsMap[step2State.currentDeliverable] = new Set();
+      renderComponentsPanel(step2State.currentDeliverable);
+    });
+  }
+  
+  // L3 panel controls
+  const l3CompSelect = document.getElementById('s2-l3-component');
+  const l3BtnAll = document.getElementById('s2-l3-selectall');
+  const l3BtnClear = document.getElementById('s2-l3-clear');
+  
+  if (l3CompSelect) {
+    l3CompSelect.addEventListener('change', e => {
+      renderL3Panel(e.target.value);
+    });
+  }
+  
+  if (l3BtnAll) {
+    l3BtnAll.addEventListener('click', async () => {
+      if (!step2State.currentDeliverable || !step2State.currentComponent) return;
+      // Fetch all L3 items and select them
       try {
-        const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}`);
+        const r = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(step2State.currentDeliverable)}&component_name=${encodeURIComponent(step2State.currentComponent)}`);
         const data = await r.json();
-        componentDataCache[code] = data.items || [];
+        const l3Items = data.items || [];
+        if (!step2State.selectedL3Map[step2State.currentDeliverable]) {
+          step2State.selectedL3Map[step2State.currentDeliverable] = {};
+        }
+        step2State.selectedL3Map[step2State.currentDeliverable][step2State.currentComponent] = 
+          new Set(l3Items.map(item => item.Task_Label));
+        renderL3Panel(step2State.currentComponent);
       } catch (e) {
-        console.error(`Error fetching components for ${code}:`, e);
-        componentDataCache[code] = [];
+        console.error('Error selecting all L3:', e);
       }
-    }
-  }));
-  
-  // Check if this render is still valid (not superseded by a newer call)
-  if (myToken !== renderYourSelectionToken) {
-    return; // Abort - newer render has started
+    });
   }
   
-  codes.forEach(code => {
-    // Use helper functions for lookups - works with both AI-suggested and manually selected deliverables
-    const name = labelFor(code);
-    const category = categoryFor(code);
-    
-    // Get component data
-    const allComponents = componentDataCache[code] || [];
-    const totalCount = allComponents.length;
-    
-    // Normalize selectedComponentsMap entry - can be Set, object, array, string sentinel, or undefined
-    const rawSelection = selectedComponentsMap[code];
-    let selectedNames = [];
-    let hasExplicitSelection = false; // Track if user made an explicit selection
-    
-    // Check for "no explicit selection" sentinels
-    if (rawSelection === undefined || rawSelection === null || 
-        rawSelection === '__ALL__' || rawSelection === 'ALL') {
-      // Default to all components (no explicit selection)
-      hasExplicitSelection = false;
-    } else {
-      hasExplicitSelection = true;
-      if (rawSelection instanceof Set) {
-        selectedNames = Array.from(rawSelection);
-      } else if (Array.isArray(rawSelection)) {
-        selectedNames = rawSelection;
-      } else if (typeof rawSelection === 'object') {
-        // Plain object like {comp1: null, comp2: null} or {}
-        selectedNames = Object.keys(rawSelection);
-      } else if (typeof rawSelection === 'string') {
-        // Unknown string sentinel - treat as explicit empty selection
-        selectedNames = [];
+  if (l3BtnClear) {
+    l3BtnClear.addEventListener('click', () => {
+      if (!step2State.currentDeliverable || !step2State.currentComponent) return;
+      if (!step2State.selectedL3Map[step2State.currentDeliverable]) {
+        step2State.selectedL3Map[step2State.currentDeliverable] = {};
       }
-    }
-    // If no explicit selection, default to all components
-    
-    const selectedCount = hasExplicitSelection 
-      ? selectedNames.length 
-      : totalCount;
-    
-    // Format: "Components (x/y)"
-    const compCountText = totalCount > 0 ? ` (${selectedCount}/${totalCount})` : ' (0/0)';
-    
-    // Tooltip: show selected component names, or all if no explicit selection, or "None selected" if explicit zero
-    let tooltip;
-    if (hasExplicitSelection) {
-      tooltip = selectedNames.length > 0 
-        ? selectedNames.join(', ')
-        : 'No components selected';
-    } else {
-      tooltip = allComponents.length > 0 
-        ? allComponents.map(c => c.name).join(', ')
-        : 'No components';
-    }
-    
-    const item = el(`
-      <div class="selection-item">
-        <div class="selection-item-left">
-          <div class="selection-item-name">${name}</div>
-          <div class="selection-item-category">${category}</div>
-        </div>
-        <div class="selection-item-right">
-          <button onclick="openComponentPicker('${code}', '${name.replace(/'/g, "\\'")}')" 
-                  class="btn-component" 
-                  title="${tooltip.replace(/"/g, '&quot;')}">Components${compCountText}</button>
-          <button onclick="onRemove('${code}')" class="btn-remove">×</button>
-        </div>
-      </div>
-    `);
-    box.append(item);
-  });
-}
-
-function renderRemovedItems() {
-  const box = document.querySelector("#removedItems");
-  if (!box) return;
-  
-  if (removedCodes.length === 0) {
-    box.innerHTML = "";
-    return;
+      step2State.selectedL3Map[step2State.currentDeliverable][step2State.currentComponent] = new Set();
+      renderL3Panel(step2State.currentComponent);
+    });
   }
-  
-  box.innerHTML = "<h3>Removed</h3>";
-  removedCodes.forEach(code => {
-    // Use helper functions for lookups
-    const name = labelFor(code);
-    const category = categoryFor(code);
-    
-    const item = el(`
-      <div class="row">
-        <div>
-          <strong>${name}</strong> 
-          <small class="badge">${category}</small>
-        </div>
-        <button onclick="onRestore('${code}')" class="restore-btn">Restore</button>
-      </div>
-    `);
-    box.append(item);
-  });
-}
-
-function renderSearchAndAdd() {
-  // This will be handled by the Step 2 Deliverables Picker
-}
+});
 
 // ---- Step 2 Deliverables Picker (search + select/clear + apply) ----
 (function(){
@@ -1067,6 +1258,9 @@ function renderSearchAndAdd() {
         // Sync selection immediately
         window.selectedCodes = Array.from(state.selected);
         if (window.appState) window.appState.selectedCodes = window.selectedCodes;
+        // Update new UI panels
+        if (window.updateStep2Summary) updateStep2Summary();
+        if (window.populateComponentsDeliverableDropdown) populateComponentsDeliverableDropdown();
       });
     });
   }
@@ -1130,6 +1324,9 @@ function renderSearchAndAdd() {
     // Sync selection immediately
     window.selectedCodes = Array.from(state.selected);
     if (window.appState) window.appState.selectedCodes = window.selectedCodes;
+    // Update new UI panels
+    if (window.updateStep2Summary) updateStep2Summary();
+    if (window.populateComponentsDeliverableDropdown) populateComponentsDeliverableDropdown();
   });
   el.btnClear.addEventListener('click', () => { 
     state.selected.clear(); 
@@ -1137,6 +1334,9 @@ function renderSearchAndAdd() {
     // Sync selection immediately
     window.selectedCodes = Array.from(state.selected);
     if (window.appState) window.appState.selectedCodes = window.selectedCodes;
+    // Update new UI panels
+    if (window.updateStep2Summary) updateStep2Summary();
+    if (window.populateComponentsDeliverableDropdown) populateComponentsDeliverableDropdown();
   });
 
   // 6) Public init for Step 2; call this right after Step 2 renders scenarios
@@ -1144,6 +1344,9 @@ function renderSearchAndAdd() {
     await ensureOptions();
     seedFromCurrentScenarios(scenarios);
     renderList('');
+    // Initialize new UI panels
+    if (window.updateStep2Summary) updateStep2Summary();
+    if (window.populateComponentsDeliverableDropdown) populateComponentsDeliverableDropdown();
   };
   
   // 7) Public function to update Step 2 picker from external selection (e.g., reconciliation)
