@@ -868,6 +868,13 @@ const step2State = {
 };
 window.step2State = step2State;
 
+// Expose functions globally
+window.updateStep2Summary = updateStep2Summary;
+window.populateComponentsDeliverableDropdown = populateComponentsDeliverableDropdown;
+window.renderComponentsPanel = renderComponentsPanel;
+window.populateL3ComponentDropdown = populateL3ComponentDropdown;
+window.renderL3Panel = renderL3Panel;
+
 // Update summary panel with current selection counts
 function updateStep2Summary() {
   const delivCount = window.step2PickerState?.selected?.size || 0;

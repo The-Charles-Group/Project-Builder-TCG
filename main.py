@@ -2603,6 +2603,36 @@ def api_components_for(deliverable_code: str, complexity: str="Advanced", tier: 
     
     return {"items": [{"name": c, "hours": float(hours_map.get(c, 0.0))} for c in comp_names]}
 
+@app.get("/api/l3_for")
+def api_l3_for(deliverable_code: str, component_name: str):
+    """List L3 subtasks (Task_Label) for a deliverable and component."""
+    if not DB.loaded: DB.load()
+    
+    try:
+        # Filter by deliverable and component
+        sub = DB.all_rows[
+            (DB.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+            (DB.all_rows["Component"].astype(str) == str(component_name))
+        ]
+        
+        if sub.empty:
+            return {"items": []}
+        
+        # Get unique Task_Label values
+        task_labels = sorted(set(
+            sub["Task_Label"].dropna().astype(str)
+            .str.strip()
+            .tolist()
+        ))
+        
+        # Filter out empty strings
+        task_labels = [label for label in task_labels if label and label != "nan"]
+        
+        return {"items": [{"Task_Label": label} for label in task_labels]}
+    except Exception as e:
+        print(f"Error in api_l3_for: {e}")
+        return {"items": []}
+
 @app.get("/api/db/status")
 def db_status():
     if not DB.loaded: DB.load()
