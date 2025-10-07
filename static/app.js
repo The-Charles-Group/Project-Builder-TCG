@@ -1023,7 +1023,7 @@ function renderComponentsEmptyState(message = 'Select a deliverable to view comp
   }
 }
 
-// Update summary counts from centralized state
+// Update summary counts and render chips with remove buttons
 function updateSummaryCounts() {
   const delivCount = APB.step2.selectedCodes.size;
   
@@ -1044,7 +1044,7 @@ function updateSummaryCounts() {
     }
   });
   
-  // Update DOM
+  // Update DOM with counts
   const delivEl = document.getElementById('s2-summary-deliverables');
   const compEl = document.getElementById('s2-summary-components');
   const l3El = document.getElementById('s2-summary-l3');
@@ -1053,10 +1053,136 @@ function updateSummaryCounts() {
   if (compEl) compEl.textContent = compCount;
   if (l3El) l3El.textContent = l3Count;
   
+  // Render detailed chips below counts
+  renderSummaryChips();
+  
   // Enable/disable Proceed to Pricing button
   const proceedBtn = document.querySelector('#btnProceedPricing, [data-proceed-pricing]');
   if (proceedBtn) {
     proceedBtn.disabled = delivCount === 0;
+  }
+}
+
+// Render summary chips with remove functionality
+function renderSummaryChips() {
+  const container = document.getElementById('s2-summary-status');
+  if (!container) return;
+  
+  const delivs = [];
+  const comps = [];
+  const l3Items = [];
+  
+  // Collect deliverables
+  APB.step2.selectedCodes.forEach(code => {
+    const deliv = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === code);
+    if (deliv) delivs.push({ code, name: deliv.Deliverable || code });
+  });
+  
+  // Collect components with L3 counts (handle "ALL", objects, and Sets)
+  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSelection]) => {
+    if (APB.step2.selectedCodes.has(code)) {
+      // Normalize to Set: handle "ALL" string, plain objects, and existing Sets
+      let compSet;
+      if (compSelection === 'ALL') {
+        // Skip "ALL" sentinel - don't show individual components
+        return;
+      } else if (compSelection instanceof Set) {
+        compSet = compSelection;
+      } else if (typeof compSelection === 'object' && compSelection !== null) {
+        // Convert object keys to Set
+        compSet = new Set(Object.keys(compSelection));
+      } else {
+        // Unknown format, skip
+        return;
+      }
+      
+      compSet.forEach(compName => {
+        const key = `${code}::${compName}`;
+        const l3Set = APB.step2.selectedL3ByKey[key] || new Set();
+        comps.push({ code, name: compName, l3Count: l3Set.size });
+      });
+    }
+  });
+  
+  // Collect L3 items
+  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
+    const [code] = key.split('::');
+    if (APB.step2.selectedCodes.has(code)) {
+      l3Set.forEach(l3Name => {
+        l3Items.push({ key, name: l3Name });
+      });
+    }
+  });
+  
+  let html = '';
+  
+  // Deliverables chips
+  if (delivs.length > 0) {
+    html += '<div style="margin-bottom:12px;"><div style="font-size:0.75em;color:var(--muted);margin-bottom:4px;">DELIVERABLES</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+    delivs.forEach(d => {
+      html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(139,92,246,0.2);border-radius:12px;font-size:0.75em;">
+        <span>✔ ${d.name}</span>
+        <button onclick="removeDeliverableFromSummary('${d.code}')" style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.1em;line-height:1;">✕</button>
+      </span>`;
+    });
+    html += '</div></div>';
+  }
+  
+  // Components chips
+  if (comps.length > 0) {
+    html += '<div style="margin-bottom:12px;"><div style="font-size:0.75em;color:var(--muted);margin-bottom:4px;">COMPONENTS</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+    comps.forEach(c => {
+      const l3Text = c.l3Count > 0 ? ` (${c.l3Count} L3)` : '';
+      html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(99,102,241,0.2);border-radius:12px;font-size:0.75em;">
+        ${c.name}${l3Text}
+      </span>`;
+    });
+    html += '</div></div>';
+  }
+  
+  // L3 chips with remove
+  if (l3Items.length > 0) {
+    html += '<div><div style="font-size:0.75em;color:var(--muted);margin-bottom:4px;">L3 SUBTASKS</div>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
+    l3Items.forEach(l3 => {
+      html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(16,185,129,0.2);border-radius:12px;font-size:0.75em;">
+        ${l3.name}
+        <button onclick="removeL3FromSummary('${l3.key}', '${l3.name}')" style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.1em;line-height:1;">✕</button>
+      </span>`;
+    });
+    html += '</div></div>';
+  }
+  
+  if (html === '') {
+    html = '<div style="text-align:center;color:var(--muted);font-size:0.85em;padding:20px;">No deliverables selected</div>';
+  }
+  
+  container.innerHTML = html;
+}
+
+// Remove deliverable from summary chip
+window.removeDeliverableFromSummary = async function(code) {
+  await deselectDeliverable(code);
+  renderDeliverablesPanel();
+  await refreshComponentsPanel();
+  updateSummaryCounts();
+  initAISummaryAndSuggestions();
+}
+
+// Remove L3 from summary chip
+window.removeL3FromSummary = function(key, l3Name) {
+  const l3Set = APB.step2.selectedL3ByKey[key];
+  if (l3Set) {
+    l3Set.delete(l3Name);
+    updateSummaryCounts();
+    
+    // Re-render L3 panel if this is the active component
+    const [code, compName] = key.split('::');
+    if (APB.step2.activeDeliverableCode === code && APB.step2.activeComponentName === compName) {
+      renderL3Panel(code, compName);
+    }
   }
 }
 
