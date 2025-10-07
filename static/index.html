@@ -1317,6 +1317,33 @@
     window.qs = window.qs || ((sel, root=document) => root.querySelector(sel));
     window.qsa = window.qsa || ((sel, root=document) => [...root.querySelectorAll(sel)]);
 
+    // ——— Business day calculation helpers ———
+    function isWeekend(d) {
+      const day = d.getDay(); // 0=Sun, 6=Sat
+      return day === 0 || day === 6;
+    }
+
+    function addBusinessDays(startDate, days, holidaysSet = new Set()) {
+      let d = new Date(startDate);
+      // If start lands on weekend, roll to Monday
+      while (isWeekend(d) || holidaysSet.has(d.toISOString().slice(0,10))) {
+        d.setDate(d.getDate()+1);
+      }
+      let remaining = Math.max(0, Number(days));
+      while (remaining > 0) {
+        d.setDate(d.getDate()+1);
+        const iso = d.toISOString().slice(0,10);
+        if (!isWeekend(d) && !holidaysSet.has(iso)) {
+          remaining -= 1;
+        }
+      }
+      // End must not be weekend/holiday; roll back to previous business day
+      while (isWeekend(d) || holidaysSet.has(d.toISOString().slice(0,10))) {
+        d.setDate(d.getDate()-1);
+      }
+      return d;
+    }
+
     // ——— Step 4 auto-show helper ———
     function showStep4(letter = 'A') {
       // reveal Step 4
@@ -1361,11 +1388,23 @@
         window.setHTML('tl-body','<tr><td colspan="4"><em>Build scenarios in Step 3 to see a timeline.</em></td></tr>');
         return;
       }
+      
+      // Get project start date for business day calculation
+      const projectStart = scen.project_start || new Date().toISOString().split('T')[0];
+      // Normalize to first business day (roll forward from weekend if needed)
+      let currentStart = addBusinessDays(new Date(projectStart), 0);
+      
       const rows = scen.items.map(d => {
         const sch = d.schedule||[];
-        const start = sch[0]?.start_date ?? '';
-        const end   = sch[sch.length-1]?.end_date ?? '';
         const days  = sch.reduce((n,s)=>n+(s.duration_days||0),0);
+        
+        // Use business day calculation for accurate dates (no weekends)
+        const start = currentStart.toISOString().split('T')[0];
+        const endDate = addBusinessDays(currentStart, days);
+        const end = endDate.toISOString().split('T')[0];
+        
+        // Next deliverable starts after this one ends (next business day)
+        currentStart = addBusinessDays(endDate, 1);
         
         // Try multiple possible field names for deliverable name
         const deliverableName = d.deliverable || d.deliverable_name || d.name || d.deliverable_code || 'Unknown Deliverable';
