@@ -31,6 +31,13 @@ let addedCodes = [];
 const selectedComponentsMap = S2.selectedComponentsMap;
 window.selectedComponentsMap = selectedComponentsMap;
 
+// Cache for component data per deliverable code
+const componentDataCache = {};
+window.componentDataCache = componentDataCache;
+
+// Concurrency guard for renderYourSelection
+let renderYourSelectionToken = 0;
+
 // Helper to normalize keys for defensive lookup
 function key(s) {
   return String(s).trim().toLowerCase();
@@ -858,9 +865,12 @@ function renderStep2UI() {
   renderSearchAndAdd();
 }
 
-function renderYourSelection() {
+async function renderYourSelection() {
   const box = document.querySelector("#yourSelection");
   if (!box) return;
+  
+  // Increment token to invalidate previous renders
+  const myToken = ++renderYourSelectionToken;
   
   // Sync legacy selectedCodes array with S2.selectedCodes Set
   const codes = S2.selectedCodes.size > 0 ? Array.from(S2.selectedCodes) : selectedCodes || [];
@@ -872,13 +882,78 @@ function renderYourSelection() {
   
   box.innerHTML = "";
   
+  // Fetch component data for all deliverables in parallel
+  await Promise.all(codes.map(async code => {
+    if (!componentDataCache[code]) {
+      try {
+        const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}`);
+        const data = await r.json();
+        componentDataCache[code] = data.items || [];
+      } catch (e) {
+        console.error(`Error fetching components for ${code}:`, e);
+        componentDataCache[code] = [];
+      }
+    }
+  }));
+  
+  // Check if this render is still valid (not superseded by a newer call)
+  if (myToken !== renderYourSelectionToken) {
+    return; // Abort - newer render has started
+  }
+  
   codes.forEach(code => {
     // Use helper functions for lookups - works with both AI-suggested and manually selected deliverables
     const name = labelFor(code);
     const category = categoryFor(code);
     
-    const selectedComps = selectedComponentsMap[code] || new Set();
-    const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
+    // Get component data
+    const allComponents = componentDataCache[code] || [];
+    const totalCount = allComponents.length;
+    
+    // Normalize selectedComponentsMap entry - can be Set, object, array, string sentinel, or undefined
+    const rawSelection = selectedComponentsMap[code];
+    let selectedNames = [];
+    let hasExplicitSelection = false; // Track if user made an explicit selection
+    
+    // Check for "no explicit selection" sentinels
+    if (rawSelection === undefined || rawSelection === null || 
+        rawSelection === '__ALL__' || rawSelection === 'ALL') {
+      // Default to all components (no explicit selection)
+      hasExplicitSelection = false;
+    } else {
+      hasExplicitSelection = true;
+      if (rawSelection instanceof Set) {
+        selectedNames = Array.from(rawSelection);
+      } else if (Array.isArray(rawSelection)) {
+        selectedNames = rawSelection;
+      } else if (typeof rawSelection === 'object') {
+        // Plain object like {comp1: null, comp2: null} or {}
+        selectedNames = Object.keys(rawSelection);
+      } else if (typeof rawSelection === 'string') {
+        // Unknown string sentinel - treat as explicit empty selection
+        selectedNames = [];
+      }
+    }
+    // If no explicit selection, default to all components
+    
+    const selectedCount = hasExplicitSelection 
+      ? selectedNames.length 
+      : totalCount;
+    
+    // Format: "Components (x/y)"
+    const compCountText = totalCount > 0 ? ` (${selectedCount}/${totalCount})` : ' (0/0)';
+    
+    // Tooltip: show selected component names, or all if no explicit selection, or "None selected" if explicit zero
+    let tooltip;
+    if (hasExplicitSelection) {
+      tooltip = selectedNames.length > 0 
+        ? selectedNames.join(', ')
+        : 'No components selected';
+    } else {
+      tooltip = allComponents.length > 0 
+        ? allComponents.map(c => c.name).join(', ')
+        : 'No components';
+    }
     
     const item = el(`
       <div class="selection-item">
@@ -887,7 +962,9 @@ function renderYourSelection() {
           <div class="selection-item-category">${category}</div>
         </div>
         <div class="selection-item-right">
-          <button onclick="openComponentPicker('${code}', '${name.replace(/'/g, "\\'")}')" class="btn-component">Components...${compCountText}</button>
+          <button onclick="openComponentPicker('${code}', '${name.replace(/'/g, "\\'")}')" 
+                  class="btn-component" 
+                  title="${tooltip.replace(/"/g, '&quot;')}">Components${compCountText}</button>
           <button onclick="onRemove('${code}')" class="btn-remove">×</button>
         </div>
       </div>
