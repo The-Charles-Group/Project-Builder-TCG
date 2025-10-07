@@ -58,6 +58,65 @@ Object.defineProperty(S2, 'selectedComponentsMap', {
   configurable: true
 });
 
+// CRITICAL FIX: Create Proxy-backed object for selectedL3ByKey (Task 6 fix)
+// This ensures ALL read/write operations sync with selectionStore.l3ByComponent
+const selectedL3Proxy = new Proxy({}, {
+  get(target, key) {
+    // Let Object.entries(), Object.keys() work via ownKeys/getOwnPropertyDescriptor
+    return selectionStore.l3ByComponent.get(String(key));
+  },
+  set(target, key, value) {
+    if (value instanceof Set) {
+      selectionStore.l3ByComponent.set(String(key), value);
+    } else if (Array.isArray(value)) {
+      selectionStore.l3ByComponent.set(String(key), new Set(value));
+    } else if (value === undefined || value === null) {
+      selectionStore.l3ByComponent.delete(String(key));
+    }
+    return true;
+  },
+  deleteProperty(target, key) {
+    selectionStore.l3ByComponent.delete(String(key));
+    return true;
+  },
+  has(target, key) {
+    return selectionStore.l3ByComponent.has(String(key));
+  },
+  ownKeys() {
+    return Array.from(selectionStore.l3ByComponent.keys());
+  },
+  getOwnPropertyDescriptor(target, key) {
+    if (selectionStore.l3ByComponent.has(String(key))) {
+      return {
+        enumerable: true,
+        configurable: true,
+        value: selectionStore.l3ByComponent.get(String(key))
+      };
+    }
+  }
+});
+
+// Lock the property to prevent accidental reassignment
+Object.defineProperty(S2, 'selectedL3ByKey', {
+  get() { return selectedL3Proxy; },
+  set(value) {
+    // If someone tries to replace the whole object, sync it to the Map instead
+    if (value === null || (typeof value === 'object' && Object.keys(value).length === 0)) {
+      selectionStore.l3ByComponent.clear();
+    } else if (typeof value === 'object') {
+      selectionStore.l3ByComponent.clear();
+      Object.entries(value).forEach(([k, v]) => {
+        if (v instanceof Set) {
+          selectionStore.l3ByComponent.set(k, v);
+        } else if (Array.isArray(v)) {
+          selectionStore.l3ByComponent.set(k, new Set(v));
+        }
+      });
+    }
+  },
+  configurable: true
+});
+
 // Legacy compatibility
 let selectedCodes = [];
 let removedCodes = [];
