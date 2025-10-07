@@ -1086,12 +1086,18 @@ async function onSuggest(){
 }
 
 // UI behaviors from blueprint
+// Legacy functions (still used in some templates - bridge to centralized state)
 function onRemove(code) {
   selectedCodes = selectedCodes.filter(c => c !== code);
   if (!removedCodes.includes(code)) {
     removedCodes = [...removedCodes, code];
   }
-  renderStep2UI();
+  // Sync to centralized state and re-render
+  APB.step2.selectedCodes.delete(code);
+  delete APB.step2.selectedComponentsByCode[code];
+  renderDeliverablesPanel();
+  refreshComponentsPanel();
+  updateSummaryCounts();
 }
 
 function onRestore(code) {
@@ -1099,7 +1105,11 @@ function onRestore(code) {
   if (!selectedCodes.includes(code)) {
     selectedCodes = [...selectedCodes, code];
   }
-  renderStep2UI();
+  // Sync to centralized state and re-render
+  APB.step2.selectedCodes.add(code);
+  renderDeliverablesPanel();
+  refreshComponentsPanel();
+  updateSummaryCounts();
 }
 
 function onAdd(code) {
@@ -1110,7 +1120,11 @@ function onAdd(code) {
   if (!addedCodes.includes(code)) {
     addedCodes = [...addedCodes, code];
   }
-  renderStep2UI();
+  // Sync to centralized state and re-render
+  APB.step2.selectedCodes.add(code);
+  renderDeliverablesPanel();
+  refreshComponentsPanel();
+  updateSummaryCounts();
 }
 
 function selectedDeliverables(){
@@ -1213,9 +1227,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Call boot to initialize everything
   boot();
   
-  if (document.querySelector('#yourSelection')) {
-    renderStep2UI();
-  }
+  // Note: renderStep2UI removed - now using centralized renderDeliverablesPanel
 });
 
 // ========== NEW STEP 2 UI (4-Column Layout) ==========
