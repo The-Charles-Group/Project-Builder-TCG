@@ -2105,6 +2105,8 @@ class BuildPayload(BaseModel):
     retainers: Optional[List[RetainerSelection]] = []
     # NEW: component-level selection per deliverable (supports multiple formats including "__ALL__" sentinel)
     selected_components_map: Optional[Dict[str, Union[str, List[str], Dict[str, Optional[float]]]]] = None
+    # NEW: L3 subtask selection per deliverable and component
+    selected_l3_map: Optional[Dict[str, Dict[str, List[str]]]] = None  # { "<Deliverable_Code>": { "<Component_Name>": ["<Task_Label>", ...] } }
 
 class AutoBuildPayload(BaseModel):
     rfp_text: str
