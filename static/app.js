@@ -809,20 +809,22 @@ function s2onRemove(code) {
 // ================================================================================
 
 // Toggle suggested deliverable (persistent button - never removes row)
+// TASK 5: Wire AI Add/Remove buttons to centralized selectionStore with auto-hydration
 async function toggleSuggestedDeliverable(rowEl, code, add) {
   const btn = rowEl.querySelector('.btn-suggest');
   if (!btn) return;
   
   if (add) {
-    APB.step2.selectedCodes.add(code);
-    // Set as active deliverable to load components
+    // Use centralized selectDeliverable with auto-hydration
+    await selectDeliverable(code);
+    APB.step2.aiSuggestedCodes.add(code); // Track as AI-suggested
     APB.step2.activeDeliverableCode = code;
     btn.textContent = 'Added • Remove';
     btn.dataset.mode = 'remove';
     btn.style.background = 'var(--danger)';
   } else {
-    APB.step2.selectedCodes.delete(code);
-    delete APB.step2.selectedComponentsByCode[code];
+    // Use centralized deselectDeliverable with cleanup
+    await deselectDeliverable(code);
     if (APB.step2.activeDeliverableCode === code) {
       APB.step2.activeDeliverableCode = null;
     }
@@ -831,7 +833,6 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
     btn.style.background = '';
   }
   
-  renderDeliverablesPanel();
   await refreshComponentsPanel();
   updateSummaryCounts();
   
@@ -1675,20 +1676,31 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
+  // TASK 8: Fix All/Clear buttons for Components panel using selectionStore
   if (compBtnAll) {
-    compBtnAll.addEventListener('click', () => {
-      if (!step2State.currentDeliverable) return;
-      const allComps = componentDataCache[step2State.currentDeliverable] || [];
-      selectedComponentsMap[step2State.currentDeliverable] = new Set(allComps.map(c => c.name));
-      renderComponentsPanel(step2State.currentDeliverable);
+    compBtnAll.addEventListener('click', async () => {
+      if (!APB.step2.activeDeliverableCode) return;
+      const delivCode = APB.step2.activeDeliverableCode;
+      
+      // Fetch all components from the new API and select them
+      try {
+        const comps = await api(`/api/components?deliverable=${encodeURIComponent(delivCode)}`);
+        selectionStore.componentsByDeliv.set(delivCode, new Set(comps));
+        if (window.renderComponentsPanel) renderComponentsPanel(delivCode);
+      } catch (error) {
+        console.error('Error selecting all components:', error);
+      }
     });
   }
   
   if (compBtnClear) {
     compBtnClear.addEventListener('click', () => {
-      if (!step2State.currentDeliverable) return;
-      selectedComponentsMap[step2State.currentDeliverable] = new Set();
-      renderComponentsPanel(step2State.currentDeliverable);
+      if (!APB.step2.activeDeliverableCode) return;
+      const delivCode = APB.step2.activeDeliverableCode;
+      
+      // Clear all components for this deliverable
+      selectionStore.componentsByDeliv.set(delivCode, new Set());
+      if (window.renderComponentsPanel) renderComponentsPanel(delivCode);
     });
   }
   
@@ -1703,34 +1715,35 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
+  // TASK 8: Fix All/Clear buttons for L3 panel using selectionStore
   if (l3BtnAll) {
     l3BtnAll.addEventListener('click', async () => {
-      if (!step2State.currentDeliverable || !step2State.currentComponent) return;
-      // Fetch all L3 items and select them
+      if (!APB.step2.activeDeliverableCode || !APB.step2.activeComponentName) return;
+      const delivCode = APB.step2.activeDeliverableCode;
+      const componentName = APB.step2.activeComponentName;
+      
+      // Fetch all L3 items from the new API and select them
       try {
-        const r = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(step2State.currentDeliverable)}&component_name=${encodeURIComponent(step2State.currentComponent)}`);
-        const data = await r.json();
-        const l3Items = data.items || [];
-        if (!step2State.selectedL3Map[step2State.currentDeliverable]) {
-          step2State.selectedL3Map[step2State.currentDeliverable] = {};
-        }
-        step2State.selectedL3Map[step2State.currentDeliverable][step2State.currentComponent] = 
-          new Set(l3Items.map(item => item.Task_Label));
-        renderL3Panel(step2State.currentComponent);
-      } catch (e) {
-        console.error('Error selecting all L3:', e);
+        const l3Items = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
+        const key = `${delivCode}::${componentName}`;
+        selectionStore.l3ByComponent.set(key, new Set(l3Items));
+        if (window.renderL3Panel) renderL3Panel(componentName);
+      } catch (error) {
+        console.error('Error selecting all L3:', error);
       }
     });
   }
   
   if (l3BtnClear) {
     l3BtnClear.addEventListener('click', () => {
-      if (!step2State.currentDeliverable || !step2State.currentComponent) return;
-      if (!step2State.selectedL3Map[step2State.currentDeliverable]) {
-        step2State.selectedL3Map[step2State.currentDeliverable] = {};
-      }
-      step2State.selectedL3Map[step2State.currentDeliverable][step2State.currentComponent] = new Set();
-      renderL3Panel(step2State.currentComponent);
+      if (!APB.step2.activeDeliverableCode || !APB.step2.activeComponentName) return;
+      const delivCode = APB.step2.activeDeliverableCode;
+      const componentName = APB.step2.activeComponentName;
+      
+      // Clear all L3 items for this component
+      const key = `${delivCode}::${componentName}`;
+      selectionStore.l3ByComponent.set(key, new Set());
+      if (window.renderL3Panel) renderL3Panel(componentName);
     });
   }
 });
