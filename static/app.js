@@ -11,8 +11,8 @@ window.APB = window.APB || {};
 window.APB.step2 = {
   rfpText: '',                                   // filled from Step 1 or sessionStorage
   selectedCodes: new Set(),                      // deliverable codes
-  selectedComponentsByCode: new Map(),           // code -> Set(component names)
-  selectedL3ByKey: new Map(),                    // `${code}::${component}` -> Set(l3 labels)
+  selectedComponentsByCode: {},                  // code -> Set(component names)
+  selectedL3ByKey: {},                           // `${code}::${component}` -> Set(l3 labels)
   complexity: 'Advanced',                        // default complexity
   tier: 'T2_MediumVolume',                       // default tier
   activeDeliverableCode: null,                   // currently active deliverable in Components panel
@@ -34,8 +34,17 @@ window.APB.step2 = {
 
 // Aliases for compatibility with existing code
 const S2 = window.APB.step2;
-const selectedComponentsMap = S2.selectedComponentsByCode;
-window.selectedComponentsMap = selectedComponentsMap;
+
+// Create dynamic getters that always reference the current object (survives resets to {})
+Object.defineProperty(window, 'selectedComponentsMap', {
+  get() { return S2.selectedComponentsByCode; },
+  configurable: true
+});
+
+Object.defineProperty(S2, 'selectedComponentsMap', {
+  get() { return S2.selectedComponentsByCode; },
+  configurable: true
+});
 
 // Legacy compatibility
 let selectedCodes = [];
@@ -702,7 +711,7 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
     btn.style.background = 'var(--danger)';
   } else {
     APB.step2.selectedCodes.delete(code);
-    APB.step2.selectedComponentsByCode.delete(code);
+    delete APB.step2.selectedComponentsByCode[code];
     btn.textContent = 'Add';
     btn.dataset.mode = 'add';
     btn.style.background = '';
@@ -776,7 +785,7 @@ async function onDeliverableToggle(code, checked) {
     APB.step2.selectedCodes.add(code);
   } else {
     APB.step2.selectedCodes.delete(code);
-    APB.step2.selectedComponentsByCode.delete(code);
+    delete APB.step2.selectedComponentsByCode[code];
   }
   
   renderDeliverablesPanel();
@@ -825,11 +834,11 @@ function renderComponentsChecklist(code, items) {
   }
   
   // Initialize selection if not exists
-  if (!APB.step2.selectedComponentsByCode.has(code)) {
-    APB.step2.selectedComponentsByCode.set(code, new Set(items.map(c => c.name)));
+  if (!APB.step2.selectedComponentsByCode[code]) {
+    APB.step2.selectedComponentsByCode[code] = new Set(items.map(c => c.name));
   }
   
-  const selectedSet = APB.step2.selectedComponentsByCode.get(code);
+  const selectedSet = APB.step2.selectedComponentsByCode[code];
   
   listEl.innerHTML = items.map(comp => `
     <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
@@ -867,7 +876,7 @@ function updateSummaryCounts() {
   
   // Count components
   let compCount = 0;
-  APB.step2.selectedComponentsByCode.forEach((compSet, code) => {
+  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSet]) => {
     if (APB.step2.selectedCodes.has(code)) {
       compCount += compSet.size;
     }
@@ -875,7 +884,7 @@ function updateSummaryCounts() {
   
   // Count L3
   let l3Count = 0;
-  APB.step2.selectedL3ByKey.forEach((l3Set, key) => {
+  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
     const [code] = key.split('::');
     if (APB.step2.selectedCodes.has(code)) {
       l3Count += l3Set.size;
@@ -936,11 +945,11 @@ function renderL3Checklist(code, componentName, items) {
   const key = `${code}::${componentName}`;
   
   // Initialize selection
-  if (!APB.step2.selectedL3ByKey.has(key)) {
-    APB.step2.selectedL3ByKey.set(key, new Set(items));
+  if (!APB.step2.selectedL3ByKey[key]) {
+    APB.step2.selectedL3ByKey[key] = new Set(items);
   }
   
-  const selectedSet = APB.step2.selectedL3ByKey.get(key);
+  const selectedSet = APB.step2.selectedL3ByKey[key];
   
   listEl.innerHTML = items.map(label => `
     <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
@@ -2139,8 +2148,8 @@ async function s2LoadDeliverables() {
   if (btnClear) {
     btnClear.onclick = () => {
       APB.step2.selectedCodes.clear();
-      APB.step2.selectedComponentsByCode.clear();
-      APB.step2.selectedL3ByKey.clear();
+      APB.step2.selectedComponentsByCode = {};
+      APB.step2.selectedL3ByKey = {};
       APB.step2.activeDeliverableCode = null;
       APB.step2.activeComponentName = null;
       renderDeliverablesPanel();
