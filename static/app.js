@@ -598,6 +598,26 @@ function s2onAdd(code) {
   }
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
+  
+  // Sync with new Step 2 UI state
+  if (window.step2PickerState) {
+    window.step2PickerState.selected.add(code);
+  }
+  
+  // Update new Step 2 UI
+  if (window.step2State) {
+    window.step2State.currentDeliverable = code;
+    if (window.populateComponentsDeliverableDropdown) {
+      window.populateComponentsDeliverableDropdown();
+    }
+    if (window.renderComponentsPanel) {
+      window.renderComponentsPanel(code);
+    }
+    if (window.updateStep2Summary) {
+      window.updateStep2Summary();
+    }
+  }
+  
   // Refresh suggestions to update badges
   initAISummaryAndSuggestions();
 }
@@ -609,6 +629,29 @@ function s2onRemove(code) {
   S2.selectedComponentsMap[code] = undefined;
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
+  
+  // Sync with new Step 2 UI state
+  if (window.step2PickerState) {
+    window.step2PickerState.selected.delete(code);
+  }
+  
+  // Update new Step 2 UI
+  if (window.step2State) {
+    // If we're removing the currently active deliverable, clear it and reset panels
+    if (window.step2State.currentDeliverable === code) {
+      window.step2State.currentDeliverable = null;
+      if (window.renderComponentsPanel) {
+        window.renderComponentsPanel(null);
+      }
+    }
+    if (window.populateComponentsDeliverableDropdown) {
+      window.populateComponentsDeliverableDropdown();
+    }
+    if (window.updateStep2Summary) {
+      window.updateStep2Summary();
+    }
+  }
+  
   // Refresh suggestions to update badges
   initAISummaryAndSuggestions();
 }
@@ -1829,9 +1872,49 @@ function s2RenderRight(filter) {
       if (e.target.checked) {
         S2.selectedCodes.add(code);
         S2.selectedMeta.set(code, {name, category: cat});
+        
+        // Sync with new Step 2 UI state
+        if (window.step2PickerState) {
+          window.step2PickerState.selected.add(code);
+        }
+        
+        // Update new Step 2 UI - set as current and populate components
+        if (window.step2State) {
+          window.step2State.currentDeliverable = code;
+          if (window.populateComponentsDeliverableDropdown) {
+            window.populateComponentsDeliverableDropdown();
+          }
+          if (window.renderComponentsPanel) {
+            window.renderComponentsPanel(code);
+          }
+          if (window.updateStep2Summary) {
+            window.updateStep2Summary();
+          }
+        }
       } else {
         S2.selectedCodes.delete(code);
         S2.selectedMeta.delete(code);
+        
+        // Sync with new Step 2 UI state
+        if (window.step2PickerState) {
+          window.step2PickerState.selected.delete(code);
+        }
+        
+        // Update new Step 2 UI
+        if (window.step2State && window.step2State.currentDeliverable === code) {
+          window.step2State.currentDeliverable = null;
+          if (window.renderComponentsPanel) {
+            window.renderComponentsPanel(null);
+          }
+        }
+        
+        // Always update dropdown and summary when any deliverable is removed
+        if (window.populateComponentsDeliverableDropdown) {
+          window.populateComponentsDeliverableDropdown();
+        }
+        if (window.updateStep2Summary) {
+          window.updateStep2Summary();
+        }
       }
       s2RenderLeft();
     });
@@ -1841,17 +1924,49 @@ function s2RenderRight(filter) {
 S2.els.search?.addEventListener('input', e => s2RenderRight(e.target.value));
 S2.els.btnSelectAll?.addEventListener('click', () => {
   S2.allDeliverables.forEach(d => {
-    S2.selectedCodes.add(String(d.Deliverable_Code));
-    S2.selectedMeta.set(String(d.Deliverable_Code), {name: d.Deliverable, category: d.Category});
+    const code = String(d.Deliverable_Code);
+    S2.selectedCodes.add(code);
+    S2.selectedMeta.set(code, {name: d.Deliverable, category: d.Category});
+    // Sync with new Step 2 UI state
+    if (window.step2PickerState) {
+      window.step2PickerState.selected.add(code);
+    }
   });
   s2RenderRight(S2.els.search?.value || '');
   s2RenderLeft();
+  
+  // Update new Step 2 UI
+  if (window.populateComponentsDeliverableDropdown) {
+    window.populateComponentsDeliverableDropdown();
+  }
+  if (window.updateStep2Summary) {
+    window.updateStep2Summary();
+  }
 });
 S2.els.btnClear?.addEventListener('click', () => {
   S2.selectedCodes.clear();
   S2.selectedMeta.clear();
   s2RenderRight(S2.els.search?.value || '');
   s2RenderLeft();
+  
+  // Sync with new Step 2 UI state
+  if (window.step2PickerState) {
+    window.step2PickerState.selected.clear();
+  }
+  
+  // Update new Step 2 UI
+  if (window.step2State) {
+    window.step2State.currentDeliverable = null;
+  }
+  if (window.renderComponentsPanel) {
+    window.renderComponentsPanel(null);
+  }
+  if (window.populateComponentsDeliverableDropdown) {
+    window.populateComponentsDeliverableDropdown();
+  }
+  if (window.updateStep2Summary) {
+    window.updateStep2Summary();
+  }
 });
 
 // ---- Left panel ("Your Selection") with Components… buttons ----
