@@ -987,7 +987,7 @@ async function onComponentClicked(componentName) {
   APB.step2.activeComponentName = componentName;
   
   try {
-    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component=${encodeURIComponent(componentName)}`);
+    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component_name=${encodeURIComponent(componentName)}`);
     const json = await res.json();
     
     const items = (json.items || json.l3 || []).map(item => 
