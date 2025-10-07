@@ -33,81 +33,121 @@
       <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB • Supports PDF, DOCX, TXT, MD</small></div>
     </section>
 
-    <!-- Step 2: Deliverable Selection (Blueprint Wireframe) -->
+    <!-- Step 2: Deliverable Selection (Restructured) -->
     <section class="card" id="step2" style="display:none;">
       <h2>Step 2 — Select & Configure Deliverables</h2>
       
-      <div class="hint" style="margin-bottom: 16px;">
-        <strong>How to use:</strong> 1) Select deliverables on the left → 2) In "Your Selection", click <span style="color: var(--accent);">Components...</span> for each deliverable and adjust (all are selected by default) → 3) Proceed to Pricing (or Get AI Suggestions first).
+      <!-- AI Analysis Panel (Top, Full Width) -->
+      <div class="ai-analysis-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+          <h3 style="margin: 0; color: var(--accent);">📋 AI Analysis & Suggestions</h3>
+          <a href="#" id="btnRunReconcile" style="font-size: 0.9em; color: var(--accent); text-decoration: none;">
+            🔄 Refresh AI Suggestions
+          </a>
+        </div>
+        
+        <!-- AI Suggested Deliverables -->
+        <div style="margin-bottom: 12px;">
+          <strong style="font-size: 0.95em;">Suggested Deliverables:</strong>
+          <div id="s2-ai-suggest" style="margin-top: 8px; min-height: 60px;">
+            <p style="color: var(--muted); font-size: 0.9em; margin: 0;">Run analysis to see AI suggestions.</p>
+          </div>
+        </div>
+        
+        <!-- AI Summary (Collapsible) -->
+        <div style="border-top: 1px solid rgba(139, 92, 246, 0.2); padding-top: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div>
+              <strong style="font-size: 0.95em;">RFP Summary</strong>
+              <small id="s2-ai-summary-count" style="opacity:.7; margin-left:8px;"></small>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button id="s2-ai-summary-copy" class="btn-sm">Copy</button>
+              <button id="s2-ai-summary-toggle" class="btn-sm">Hide</button>
+            </div>
+          </div>
+          <div id="s2-ai-summary-body" style="white-space:pre-wrap; max-height:180px; overflow:auto; font-size:0.9em; color: var(--muted); line-height: 1.5;"></div>
+        </div>
       </div>
       
-      <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-        <!-- Left Panel: Deliverables Selection -->
-        <div class="left-panel">
-          <h3>Deliverables (select)</h3>
-          <input id="s2-deliv-search" type="search" placeholder="Search deliverables…" autocomplete="off" 
-                 style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff;">
-          <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-            <button id="s2-deliv-selectall" type="button" class="btn-sm">Select all</button>
-            <button id="s2-deliv-clear" type="button" class="btn-sm">Clear</button>
+      <!-- Selection Grid (4 Columns) -->
+      <div class="selection-grid" style="display: grid; grid-template-columns: 1fr 1fr 1fr 300px; gap: 16px; margin-bottom: 20px;">
+        
+        <!-- Column 1: Deliverables (Level 1) -->
+        <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
+          <h3 style="font-size: 1em; margin: 0 0 12px 0;">1️⃣ Deliverables</h3>
+          <input id="s2-deliv-search" type="search" placeholder="Search…" autocomplete="off" 
+                 style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <button id="s2-deliv-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">All</button>
+            <button id="s2-deliv-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Clear</button>
           </div>
-          <div id="s2-deliv-list" style="border:1px solid #2a2a2a; border-radius:6px; height:360px; overflow:auto; padding: 8px;"></div>
+          <div id="s2-deliv-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;"></div>
         </div>
 
-        <!-- Middle Panel: Your Selection -->
-        <div class="middle-panel">
-          <h3>Your Selection</h3>
-          <div id="yourSelection" style="min-height: 360px;">
-            <p style="color: var(--muted);">No deliverables selected yet.</p>
+        <!-- Column 2: Components (Level 2) -->
+        <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
+          <h3 style="font-size: 1em; margin: 0 0 12px 0;">2️⃣ Components</h3>
+          <div style="margin-bottom: 8px;">
+            <select id="s2-comp-deliverable" style="width:100%; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
+              <option value="">Select a deliverable first...</option>
+            </select>
+          </div>
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <button id="s2-comp-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>All</button>
+            <button id="s2-comp-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>Clear</button>
+          </div>
+          <div id="s2-comp-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;">
+            <p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a deliverable to view components</p>
           </div>
         </div>
 
-        <!-- Right Panel: AI Suggestions & Summary -->
-        <div class="right-panel">
-          <h3>AI Suggestions</h3>
-          <div id="s2-ai-suggest" style="min-height: 240px;">
-            <p style="color: var(--muted);">Run analysis to see suggestions.</p>
+        <!-- Column 3: L3 Subtasks (Level 3) -->
+        <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
+          <h3 style="font-size: 1em; margin: 0 0 12px 0;">3️⃣ L3 Subtasks</h3>
+          <div style="margin-bottom: 8px;">
+            <select id="s2-l3-component" style="width:100%; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
+              <option value="">Select a component first...</option>
+            </select>
           </div>
-          
-          <!-- AI Summary Panel -->
-          <div id="s2-ai-summary" class="card" style="margin-top:12px; background: rgba(255,255,255,0.03);">
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.1);">
-              <div>
-                <strong>AI Summary</strong>
-                <small id="s2-ai-summary-count" style="opacity:.7; margin-left:8px;"></small>
-              </div>
-              <div style="display:flex; gap:8px;">
-                <button id="s2-ai-summary-copy" class="btn-sm">Copy</button>
-                <button id="s2-ai-summary-toggle" class="btn-sm">Hide</button>
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <button id="s2-l3-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>All</button>
+            <button id="s2-l3-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>Clear</button>
+          </div>
+          <div id="s2-l3-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;">
+            <p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view subtasks</p>
+          </div>
+        </div>
+
+        <!-- Column 4: Summary -->
+        <div class="selection-panel" style="border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 12px; background: rgba(139, 92, 246, 0.05);">
+          <h3 style="font-size: 1em; margin: 0 0 12px 0; color: var(--accent);">📊 Summary</h3>
+          <div id="s2-summary" style="font-size: 0.9em; line-height: 1.8;">
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span>Deliverables:</span>
+              <strong id="s2-summary-deliverables">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span>Components:</span>
+              <strong id="s2-summary-components">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span>L3 Subtasks:</span>
+              <strong id="s2-summary-l3">0</strong>
+            </div>
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 2px solid rgba(139, 92, 246, 0.3);">
+              <div style="text-align: center; color: var(--muted); font-size: 0.85em; margin-bottom: 8px;">Selection Status</div>
+              <div id="s2-summary-status" style="text-align: center; font-size: 0.85em; color: var(--muted);">
+                No deliverables selected
               </div>
             </div>
-            <div class="card-body" id="s2-ai-summary-body"
-                 style="white-space:pre-wrap; max-height:220px; overflow:auto; padding: 12px;"></div>
           </div>
         </div>
       </div>
 
       <div class="actions" style="margin-top: 20px;">
         <button id="btnProceedToStep3" class="btn-primary">Proceed to Pricing</button>
-        <a href="#" id="btnRunReconcile" style="margin-left: 16px; font-size: 0.9em; color: var(--muted); text-decoration: none;">
-          🔄 Refresh AI Suggestions
-        </a>
       </div>
-
-      <!-- Component bubble dialog -->
-      <dialog id="componentsDialog" style="border: 1px solid #2a2a2a; border-radius: 8px; background: #1a1a1a; color: #fff; padding: 20px; max-width: 500px;">
-        <form method="dialog">
-          <h3 id="compTitle" style="margin-top: 0;">Components</h3>
-          <div class="controls" style="display: flex; gap: 8px; margin-bottom: 12px;">
-            <button id="selectAllComps" type="button" class="btn-sm">Select all</button>
-            <button id="unselectAllComps" type="button" class="btn-sm">Unselect all</button>
-          </div>
-          <div id="componentsContainer" style="max-height: 400px; overflow-y: auto; margin-bottom: 16px; padding: 8px; border: 1px solid #2a2a2a; border-radius: 4px; background: rgba(255,255,255,0.03);"></div>
-          <div style="display: flex; justify-content: flex-end; gap: 8px;">
-            <button value="close" class="btn-primary">Close</button>
-          </div>
-        </form>
-      </dialog>
     </section>
 
     <!-- Stage 2: AI Analysis & Reconciliation (Original) -->
@@ -312,37 +352,6 @@
     </section>
   </main>
 
-  <!-- Component Drawer for Step 2 -->
-  <div id="compDrawer" class="drawer hidden" style="position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;display:none;z-index:1000;">
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-      <strong id="compTitle" style="flex:1">Components</strong>
-      <button id="compDone" class="btn small">Done</button>
-    </div>
-    <div style="display:flex;gap:8px;margin-bottom:8px;">
-      <button id="compSelectAll" class="btn small" style="flex:1">Select All</button>
-      <button id="compUnselectAll" class="btn small" style="flex:1">Unselect All</button>
-    </div>
-    <div id="compList" style="height:calc(70vh - 120px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
-  </div>
-  <script>
-    // show/hide helpers for the component drawer
-    const _drawer = document.getElementById('compDrawer');
-    if (_drawer) {
-      _drawer.classList.add('hidden');
-      Object.defineProperty(_drawer.classList, 'remove', { 
-        value: function(){ 
-          _drawer.style.display='block'; 
-          DOMTokenList.prototype.remove.apply(this, arguments);
-        } 
-      });
-      Object.defineProperty(_drawer.classList, 'add', { 
-        value: function(){ 
-          _drawer.style.display='none';  
-          DOMTokenList.prototype.add.apply(this, arguments);
-        } 
-      });
-    }
-  </script>
 
   <script>
     // --- Safe DOM helpers ---
