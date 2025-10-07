@@ -8,6 +8,25 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes (October 2025)
+
+### Critical L3 Synchronization Fix
+- **Issue**: L3 (Level 3) selections from Step 2 UI were not reaching Step 3 payload due to data synchronization problems between legacy code paths and the centralized state store.
+- **Solution**: Implemented a Proxy-backed `selectedL3ByKey` object that intercepts all property operations (get, set, delete, enumerate) and synchronizes with `selectionStore.l3ByComponent` Map.
+- **Implementation**: 
+  - Lines 66-100 in app.js: Proxy with comprehensive traps for all operations
+  - Lines 103-121 in app.js: Locked property definition to prevent accidental reassignment
+  - Ensures all read/write paths use a single source of truth
+
+### Enhanced Summary Panel
+- **Feature**: Column 4 now displays hierarchical Deliverable → Component → L3 structure
+- **Functionality**: Individual remove buttons for each level with cascading deletion
+- **UI**: L3 chips grouped by parent component for clear visualization
+
+### Timeline Accuracy Improvements
+- **Business Days Calculation**: Added `businessDaysInclusive()` helper function to accurately calculate project durations excluding weekends
+- **XML Export**: Verified Saturday configured as non-working day (DayWorking=0) in Workfront-compatible calendar export
+
 ## System Architecture
 
 ### Backend Architecture
@@ -21,7 +40,7 @@ Preferred communication style: Simple, everyday language.
 - **Technology**: Vanilla JavaScript, HTML, and CSS (framework-agnostic).
 - **UI Pattern**: Single-page application with a step-based workflow.
 - **Styling**: Uses CSS custom properties for theming, including a dark mode.
-- **State Management**: Client-side caching for options and scenario data.
+- **State Management**: Centralized `selectionStore` as single source of truth with Proxy-backed compatibility layer for legacy code paths.
 
 ### Data Storage Pattern
 - **Primary Storage**: Excel/CSV files serve as the main source for business rules and configuration data.
