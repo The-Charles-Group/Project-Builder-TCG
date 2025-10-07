@@ -2633,6 +2633,68 @@ def api_l3_for(deliverable_code: str, component_name: str):
         print(f"Error in api_l3_for: {e}")
         return {"items": []}
 
+# ============================================================================
+# Step 2 Deterministic Endpoints (single source of truth)
+# ============================================================================
+
+@app.post("/api/step2/components")
+async def step2_components(payload: dict):
+    """
+    Returns components for selected deliverables.
+    payload = {"deliverables": ["deck_strategy", "production", ...]}
+    returns = {
+      "deck_strategy": ["brief", "art_direction", "internal_review", ...],
+      "production": ["prepro_coord", "shoot", "post", ...],
+    }
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    codes = [str(c).strip() for c in payload.get("deliverables", [])]
+    df = DB.all_rows.copy()
+    
+    out = {}
+    for code in codes:
+        subset = df[df["Deliverable_Code"] == code]
+        comps = (
+            subset["Component"]
+            .fillna("").astype(str).str.strip()
+            .replace({"nan": ""})
+            .tolist()
+        )
+        comps = sorted({c for c in comps if c})
+        out[code] = comps if comps else ["general"]
+    
+    return out
+
+@app.post("/api/step2/l3")
+async def step2_l3(payload: dict):
+    """
+    Returns L3 subtasks for a deliverable + component.
+    payload = {"deliverable": "deck_strategy", "component": "brief"}
+    returns = ["deck_build", "internal_review", "client_review", ...]
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    dcode = str(payload.get("deliverable", "")).strip()
+    comp = str(payload.get("component", "")).strip()
+    df = DB.all_rows.copy()
+    
+    rows = df[(df["Deliverable_Code"] == dcode) & (df["Component"] == comp)]
+    
+    # Prefer Task_Label (normalized), fallback to task_group if empty
+    label_col = "Task_Label"
+    if label_col not in rows.columns or rows[label_col].eq("").all():
+        label_col = "task_group" if "task_group" in rows.columns else None
+    
+    tasks = []
+    if label_col:
+        tasks = rows[label_col].fillna("").astype(str).str.strip().tolist()
+    tasks = sorted({t for t in tasks if t})
+    
+    return tasks
+
 @app.get("/api/db/status")
 def db_status():
     if not DB.loaded: DB.load()

@@ -216,11 +216,25 @@ async function boot() {
   if (reconcileBtn) {
     reconcileBtn.onclick = async (e) => {
       e.preventDefault();
-      // Refresh AI suggestions using stored RFP text (no re-upload needed)
-      const rfpText = window.APP?.rfpText || '';
+      
+      // Get RFP text from multiple sources (never block in Step 2)
+      let rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || '';
+      
+      // If still no text, check if we have a stored analysis summary
+      if (!rfpText && sessionStorage.getItem('apb:rfpSummary')) {
+        try {
+          const summary = JSON.parse(sessionStorage.getItem('apb:rfpSummary'));
+          if (summary && summary.summary_text) {
+            rfpText = summary.summary_text; // Use summary as fallback
+          }
+        } catch (e) {
+          console.warn('Could not parse stored summary:', e);
+        }
+      }
+      
       if (!rfpText) {
-        alert('No RFP text available. Please run AI analysis first.');
-        return;
+        // Last resort: show non-blocking message but don't prevent refresh
+        console.warn('No RFP text found - refresh may have limited results');
       }
       
       try {
@@ -333,6 +347,17 @@ async function buildFromCurrentSelection() {
     }
   });
 
+  // Include L3 subtasks from APB.step2.selectedL3ByKey
+  // Format: { deliverableCode: { component: [l3tasks...] } }
+  const l3Payload = {};
+  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
+    const [code, component] = key.split('::');
+    if (codes.includes(code) && l3Set && l3Set.size > 0) {
+      if (!l3Payload[code]) l3Payload[code] = {};
+      l3Payload[code][component] = Array.from(l3Set);
+    }
+  });
+
   // Include retainers if toggle is enabled
   const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
   const retainersPayload = retainersEnabled ? (window.APP?.retainers || []) : [];
@@ -340,6 +365,7 @@ async function buildFromCurrentSelection() {
   const payload = {
     selected_deliverable_codes: codes,
     selected_components_map: selectedComponentsPayload,
+    selected_l3_map: l3Payload,
     pricing_mode: window.getPricingModeFromUI?.() || 'Flat_Blended',
     blended_rate: window.getBlendedRateFromUI?.() || 195,
     rate_band: window.getRateBandFromUI?.() || 'Standard_US',
@@ -576,7 +602,7 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
       toggleBtn.className = 'btn-sm btn-suggest';
       toggleBtn.dataset.code = sug.code;
       toggleBtn.dataset.mode = isSel ? 'remove' : 'add';
-      toggleBtn.textContent = isSel ? 'Remove' : 'Add';
+      toggleBtn.textContent = isSel ? 'Added • Remove' : 'Add';
       toggleBtn.style = isSel ? 'background:var(--danger);' : '';
       toggleBtn.onclick = () => toggleSuggestedDeliverable(row, sug.code, !isSel);
       right.appendChild(toggleBtn);
@@ -708,7 +734,7 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
     APB.step2.selectedCodes.add(code);
     // Set as active deliverable to load components
     APB.step2.activeDeliverableCode = code;
-    btn.textContent = 'Remove';
+    btn.textContent = 'Added • Remove';
     btn.dataset.mode = 'remove';
     btn.style.background = 'var(--danger)';
   } else {
