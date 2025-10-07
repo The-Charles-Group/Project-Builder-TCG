@@ -706,12 +706,17 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
   
   if (add) {
     APB.step2.selectedCodes.add(code);
+    // Set as active deliverable to load components
+    APB.step2.activeDeliverableCode = code;
     btn.textContent = 'Remove';
     btn.dataset.mode = 'remove';
     btn.style.background = 'var(--danger)';
   } else {
     APB.step2.selectedCodes.delete(code);
     delete APB.step2.selectedComponentsByCode[code];
+    if (APB.step2.activeDeliverableCode === code) {
+      APB.step2.activeDeliverableCode = null;
+    }
     btn.textContent = 'Add';
     btn.dataset.mode = 'add';
     btn.style.background = '';
@@ -720,6 +725,9 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
   renderDeliverablesPanel();
   await refreshComponentsPanel();
   updateSummaryCounts();
+  
+  // Refresh AI suggestions to update other buttons
+  initAISummaryAndSuggestions();
 }
 
 // Render deliverables panel with Selected on top, then Other
@@ -746,8 +754,9 @@ function renderDeliverablesPanel() {
     html += '<div style="font-weight:600;padding:8px;color:var(--accent);background:rgba(139,92,246,0.05);border-bottom:1px solid rgba(255,255,255,0.1);">Selected</div>';
     selected.forEach(d => {
       const code = String(d.Deliverable_Code);
+      const isActive = APB.step2.activeDeliverableCode === code;
       html += `
-        <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;background:rgba(139,92,246,0.03);">
+        <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;background:${isActive ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.03)'};border-left:${isActive ? '3px solid var(--accent)' : '3px solid transparent'};">
           <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked />
           <span>${d.Deliverable}</span>
           <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
@@ -762,7 +771,7 @@ function renderDeliverablesPanel() {
     other.forEach(d => {
       const code = String(d.Deliverable_Code);
       html += `
-        <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+        <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
           <input type="checkbox" class="deliv-checkbox" data-code="${code}" />
           <span>${d.Deliverable}</span>
           <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
@@ -775,7 +784,32 @@ function renderDeliverablesPanel() {
   
   // Attach checkbox handlers
   host.querySelectorAll('.deliv-checkbox').forEach(cb => {
-    cb.addEventListener('change', e => onDeliverableToggle(e.target.dataset.code, e.target.checked));
+    cb.addEventListener('change', e => {
+      e.stopPropagation(); // Prevent row click from triggering
+      onDeliverableToggle(e.target.dataset.code, e.target.checked);
+    });
+  });
+  
+  // Attach row click handlers to set active deliverable
+  host.querySelectorAll('.deliv-row').forEach(row => {
+    row.addEventListener('click', async (e) => {
+      // Only trigger if clicking the row itself, not the checkbox
+      if (e.target.classList.contains('deliv-checkbox')) return;
+      
+      const code = row.dataset.code;
+      const checkbox = row.querySelector('.deliv-checkbox');
+      
+      // If not selected, select it first
+      if (!checkbox.checked) {
+        checkbox.checked = true;
+        await onDeliverableToggle(code, true);
+      } else {
+        // Already selected, just make it active and refresh components
+        APB.step2.activeDeliverableCode = code;
+        renderDeliverablesPanel(); // Re-render to update active highlight
+        await refreshComponentsPanel();
+      }
+    });
   });
 }
 
@@ -783,14 +817,23 @@ function renderDeliverablesPanel() {
 async function onDeliverableToggle(code, checked) {
   if (checked) {
     APB.step2.selectedCodes.add(code);
+    // Set as active deliverable to load components
+    APB.step2.activeDeliverableCode = code;
   } else {
     APB.step2.selectedCodes.delete(code);
     delete APB.step2.selectedComponentsByCode[code];
+    // If we unchecked the active one, clear it
+    if (APB.step2.activeDeliverableCode === code) {
+      APB.step2.activeDeliverableCode = null;
+    }
   }
   
   renderDeliverablesPanel();
   await refreshComponentsPanel();
   updateSummaryCounts();
+  
+  // Refresh AI suggestions to update button states
+  initAISummaryAndSuggestions();
 }
 
 // Refresh components panel for active deliverable
@@ -1095,9 +1138,13 @@ function onRemove(code) {
   // Sync to centralized state and re-render
   APB.step2.selectedCodes.delete(code);
   delete APB.step2.selectedComponentsByCode[code];
+  if (APB.step2.activeDeliverableCode === code) {
+    APB.step2.activeDeliverableCode = null;
+  }
   renderDeliverablesPanel();
   refreshComponentsPanel();
   updateSummaryCounts();
+  initAISummaryAndSuggestions();
 }
 
 function onRestore(code) {
@@ -1107,9 +1154,11 @@ function onRestore(code) {
   }
   // Sync to centralized state and re-render
   APB.step2.selectedCodes.add(code);
+  APB.step2.activeDeliverableCode = code;
   renderDeliverablesPanel();
   refreshComponentsPanel();
   updateSummaryCounts();
+  initAISummaryAndSuggestions();
 }
 
 function onAdd(code) {
@@ -1122,9 +1171,11 @@ function onAdd(code) {
   }
   // Sync to centralized state and re-render
   APB.step2.selectedCodes.add(code);
+  APB.step2.activeDeliverableCode = code;
   renderDeliverablesPanel();
   refreshComponentsPanel();
   updateSummaryCounts();
+  initAISummaryAndSuggestions();
 }
 
 function selectedDeliverables(){
