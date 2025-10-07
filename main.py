@@ -28,6 +28,9 @@ app = FastAPI(title="Agency Project Builder", version="1.0")
 # Global to track last uploaded filename for export defaults
 LAST_UPLOAD_FILENAME: str | None = None
 
+# Global RFP text cache for Step 1 → Step 2 handoff
+RFP_TEXT_CACHE: str | None = None
+
 # Configure file upload limits - allow up to 20MB files
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -2502,6 +2505,65 @@ def api_last_upload_name():
     """Return the sanitized project name default from the most recent file upload."""
     return {"project_name_default": _upload_title_default() or ""}
 
+@app.post("/api/rfp/cache")
+async def cache_rfp_text(text: str = Form(...)):
+    """Cache RFP text from Step 1 for reuse in Step 2 Refresh AI Suggestions."""
+    global RFP_TEXT_CACHE
+    RFP_TEXT_CACHE = text.strip() or None
+    return {"ok": True}
+
+@app.get("/api/rfp/cache")
+async def get_cached_rfp_text():
+    """Retrieve cached RFP text for Step 2."""
+    return {"text": RFP_TEXT_CACHE or ""}
+
+@app.get("/api/components")
+def list_components(deliverable: str):
+    """Return all unique components for a given deliverable code."""
+    if not DB.loaded:
+        DB.load()
+    df = DB.all_rows
+    deliverable = str(deliverable).strip().lower()
+    subset = df[df["Deliverable_Code"].astype(str).str.lower() == deliverable]
+    comps = (
+        subset["Component"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace({"nan": ""})
+        .unique()
+        .tolist()
+    )
+    return sorted([c for c in comps if c])
+
+@app.get("/api/l3")
+def list_l3(deliverable: str, component: str):
+    """Return all L3 tasks for a given deliverable and component."""
+    if not DB.loaded:
+        DB.load()
+    df = DB.all_rows
+    d = str(deliverable).strip().lower()
+    c = str(component).strip().lower()
+    sub = df[
+        (df["Deliverable_Code"].astype(str).str.lower() == d) &
+        (df["Component"].astype(str).str.lower() == c)
+    ]
+    task_col = "Task_Label" if "Task_Label" in sub.columns else "Task"
+    items = (
+        sub[task_col]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace({"nan": ""})
+        .unique()
+        .tolist()
+    )
+    return sorted([x for x in items if x])
+
+def dedupe_list(xs):
+    """Deduplicate and sort a list of strings, removing empty/nan values."""
+    return sorted(list({str(x).strip() for x in xs if str(x).strip() and str(x).strip().lower() != "nan"}))
+
 @app.get("/api/options")
 def api_options():
     if not DB.loaded:
@@ -2514,8 +2576,8 @@ def api_options():
     if not v3_tiers:
         v3_tiers = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].head(3).tolist()
 
-    rate_bands = DB.rate_bands["Band_Name"].head(3).tolist()  # 3 bands max
-    pricing_modes = ["Flat_Blended","Per_Resource"]
+    rate_bands = dedupe_list(DB.rate_bands["Band_Name"].head(3).tolist())  # Deduplicate
+    pricing_modes = dedupe_list(["Flat_Blended","Per_Resource"])  # Deduplicate
     
     # Include Service Department and Sort_Order for grouping/ordering
     deliv_cols = ["Deliverable_Code", "Deliverable", "Category"]
@@ -4324,6 +4386,23 @@ def convert_excel_to_mspdi(
 
         # === WORKFRONT SEQUENCING ENRICHMENT ===
         # Add anchor tasks per deliverable and chain components properly
+        def safe_code(name: str, code: str | None, unique_index: int = 0) -> str:
+            """
+            Generate a safe, unique deliverable code for START/END anchors.
+            Falls back to slug of deliverable name if code is missing/nan.
+            Appends unique_index to ensure no collisions when multiple deliverables lack codes.
+            """
+            import re
+            c = (code or "").strip()
+            if not c or c.lower() == "nan":
+                # Fallback to slug of the deliverable name
+                slug = re.sub(r"[^a-z0-9]+", "_", (name or "deliverable").lower()).strip("_")
+                # Ensure uniqueness with index when name is generic or empty
+                if not name or slug == "deliverable":
+                    return f"{slug}_{unique_index}"
+                return slug
+            return c
+        
         def enrich_wbs_for_workfront(rows):
             enriched = []
             anchor_id_counter = [90000]  # Start high to avoid conflicts with existing WBS IDs
@@ -4348,10 +4427,18 @@ def convert_excel_to_mspdi(
             
             prev_deliv_end_wbs = None
             
+            deliverable_index = 0
             for dcode in sorted(deliverables.keys()):
                 deliv_rows = deliverables[dcode]
                 if not deliv_rows:
                     continue
+                
+                deliverable_index += 1
+                # Get deliverable name for safe_code fallback
+                deliv_name = next((r.get("Deliverable", "") for r in deliv_rows if r.get("Deliverable")), "")
+                
+                # Generate safe, unique code (safe_code handles uniqueness internally)
+                safe_dcode = safe_code(deliv_name, dcode, deliverable_index)
                 
                 # Create START anchor
                 start_wbs = f"ANCHOR_{anchor_id_counter[0]}"
@@ -4359,7 +4446,7 @@ def convert_excel_to_mspdi(
                 start_anchor = {
                     "WBS": start_wbs,
                     "ParentWBS": "1",
-                    "Name": f"[{dcode}] START",
+                    "Name": f"[{safe_dcode}] START",
                     "PlannedHours": 0,
                     "StartOffset": 0,
                     "Duration": 0,
@@ -4400,7 +4487,7 @@ def convert_excel_to_mspdi(
                 end_anchor = {
                     "WBS": end_wbs,
                     "ParentWBS": "1",
-                    "Name": f"[{dcode}] END",
+                    "Name": f"[{safe_dcode}] END",
                     "PlannedHours": 0,
                     "StartOffset": 0,
                     "Duration": 0,

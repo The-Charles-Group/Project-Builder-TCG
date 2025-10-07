@@ -5,19 +5,28 @@ let DELIV_INDEX = {};     // code -> deliverable object lookup for fast renderin
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ================================================================================
-// Centralized Step 2 State - Single Source of Truth
+// Centralized Step 2 State - Single Source of Truth (selectionStore)
 // ================================================================================
 window.APB = window.APB || {};
+
+// Unified selection store per requirements
+const selectionStore = {
+  deliverables: new Set(),                       // deliverable codes (e.g., deck_strategy)
+  componentsByDeliv: new Map(),                  // Map<delivCode, Set<componentName>>
+  l3ByComponent: new Map(),                      // Map<delivCode::componentKey, Set<l3Name>>
+};
+
 window.APB.step2 = {
   rfpText: '',                                   // filled from Step 1 or sessionStorage
-  selectedCodes: new Set(),                      // deliverable codes
-  selectedComponentsByCode: {},                  // code -> Set(component names)
-  selectedL3ByKey: {},                           // `${code}::${component}` -> Set(l3 labels)
+  selectedCodes: selectionStore.deliverables,    // alias for compatibility
+  selectedComponentsByCode: {},                  // DEPRECATED: use selectionStore.componentsByDeliv
+  selectedL3ByKey: {},                           // DEPRECATED: use selectionStore.l3ByComponent
   complexity: 'Advanced',                        // default complexity
   tier: 'T2_MediumVolume',                       // default tier
   activeDeliverableCode: null,                   // currently active deliverable in Components panel
   activeComponentName: null,                     // currently active component in L3 panel
   allDeliverables: [],                           // from /api/options
+  aiSuggestedCodes: new Set(),                   // codes that came from AI suggestions
   els: {                                         // DOM element references
     listRight: null,
     search: null,
@@ -31,6 +40,9 @@ window.APB.step2 = {
     compDone: null,
   }
 };
+
+// Export selectionStore globally for access
+window.selectionStore = selectionStore;
 
 // Aliases for compatibility with existing code
 const S2 = window.APB.step2;
@@ -107,6 +119,74 @@ async function api(path, opts={}) {
 function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
 
 function currency(n){ return `$${Number(n||0).toLocaleString()}`; }
+
+// ================================================================================
+// Centralized Step 2 Hydration Functions - wire ALL entry points to selectionStore
+// ================================================================================
+
+async function hydrateComponentsFor(delivCode) {
+  try {
+    const comps = await api(`/api/components?deliverable=${encodeURIComponent(delivCode)}`);
+    selectionStore.componentsByDeliv.set(delivCode, new Set(comps));
+    
+    // Auto-select first component for L3 preview if available
+    if (comps.length > 0) {
+      await hydrateL3For(delivCode, comps[0]);
+    }
+  } catch (error) {
+    console.error(`Failed to hydrate components for ${delivCode}:`, error);
+  }
+}
+
+async function hydrateL3For(delivCode, componentName) {
+  try {
+    const l3 = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
+    const key = `${delivCode}::${componentName}`;
+    selectionStore.l3ByComponent.set(key, new Set(l3));
+  } catch (error) {
+    console.error(`Failed to hydrate L3 for ${delivCode}::${componentName}:`, error);
+  }
+}
+
+async function selectDeliverable(code) {
+  selectionStore.deliverables.add(code);
+  APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
+  
+  // Hydrate components for this deliverable
+  await hydrateComponentsFor(code);
+  
+  // Re-render all panels
+  if (window.renderDeliverablesPanel) renderDeliverablesPanel();
+  if (window.renderComponentsPanel) renderComponentsPanel(code);
+  if (window.renderSummary) renderSummary();
+}
+
+async function deselectDeliverable(code) {
+  selectionStore.deliverables.delete(code);
+  selectionStore.componentsByDeliv.delete(code);
+  
+  // Remove all L3 entries for this deliverable
+  Array.from(selectionStore.l3ByComponent.keys())
+    .filter(k => k.startsWith(`${code}::`))
+    .forEach(k => selectionStore.l3ByComponent.delete(k));
+  
+  APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
+  
+  // Re-render panels
+  if (window.renderDeliverablesPanel) renderDeliverablesPanel();
+  if (window.renderSummary) renderSummary();
+  
+  // If this was an AI suggestion, show Add button again
+  if (APB.step2.aiSuggestedCodes.has(code)) {
+    if (window.renderAISuggestions) renderAISuggestions();
+  }
+}
+
+// Export hydration functions globally
+window.selectDeliverable = selectDeliverable;
+window.deselectDeliverable = deselectDeliverable;
+window.hydrateComponentsFor = hydrateComponentsFor;
+window.hydrateL3For = hydrateL3For;
 
 async function boot() {
   await api("/api/load");
