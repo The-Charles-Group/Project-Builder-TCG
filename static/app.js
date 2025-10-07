@@ -432,6 +432,10 @@ async function onRunReconcile() {
     window.APP.rfpText = rfpText;
     window.APP.summary = summary;
     sessionStorage.setItem('apb:rfpSummary', JSON.stringify(summary));
+    sessionStorage.setItem('apb.rfp_text', rfpText);
+    
+    // Update centralized state
+    APB.step2.rfpText = rfpText;
 
     // Show Step 2
     const step2 = document.getElementById('step2');
@@ -535,7 +539,7 @@ async function reconcileAndRender(aiLabels, selectedCodes) {
   }
 }
 
-// Render AI Suggestions with Accept/Remove buttons
+// Render AI Suggestions with persistent toggle buttons (rows never disappear)
 function renderNewAISuggestions(add = [], del = [], unchanged = []) {
   const root = document.querySelector('#s2-ai-suggest');
   if (!root) return;
@@ -543,6 +547,7 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
   const mkRow = (sug, type) => {
     const row = document.createElement('div');
     row.style = 'display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);';
+    row.dataset.code = sug.code || '';
 
     const left = document.createElement('div');
     left.innerHTML = `<strong>${sug.label || sug}</strong> <span style="opacity:.65;">${
@@ -554,29 +559,18 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
     const right = document.createElement('div');
     right.style = 'display:flex;gap:8px;align-items:center;';
 
-    // Only add action buttons if we have a code
+    // Create persistent toggle button (never disappears)
     if (sug.code) {
-      // Check if already selected
-      const isSel = (S2.selectedCodes || new Set()).has(sug.code);
-      if (isSel) {
-        const badge = document.createElement('span');
-        badge.style = 'background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75em;';
-        badge.textContent = 'Selected ✓';
-        right.appendChild(badge);
-
-        const rm = document.createElement('button');
-        rm.className = 'btn-sm';
-        rm.textContent = 'Remove';
-        rm.style = 'background:var(--danger);';
-        rm.onclick = () => s2onRemove(sug.code);
-        right.appendChild(rm);
-      } else {
-        const addBtn = document.createElement('button');
-        addBtn.className = 'btn-sm';
-        addBtn.textContent = 'Add';
-        addBtn.onclick = () => s2onAdd(sug.code);
-        right.appendChild(addBtn);
-      }
+      const isSel = APB.step2.selectedCodes.has(sug.code);
+      
+      const toggleBtn = document.createElement('button');
+      toggleBtn.className = 'btn-sm btn-suggest';
+      toggleBtn.dataset.code = sug.code;
+      toggleBtn.dataset.mode = isSel ? 'remove' : 'add';
+      toggleBtn.textContent = isSel ? 'Remove' : 'Add';
+      toggleBtn.style = isSel ? 'background:var(--danger);' : '';
+      toggleBtn.onclick = () => toggleSuggestedDeliverable(row, sug.code, !isSel);
+      right.appendChild(toggleBtn);
     }
 
     row.appendChild(left); 
@@ -585,8 +579,17 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
   };
 
   root.innerHTML = '';
+  
+  // Show non-blocking tip if no RFP text
+  if (!APB.step2.rfpText) {
+    const tip = document.createElement('div');
+    tip.style = 'background:rgba(255,193,7,0.1);border-left:3px solid #ffc107;padding:8px 12px;margin-bottom:12px;font-size:0.9em;';
+    tip.innerHTML = '<strong>Tip:</strong> No RFP text in memory. Suggestions will be blank until you paste text or re-run Step 1.';
+    root.appendChild(tip);
+  }
+  
   if (!add.length && !del.length && !unchanged.length) {
-    root.innerHTML = '<div style="opacity:.7;">Run analysis to see suggestions.</div>';
+    root.innerHTML += '<div style="opacity:.7;">Run analysis to see suggestions.</div>';
     return;
   }
 
@@ -681,6 +684,284 @@ function s2onRemove(code) {
   
   // Refresh suggestions to update badges
   initAISummaryAndSuggestions();
+}
+
+// ================================================================================
+// Centralized Step 2 Functions - Single Source of Truth (APB.step2)
+// ================================================================================
+
+// Toggle suggested deliverable (persistent button - never removes row)
+async function toggleSuggestedDeliverable(rowEl, code, add) {
+  const btn = rowEl.querySelector('.btn-suggest');
+  if (!btn) return;
+  
+  if (add) {
+    APB.step2.selectedCodes.add(code);
+    btn.textContent = 'Remove';
+    btn.dataset.mode = 'remove';
+    btn.style.background = 'var(--danger)';
+  } else {
+    APB.step2.selectedCodes.delete(code);
+    APB.step2.selectedComponentsByCode.delete(code);
+    btn.textContent = 'Add';
+    btn.dataset.mode = 'add';
+    btn.style.background = '';
+  }
+  
+  renderDeliverablesPanel();
+  await refreshComponentsPanel();
+  updateSummaryCounts();
+}
+
+// Render deliverables panel with Selected on top, then Other
+function renderDeliverablesPanel() {
+  const list = APB.step2.allDeliverables;
+  const selected = [], other = [];
+  
+  list.forEach(d => {
+    const code = String(d.Deliverable_Code);
+    if (APB.step2.selectedCodes.has(code)) {
+      selected.push(d);
+    } else {
+      other.push(d);
+    }
+  });
+  
+  const host = APB.step2.els.listRight;
+  if (!host) return;
+  
+  let html = '';
+  
+  // Render Selected group
+  if (selected.length > 0) {
+    html += '<div style="font-weight:600;padding:8px;color:var(--accent);background:rgba(139,92,246,0.05);border-bottom:1px solid rgba(255,255,255,0.1);">Selected</div>';
+    selected.forEach(d => {
+      const code = String(d.Deliverable_Code);
+      html += `
+        <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;background:rgba(139,92,246,0.03);">
+          <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked />
+          <span>${d.Deliverable}</span>
+          <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+        </label>
+      `;
+    });
+  }
+  
+  // Render Other group
+  if (other.length > 0) {
+    html += '<div style="font-weight:600;padding:8px;color:var(--muted);margin-top:8px;">Other</div>';
+    other.forEach(d => {
+      const code = String(d.Deliverable_Code);
+      html += `
+        <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+          <input type="checkbox" class="deliv-checkbox" data-code="${code}" />
+          <span>${d.Deliverable}</span>
+          <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+        </label>
+      `;
+    });
+  }
+  
+  host.innerHTML = html || '<div style="opacity:.7;padding:8px">No deliverables</div>';
+  
+  // Attach checkbox handlers
+  host.querySelectorAll('.deliv-checkbox').forEach(cb => {
+    cb.addEventListener('change', e => onDeliverableToggle(e.target.dataset.code, e.target.checked));
+  });
+}
+
+// Deliverable checkbox toggle handler
+async function onDeliverableToggle(code, checked) {
+  if (checked) {
+    APB.step2.selectedCodes.add(code);
+  } else {
+    APB.step2.selectedCodes.delete(code);
+    APB.step2.selectedComponentsByCode.delete(code);
+  }
+  
+  renderDeliverablesPanel();
+  await refreshComponentsPanel();
+  updateSummaryCounts();
+}
+
+// Refresh components panel for active deliverable
+async function refreshComponentsPanel() {
+  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
+  if (!code) {
+    renderComponentsEmptyState();
+    return;
+  }
+  
+  const { complexity, tier } = APB.step2;
+  
+  try {
+    const res = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${encodeURIComponent(complexity)}&tier=${encodeURIComponent(tier)}`);
+    const json = await res.json();
+    
+    renderComponentsChecklist(code, json.items || []);
+  } catch (e) {
+    console.error('Error loading components:', e);
+    renderComponentsEmptyState('Error loading components');
+  }
+}
+
+// Get active deliverable code (first selected one if no explicit active)
+function getActiveDeliverableCode() {
+  if (APB.step2.activeDeliverableCode && APB.step2.selectedCodes.has(APB.step2.activeDeliverableCode)) {
+    return APB.step2.activeDeliverableCode;
+  }
+  const codes = Array.from(APB.step2.selectedCodes);
+  return codes.length > 0 ? codes[0] : null;
+}
+
+// Render components checklist
+function renderComponentsChecklist(code, items) {
+  const listEl = document.getElementById('s2-comp-list');
+  if (!listEl) return;
+  
+  if (items.length === 0) {
+    listEl.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 8px;">No components available</p>';
+    return;
+  }
+  
+  // Initialize selection if not exists
+  if (!APB.step2.selectedComponentsByCode.has(code)) {
+    APB.step2.selectedComponentsByCode.set(code, new Set(items.map(c => c.name)));
+  }
+  
+  const selectedSet = APB.step2.selectedComponentsByCode.get(code);
+  
+  listEl.innerHTML = items.map(comp => `
+    <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+      <input type="checkbox" class="comp-checkbox" data-comp="${comp.name}" 
+             ${selectedSet.has(comp.name) ? 'checked' : ''} />
+      <span style="font-size:0.9em;">${comp.name}</span>
+    </label>
+  `).join('');
+  
+  // Attach handlers
+  listEl.querySelectorAll('.comp-checkbox').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const compName = e.target.dataset.comp;
+      if (e.target.checked) {
+        selectedSet.add(compName);
+      } else {
+        selectedSet.delete(compName);
+      }
+      updateSummaryCounts();
+    });
+  });
+}
+
+// Render empty state for components
+function renderComponentsEmptyState(message = 'Select a deliverable to view components') {
+  const listEl = document.getElementById('s2-comp-list');
+  if (listEl) {
+    listEl.innerHTML = `<p style="color:var(--muted);text-align:center;padding:40px 8px;">${message}</p>`;
+  }
+}
+
+// Update summary counts from centralized state
+function updateSummaryCounts() {
+  const delivCount = APB.step2.selectedCodes.size;
+  
+  // Count components
+  let compCount = 0;
+  APB.step2.selectedComponentsByCode.forEach((compSet, code) => {
+    if (APB.step2.selectedCodes.has(code)) {
+      compCount += compSet.size;
+    }
+  });
+  
+  // Count L3
+  let l3Count = 0;
+  APB.step2.selectedL3ByKey.forEach((l3Set, key) => {
+    const [code] = key.split('::');
+    if (APB.step2.selectedCodes.has(code)) {
+      l3Count += l3Set.size;
+    }
+  });
+  
+  // Update DOM
+  const delivEl = document.getElementById('s2-summary-deliverables');
+  const compEl = document.getElementById('s2-summary-components');
+  const l3El = document.getElementById('s2-summary-l3');
+  
+  if (delivEl) delivEl.textContent = delivCount;
+  if (compEl) compEl.textContent = compCount;
+  if (l3El) l3El.textContent = l3Count;
+  
+  // Enable/disable Proceed to Pricing button
+  const proceedBtn = document.querySelector('#btnProceedPricing, [data-proceed-pricing]');
+  if (proceedBtn) {
+    proceedBtn.disabled = delivCount === 0;
+  }
+}
+
+// Component clicked - load L3 panel
+async function onComponentClicked(componentName) {
+  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
+  if (!code) return;
+  
+  APB.step2.activeComponentName = componentName;
+  
+  try {
+    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component=${encodeURIComponent(componentName)}`);
+    const json = await res.json();
+    
+    const items = (json.items || json.l3 || []).map(item => 
+      typeof item === 'string' ? item : (item.Task_Label || item.name || '')
+    );
+    
+    renderL3Checklist(code, componentName, items);
+  } catch (e) {
+    console.error('Error loading L3:', e);
+    const l3ListEl = document.getElementById('s2-l3-list');
+    if (l3ListEl) {
+      l3ListEl.innerHTML = '<p style="color:#f88;text-align:center;padding:40px 8px;">Error loading subtasks</p>';
+    }
+  }
+}
+
+// Render L3 checklist
+function renderL3Checklist(code, componentName, items) {
+  const listEl = document.getElementById('s2-l3-list');
+  if (!listEl) return;
+  
+  if (items.length === 0) {
+    listEl.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 8px;">No L3 subtasks</p>';
+    return;
+  }
+  
+  const key = `${code}::${componentName}`;
+  
+  // Initialize selection
+  if (!APB.step2.selectedL3ByKey.has(key)) {
+    APB.step2.selectedL3ByKey.set(key, new Set(items));
+  }
+  
+  const selectedSet = APB.step2.selectedL3ByKey.get(key);
+  
+  listEl.innerHTML = items.map(label => `
+    <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+      <input type="checkbox" class="l3-checkbox" data-label="${label}" 
+             ${selectedSet.has(label) ? 'checked' : ''} />
+      <span style="font-size:0.9em;">${label}</span>
+    </label>
+  `).join('');
+  
+  // Attach handlers
+  listEl.querySelectorAll('.l3-checkbox').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const label = e.target.dataset.label;
+      if (e.target.checked) {
+        selectedSet.add(label);
+      } else {
+        selectedSet.delete(label);
+      }
+      updateSummaryCounts();
+    });
+  });
 }
 
 // Retainer toggle handler
@@ -1820,10 +2101,11 @@ document.addEventListener('click', e => {
 
 // ---- S2 Functions (GPT 5 Pro Implementation) ----
 
-// ---- Load options and render right-hand list ----
+// ---- Load options and render deliverables panel ----
 async function s2LoadDeliverables() {
   const r = await fetch('/api/options');   // server returns deliverables + templates
   const data = await r.json();
+  APB.step2.allDeliverables = data.deliverables || [];
   S2.allDeliverables = data.deliverables || [];
   
   // Build code→deliverable index for fast lookups
@@ -1835,7 +2117,37 @@ async function s2LoadDeliverables() {
     DELIV_INDEX_LO[key(code)] = d;
   }
   
-  s2RenderRight('');
+  // Render with centralized state
+  renderDeliverablesPanel();
+  updateSummaryCounts();
+  
+  // Wire Select All button
+  const btnSelectAll = APB.step2.els.btnSelectAll;
+  if (btnSelectAll) {
+    btnSelectAll.onclick = () => {
+      APB.step2.allDeliverables.forEach(d => {
+        APB.step2.selectedCodes.add(String(d.Deliverable_Code));
+      });
+      renderDeliverablesPanel();
+      refreshComponentsPanel();
+      updateSummaryCounts();
+    };
+  }
+  
+  // Wire Clear button
+  const btnClear = APB.step2.els.btnClear;
+  if (btnClear) {
+    btnClear.onclick = () => {
+      APB.step2.selectedCodes.clear();
+      APB.step2.selectedComponentsByCode.clear();
+      APB.step2.selectedL3ByKey.clear();
+      APB.step2.activeDeliverableCode = null;
+      APB.step2.activeComponentName = null;
+      renderDeliverablesPanel();
+      renderComponentsEmptyState();
+      updateSummaryCounts();
+    };
+  }
 }
 
 function s2RenderRight(filter) {
