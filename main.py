@@ -4707,14 +4707,16 @@ def convert_excel_to_mspdi(
         SubElement(calendar, "Name").text = "Standard"
         SubElement(calendar, "IsBaseCalendar").text = "1"
         
-        # Working days
+        # Working days (Mon-Fri only, weekends non-working)
+        # DayType: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
         weekdays = SubElement(calendar, "WeekDays")
-        for day_num in range(1, 8):  # 1=Sunday, 2=Monday, etc.
+        for day_num in range(1, 8):
             weekday = SubElement(weekdays, "WeekDay")
             SubElement(weekday, "DayType").text = str(day_num)
-            if day_num in [1, 7]:  # Sunday, Saturday
+            # Make Sun (1) and Sat (7) non-working; Mon-Fri (2-6) are working
+            if day_num in [1, 7]:  # Sunday and Saturday
                 SubElement(weekday, "DayWorking").text = "0"
-            else:
+            else:  # Monday through Friday
                 SubElement(weekday, "DayWorking").text = "1"
                 working_times = SubElement(weekday, "WorkingTimes")
                 for start_time, end_time in calendar_blocks:
