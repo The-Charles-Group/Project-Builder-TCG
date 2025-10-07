@@ -1063,97 +1063,80 @@ function updateSummaryCounts() {
   }
 }
 
-// Render summary chips with remove functionality
+// Render summary chips with hierarchical L3 display: Deliverable → Component → L3
 function renderSummaryChips() {
   const container = document.getElementById('s2-summary-status');
   if (!container) return;
   
-  const delivs = [];
-  const comps = [];
-  const l3Items = [];
-  
-  // Collect deliverables
-  APB.step2.selectedCodes.forEach(code => {
-    const deliv = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === code);
-    if (deliv) delivs.push({ code, name: deliv.Deliverable || code });
-  });
-  
-  // Collect components with L3 counts (handle "ALL", objects, and Sets)
-  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSelection]) => {
-    if (APB.step2.selectedCodes.has(code)) {
-      // Normalize to Set: handle "ALL" string, plain objects, and existing Sets
-      let compSet;
-      if (compSelection === 'ALL') {
-        // Skip "ALL" sentinel - don't show individual components
-        return;
-      } else if (compSelection instanceof Set) {
-        compSet = compSelection;
-      } else if (typeof compSelection === 'object' && compSelection !== null) {
-        // Convert object keys to Set
-        compSet = new Set(Object.keys(compSelection));
-      } else {
-        // Unknown format, skip
-        return;
-      }
-      
-      compSet.forEach(compName => {
-        const key = `${code}::${compName}`;
-        const l3Set = APB.step2.selectedL3ByKey[key] || new Set();
-        comps.push({ code, name: compName, l3Count: l3Set.size });
-      });
-    }
-  });
-  
-  // Collect L3 items
-  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
-    const [code] = key.split('::');
-    if (APB.step2.selectedCodes.has(code)) {
-      l3Set.forEach(l3Name => {
-        l3Items.push({ key, name: l3Name });
-      });
-    }
-  });
-  
   let html = '';
   
-  // Deliverables chips
-  if (delivs.length > 0) {
-    html += '<div style="margin-bottom:12px;"><div style="font-size:0.75em;color:var(--muted);margin-bottom:4px;">DELIVERABLES</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
-    delivs.forEach(d => {
-      html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(139,92,246,0.2);border-radius:12px;font-size:0.75em;">
-        <span>✔ ${d.name}</span>
-        <button onclick="removeDeliverableFromSummary('${d.code}')" style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.1em;line-height:1;">✕</button>
-      </span>`;
+  // Group by Deliverable → Component → L3
+  APB.step2.selectedCodes.forEach(delivCode => {
+    const deliv = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === delivCode);
+    const delivName = deliv ? (deliv.Deliverable || delivCode) : delivCode;
+    
+    // Start deliverable group
+    html += `<div style="margin-bottom:16px;padding:8px;border-left:3px solid rgba(139,92,246,0.5);background:rgba(139,92,246,0.05);">`;
+    
+    // Deliverable header with remove button
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <strong style="font-size:0.9em;color:var(--accent);">${delivName}</strong>
+      <button onclick="removeDeliverableFromSummary('${delivCode}')" 
+              style="background:rgba(239,68,68,0.2);border:none;color:var(--danger);cursor:pointer;padding:4px 8px;border-radius:4px;font-size:0.75em;">
+        Remove All
+      </button>
+    </div>`;
+    
+    // Get components for this deliverable
+    const compSelection = APB.step2.selectedComponentsByCode[delivCode];
+    let compSet;
+    
+    // Normalize component selection to Set
+    if (compSelection === 'ALL') {
+      // Don't show individual components for ALL sentinel
+      compSet = new Set();
+    } else if (compSelection instanceof Set) {
+      compSet = compSelection;
+    } else if (typeof compSelection === 'object' && compSelection !== null) {
+      compSet = new Set(Object.keys(compSelection));
+    } else {
+      compSet = new Set();
+    }
+    
+    // Render each component and its L3 items
+    compSet.forEach(compName => {
+      const key = `${delivCode}::${compName}`;
+      const l3Set = APB.step2.selectedL3ByKey[key] || new Set();
+      
+      if (l3Set.size > 0) {
+        // Component label with remove button
+        html += `<div style="margin-top:8px;padding-left:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:0.8em;color:var(--muted);">${compName}</span>
+            <button onclick="removeComponentFromSummary('${delivCode}', '${compName}')" 
+                    style="background:none;border:none;color:var(--danger);cursor:pointer;padding:2px 6px;font-size:0.7em;">
+              Remove Component
+            </button>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:8px;">`;
+        
+        // L3 chips for this component
+        l3Set.forEach(l3Name => {
+          const escapedKey = key.replace(/'/g, "\\'");
+          const escapedL3 = l3Name.replace(/'/g, "\\'");
+          html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(16,185,129,0.2);border-radius:12px;font-size:0.7em;">
+            ${l3Name}
+            <button onclick="removeL3FromSummary('${escapedKey}', '${escapedL3}')" 
+                    style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.2em;line-height:1;">×</button>
+          </span>`;
+        });
+        
+        html += `</div></div>`;
+      }
     });
-    html += '</div></div>';
-  }
-  
-  // Components chips
-  if (comps.length > 0) {
-    html += '<div style="margin-bottom:12px;"><div style="font-size:0.75em;color:var(--muted);margin-bottom:4px;">COMPONENTS</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
-    comps.forEach(c => {
-      const l3Text = c.l3Count > 0 ? ` (${c.l3Count} L3)` : '';
-      html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(99,102,241,0.2);border-radius:12px;font-size:0.75em;">
-        ${c.name}${l3Text}
-      </span>`;
-    });
-    html += '</div></div>';
-  }
-  
-  // L3 chips with remove
-  if (l3Items.length > 0) {
-    html += '<div><div style="font-size:0.75em;color:var(--muted);margin-bottom:4px;">L3 SUBTASKS</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;">';
-    l3Items.forEach(l3 => {
-      html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;background:rgba(16,185,129,0.2);border-radius:12px;font-size:0.75em;">
-        ${l3.name}
-        <button onclick="removeL3FromSummary('${l3.key}', '${l3.name}')" style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.1em;line-height:1;">✕</button>
-      </span>`;
-    });
-    html += '</div></div>';
-  }
+    
+    html += `</div>`;
+  });
   
   if (html === '') {
     html = '<div style="text-align:center;color:var(--muted);font-size:0.85em;padding:20px;">No deliverables selected</div>';
@@ -1162,7 +1145,9 @@ function renderSummaryChips() {
   container.innerHTML = html;
 }
 
-// Remove deliverable from summary chip
+// Cascading Remove Handlers (Task 2)
+
+// Remove deliverable from summary - cascades to all components and L3
 window.removeDeliverableFromSummary = async function(code) {
   await deselectDeliverable(code);
   renderDeliverablesPanel();
@@ -1171,19 +1156,67 @@ window.removeDeliverableFromSummary = async function(code) {
   initAISummaryAndSuggestions();
 }
 
-// Remove L3 from summary chip
-window.removeL3FromSummary = function(key, l3Name) {
-  const l3Set = APB.step2.selectedL3ByKey[key];
-  if (l3Set) {
-    l3Set.delete(l3Name);
-    updateSummaryCounts();
+// Remove component from summary - cascades to its L3 items
+window.removeComponentFromSummary = function(delivCode, compName) {
+  const key = `${delivCode}::${compName}`;
+  
+  // Remove L3 for this component
+  if (APB.step2.selectedL3ByKey[key]) {
+    delete APB.step2.selectedL3ByKey[key];
+  }
+  
+  // Remove component from selection
+  const compSet = APB.step2.selectedComponentsByCode[delivCode];
+  if (compSet instanceof Set) {
+    compSet.delete(compName);
     
-    // Re-render L3 panel if this is the active component
-    const [code, compName] = key.split('::');
-    if (APB.step2.activeDeliverableCode === code && APB.step2.activeComponentName === compName) {
-      renderL3Panel(code, compName);
+    // If no components left, remove deliverable
+    if (compSet.size === 0) {
+      APB.step2.selectedCodes.delete(delivCode);
+      delete APB.step2.selectedComponentsByCode[delivCode];
     }
   }
+  
+  // Re-render panels
+  renderDeliverablesPanel();
+  if (APB.step2.activeDeliverableCode === delivCode) {
+    refreshComponentsPanel();
+  }
+  updateSummaryCounts();
+}
+
+// Remove single L3 from summary - with cleanup
+window.removeL3FromSummary = function(key, l3Name) {
+  const l3Set = APB.step2.selectedL3ByKey[key];
+  if (!l3Set) return;
+  
+  // Remove the L3 item
+  l3Set.delete(l3Name);
+  
+  const [delivCode, compName] = key.split('::');
+  
+  // If no L3 left for this component, remove the component
+  if (l3Set.size === 0) {
+    delete APB.step2.selectedL3ByKey[key];
+    
+    const compSet = APB.step2.selectedComponentsByCode[delivCode];
+    if (compSet instanceof Set) {
+      compSet.delete(compName);
+      
+      // If no components left, remove deliverable
+      if (compSet.size === 0) {
+        APB.step2.selectedCodes.delete(delivCode);
+        delete APB.step2.selectedComponentsByCode[delivCode];
+      }
+    }
+  }
+  
+  // Re-render panels
+  renderDeliverablesPanel();
+  if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
+    renderL3Panel(delivCode, compName);
+  }
+  updateSummaryCounts();
 }
 
 // Component clicked - load L3 panel

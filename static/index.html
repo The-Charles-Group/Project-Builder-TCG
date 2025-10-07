@@ -310,7 +310,7 @@
       </div>
       <table id="tl-table" class="table-compact" style="width:100%">
         <thead>
-          <tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (days)</th></tr>
+          <tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (business days)</th></tr>
         </thead>
         <tbody id="tl-body"></tbody>
       </table>
@@ -1344,6 +1344,23 @@
       return d;
     }
 
+    // Calculate business days inclusive between start and end (Task 7)
+    function businessDaysInclusive(startDate, endDate, holidaysSet = new Set()) {
+      let d = new Date(startDate);
+      const end = new Date(endDate);
+      let count = 0;
+      
+      while (d <= end) {
+        const iso = d.toISOString().slice(0,10);
+        if (!isWeekend(d) && !holidaysSet.has(iso)) {
+          count++;
+        }
+        d.setDate(d.getDate() + 1);
+      }
+      
+      return count;
+    }
+
     // ——— Step 4 auto-show helper ———
     function showStep4(letter = 'A') {
       // reveal Step 4
@@ -1403,6 +1420,9 @@
         const endDate = addBusinessDays(currentStart, days);
         const end = endDate.toISOString().split('T')[0];
         
+        // Calculate actual business days inclusive for display (Task 7)
+        const businessDays = businessDaysInclusive(currentStart, endDate);
+        
         // Next deliverable starts after this one ends (next business day)
         currentStart = addBusinessDays(endDate, 1);
         
@@ -1410,7 +1430,7 @@
         const deliverableName = d.deliverable || d.deliverable_name || d.name || d.deliverable_code || 'Unknown Deliverable';
         
         return `<tr class="tl-row" draggable="true" data-dcode="${d.deliverable_code}">
-          <td>${deliverableName}</td><td>${start}</td><td>${end}</td><td>${days}</td>
+          <td>${deliverableName}</td><td>${start}</td><td>${end}</td><td>${businessDays}</td>
         </tr>`;
       }).join('');
       window.setHTML('tl-body', rows);
