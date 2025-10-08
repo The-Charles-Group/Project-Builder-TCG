@@ -1,0 +1,338 @@
+What I’m changing (v2.8.1 → hotfix)
+
+UI/UX
+
+Interactive Summary pane (checkboxes + scrollbar).
+
+Each Deliverable expands to Components; each Component expands to its L3 Subtasks (Task_Label / task_group).
+
+The Summary pane gets its own search box and “Select all / Clear all / Reset to defaults” actions at the Component level.
+
+The list is virtualized to stay smooth with dozens of L3 items.
+
+“Preview vs. Select” behavior.
+
+Clicking the row shows a preview (highlights + loads Components/L3) without changing the selected set.
+
+Clicking the checkbox toggles selection. This prevents the bug where simply clicking a deliverable row causes the right column to populate and counts to change.
+
+Seamless rehydration (nothing “vanishes”).
+
+All choices live in a single, persisted store (Zustand). Changing the active deliverable/component no longer clears the current selection.
+
+Removing a subtask creates a hidden set for that component; re‑adding the component gives you two options: restore previous custom state or “Reset to defaults” (bring all L3 back).
+
+Accurate L3 counts.
+
+Summary counts are recomputed only from what is actually selected in the store (no stale totals).
+
+Counts remain correct across deliverable/component switching and after removals/adds.
+
+Backend (already present; we’ll just call them from the UI)
+
+Components: /api/step2/components and /api/components_for (fallback) provide the components list and hours.
+
+L3 subtasks (grouped by component): /api/step2/l3/bulk.
+
+Build payload already supports component selection (selected_components_map) and task-group inclusion maps (included_map), so we can pass fine‑grained L3 picks back to the builder.
+
+For the Step‑4 XML export, you already have an optional enrichment that adds Start/End anchors. We’ll expose a UI toggle that flips add_deliverable_milestones so you can remove those anchors when you don’t want them.
+
+Data model (front‑end store)
+
+Uses Zustand with the persist middleware so selections survive pane switches and refreshes.
+
+// /src/state/step2Store.ts
+import create from 'zustand'
+import { persist } from 'zustand/middleware'
+
+export type DeliverableCode = string
+export type ComponentName = string
+export type L3Key = string  // Task_Label (or task_group fallback)
+
+type L3Buckets = Record<ComponentName, L3Key[]>
+type L3Sets = Record<ComponentName, Set<L3Key>>
+
+type Step2State = {
+  // Source of truth
+  selectedDeliverables: Set<DeliverableCode>
+  selectedComponents: Record<DeliverableCode, Set<ComponentName>>
+
+  // Available options returned by API, cached
+  l3Options: Record<DeliverableCode, L3Buckets>
+
+  // User selections at L3 granularity
+  l3Selected: Record<DeliverableCode, L3Sets>
+
+  // Items user manually hid (per component)
+  l3Hidden: Record<DeliverableCode, L3Sets>
+
+  // Non-destructive cursor for “preview”
+  active: { deliverable?: DeliverableCode; component?: ComponentName }
+
+  // Actions
+  setActive: (d?: DeliverableCode, c?: ComponentName) => void
+  toggleDeliverable: (d: DeliverableCode, checked: boolean) => void
+  toggleComponent: (d: DeliverableCode, c: ComponentName, checked: boolean, opts?: {restorePrior?: boolean}) => void
+  seedL3: (d: DeliverableCode, comp: ComponentName, l3: L3Key[]) => void
+  toggleL3: (d: DeliverableCode, comp: ComponentName, key: L3Key, checked: boolean) => void
+  selectAllL3: (d: DeliverableCode, comp: ComponentName) => void
+  clearAllL3: (d: DeliverableCode, comp: ComponentName) => void
+  resetL3ToDefaults: (d: DeliverableCode, comp: ComponentName) => void
+
+  // Derived counters
+  counts: () => { deliverables: number; components: number; l3: number }
+}
+
+const toSet = (arr: string[] = []) => new Set(arr)
+const ensure = <T,>(obj: Record<string, T>, key: string, def: T): T => (obj[key] ??= def)
+
+export const useStep2Store = create<Step2State>()(persist((set, get) => ({
+  selectedDeliverables: new Set(),
+  selectedComponents: {},
+  l3Options: {},
+  l3Selected: {},
+  l3Hidden: {},
+  active: {},
+
+  setActive: (deliverable, component) => set({ active: { deliverable, component } }),
+
+  toggleDeliverable: (d, checked) =>
+    set(state => {
+      const s = new Set(state.selectedDeliverables)
+      if (checked) s.add(d); else s.delete(d)
+      if (!checked) { delete state.selectedComponents[d]; delete state.l3Selected[d]; delete state.l3Hidden[d]; delete state.l3Options[d] }
+      return { selectedDeliverables: s }
+    }),
+
+  toggleComponent: (d, c, checked, opts) =>
+    set(state => {
+      const comps = ensure(state.selectedComponents, d, new Set<ComponentName>())
+      if (checked) {
+        comps.add(c)
+        // If we have cached l3 options, seed selections (restore prior custom if requested)
+        const prior = state.l3Selected[d]?.[c]
+        const defaults = state.l3Options[d]?.[c] ?? []
+        const destSel = ensure(state.l3Selected, d, {})
+        const destHid = ensure(state.l3Hidden, d, {})
+        if (!destSel[c] || !opts?.restorePrior) {
+          destSel[c] = toSet(defaults)
+          destHid[c] = new Set()
+        }
+      } else {
+        comps.delete(c)
+        // Keep user’s customizations in case they re-add with restorePrior flag
+      }
+      return { selectedComponents: { ...state.selectedComponents, [d]: new Set(comps) } }
+    }),
+
+  seedL3: (d, comp, l3) => set(state => {
+    ensure(state.l3Options, d, {})
+    state.l3Options[d][comp] = [...new Set(l3)]
+    // if component is selected and we don't have a prior selection, initialize to defaults
+    const compIsSelected = state.selectedComponents[d]?.has(comp)
+    if (compIsSelected) {
+      ensure(state.l3Selected, d, {})
+      if (!state.l3Selected[d][comp]) state.l3Selected[d][comp] = new Set(l3)
+    }
+    return { l3Options: { ...state.l3Options } }
+  }),
+
+  toggleL3: (d, comp, key, checked) =>
+    set(state => {
+      const sel = ensure(ensure(state.l3Selected, d, {}), comp, new Set<L3Key>())
+      const hid = ensure(ensure(state.l3Hidden, d, {}), comp, new Set<L3Key>())
+      if (checked) { sel.add(key); hid.delete(key) } else { sel.delete(key); hid.add(key) }
+      return { l3Selected: { ...state.l3Selected }, l3Hidden: { ...state.l3Hidden } }
+    }),
+
+  selectAllL3: (d, comp) =>
+    set(state => {
+      const all = new Set(ensure(ensure(state.l3Options, d, {}), comp, []))
+      ensure(ensure(state.l3Selected, d, {}), comp, new Set()).clear()
+      ensure(ensure(state.l3Hidden, d, {}), comp, new Set()).clear()
+      state.l3Selected[d][comp] = all
+      return { l3Selected: { ...state.l3Selected }, l3Hidden: { ...state.l3Hidden } }
+    }),
+
+  clearAllL3: (d, comp) =>
+    set(state => {
+      ensure(ensure(state.l3Selected, d, {}), comp, new Set()).clear()
+      const all = ensure(ensure(state.l3Options, d, {}), comp, [])
+      state.l3Hidden[d][comp] = new Set(all)
+      return { l3Selected: { ...state.l3Selected }, l3Hidden: { ...state.l3Hidden } }
+    }),
+
+  resetL3ToDefaults: (d, comp) =>
+    set(state => {
+      const defaults = ensure(ensure(state.l3Options, d, {}), comp, [])
+      ensure(ensure(state.l3Selected, d, {}), comp, new Set()).clear()
+      ensure(ensure(state.l3Hidden, d, {}), comp, new Set()).clear()
+      state.l3Selected[d][comp] = new Set(defaults)
+      return { l3Selected: { ...state.l3Selected }, l3Hidden: { ...state.l3Hidden } }
+    }),
+
+  counts: () => {
+    const st = get()
+    const deliverables = st.selectedDeliverables.size
+    const components = Object.values(st.selectedComponents).reduce((n, s) => n + (s?.size ?? 0), 0)
+    const l3 = Object.values(st.l3Selected).reduce((sum, compMap) =>
+      sum + Object.values(compMap ?? {}).reduce((n, set) => n + (set?.size ?? 0), 0), 0)
+    return { deliverables, components, l3 }
+  }
+}), { name: 'step2-state-v281' }))
+
+API wiring (fetch once, cache, never “vanish”)
+// /src/api/step2.ts
+export async function fetchComponents(codes: string[]) {
+  // Try deterministic Step 2 endpoint first, fall back to generic
+  const res = await fetch('/api/step2/components', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deliverables: codes }) })
+  if (res.ok) return res.json()
+  const all = await Promise.all(codes.map(c => fetch(`/api/components_for?deliverable_code=${encodeURIComponent(c)}`).then(r => r.json())))
+  return { items: all.flatMap((x: any) => x.items ?? []) }
+}
+
+export async function fetchL3Bulk(deliverable: string, components: string[]) {
+  const res = await fetch('/api/step2/l3/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deliverable, components }) })
+  if (!res.ok) return {}
+  return res.json() as Promise<Record<string, string[]>>
+}
+
+
+/api/step2/l3/bulk returns L3 per component (we filter out blanks/“nan” on the server already).
+
+Components endpoint is available (/api/step2/components), with /api/components_for as a safe fallback.
+
+Summary pane component
+// /src/components/Step2Summary.tsx
+import { useEffect, useState, useMemo } from 'react'
+import { useStep2Store } from '@/state/step2Store'
+import { fetchL3Bulk } from '@/api/step2'
+import { Virtuoso } from 'react-virtuoso'
+
+export function Step2Summary() {
+  const {
+    selectedDeliverables, selectedComponents, l3Options, l3Selected, setActive,
+    seedL3, toggleL3, selectAllL3, clearAllL3, resetL3ToDefaults, counts
+  } = useStep2Store()
+
+  const [filter, setFilter] = useState('')
+
+  // Fetch L3 for any deliverable+component pairs missing from cache
+  useEffect(() => {
+    ;(async () => {
+      for (const d of selectedDeliverables) {
+        const comps = Array.from(selectedComponents[d] ?? [])
+        const missing = comps.filter(c => !(l3Options[d]?.[c]))
+        if (missing.length) {
+          const bulk = await fetchL3Bulk(d, missing)
+          Object.entries(bulk).forEach(([comp, list]) => {
+            seedL3(d, comp, list.filter(Boolean))
+          })
+        }
+      }
+    })()
+  }, [selectedDeliverables, selectedComponents])
+
+  const { deliverables, components, l3 } = counts()
+
+  return (
+    <aside className="summary-pane">
+      <header className="summary-head">
+        <h3>Summary</h3>
+        <div className="stats">
+          <span>Deliverables: {deliverables}</span>
+          <span>Components: {components}</span>
+          <span>L3 Subtasks: {l3}</span>
+        </div>
+        <input
+          className="summary-search"
+          placeholder="Search subtasks…"
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+        />
+      </header>
+
+      <div className="summary-body" role="tree" aria-label="Selection Status">
+        {Array.from(selectedDeliverables).map(d => (
+          <section key={d} className="summary-deliv" aria-label={d}>
+            <h4 onClick={() => setActive(d)}>{d}</h4>
+            {(selectedComponents[d] ? Array.from(selectedComponents[d]) : []).map(c => {
+              const allL3 = (l3Options[d]?.[c] ?? []).filter(k => !filter || k.toLowerCase().includes(filter.toLowerCase()))
+              const sel = Array.from(l3Selected[d]?.[c] ?? [])
+              const compLabel = c
+              return (
+                <div key={`${d}|${c}`} className="summary-comp" role="group" aria-label={compLabel}>
+                  <div className="summary-comp-head" onClick={() => setActive(d, c)}>
+                    <strong>{compLabel}</strong>
+                    <div className="actions">
+                      <button onClick={() => selectAllL3(d, c)} title="Select all">All</button>
+                      <button onClick={() => clearAllL3(d, c)} title="Clear all">Clear</button>
+                      <button onClick={() => resetL3ToDefaults(d, c)} title="Reset to defaults">Reset</button>
+                    </div>
+                  </div>
+
+                  <div className="l3-list">
+                    <Virtuoso
+                      style={{ height: Math.min(300, 28 * Math.max(6, allL3.length)) }}
+                      totalCount={allL3.length}
+                      itemContent={(idx) => {
+                        const k = allL3[idx]
+                        const checked = (l3Selected[d]?.[c]?.has(k) ?? false)
+                        return (
+                          <label className="l3-row" key={k} title={k}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={e => toggleL3(d, c, k, e.currentTarget.checked)}
+                            />
+                            <span>{k}</span>
+                          </label>
+                        )
+                      }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </section>
+        ))}
+      </div>
+    </aside>
+  )
+}
+
+
+CSS snippets
+
+.summary-pane { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+.summary-head { position: sticky; top: 0; background: var(--panel); padding: 8px 12px; z-index: 1; }
+.summary-body { overflow-y: auto; padding: 8px 12px; }
+.summary-deliv { margin-bottom: 12px; }
+.summary-comp { border: 1px solid var(--hairline); border-radius: 8px; margin: 8px 0; }
+.summary-comp-head { display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; cursor: pointer; }
+.actions button { margin-left: 6px; }
+.l3-list { border-top: 1px dashed var(--hairline); }
+.l3-row { display: flex; gap: 8px; align-items: center; padding: 6px 10px; }
+.summary-search { width: 100%; margin-top: 6px; }
+
+Preventing the “click row shows components” bug
+
+Where you render Deliverables/Components (left/middle panes):
+
+// Replace row <div onClick={toggleDeliverable(...)}> with:
+<div
+  role="row"
+  onClick={(e) => { e.stopPropagation(); setActive(d) }}      // preview only
+>
+  <input
+    type="checkbox"
+    checked={isSelected}
+    onChange={(e) => toggleDeliverable(d, e.currentTarget.checked)} // selection
+    onClick={(e) => e.stopPropagation()} // keep click from toggling preview
+  />
+  <span>{label}</span>
+</div>
+
+
+That splits preview from selection, so merely clicking the row no longer alters counts or causes state churn.
