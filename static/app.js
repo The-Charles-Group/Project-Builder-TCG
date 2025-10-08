@@ -1007,25 +1007,24 @@ function renderDeliverablesPanel() {
     });
   });
   
-  // Attach row click handlers to set active deliverable
+  // Attach row click handlers to set active deliverable (preview only)
   host.querySelectorAll('.deliv-row').forEach(row => {
     row.addEventListener('click', async (e) => {
-      // Only trigger if clicking the row itself, not the checkbox
+      // Only trigger if clicking the row itself, not the checkbox or button
       if (e.target.classList.contains('deliv-checkbox')) return;
+      if (e.target.tagName === 'BUTTON') return;
       
       const code = row.dataset.code;
       const checkbox = row.querySelector('.deliv-checkbox');
       
-      // If not selected, select it first
-      if (!checkbox.checked) {
-        checkbox.checked = true;
-        await onDeliverableToggle(code, true);
-      } else {
-        // Already selected, just make it active and refresh components
+      // Row click = preview only (do not change selection)
+      // Only show components if the deliverable is actually selected
+      if (checkbox.checked) {
         APB.step2.activeDeliverableCode = code;
         renderDeliverablesPanel(); // Re-render to update active highlight
         await refreshComponentsPanel();
       }
+      // If not selected, row click does nothing (checkbox is the only way to select)
     });
   });
 }
@@ -1112,12 +1111,19 @@ function renderComponentsChecklist(code, items) {
   
   // Attach handlers
   listEl.querySelectorAll('.comp-checkbox').forEach(cb => {
-    cb.addEventListener('change', e => {
+    cb.addEventListener('change', async (e) => {
       const compName = e.target.dataset.comp;
+      const key = `${code}::${compName}`;
+      
       if (e.target.checked) {
         selectedSet.add(compName);
+        // Clear and refetch L3 tasks when component is reselected (fixes Task 3)
+        selectionStore.l3ByComponent.delete(key);
+        await hydrateL3For(code, compName);
       } else {
         selectedSet.delete(compName);
+        // Remove L3 tasks when component is deselected
+        selectionStore.l3ByComponent.delete(key);
       }
       updateSummaryCounts();
     });
@@ -1144,12 +1150,16 @@ function updateSummaryCounts() {
     }
   });
   
-  // Count L3
+  // Count L3 - only for selected components (fixes Task 4)
   let l3Count = 0;
   Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
-    const [code] = key.split('::');
+    const [code, compName] = key.split('::');
+    // Only count if deliverable is selected AND component is selected
     if (APB.step2.selectedCodes.has(code)) {
-      l3Count += l3Set.size;
+      const compSet = APB.step2.selectedComponentsByCode[code];
+      if (compSet && compSet.has(compName)) {
+        l3Count += l3Set.size;
+      }
     }
   });
   

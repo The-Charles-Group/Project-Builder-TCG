@@ -4557,7 +4557,8 @@ def convert_excel_to_mspdi(
     project_name: Optional[str] = None,      # <— explicit project name override
     pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
     rate_band: str = "Standard_US",          # <— NEW: rate band
-    blended_rate: Optional[float] = None     # <— NEW: blended rate
+    blended_rate: Optional[float] = None,    # <— NEW: blended rate
+    add_deliverable_milestones: bool = False # <— NEW: toggle for START/END anchors
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -4833,8 +4834,8 @@ def convert_excel_to_mspdi(
                 # Generate safe, unique code (safe_code handles uniqueness internally)
                 safe_dcode = safe_code(deliv_name, dcode, deliverable_index)
                 
-                # Use friendly deliverable name for milestone labels
-                dname = (deliv_name or str(dcode) or f"Deliverable {deliverable_index}").strip()
+                # Use friendly deliverable name for milestone labels (use safe_dcode to avoid "nan")
+                dname = (deliv_name or safe_dcode or f"Deliverable {deliverable_index}").strip()
                 
                 # Create START anchor
                 start_wbs = f"ANCHOR_{anchor_id_counter[0]}"
@@ -4906,8 +4907,9 @@ def convert_excel_to_mspdi(
             
             return enriched
         
-        # Apply enrichment
-        rows = enrich_wbs_for_workfront(rows)
+        # Apply enrichment (optional)
+        if add_deliverable_milestones:
+            rows = enrich_wbs_for_workfront(rows)
         
         # Rebuild indices after enrichment
         by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
