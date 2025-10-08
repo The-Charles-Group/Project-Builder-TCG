@@ -374,7 +374,7 @@ async function boot() {
     reconcileBtn.onclick = async (e) => {
       e.preventDefault();
       
-      // Get RFP text from multiple sources (never block in Step 2)
+      // Task 1.7: Get RFP text from multiple sources including backend cache
       let rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
       
       // If still no text, check if we have a stored analysis summary
@@ -386,6 +386,22 @@ async function boot() {
           }
         } catch (e) {
           console.warn('Could not parse stored summary:', e);
+        }
+      }
+      
+      // Task 1.7: If still no text, try backend RFP cache (uses LAST_UPLOAD_FILENAME)
+      if (!rfpText) {
+        try {
+          const cacheRes = await fetch('/api/rfp/cache');
+          if (cacheRes.ok) {
+            const cacheData = await cacheRes.json();
+            if (cacheData.text) {
+              rfpText = cacheData.text;
+              console.log('Using cached RFP text from backend');
+            }
+          }
+        } catch (e) {
+          console.warn('Could not fetch backend RFP cache:', e);
         }
       }
       
@@ -917,13 +933,22 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
   initAISummaryAndSuggestions();
 }
 
-// Render deliverables panel with Selected on top, then Other
+// Render deliverables panel with Selected on top, then Other (Task 1.5: with search filter)
 function renderDeliverablesPanel() {
   const list = APB.step2.allDeliverables;
+  const filter = (APB.step2.filters.deliverables || '').toLowerCase();
   const selected = [], other = [];
   
   list.forEach(d => {
     const code = String(d.Deliverable_Code);
+    const name = (d.Deliverable || '').toLowerCase();
+    const category = (d.Category || '').toLowerCase();
+    
+    // Apply search filter
+    if (filter && !name.includes(filter) && !category.includes(filter) && !code.toLowerCase().includes(filter)) {
+      return; // Skip items that don't match filter
+    }
+    
     if (APB.step2.selectedCodes.has(code)) {
       selected.push(d);
     } else {
@@ -944,9 +969,10 @@ function renderDeliverablesPanel() {
       const isActive = APB.step2.activeDeliverableCode === code;
       html += `
         <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;background:${isActive ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.03)'};border-left:${isActive ? '3px solid var(--accent)' : '3px solid transparent'};">
-          <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked />
+          <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked data-visible="1" />
           <span>${d.Deliverable}</span>
-          <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+          <button onclick="event.stopPropagation(); removeDeliverableX('${code}')" style="margin-left:auto;background:none;border:none;color:var(--danger);cursor:pointer;font-size:1.2em;padding:0 8px;">×</button>
+          <small style="opacity:.75">${d.Category || ''}</small>
         </label>
       `;
     });
@@ -959,7 +985,7 @@ function renderDeliverablesPanel() {
       const code = String(d.Deliverable_Code);
       html += `
         <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
-          <input type="checkbox" class="deliv-checkbox" data-code="${code}" />
+          <input type="checkbox" class="deliv-checkbox" data-code="${code}" data-visible="1" />
           <span>${d.Deliverable}</span>
           <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
         </label>
@@ -967,7 +993,11 @@ function renderDeliverablesPanel() {
     });
   }
   
-  host.innerHTML = html || '<div style="opacity:.7;padding:8px">No deliverables</div>';
+  if (!html) {
+    html = '<div style="opacity:.7;padding:8px;text-align:center;">No deliverables match your search</div>';
+  }
+  
+  host.innerHTML = html;
   
   // Attach checkbox handlers
   host.querySelectorAll('.deliv-checkbox').forEach(cb => {
@@ -1003,16 +1033,9 @@ function renderDeliverablesPanel() {
 // Deliverable checkbox toggle handler
 async function onDeliverableToggle(code, checked) {
   if (checked) {
-    APB.step2.selectedCodes.add(code);
-    // Set as active deliverable to load components
-    APB.step2.activeDeliverableCode = code;
+    await selectDeliverable(code);
   } else {
-    APB.step2.selectedCodes.delete(code);
-    delete APB.step2.selectedComponentsByCode[code];
-    // If we unchecked the active one, clear it
-    if (APB.step2.activeDeliverableCode === code) {
-      APB.step2.activeDeliverableCode = null;
-    }
+    await deselectDeliverable(code);
   }
   
   renderDeliverablesPanel();
@@ -1020,6 +1043,15 @@ async function onDeliverableToggle(code, checked) {
   updateSummaryCounts();
   
   // Refresh AI suggestions to update button states
+  initAISummaryAndSuggestions();
+}
+
+// Task 1.5: Remove deliverable via X button
+window.removeDeliverableX = async function(code) {
+  await deselectDeliverable(code);
+  renderDeliverablesPanel();
+  await refreshComponentsPanel();
+  updateSummaryCounts();
   initAISummaryAndSuggestions();
 }
 
@@ -1922,6 +1954,15 @@ async function renderL3Panel() {
 
 // Wire up new Step 2 UI controls
 document.addEventListener('DOMContentLoaded', function() {
+  // Task 1.5: Deliverables search filter
+  const delivSearch = document.getElementById('s2-deliv-search');
+  if (delivSearch) {
+    delivSearch.addEventListener('input', debounce(e => {
+      APB.step2.filters.deliverables = e.target.value.toLowerCase();
+      renderDeliverablesPanel();
+    }, 200));
+  }
+  
   // Components panel controls
   const compSearch = document.getElementById('s2-comp-search');
   const compBtnAll = document.getElementById('s2-comp-selectall');
