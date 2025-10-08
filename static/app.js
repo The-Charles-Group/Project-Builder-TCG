@@ -2045,6 +2045,54 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
+  // Components Suggest button - AI suggests relevant components
+  const compBtnSuggest = document.getElementById('s2-comp-suggest');
+  if (compBtnSuggest) {
+    compBtnSuggest.addEventListener('click', async () => {
+      const activeDeliv = APB.step2.activeDeliverableCode || Array.from(selectionStore.deliverables)[0];
+      if (!activeDeliv) {
+        alert('Please select a deliverable first');
+        return;
+      }
+      
+      try {
+        compBtnSuggest.disabled = true;
+        compBtnSuggest.textContent = 'Suggesting...';
+        
+        const response = await fetch('/api/step2/suggest/components', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deliverable_code: activeDeliv, limit: 6 })
+        });
+        
+        const suggested = await response.json();
+        
+        if (suggested && suggested.length > 0) {
+          if (!S2.selectedComponentsByCode[activeDeliv]) {
+            S2.selectedComponentsByCode[activeDeliv] = new Set();
+          }
+          
+          suggested.forEach(comp => {
+            S2.selectedComponentsByCode[activeDeliv].add(comp);
+          });
+          
+          await renderComponentsPanel();
+          await hydrateL3ForAllSelected();
+          if (window.updateStep2Summary) updateStep2Summary();
+          if (window.renderL3Panel) renderL3Panel();
+        } else {
+          alert('No component suggestions available for this deliverable');
+        }
+      } catch (error) {
+        console.error('Suggest components error:', error);
+        alert('Failed to get suggestions. Please try again.');
+      } finally {
+        compBtnSuggest.disabled = false;
+        compBtnSuggest.textContent = 'Suggest';
+      }
+    });
+  }
+  
   // L3 panel controls
   const l3Search = document.getElementById('s2-l3-search');
   const l3BtnAll = document.getElementById('s2-l3-selectall');

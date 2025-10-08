@@ -52,6 +52,16 @@ Preferred communication style: Simple, everyday language.
 - **Functionality**: Individual remove buttons for each level with cascading deletion
 - **UI**: L3 chips grouped by parent component for clear visualization
 
+### AI Suggest Features (Latest - October 8, 2025)
+- **Component Suggestions**: "Suggest" button in Components panel uses AI to recommend relevant components based on RFP text
+  - Endpoint: `/api/step2/suggest/components` - scores components by frequency + RFP keyword overlap
+  - Auto-selects suggested components and hydrates their L3 tasks
+  - Limit: Returns top 6 most relevant components
+- **L3 Task Suggestions**: Per-component suggest functionality for L3 subtasks
+  - Endpoint: `/api/step2/suggest/l3` - ranks tasks by frequency + RFP relevance
+  - Global deduplication: Excludes tasks already selected across all deliverables/components
+  - Merges suggestions into existing L3 selections
+
 ### Timeline Accuracy Improvements
 - **Business Days Calculation**: Uses `numpy.busday_offset()` and `numpy.busday_count()` with US/MX holiday calendar
 - **Memorial Day Fix**: Corrected calculation to always land on the last Monday of May

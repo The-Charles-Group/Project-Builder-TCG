@@ -25,6 +25,8 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .btn-secondary{background:transparent;border:1px solid var(--accent);color:var(--accent)}
 .btn-component{padding:4px 10px;font-size:12px;background:var(--accent);border:1px solid var(--accent);color:#08121e;margin-left:8px;border-radius:6px}
 .btn-remove{padding:2px 8px;font-size:12px;background:#dc3545;border:1px solid #dc3545;color:#fff;margin-left:8px;border-radius:4px}
+.btn-ghost{background:transparent;border:1px solid rgba(255,255,255,.2);border-radius:4px;padding:2px 8px;cursor:pointer;color:var(--text)}
+.muted{opacity:.7;font-size:12px}
 
 /* Step 2 Selection Styles */
 .selection-item{

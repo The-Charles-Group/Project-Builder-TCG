@@ -2881,6 +2881,88 @@ async def step2_l3_bulk(payload: dict):
     
     return out
 
+# --- Suggest Components for a deliverable ---
+class SuggestComponentsReq(BaseModel):
+    deliverable_code: str
+    limit: Optional[int] = 6
+
+@app.post("/api/step2/suggest/components")
+def suggest_components(req: SuggestComponentsReq):
+    if not DB.loaded:
+        DB.load()
+    d = str(req.deliverable_code)
+    
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str) == d]
+    if sub.empty:
+        return JSONResponse([])
+    
+    # Simple weighting: frequency of tasks per Component, boosted by RFP keyword overlap
+    txt = (RFP_TEXT_CACHE or "").lower()
+    tokens = {t for t in re.findall(r"[a-z0-9]{3,}", txt)}
+    
+    # score component by (#rows) + bonus if Task_Label matches RFP
+    scores = {}
+    for _, r in sub.iterrows():
+        comp = str(r.get("Component","") or "").strip() or "General"
+        scores.setdefault(comp, 0)
+        scores[comp] += 1
+        lab = str(r.get("Task_Label","") or "").lower()
+        if tokens and any(tok in lab for tok in tokens):
+            scores[comp] += 2  # small boost for RFP relevance
+    
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+    out = [c for c,_ in ranked[: (req.limit or 999)]]
+    return JSONResponse(out)
+
+
+# --- Suggest L3 tasks for one or more components (dedupe-aware) ---
+class SuggestL3Req(BaseModel):
+    deliverable_code: str
+    components: List[str]
+    exclude_labels: Optional[List[str]] = None
+    limit_per_component: Optional[int] = 20
+
+@app.post("/api/step2/suggest/l3")
+def suggest_l3(req: SuggestL3Req):
+    if not DB.loaded:
+        DB.load()
+    d = str(req.deliverable_code)
+    excl = { (x or "").strip().lower() for x in (req.exclude_labels or []) }
+    txt = (RFP_TEXT_CACHE or "").lower()
+    tokens = {t for t in re.findall(r"[a-z0-9]{3,}", txt)}
+    
+    resp: Dict[str, List[str]] = {}
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==d]
+    if sub.empty:
+        return JSONResponse(resp)
+    
+    for c in req.components or []:
+        cand = sub[(sub["Component"].astype(str)==str(c)) | ((sub["Component"]=="") & (c=="General"))]
+        if cand.empty:
+            resp[c] = []
+            continue
+        
+        # score tasks: frequency + RFP keyword overlap
+        t_scores: Dict[str, int] = {}
+        for _, r in cand.iterrows():
+            lab = str(r.get("Task_Label","") or "").strip()
+            if not lab:
+                continue
+            key = lab.lower()
+            t_scores.setdefault(lab, 0)
+            t_scores[lab] += 1
+            if tokens and any(tok in key for tok in tokens):
+                t_scores[lab] += 2
+        
+        # drop duplicates across the whole project if requested
+        if excl:
+            t_scores = {lab:sc for lab,sc in t_scores.items() if lab.lower() not in excl}
+        
+        ranked = sorted(t_scores.items(), key=lambda x: (-x[1], x[0]))
+        resp[c] = [lab for lab,_ in ranked[: (req.limit_per_component or 999)]]
+    
+    return JSONResponse(resp)
+
 @app.get("/api/db/status")
 def db_status():
     if not DB.loaded: DB.load()
