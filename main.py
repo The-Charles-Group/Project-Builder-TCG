@@ -2321,6 +2321,9 @@ def _current_scenarios():
     """Access current scenarios for reordering operations."""
     return _CURRENT_SCENARIOS
 
+# Alias for XML export endpoints
+_get_scenarios = _current_scenarios
+
 # ---------- OpenAI Integration Functions (Stage 2) ----------
 
 # Initialize OpenAI client now that we can import it
