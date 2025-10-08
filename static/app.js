@@ -9,6 +9,9 @@ let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 // ================================================================================
 window.APB = window.APB || {};
 
+// Enables auto-pick of components when a deliverable is selected
+const AUTO_SUGGEST_ON_SELECT = true;
+
 // Unified selection store per requirements
 const selectionStore = {
   deliverables: new Set(),                       // deliverable codes (e.g., deck_strategy)
@@ -1033,6 +1036,38 @@ function renderDeliverablesPanel() {
 async function onDeliverableToggle(code, checked) {
   if (checked) {
     await selectDeliverable(code);
+    
+    // Check if this deliverable has any components selected
+    const hasComponents = S2.selectedComponentsByCode[code] && S2.selectedComponentsByCode[code].size > 0;
+    
+    if (AUTO_SUGGEST_ON_SELECT && !hasComponents) {
+      // Auto-suggest components for this deliverable
+      try {
+        const response = await fetch('/api/step2/suggest/components', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deliverable_code: code, limit: 6 })
+        });
+        
+        const suggested = await response.json();
+        
+        if (suggested && suggested.length > 0) {
+          if (!S2.selectedComponentsByCode[code]) {
+            S2.selectedComponentsByCode[code] = new Set();
+          }
+          
+          // Add suggested components to selection
+          suggested.forEach(comp => {
+            S2.selectedComponentsByCode[code].add(comp);
+          });
+          
+          // Hydrate L3 for each suggested component
+          await Promise.all(suggested.map(comp => hydrateL3For(code, comp)));
+        }
+      } catch (error) {
+        console.error('Auto-suggest components error:', error);
+      }
+    }
   } else {
     await deselectDeliverable(code);
   }

@@ -1,0 +1,58 @@
+Below is a minimal, drop‑in patch for your vanilla‑JS Step 2 module.
+
+1) Static frontend (tiny edit)
+
+Add this constant near the top of the Step‑2 script:
+
+// Enables auto-pick of components when a deliverable is selected
+const AUTO_SUGGEST_ON_SELECT = true;
+
+
+Then replace the deliverables checkbox handler in bindEvents() with the block below (only this if‑block changes):
+
+// Checkbox = SELECT / UNSELECT (Deliverables)
+delivPane.addEventListener("change", async (e) => {
+  const cb = e.target.closest('input[type="checkbox"][data-deliverable]');
+  if (!cb) return;
+
+  const dCode = cb.getAttribute("data-code"); // always use code
+  await toggleDeliverable(dCode, cb.checked);
+
+  if (cb.checked) {
+    // If this deliverable has no components yet, auto-suggest.
+    const hasAny =
+      state.selectedComponents[dCode] &&
+      state.selectedComponents[dCode].size > 0;
+
+    if (AUTO_SUGGEST_ON_SELECT && !hasAny) {
+      // Picks components, preselects all their L3, refreshes UI
+      await suggestComponentsForDeliverable(dCode);
+    } else {
+      // If there are already selections (rehydrated), just ensure L3 are loaded
+      await ensureAllL3LoadedForDeliverable(dCode);
+    }
+  }
+});
+
+
+Nothing else in your Step‑2 code needs to change. The suggestComponentsForDeliverable helper already (a) selects the suggested components, (b) fetches their L3, (c) preselects all L3, (d) persists to localStorage, and (e) re‑renders both the Components pane and the Summary.
+
+2) Server endpoints (unchanged from the last patch)
+
+POST /api/step2/suggest/components — scores components for a deliverable (frequency + RFP overlap) and returns a ranked subset. It reads RFP_TEXT_CACHE from Step‑1 so suggestions are RFP‑aware.
+
+POST /api/step2/suggest/l3 — picks L3 tasks per component, supports de‑dupe across the project.
+
+Both endpoints use the in‑memory DB you load in Step‑2 (v4/v4b All_Task_Rows with normalized columns for Deliverable_Code / Component / Task_Label).
+
+If you already added these endpoints from the previous message, you’re set.
+
+3) Behavior you’ll see
+
+Selecting a deliverable (checkbox) → Components auto‑populate for that deliverable; Summary shows all L3 under each chosen component.
+
+Row‑click (on a deliverable without checking the box) still only previews its component list — it does not change selections.
+
+Re‑opening a saved session (rehydration) won’t override your existing picks; auto‑suggest only triggers when a deliverable is newly selected and has no components yet.
+
+Counts at the top of the Summary are computed strictly from the selected sets, not from previews.

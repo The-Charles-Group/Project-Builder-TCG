@@ -53,7 +53,12 @@ Preferred communication style: Simple, everyday language.
 - **UI**: L3 chips grouped by parent component for clear visualization
 
 ### AI Suggest Features (Latest - October 8, 2025)
-- **Component Suggestions**: "Suggest" button in Components panel uses AI to recommend relevant components based on RFP text
+- **Auto-Suggest on Selection**: Automatically suggests components when a deliverable is selected (checkbox)
+  - Enabled via `AUTO_SUGGEST_ON_SELECT = true` constant
+  - Only triggers for deliverables with no components yet
+  - Auto-selects top 6 relevant components and hydrates all their L3 tasks
+  - Rehydrated sessions (with existing selections) skip auto-suggest
+- **Manual Component Suggestions**: "Suggest" button in Components panel for manual suggestions
   - Endpoint: `/api/step2/suggest/components` - scores components by frequency + RFP keyword overlap
   - Auto-selects suggested components and hydrates their L3 tasks
   - Limit: Returns top 6 most relevant components
