@@ -88,14 +88,11 @@
         <!-- Column 2: Components (Level 2) -->
         <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
           <h3 style="font-size: 1em; margin: 0 0 12px 0;">2️⃣ Components</h3>
-          <div style="margin-bottom: 8px;">
-            <select id="s2-comp-deliverable" style="width:100%; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
-              <option value="">Select a deliverable first...</option>
-            </select>
-          </div>
+          <input id="s2-comp-search" type="search" placeholder="Search components…" autocomplete="off" 
+                 style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
           <div style="display:flex; gap:6px; margin-bottom:8px;">
-            <button id="s2-comp-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>All</button>
-            <button id="s2-comp-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>Clear</button>
+            <button id="s2-comp-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">All</button>
+            <button id="s2-comp-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Clear</button>
           </div>
           <div id="s2-comp-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;">
             <p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a deliverable to view components</p>
@@ -105,14 +102,11 @@
         <!-- Column 3: L3 Subtasks (Level 3) -->
         <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
           <h3 style="font-size: 1em; margin: 0 0 12px 0;">3️⃣ L3 Subtasks</h3>
-          <div style="margin-bottom: 8px;">
-            <select id="s2-l3-component" style="width:100%; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
-              <option value="">Select a component first...</option>
-            </select>
-          </div>
+          <input id="s2-l3-search" type="search" placeholder="Search L3 subtasks…" autocomplete="off" 
+                 style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
           <div style="display:flex; gap:6px; margin-bottom:8px;">
-            <button id="s2-l3-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>All</button>
-            <button id="s2-l3-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;" disabled>Clear</button>
+            <button id="s2-l3-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">All</button>
+            <button id="s2-l3-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Clear</button>
           </div>
           <div id="s2-l3-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;">
             <p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view subtasks</p>

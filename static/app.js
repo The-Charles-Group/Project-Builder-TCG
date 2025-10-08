@@ -27,6 +27,11 @@ window.APB.step2 = {
   activeComponentName: null,                     // currently active component in L3 panel
   allDeliverables: [],                           // from /api/options
   aiSuggestedCodes: new Set(),                   // codes that came from AI suggestions
+  filters: {                                     // Task 1.3: search filter state
+    deliverables: '',
+    components: '',
+    l3: ''
+  },
   els: {                                         // DOM element references
     listRight: null,
     search: null,
@@ -129,6 +134,19 @@ window.componentDataCache = componentDataCache;
 // Concurrency guard for renderYourSelection
 let renderYourSelectionToken = 0;
 
+// Debounce utility for search filters (Task 1.3)
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
 // Helper to normalize keys for defensive lookup
 function key(s) {
   return String(s).trim().toLowerCase();
@@ -188,9 +206,9 @@ async function hydrateComponentsFor(delivCode) {
     const comps = await api(`/api/components?deliverable=${encodeURIComponent(delivCode)}`);
     selectionStore.componentsByDeliv.set(delivCode, new Set(comps));
     
-    // Auto-select first component for L3 preview if available
+    // Auto-load ALL L3 for ALL components (Task 1.1 requirement)
     if (comps.length > 0) {
-      await hydrateL3For(delivCode, comps[0]);
+      await Promise.all(comps.map(comp => hydrateL3For(delivCode, comp)));
     }
   } catch (error) {
     console.error(`Failed to hydrate components for ${delivCode}:`, error);
@@ -1621,9 +1639,7 @@ window.step2State = step2State;
 
 // Expose functions globally
 window.updateStep2Summary = updateStep2Summary;
-window.populateComponentsDeliverableDropdown = populateComponentsDeliverableDropdown;
 window.renderComponentsPanel = renderComponentsPanel;
-window.populateL3ComponentDropdown = populateL3ComponentDropdown;
 window.renderL3Panel = renderL3Panel;
 
 // Update summary panel with current selection counts
@@ -1670,298 +1686,339 @@ function updateStep2Summary() {
   }
 }
 
-// Populate Components panel dropdown with selected deliverables
-function populateComponentsDeliverableDropdown() {
-  const select = document.getElementById('s2-comp-deliverable');
-  if (!select) return;
-  
-  const selectedCodes = Array.from(window.step2PickerState?.selected || []);
-  
-  if (selectedCodes.length === 0) {
-    select.innerHTML = '<option value="">Select a deliverable first...</option>';
-    select.disabled = true;
-    return;
-  }
-  
-  select.disabled = false;
-  select.innerHTML = '<option value="">Choose deliverable...</option>' +
-    selectedCodes.map(code => {
-      const name = labelFor(code);
-      return `<option value="${code}">${name}</option>`;
-    }).join('');
-}
 
-// Render Components panel for selected deliverable
-async function renderComponentsPanel(deliverableCode) {
+// Render Components panel - aggregates ALL components from ALL selected deliverables
+async function renderComponentsPanel() {
   const listEl = document.getElementById('s2-comp-list');
   const btnAll = document.getElementById('s2-comp-selectall');
   const btnClear = document.getElementById('s2-comp-clear');
   
-  if (!deliverableCode) {
-    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a deliverable to view components</p>';
-    btnAll.disabled = true;
-    btnClear.disabled = true;
+  if (!listEl) return;
+  
+  const selectedCodes = Array.from(selectionStore.deliverables);
+  
+  if (selectedCodes.length === 0) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select deliverables to view components</p>';
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
     return;
   }
   
-  step2State.currentDeliverable = deliverableCode;
-  
-  // Fetch components if not cached
-  if (!componentDataCache[deliverableCode]) {
-    try {
-      const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(deliverableCode)}`);
-      const data = await r.json();
-      componentDataCache[deliverableCode] = data.items || [];
-    } catch (e) {
-      console.error(`Error fetching components for ${deliverableCode}:`, e);
-      componentDataCache[deliverableCode] = [];
+  // Aggregate all components from all selected deliverables
+  const allComponents = [];
+  for (const delivCode of selectedCodes) {
+    // Ensure components are hydrated
+    if (!selectionStore.componentsByDeliv.has(delivCode)) {
+      await hydrateComponentsFor(delivCode);
+    }
+    
+    const compSet = selectionStore.componentsByDeliv.get(delivCode);
+    if (compSet && compSet.size > 0) {
+      compSet.forEach(compName => {
+        allComponents.push({
+          delivCode,
+          delivLabel: labelFor(delivCode),
+          compName
+        });
+      });
     }
   }
-  
-  const allComponents = componentDataCache[deliverableCode] || [];
   
   if (allComponents.length === 0) {
     listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No components available</p>';
-    btnAll.disabled = true;
-    btnClear.disabled = true;
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
     return;
   }
   
-  btnAll.disabled = false;
-  btnClear.disabled = false;
+  // Apply search filter
+  const searchFilter = (APB.step2.filters.components || '').toLowerCase();
+  const filteredComponents = searchFilter 
+    ? allComponents.filter(c => 
+        c.compName.toLowerCase().includes(searchFilter) ||
+        c.delivLabel.toLowerCase().includes(searchFilter)
+      )
+    : allComponents;
   
-  // Initialize selection if not exists
-  if (!selectedComponentsMap[deliverableCode] || 
-      selectedComponentsMap[deliverableCode] === '__ALL__' || 
-      selectedComponentsMap[deliverableCode] === 'ALL') {
-    selectedComponentsMap[deliverableCode] = new Set(allComponents.map(c => c.name));
-  } else if (!(selectedComponentsMap[deliverableCode] instanceof Set)) {
-    // Convert to Set if needed
-    const raw = selectedComponentsMap[deliverableCode];
-    if (Array.isArray(raw)) {
-      selectedComponentsMap[deliverableCode] = new Set(raw);
-    } else if (typeof raw === 'object') {
-      selectedComponentsMap[deliverableCode] = new Set(Object.keys(raw));
-    } else {
-      selectedComponentsMap[deliverableCode] = new Set();
-    }
-  }
+  if (btnAll) btnAll.disabled = false;
+  if (btnClear) btnClear.disabled = false;
   
-  const selectedSet = selectedComponentsMap[deliverableCode];
-  
-  // Render checkboxes
-  listEl.innerHTML = allComponents.map(comp => `
-    <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px;" 
-           class="comp-checkbox-label">
-      <input type="checkbox" data-comp="${comp.name}" 
-             ${selectedSet.has(comp.name) ? 'checked' : ''}
-             style="cursor:pointer;"/>
-      <span style="font-size:0.9em;">${comp.name}</span>
-    </label>
-  `).join('');
+  // Render checkboxes with deliverable badges
+  listEl.innerHTML = filteredComponents.map(comp => {
+    const key = `${comp.delivCode}::${comp.compName}`;
+    const isSelected = S2.selectedComponentsByCode[comp.delivCode]?.has?.(comp.compName) || false;
+    const isVisible = !searchFilter || (
+      comp.compName.toLowerCase().includes(searchFilter) ||
+      comp.delivLabel.toLowerCase().includes(searchFilter)
+    );
+    
+    return `
+      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px;" 
+             class="comp-checkbox-label">
+        <input type="checkbox" 
+               data-deliv="${comp.delivCode}" 
+               data-comp="${comp.compName}"
+               data-visible="${isVisible ? '1' : '0'}"
+               ${isSelected ? 'checked' : ''}
+               style="cursor:pointer;"/>
+        <span style="font-size:0.9em;">${comp.compName}</span>
+        <span style="margin-left:auto; opacity:.6; font-size:0.75em; padding:2px 6px; background:rgba(255,255,255,.1); border-radius:3px;">${comp.delivLabel}</span>
+      </label>
+    `;
+  }).join('');
   
   // Add change listeners
   listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
     cb.addEventListener('change', e => {
+      const delivCode = e.target.getAttribute('data-deliv');
       const compName = e.target.getAttribute('data-comp');
-      if (e.target.checked) {
-        selectedSet.add(compName);
-      } else {
-        selectedSet.delete(compName);
+      
+      // Ensure the deliverable has a Set in selectedComponentsByCode
+      if (!S2.selectedComponentsByCode[delivCode]) {
+        S2.selectedComponentsByCode[delivCode] = new Set();
+      } else if (!(S2.selectedComponentsByCode[delivCode] instanceof Set)) {
+        S2.selectedComponentsByCode[delivCode] = new Set(
+          Array.isArray(S2.selectedComponentsByCode[delivCode]) 
+            ? S2.selectedComponentsByCode[delivCode]
+            : Object.keys(S2.selectedComponentsByCode[delivCode] || {})
+        );
       }
-      updateStep2Summary();
-      populateL3ComponentDropdown();
+      
+      if (e.target.checked) {
+        S2.selectedComponentsByCode[delivCode].add(compName);
+      } else {
+        S2.selectedComponentsByCode[delivCode].delete(compName);
+      }
+      
+      if (window.updateStep2Summary) updateStep2Summary();
+      if (window.renderL3Panel) renderL3Panel();
     });
   });
   
-  updateStep2Summary();
-  populateL3ComponentDropdown();
+  if (window.updateStep2Summary) updateStep2Summary();
 }
 
-// Populate L3 panel dropdown with selected components
-function populateL3ComponentDropdown() {
-  const select = document.getElementById('s2-l3-component');
-  if (!select) return;
-  
-  if (!step2State.currentDeliverable) {
-    select.innerHTML = '<option value="">Select a component first...</option>';
-    select.disabled = true;
-    return;
-  }
-  
-  const selectedComps = selectedComponentsMap[step2State.currentDeliverable];
-  if (!selectedComps || (selectedComps instanceof Set && selectedComps.size === 0)) {
-    select.innerHTML = '<option value="">No components selected...</option>';
-    select.disabled = true;
-    return;
-  }
-  
-  const compNames = selectedComps instanceof Set ? Array.from(selectedComps) : 
-                    Array.isArray(selectedComps) ? selectedComps : Object.keys(selectedComps);
-  
-  select.disabled = false;
-  select.innerHTML = '<option value="">Choose component...</option>' +
-    compNames.map(name => `<option value="${name}">${name}</option>`).join('');
-}
 
-// Render L3 Subtasks panel for selected component
-async function renderL3Panel(componentName) {
+// Render L3 Subtasks panel - aggregates ALL L3 from ALL selected components
+async function renderL3Panel() {
   const listEl = document.getElementById('s2-l3-list');
   const btnAll = document.getElementById('s2-l3-selectall');
   const btnClear = document.getElementById('s2-l3-clear');
   
-  if (!componentName || !step2State.currentDeliverable) {
-    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view subtasks</p>';
-    btnAll.disabled = true;
-    btnClear.disabled = true;
+  if (!listEl) return;
+  
+  const selectedCodes = Array.from(selectionStore.deliverables);
+  
+  if (selectedCodes.length === 0) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select deliverables and components to view L3 subtasks</p>';
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
     return;
   }
   
-  step2State.currentComponent = componentName;
+  // Aggregate all L3 from all selected components across all deliverables
+  const allL3 = [];
+  for (const delivCode of selectedCodes) {
+    const selectedComponents = S2.selectedComponentsByCode[delivCode];
+    
+    if (selectedComponents && selectedComponents.size > 0) {
+      for (const compName of selectedComponents) {
+        const key = `${delivCode}::${compName}`;
+        
+        // Ensure L3 is hydrated for this component
+        if (!selectionStore.l3ByComponent.has(key)) {
+          await hydrateL3For(delivCode, compName);
+        }
+        
+        const l3Set = selectionStore.l3ByComponent.get(key);
+        if (l3Set && l3Set.size > 0) {
+          l3Set.forEach(l3Name => {
+            allL3.push({
+              delivCode,
+              delivLabel: labelFor(delivCode),
+              compName,
+              l3Name,
+              key
+            });
+          });
+        }
+      }
+    }
+  }
   
-  // Fetch L3 data from API
-  try {
-    const r = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(step2State.currentDeliverable)}&component_name=${encodeURIComponent(componentName)}`);
-    const data = await r.json();
-    const l3Items = data.items || [];
+  if (allL3.length === 0) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L3 subtasks available for selected components</p>';
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
+    return;
+  }
+  
+  // Apply search filter
+  const searchFilter = (APB.step2.filters.l3 || '').toLowerCase();
+  const filteredL3 = searchFilter
+    ? allL3.filter(l => 
+        l.l3Name.toLowerCase().includes(searchFilter) ||
+        l.compName.toLowerCase().includes(searchFilter) ||
+        l.delivLabel.toLowerCase().includes(searchFilter)
+      )
+    : allL3;
+  
+  if (btnAll) btnAll.disabled = false;
+  if (btnClear) btnClear.disabled = false;
+  
+  // Render checkboxes grouped by component
+  listEl.innerHTML = filteredL3.map(item => {
+    const isSelected = S2.selectedL3ByKey[item.key]?.has?.(item.l3Name) || false;
+    const isVisible = !searchFilter || (
+      item.l3Name.toLowerCase().includes(searchFilter) ||
+      item.compName.toLowerCase().includes(searchFilter) ||
+      item.delivLabel.toLowerCase().includes(searchFilter)
+    );
     
-    if (l3Items.length === 0) {
-      listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L3 subtasks available</p>';
-      btnAll.disabled = true;
-      btnClear.disabled = true;
-      return;
-    }
-    
-    btnAll.disabled = false;
-    btnClear.disabled = false;
-    
-    // Initialize L3 selection
-    if (!step2State.selectedL3Map[step2State.currentDeliverable]) {
-      step2State.selectedL3Map[step2State.currentDeliverable] = {};
-    }
-    if (!step2State.selectedL3Map[step2State.currentDeliverable][componentName]) {
-      // Default: all L3 selected
-      step2State.selectedL3Map[step2State.currentDeliverable][componentName] = 
-        new Set(l3Items.map(item => item.Task_Label));
-    }
-    
-    const selectedSet = step2State.selectedL3Map[step2State.currentDeliverable][componentName];
-    
-    // Render checkboxes
-    listEl.innerHTML = l3Items.map(item => `
+    return `
       <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px;" 
              class="l3-checkbox-label">
-        <input type="checkbox" data-label="${item.Task_Label}" 
-               ${selectedSet.has(item.Task_Label) ? 'checked' : ''}
+        <input type="checkbox" 
+               data-key="${item.key}" 
+               data-l3="${item.l3Name}"
+               data-visible="${isVisible ? '1' : '0'}"
+               ${isSelected ? 'checked' : ''}
                style="cursor:pointer;"/>
-        <span style="font-size:0.9em;">${item.Task_Label}</span>
+        <span style="font-size:0.9em;">${item.l3Name}</span>
+        <span style="margin-left:auto; opacity:.6; font-size:0.75em; padding:2px 6px; background:rgba(255,255,255,.1); border-radius:3px;">${item.compName}</span>
       </label>
-    `).join('');
-    
-    // Add change listeners
-    listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-      cb.addEventListener('change', e => {
-        const label = e.target.getAttribute('data-label');
-        if (e.target.checked) {
-          selectedSet.add(label);
-        } else {
-          selectedSet.delete(label);
-        }
-        updateStep2Summary();
-      });
+    `;
+  }).join('');
+  
+  // Add change listeners
+  listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const key = e.target.getAttribute('data-key');
+      const l3Name = e.target.getAttribute('data-l3');
+      
+      // Ensure the key exists in selectedL3ByKey (will use Proxy)
+      if (!S2.selectedL3ByKey[key]) {
+        S2.selectedL3ByKey[key] = new Set();
+      } else if (!(S2.selectedL3ByKey[key] instanceof Set)) {
+        S2.selectedL3ByKey[key] = new Set(
+          Array.isArray(S2.selectedL3ByKey[key]) 
+            ? S2.selectedL3ByKey[key]
+            : Object.keys(S2.selectedL3ByKey[key] || {})
+        );
+      }
+      
+      if (e.target.checked) {
+        S2.selectedL3ByKey[key].add(l3Name);
+      } else {
+        S2.selectedL3ByKey[key].delete(l3Name);
+      }
+      
+      if (window.updateStep2Summary) updateStep2Summary();
     });
-    
-    updateStep2Summary();
-    
-  } catch (e) {
-    console.error('Error fetching L3 data:', e);
-    listEl.innerHTML = '<p style="color: #f88; text-align: center; padding-top: 40px; font-size: 0.9em;">Error loading subtasks</p>';
-    btnAll.disabled = true;
-    btnClear.disabled = true;
-  }
+  });
+  
+  if (window.updateStep2Summary) updateStep2Summary();
 }
 
 // Wire up new Step 2 UI controls
 document.addEventListener('DOMContentLoaded', function() {
   // Components panel controls
-  const compDelivSelect = document.getElementById('s2-comp-deliverable');
+  const compSearch = document.getElementById('s2-comp-search');
   const compBtnAll = document.getElementById('s2-comp-selectall');
   const compBtnClear = document.getElementById('s2-comp-clear');
   
-  if (compDelivSelect) {
-    compDelivSelect.addEventListener('change', e => {
-      renderComponentsPanel(e.target.value);
-    });
+  // Components search filter
+  if (compSearch) {
+    compSearch.addEventListener('input', debounce(e => {
+      APB.step2.filters.components = e.target.value.toLowerCase();
+      renderComponentsPanel();
+    }, 200));
   }
   
-  // TASK 8: Fix All/Clear buttons for Components panel using selectionStore
+  // Components All button - select only visible checkboxes
   if (compBtnAll) {
     compBtnAll.addEventListener('click', async () => {
-      if (!APB.step2.activeDeliverableCode) return;
-      const delivCode = APB.step2.activeDeliverableCode;
+      const visibleBoxes = document.querySelectorAll('#s2-comp-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const delivCode = cb.getAttribute('data-deliv');
+        const compName = cb.getAttribute('data-comp');
+        
+        if (!S2.selectedComponentsByCode[delivCode]) {
+          S2.selectedComponentsByCode[delivCode] = new Set();
+        }
+        S2.selectedComponentsByCode[delivCode].add(compName);
+        cb.checked = true;
+      });
       
-      // Fetch all components from the new API and select them
-      try {
-        const comps = await api(`/api/components?deliverable=${encodeURIComponent(delivCode)}`);
-        selectionStore.componentsByDeliv.set(delivCode, new Set(comps));
-        if (window.renderComponentsPanel) renderComponentsPanel(delivCode);
-      } catch (error) {
-        console.error('Error selecting all components:', error);
-      }
+      if (window.updateStep2Summary) updateStep2Summary();
+      if (window.renderL3Panel) renderL3Panel();
     });
   }
   
   if (compBtnClear) {
     compBtnClear.addEventListener('click', () => {
-      if (!APB.step2.activeDeliverableCode) return;
-      const delivCode = APB.step2.activeDeliverableCode;
+      const visibleBoxes = document.querySelectorAll('#s2-comp-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const delivCode = cb.getAttribute('data-deliv');
+        const compName = cb.getAttribute('data-comp');
+        
+        if (S2.selectedComponentsByCode[delivCode]) {
+          S2.selectedComponentsByCode[delivCode].delete(compName);
+        }
+        cb.checked = false;
+      });
       
-      // Clear all components for this deliverable
-      selectionStore.componentsByDeliv.set(delivCode, new Set());
-      if (window.renderComponentsPanel) renderComponentsPanel(delivCode);
+      if (window.updateStep2Summary) updateStep2Summary();
+      if (window.renderL3Panel) renderL3Panel();
     });
   }
   
   // L3 panel controls
-  const l3CompSelect = document.getElementById('s2-l3-component');
+  const l3Search = document.getElementById('s2-l3-search');
   const l3BtnAll = document.getElementById('s2-l3-selectall');
   const l3BtnClear = document.getElementById('s2-l3-clear');
   
-  if (l3CompSelect) {
-    l3CompSelect.addEventListener('change', e => {
-      renderL3Panel(e.target.value);
-    });
+  // L3 search filter
+  if (l3Search) {
+    l3Search.addEventListener('input', debounce(e => {
+      APB.step2.filters.l3 = e.target.value.toLowerCase();
+      renderL3Panel();
+    }, 200));
   }
   
-  // TASK 8: Fix All/Clear buttons for L3 panel using selectionStore
+  // L3 All button - select only visible checkboxes
   if (l3BtnAll) {
     l3BtnAll.addEventListener('click', async () => {
-      if (!APB.step2.activeDeliverableCode || !APB.step2.activeComponentName) return;
-      const delivCode = APB.step2.activeDeliverableCode;
-      const componentName = APB.step2.activeComponentName;
+      const visibleBoxes = document.querySelectorAll('#s2-l3-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const key = cb.getAttribute('data-key');
+        const l3Name = cb.getAttribute('data-l3');
+        
+        if (!S2.selectedL3ByKey[key]) {
+          S2.selectedL3ByKey[key] = new Set();
+        }
+        S2.selectedL3ByKey[key].add(l3Name);
+        cb.checked = true;
+      });
       
-      // Fetch all L3 items from the new API and select them
-      try {
-        const l3Items = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
-        const key = `${delivCode}::${componentName}`;
-        selectionStore.l3ByComponent.set(key, new Set(l3Items));
-        if (window.renderL3Panel) renderL3Panel(componentName);
-      } catch (error) {
-        console.error('Error selecting all L3:', error);
-      }
+      if (window.updateStep2Summary) updateStep2Summary();
     });
   }
   
   if (l3BtnClear) {
     l3BtnClear.addEventListener('click', () => {
-      if (!APB.step2.activeDeliverableCode || !APB.step2.activeComponentName) return;
-      const delivCode = APB.step2.activeDeliverableCode;
-      const componentName = APB.step2.activeComponentName;
+      const visibleBoxes = document.querySelectorAll('#s2-l3-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const key = cb.getAttribute('data-key');
+        const l3Name = cb.getAttribute('data-l3');
+        
+        if (S2.selectedL3ByKey[key]) {
+          S2.selectedL3ByKey[key].delete(l3Name);
+        }
+        cb.checked = false;
+      });
       
-      // Clear all L3 items for this component
-      const key = `${delivCode}::${componentName}`;
-      selectionStore.l3ByComponent.set(key, new Set());
-      if (window.renderL3Panel) renderL3Panel(componentName);
+      if (window.updateStep2Summary) updateStep2Summary();
     });
   }
 });
