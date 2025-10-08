@@ -100,7 +100,9 @@ def _get_us_mx_holidays(year: int) -> list:
     holidays.append(np.datetime64(f'{year}-02-{15 + (7 - datetime.date(year, 2, 15).weekday()) % 7}'))
     # Memorial Day (last Monday in May)
     last_may = datetime.date(year, 5, 31)
-    memorial = last_may - datetime.timedelta(days=(last_may.weekday() + 1) % 7)
+    # Roll back from May 31 to the last Monday (weekday 0)
+    days_since_monday = last_may.weekday()  # 0=Mon, 6=Sun
+    memorial = last_may - datetime.timedelta(days=days_since_monday)
     holidays.append(np.datetime64(memorial))
     holidays.append(np.datetime64(f'{year}-07-04'))  # Independence Day
     # Labor Day (1st Monday in September)
