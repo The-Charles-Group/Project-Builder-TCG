@@ -228,7 +228,7 @@
         </div>
         <div>
           <label for="blendedRate">Blended rate (optional)</label>
-          <input id="blendedRate" type="number" step="1" placeholder="e.g., 185" />
+          <input id="blendedRate" type="number" step="1" value="195" placeholder="195" />
         </div>
         <div>
           <label for="rateBand">Rate band</label>
@@ -1101,19 +1101,29 @@
         'Workfront_Export_Scenarios_A_B_and_C.xlsx');
     }
 
-    // XML Export Functions
+    // XML Export Functions (Task 4.5: Use new individual scenario endpoints)
     async function onExportXMLScenario(letter) {
       const scen = window.getScenario(letter);
       if (!scen) { alert(`Build Scenario ${letter} first.`); return; }
 
-      const payload = {
-        scenario: scen,
-        project_name: getProjectName(),
-        scenario_label: `Scenario ${letter}`,
-        sheet_name: `Scenario ${letter}`,
-        merge_identical_children: false
-      };
-      await downloadFromEndpoint('/api/export_xml', payload, `Project_Scenario_${letter}.xml`);
+      // Use new GET endpoints for individual scenarios
+      const endpoint = `/api/export/xml/${letter.toLowerCase()}`;
+      try {
+        const response = await fetch(endpoint);
+        if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Project_Scenario_${letter}.xml`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      } catch (error) {
+        alert(`Error exporting Scenario ${letter}: ${error.message}`);
+      }
     }
 
     async function onExportXMLWorkbook() {
@@ -1138,17 +1148,23 @@
       const C = window.getScenario('C');
       if (!A || !B || !C) { alert('Build scenarios A, B & C first.'); return; }
 
-      const payload = {
-        scenario_a: A,
-        scenario_b: B,
-        scenario_c: C,
-        project_name: getProjectName(),
-        start_date_mode: 'fixed',
-        fixed_start_iso: document.getElementById('projectStartInput')?.value,
-        hours_per_day: 8.0
-      };
-      await downloadFromEndpoint('/api/export_workbook_xml_abc', payload,
-        'Project_Scenarios_A_B_and_C.zip');
+      // Task 4.5: Use new Export All endpoint
+      try {
+        const response = await fetch('/api/export/xml/all');
+        if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Project_Scenarios_All.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      } catch (error) {
+        alert(`Error exporting all scenarios: ${error.message}`);
+      }
     }
 
     // Legacy function removed - use Step 5 exports instead

@@ -87,6 +87,42 @@ SCENARIO_MULT = {
     "C": {"hours_mult": 1.30, "qa_pct": 0.10, "pm_pct": 0.15, "include_addons": True}
 }
 
+# US & Mexico holidays for business day calendar
+def _get_us_mx_holidays(year: int) -> list:
+    """Get US federal and Mexico holidays for a given year."""
+    holidays = []
+    
+    # US Federal Holidays
+    holidays.append(np.datetime64(f'{year}-01-01'))  # New Year's Day
+    # MLK Day (3rd Monday in January)
+    holidays.append(np.datetime64(f'{year}-01-{15 + (7 - datetime.date(year, 1, 15).weekday()) % 7}'))
+    # Presidents Day (3rd Monday in February)
+    holidays.append(np.datetime64(f'{year}-02-{15 + (7 - datetime.date(year, 2, 15).weekday()) % 7}'))
+    # Memorial Day (last Monday in May)
+    last_may = datetime.date(year, 5, 31)
+    memorial = last_may - datetime.timedelta(days=(last_may.weekday() + 1) % 7)
+    holidays.append(np.datetime64(memorial))
+    holidays.append(np.datetime64(f'{year}-07-04'))  # Independence Day
+    # Labor Day (1st Monday in September)
+    holidays.append(np.datetime64(f'{year}-09-{1 + (7 - datetime.date(year, 9, 1).weekday()) % 7}'))
+    # Columbus Day (2nd Monday in October)
+    holidays.append(np.datetime64(f'{year}-10-{8 + (7 - datetime.date(year, 10, 8).weekday()) % 7}'))
+    holidays.append(np.datetime64(f'{year}-11-11'))  # Veterans Day
+    # Thanksgiving (4th Thursday in November)
+    first_nov = datetime.date(year, 11, 1)
+    thanksgiving = first_nov + datetime.timedelta(days=(3 - first_nov.weekday()) % 7 + 21)
+    holidays.append(np.datetime64(thanksgiving))
+    holidays.append(np.datetime64(f'{year}-12-25'))  # Christmas
+    
+    # Mexico holidays
+    holidays.append(np.datetime64(f'{year}-02-05'))  # Constitution Day
+    holidays.append(np.datetime64(f'{year}-03-21'))  # Benito Juárez's Birthday
+    holidays.append(np.datetime64(f'{year}-05-01'))  # Labor Day (Mexico)
+    holidays.append(np.datetime64(f'{year}-09-16'))  # Independence Day (Mexico)
+    holidays.append(np.datetime64(f'{year}-11-20'))  # Revolution Day
+    
+    return holidays
+
 # Helper to find v3 database by environment or common paths
 def _find_v3_path() -> str | None:
     for p in [
@@ -981,27 +1017,47 @@ class AgencyDB:
             start_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
         else:
             start_date = datetime.date.today()
+        
+        # Build business day calendar with US/MX holidays
+        year = start_date.year
+        holidays = _get_us_mx_holidays(year)
+        # Also get holidays for next year in case project spans years
+        if start_date.month >= 10:  # If starting in Q4, include next year's holidays
+            holidays.extend(_get_us_mx_holidays(year + 1))
 
-        cursor_day = 0
+        # Use numpy to calculate business days (Mon-Fri only, excluding holidays)
+        cursor = np.datetime64(start_date)
         rows = []
         for tg in tgs:
             dur = self.task_group_duration_days(tg, complexity, tier, use_slack,
                                                 slack_after_internal, slack_after_client, slack_global_pct)
-            start = start_date + datetime.timedelta(days=cursor_day)
-            end   = start + datetime.timedelta(days=math.ceil(dur))
+            # Ceiling the duration to ensure we have at least 1 business day
+            business_days_needed = max(1, math.ceil(dur))
+            
+            # Calculate start (ensure it's a business day)
+            start = np.busday_offset(cursor, 0, roll='forward', holidays=holidays)
+            # Calculate end using business day offset
+            end = np.busday_offset(start, business_days_needed, roll='forward', holidays=holidays)
+            
+            # Convert numpy dates back to strings for JSON serialization
+            start_str = str(start)
+            end_str = str(end)
+            
             rows.append({
                 "task_group": tg,
-                "start_date": str(start),
-                "end_date": str(end),
-                "duration_days": math.ceil(dur)
+                "start_date": start_str,
+                "end_date": end_str,
+                "duration_days": business_days_needed
             })
-            cursor_day += math.ceil(dur)
+            
+            # Move cursor to end date for next task group
+            cursor = end
 
-            # Slack after reviews
+            # Slack after reviews (in business days)
             if use_slack and tg == "internal_review":
-                cursor_day += int(slack_after_internal)
+                cursor = np.busday_offset(cursor, int(slack_after_internal), roll='forward', holidays=holidays)
             if use_slack and tg == "client_review":
-                cursor_day += int(slack_after_client)
+                cursor = np.busday_offset(cursor, int(slack_after_client), roll='forward', holidays=holidays)
 
         return rows
 
@@ -3781,6 +3837,199 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
                 except:
                     pass
 
+# ---------- Individual Scenario Export Endpoints (Task 4.5) ----------
+
+def _export_single_scenario_xml(
+    scenario: Dict[str, Any],
+    scenario_label: str,
+    project_name: Optional[str] = None
+) -> str:
+    """
+    Helper function to export a single scenario to XML.
+    Returns the path to the final XML file.
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    # Guard: ensure scenario has items
+    _assert_has_items(scenario, f"{scenario_label} XML export")
+    
+    # Inflate components if missing
+    scenario = _inflate_components_if_missing(scenario)
+    
+    # Determine project name
+    project = (project_name 
+               or _upload_title_default() 
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
+    
+    # Build WBS DataFrame
+    df = build_wbs_dataframe_from_scenario(scenario, project)
+    df = _ensure_v3_ae_columns(df)
+    
+    # Create temporary Excel file for MSPDI conversion
+    base = _export_basename(project, scenario_label)
+    temp_xlsx = f"{base}_temp.xlsx"
+    output_xml = f"{base}.xml"
+    
+    try:
+        # Write to temporary Excel file
+        with pd.ExcelWriter(temp_xlsx, engine="openpyxl") as xw:
+            df.to_excel(xw, sheet_name=scenario_label, index=False)
+            _apply_number_formats(xw.sheets[scenario_label], df)
+        
+        # Convert to MSPDI XML
+        project_start_iso = scenario.get("project_start")
+        
+        stats = convert_excel_to_mspdi(
+            input_xlsx=temp_xlsx,
+            output_xml=output_xml,
+            sheet_name=scenario_label,
+            start_date_mode="next_monday",
+            fixed_start_iso=project_start_iso,
+            hours_per_day=8.0,
+            merge_identical_children=False,
+            project_name=project,
+            pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenario.get("rate_band", "Standard_US"),
+            blended_rate=scenario.get("blended_rate")
+        )
+        
+        # Post-process XML to parallelize identical task names (optional)
+        final_xml = output_xml
+        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+            final_xml = post_process_xml(output_xml)
+        
+        return final_xml
+    
+    finally:
+        # Clean up temporary Excel file
+        if os.path.exists(temp_xlsx):
+            try:
+                os.remove(temp_xlsx)
+            except:
+                pass
+
+@app.get("/api/export/xml/a")
+def api_export_xml_scenario_a():
+    """Export Scenario A only as XML"""
+    scenarios = _get_scenarios()
+    if "A" not in scenarios:
+        raise HTTPException(400, "Scenario A not found. Please build scenarios first.")
+    
+    final_xml = _export_single_scenario_xml(
+        scenario=scenarios["A"],
+        scenario_label="Scenario A",
+        project_name=scenarios["A"].get("project_name")
+    )
+    
+    return FileResponse(
+        final_xml,
+        filename=os.path.basename(final_xml),
+        media_type="application/xml"
+    )
+
+@app.get("/api/export/xml/b")
+def api_export_xml_scenario_b():
+    """Export Scenario B only as XML"""
+    scenarios = _get_scenarios()
+    if "B" not in scenarios:
+        raise HTTPException(400, "Scenario B not found. Please build scenarios first.")
+    
+    final_xml = _export_single_scenario_xml(
+        scenario=scenarios["B"],
+        scenario_label="Scenario B",
+        project_name=scenarios["B"].get("project_name")
+    )
+    
+    return FileResponse(
+        final_xml,
+        filename=os.path.basename(final_xml),
+        media_type="application/xml"
+    )
+
+@app.get("/api/export/xml/c")
+def api_export_xml_scenario_c():
+    """Export Scenario C only as XML"""
+    scenarios = _get_scenarios()
+    if "C" not in scenarios:
+        raise HTTPException(400, "Scenario C not found. Please build scenarios first.")
+    
+    final_xml = _export_single_scenario_xml(
+        scenario=scenarios["C"],
+        scenario_label="Scenario C",
+        project_name=scenarios["C"].get("project_name")
+    )
+    
+    return FileResponse(
+        final_xml,
+        filename=os.path.basename(final_xml),
+        media_type="application/xml"
+    )
+
+@app.get("/api/export/xml/all")
+def api_export_xml_all_scenarios():
+    """Export all three scenarios (A, B, C) as a ZIP archive"""
+    scenarios = _get_scenarios()
+    
+    # Check if all scenarios exist
+    missing = []
+    for letter in ["A", "B", "C"]:
+        if letter not in scenarios:
+            missing.append(f"Scenario {letter}")
+    
+    if missing:
+        raise HTTPException(400, f"Missing scenarios: {', '.join(missing)}. Please build all scenarios first.")
+    
+    # Determine project name (prefer from Scenario A)
+    project = (scenarios.get("A", {}).get("project_name")
+               or _upload_title_default()
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
+    
+    temp_files = []
+    xml_files = []
+    
+    try:
+        # Export each scenario
+        for letter, label in [("A", "Scenario A"), ("B", "Scenario B"), ("C", "Scenario C")]:
+            final_xml = _export_single_scenario_xml(
+                scenario=scenarios[letter],
+                scenario_label=label,
+                project_name=project
+            )
+            temp_files.append(final_xml)
+            xml_files.append((f"Scenario_{letter}.xml", final_xml))
+        
+        # Create ZIP file with all three XMLs
+        import zipfile
+        base = _export_basename(project, "Scenarios A, B & C")
+        zip_path = f"{base}.zip"
+        
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            for alias, real_path in xml_files:
+                zipf.write(real_path, alias)
+            
+            # Add metadata
+            zipf.writestr("export_info.json", json.dumps({
+                "project_name": project,
+                "export_date": datetime.datetime.now().isoformat(),
+                "scenarios": ["A", "B", "C"]
+            }, indent=2))
+        
+        return FileResponse(
+            zip_path,
+            filename=os.path.basename(zip_path),
+            media_type="application/zip"
+        )
+    
+    finally:
+        # Clean up temporary XML files
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+
 @app.post("/api/audit_pricing")
 def api_audit_pricing(p: AuditPricingPayload):
     if not DB.loaded:
@@ -3879,38 +4128,98 @@ async def api_summarize_by_file(file: UploadFile = File(...)):
 
 @app.post("/api/retainer_detect")
 def api_retainer_detect(p: dict):
-    """Detect retainer opportunities for given deliverables."""
+    """Detect retainer opportunities for given deliverables with comprehensive null-safety."""
     if not DB.loaded:
         DB.load()
     
-    rfp_text = str(p.get("rfp_text", "") or "")
-    deliverable_codes = [str(x) for x in (p.get("deliverable_codes", []) or [])]
+    # Validate input payload
+    if not p or not isinstance(p, dict):
+        raise HTTPException(400, "Invalid payload: expected a JSON object")
+    
+    # Extract and validate RFP text
+    rfp_text = str(p.get("rfp_text", "") or "").strip()
+    
+    # Extract and validate deliverable codes
+    deliverable_codes_raw = p.get("deliverable_codes")
+    if deliverable_codes_raw is None:
+        deliverable_codes = []
+    elif not isinstance(deliverable_codes_raw, list):
+        raise HTTPException(400, "Invalid deliverable_codes: expected a list")
+    else:
+        # Filter out None, empty, and invalid entries
+        deliverable_codes = [
+            str(x).strip() for x in deliverable_codes_raw 
+            if x is not None and str(x).strip() and str(x).strip().lower() != "nan"
+        ]
     
     # Fallback: use codes from the last built A scenario if none provided
     if not deliverable_codes:
-        scen = _current_scenarios().get("A") or {}
-        deliverable_codes = [str(it.get("deliverable_code")) for it in (scen.get("items") or []) if it.get("deliverable_code")]
-        
+        try:
+            scen = _current_scenarios().get("A") or {}
+            items = scen.get("items") or []
+            if not isinstance(items, list):
+                items = []
+            deliverable_codes = [
+                str(it.get("deliverable_code")).strip() 
+                for it in items 
+                if it and isinstance(it, dict) and it.get("deliverable_code")
+                and str(it.get("deliverable_code")).strip().lower() != "nan"
+            ]
+        except Exception:
+            deliverable_codes = []
+    
+    # Validate we have deliverables to process
     if not deliverable_codes:
-        return {"retainers": []}
+        raise HTTPException(400, "No valid deliverables provided. Please select at least one deliverable or build a scenario first.")
     
-    # Get deliverable names from codes
-    db_delivs = DB.deliverables[["Deliverable_Code", "Deliverable"]].copy()
-    db_delivs["Deliverable_Code"] = db_delivs["Deliverable_Code"].astype(str)
-    code_to_name = {r["Deliverable_Code"]: r["Deliverable"] for _, r in db_delivs.iterrows()}
+    # Validate database has deliverables data
+    if DB.deliverables is None or DB.deliverables.empty:
+        raise HTTPException(500, "Database deliverables not loaded. Please contact support.")
     
+    # Get deliverable names from codes with null-safety
+    try:
+        db_delivs = DB.deliverables[["Deliverable_Code", "Deliverable"]].copy()
+        db_delivs["Deliverable_Code"] = db_delivs["Deliverable_Code"].astype(str)
+        code_to_name = {r["Deliverable_Code"]: r["Deliverable"] for _, r in db_delivs.iterrows()}
+    except Exception as e:
+        raise HTTPException(500, f"Error loading deliverable names: {str(e)}")
+    
+    # Process retainer recommendations with null-safety
     retainers = []
     for code in deliverable_codes:
+        if not code:
+            continue
+            
         deliv_name = code_to_name.get(code, "")
-        if deliv_name:
+        if not deliv_name:
+            continue
+        
+        try:
+            # Call retainer recommendation with null-safety
             is_retainer, months = DB.retainer_recommendation(rfp_text, deliv_name)
+            
+            # Validate months is a valid number
+            if months is not None:
+                try:
+                    months_int = int(float(months))
+                    if months_int < 1:
+                        months_int = 6  # Default to 6 months for invalid values
+                except (ValueError, TypeError):
+                    months_int = 6  # Default to 6 months if conversion fails
+            else:
+                months_int = 6  # Default to 6 months if None
+            
             if is_retainer:
                 retainers.append({
                     "deliverable_code": code,
                     "deliverable_name": deliv_name,
-                    "suggested_months": int(months or 6),
-                    "confidence": "high" if months and months >= 6 else "medium"
+                    "suggested_months": months_int,
+                    "confidence": "high" if months_int >= 6 else "medium"
                 })
+        except Exception as e:
+            # Log error but continue processing other deliverables
+            print(f"[RETAINER] Error processing {code}: {str(e)}")
+            continue
     
     return {"retainers": retainers}
 
@@ -4398,19 +4707,26 @@ def convert_excel_to_mspdi(
         def safe_code(name: str, code: str | None, unique_index: int = 0) -> str:
             """
             Generate a safe, unique deliverable code for START/END anchors.
-            Falls back to slug of deliverable name if code is missing/nan.
-            Appends unique_index to ensure no collisions when multiple deliverables lack codes.
+            Never returns [nan], None, or empty string.
+            Falls back to slug of deliverable name, then to generic placeholder with index.
             """
             import re
-            c = (code or "").strip()
-            if not c or c.lower() == "nan":
-                # Fallback to slug of the deliverable name
-                slug = re.sub(r"[^a-z0-9]+", "_", (name or "deliverable").lower()).strip("_")
-                # Ensure uniqueness with index when name is generic or empty
-                if not name or slug == "deliverable":
-                    return f"{slug}_{unique_index}"
-                return slug
-            return c
+            
+            # Ensure code is a clean string (handle None, nan, empty, etc.)
+            c = str(code).strip() if code is not None else ""
+            # Check for various "nan" representations
+            if c and c.lower() not in ["nan", "none", "null", ""]:
+                return c
+            
+            # Fallback 1: Create slug from deliverable name
+            name_str = str(name).strip() if name is not None else ""
+            if name_str and name_str.lower() not in ["nan", "none", "null", ""]:
+                slug = re.sub(r"[^a-z0-9]+", "_", name_str.lower()).strip("_")
+                if slug and slug != "unnamed":
+                    return slug
+            
+            # Fallback 2: Use generic placeholder with unique index
+            return f"deliverable_{unique_index}" if unique_index > 0 else "deliverable"
         
         def enrich_wbs_for_workfront(rows):
             enriched = []
@@ -4804,15 +5120,16 @@ def convert_excel_to_mspdi(
         SubElement(calendar, "IsBaseCalendar").text = "1"
         
         # Working days (Mon-Fri only, weekends non-working)
-        # DayType: 1=Sun, 2=Mon, 3=Tue, 4=Wed, 5=Thu, 6=Fri, 7=Sat
+        # DayType: 1=Sunday, 2=Monday, 3=Tuesday, 4=Wednesday, 5=Thursday, 6=Friday, 7=Saturday
+        # IMPORTANT: Saturday is DayType=7, not DayType=6 (which is Friday)
         weekdays = SubElement(calendar, "WeekDays")
         for day_num in range(1, 8):
             weekday = SubElement(weekdays, "WeekDay")
             SubElement(weekday, "DayType").text = str(day_num)
-            # Make Sun (1) and Sat (7) non-working; Mon-Fri (2-6) are working
-            if day_num in [1, 7]:  # Sunday and Saturday
+            # Make Sunday (1) and Saturday (7) non-working; Monday-Friday (2-6) are working days
+            if day_num in [1, 7]:  # Sunday=1 and Saturday=7 are non-working
                 SubElement(weekday, "DayWorking").text = "0"
-            else:  # Monday through Friday
+            else:  # Monday=2 through Friday=6 are working days
                 SubElement(weekday, "DayWorking").text = "1"
                 working_times = SubElement(weekday, "WorkingTimes")
                 for start_time, end_time in calendar_blocks:
