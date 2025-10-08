@@ -1,0 +1,366 @@
+What this adds
+
+/api/step2/ai/suggest — asks GPT‑5 to:
+
+read a compact “catalog” of Components → their available L3 tasks for the chosen deliverable,
+
+read the RFP text from Step 1,
+
+return a ranked list of Components and a curated list of L3 tasks per component (only tasks that exist in the DB) with short reasons for the AI panel.
+
+Front‑end Step 2:
+
+When you select a deliverable, the app calls the GPT route (first) and auto‑applies its component picks + (by default) selects all L3 so Summary is never empty.
+
+At the same time, the AI Analysis & Suggestions panel shows a “GPT‑5 Suggestions” section with the model’s explanation. You can Apply All / Add / Replace from that panel.
+
+Graceful fallback if GPT‑5 isn’t configured: the endpoint falls back to your rules/heuristics (frequency + RFP keyword overlap), still writes to the AI panel, and still auto‑applies.
+
+1) Server — add one route + helpers (FastAPI)
+
+Paste near your other Step‑2 routes. It uses your loaded AgencyDB (All_Task_Rows, Deliverable_Index), your RFP_TEXT_CACHE, and the OpenAI client that’s already wired in this project.
+
+# ========= AI Suggest (GPT-5) =========
+import os, json, re
+from typing import Dict, Any, List
+from pydantic import BaseModel
+
+OPENAI_MODEL = os.getenv("APB_SUGGEST_MODEL", "gpt-5")
+
+try:
+    from openai import OpenAI
+    _openai = OpenAI()   # uses OPENAI_API_KEY env var
+except Exception:
+    _openai = None
+
+class AISuggestReq(BaseModel):
+    deliverable_code: str
+    include_l3: bool = True
+    top_components: int = 6
+    top_l3_per_component: int = 12
+    rfp_text: str | None = None
+    exclude_labels: List[str] | None = None   # global dedupe across components
+
+def _component_catalog_for_deliverable(db: AgencyDB, dcode: str, max_tasks_per_comp: int = 40) -> Dict[str, List[str]]:
+    """Return {component: [top task labels]} limited for token safety."""
+    sub = db.all_rows[db.all_rows["Deliverable_Code"].astype(str) == str(dcode)]
+    if sub.empty:
+        return {}
+
+    # standardize
+    sub["Component"] = sub["Component"].fillna("").astype(str).str.strip().replace({"nan": ""})
+    sub["Task_Label"] = sub["Task_Label"].fillna("").astype(str).str.strip().replace({"nan": ""})
+
+    # If any Component is blank in DB, treat as "General" so we still show things
+    sub.loc[sub["Component"]=="", "Component"] = "General"
+
+    # Rank tasks by frequency within component (stable, deterministic)
+    out: Dict[str, List[str]] = {}
+    for comp, grp in sub.groupby("Component", sort=False):
+        g = (grp["Task_Label"]
+                .replace({"": None})
+                .dropna()
+                .value_counts(sort=True))
+        top = [str(x) for x in g.index.tolist()[:max_tasks_per_comp]]
+        out[comp] = top
+    return out
+
+def _rules_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
+                                  top_components: int, top_l3: int,
+                                  exclude: set[str]) -> dict:
+    """Deterministic fallback using frequency + RFP overlaps (same idea as the heuristics you already use)."""
+    catalog = _component_catalog_for_deliverable(db, dcode, 100)
+    text = (rfp or "").lower()
+    toks = set(re.findall(r"[a-z0-9]{3,}", text))
+
+    # component scores
+    comp_scores = {}
+    for c, tasks in catalog.items():
+        score = len(tasks)  # base: how rich the component is
+        if toks:
+            score += sum(any(t in (lab.lower()) for t in toks) for lab in tasks)
+        comp_scores[c] = score
+
+    comp_ranked = [c for c,_ in sorted(comp_scores.items(), key=lambda x: (-x[1], x[0]))][:top_components]
+
+    l3_pick: Dict[str, List[dict]] = {}
+    for c in comp_ranked:
+        tasks = catalog.get(c, [])
+        # score tasks by simple tf + RFP overlap
+        t_scores = []
+        for lab in tasks:
+            key = lab.lower()
+            if key in exclude: 
+                continue
+            s = 1 + sum(tok in key for tok in toks) * 2
+            t_scores.append((lab, s))
+        t_sorted = [lab for lab,_ in sorted(t_scores, key=lambda x: (-x[1], x[0]))][:top_l3]
+        l3_pick[c] = [{"label": lab, "why": "Rule-based relevance"} for lab in t_sorted]
+
+    return {
+        "source": "rules",
+        "components": [{"name": c, "score": float(comp_scores.get(c, 0)), "why": "High frequency + RFP keyword overlap"} for c in comp_ranked],
+        "l3_by_component": l3_pick
+    }
+
+def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
+                                top_components: int, top_l3: int,
+                                exclude: set[str]) -> dict:
+    catalog = _component_catalog_for_deliverable(db, dcode, 60)
+    # Prepare compact payload for model
+    # Also include Deliverable human name for context.
+    drow = db.deliverables[db.deliverables["Deliverable_Code"].astype(str)==str(dcode)]
+    dname = str(drow["Deliverable"].iloc[0]) if not drow.empty else dcode
+
+    user_payload = {
+        "rfp_summary": (rfp or "")[:12000],  # safety cap
+        "deliverable": {"code": dcode, "name": dname},
+        "catalog": [{"component": c, "tasks": catalog[c]} for c in sorted(catalog.keys())],
+        "top_components": top_components,
+        "top_l3_per_component": top_l3,
+        "exclude_labels": sorted(list(exclude)),
+        "instructions": [
+            "Pick components that best respond to the RFP.",
+            "Only choose components and tasks that exist in the catalog.",
+            "Avoid duplicated tasks across components (use exclude_labels and dedupe).",
+            "Prefer tasks that reflect real client-facing outcomes and the typical workflow.",
+            "Return JSON ONLY in the schema below; do not add fields."
+        ],
+        "return_schema": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type":"string"},
+                            "why": {"type":"string"},
+                            "score": {"type":"number"}
+                        },
+                        "required": ["name"]
+                    }
+                },
+                "l3_by_component": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type":"object",
+                            "properties": {
+                                "label": {"type":"string"},
+                                "why": {"type":"string"}
+                            },
+                            "required": ["label"]
+                        }
+                    }
+                },
+                "rationale_summary": {"type":"string"}
+            },
+            "required": ["components","l3_by_component"]
+        }
+    }
+
+    # If no API key or client, caller will catch and use rules fallback.
+    if not _openai:
+        raise RuntimeError("OpenAI not configured")
+
+    # Prefer Responses API; fall back to Chat if not available in runtime.
+    try:
+        resp = _openai.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {"role":"system","content":"You are a senior agency program manager. Output STRICT JSON per schema."},
+                {"role":"user","content":json.dumps(user_payload)}
+            ],
+            temperature=0.2,
+            response_format={"type":"json_object"}
+        )
+        content = resp.output_text
+    except Exception:
+        chat = _openai.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.2,
+            messages=[
+                {"role":"system","content":"You are a senior agency program manager. Output STRICT JSON per schema."},
+                {"role":"user","content":json.dumps(user_payload)}
+            ],
+            response_format={"type":"json_object"}
+        )
+        content = chat.choices[0].message.content
+
+    data = json.loads(content)
+    # schema hygiene
+    comps = data.get("components") or []
+    for c in comps:
+        c.setdefault("why","Selected by GPT‑5 for RFP fit")
+        c.setdefault("score", 0.9)
+    l3 = data.get("l3_by_component") or {}
+    for k, arr in l3.items():
+        for item in arr:
+            item.setdefault("why","GPT‑5 rationale")
+
+    return {
+        "source": "gpt",
+        "components": comps[:top_components],
+        "l3_by_component": {k: v[:top_l3] for k,v in l3.items()},
+        "rationale_summary": data.get("rationale_summary","")
+    }
+
+@app.post("/api/step2/ai/suggest")
+def ai_suggest(req: AISuggestReq):
+    db: AgencyDB = app.state.db  # same handle you use elsewhere in Step 2
+    if not getattr(db, "loaded", False):
+        db.load()
+    d = str(req.deliverable_code)
+    rfp = (req.rfp_text or (globals().get("RFP_TEXT_CACHE") or ""))  # Step‑1 cache
+    exclude = { (x or "").strip().lower() for x in (req.exclude_labels or []) }
+
+    # Try GPT first; on any error, fall back to rules (deterministic)
+    try:
+        payload = _gpt_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
+        payload["model_used"] = OPENAI_MODEL
+    except Exception:
+        payload = _rules_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
+        payload["model_used"] = "rules"
+
+    # For the AI panel we also send the raw catalog counts to display if needed
+    return JSONResponse(payload)
+
+
+Why this works with your app right away
+
+The DB loader already exposes all_rows (with normalized Component and Task_Label) and deliverables; we’re reusing those to build the catalog.
+
+The Step‑1 → Step‑2 RFP handoff is already cached as RFP_TEXT_CACHE; we read it here so GPT can align to the brief.
+
+If there’s no OpenAI key, you still get deterministic suggestions via the rules fallback (the same signal you used before).
+
+Optional: keep your XML “Start/End anchors” toggle; export respects the switch that’s already in the converter (no change needed).
+
+2) Front‑end (vanilla JS) — surface GPT picks in the AI panel and auto‑apply
+
+Add these snippets to your Step‑2 JS module (where we already handle auto‑suggest):
+
+a) Call GPT when a deliverable is selected
+// place near your constants
+const USE_GPT_FOR_AUTOSUGGEST = true;
+
+// inside the deliverables checkbox handler (after we set active deliverable)
+if (cb.checked) {
+  const dCode = cb.getAttribute("data-code");
+
+  // Prefer GPT picks; fallback path already in route
+  if (USE_GPT_FOR_AUTOSUGGEST) {
+    const exclude = []; // gather any globally selected L3 labels if you want global dedupe
+    const res = await fetch("/api/step2/ai/suggest", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        deliverable_code: dCode,
+        include_l3: true,
+        top_components: 6,
+        top_l3_per_component: 20,
+        exclude_labels: exclude
+      })
+    });
+    const ai = await res.json();
+
+    // 1) Show in the AI panel (right above the 3 columns area)
+    renderAISuggestionsPanel(dCode, ai);
+
+    // 2) Auto-apply the components and preselect ALL their L3 so Summary is never blank
+    for (const c of (ai.components || []).map(x => x.name)) {
+      await toggleComponent(dCode, c, true);
+    }
+    // Ensure L3 cache, then select all (we still give users the "Suggest L3" per component to refine)
+    await fetchL3(dCode, (ai.components || []).map(x => x.name));
+    for (const c of (ai.components || []).map(x => x.name)) {
+      const all = (state.caches.l3[dCode] && state.caches.l3[dCode][c]) || [];
+      state.selectedL3[dCode][c] = new Set(all);
+    }
+    persist(); recount(); renderSummary();
+
+    // If you prefer to apply GPT’s curated L3 instead of "select all", swap the block above for:
+    // for (const [comp, items] of Object.entries(ai.l3_by_component || {})) {
+    //   state.selectedL3[dCode][comp] = new Set(items.map(t => t.label));
+    // }
+    // persist(); recount(); renderSummary();
+
+  } else {
+    // previous rules-based auto-suggest helper
+    await suggestComponentsForDeliverable(dCode);
+  }
+}
+
+b) Minimal AI panel renderer
+
+Add a container in your HTML (you already have an AI Analysis & Suggestions area; give it an ID like ai-suggest-panel), then:
+
+function renderAISuggestionsPanel(dCode, ai) {
+  const host = document.getElementById("ai-suggest-panel");
+  if (!host) return;
+
+  const comps = (ai.components || []).map(c => `
+    <div class="ai-chip">
+      <strong>${c.name}</strong>
+      ${c.why ? `<div class="muted">${c.why}</div>` : ""}
+    </div>
+  `).join("");
+
+  const l3html = Object.entries(ai.l3_by_component || {}).map(([comp, tasks]) => `
+    <details class="ai-group"><summary>${comp}</summary>
+      <ul class="ai-l3">
+        ${tasks.map(t => `<li>${t.label}${t.why ? ` — <span class="muted">${t.why}</span>` : ""}</li>`).join("")}
+      </ul>
+    </details>
+  `).join("");
+
+  host.innerHTML = `
+    <div class="panel-head row-between">
+      <h3>AI Analysis & Suggestions</h3>
+      <div class="muted">Source: ${ai.source === "gpt" ? `GPT‑5 (${ai.model_used})` : "Rules"}</div>
+    </div>
+
+    ${ai.rationale_summary ? `<div class="ai-note">${ai.rationale_summary}</div>` : ""}
+
+    <div class="ai-section">
+      <h4>GPT‑5 Suggested Components</h4>
+      <div class="ai-list">${comps || "<div class='muted'>No suggestions.</div>"}</div>
+      <div class="row" style="gap:8px;margin-top:8px;">
+        <button class="btn" data-ai-act="apply-all" data-d="${dCode}">Apply All</button>
+        <button class="btn-ghost" data-ai-act="replace" data-d="${dCode}">Replace Current</button>
+      </div>
+    </div>
+
+    <div class="ai-section">
+      <h4>GPT‑5 Suggested L3 (per component)</h4>
+      ${l3html || "<div class='muted'>No task suggestions.</div>"}
+    </div>
+  `;
+
+  host.onclick = async (e) => {
+    const btn = e.target.closest("[data-ai-act]");
+    if (!btn) return;
+    const act = btn.getAttribute("data-ai-act");
+    const d = btn.getAttribute("data-d");
+    const compsPicked = (ai.components || []).map(x => x.name);
+
+    if (act === "replace") {
+      state.selectedComponents[d] = new Set();
+      state.selectedL3[d] = {};
+    }
+    for (const c of compsPicked) {
+      await toggleComponent(d, c, true);
+    }
+    // Option: apply GPT's curated L3 instead of ALL
+    await fetchL3(d, compsPicked);
+    for (const [comp, items] of Object.entries(ai.l3_by_component || {})) {
+      state.selectedL3[d][comp] = new Set(items.map(t => t.label));
+    }
+    persist(); recount(); renderSummary();
+  };
+}
+
+
+(Keep your existing styling; if you want a touch of UI polish, add tiny CSS for .ai-chip, .ai-note, etc.)

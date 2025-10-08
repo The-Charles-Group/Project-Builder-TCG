@@ -2963,6 +2963,192 @@ def suggest_l3(req: SuggestL3Req):
     
     return JSONResponse(resp)
 
+# ========= AI Suggest (GPT-5) =========
+OPENAI_MODEL = os.getenv("APB_SUGGEST_MODEL", "gpt-5")
+
+class AISuggestReq(BaseModel):
+    deliverable_code: str
+    include_l3: bool = True
+    top_components: int = 6
+    top_l3_per_component: int = 12
+    rfp_text: str | None = None
+    exclude_labels: List[str] | None = None
+
+def _component_catalog_for_deliverable(db: AgencyDB, dcode: str, max_tasks_per_comp: int = 40) -> Dict[str, List[str]]:
+    """Return {component: [top task labels]} limited for token safety."""
+    sub = db.all_rows[db.all_rows["Deliverable_Code"].astype(str) == str(dcode)]
+    if sub.empty:
+        return {}
+
+    sub["Component"] = sub["Component"].fillna("").astype(str).str.strip().replace({"nan": ""})
+    sub["Task_Label"] = sub["Task_Label"].fillna("").astype(str).str.strip().replace({"nan": ""})
+
+    sub.loc[sub["Component"]=="", "Component"] = "General"
+
+    out: Dict[str, List[str]] = {}
+    for comp, grp in sub.groupby("Component", sort=False):
+        g = (grp["Task_Label"]
+                .replace({"": None})
+                .dropna()
+                .value_counts(sort=True))
+        top = [str(x) for x in g.index.tolist()[:max_tasks_per_comp]]
+        out[comp] = top
+    return out
+
+def _rules_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
+                                  top_components: int, top_l3: int,
+                                  exclude: set[str]) -> dict:
+    """Deterministic fallback using frequency + RFP overlaps."""
+    catalog = _component_catalog_for_deliverable(db, dcode, 100)
+    text = (rfp or "").lower()
+    toks = set(re.findall(r"[a-z0-9]{3,}", text))
+
+    comp_scores = {}
+    for c, tasks in catalog.items():
+        score = len(tasks)
+        if toks:
+            score += sum(any(t in (lab.lower()) for t in toks) for lab in tasks)
+        comp_scores[c] = score
+
+    comp_ranked = [c for c,_ in sorted(comp_scores.items(), key=lambda x: (-x[1], x[0]))][:top_components]
+
+    l3_pick: Dict[str, List[dict]] = {}
+    for c in comp_ranked:
+        tasks = catalog.get(c, [])
+        t_scores = []
+        for lab in tasks:
+            key = lab.lower()
+            if key in exclude: 
+                continue
+            s = 1 + sum(tok in key for tok in toks) * 2
+            t_scores.append((lab, s))
+        t_sorted = [lab for lab,_ in sorted(t_scores, key=lambda x: (-x[1], x[0]))][:top_l3]
+        l3_pick[c] = [{"label": lab, "why": "Rule-based relevance"} for lab in t_sorted]
+
+    return {
+        "source": "rules",
+        "components": [{"name": c, "score": float(comp_scores.get(c, 0)), "why": "High frequency + RFP keyword overlap"} for c in comp_ranked],
+        "l3_by_component": l3_pick
+    }
+
+def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
+                                top_components: int, top_l3: int,
+                                exclude: set[str]) -> dict:
+    catalog = _component_catalog_for_deliverable(db, dcode, 60)
+    drow = db.deliverables[db.deliverables["Deliverable_Code"].astype(str)==str(dcode)]
+    dname = str(drow["Deliverable"].iloc[0]) if not drow.empty else dcode
+
+    user_payload = {
+        "rfp_summary": (rfp or "")[:12000],
+        "deliverable": {"code": dcode, "name": dname},
+        "catalog": [{"component": c, "tasks": catalog[c]} for c in sorted(catalog.keys())],
+        "top_components": top_components,
+        "top_l3_per_component": top_l3,
+        "exclude_labels": sorted(list(exclude)),
+        "instructions": [
+            "Pick components that best respond to the RFP.",
+            "Only choose components and tasks that exist in the catalog.",
+            "Avoid duplicated tasks across components (use exclude_labels and dedupe).",
+            "Prefer tasks that reflect real client-facing outcomes and the typical workflow.",
+            "Return JSON ONLY in the schema below; do not add fields."
+        ],
+        "return_schema": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type":"string"},
+                            "why": {"type":"string"},
+                            "score": {"type":"number"}
+                        },
+                        "required": ["name"]
+                    }
+                },
+                "l3_by_component": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type":"object",
+                            "properties": {
+                                "label": {"type":"string"},
+                                "why": {"type":"string"}
+                            },
+                            "required": ["label"]
+                        }
+                    }
+                },
+                "rationale_summary": {"type":"string"}
+            },
+            "required": ["components","l3_by_component"]
+        }
+    }
+
+    if not openai_client:
+        raise RuntimeError("OpenAI not configured")
+
+    try:
+        resp = openai_client.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {"role":"system","content":"You are a senior agency program manager. Output STRICT JSON per schema."},
+                {"role":"user","content":json.dumps(user_payload)}
+            ],
+            temperature=0.2,
+            response_format={"type":"json_object"}
+        )
+        content = resp.output_text
+    except Exception:
+        chat = openai_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.2,
+            messages=[
+                {"role":"system","content":"You are a senior agency program manager. Output STRICT JSON per schema."},
+                {"role":"user","content":json.dumps(user_payload)}
+            ],
+            response_format={"type":"json_object"}
+        )
+        content = chat.choices[0].message.content
+
+    data = json.loads(content)
+    comps = data.get("components") or []
+    for c in comps:
+        c.setdefault("why","Selected by GPT‑5 for RFP fit")
+        c.setdefault("score", 0.9)
+    l3 = data.get("l3_by_component") or {}
+    for k, arr in l3.items():
+        for item in arr:
+            item.setdefault("why","GPT‑5 rationale")
+
+    return {
+        "source": "gpt",
+        "components": comps[:top_components],
+        "l3_by_component": {k: v[:top_l3] for k,v in l3.items()},
+        "rationale_summary": data.get("rationale_summary","")
+    }
+
+@app.post("/api/step2/ai/suggest")
+def ai_suggest(req: AISuggestReq):
+    db: AgencyDB = app.state.db
+    if not getattr(db, "loaded", False):
+        db.load()
+    d = str(req.deliverable_code)
+    rfp = (req.rfp_text or RFP_TEXT_CACHE or "")
+    exclude = { (x or "").strip().lower() for x in (req.exclude_labels or []) }
+
+    try:
+        payload = _gpt_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
+        payload["model_used"] = OPENAI_MODEL
+    except Exception as e:
+        print(f"GPT suggest fallback to rules: {e}")
+        payload = _rules_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
+        payload["model_used"] = "rules"
+
+    return JSONResponse(payload)
+
 @app.get("/api/db/status")
 def db_status():
     if not DB.loaded: DB.load()

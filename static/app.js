@@ -11,6 +11,7 @@ window.APB = window.APB || {};
 
 // Enables auto-pick of components when a deliverable is selected
 const AUTO_SUGGEST_ON_SELECT = true;
+const USE_GPT_FOR_AUTOSUGGEST = true;
 
 // Unified selection store per requirements
 const selectionStore = {
@@ -704,6 +705,90 @@ function initAISummaryAndSuggestions() {
   reconcileAndRender(labels, selCodes);
 }
 
+// Render GPT-5 AI Suggestions Panel
+function renderAISuggestionsPanel(dCode, ai) {
+  const host = document.getElementById("ai-suggest-panel");
+  if (!host) return;
+
+  const comps = (ai.components || []).map(c => `
+    <div class="ai-chip">
+      <strong>${c.name}</strong>
+      ${c.why ? `<div class="muted" style="font-size:0.85em;margin-top:4px;">${c.why}</div>` : ""}
+    </div>
+  `).join("");
+
+  const l3html = Object.entries(ai.l3_by_component || {}).map(([comp, tasks]) => `
+    <details class="ai-group" style="margin:8px 0;">
+      <summary style="cursor:pointer;font-weight:600;padding:4px 0;">${comp}</summary>
+      <ul class="ai-l3" style="margin:4px 0 0 20px;list-style:disc;">
+        ${tasks.map(t => `<li style="padding:2px 0;">${t.label}${t.why ? ` — <span class="muted" style="font-size:0.85em;">${t.why}</span>` : ""}</li>`).join("")}
+      </ul>
+    </details>
+  `).join("");
+
+  host.innerHTML = `
+    <div class="panel-head row-between" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3 style="margin:0;">AI Analysis & Suggestions</h3>
+      <div class="muted" style="font-size:0.85em;">Source: ${ai.source === "gpt" ? `GPT‑5 (${ai.model_used})` : "Rules"}</div>
+    </div>
+
+    ${ai.rationale_summary ? `<div class="ai-note" style="background:rgba(100,100,255,0.1);padding:12px;border-radius:6px;margin-bottom:12px;font-size:0.9em;">${ai.rationale_summary}</div>` : ""}
+
+    <div class="ai-section" style="margin-bottom:16px;">
+      <h4 style="margin:8px 0;">GPT‑5 Suggested Components</h4>
+      <div class="ai-list" style="display:flex;flex-direction:column;gap:8px;margin:8px 0;">${comps || "<div class='muted'>No suggestions.</div>"}</div>
+      <div class="row" style="gap:8px;margin-top:8px;display:flex;">
+        <button class="btn" data-ai-act="apply-all" data-d="${dCode}">Apply All</button>
+        <button class="btn-ghost" data-ai-act="replace" data-d="${dCode}">Replace Current</button>
+      </div>
+    </div>
+
+    <div class="ai-section">
+      <h4 style="margin:8px 0;">GPT‑5 Suggested L3 (per component)</h4>
+      ${l3html || "<div class='muted'>No task suggestions.</div>"}
+    </div>
+  `;
+
+  host.onclick = async (e) => {
+    const btn = e.target.closest("[data-ai-act]");
+    if (!btn) return;
+    const act = btn.getAttribute("data-ai-act");
+    const d = btn.getAttribute("data-d");
+    const compsPicked = (ai.components || []).map(x => x.name);
+
+    if (act === "replace") {
+      S2.selectedComponentsByCode[d] = new Set();
+      selectionStore.componentsByDeliv.set(d, new Set());
+      for (const key of Array.from(selectionStore.l3ByComponent.keys())) {
+        if (key.startsWith(d + "::")) {
+          selectionStore.l3ByComponent.delete(key);
+        }
+      }
+    }
+    
+    for (const c of compsPicked) {
+      if (!S2.selectedComponentsByCode[d]) {
+        S2.selectedComponentsByCode[d] = new Set();
+      }
+      S2.selectedComponentsByCode[d].add(c);
+      await hydrateL3For(d, c);
+    }
+    
+    if (ai.l3_by_component) {
+      for (const [comp, items] of Object.entries(ai.l3_by_component)) {
+        const key = `${d}::${comp}`;
+        if (!selectionStore.l3ByComponent.has(key)) {
+          selectionStore.l3ByComponent.set(key, new Set());
+        }
+        items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
+      }
+    }
+    
+    await refreshComponentsPanel();
+    updateSummaryCounts();
+  };
+}
+
 // Render AI Summary panel
 function renderAISummary(sum) {
   const body  = document.querySelector('#s2-ai-summary-body');
@@ -1037,35 +1122,72 @@ async function onDeliverableToggle(code, checked) {
   if (checked) {
     await selectDeliverable(code);
     
-    // Check if this deliverable has any components selected
     const hasComponents = S2.selectedComponentsByCode[code] && S2.selectedComponentsByCode[code].size > 0;
     
     if (AUTO_SUGGEST_ON_SELECT && !hasComponents) {
-      // Auto-suggest components for this deliverable
-      try {
-        const response = await fetch('/api/step2/suggest/components', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deliverable_code: code, limit: 6 })
-        });
-        
-        const suggested = await response.json();
-        
-        if (suggested && suggested.length > 0) {
+      if (USE_GPT_FOR_AUTOSUGGEST) {
+        try {
+          const exclude = [];
+          const res = await fetch("/api/step2/ai/suggest", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              deliverable_code: code,
+              include_l3: true,
+              top_components: 6,
+              top_l3_per_component: 20,
+              exclude_labels: exclude
+            })
+          });
+          const ai = await res.json();
+
+          renderAISuggestionsPanel(code, ai);
+
           if (!S2.selectedComponentsByCode[code]) {
             S2.selectedComponentsByCode[code] = new Set();
           }
           
-          // Add suggested components to selection
-          suggested.forEach(comp => {
-            S2.selectedComponentsByCode[code].add(comp);
+          for (const c of (ai.components || []).map(x => x.name)) {
+            S2.selectedComponentsByCode[code].add(c);
+            await hydrateL3For(code, c);
+          }
+          
+          if (ai.l3_by_component) {
+            for (const [comp, items] of Object.entries(ai.l3_by_component)) {
+              const key = `${code}::${comp}`;
+              if (!selectionStore.l3ByComponent.has(key)) {
+                selectionStore.l3ByComponent.set(key, new Set());
+              }
+              items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
+            }
+          }
+        } catch (error) {
+          console.error('GPT auto-suggest error:', error);
+        }
+      } else {
+        try {
+          const response = await fetch('/api/step2/suggest/components', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deliverable_code: code, limit: 6 })
           });
           
-          // Hydrate L3 for each suggested component
-          await Promise.all(suggested.map(comp => hydrateL3For(code, comp)));
+          const suggested = await response.json();
+          
+          if (suggested && suggested.length > 0) {
+            if (!S2.selectedComponentsByCode[code]) {
+              S2.selectedComponentsByCode[code] = new Set();
+            }
+            
+            suggested.forEach(comp => {
+              S2.selectedComponentsByCode[code].add(comp);
+            });
+            
+            await Promise.all(suggested.map(comp => hydrateL3For(code, comp)));
+          }
+        } catch (error) {
+          console.error('Auto-suggest components error:', error);
         }
-      } catch (error) {
-        console.error('Auto-suggest components error:', error);
       }
     }
   } else {
@@ -1076,7 +1198,6 @@ async function onDeliverableToggle(code, checked) {
   await refreshComponentsPanel();
   updateSummaryCounts();
   
-  // Refresh AI suggestions to update button states
   initAISummaryAndSuggestions();
 }
 

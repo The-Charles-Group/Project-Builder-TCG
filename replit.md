@@ -53,11 +53,20 @@ Preferred communication style: Simple, everyday language.
 - **UI**: L3 chips grouped by parent component for clear visualization
 
 ### AI Suggest Features (Latest - October 8, 2025)
-- **Auto-Suggest on Selection**: Automatically suggests components when a deliverable is selected (checkbox)
-  - Enabled via `AUTO_SUGGEST_ON_SELECT = true` constant
+- **GPT-5 Auto-Suggest on Selection**: Automatically suggests components when a deliverable is selected
+  - Enabled via `USE_GPT_FOR_AUTOSUGGEST = true` constant (uses GPT-5 if true, rules-based if false)
+  - Endpoint: `/api/step2/ai/suggest` - GPT-5 analyzes RFP and deliverable catalog to suggest components and L3 tasks
   - Only triggers for deliverables with no components yet
-  - Auto-selects top 6 relevant components and hydrates all their L3 tasks
+  - Auto-selects top 6 relevant components and hydrates GPT-curated L3 tasks
+  - Displays suggestions with reasoning in AI panel (`#ai-suggest-panel`)
+  - Graceful fallback: If OpenAI unavailable, uses rules-based algorithm (frequency + RFP keyword overlap)
   - Rehydrated sessions (with existing selections) skip auto-suggest
+- **AI Panel UI**: Shows GPT-5 suggestions with reasoning and action buttons
+  - Source indicator: "GPT-5 (gpt-5)" or "Rules"
+  - Component suggestions: Shows component name + why it was suggested
+  - L3 task suggestions: Grouped by component with per-task reasoning
+  - Action buttons: "Apply All" (adds to existing) and "Replace Current" (clears first)
+  - Optional rationale summary from GPT-5
 - **Manual Component Suggestions**: "Suggest" button in Components panel for manual suggestions
   - Endpoint: `/api/step2/suggest/components` - scores components by frequency + RFP keyword overlap
   - Auto-selects suggested components and hydrates their L3 tasks
