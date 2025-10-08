@@ -3020,4 +3020,35 @@ async function s2ApplyAndBuild() {
 // Bind buttons
 S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
+// ========== XML Export Functions ==========
+async function exportXMLScenario(letter) {
+  // Check if anchors should be included
+  const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
+  
+  // Build endpoint with query parameter
+  const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+  
+  try {
+    const response = await fetch(endpoint);
+    if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+    
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Project_Scenario_${letter}.xml`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`XML export failed: ${err.message}`);
+  }
+}
+
+// Wire up XML export buttons
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('btn-export-xml-a')?.addEventListener('click', () => exportXMLScenario('A'));
+  document.getElementById('btn-export-xml-b')?.addEventListener('click', () => exportXMLScenario('B'));
+  document.getElementById('btn-export-xml-c')?.addEventListener('click', () => exportXMLScenario('C'));
+});
+
 window.addEventListener("load", boot);

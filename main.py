@@ -3910,7 +3910,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
 def _export_single_scenario_xml(
     scenario: Dict[str, Any],
     scenario_label: str,
-    project_name: Optional[str] = None
+    project_name: Optional[str] = None,
+    add_deliverable_milestones: bool = False
 ) -> str:
     """
     Helper function to export a single scenario to XML.
@@ -3959,7 +3960,8 @@ def _export_single_scenario_xml(
             project_name=project,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
-            blended_rate=scenario.get("blended_rate")
+            blended_rate=scenario.get("blended_rate"),
+            add_deliverable_milestones=add_deliverable_milestones
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -3978,7 +3980,7 @@ def _export_single_scenario_xml(
                 pass
 
 @app.get("/api/export/xml/a")
-def api_export_xml_scenario_a():
+def api_export_xml_scenario_a(add_anchors: bool = False):
     """Export Scenario A only as XML"""
     scenarios = _get_scenarios()
     if "A" not in scenarios:
@@ -3987,7 +3989,8 @@ def api_export_xml_scenario_a():
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["A"],
         scenario_label="Scenario A",
-        project_name=scenarios["A"].get("project_name")
+        project_name=scenarios["A"].get("project_name"),
+        add_deliverable_milestones=add_anchors
     )
     
     return FileResponse(
@@ -3997,7 +4000,7 @@ def api_export_xml_scenario_a():
     )
 
 @app.get("/api/export/xml/b")
-def api_export_xml_scenario_b():
+def api_export_xml_scenario_b(add_anchors: bool = False):
     """Export Scenario B only as XML"""
     scenarios = _get_scenarios()
     if "B" not in scenarios:
@@ -4006,7 +4009,8 @@ def api_export_xml_scenario_b():
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["B"],
         scenario_label="Scenario B",
-        project_name=scenarios["B"].get("project_name")
+        project_name=scenarios["B"].get("project_name"),
+        add_deliverable_milestones=add_anchors
     )
     
     return FileResponse(
@@ -4016,7 +4020,7 @@ def api_export_xml_scenario_b():
     )
 
 @app.get("/api/export/xml/c")
-def api_export_xml_scenario_c():
+def api_export_xml_scenario_c(add_anchors: bool = False):
     """Export Scenario C only as XML"""
     scenarios = _get_scenarios()
     if "C" not in scenarios:
@@ -4025,7 +4029,8 @@ def api_export_xml_scenario_c():
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["C"],
         scenario_label="Scenario C",
-        project_name=scenarios["C"].get("project_name")
+        project_name=scenarios["C"].get("project_name"),
+        add_deliverable_milestones=add_anchors
     )
     
     return FileResponse(

@@ -12,12 +12,14 @@ Preferred communication style: Simple, everyday language.
 
 ### UI & Export Quality Improvements (Latest - October 8, 2025)
 - **Deliverable Selection UX**: Row click now previews only (shows components if already selected); checkbox is sole source of truth for selection
-- **XML Anchor Milestones**: Made optional via `add_deliverable_milestones=False` parameter (default OFF)
+- **XML Anchor Milestones**: Made optional with UI toggle in Step 2 Summary panel
+  - Checkbox control: "Include Start/End anchors in XML" (default unchecked)
   - When enabled: START/END anchors use friendly names `Start — {Deliverable}` / `End — {Deliverable}` with `<Milestone>1</Milestone>` tags
   - Safe fallback prevents [nan] labels by using `safe_dcode` instead of raw deliverable code
-  - Located in `convert_excel_to_mspdi()` and `enrich_wbs_for_workfront()` functions in main.py
+  - Backend parameter: `add_deliverable_milestones` (default False) in `convert_excel_to_mspdi()` and export endpoints
 - **L3 Task Restoration**: Component reselection now clears cache and refetches L3 from server, allowing removed L3 subtasks to be re-added
 - **Summary Count Accuracy**: L3 count now only includes tasks for selected components (checks both deliverable AND component selection)
+- **XML Export Integration**: Export buttons read checkbox state and pass `?add_anchors=true/false` to API endpoints
 
 ### Step 2 UI Restructure
 - **Simplified Grid**: Changed from 4-column to 3-column layout (Deliverables | Components | Summary)
