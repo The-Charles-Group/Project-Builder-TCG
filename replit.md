@@ -10,13 +10,14 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 2025)
 
-### Workfront XML Export Enhancements (Latest)
-- **Milestone Anchors**: START/END anchor tasks now display as friendly milestones
-  - Names changed from `[DEL-xxxx] START/END` to `Start — {Deliverable Name}` / `End — {Deliverable Name}`
-  - All anchor tasks marked with `<Milestone>1</Milestone>` for visual de-emphasis in Workfront
-  - Located in `enrich_wbs_for_workfront()` function (lines 4799-4907 in main.py)
-  - XML milestone tag added at line 5278-5280 in main.py
-- **No [nan] Labels**: Safe fallback code generation prevents any [nan] entries in exports
+### UI & Export Quality Improvements (Latest - October 8, 2025)
+- **Deliverable Selection UX**: Row click now previews only (shows components if already selected); checkbox is sole source of truth for selection
+- **XML Anchor Milestones**: Made optional via `add_deliverable_milestones=False` parameter (default OFF)
+  - When enabled: START/END anchors use friendly names `Start — {Deliverable}` / `End — {Deliverable}` with `<Milestone>1</Milestone>` tags
+  - Safe fallback prevents [nan] labels by using `safe_dcode` instead of raw deliverable code
+  - Located in `convert_excel_to_mspdi()` and `enrich_wbs_for_workfront()` functions in main.py
+- **L3 Task Restoration**: Component reselection now clears cache and refetches L3 from server, allowing removed L3 subtasks to be re-added
+- **Summary Count Accuracy**: L3 count now only includes tasks for selected components (checks both deliverable AND component selection)
 
 ### Step 2 UI Restructure
 - **Simplified Grid**: Changed from 4-column to 3-column layout (Deliverables | Components | Summary)
