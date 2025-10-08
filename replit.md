@@ -10,6 +10,15 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 2025)
 
+### L3 Bulk Query Endpoints (Latest)
+- **New Endpoint `/api/step2/l3/bulk`**: Returns L3 tasks grouped by component for efficient UI rendering
+  - Input: `{"deliverable": "code", "components": ["comp1", "comp2"]}`
+  - Output: `{"comp1": ["task1", "task2"], "comp2": ["task3"]}`
+  - Preserves component grouping for summary panel display
+- **Enhanced `/api/step2/l3`**: Now accepts both single component (string) or multiple components (array)
+  - Returns merged, deduplicated L3 tasks
+  - Fully backward compatible with existing callers
+
 ### Critical L3 Synchronization Fix
 - **Issue**: L3 (Level 3) selections from Step 2 UI were not reaching Step 3 payload due to data synchronization problems between legacy code paths and the centralized state store.
 - **Solution**: Implemented a Proxy-backed `selectedL3ByKey` object that intercepts all property operations (get, set, delete, enumerate) and synchronizes with `selectionStore.l3ByComponent` Map.
@@ -24,8 +33,10 @@ Preferred communication style: Simple, everyday language.
 - **UI**: L3 chips grouped by parent component for clear visualization
 
 ### Timeline Accuracy Improvements
-- **Business Days Calculation**: Added `businessDaysInclusive()` helper function to accurately calculate project durations excluding weekends
-- **XML Export**: Verified Saturday configured as non-working day (DayWorking=0) in Workfront-compatible calendar export
+- **Business Days Calculation**: Uses `numpy.busday_offset()` and `numpy.busday_count()` with US/MX holiday calendar
+- **Memorial Day Fix**: Corrected calculation to always land on the last Monday of May
+- **XML Export**: Saturday and Sunday configured as non-working days (DayWorking=0) in Workfront-compatible calendar export
+- **No Weekend End Dates**: All timeline calculations exclude weekends and holidays
 
 ## System Architecture
 

@@ -2837,6 +2837,43 @@ async def step2_l3(p: L3Request):
         "l3": sorted(out)
     }
 
+@app.post("/api/step2/l3/bulk")
+async def step2_l3_bulk(payload: dict):
+    """
+    Returns L3 subtasks grouped by component (not merged).
+    payload: {"deliverable": "deck_strategy", "components": ["brief","art_direction",...]}
+    returns: {"brief": ["deck_build","internal_review",...], "art_direction": [...]}
+    
+    This endpoint preserves component grouping for UI rendering.
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    dcode = str(payload.get("deliverable", "")).strip()
+    comps = [str(x).strip() for x in payload.get("components", [])]
+    df = DB.all_rows.copy()
+    
+    out = {}
+    for comp in comps:
+        if not comp:
+            continue
+            
+        rows = df[(df["Deliverable_Code"] == dcode) & (df["Component"] == comp)]
+        
+        # Prefer Task_Label (normalized), fallback to task_group if empty
+        label_col = "Task_Label"
+        if label_col not in rows.columns or rows[label_col].eq("").all():
+            label_col = "task_group" if "task_group" in rows.columns else None
+        
+        tasks = []
+        if label_col:
+            task_list = rows[label_col].fillna("").astype(str).str.strip().tolist()
+            tasks = sorted({t for t in task_list if t and t != "nan"})
+        
+        out[comp] = tasks
+    
+    return out
+
 @app.get("/api/db/status")
 def db_status():
     if not DB.loaded: DB.load()
