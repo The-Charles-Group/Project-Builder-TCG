@@ -757,16 +757,15 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
 
   root.innerHTML = '';
   
-  // Show non-blocking tip ONLY if no RFP text AND no suggestions exist
-  const hasSuggestions = add.length || del.length || unchanged.length;
-  if (!APB.step2.rfpText && !hasSuggestions) {
+  // Show non-blocking tip if no RFP text
+  if (!APB.step2.rfpText) {
     const tip = document.createElement('div');
     tip.style = 'background:rgba(255,193,7,0.1);border-left:3px solid #ffc107;padding:8px 12px;margin-bottom:12px;font-size:0.9em;';
     tip.innerHTML = '<strong>Tip:</strong> No RFP text in memory. Suggestions will be blank until you paste text or re-run Step 1.';
     root.appendChild(tip);
   }
   
-  if (!hasSuggestions) {
+  if (!add.length && !del.length && !unchanged.length) {
     root.innerHTML += '<div style="opacity:.7;">Run analysis to see suggestions.</div>';
     return;
   }
