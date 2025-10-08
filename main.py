@@ -95,9 +95,11 @@ def _get_us_mx_holidays(year: int) -> list:
     # US Federal Holidays
     holidays.append(np.datetime64(f'{year}-01-01'))  # New Year's Day
     # MLK Day (3rd Monday in January)
-    holidays.append(np.datetime64(f'{year}-01-{15 + (7 - datetime.date(year, 1, 15).weekday()) % 7}'))
+    mlk_day = 15 + (7 - datetime.date(year, 1, 15).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-01-{mlk_day:02d}'))
     # Presidents Day (3rd Monday in February)
-    holidays.append(np.datetime64(f'{year}-02-{15 + (7 - datetime.date(year, 2, 15).weekday()) % 7}'))
+    pres_day = 15 + (7 - datetime.date(year, 2, 15).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-02-{pres_day:02d}'))
     # Memorial Day (last Monday in May)
     last_may = datetime.date(year, 5, 31)
     # Roll back from May 31 to the last Monday (weekday 0)
@@ -106,9 +108,11 @@ def _get_us_mx_holidays(year: int) -> list:
     holidays.append(np.datetime64(memorial))
     holidays.append(np.datetime64(f'{year}-07-04'))  # Independence Day
     # Labor Day (1st Monday in September)
-    holidays.append(np.datetime64(f'{year}-09-{1 + (7 - datetime.date(year, 9, 1).weekday()) % 7}'))
+    labor_day = 1 + (7 - datetime.date(year, 9, 1).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-09-{labor_day:02d}'))
     # Columbus Day (2nd Monday in October)
-    holidays.append(np.datetime64(f'{year}-10-{8 + (7 - datetime.date(year, 10, 8).weekday()) % 7}'))
+    columbus_day = 8 + (7 - datetime.date(year, 10, 8).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-10-{columbus_day:02d}'))
     holidays.append(np.datetime64(f'{year}-11-11'))  # Veterans Day
     # Thanksgiving (4th Thursday in November)
     first_nov = datetime.date(year, 11, 1)
@@ -2639,7 +2643,7 @@ def api_options():
     if not v3_tiers:
         v3_tiers = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].head(3).tolist()
 
-    rate_bands = dedupe_list(DB.rate_bands["Band_Name"].head(3).tolist())  # Deduplicate
+    rate_bands = dedupe_list(DB.rate_bands["Band_Name"].head(3).tolist()) if DB.rate_bands is not None else []
     pricing_modes = dedupe_list(["Flat_Blended","Per_Resource"])  # Deduplicate
     
     # Include Service Department and Sort_Order for grouping/ordering
