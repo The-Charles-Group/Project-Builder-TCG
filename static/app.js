@@ -2072,14 +2072,16 @@ document.addEventListener('DOMContentLoaded', function() {
             S2.selectedComponentsByCode[activeDeliv] = new Set();
           }
           
+          // Add suggested components to selection
           suggested.forEach(comp => {
             S2.selectedComponentsByCode[activeDeliv].add(comp);
           });
           
+          // Hydrate L3 for each suggested component
+          await Promise.all(suggested.map(comp => hydrateL3For(activeDeliv, comp)));
+          
           await renderComponentsPanel();
-          await hydrateL3ForAllSelected();
-          if (window.updateStep2Summary) updateStep2Summary();
-          if (window.renderL3Panel) renderL3Panel();
+          updateSummaryCounts();
         } else {
           alert('No component suggestions available for this deliverable');
         }
