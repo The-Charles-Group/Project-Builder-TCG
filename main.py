@@ -5649,13 +5649,29 @@ def convert_excel_to_mspdi(
                 if proj_summary_elem is not None:
                     proj_summary_elem.text = "1"
 
-        # Write XML file
+        # Write XML file with proper formatting and error handling
         xml_string = tostring(project, encoding='unicode')
-        dom = minidom.parseString(xml_string)
-        pretty_xml = dom.toprettyxml(indent="  ")
         
-        with open(output_xml, 'w', encoding='utf-8') as f:
-            f.write(pretty_xml)
+        try:
+            # Try pretty printing with minidom
+            dom = minidom.parseString(xml_string)
+            pretty_xml = dom.toprettyxml(indent="  ", encoding=None)
+            
+            # Remove extra blank lines that toprettyxml adds
+            lines = [line for line in pretty_xml.split('\n') if line.strip()]
+            final_xml = '\n'.join(lines)
+            
+            with open(output_xml, 'w', encoding='utf-8') as f:
+                f.write(final_xml)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as e:
+            # Fallback: write raw XML if pretty printing fails
+            print(f"[XML] Pretty print failed, using raw XML: {e}")
+            with open(output_xml, 'w', encoding='utf-8') as f:
+                f.write(xml_string)
+                f.flush()
+                os.fsync(f.fileno())
 
         # Return statistics
         return {
