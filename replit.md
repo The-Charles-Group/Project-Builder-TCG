@@ -18,6 +18,7 @@ Preferred communication style: Simple, everyday language.
   - Safe fallback prevents [nan] labels by using `safe_dcode` instead of raw deliverable code
   - Backend parameter: `add_deliverable_milestones` (default False) in `convert_excel_to_mspdi()` and export endpoints
 - **L3 Task Restoration**: Component reselection now clears cache and refetches L3 from server, allowing removed L3 subtasks to be re-added
+  - Added "↻ Reset" button next to each component in Summary panel for instant L3 restoration without needing to toggle component off/on
 - **Summary Count Accuracy**: L3 count now only includes tasks for selected components (checks both deliverable AND component selection)
 - **XML Export Integration**: Export buttons read checkbox state and pass `?add_anchors=true/false` to API endpoints
 

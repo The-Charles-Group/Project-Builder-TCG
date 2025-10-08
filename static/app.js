@@ -1228,14 +1228,21 @@ function renderSummaryChips() {
       const l3Set = APB.step2.selectedL3ByKey[key] || new Set();
       
       if (l3Set.size > 0) {
-        // Component label with remove button
+        // Component label with reset and remove buttons
         html += `<div style="margin-top:8px;padding-left:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
             <span style="font-size:0.8em;color:var(--muted);">${compName}</span>
-            <button onclick="removeComponentFromSummary('${delivCode}', '${compName}')" 
-                    style="background:none;border:none;color:var(--danger);cursor:pointer;padding:2px 6px;font-size:0.7em;">
-              Remove Component
-            </button>
+            <div style="display:flex;gap:6px;">
+              <button onclick="resetL3ForComponent('${delivCode}', '${compName}')" 
+                      style="background:rgba(139,92,246,0.15);border:none;color:var(--accent);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:0.7em;"
+                      title="Restore all L3 subtasks for this component">
+                ↻ Reset
+              </button>
+              <button onclick="removeComponentFromSummary('${delivCode}', '${compName}')" 
+                      style="background:none;border:none;color:var(--danger);cursor:pointer;padding:2px 6px;font-size:0.7em;">
+                Remove
+              </button>
+            </div>
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:8px;">`;
         
@@ -1335,6 +1342,20 @@ window.removeL3FromSummary = function(key, l3Name) {
   if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
     renderL3Panel(delivCode, compName);
   }
+  updateSummaryCounts();
+}
+
+// Reset L3 subtasks for a component - refetches all from server
+window.resetL3ForComponent = async function(delivCode, compName) {
+  const key = `${delivCode}::${compName}`;
+  
+  // Clear the cached L3 for this component
+  selectionStore.l3ByComponent.delete(key);
+  
+  // Refetch L3 from server
+  await hydrateL3For(delivCode, compName);
+  
+  // Update the summary display
   updateSummaryCounts();
 }
 
