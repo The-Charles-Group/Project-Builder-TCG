@@ -10,7 +10,23 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 2025)
 
-### L3 Bulk Query Endpoints (Latest)
+### Workfront XML Export Enhancements (Latest)
+- **Milestone Anchors**: START/END anchor tasks now display as friendly milestones
+  - Names changed from `[DEL-xxxx] START/END` to `Start — {Deliverable Name}` / `End — {Deliverable Name}`
+  - All anchor tasks marked with `<Milestone>1</Milestone>` for visual de-emphasis in Workfront
+  - Located in `enrich_wbs_for_workfront()` function (lines 4799-4907 in main.py)
+  - XML milestone tag added at line 5278-5280 in main.py
+- **No [nan] Labels**: Safe fallback code generation prevents any [nan] entries in exports
+
+### Step 2 UI Restructure
+- **Simplified Grid**: Changed from 4-column to 3-column layout (Deliverables | Components | Summary)
+  - Removed dedicated L3 Subtasks column
+  - L3 selection now handled within Summary panel for each component
+  - Grid template updated to `1fr 1fr 350px` for better spacing
+- **Search Functionality**: Search bars for Deliverables and Components filter the lists in real-time
+- **Enhanced Summary**: Shows hierarchical Deliverable → Component → L3 structure with per-component controls
+
+### L3 Bulk Query Endpoints
 - **New Endpoint `/api/step2/l3/bulk`**: Returns L3 tasks grouped by component for efficient UI rendering
   - Input: `{"deliverable": "code", "components": ["comp1", "comp2"]}`
   - Output: `{"comp1": ["task1", "task2"], "comp2": ["task3"]}`

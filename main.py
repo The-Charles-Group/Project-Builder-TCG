@@ -4833,13 +4833,16 @@ def convert_excel_to_mspdi(
                 # Generate safe, unique code (safe_code handles uniqueness internally)
                 safe_dcode = safe_code(deliv_name, dcode, deliverable_index)
                 
+                # Use friendly deliverable name for milestone labels
+                dname = (deliv_name or str(dcode) or f"Deliverable {deliverable_index}").strip()
+                
                 # Create START anchor
                 start_wbs = f"ANCHOR_{anchor_id_counter[0]}"
                 anchor_id_counter[0] += 1
                 start_anchor = {
                     "WBS": start_wbs,
                     "ParentWBS": "1",
-                    "Name": f"[{safe_dcode}] START",
+                    "Name": f"Start — {dname}",
                     "PlannedHours": 0,
                     "StartOffset": 0,
                     "Duration": 0,
@@ -4880,7 +4883,7 @@ def convert_excel_to_mspdi(
                 end_anchor = {
                     "WBS": end_wbs,
                     "ParentWBS": "1",
-                    "Name": f"[{safe_dcode}] END",
+                    "Name": f"End — {dname}",
                     "PlannedHours": 0,
                     "StartOffset": 0,
                     "Duration": 0,
@@ -5268,6 +5271,10 @@ def convert_excel_to_mspdi(
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
+            
+            # Mark anchor rows (WBS starts with ANCHOR_) as milestones
+            is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
+            SubElement(task, "Milestone").text = "1" if is_anchor else "0"
 
         # Assignments
         assignments_elem = SubElement(project, "Assignments")
