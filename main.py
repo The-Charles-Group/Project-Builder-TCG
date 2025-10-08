@@ -2305,6 +2305,11 @@ class ReorderPayload(BaseModel):
     complexity: str = "Advanced"
     tier: str = "T2_MediumVolume"
 
+# A1: L3 Request model for bulk component queries
+class L3Request(BaseModel):
+    deliverable_code: str
+    component: Union[str, List[str]]  # can be one or many components
+
 # ---------- Global Scenario Storage for Reordering ----------
 _CURRENT_SCENARIOS = {}  # Store scenarios for reordering
 
@@ -2788,32 +2793,49 @@ async def step2_components(payload: dict):
     return out
 
 @app.post("/api/step2/l3")
-async def step2_l3(payload: dict):
+async def step2_l3(p: L3Request):
     """
-    Returns L3 subtasks for a deliverable + component.
-    payload = {"deliverable": "deck_strategy", "component": "brief"}
-    returns = ["deck_build", "internal_review", "client_review", ...]
+    Returns L3 subtasks for a deliverable + component(s).
+    Supports both single component and multiple components (bulk query).
+    
+    Single: {"deliverable_code": "deck_strategy", "component": "brief"}
+    Bulk: {"deliverable_code": "deck_strategy", "component": ["brief", "art_direction"]}
+    
+    Returns merged, deduplicated list of L3 tasks.
     """
     if not DB.loaded:
         DB.load()
     
-    dcode = str(payload.get("deliverable", "")).strip()
-    comp = str(payload.get("component", "")).strip()
+    dcode = str(p.deliverable_code).strip()
+    # Handle both string and list inputs
+    comps = p.component if isinstance(p.component, list) else [p.component]
+    comps = [str(c).strip() for c in comps]
+    
     df = DB.all_rows.copy()
+    out: set[str] = set()
     
-    rows = df[(df["Deliverable_Code"] == dcode) & (df["Component"] == comp)]
+    for comp in comps:
+        if not comp:
+            continue
+            
+        rows = df[(df["Deliverable_Code"] == dcode) & (df["Component"] == comp)]
+        
+        # Prefer Task_Label (normalized), fallback to task_group if empty
+        label_col = "Task_Label"
+        if label_col not in rows.columns or rows[label_col].eq("").all():
+            label_col = "task_group" if "task_group" in rows.columns else None
+        
+        if label_col:
+            tasks = rows[label_col].fillna("").astype(str).str.strip().tolist()
+            for task in tasks:
+                if task:
+                    out.add(task)
     
-    # Prefer Task_Label (normalized), fallback to task_group if empty
-    label_col = "Task_Label"
-    if label_col not in rows.columns or rows[label_col].eq("").all():
-        label_col = "task_group" if "task_group" in rows.columns else None
-    
-    tasks = []
-    if label_col:
-        tasks = rows[label_col].fillna("").astype(str).str.strip().tolist()
-    tasks = sorted({t for t in tasks if t})
-    
-    return tasks
+    return {
+        "deliverable_code": dcode,
+        "components": comps,
+        "l3": sorted(out)
+    }
 
 @app.get("/api/db/status")
 def db_status():
