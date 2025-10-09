@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.venv
+venv/
+ENV/
+
+# Test outputs and exports
+test_outputs/
+*.xml
+*.xlsx
+*.csv
+!AI_Matching_Rules_full.xlsx
+!Replit_App_DB_READABLE_FullRows_v3.xlsx
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+/tmp/
+
+# Replit
+.replit
+.config/
+.upm/
+.cache/
+.local/
+.pythonlibs/

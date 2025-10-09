@@ -18,10 +18,19 @@ Preferred communication style: Simple, everyday language.
 - **Weighted Scoring API**: New `/api/step2/ai/weights` endpoint provides 0-100% match percentages
   - Returns Service Department → Deliverable → Match % with detailed explanations
   - Example: "Paid Media Buying & Activation" correctly scores 97.38% for paid media RFPs
-- **Ask AI for Suggestions Button**: New UI feature in Step 2 for deliverable recommendations
+- **Interactive AI Suggestions Panel**: Enhanced UI for deliverable recommendations with full user control
   - Purple gradient button "🤖 Ask AI for Deliverable Suggestions"
-  - TCGWeights.render() displays weighted match results table
-  - Shows top components and tasks for each matched deliverable
+  - Checkboxes for selective application (shows already-selected items grayed out)
+  - "Select All" and "Select Top 3" quick actions
+  - "Apply Selected Deliverables" button batch-adds selections via APB.step2.addDeliverables()
+  - Real-time selection counter (e.g., "3 of 8 selected")
+  - Weighted match results table shows Service Dept → Deliverable → Match % with expandable components/tasks
+- **GPT-5 Pre-filter Enhancement**: Auto-suggest now uses weighted rules for improved accuracy
+  - When deliverable selected, first calls `/api/step2/ai/weights` for rule-based context
+  - Extracts top components and tasks as weighted_context
+  - Passes weighted_context to GPT-5 with PRIORITY instruction highlighting top 3 components
+  - Response includes `used_weighted_prefilter: true` flag when context applied
+  - Reduces GPT-5 API costs by providing better targeting context
 - **Simplified Scenarios**: Removed Scenario B and C from entire UI for cleaner user experience
   - Steps 3, 4, 5 now only show Scenario A
   - JavaScript updated with null checks to prevent errors
