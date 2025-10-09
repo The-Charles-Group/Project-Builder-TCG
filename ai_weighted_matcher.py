@@ -210,14 +210,25 @@ def score_rfp(rfp_text: str,
     agg = aggregate_scores(index_df, lex_scores, rules, rule_hits, config)
     final = normalize_to_percent(agg, min_threshold=float(config.get("min_score_threshold", 0.02)))
 
-    # Attach names / service departments for convenience if provided
-    delivery = []
+    # Build mapping from AI_Index (which has deliverable names and service departments)
+    # Get L1 rows only for the mapping
+    l1_rows = index_df[index_df["Level"] == "L1"].copy()
+    map_name = {}
+    for _, r in l1_rows.iterrows():
+        code = str(r["Deliverable_Code"])
+        name = str(r.get("Deliverable", code))
+        dept = str(r.get("Service_Department", ""))
+        map_name[code] = (name, dept)
+    
+    # If external deliverable_index_df provided, prefer those names (for consistency with main app)
     if deliverable_index_df is not None:
-        map_name = {str(r["Deliverable_Code"]): (str(r["Deliverable"]), str(r.get("Service_Department", "")))
-                    for _, r in deliverable_index_df.iterrows()}
-    else:
-        map_name = {}
+        for _, r in deliverable_index_df.iterrows():
+            code = str(r["Deliverable_Code"])
+            name = str(r.get("Deliverable", code))
+            dept = str(r.get("Service_Department", ""))
+            map_name[code] = (name, dept)
 
+    delivery = []
     for code, data in final.items():
         name, dept = map_name.get(str(code), (code, ""))
         delivery.append({
