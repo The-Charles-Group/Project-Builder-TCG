@@ -81,11 +81,9 @@ WF_COLUMNS = [
 # at top, near other env helpers
 PRIMARY = os.getenv("APB_PRIMARY_DB_VERSION", "v4").lower()  # 'v3' or 'v4'
 
-# Scenario multipliers for A/B/C differentiation
+# Scenario multipliers for A only (B/C removed for simplicity)
 SCENARIO_MULT = {
-    "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True},
-    "B": {"hours_mult": 1.15, "qa_pct": 0.07, "pm_pct": 0.12, "strip_optional": False},
-    "C": {"hours_mult": 1.30, "qa_pct": 0.10, "pm_pct": 0.15, "include_addons": True}
+    "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True}
 }
 
 # US & Mexico holidays for business day calendar
@@ -2181,7 +2179,6 @@ class ScenarioSpec(BaseModel):
 class BuildPayload(BaseModel):
     selected_deliverable_codes: List[str]
     scenario_a: Optional[ScenarioSpec] = None
-    scenario_b: Optional[ScenarioSpec] = None
     pricing_mode: str = "Flat_Blended"                       # "Flat_Blended" or "Per_Resource"
     blended_rate: Optional[float] = None
     rate_band: Optional[str] = "Standard_US"
@@ -2201,7 +2198,6 @@ class BuildPayload(BaseModel):
 class AutoBuildPayload(BaseModel):
     rfp_text: str
     scenario_a: ScenarioSpec
-    scenario_b: ScenarioSpec
     pricing_mode: str                       # "Flat_Blended" or "Per_Resource"
     blended_rate: Optional[float] = None
     rate_band: Optional[str] = "Standard_US"
@@ -2221,24 +2217,6 @@ class ExportPayload(BaseModel):
     scenario_label: Optional[str] = None     # e.g., "Scenario A"
     add_timestamp: Optional[bool] = False    # include yyyymmdd-HHMM in filename?                # a scenario dict returned from /api/build
 
-class ExportWorkbookPayload(BaseModel):
-    scenario_a: dict
-    scenario_b: dict
-    project_name: str | None = None
-    sheet_name_a: str | None = "Scenario A"
-    sheet_name_b: str | None = "Scenario B"
-    add_timestamp: bool | None = False
-
-class ExportWorkbookABCPayload(BaseModel):
-    scenario_a: dict
-    scenario_b: dict
-    scenario_c: dict
-    project_name: str | None = None
-    sheet_name_a: str | None = "Scenario A"
-    sheet_name_b: str | None = "Scenario B"
-    sheet_name_c: str | None = "Scenario C"
-    add_timestamp: bool | None = False
-
 class ExportXMLPayload(BaseModel):
     scenario: Optional[Dict[str, Any]] = None
     project_name: Optional[str] = None
@@ -2248,22 +2226,6 @@ class ExportXMLPayload(BaseModel):
     fixed_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
     hours_per_day: float = 8.0
     merge_identical_children: bool = False
-
-class ExportWorkbookXMLPayload(BaseModel):
-    scenario_a: Optional[Dict[str, Any]] = None
-    scenario_b: Optional[Dict[str, Any]] = None  
-    project_name: Optional[str] = None
-    project_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
-    merge_identical_children: bool = False
-
-class ExportWorkbookXMLABCPayload(BaseModel):
-    scenario_a: Optional[Dict[str, Any]] = None
-    scenario_b: Optional[Dict[str, Any]] = None
-    scenario_c: Optional[Dict[str, Any]] = None
-    project_name: Optional[str] = None
-    start_date_mode: str = "next_monday"   # "next_monday" | "fixed"
-    fixed_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
-    hours_per_day: float = 8.0
 
 class AuditPricingPayload(BaseModel):
     scenario: Dict[str, Any]           # scenario object from /api/build
