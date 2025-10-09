@@ -1009,17 +1009,25 @@ class AgencyDB:
             return 0.0
         base = float(tp["Nominal_Duration_Days"].iloc[0])
 
-        # Scaling
-        cw = self.timeline_weighting[self.timeline_weighting["Task_Group"]==task_group]
-        wc = float(cw["Weight_Complexity"].iloc[0]) if not cw.empty else 0.6
-        wt = float(cw["Weight_Tier"].iloc[0])        if not cw.empty else 0.4
+        # Scaling - with None checks for v3 database compatibility
+        if self.timeline_weighting is not None:
+            cw = self.timeline_weighting[self.timeline_weighting["Task_Group"]==task_group]
+            wc = float(cw["Weight_Complexity"].iloc[0]) if not cw.empty else 0.6
+            wt = float(cw["Weight_Tier"].iloc[0])        if not cw.empty else 0.4
+        else:
+            wc = 0.6  # Default weight for complexity
+            wt = 0.4  # Default weight for tier
 
-        cm = self.timeline_scaling[(self.timeline_scaling["Scale_Type"]=="Complexity") &
-                                   (self.timeline_scaling["Key"]==complexity)]
-        tm = self.timeline_scaling[(self.timeline_scaling["Scale_Type"]=="Tier") &
-                                   (self.timeline_scaling["Key"]==tier)]
-        cmult = float(cm["Multiplier"].iloc[0]) if not cm.empty else 1.0
-        tmult = float(tm["Multiplier"].iloc[0]) if not tm.empty else 1.0
+        if self.timeline_scaling is not None:
+            cm = self.timeline_scaling[(self.timeline_scaling["Scale_Type"]=="Complexity") &
+                                       (self.timeline_scaling["Key"]==complexity)]
+            tm = self.timeline_scaling[(self.timeline_scaling["Scale_Type"]=="Tier") &
+                                       (self.timeline_scaling["Key"]==tier)]
+            cmult = float(cm["Multiplier"].iloc[0]) if not cm.empty else 1.0
+            tmult = float(tm["Multiplier"].iloc[0]) if not tm.empty else 1.0
+        else:
+            cmult = 1.0  # Default multiplier
+            tmult = 1.0  # Default multiplier
 
         dur = base * (1 + (cmult - 1)*wc) * (1 + (tmult - 1)*wt)
         if use_slack and slack_global_pct > 0:
@@ -2172,9 +2180,9 @@ class ScenarioSpec(BaseModel):
 
 class BuildPayload(BaseModel):
     selected_deliverable_codes: List[str]
-    scenario_a: ScenarioSpec
-    scenario_b: ScenarioSpec
-    pricing_mode: str                       # "Flat_Blended" or "Per_Resource"
+    scenario_a: Optional[ScenarioSpec] = None
+    scenario_b: Optional[ScenarioSpec] = None
+    pricing_mode: str = "Flat_Blended"                       # "Flat_Blended" or "Per_Resource"
     blended_rate: Optional[float] = None
     rate_band: Optional[str] = "Standard_US"
     use_slack: bool = True
@@ -3455,13 +3463,20 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
 
 @app.post("/api/build")
 def api_build(payload: BuildPayload):
-    if not DB.loaded:
-        DB.load()
+    try:
+        print(f"DEBUG: api_build called with {len(payload.selected_deliverable_codes)} deliverables")
+        if not DB.loaded:
+            DB.load()
 
-    # Prepare UI intent
-    pricing_mode = payload.pricing_mode
-    blended_rate = payload.blended_rate
-    rate_band    = payload.rate_band or "Standard_US"
+        # Prepare UI intent
+        pricing_mode = payload.pricing_mode
+        blended_rate = payload.blended_rate
+        rate_band    = payload.rate_band or "Standard_US"
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"ERROR in api_build initialization: {error_details}")
+        raise HTTPException(500, f"Build initialization error: {str(e)}")
 
     # Slack/timeline
     use_slack = bool(payload.use_slack)
@@ -3507,7 +3522,11 @@ def api_build(payload: BuildPayload):
 
     # Build scenarios
     scenarios = {}
-    for letter, spec_in in [("A", payload.scenario_a), ("B", payload.scenario_b)]:
+    # Set default scenarios if not provided
+    default_spec_a = ScenarioSpec(mode="template", scenario_key="MED_LOW")
+    default_spec_b = ScenarioSpec(mode="template", scenario_key="MED_HIGH")
+    
+    for letter, spec_in in [("A", payload.scenario_a or default_spec_a), ("B", payload.scenario_b or default_spec_b)]:
         per_deliv = []
         for code in payload.selected_deliverable_codes:
             row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
