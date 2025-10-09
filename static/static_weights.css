@@ -1,0 +1,8 @@
+
+.tcg-weights { margin: 12px 0 20px; }
+.tcg-weights-table { width: 100%; border-collapse: collapse; }
+.tcg-weights-table th, .tcg-weights-table td { padding: 8px 10px; border-bottom: 1px solid #e5e5e5; }
+.tcg-weights-table th { text-align: left; }
+.tcg-subhead { margin: 8px 0 6px; font-weight: 600; font-size: 0.95rem; }
+.tcg-chip { display: inline-block; border: 1px solid #ddd; padding: 4px 8px; border-radius: 12px; margin: 3px 6px 3px 0; font-size: 0.85rem; }
+.tcg-chip-pct { font-weight: 700; }
