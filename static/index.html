@@ -522,6 +522,22 @@
           await window.initStep2DeliverablePicker(scenarios);
         }
         
+        // Sync merged RFP text to frontend state for Step 2 AI features
+        try {
+          const cacheRes = await fetch('/api/rfp/cache');
+          if (cacheRes.ok) {
+            const cacheData = await cacheRes.json();
+            if (cacheData.text) {
+              if (window.APB?.step2) {
+                window.APB.step2.rfpText = cacheData.text;
+              }
+              sessionStorage.setItem('apb.rfp_text', cacheData.text);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not sync RFP cache to frontend:', e);
+        }
+        
       } catch (error) {
         alert('Error analyzing file: ' + error.message);
       } finally {
@@ -636,6 +652,22 @@
         // Initialize Step 2 picker with the built scenarios
         if (window.initStep2DeliverablePicker) {
           await window.initStep2DeliverablePicker(autoData.scenarios);
+        }
+        
+        // Sync RFP text to frontend state for Step 2 AI features
+        try {
+          const cacheRes = await fetch('/api/rfp/cache');
+          if (cacheRes.ok) {
+            const cacheData = await cacheRes.json();
+            if (cacheData.text) {
+              if (window.APB?.step2) {
+                window.APB.step2.rfpText = cacheData.text;
+              }
+              sessionStorage.setItem('apb.rfp_text', cacheData.text);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not sync RFP cache to frontend:', e);
         }
         
       } catch (error) {

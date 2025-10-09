@@ -29,8 +29,10 @@ app = FastAPI(title="Agency Project Builder", version="1.0")
 # Global to track last uploaded filename for export defaults
 LAST_UPLOAD_FILENAME: str | None = None
 
-# Global RFP text cache for Step 1 → Step 2 handoff
-RFP_TEXT_CACHE: str | None = None
+# Global RFP text caches for Step 1 → Step 2 handoff
+RFP_TEXT_CACHE_TEXTAREA: str | None = None  # Text from textarea input
+RFP_TEXT_CACHE_FILE: str | None = None       # Text from uploaded file
+RFP_TEXT_CACHE: str | None = None            # Merged text (backward compatibility)
 
 # Configure file upload limits - allow up to 20MB files
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -2606,8 +2608,22 @@ def api_last_upload_name():
 @app.post("/api/rfp/cache")
 async def cache_rfp_text(text: str = Form(...)):
     """Cache RFP text from Step 1 for reuse in Step 2 Refresh AI Suggestions."""
-    global RFP_TEXT_CACHE
-    RFP_TEXT_CACHE = text.strip() or None
+    global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE
+    
+    RFP_TEXT_CACHE_TEXTAREA = text.strip() or None
+    textarea_text = RFP_TEXT_CACHE_TEXTAREA or ""
+    file_text = (RFP_TEXT_CACHE_FILE or "").strip()
+    
+    # Combine both sources with clear separator
+    if textarea_text and file_text:
+        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_text}"
+    elif file_text:
+        merged_text = file_text
+    else:
+        merged_text = textarea_text
+    
+    # Cache merged text for backward compatibility
+    RFP_TEXT_CACHE = merged_text
     return {"ok": True}
 
 @app.get("/api/rfp/cache")
@@ -3280,14 +3296,31 @@ async def api_suggest_by_file(file: UploadFile = File(...)):
     if len(text) > 200_000:
         text = text[:200_000]
 
-    recs = DB.suggest_deliverables_from_text(text or "")
+    # Store file text separately and merge with textarea text if present
+    global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
+    
+    RFP_TEXT_CACHE_FILE = (text or "").strip()
+    textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
+    file_text = RFP_TEXT_CACHE_FILE
+    
+    # Combine both sources with clear separator
+    if textarea_text and file_text:
+        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_text}"
+    elif file_text:
+        merged_text = file_text
+    else:
+        merged_text = textarea_text
+    
+    # Cache merged text for backward compatibility
+    RFP_TEXT_CACHE = merged_text
+    
+    recs = DB.suggest_deliverables_from_text(merged_text or "")
     # NEW: attach retainer hints per deliverable
     for r in recs:
-        is_ret, months = DB.retainer_recommendation(text or "", r.get("deliverable",""))
+        is_ret, months = DB.retainer_recommendation(merged_text or "", r.get("deliverable",""))
         r["retainer_hint"] = bool(is_ret)
         r["retainer_months_suggested"] = int(months or 0)
     # NEW: remember for default project name
-    global LAST_UPLOAD_FILENAME
     LAST_UPLOAD_FILENAME = file.filename
     return {"suggested": recs, "filename": file.filename}
 
@@ -4556,7 +4589,26 @@ def api_audit_pricing(p: AuditPricingPayload):
 def api_summarize(p: SummarizePayload):
     if not p.rfp_text:
         raise HTTPException(400, "rfp_text is required for /api/summarize (use /api/summarize_by_file for uploads).")
-    return ai_summarize_rfp_text(p.rfp_text)
+    
+    # Store textarea text separately and merge with file text if present
+    global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE
+    
+    RFP_TEXT_CACHE_TEXTAREA = (p.rfp_text or "").strip() or None
+    textarea_text = RFP_TEXT_CACHE_TEXTAREA or ""
+    file_text = (RFP_TEXT_CACHE_FILE or "").strip()
+    
+    # Combine both sources with clear separator
+    if textarea_text and file_text:
+        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_text}"
+    elif file_text:
+        merged_text = file_text
+    else:
+        merged_text = textarea_text
+    
+    # Cache merged text for backward compatibility
+    RFP_TEXT_CACHE = merged_text
+    
+    return ai_summarize_rfp_text(merged_text)
 
 @app.post("/api/summarize_by_file", response_model=RfpSummary)
 async def api_summarize_by_file(file: UploadFile = File(...)):
@@ -4567,10 +4619,28 @@ async def api_summarize_by_file(file: UploadFile = File(...)):
     # Hard cap already present in /api/suggest_by_file; can reapply if desired
     if len(text) > 200_000:
         text = text[:200_000]
+    
+    # Store file text separately and merge with textarea text if present
+    global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
+    
+    RFP_TEXT_CACHE_FILE = (text or "").strip()
+    textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
+    file_text = RFP_TEXT_CACHE_FILE
+    
+    # Combine both sources with clear separator
+    if textarea_text and file_text:
+        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_text}"
+    elif file_text:
+        merged_text = file_text
+    else:
+        merged_text = textarea_text
+    
+    # Cache merged text for backward compatibility
+    RFP_TEXT_CACHE = merged_text
+    
     # NEW: remember for default project name
-    global LAST_UPLOAD_FILENAME
     LAST_UPLOAD_FILENAME = file.filename
-    return ai_summarize_rfp_text(text)
+    return ai_summarize_rfp_text(merged_text)
 
 @app.post("/api/retainer_detect")
 def api_retainer_detect(p: dict):
