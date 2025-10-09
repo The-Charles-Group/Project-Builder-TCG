@@ -47,7 +47,9 @@ window.APB.step2 = {
     compList: null,
     compTitle: null,
     compDone: null,
-  }
+  },
+  // API methods (will be wired after boot)
+  addDeliverables: null                          // batch add deliverables (for AI suggestions)
 };
 
 // Export selectionStore globally for access
@@ -241,6 +243,30 @@ async function selectDeliverable(code) {
   if (window.renderComponentsPanel) renderComponentsPanel(code);
   if (window.renderSummary) renderSummary();
 }
+
+// Batch add multiple deliverables (used by AI suggestions)
+async function addDeliverables(codes) {
+  if (!codes || codes.length === 0) return;
+  
+  // Add all codes to selection
+  for (const code of codes) {
+    selectionStore.deliverables.add(code);
+  }
+  APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
+  
+  // Hydrate components for all new deliverables
+  for (const code of codes) {
+    await hydrateComponentsFor(code);
+  }
+  
+  // Re-render all panels once
+  if (window.renderDeliverablesPanel) renderDeliverablesPanel();
+  if (window.renderSummary) renderSummary();
+  if (window.updateSummaryCounts) updateSummaryCounts();
+}
+
+// Wire addDeliverables to APB.step2 API
+APB.step2.addDeliverables = addDeliverables;
 
 async function deselectDeliverable(code) {
   selectionStore.deliverables.delete(code);
@@ -1126,17 +1152,50 @@ async function onDeliverableToggle(code, checked) {
     if (AUTO_SUGGEST_ON_SELECT && !hasComponents) {
       if (USE_GPT_FOR_AUTOSUGGEST) {
         try {
+          // STEP 1: Get weighted rule matches as pre-filter context
+          const rfpText = APB.step2.rfpText || document.getElementById('rfpText')?.value || '';
+          let weightedContext = null;
+          
+          if (rfpText) {
+            try {
+              const weightsRes = await fetch('/api/step2/ai/weights', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rfp_text: rfpText })
+              });
+              if (weightsRes.ok) {
+                weightedContext = await weightsRes.json();
+              }
+            } catch (err) {
+              console.warn('Weighted pre-filter unavailable, proceeding without:', err);
+            }
+          }
+          
+          // STEP 2: Call GPT-5 with weighted context for smarter suggestions
           const exclude = [];
+          const requestBody = {
+            deliverable_code: code,
+            include_l3: true,
+            top_components: 6,
+            top_l3_per_component: 20,
+            exclude_labels: exclude
+          };
+          
+          // Include weighted matches as context for GPT-5
+          if (weightedContext && weightedContext.deliverables) {
+            requestBody.weighted_context = weightedContext.deliverables
+              .filter(d => d.deliverable_code === code)
+              .map(d => ({
+                match_percent: d.match_percent,
+                top_components: (weightedContext.components && weightedContext.components[code]) || [],
+                top_tasks: (weightedContext.tasks && weightedContext.tasks[code]) || []
+              }))[0] || null;
+          }
+          
           const res = await fetch("/api/step2/ai/suggest", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              deliverable_code: code,
-              include_l3: true,
-              top_components: 6,
-              top_l3_per_component: 20,
-              exclude_labels: exclude
-            })
+            body: JSON.stringify(requestBody)
           });
           const ai = await res.json();
 

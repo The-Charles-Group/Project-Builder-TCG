@@ -2974,6 +2974,7 @@ class AISuggestReq(BaseModel):
     top_l3_per_component: int = 12
     rfp_text: str | None = None
     exclude_labels: List[str] | None = None
+    weighted_context: dict | None = None  # Pre-filter context from weighted rules
 
 def _component_catalog_for_deliverable(db: AgencyDB, dcode: str, max_tasks_per_comp: int = 40) -> Dict[str, List[str]]:
     """Return {component: [top task labels]} limited for token safety."""
@@ -3034,10 +3035,24 @@ def _rules_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
 
 def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
                                 top_components: int, top_l3: int,
-                                exclude: set[str]) -> dict:
+                                exclude: set[str], weighted_context: dict = None) -> dict:
     catalog = _component_catalog_for_deliverable(db, dcode, 60)
     drow = db.deliverables[db.deliverables["Deliverable_Code"].astype(str)==str(dcode)]
     dname = str(drow["Deliverable"].iloc[0]) if not drow.empty else dcode
+
+    instructions = [
+        "Pick components that best respond to the RFP.",
+        "Only choose components and tasks that exist in the catalog.",
+        "Avoid duplicated tasks across components (use exclude_labels and dedupe).",
+        "Prefer tasks that reflect real client-facing outcomes and the typical workflow.",
+        "Return JSON ONLY in the schema below; do not add fields."
+    ]
+    
+    # Add weighted context hint if available
+    if weighted_context and weighted_context.get("top_components"):
+        top_comps = [c.get("component") for c in weighted_context["top_components"][:3]]
+        if top_comps:
+            instructions.insert(0, f"PRIORITY: Rule-based analysis suggests these components are highly relevant: {', '.join(top_comps)}. Consider these first.")
 
     user_payload = {
         "rfp_summary": (rfp or "")[:12000],
@@ -3046,13 +3061,7 @@ def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
         "top_components": top_components,
         "top_l3_per_component": top_l3,
         "exclude_labels": sorted(list(exclude)),
-        "instructions": [
-            "Pick components that best respond to the RFP.",
-            "Only choose components and tasks that exist in the catalog.",
-            "Avoid duplicated tasks across components (use exclude_labels and dedupe).",
-            "Prefer tasks that reflect real client-facing outcomes and the typical workflow.",
-            "Return JSON ONLY in the schema below; do not add fields."
-        ],
+        "instructions": instructions,
         "return_schema": {
             "type": "object",
             "properties": {
@@ -3141,8 +3150,13 @@ def ai_suggest(req: AISuggestReq):
     exclude = { (x or "").strip().lower() for x in (req.exclude_labels or []) }
 
     try:
-        payload = _gpt_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
+        payload = _gpt_pick_components_and_l3(
+            db, d, rfp, req.top_components, req.top_l3_per_component, 
+            exclude, weighted_context=req.weighted_context
+        )
         payload["model_used"] = OPENAI_MODEL
+        if req.weighted_context:
+            payload["used_weighted_prefilter"] = True
     except Exception as e:
         print(f"GPT suggest fallback to rules: {e}")
         payload = _rules_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
