@@ -27,6 +27,11 @@ try:
 except Exception:
     PdfReader = None
 
+try:
+    from PIL import Image  # pip install pillow
+except Exception:
+    Image = None
+
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0")
 
@@ -1670,8 +1675,30 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
             try:
                 img_start = datetime.datetime.now().timestamp()
                 
-                # Convert image to base64
-                img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                # Convert image to PNG format for OpenAI compatibility
+                if Image:
+                    try:
+                        # Load image from bytes
+                        img = Image.open(io.BytesIO(img_bytes))
+                        
+                        # Convert to RGB if needed (handles CMYK, grayscale, palette modes, etc.)
+                        if img.mode not in ('RGB', 'RGBA'):
+                            img = img.convert('RGB')
+                        
+                        # Save as PNG to buffer
+                        png_buffer = io.BytesIO()
+                        img.save(png_buffer, format='PNG')
+                        img_base64 = base64.b64encode(png_buffer.getvalue()).decode('utf-8')
+                        image_format = "png"
+                    except Exception as conv_error:
+                        # Fallback to raw bytes if conversion fails
+                        print(f"[JOB {job_id}] Image conversion failed for image {img_index} on page {page_num}, using raw bytes: {conv_error}")
+                        img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                        image_format = "jpeg"
+                else:
+                    # PIL not available, use raw bytes
+                    img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                    image_format = "jpeg"
                 
                 # Analyze image with OpenAI Vision (synchronous call wrapped in executor)
                 loop = asyncio.get_event_loop()
@@ -1690,7 +1717,7 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
                                     {
                                         "type": "image_url",
                                         "image_url": {
-                                            "url": f"data:image/jpeg;base64,{img_base64}"
+                                            "url": f"data:image/{image_format};base64,{img_base64}"
                                         }
                                     }
                                 ]
