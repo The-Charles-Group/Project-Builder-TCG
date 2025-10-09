@@ -51,8 +51,96 @@ Preferred communication style: Simple, everyday language.
 - **Jinja2**: Template engine.
 - **Uvicorn**: ASGI server.
 - **OpenAI Vision API**: For parallel image processing and analysis.
+- **psycopg2-binary**: PostgreSQL database adapter.
 
 ### File Format Support
 - **Excel/CSV**: Core data source.
 - **PDF/DOCX**: For RFP document parsing.
 - **JSON**: For API data exchange.
+
+## Database Configuration
+
+### Development vs Production Database
+The application uses **automatic database switching** based on the environment:
+
+#### **Development Environment** (Current)
+- Uses Replit's built-in PostgreSQL database
+- Connection via `DATABASE_URL` environment variable
+- Database credentials available as environment variables: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`
+- Safe for testing and feature development
+- Database: Neon PostgreSQL 16.9
+
+#### **Production Environment** (When Published)
+- Automatically switches to production database
+- Connection string stored in `/tmp/replitdb` file
+- Completely separate from development database
+- Ensures production data is isolated from development
+
+### How to Use the Database
+
+#### **In Your Code**
+Use the `database.py` helper module to get the correct database connection:
+
+```python
+from database import get_database_url, get_connection_params
+
+# Get the full database URL (works in both dev and production)
+db_url = get_database_url()
+
+# Or get individual connection parameters
+params = get_connection_params()
+# params = {"host": "...", "port": 5432, "user": "...", "password": "...", "database": "..."}
+```
+
+The helper automatically:
+1. Checks for `/tmp/replitdb` (production) first
+2. Falls back to `DATABASE_URL` environment variable (development)
+3. Prints which environment is being used
+
+#### **Testing the Connection**
+Run the test script to verify database connectivity:
+```bash
+python test_db_connection.py
+```
+
+### Publishing with Production Database
+
+When you're ready to publish your app:
+
+1. **Click "Publish"** in Replit
+2. **Enable "Production Database"** option in the publish settings
+3. **Deploy** - Replit automatically creates `/tmp/replitdb` with production credentials
+4. **Your app automatically connects** to the production database (no code changes needed!)
+
+### Adding Database Models
+
+Database models should be defined in `models.py`. Example using SQLAlchemy:
+
+```python
+from sqlalchemy import Column, Integer, String, DateTime, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from database import get_database_url
+from datetime import datetime
+
+Base = declarative_base()
+
+class YourModel(Base):
+    __tablename__ = 'your_table'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+# Create tables
+engine = create_engine(get_database_url())
+Base.metadata.create_all(engine)
+
+# Use in your app
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+```
+
+### Database Files
+- `database.py` - Connection helper with automatic dev/prod switching
+- `models.py` - Database models template (add your models here)
+- `test_db_connection.py` - Test script to verify connection
