@@ -1,11 +1,15 @@
 import os, re, io, math, json, datetime, urllib.parse, tempfile, base64
+import uuid
+import asyncio
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from zoneinfo import ZoneInfo  # Python 3.9+
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
 from ai_weighted_matcher import score_rfp
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +29,70 @@ except Exception:
 
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0")
+
+# ---------- Job Tracking System for Async Image Processing ----------
+class JobStatus(str, Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+@dataclass
+class JobState:
+    job_id: str
+    status: JobStatus
+    total_images: int = 0
+    processed_images: int = 0
+    start_time: float = field(default_factory=lambda: datetime.datetime.now().timestamp())
+    end_time: Optional[float] = None
+    errors: List[str] = field(default_factory=list)
+    result_text: Optional[str] = None
+    image_timings: List[float] = field(default_factory=list)  # Track time per image for ETA
+    cancelled: bool = False
+    
+    @property
+    def percentage(self) -> float:
+        if self.total_images == 0:
+            return 100.0
+        return (self.processed_images / self.total_images) * 100
+    
+    @property
+    def eta_seconds(self) -> Optional[float]:
+        """Estimate time remaining based on rolling average of image processing times"""
+        if self.total_images == 0 or self.processed_images == 0:
+            return None
+        
+        remaining = self.total_images - self.processed_images
+        if remaining == 0:
+            return 0.0
+        
+        # Use rolling average of last 3 image timings for better accuracy
+        recent_timings = self.image_timings[-3:] if len(self.image_timings) > 0 else []
+        if not recent_timings:
+            return None
+        
+        avg_time_per_image = sum(recent_timings) / len(recent_timings)
+        return remaining * avg_time_per_image
+
+# In-memory job store with automatic cleanup
+JOB_STORE: Dict[str, JobState] = {}
+JOB_TTL_SECONDS = 3600  # Clean up jobs after 1 hour
+
+async def cleanup_old_jobs():
+    """Remove completed/failed jobs older than TTL"""
+    now = datetime.datetime.now().timestamp()
+    to_remove = []
+    
+    for job_id, job in JOB_STORE.items():
+        if job.end_time and (now - job.end_time > JOB_TTL_SECONDS):
+            to_remove.append(job_id)
+    
+    for job_id in to_remove:
+        del JOB_STORE[job_id]
+    
+    if to_remove:
+        print(f"[JOB CLEANUP] Removed {len(to_remove)} expired jobs")
 
 # Global to track last uploaded filename for export defaults
 LAST_UPLOAD_FILENAME: str | None = None
@@ -1594,11 +1662,84 @@ def _extract_text_from_upload(content: bytes, filename: str) -> str:
 
     raise HTTPException(415, f"Unsupported file type: {ext}. Use .pdf, .docx, or .txt.")
 
-# ---------- Helper: extract and analyze images from PDFs ----------
-def _extract_and_analyze_pdf_images(content: bytes, filename: str) -> str:
+# ---------- Helper: extract and analyze images from PDFs (with parallel processing) ----------
+async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index: int, semaphore: asyncio.Semaphore, job_id: str) -> Optional[str]:
+    """Analyze a single image with retry logic and rate limit handling"""
+    async with semaphore:  # Limit concurrent OpenAI calls
+        for attempt in range(3):  # Retry up to 3 times
+            try:
+                img_start = datetime.datetime.now().timestamp()
+                
+                # Convert image to base64
+                img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                
+                # Analyze image with OpenAI Vision (synchronous call wrapped in executor)
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: openai_client.chat.completions.create(
+                        model="gpt-5",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "Analyze this image from an RFP document. Describe what it shows: charts, diagrams, mockups, screenshots, or other visual content. Focus on business requirements and deliverables it implies."
+                                    },
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:image/jpeg;base64,{img_base64}"
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        max_completion_tokens=500
+                    )
+                )
+                
+                description = response.choices[0].message.content
+                img_end = datetime.datetime.now().timestamp()
+                
+                # Update job timing
+                if job_id in JOB_STORE:
+                    JOB_STORE[job_id].image_timings.append(img_end - img_start)
+                    JOB_STORE[job_id].processed_images += 1
+                
+                return f"Page {page_num}, Image {img_index}: {description}"
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "rate" in error_msg or "429" in error_msg:
+                    # Rate limit - wait and retry
+                    wait_time = (attempt + 1) * 2  # 2s, 4s, 6s
+                    print(f"[JOB {job_id}] Rate limit hit, waiting {wait_time}s before retry {attempt+1}/3")
+                    await asyncio.sleep(wait_time)
+                elif "timeout" in error_msg:
+                    # Timeout - retry with backoff
+                    wait_time = attempt + 1
+                    print(f"[JOB {job_id}] Timeout, retrying in {wait_time}s (attempt {attempt+1}/3)")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # Other error - log and give up
+                    if job_id in JOB_STORE:
+                        JOB_STORE[job_id].errors.append(f"Image {img_index} on page {page_num}: {str(e)}")
+                        JOB_STORE[job_id].processed_images += 1  # Count as processed to keep progress moving
+                    print(f"[JOB {job_id}] Error analyzing image {img_index} on page {page_num}: {e}")
+                    return None
+        
+        # All retries failed
+        if job_id in JOB_STORE:
+            JOB_STORE[job_id].errors.append(f"Image {img_index} on page {page_num}: Max retries exceeded")
+            JOB_STORE[job_id].processed_images += 1
+        return None
+
+async def _extract_and_analyze_pdf_images_async(content: bytes, filename: str, job_id: str) -> str:
     """
-    Extract images from PDF and analyze them using OpenAI Vision API.
-    Returns a text description of all images found.
+    Extract images from PDF and analyze them in parallel using OpenAI Vision API.
+    Tracks progress via job_id. Returns a text description of all images found.
     """
     ext = os.path.splitext(filename or "")[1].lower()
     if ext != ".pdf":
@@ -1609,55 +1750,120 @@ def _extract_and_analyze_pdf_images(content: bytes, filename: str) -> str:
     
     try:
         reader = PdfReader(io.BytesIO(content))
-        image_descriptions = []
+        image_tasks = []
         
+        # Semaphore to limit concurrent OpenAI API calls (prevents rate limiting)
+        semaphore = asyncio.Semaphore(3)
+        
+        # Extract all images first
         for page_num, page in enumerate(reader.pages, 1):
             if hasattr(page, 'images'):
                 for img_index, image in enumerate(page.images, 1):
                     try:
-                        # Convert image to base64
                         img_bytes = image.data
-                        img_base64 = base64.b64encode(img_bytes).decode('utf-8')
-                        
-                        # Analyze image with OpenAI Vision
-                        # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
-                        # do not change this unless explicitly requested by the user
-                        response = openai_client.chat.completions.create(
-                            model="gpt-5",
-                            messages=[
-                                {
-                                    "role": "user",
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": "Analyze this image from an RFP document. Describe what it shows: charts, diagrams, mockups, screenshots, or other visual content. Focus on business requirements and deliverables it implies."
-                                        },
-                                        {
-                                            "type": "image_url",
-                                            "image_url": {
-                                                "url": f"data:image/jpeg;base64,{img_base64}"
-                                            }
-                                        }
-                                    ]
-                                }
-                            ],
-                            max_completion_tokens=500
-                        )
-                        
-                        description = response.choices[0].message.content
-                        image_descriptions.append(f"Page {page_num}, Image {img_index}: {description}")
-                        
+                        # Create async task for this image
+                        task = _analyze_single_image_async(img_bytes, page_num, img_index, semaphore, job_id)
+                        image_tasks.append(task)
                     except Exception as e:
-                        print(f"Warning: Could not analyze image {img_index} on page {page_num}: {e}")
+                        print(f"[JOB {job_id}] Could not extract image {img_index} from page {page_num}: {e}")
                         continue
         
-        if image_descriptions:
-            return "\n\n--- Visual Content Analysis ---\n\n" + "\n\n".join(image_descriptions)
+        if not image_tasks:
+            return ""  # No images found
+        
+        # Update job with total image count
+        if job_id in JOB_STORE:
+            JOB_STORE[job_id].total_images = len(image_tasks)
+            JOB_STORE[job_id].status = JobStatus.PROCESSING
+        
+        # Process all images in parallel (with semaphore limiting concurrency)
+        image_descriptions = await asyncio.gather(*image_tasks)
+        
+        # Filter out None results (failed analyses)
+        valid_descriptions = [desc for desc in image_descriptions if desc]
+        
+        if valid_descriptions:
+            return "\n\n--- Visual Content Analysis ---\n\n" + "\n\n".join(valid_descriptions)
         return ""
         
     except Exception as e:
-        print(f"Warning: Could not extract images from PDF: {e}")
+        print(f"[JOB {job_id}] Could not extract images from PDF: {e}")
+        if job_id in JOB_STORE:
+            JOB_STORE[job_id].errors.append(f"PDF extraction failed: {str(e)}")
         return ""
+
+# Synchronous wrapper for backward compatibility
+def _extract_and_analyze_pdf_images(content: bytes, filename: str) -> str:
+    """Synchronous wrapper - creates a job and runs async version"""
+    job_id = str(uuid.uuid4())
+    JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
+    
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(_extract_and_analyze_pdf_images_async(content, filename, job_id))
+        loop.close()
+        return result
+    finally:
+        if job_id in JOB_STORE:
+            del JOB_STORE[job_id]  # Clean up sync wrapper jobs immediately
+
+# Background task for async image processing
+async def _process_images_background(content: bytes, filename: str, job_id: str, text_content: str):
+    """Background task to process images and update cache when complete"""
+    global RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, RFP_TEXT_CACHE_TEXTAREA
+    
+    try:
+        # Check for cancellation before starting
+        if job_id in JOB_STORE and JOB_STORE[job_id].cancelled:
+            JOB_STORE[job_id].status = JobStatus.CANCELLED
+            JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
+            return
+        
+        # Run image analysis
+        image_analysis = await _extract_and_analyze_pdf_images_async(content, filename, job_id)
+        
+        # Check for cancellation after processing
+        if job_id in JOB_STORE and JOB_STORE[job_id].cancelled:
+            JOB_STORE[job_id].status = JobStatus.CANCELLED
+            JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
+            return
+        
+        # Combine text and image analysis
+        file_content = text_content
+        if image_analysis:
+            file_content = f"{file_content}\n\n{image_analysis}".strip()
+        
+        # Update caches
+        RFP_TEXT_CACHE_FILE = file_content
+        textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
+        
+        # Combine both sources
+        if textarea_text and file_content:
+            merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_content}"
+        elif file_content:
+            merged_text = file_content
+        else:
+            merged_text = textarea_text
+        
+        RFP_TEXT_CACHE = merged_text
+        
+        # Mark job complete
+        if job_id in JOB_STORE:
+            JOB_STORE[job_id].status = JobStatus.COMPLETED
+            JOB_STORE[job_id].result_text = merged_text
+            JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
+        
+        # Schedule cleanup
+        await asyncio.sleep(1)  # Small delay before cleanup
+        await cleanup_old_jobs()
+        
+    except Exception as e:
+        print(f"[JOB {job_id}] Background processing failed: {e}")
+        if job_id in JOB_STORE:
+            JOB_STORE[job_id].status = JobStatus.FAILED
+            JOB_STORE[job_id].errors.append(f"Processing failed: {str(e)}")
+            JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
 
 # ---------- Helper: sanitize filenames ----------
 def _safe_filename(s: str) -> str:
@@ -2695,6 +2901,42 @@ async def cache_rfp_text(text: str = Form(...)):
 async def get_cached_rfp_text():
     """Retrieve cached RFP text for Step 2."""
     return {"text": RFP_TEXT_CACHE or ""}
+
+@app.get("/api/upload/progress/{job_id}")
+async def get_upload_progress(job_id: str):
+    """Get progress of image analysis job"""
+    if job_id not in JOB_STORE:
+        raise HTTPException(404, f"Job {job_id} not found")
+    
+    job = JOB_STORE[job_id]
+    
+    return {
+        "job_id": job.job_id,
+        "status": job.status.value,
+        "total_images": job.total_images,
+        "processed_images": job.processed_images,
+        "percentage": round(job.percentage, 1),
+        "eta_seconds": round(job.eta_seconds, 1) if job.eta_seconds is not None else None,
+        "errors": job.errors,
+        "result_text": job.result_text
+    }
+
+@app.post("/api/upload/cancel/{job_id}")
+async def cancel_upload(job_id: str):
+    """Cancel an in-progress image analysis job"""
+    if job_id not in JOB_STORE:
+        raise HTTPException(404, f"Job {job_id} not found")
+    
+    job = JOB_STORE[job_id]
+    
+    if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
+        return {"ok": False, "message": f"Job already {job.status.value}"}
+    
+    job.cancelled = True
+    job.status = JobStatus.CANCELLED
+    job.end_time = datetime.datetime.now().timestamp()
+    
+    return {"ok": True, "message": "Job cancelled successfully"}
 
 @app.get("/api/components")
 def list_components(deliverable: str):
