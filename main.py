@@ -81,6 +81,9 @@ WF_COLUMNS = [
 # at top, near other env helpers
 PRIMARY = os.getenv("APB_PRIMARY_DB_VERSION", "v4").lower()  # 'v3' or 'v4'
 
+# XML post-processing: disable parallelization to preserve role-to-role predecessor chains
+PARALLELIZE_IDENTICAL_NAMES = os.getenv("PARALLELIZE_IDENTICAL_NAMES", "false").lower() == "true"
+
 # Scenario multipliers - A only (B/C removed for simplicity)
 SCENARIO_MULT = {
     "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True}
@@ -4015,7 +4018,7 @@ def api_export_xml(payload: ExportXMLPayload):
         
         # Post-process XML to parallelize identical task names (optional)
         final_xml = output_xml
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+        if PARALLELIZE_IDENTICAL_NAMES:
             final_xml = post_process_xml(output_xml)
 
         return FileResponse(
@@ -4088,7 +4091,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
         
         # Post-process Scenario A XML
         final_xml_a = output_xml_a
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+        if PARALLELIZE_IDENTICAL_NAMES:
             final_xml_a = post_process_xml(output_xml_a)
             temp_files.append(final_xml_a)
         
@@ -4118,7 +4121,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
         
         # Post-process Scenario B XML
         final_xml_b = output_xml_b
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+        if PARALLELIZE_IDENTICAL_NAMES:
             final_xml_b = post_process_xml(output_xml_b)
             temp_files.append(final_xml_b)
         
@@ -4199,7 +4202,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         )
         # Post-process Scenario A XML
         final_xml_a = out_xml_a
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+        if PARALLELIZE_IDENTICAL_NAMES:
             final_xml_a = post_process_xml(out_xml_a)
             temp_files.append(final_xml_a)
         xml_files.append(("Scenario_A.xml", final_xml_a, stats_a))
@@ -4222,7 +4225,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         )
         # Post-process Scenario B XML
         final_xml_b = out_xml_b
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+        if PARALLELIZE_IDENTICAL_NAMES:
             final_xml_b = post_process_xml(out_xml_b)
             temp_files.append(final_xml_b)
         xml_files.append(("Scenario_B.xml", final_xml_b, stats_b))
@@ -4245,7 +4248,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         )
         # Post-process Scenario C XML
         final_xml_c = out_xml_c
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+        if PARALLELIZE_IDENTICAL_NAMES:
             final_xml_c = post_process_xml(out_xml_c)
             temp_files.append(final_xml_c)
         xml_files.append(("Scenario_C.xml", final_xml_c, stats_c))
@@ -4332,7 +4335,7 @@ def _export_single_scenario_xml(
         
         # Post-process XML to parallelize identical task names (optional)
         final_xml = output_xml
-        if os.getenv("PARALLELIZE_IDENTICAL_NAMES", "true").lower() == "true":
+        if PARALLELIZE_IDENTICAL_NAMES:
             final_xml = post_process_xml(output_xml)
         
         return final_xml
