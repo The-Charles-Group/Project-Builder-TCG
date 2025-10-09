@@ -10,7 +10,17 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 2025)
 
-### Compatibility Wrapper & Response Format Update (Latest - October 9, 2025)
+### Single-Scenario Refactoring (Latest - October 9, 2025)
+- **Complete Removal of Scenarios B and C**: Simplified the entire application to focus on Scenario A only
+  - Backend: Removed B/C from SCENARIO_MULT, Pydantic models, and /api/build loop
+  - Frontend: Removed all B/C rendering, export handlers, and event listeners
+  - /api/build now returns only `{scenarios: {A: {...}}}`
+  - Steps 3, 4, 5 display and export only Scenario A
+  - Removed buildScenarioC, renderUpsellList, and all multi-scenario export functions
+  - Cleaner UX with single-scenario focus throughout Steps 1-5
+- **Architect Review**: ✅ Complete - all B/C references removed, single-scenario contract verified
+
+### Compatibility Wrapper & Response Format Update (October 9, 2025)
 - **Backend Compatibility Wrapper**: /api/build now returns both old and new response formats
   - New format: `{ok: true, scenarios: {A, B}, ...}`
   - Old format: Top-level A/B keys preserved for backward compatibility
@@ -64,9 +74,6 @@ Preferred communication style: Simple, everyday language.
   - Passes weighted_context to GPT-5 with PRIORITY instruction highlighting top 3 components
   - Response includes `used_weighted_prefilter: true` flag when context applied
   - Reduces GPT-5 API costs by providing better targeting context
-- **Simplified Scenarios**: Removed Scenario B and C from entire UI for cleaner user experience
-  - Steps 3, 4, 5 now only show Scenario A
-  - JavaScript updated with null checks to prevent errors
 - **Step 2A Labeling**: Bottom section renamed to "Step 2A: Detail Review & Selection" with visual separator
 
 ### UI & Export Quality Improvements (October 8, 2025)

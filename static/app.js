@@ -390,9 +390,6 @@ async function boot() {
   
   const btnExportA = document.querySelector("#btnExportA");
   if (btnExportA) btnExportA.onclick = () => onExport('A');
-  
-  const btnExportB = document.querySelector("#btnExportB");
-  if (btnExportB) btnExportB.onclick = () => onExport('B');
 
   // UI wiring (new Step 2)
   const proceedBtn = document.querySelector("#btnProceedToStep3");
@@ -2411,7 +2408,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // 2) Seed selection from the most recent scenarios (A/B)
   function seedFromCurrentScenarios(scenarios) {
     const set = new Set();
-    ['A','B'].forEach(letter => {
+    ['A'].forEach(letter => {
       (scenarios?.[letter]?.items || []).forEach(it => set.add(String(it.deliverable_code)));
     });
     if (set.size) state.selected = set;
@@ -3276,7 +3273,6 @@ async function s2ApplyAndBuild() {
   const slackPct     = Number(document.querySelector('#slackGlobalPct')?.value     || 0.05);
   const projectStart = document.querySelector('#projectStart')?.value || null;
   const scenA        = document.querySelector('#scenarioA')?.value || 'MED_LOW';
-  const scenB        = document.querySelector('#scenarioB')?.value || 'MED_HIGH';
 
   // Convert component selections to proper format (handle "__ALL__" sentinel)
   const compMap = {};
@@ -3301,7 +3297,6 @@ async function s2ApplyAndBuild() {
     selected_deliverable_codes: codes,
     selected_components_map: compMap,
     scenario_a: { mode: 'template', scenario_key: scenA },
-    scenario_b: { mode: 'template', scenario_key: scenB },
     pricing_mode: pricingMode,
     blended_rate: pricingMode === 'Flat_Blended' ? blendedRate : undefined,
     rate_band: rateBand,
@@ -3349,11 +3344,9 @@ async function exportXMLScenario(letter) {
   }
 }
 
-// Wire up XML export buttons
+// Wire up XML export button (Scenario A only)
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-export-xml-a')?.addEventListener('click', () => exportXMLScenario('A'));
-  document.getElementById('btn-export-xml-b')?.addEventListener('click', () => exportXMLScenario('B'));
-  document.getElementById('btn-export-xml-c')?.addEventListener('click', () => exportXMLScenario('C'));
 });
 
 window.addEventListener("load", boot);

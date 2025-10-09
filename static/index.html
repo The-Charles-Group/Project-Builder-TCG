@@ -868,38 +868,6 @@
           }
         }
       }
-      
-      // Display budget info for Scenario B
-      if (scenarios.B) {
-        const scenarioBDiv = document.getElementById('scenarioB');
-        if (scenarioBDiv) {
-          const existing = scenarioBDiv.querySelector('.budget-info');
-          if (existing) existing.remove();
-          const html = renderBudgetPill(scenarios.B);
-          if (html) {
-            const div = document.createElement('div');
-            div.className = 'budget-info';
-            div.innerHTML = html;
-            scenarioBDiv.insertBefore(div, scenarioBDiv.firstChild);
-          }
-        }
-      }
-      
-      // Display budget info for Scenario C (if available)
-      if (scenarios.C) {
-        const scenarioCDiv = document.getElementById('scenarioC');
-        if (scenarioCDiv) {
-          const existing = scenarioCDiv.querySelector('.budget-info');
-          if (existing) existing.remove();
-          const html = renderBudgetPill(scenarios.C);
-          if (html) {
-            const div = document.createElement('div');
-            div.className = 'budget-info';
-            div.innerHTML = html;
-            scenarioCDiv.insertBefore(div, scenarioCDiv.firstChild);
-          }
-        }
-      }
     }
     
     // Step 3 — make the Build button work (as specified)
@@ -946,7 +914,6 @@
         project_start: getProjectStartFromUI() || null,
         client_budget_usd: getClientBudgetFromUI() || null,
         scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
-        scenario_b: getScenarioSpecBFromUI(),
         retainers: retainers  // Include retainer data from new toggle system
       };
 
@@ -956,7 +923,8 @@
         body: JSON.stringify(payload)
       });
 
-      const scenarios = await resp.json();
+      const json = await resp.json();
+      const scenarios = json.scenarios || {};
       
       // Store scenarios globally for timeline and export
       window.appState = window.appState || {};
@@ -964,14 +932,9 @@
       window.latestScenarios = scenarios;  // legacy alias (works with older code)
       
       renderScenario('scenarioA', scenarios.A);
-      renderScenario('scenarioB', scenarios.B);
       
       // Display budget information if provided
       displayBudgetInfo(scenarios);
-      
-      // Enable Scenario C controls after A/B are built
-      renderUpsellList();
-      document.getElementById('btn-build-c').disabled = false;
       
       // Call once after /api/build succeeds:
       // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
@@ -1057,36 +1020,6 @@
       await downloadFromEndpoint('/api/export', payload, `Workfront_Export_Scenario_${letter}.xlsx`);
     }
 
-    async function onExportWorkbookAB() {
-      const A = window.getScenario('A');
-      const B = window.getScenario('B');
-      if (!A || !B) { alert('Build scenarios A & B first.'); return; }
-
-      const payload = {
-        scenario_a: A,
-        scenario_b: B,
-        project_name: getProjectName()
-      };
-      await downloadFromEndpoint('/api/export_workbook', payload,
-        'Workfront_Export_Scenarios_A_and_B.xlsx');
-    }
-
-    async function onExportWorkbookABC() {
-      const A = window.getScenario('A');
-      const B = window.getScenario('B');
-      const C = window.getScenario('C');
-      if (!A || !B) { alert('Build scenarios A & B first.'); return; }
-      if (!C) { alert('Build Scenario C first.'); return; }
-
-      const payload = {
-        scenario_a: A,
-        scenario_b: B,
-        scenario_c: C,
-        project_name: getProjectName()
-      };
-      await downloadFromEndpoint('/api/export_workbook_abc', payload,
-        'Workfront_Export_Scenarios_A_B_and_C.xlsx');
-    }
 
     // XML Export Functions (Task 4.5: Use new individual scenario endpoints)
     async function onExportXMLScenario(letter) {
@@ -1113,46 +1046,6 @@
       }
     }
 
-    async function onExportXMLWorkbook() {
-      const A = window.getScenario('A');
-      const B = window.getScenario('B');
-      if (!A || !B) { alert('Build scenarios A & B first.'); return; }
-
-      const payload = {
-        scenario_a: A,
-        scenario_b: B,
-        project_name: getProjectName(),
-        project_start_iso: document.getElementById('projectStartInput')?.value,
-        merge_identical_children: false
-      };
-      await downloadFromEndpoint('/api/export_workbook_xml', payload,
-        'Project_Scenarios_A_and_B.zip');
-    }
-
-    async function onExportXMLWorkbookABC() {
-      const A = window.getScenario('A');
-      const B = window.getScenario('B');
-      const C = window.getScenario('C');
-      if (!A || !B || !C) { alert('Build scenarios A, B & C first.'); return; }
-
-      // Task 4.5: Use new Export All endpoint
-      try {
-        const response = await fetch('/api/export/xml/all');
-        if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
-        
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'Project_Scenarios_All.zip';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-      } catch (error) {
-        alert(`Error exporting all scenarios: ${error.message}`);
-      }
-    }
 
     // Legacy function removed - use Step 5 exports instead
 
@@ -1518,72 +1411,6 @@
       if(btn) renderTimeline(btn.dataset.timelineSel);
     });
 
-    // Scenario C (Upsell) functionality
-    function renderUpsellList() {
-      const base = document.querySelector('#c-base')?.value || 'A';
-      const baseCodes = new Set((appState.scenarios?.[base]?.items || []).map(i => i.deliverable_code));
-      const adds = (appState.reconciliation?.add || []).filter(s => !baseCodes.has(s.code));
-      const html = adds.length ? adds.map(s => 
-          `<label><input type="checkbox" data-code="${s.code}" checked> ${s.label}</label>`
-        ).join('<br>') : '<em>No AI add-ons available</em>';
-      document.getElementById('c-adds').innerHTML = html;
-    }
-
-    async function buildScenarioC() {
-      const base = document.querySelector('#c-base')?.value || 'A';
-      const addCodes = [...document.querySelectorAll('#c-adds input[type=checkbox]:checked')]
-                        .map(cb => cb.dataset.code);
-      
-      // Get pricing preferences from Step 3
-      const payload = {
-        base: base,
-        add_on_codes: addCodes,
-        pricing_mode: getPricingModeFromUI(),
-        blended_rate: getBlendedRateFromUI(),
-        rate_band: getRateBandFromUI(),
-        use_slack: getUseSlackFromUI(),
-        slack_after_internal: getSlackInternalFromUI(),
-        slack_after_client: getSlackClientFromUI(),
-        slack_global_pct: getSlackPctFromUI(),
-        project_start: getProjectStartFromUI(),
-        client_budget_usd: getClientBudgetFromUI() || null
-      };
-
-      try {
-        const res = await fetch('/api/build_scenario_c', {
-          method: 'POST', 
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
-        });
-        
-        if (!res.ok) {
-          const errorText = await res.text();
-          throw new Error(`Failed to build Scenario C: ${errorText || res.statusText}`);
-        }
-        
-        const result = await res.json();
-        
-        // Update app state and render scenario C
-        window.appState = window.appState || {};
-        window.appState.scenarios = { ...(window.appState.scenarios || {}), ...result };
-        appState.scenarios = window.appState.scenarios;  // sync local state
-        renderScenario('scenarioC', window.appState.scenarios.C);
-        
-        // Display budget info for Scenario C
-        displayBudgetInfo(window.appState.scenarios);
-        
-        // Show delta vs base
-        const baseTotal = window.appState.scenarios[base]?.totals?.price || 0;
-        const cTotal = window.appState.scenarios.C?.totals?.price || 0;
-        document.getElementById('c-delta').textContent = `Δ vs Scenario ${base}: $${(cTotal - baseTotal).toLocaleString()}`;
-        
-        // show Step 4 and render C; button will auto-appear via showStep4()
-        showStep4('C');
-        
-      } catch (error) {
-        alert('Error building Scenario C: ' + error.message);
-      }
-    }
 
     // Event listeners - ensure DOM is loaded first
     document.addEventListener('DOMContentLoaded', function() {
@@ -1612,26 +1439,12 @@
       const btnBuild = document.getElementById('btnBuild');
       if (btnBuild) btnBuild.onclick = buildScenariosAB;
       
-      const btnBuildC = document.getElementById('btn-build-c');
-      if (btnBuildC) btnBuildC.onclick = buildScenarioC;
-      
       // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
     });
-    document.querySelector('#c-base')?.addEventListener('change', renderUpsellList);
     
-    // Hook up your buttons (adjust IDs to your HTML)
+    // Hook up export buttons (Scenario A only)
     document.querySelector('#btn-export-a')?.addEventListener('click', () => onExportScenario('A'));
-    document.querySelector('#btn-export-b')?.addEventListener('click', () => onExportScenario('B'));
-    document.querySelector('#btn-export-c')?.addEventListener('click', () => onExportScenario('C'));
-    document.querySelector('#btn-export-ab')?.addEventListener('click', onExportWorkbookAB);
-    document.querySelector('#btn-export-abc')?.addEventListener('click', onExportWorkbookABC);
-
-    // XML Export buttons
     document.querySelector('#btn-export-xml-a')?.addEventListener('click', () => onExportXMLScenario('A'));
-    document.querySelector('#btn-export-xml-b')?.addEventListener('click', () => onExportXMLScenario('B'));
-    document.querySelector('#btn-export-xml-c')?.addEventListener('click', () => onExportXMLScenario('C'));
-    document.querySelector('#btn-export-xml-ab')?.addEventListener('click', onExportXMLWorkbook);
-    document.querySelector('#btn-export-xml-abc')?.addEventListener('click', onExportXMLWorkbookABC);
 
     // Legacy format tracking (remove old handlers)
     // Note: New export format handling is in Step 5
