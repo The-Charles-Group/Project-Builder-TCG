@@ -1553,9 +1553,38 @@
             btnAskWeights.disabled = true;
             btnAskWeights.textContent = '⏳ Analyzing...';
             
-            // Get RFP text from Step 1
-            const rfpText = document.getElementById('rfpText')?.value || '';
+            // Get RFP text: first from session state, then from backend cache
+            let rfpText = window.APB?.step2?.rfpText || '';
             
+            if (!rfpText) {
+              // Try to fetch from backend cache
+              const cacheRes = await fetch('/api/rfp/cache');
+              if (cacheRes.ok) {
+                const cacheData = await cacheRes.json();
+                rfpText = cacheData.text || '';
+                
+                // Sync to session state if we got text from cache
+                if (rfpText && window.APB?.step2) {
+                  window.APB.step2.rfpText = rfpText;
+                  sessionStorage.setItem('apb.rfp_text', rfpText);
+                }
+              }
+            }
+            
+            // Validate we have RFP text
+            if (!rfpText || !rfpText.trim()) {
+              // Show inline message instead of blocking
+              weightsContainer.style.display = 'block';
+              const container = weightsContainer.querySelector('#step2-ai-weights');
+              if (container) {
+                container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted);">Please enter RFP text in Step 1 to get AI-powered deliverable suggestions.</div>';
+              }
+              btnAskWeights.textContent = '🤖 Ask AI for Deliverable Suggestions';
+              btnAskWeights.disabled = false;
+              return;
+            }
+            
+            // Call weighted AI endpoint
             const res = await fetch('/api/step2/ai/weights', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
