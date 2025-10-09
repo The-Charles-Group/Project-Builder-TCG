@@ -3645,7 +3645,26 @@ def api_build(payload: BuildPayload):
                 "scale_factor_if_fit": round(scale_factor, 3)
             }
     
-    return scenarios
+    # Return a compatibility envelope so both UIs work
+    # Old UIs expect top-level A/B; newer UIs expect {scenarios: {...}}
+    # We return both.
+    resp = {
+        "ok": True,
+        "scenarios": scenarios,   # NEW wrapper for newer UI handlers
+        **scenarios               # Keep A/B at the top level for older UI handlers
+    }
+    return resp
+
+@app.get("/api/scenarios")
+def api_get_scenarios():
+    """
+    Return what's in memory so Step 4 can recover even if a previous build
+    had a transient parsing issue on the client.
+    """
+    return {
+        "ok": True,
+        "scenarios": _current_scenarios() if callable(globals().get("_current_scenarios")) else (_CURRENT_SCENARIOS or {})
+    }
 
 @app.post("/api/build_scenario_c")
 def api_build_scenario_c_deprecated(payload: dict):
