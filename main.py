@@ -1,4 +1,4 @@
-import os, re, io, math, json, datetime, urllib.parse, tempfile
+import os, re, io, math, json, datetime, urllib.parse, tempfile, base64
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
 from zoneinfo import ZoneInfo  # Python 3.9+
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -1600,8 +1600,6 @@ def _extract_and_analyze_pdf_images(content: bytes, filename: str) -> str:
     Extract images from PDF and analyze them using OpenAI Vision API.
     Returns a text description of all images found.
     """
-    import base64
-    
     ext = os.path.splitext(filename or "")[1].lower()
     if ext != ".pdf":
         return ""  # Only process PDFs for image analysis
