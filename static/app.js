@@ -589,19 +589,38 @@ async function buildFromCurrentSelection() {
   });
   
   if (!res.ok) {
-    const txt = await res.text();
-    alert(`Build failed: ${txt}`);
+    const msg = await res.text().catch(() => '');
+    alert(`Build failed (${res.status}): ${msg}`);
     return;
   }
   
-  const data = await res.json();
+  const json = await res.json();
   
-  // Store globally for Step 3 and exports
-  window.BUILD = data;
+  // Accept both shapes:
+  // - { scenarios: { A, B }, A: {...}, B: {...}, ok: true }
+  // - { A, B }
+  const scenarios = json.scenarios || {
+    A: json.A,
+    B: json.B
+  };
+
+  if (!scenarios || !scenarios.A || !scenarios.B) {
+    console.warn('Build response', json);
+    alert('Malformed build response: missing scenarios A/B');
+    return;
+  }
+
+  // Save to client state
+  window.APP_STATE = window.APP_STATE || {};
+  window.APP_STATE.scenarios = scenarios;
+  window.APP_STATE.activeScenario = window.APP_STATE.activeScenario || 'A';
+  
+  // Legacy aliases for backward compatibility
+  window.BUILD = json;
   window.appState = window.appState || {};
-  window.appState.scenarios = data;
-  window.latestScenarios = data;
-  SCENARIOS = data;
+  window.appState.scenarios = scenarios;
+  window.latestScenarios = scenarios;
+  window.SCENARIOS = scenarios;
 
   // Show Step 3 and scroll
   const step3 = document.querySelector("#step3");
@@ -612,8 +631,8 @@ async function buildFromCurrentSelection() {
 
   // Render scenarios if function exists
   if (window.renderScenario) {
-    window.renderScenario('scenarioA', data.A);
-    window.renderScenario('scenarioB', data.B);
+    window.renderScenario('scenarioA', scenarios.A);
+    window.renderScenario('scenarioB', scenarios.B);
   }
 }
 
