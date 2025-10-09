@@ -1594,6 +1594,73 @@ def _extract_text_from_upload(content: bytes, filename: str) -> str:
 
     raise HTTPException(415, f"Unsupported file type: {ext}. Use .pdf, .docx, or .txt.")
 
+# ---------- Helper: extract and analyze images from PDFs ----------
+def _extract_and_analyze_pdf_images(content: bytes, filename: str) -> str:
+    """
+    Extract images from PDF and analyze them using OpenAI Vision API.
+    Returns a text description of all images found.
+    """
+    import base64
+    
+    ext = os.path.splitext(filename or "")[1].lower()
+    if ext != ".pdf":
+        return ""  # Only process PDFs for image analysis
+    
+    if not PdfReader or not openai_client:
+        return ""  # Skip if dependencies missing
+    
+    try:
+        reader = PdfReader(io.BytesIO(content))
+        image_descriptions = []
+        
+        for page_num, page in enumerate(reader.pages, 1):
+            if hasattr(page, 'images'):
+                for img_index, image in enumerate(page.images, 1):
+                    try:
+                        # Convert image to base64
+                        img_bytes = image.data
+                        img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                        
+                        # Analyze image with OpenAI Vision
+                        # the newest OpenAI model is "gpt-5" which was released August 7, 2025.
+                        # do not change this unless explicitly requested by the user
+                        response = openai_client.chat.completions.create(
+                            model="gpt-5",
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "Analyze this image from an RFP document. Describe what it shows: charts, diagrams, mockups, screenshots, or other visual content. Focus on business requirements and deliverables it implies."
+                                        },
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": f"data:image/jpeg;base64,{img_base64}"
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            max_completion_tokens=500
+                        )
+                        
+                        description = response.choices[0].message.content
+                        image_descriptions.append(f"Page {page_num}, Image {img_index}: {description}")
+                        
+                    except Exception as e:
+                        print(f"Warning: Could not analyze image {img_index} on page {page_num}: {e}")
+                        continue
+        
+        if image_descriptions:
+            return "\n\n--- Visual Content Analysis ---\n\n" + "\n\n".join(image_descriptions)
+        return ""
+        
+    except Exception as e:
+        print(f"Warning: Could not extract images from PDF: {e}")
+        return ""
+
 # ---------- Helper: sanitize filenames ----------
 def _safe_filename(s: str) -> str:
     s = (s or "Proposal").strip()
@@ -3295,11 +3362,19 @@ async def api_suggest_by_file(file: UploadFile = File(...)):
     # Hard cap text length to protect downstream regex scan
     if len(text) > 200_000:
         text = text[:200_000]
+    
+    # Extract and analyze images from PDF using OpenAI Vision
+    image_analysis = _extract_and_analyze_pdf_images(content, file.filename)
 
     # Store file text separately and merge with textarea text if present
     global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
     
-    RFP_TEXT_CACHE_FILE = (text or "").strip()
+    # Combine text and image analysis
+    file_content = (text or "").strip()
+    if image_analysis:
+        file_content = f"{file_content}\n\n{image_analysis}".strip()
+    
+    RFP_TEXT_CACHE_FILE = file_content
     textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
     file_text = RFP_TEXT_CACHE_FILE
     
@@ -4620,10 +4695,18 @@ async def api_summarize_by_file(file: UploadFile = File(...)):
     if len(text) > 200_000:
         text = text[:200_000]
     
+    # Extract and analyze images from PDF using OpenAI Vision
+    image_analysis = _extract_and_analyze_pdf_images(content, file.filename)
+    
     # Store file text separately and merge with textarea text if present
     global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
     
-    RFP_TEXT_CACHE_FILE = (text or "").strip()
+    # Combine text and image analysis
+    file_content = (text or "").strip()
+    if image_analysis:
+        file_content = f"{file_content}\n\n{image_analysis}".strip()
+    
+    RFP_TEXT_CACHE_FILE = file_content
     textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
     file_text = RFP_TEXT_CACHE_FILE
     
