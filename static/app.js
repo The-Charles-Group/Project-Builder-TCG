@@ -634,6 +634,14 @@ async function buildFromCurrentSelection() {
     window.renderScenario('scenarioA', scenarios.A);
     window.renderScenario('scenarioB', scenarios.B);
   }
+
+  // Show Step 4 (Timeline) and Step 5 (Export)
+  const step4 = document.querySelector("#step4");
+  const step5 = document.querySelector("#step5");
+  if (step5) step5.style.display = 'block';
+  if (step4 && window.showStep4) {
+    window.showStep4('A');  // Show timeline for Scenario A
+  }
 }
 
 // Alias for backward compatibility
