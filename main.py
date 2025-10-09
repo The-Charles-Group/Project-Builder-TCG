@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo  # Python 3.9+
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
+from ai_weighted_matcher import score_rfp
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -3148,6 +3149,24 @@ def ai_suggest(req: AISuggestReq):
         payload["model_used"] = "rules"
 
     return JSONResponse(payload)
+
+@app.post("/api/step2/ai/weights")
+def api_weighted_scores(payload: dict):
+    """
+    NEW: Weighted AI matching using rule-based + lexical (TF-IDF) scoring.
+    Returns deliverables ranked by match % with top components/tasks.
+    """
+    rfp_text = payload.get("rfp_text") or RFP_TEXT_CACHE or ""
+    ai_rules_path = "AI_Matching_Rules_full.xlsx"
+    
+    if not DB.loaded:
+        DB.load()
+    
+    try:
+        result = score_rfp(rfp_text, ai_rules_path, deliverable_index_df=DB.deliverables)
+        return JSONResponse(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Weighted scoring failed: {str(e)}")
 
 @app.get("/api/db/status")
 def db_status():
