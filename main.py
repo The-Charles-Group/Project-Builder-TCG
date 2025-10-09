@@ -3585,7 +3585,7 @@ def api_suggest(payload: SuggestPayload):
     return {"suggested": recs}
 
 @app.post("/api/suggest_by_file")
-async def api_suggest_by_file(file: UploadFile = File(...)):
+async def api_suggest_by_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     if not DB.loaded:
         DB.load()
 
@@ -3603,41 +3603,50 @@ async def api_suggest_by_file(file: UploadFile = File(...)):
     if len(text) > 200_000:
         text = text[:200_000]
     
-    # Extract and analyze images from PDF using OpenAI Vision
-    image_analysis = _extract_and_analyze_pdf_images(content, file.filename)
-
+    # Create job for image processing
+    job_id = str(uuid.uuid4())
+    JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
+    
     # Store file text separately and merge with textarea text if present
     global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
     
-    # Combine text and image analysis
+    # Cache text content immediately (without images)
     file_content = (text or "").strip()
-    if image_analysis:
-        file_content = f"{file_content}\n\n{image_analysis}".strip()
-    
     RFP_TEXT_CACHE_FILE = file_content
     textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
-    file_text = RFP_TEXT_CACHE_FILE
     
     # Combine both sources with clear separator
-    if textarea_text and file_text:
-        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_text}"
-    elif file_text:
-        merged_text = file_text
+    if textarea_text and file_content:
+        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_content}"
+    elif file_content:
+        merged_text = file_content
     else:
         merged_text = textarea_text
     
     # Cache merged text for backward compatibility
     RFP_TEXT_CACHE = merged_text
     
+    # Start background image processing (will update cache when complete)
+    if background_tasks:
+        background_tasks.add_task(_process_images_background, content, file.filename, job_id, file_content)
+    
+    # Generate recommendations from text (images will be processed in background)
     recs = DB.suggest_deliverables_from_text(merged_text or "")
     # NEW: attach retainer hints per deliverable
     for r in recs:
         is_ret, months = DB.retainer_recommendation(merged_text or "", r.get("deliverable",""))
         r["retainer_hint"] = bool(is_ret)
         r["retainer_months_suggested"] = int(months or 0)
+    
     # NEW: remember for default project name
     LAST_UPLOAD_FILENAME = file.filename
-    return {"suggested": recs, "filename": file.filename}
+    
+    return {
+        "suggested": recs, 
+        "filename": file.filename,
+        "job_id": job_id,
+        "processing_images": True
+    }
 
 def _safe_retainer_map(retainers) -> dict:
     out = {}
@@ -4926,7 +4935,7 @@ def api_summarize(p: SummarizePayload):
     return ai_summarize_rfp_text(merged_text)
 
 @app.post("/api/summarize_by_file", response_model=RfpSummary)
-async def api_summarize_by_file(file: UploadFile = File(...)):
+async def api_summarize_by_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     content = await file.read()
     if not content:
         raise HTTPException(400, "Empty upload.")
@@ -4935,31 +4944,32 @@ async def api_summarize_by_file(file: UploadFile = File(...)):
     if len(text) > 200_000:
         text = text[:200_000]
     
-    # Extract and analyze images from PDF using OpenAI Vision
-    image_analysis = _extract_and_analyze_pdf_images(content, file.filename)
+    # Create job for image processing
+    job_id = str(uuid.uuid4())
+    JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
     
     # Store file text separately and merge with textarea text if present
     global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
     
-    # Combine text and image analysis
+    # Cache text content immediately (without images)
     file_content = (text or "").strip()
-    if image_analysis:
-        file_content = f"{file_content}\n\n{image_analysis}".strip()
-    
     RFP_TEXT_CACHE_FILE = file_content
     textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
-    file_text = RFP_TEXT_CACHE_FILE
     
     # Combine both sources with clear separator
-    if textarea_text and file_text:
-        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_text}"
-    elif file_text:
-        merged_text = file_text
+    if textarea_text and file_content:
+        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_content}"
+    elif file_content:
+        merged_text = file_content
     else:
         merged_text = textarea_text
     
     # Cache merged text for backward compatibility
     RFP_TEXT_CACHE = merged_text
+    
+    # Start background image processing (will update cache when complete)
+    if background_tasks:
+        background_tasks.add_task(_process_images_background, content, file.filename, job_id, file_content)
     
     # NEW: remember for default project name
     LAST_UPLOAD_FILENAME = file.filename
