@@ -4934,7 +4934,7 @@ def api_summarize(p: SummarizePayload):
     
     return ai_summarize_rfp_text(merged_text)
 
-@app.post("/api/summarize_by_file", response_model=RfpSummary)
+@app.post("/api/summarize_by_file")
 async def api_summarize_by_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     content = await file.read()
     if not content:
@@ -4973,7 +4973,16 @@ async def api_summarize_by_file(file: UploadFile = File(...), background_tasks: 
     
     # NEW: remember for default project name
     LAST_UPLOAD_FILENAME = file.filename
-    return ai_summarize_rfp_text(merged_text)
+    
+    # Get summary
+    summary = ai_summarize_rfp_text(merged_text)
+    
+    # Return summary with job_id for progress tracking
+    return {
+        **summary.model_dump(),
+        "job_id": job_id,
+        "processing_images": True
+    }
 
 @app.post("/api/retainer_detect")
 def api_retainer_detect(p: dict):

@@ -28,6 +28,22 @@
       <label for="rfpFile">Upload File</label>
       <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" />
       
+      <!-- Image Analysis Progress Bar -->
+      <div id="image-progress-container" style="display: none; margin: 16px 0; padding: 12px; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <strong style="color: var(--accent); font-size: 0.95em;">🔍 Analyzing Images with AI Vision</strong>
+          <span id="image-progress-percentage" style="font-weight: 600; color: var(--accent);">0%</span>
+        </div>
+        <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+          <div id="image-progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.3s ease;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85em; color: var(--muted);">
+          <span id="image-progress-status">Preparing...</span>
+          <span id="image-progress-eta"></span>
+        </div>
+        <div id="image-progress-errors" style="margin-top: 8px; padding: 8px; background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: 4px; color: #fca5a5; font-size: 0.85em; display: none;"></div>
+      </div>
+      
       <div class="actions">
         <button id="btnAnalyze">Analyze with AI</button>
       </div>

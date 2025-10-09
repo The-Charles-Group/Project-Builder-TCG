@@ -637,6 +637,125 @@ async function buildFromCurrentSelection() {
 // Alias for backward compatibility
 const onProceedToStep3 = buildFromCurrentSelection;
 
+// Image Progress Tracking
+let currentJobId = null;
+let progressInterval = null;
+
+function showProgressUI() {
+  const container = document.getElementById('image-progress-container');
+  if (container) container.style.display = 'block';
+}
+
+function hideProgressUI() {
+  const container = document.getElementById('image-progress-container');
+  if (container) container.style.display = 'none';
+  if (progressInterval) {
+    clearInterval(progressInterval);
+    progressInterval = null;
+  }
+}
+
+function updateProgressUI(progress) {
+  const bar = document.getElementById('image-progress-bar');
+  const percentage = document.getElementById('image-progress-percentage');
+  const status = document.getElementById('image-progress-status');
+  const eta = document.getElementById('image-progress-eta');
+  const errors = document.getElementById('image-progress-errors');
+  
+  if (bar) bar.style.width = `${progress.percentage || 0}%`;
+  if (percentage) percentage.textContent = `${Math.round(progress.percentage || 0)}%`;
+  
+  // Update status message
+  if (status) {
+    if (progress.status === 'processing') {
+      status.textContent = `Processing ${progress.processed_images} of ${progress.total_images} images...`;
+    } else if (progress.status === 'completed') {
+      status.textContent = `✓ Complete! Analyzed ${progress.total_images} images`;
+    } else if (progress.status === 'failed') {
+      status.textContent = `✗ Analysis failed`;
+    } else if (progress.status === 'cancelled') {
+      status.textContent = `✗ Analysis cancelled`;
+    } else {
+      status.textContent = 'Preparing...';
+    }
+  }
+  
+  // Update ETA
+  if (eta && progress.eta_seconds != null && progress.eta_seconds > 0) {
+    const seconds = Math.ceil(progress.eta_seconds);
+    if (seconds < 60) {
+      eta.textContent = `~${seconds}s remaining`;
+    } else {
+      const minutes = Math.ceil(seconds / 60);
+      eta.textContent = `~${minutes}m remaining`;
+    }
+  } else {
+    if (eta) eta.textContent = '';
+  }
+  
+  // Show errors if any
+  if (errors && progress.errors && progress.errors.length > 0) {
+    errors.textContent = `⚠️ Errors: ${progress.errors.join(', ')}`;
+    errors.style.display = 'block';
+  } else {
+    if (errors) errors.style.display = 'none';
+  }
+}
+
+async function pollProgress(jobId) {
+  if (!jobId) return;
+  
+  try {
+    const res = await fetch(`/api/upload/progress/${jobId}`);
+    if (!res.ok) {
+      console.warn('Progress fetch failed:', res.status);
+      hideProgressUI();
+      return;
+    }
+    
+    const progress = await res.json();
+    updateProgressUI(progress);
+    
+    // Stop polling if complete, failed, or cancelled
+    if (['completed', 'failed', 'cancelled'].includes(progress.status)) {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+      }
+      
+      // Hide UI after a short delay
+      setTimeout(() => {
+        hideProgressUI();
+        
+        // If completed successfully, update RFP text cache with image results
+        if (progress.status === 'completed' && progress.result_text) {
+          APB.step2.rfpText = progress.result_text;
+          sessionStorage.setItem('apb.rfp_text', progress.result_text);
+          localStorage.setItem('apb.rfpText.v1', progress.result_text);
+          console.log('[Image Analysis] Results merged into RFP text cache');
+        }
+      }, 2000);
+    }
+  } catch (error) {
+    console.error('Error polling progress:', error);
+    hideProgressUI();
+  }
+}
+
+function startProgressPolling(jobId) {
+  if (!jobId) return;
+  
+  currentJobId = jobId;
+  showProgressUI();
+  updateProgressUI({ status: 'pending', percentage: 0, processed_images: 0, total_images: 0 });
+  
+  // Poll every 500ms
+  progressInterval = setInterval(() => pollProgress(jobId), 500);
+  
+  // Initial fetch
+  pollProgress(jobId);
+}
+
 // Step 1: Analyze with AI (updated to use summarize endpoints and show Step 2)
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
@@ -659,7 +778,12 @@ async function onRunReconcile() {
       if (!res.ok) {
         throw new Error(`Server error: ${res.status} ${res.statusText}`);
       }
-      summary = await res.json(); // { summary_text, deliverables: [{label, short_desc, tasks}], word_count }
+      summary = await res.json(); // { summary_text, deliverables: [{label, short_desc, tasks}], word_count, job_id?, processing_images? }
+      
+      // Start progress polling if image processing job was started
+      if (summary.job_id && summary.processing_images) {
+        startProgressPolling(summary.job_id);
+      }
     } else if (rfpText) {
       // Disable button and show loading state
       if (btnAnalyze) {
