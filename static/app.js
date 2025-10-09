@@ -578,7 +578,6 @@ async function buildFromCurrentSelection() {
     project_start: window.getProjectStartFromUI?.() || null,
     client_budget_usd: window.getClientBudgetFromUI?.() || null,
     scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
-    scenario_b: window.getScenarioSpecBFromUI?.() || { mode: 'template', scenario_key: 'MED_HIGH' },
     retainers: retainersPayload
   };
 
@@ -596,24 +595,19 @@ async function buildFromCurrentSelection() {
   
   const json = await res.json();
   
-  // Accept both shapes:
-  // - { scenarios: { A, B }, A: {...}, B: {...}, ok: true }
-  // - { A, B }
-  const scenarios = json.scenarios || {
-    A: json.A,
-    B: json.B
-  };
+  // Extract scenarios (now only contains A)
+  const scenarios = json.scenarios || {};
 
-  if (!scenarios || !scenarios.A || !scenarios.B) {
+  if (!scenarios || !scenarios.A) {
     console.warn('Build response', json);
-    alert('Malformed build response: missing scenarios A/B');
+    alert('Malformed build response: missing scenario A');
     return;
   }
 
   // Save to client state
   window.APP_STATE = window.APP_STATE || {};
   window.APP_STATE.scenarios = scenarios;
-  window.APP_STATE.activeScenario = window.APP_STATE.activeScenario || 'A';
+  window.APP_STATE.activeScenario = 'A';
   
   // Legacy aliases for backward compatibility
   window.BUILD = json;
@@ -629,10 +623,9 @@ async function buildFromCurrentSelection() {
     step3.scrollIntoView({ behavior: "smooth" });
   }
 
-  // Render scenarios if function exists
+  // Render Scenario A only
   if (window.renderScenario) {
     window.renderScenario('scenarioA', scenarios.A);
-    window.renderScenario('scenarioB', scenarios.B);
   }
 
   // Show Step 4 (Timeline) and Step 5 (Export)

@@ -81,11 +81,9 @@ WF_COLUMNS = [
 # at top, near other env helpers
 PRIMARY = os.getenv("APB_PRIMARY_DB_VERSION", "v4").lower()  # 'v3' or 'v4'
 
-# Scenario multipliers for A/B/C differentiation
+# Scenario multipliers - A only (B/C removed for simplicity)
 SCENARIO_MULT = {
-    "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True},
-    "B": {"hours_mult": 1.15, "qa_pct": 0.07, "pm_pct": 0.12, "strip_optional": False},
-    "C": {"hours_mult": 1.30, "qa_pct": 0.10, "pm_pct": 0.15, "include_addons": True}
+    "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True}
 }
 
 # US & Mexico holidays for business day calendar
@@ -2181,7 +2179,6 @@ class ScenarioSpec(BaseModel):
 class BuildPayload(BaseModel):
     selected_deliverable_codes: List[str]
     scenario_a: Optional[ScenarioSpec] = None
-    scenario_b: Optional[ScenarioSpec] = None
     pricing_mode: str = "Flat_Blended"                       # "Flat_Blended" or "Per_Resource"
     blended_rate: Optional[float] = None
     rate_band: Optional[str] = "Standard_US"
@@ -2201,7 +2198,6 @@ class BuildPayload(BaseModel):
 class AutoBuildPayload(BaseModel):
     rfp_text: str
     scenario_a: ScenarioSpec
-    scenario_b: ScenarioSpec
     pricing_mode: str                       # "Flat_Blended" or "Per_Resource"
     blended_rate: Optional[float] = None
     rate_band: Optional[str] = "Standard_US"
@@ -3520,13 +3516,13 @@ def api_build(payload: BuildPayload):
     
     print(f"DEBUG Build: Component map processed: {comp_map}")
 
-    # Build scenarios
+    # Build Scenario A only (B/C removed for simplicity)
     scenarios = {}
-    # Set default scenarios if not provided
     default_spec_a = ScenarioSpec(mode="template", scenario_key="MED_LOW")
-    default_spec_b = ScenarioSpec(mode="template", scenario_key="MED_HIGH")
+    spec_in = payload.scenario_a or default_spec_a
+    letter = "A"
     
-    for letter, spec_in in [("A", payload.scenario_a or default_spec_a), ("B", payload.scenario_b or default_spec_b)]:
+    if True:  # Keep indentation consistent
         per_deliv = []
         for code in payload.selected_deliverable_codes:
             row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
@@ -3631,29 +3627,21 @@ def api_build(payload: BuildPayload):
     
     # Add budget metrics if client_budget_usd was provided
     if client_budget_usd and client_budget_usd > 0:
-        for letter in scenarios:
-            scenario_price = scenarios[letter]["totals"]["price"]
-            budget_delta = scenario_price - client_budget_usd
-            coverage_pct = (scenario_price / client_budget_usd) * 100 if client_budget_usd > 0 else 0
-            scale_factor = client_budget_usd / scenario_price if scenario_price > 0 else 1.0
-            
-            scenarios[letter]["budget_info"] = {
-                "client_budget_usd": client_budget_usd,
-                "total_price": scenario_price,
-                "budget_delta": budget_delta,
-                "coverage_pct": round(coverage_pct, 1),
-                "scale_factor_if_fit": round(scale_factor, 3)
-            }
+        scenario_price = scenarios["A"]["totals"]["price"]
+        budget_delta = scenario_price - client_budget_usd
+        coverage_pct = (scenario_price / client_budget_usd) * 100 if client_budget_usd > 0 else 0
+        scale_factor = client_budget_usd / scenario_price if scenario_price > 0 else 1.0
+        
+        scenarios["A"]["budget_info"] = {
+            "client_budget_usd": client_budget_usd,
+            "total_price": scenario_price,
+            "budget_delta": budget_delta,
+            "coverage_pct": round(coverage_pct, 1),
+            "scale_factor_if_fit": round(scale_factor, 3)
+        }
     
-    # Return a compatibility envelope so both UIs work
-    # Old UIs expect top-level A/B; newer UIs expect {scenarios: {...}}
-    # We return both.
-    resp = {
-        "ok": True,
-        "scenarios": scenarios,   # NEW wrapper for newer UI handlers
-        **scenarios               # Keep A/B at the top level for older UI handlers
-    }
-    return resp
+    # Return scenarios (A only)
+    return {"scenarios": scenarios}
 
 @app.get("/api/scenarios")
 def api_get_scenarios():
