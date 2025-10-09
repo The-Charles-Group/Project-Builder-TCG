@@ -294,16 +294,15 @@ async function boot() {
   if (pricingMode) populateSelect(pricingMode, OPTIONS.pricing_modes);
   const rateBand = document.querySelector("#rateBand");
   if (rateBand) populateSelect(rateBand, OPTIONS.rate_bands);
-  // Scenario templates
+  // Scenario templates (Scenario B/C removed - only populate A if it exists)
   const sA = document.querySelector("#scenarioA");
-  const sB = document.querySelector("#scenarioB");
-  OPTIONS.scenario_templates.forEach(s => {
-    sA.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
-    sB.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
-  });
-  // Defaults: MED_LOW / MED_HIGH
-  if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_LOW")) sA.value="MED_LOW";
-  if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_HIGH")) sB.value="MED_HIGH";
+  if (sA) {
+    OPTIONS.scenario_templates.forEach(s => {
+      sA.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
+    });
+    // Default: MED_LOW
+    if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_LOW")) sA.value="MED_LOW";
+  }
 
   // Deliverables list
   DELIVERABLES = OPTIONS.deliverables;

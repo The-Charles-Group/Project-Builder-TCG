@@ -37,6 +37,25 @@
     <section class="card" id="step2" style="display:none;">
       <h2>Step 2 — Select & Configure Deliverables</h2>
       
+      <!-- Weighted AI Suggestions Button -->
+      <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
+        <button id="btn-ask-ai-weights" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          🤖 Ask AI for Deliverable Suggestions
+        </button>
+        <small style="color: var(--muted);">Get AI-powered recommendations based on your RFP (using weighted matching)</small>
+      </div>
+
+      <!-- Weighted Suggestions Display (initially hidden) -->
+      <div id="step2-ai-weights-container" style="margin-bottom: 20px; display: none;">
+        <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; color: var(--accent);">📊 Weighted AI Match Results</h3>
+            <button id="btn-close-weights" class="btn-sm">✕ Close</button>
+          </div>
+          <div id="step2-ai-weights"></div>
+        </div>
+      </div>
+      
       <!-- AI Analysis Panel (Top, Full Width) -->
       <div class="ai-analysis-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -1705,6 +1724,58 @@
     // Initialize
     loadOptions();
   </script>
+  <script src="/static/static_weights.js"></script>
   <script src="/static/app.js?v=5.3" defer></script>
+  <script>
+    // Weighted AI Suggestions Handler
+    document.addEventListener('DOMContentLoaded', () => {
+      const btnAskWeights = document.getElementById('btn-ask-ai-weights');
+      const weightsContainer = document.getElementById('step2-ai-weights-container');
+      const btnCloseWeights = document.getElementById('btn-close-weights');
+      
+      if (btnAskWeights) {
+        btnAskWeights.addEventListener('click', async () => {
+          try {
+            btnAskWeights.disabled = true;
+            btnAskWeights.textContent = '⏳ Analyzing...';
+            
+            // Get RFP text from Step 1
+            const rfpText = document.getElementById('rfpText')?.value || '';
+            
+            const res = await fetch('/api/step2/ai/weights', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ rfp_text: rfpText })
+            });
+            
+            if (!res.ok) throw new Error('Failed to get weighted suggestions');
+            
+            const data = await res.json();
+            
+            // Show and render results
+            weightsContainer.style.display = 'block';
+            TCGWeights.render('#step2-ai-weights', data);
+            
+            btnAskWeights.textContent = '✓ AI Suggestions Loaded';
+            setTimeout(() => {
+              btnAskWeights.textContent = '🤖 Ask AI for Deliverable Suggestions';
+              btnAskWeights.disabled = false;
+            }, 2000);
+            
+          } catch (err) {
+            alert('Error getting AI suggestions: ' + err.message);
+            btnAskWeights.textContent = '🤖 Ask AI for Deliverable Suggestions';
+            btnAskWeights.disabled = false;
+          }
+        });
+      }
+      
+      if (btnCloseWeights) {
+        btnCloseWeights.addEventListener('click', () => {
+          weightsContainer.style.display = 'none';
+        });
+      }
+    });
+  </script>
 </body>
 </html>
