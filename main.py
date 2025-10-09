@@ -3585,50 +3585,68 @@ def api_suggest(payload: SuggestPayload):
     return {"suggested": recs}
 
 @app.post("/api/suggest_by_file")
-async def api_suggest_by_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
+async def api_suggest_by_file(files: List[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
     if not DB.loaded:
         DB.load()
 
-    # Read content
-    content = await file.read()
-    if not content or len(content) == 0:
-        raise HTTPException(400, "Empty upload.")
-
-    # Basic size guard (20 MB to match middleware)
-    if len(content) > 20 * 1024 * 1024:
-        raise HTTPException(413, "File too large. Maximum size is 20MB.")
-
-    text = _extract_text_from_upload(content, file.filename)
-    # Hard cap text length to protect downstream regex scan
-    if len(text) > 200_000:
-        text = text[:200_000]
-    
-    # Create job for image processing
-    job_id = str(uuid.uuid4())
-    JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
+    # Validate we have at least one file
+    if not files:
+        raise HTTPException(400, "No files uploaded.")
     
     # Store file text separately and merge with textarea text if present
     global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
     
-    # Cache text content immediately (without images)
-    file_content = (text or "").strip()
+    # Process all files
+    all_file_contents = []
+    filenames = []
+    background_jobs = []
+    
+    for file in files:
+        # Read content
+        content = await file.read()
+        if not content or len(content) == 0:
+            continue  # Skip empty files
+
+        # Basic size guard (20 MB to match middleware)
+        if len(content) > 20 * 1024 * 1024:
+            raise HTTPException(413, f"File '{file.filename}' too large. Maximum size is 20MB.")
+
+        text = _extract_text_from_upload(content, file.filename)
+        # Hard cap text length to protect downstream regex scan
+        if len(text) > 200_000:
+            text = text[:200_000]
+        
+        # Add file content with clear label
+        if text.strip():
+            labeled_content = f"--- File: {file.filename} ---\n\n{text.strip()}"
+            all_file_contents.append(labeled_content)
+            filenames.append(file.filename)
+            
+            # Create job for image processing for this file
+            job_id = str(uuid.uuid4())
+            JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
+            background_jobs.append(job_id)
+            
+            # Start background image processing for this file
+            if background_tasks:
+                background_tasks.add_task(_process_images_background, content, file.filename, job_id, text.strip())
+    
+    # Combine all file contents
+    file_content = "\n\n".join(all_file_contents) if all_file_contents else ""
     RFP_TEXT_CACHE_FILE = file_content
     textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
     
-    # Combine both sources with clear separator
-    if textarea_text and file_content:
-        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_content}"
-    elif file_content:
-        merged_text = file_content
-    else:
-        merged_text = textarea_text
+    # Merge textarea text with all file contents
+    parts = []
+    if textarea_text:
+        parts.append(textarea_text)
+    if file_content:
+        parts.append(file_content)
+    
+    merged_text = "\n\n".join(parts) if parts else ""
     
     # Cache merged text for backward compatibility
     RFP_TEXT_CACHE = merged_text
-    
-    # Start background image processing (will update cache when complete)
-    if background_tasks:
-        background_tasks.add_task(_process_images_background, content, file.filename, job_id, file_content)
     
     # Generate recommendations from text (images will be processed in background)
     recs = DB.suggest_deliverables_from_text(merged_text or "")
@@ -3638,14 +3656,14 @@ async def api_suggest_by_file(file: UploadFile = File(...), background_tasks: Ba
         r["retainer_hint"] = bool(is_ret)
         r["retainer_months_suggested"] = int(months or 0)
     
-    # NEW: remember for default project name
-    LAST_UPLOAD_FILENAME = file.filename
+    # NEW: remember for default project name (use first file)
+    LAST_UPLOAD_FILENAME = filenames[0] if filenames else "upload"
     
     return {
         "suggested": recs, 
-        "filename": file.filename,
-        "job_id": job_id,
-        "processing_images": True
+        "filenames": filenames,  # Return all filenames
+        "job_ids": background_jobs,  # Return all job IDs
+        "processing_images": len(background_jobs) > 0
     }
 
 def _safe_retainer_map(retainers) -> dict:
@@ -4935,55 +4953,75 @@ def api_summarize(p: SummarizePayload):
     return ai_summarize_rfp_text(merged_text)
 
 @app.post("/api/summarize_by_file")
-async def api_summarize_by_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
-    content = await file.read()
-    if not content:
-        raise HTTPException(400, "Empty upload.")
-    text = _extract_text_from_upload(content, file.filename)   # reuses existing extractor
-    # Hard cap already present in /api/suggest_by_file; can reapply if desired
-    if len(text) > 200_000:
-        text = text[:200_000]
-    
-    # Create job for image processing
-    job_id = str(uuid.uuid4())
-    JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
+async def api_summarize_by_file(files: List[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
+    # Validate we have at least one file
+    if not files:
+        raise HTTPException(400, "No files uploaded.")
     
     # Store file text separately and merge with textarea text if present
     global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
     
-    # Cache text content immediately (without images)
-    file_content = (text or "").strip()
+    # Process all files
+    all_file_contents = []
+    filenames = []
+    background_jobs = []
+    
+    for file in files:
+        content = await file.read()
+        if not content:
+            continue  # Skip empty files
+            
+        text = _extract_text_from_upload(content, file.filename)
+        # Hard cap text length
+        if len(text) > 200_000:
+            text = text[:200_000]
+        
+        # Add file content with clear label
+        if text.strip():
+            labeled_content = f"--- File: {file.filename} ---\n\n{text.strip()}"
+            all_file_contents.append(labeled_content)
+            filenames.append(file.filename)
+            
+            # Create job for image processing for this file
+            job_id = str(uuid.uuid4())
+            JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
+            background_jobs.append(job_id)
+            
+            # Start background image processing for this file
+            if background_tasks:
+                background_tasks.add_task(_process_images_background, content, file.filename, job_id, text.strip())
+    
+    # Combine all file contents
+    file_content = "\n\n".join(all_file_contents) if all_file_contents else ""
     RFP_TEXT_CACHE_FILE = file_content
     textarea_text = (RFP_TEXT_CACHE_TEXTAREA or "").strip()
     
-    # Combine both sources with clear separator
-    if textarea_text and file_content:
-        merged_text = f"{textarea_text}\n\n--- Uploaded Document Content ---\n\n{file_content}"
-    elif file_content:
-        merged_text = file_content
-    else:
-        merged_text = textarea_text
+    # Merge textarea text with all file contents
+    parts = []
+    if textarea_text:
+        parts.append(textarea_text)
+    if file_content:
+        parts.append(file_content)
+    
+    merged_text = "\n\n".join(parts) if parts else ""
     
     # Cache merged text for backward compatibility
     RFP_TEXT_CACHE = merged_text
     
-    # Start background image processing (will update cache when complete)
-    if background_tasks:
-        background_tasks.add_task(_process_images_background, content, file.filename, job_id, file_content)
+    # NEW: remember for default project name (use first file)
+    LAST_UPLOAD_FILENAME = filenames[0] if filenames else "upload"
     
-    # NEW: remember for default project name
-    LAST_UPLOAD_FILENAME = file.filename
-    
-    # Get summary
+    # Get summary using GPT-5
     summary = ai_summarize_rfp_text(merged_text)
     
-    # Return summary with job_id for progress tracking
+    # Return summary with job_ids for progress tracking
     # Use .dict() for Pydantic v1 compatibility
     summary_dict = summary.dict() if hasattr(summary, 'dict') else summary.model_dump()
     return {
         **summary_dict,
-        "job_id": job_id,
-        "processing_images": True
+        "filenames": filenames,  # Return all filenames
+        "job_ids": background_jobs,  # Return all job IDs
+        "processing_images": len(background_jobs) > 0
     }
 
 @app.post("/api/retainer_detect")
