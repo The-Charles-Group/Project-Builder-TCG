@@ -81,9 +81,11 @@ WF_COLUMNS = [
 # at top, near other env helpers
 PRIMARY = os.getenv("APB_PRIMARY_DB_VERSION", "v4").lower()  # 'v3' or 'v4'
 
-# Scenario multipliers for A only (B/C removed for simplicity)
+# Scenario multipliers for A/B/C differentiation
 SCENARIO_MULT = {
-    "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True}
+    "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True},
+    "B": {"hours_mult": 1.15, "qa_pct": 0.07, "pm_pct": 0.12, "strip_optional": False},
+    "C": {"hours_mult": 1.30, "qa_pct": 0.10, "pm_pct": 0.15, "include_addons": True}
 }
 
 # US & Mexico holidays for business day calendar
@@ -2179,6 +2181,7 @@ class ScenarioSpec(BaseModel):
 class BuildPayload(BaseModel):
     selected_deliverable_codes: List[str]
     scenario_a: Optional[ScenarioSpec] = None
+    scenario_b: Optional[ScenarioSpec] = None
     pricing_mode: str = "Flat_Blended"                       # "Flat_Blended" or "Per_Resource"
     blended_rate: Optional[float] = None
     rate_band: Optional[str] = "Standard_US"
@@ -2198,6 +2201,7 @@ class BuildPayload(BaseModel):
 class AutoBuildPayload(BaseModel):
     rfp_text: str
     scenario_a: ScenarioSpec
+    scenario_b: ScenarioSpec
     pricing_mode: str                       # "Flat_Blended" or "Per_Resource"
     blended_rate: Optional[float] = None
     rate_band: Optional[str] = "Standard_US"
@@ -2217,6 +2221,24 @@ class ExportPayload(BaseModel):
     scenario_label: Optional[str] = None     # e.g., "Scenario A"
     add_timestamp: Optional[bool] = False    # include yyyymmdd-HHMM in filename?                # a scenario dict returned from /api/build
 
+class ExportWorkbookPayload(BaseModel):
+    scenario_a: dict
+    scenario_b: dict
+    project_name: str | None = None
+    sheet_name_a: str | None = "Scenario A"
+    sheet_name_b: str | None = "Scenario B"
+    add_timestamp: bool | None = False
+
+class ExportWorkbookABCPayload(BaseModel):
+    scenario_a: dict
+    scenario_b: dict
+    scenario_c: dict
+    project_name: str | None = None
+    sheet_name_a: str | None = "Scenario A"
+    sheet_name_b: str | None = "Scenario B"
+    sheet_name_c: str | None = "Scenario C"
+    add_timestamp: bool | None = False
+
 class ExportXMLPayload(BaseModel):
     scenario: Optional[Dict[str, Any]] = None
     project_name: Optional[str] = None
@@ -2226,6 +2248,22 @@ class ExportXMLPayload(BaseModel):
     fixed_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
     hours_per_day: float = 8.0
     merge_identical_children: bool = False
+
+class ExportWorkbookXMLPayload(BaseModel):
+    scenario_a: Optional[Dict[str, Any]] = None
+    scenario_b: Optional[Dict[str, Any]] = None  
+    project_name: Optional[str] = None
+    project_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
+    merge_identical_children: bool = False
+
+class ExportWorkbookXMLABCPayload(BaseModel):
+    scenario_a: Optional[Dict[str, Any]] = None
+    scenario_b: Optional[Dict[str, Any]] = None
+    scenario_c: Optional[Dict[str, Any]] = None
+    project_name: Optional[str] = None
+    start_date_mode: str = "next_monday"   # "next_monday" | "fixed"
+    fixed_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
+    hours_per_day: float = 8.0
 
 class AuditPricingPayload(BaseModel):
     scenario: Dict[str, Any]           # scenario object from /api/build
@@ -3482,110 +3520,110 @@ def api_build(payload: BuildPayload):
     
     print(f"DEBUG Build: Component map processed: {comp_map}")
 
-    # Build Scenario A only (B/C removed for simplicity)
+    # Build scenarios
     scenarios = {}
-    
-    # Default spec if not provided
+    # Set default scenarios if not provided
     default_spec_a = ScenarioSpec(mode="template", scenario_key="MED_LOW")
-    spec_in = (payload.scenario_a or default_spec_a)
+    default_spec_b = ScenarioSpec(mode="template", scenario_key="MED_HIGH")
     
-    per_deliv = []
-    for code in payload.selected_deliverable_codes:
-        row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
-        if row.empty: 
-            print(f"DEBUG Build: No deliverable found for code '{code}'")
-            continue
-        
-        deliverable_name = str(row["Deliverable"].iloc[0])
-        cat = str(row["Category"].iloc[0])
-        print(f"DEBUG Build: Code '{code}' -> Name '{deliverable_name}' (Category: {cat})")
-        
-        spec_resolved = _resolve_scenario(spec_in, cat)
-        months = int(ret_map.get(code, 0))
-        selected_components_dict = comp_map.get(str(code), {})
-        out = _scenario_for_deliverable(
-            code, cat, spec_resolved,
-            pricing_mode, blended_rate, rate_band,
-            use_slack, slack_i, slack_c, slack_pct, project_start,
-            scenario_letter="A",
-            retainer_months=months,
-            selected_components=selected_components_dict
+    for letter, spec_in in [("A", payload.scenario_a or default_spec_a), ("B", payload.scenario_b or default_spec_b)]:
+        per_deliv = []
+        for code in payload.selected_deliverable_codes:
+            row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
+            if row.empty: 
+                print(f"DEBUG Build: No deliverable found for code '{code}'")
+                continue
+            
+            deliverable_name = str(row["Deliverable"].iloc[0])
+            cat = str(row["Category"].iloc[0])
+            print(f"DEBUG Build: Code '{code}' -> Name '{deliverable_name}' (Category: {cat})")
+            
+            spec_resolved = _resolve_scenario(spec_in, cat)
+            months = int(ret_map.get(code, 0))
+            selected_components_dict = comp_map.get(str(code), {})
+            out = _scenario_for_deliverable(
+                code, cat, spec_resolved,
+                pricing_mode, blended_rate, rate_band,
+                use_slack, slack_i, slack_c, slack_pct, project_start,
+                scenario_letter=letter,
+                retainer_months=months,   # NEW
+                selected_components=selected_components_dict  # NEW
+            )
+            # Add names for readability
+            out["deliverable"] = deliverable_name
+            out["category"]    = cat
+            print(f"DEBUG Build: Added to scenario - deliverable field: '{out.get('deliverable', 'MISSING')}')")
+            per_deliv.append(out)
+
+        # Look up any previously built scenario so we can preserve a user-locked timeline
+        _prev = _current_scenarios().get(letter) or {}
+        locked = bool(_prev.get("manual_order_locked"))
+
+        if locked:
+            # 1) Preserve the user's order (keep intersection, append any new codes at the end)
+            built_by_code = {str(it["deliverable_code"]): it for it in per_deliv}
+            prev_order = [str(c) for c in (_prev.get("user_order") or [])]
+            keep = [c for c in prev_order if c in built_by_code]
+            tail = [c for c in built_by_code.keys() if c not in keep]
+            ordered_codes = keep + tail
+            per_deliv = [built_by_code[c] for c in ordered_codes]
+
+            # 2) Carry forward the sequential schedule/dates computed by Save Order
+            prev_by_code = {str(it.get("deliverable_code")): it for it in (_prev.get("items") or [])}
+            for it in per_deliv:
+                code = str(it["deliverable_code"])
+                prev_it = prev_by_code.get(code)
+                if prev_it and prev_it.get("schedule"):
+                    sched = prev_it["schedule"]
+                    it["schedule"] = sched
+                    it["start"] = sched[0]["start_date"]
+                    it["end"]   = sched[-1]["end_date"]
+                    it["duration_days"] = sum(int(r["duration_days"]) for r in sched)
+        else:
+            # Default behavior when user hasn't locked a timeline yet
+            per_deliv = _sort_deliverables(per_deliv, letter)
+
+        # Apply scenario-specific multipliers and add PM/QA overhead
+        spec_resolved = _resolve_scenario(spec_in, "General")  # Get resolved spec for complexity/tier
+        per_deliv = _apply_scenario_knobs(
+            per_deliv, letter, 
+            spec_resolved.get("complexity", "Advanced"), 
+            spec_resolved.get("tier", "T2_MediumVolume"),
+            pricing_mode, rate_band, DB, blended_rate
         )
-        # Add names for readability
-        out["deliverable"] = deliverable_name
-        out["category"]    = cat
-        print(f"DEBUG Build: Added to scenario - deliverable field: '{out.get('deliverable', 'MISSING')}')")
-        per_deliv.append(out)
 
-    # Look up any previously built scenario so we can preserve a user-locked timeline
-    _prev = _current_scenarios().get("A") or {}
-    locked = bool(_prev.get("manual_order_locked"))
+        # Totals after order is finalized and scenario knobs applied
+        price_sum = sum(int(x["price"]) for x in per_deliv)
+        hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
 
-    if locked:
-        # 1) Preserve the user's order (keep intersection, append any new codes at the end)
-        built_by_code = {str(it["deliverable_code"]): it for it in per_deliv}
-        prev_order = [str(c) for c in (_prev.get("user_order") or [])]
-        keep = [c for c in prev_order if c in built_by_code]
-        tail = [c for c in built_by_code.keys() if c not in keep]
-        ordered_codes = keep + tail
-        per_deliv = [built_by_code[c] for c in ordered_codes]
+        # Build the scenario object
+        scenario_out = {
+            "pricing_mode": pricing_mode,
+            "rate_band": rate_band,
+            "blended_rate": blended_rate,
+            "use_slack": use_slack,
+            "slack_after_internal": slack_i,
+            "slack_after_client": slack_c,
+            "slack_global_pct": slack_pct,
+            "project_start": project_start,
+            "items": per_deliv,
+            "totals": {"hours": int(hours_sum), "price": int(price_sum)}
+        }
 
-        # 2) Carry forward the sequential schedule/dates computed by Save Order
-        prev_by_code = {str(it.get("deliverable_code")): it for it in (_prev.get("items") or [])}
-        for it in per_deliv:
-            code = str(it["deliverable_code"])
-            prev_it = prev_by_code.get(code)
-            if prev_it and prev_it.get("schedule"):
-                sched = prev_it["schedule"]
-                it["schedule"] = sched
-                it["start"] = sched[0]["start_date"]
-                it["end"]   = sched[-1]["end_date"]
-                it["duration_days"] = sum(int(r["duration_days"]) for r in sched)
-    else:
-        # Default behavior when user hasn't locked a timeline yet
-        per_deliv = _sort_deliverables(per_deliv, "A")
+        # Preserve/Set order tracking flags
+        if locked:
+            scenario_out["ai_order"] = list(_prev.get("ai_order") or [it["deliverable_code"] for it in per_deliv])
+            scenario_out["user_order"] = ordered_codes
+            scenario_out["manual_order_locked"] = True
+        else:
+            scenario_out["ai_order"] = [it["deliverable_code"] for it in per_deliv]
+            scenario_out["user_order"] = list(scenario_out["ai_order"])
+            scenario_out["manual_order_locked"] = False
 
-    # Apply scenario-specific multipliers and add PM/QA overhead
-    spec_resolved = _resolve_scenario(spec_in, "General")  # Get resolved spec for complexity/tier
-    per_deliv = _apply_scenario_knobs(
-        per_deliv, "A", 
-        spec_resolved.get("complexity", "Advanced"), 
-        spec_resolved.get("tier", "T2_MediumVolume"),
-        pricing_mode, rate_band, DB, blended_rate
-    )
-
-    # Totals after order is finalized and scenario knobs applied
-    price_sum = sum(int(x["price"]) for x in per_deliv)
-    hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
-
-    # Build the scenario object
-    scenario_out = {
-        "pricing_mode": pricing_mode,
-        "rate_band": rate_band,
-        "blended_rate": blended_rate,
-        "use_slack": use_slack,
-        "slack_after_internal": slack_i,
-        "slack_after_client": slack_c,
-        "slack_global_pct": slack_pct,
-        "project_start": project_start,
-        "items": per_deliv,
-        "totals": {"hours": int(hours_sum), "price": int(price_sum)}
-    }
-
-    # Preserve/Set order tracking flags
-    if locked:
-        scenario_out["ai_order"] = list(_prev.get("ai_order") or [it["deliverable_code"] for it in per_deliv])
-        scenario_out["user_order"] = ordered_codes
-        scenario_out["manual_order_locked"] = True
-    else:
-        scenario_out["ai_order"] = [it["deliverable_code"] for it in per_deliv]
-        scenario_out["user_order"] = list(scenario_out["ai_order"])
-        scenario_out["manual_order_locked"] = False
-
-    # Inflate components if missing (defensive fallback for exports)
-    scenario_out = _inflate_components_if_missing(scenario_out)
-    
-    scenarios["A"] = scenario_out
+        # Inflate components if missing (defensive fallback for exports)
+        scenario_out = _inflate_components_if_missing(scenario_out)
+        
+        scenarios[letter] = scenario_out
 
     # Store scenarios globally for reordering
     global _CURRENT_SCENARIOS
@@ -3593,21 +3631,29 @@ def api_build(payload: BuildPayload):
     
     # Add budget metrics if client_budget_usd was provided
     if client_budget_usd and client_budget_usd > 0:
-        scenario_price = scenarios["A"]["totals"]["price"]
-        budget_delta = scenario_price - client_budget_usd
-        coverage_pct = (scenario_price / client_budget_usd) * 100 if client_budget_usd > 0 else 0
-        scale_factor = client_budget_usd / scenario_price if scenario_price > 0 else 1.0
-        
-        scenarios["A"]["budget_info"] = {
-            "client_budget_usd": client_budget_usd,
-            "total_price": scenario_price,
-            "budget_delta": budget_delta,
-            "coverage_pct": round(coverage_pct, 1),
-            "scale_factor_if_fit": round(scale_factor, 3)
-        }
+        for letter in scenarios:
+            scenario_price = scenarios[letter]["totals"]["price"]
+            budget_delta = scenario_price - client_budget_usd
+            coverage_pct = (scenario_price / client_budget_usd) * 100 if client_budget_usd > 0 else 0
+            scale_factor = client_budget_usd / scenario_price if scenario_price > 0 else 1.0
+            
+            scenarios[letter]["budget_info"] = {
+                "client_budget_usd": client_budget_usd,
+                "total_price": scenario_price,
+                "budget_delta": budget_delta,
+                "coverage_pct": round(coverage_pct, 1),
+                "scale_factor_if_fit": round(scale_factor, 3)
+            }
     
-    # Return scenarios (A only)
-    return {"scenarios": scenarios}
+    # Return a compatibility envelope so both UIs work
+    # Old UIs expect top-level A/B; newer UIs expect {scenarios: {...}}
+    # We return both.
+    resp = {
+        "ok": True,
+        "scenarios": scenarios,   # NEW wrapper for newer UI handlers
+        **scenarios               # Keep A/B at the top level for older UI handlers
+    }
+    return resp
 
 @app.get("/api/scenarios")
 def api_get_scenarios():
@@ -3619,6 +3665,121 @@ def api_get_scenarios():
         "ok": True,
         "scenarios": _current_scenarios() if callable(globals().get("_current_scenarios")) else (_CURRENT_SCENARIOS or {})
     }
+
+@app.post("/api/build_scenario_c")
+def api_build_scenario_c_deprecated(payload: dict):
+    if not DB.loaded:
+        DB.load()
+
+    # 1) Fetch the base scenario (A or B) from current scenarios store
+    base_letter = payload.base.upper()
+    base = _current_scenarios().get(base_letter)
+    if not base:
+        raise HTTPException(status_code=400, detail=f"Base scenario {base_letter} not found. Please build scenarios A and B first.")
+
+    # 2) Union of deliverable codes (base codes + add-on codes)
+    base_codes = [item["deliverable_code"] for item in (base.get("items") or [])]
+    # Use dict.fromkeys to maintain order and remove duplicates
+    union_codes = list(dict.fromkeys(base_codes + payload.add_on_codes))
+    
+    # Filter out any unknown codes
+    valid_codes = []
+    for code in union_codes:
+        if not DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)].empty:
+            valid_codes.append(code)
+    
+    # 3) Inherit parameters from base unless explicitly provided
+    complexity = payload.complexity or base.get("complexity", "Advanced")
+    tier = payload.tier or base.get("tier", "T2_MediumVolume")
+    use_slack = base.get("use_slack", True) if payload.use_slack is None else payload.use_slack
+    slack_i = base.get("slack_after_internal", 1) if payload.slack_after_internal is None else payload.slack_after_internal
+    slack_c = base.get("slack_after_client", 2) if payload.slack_after_client is None else payload.slack_after_client
+    slack_pct = base.get("slack_global_pct", 0.05) if payload.slack_global_pct is None else payload.slack_global_pct
+    project_start = payload.project_start or base.get("project_start")
+    
+    # Build inheritance map from base unless overridden
+    base_ret_map = {}
+    for it in (base.get("items") or []):
+        if it.get("retainer", {}) and int(it["retainer"].get("months", 0)) > 0:
+            base_ret_map[it["deliverable_code"]] = int(it["retainer"]["months"])
+    override_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or [])}
+    ret_map = {**base_ret_map, **override_map}
+
+    # 4) Build scenario items using existing logic (same as /api/build)
+    per_deliv = []
+    for code in valid_codes:
+        row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
+        if row.empty:
+            continue
+        cat = str(row["Category"].iloc[0])
+        
+        # Create scenario spec for this deliverable
+        spec_resolved = {"mode": "template", "complexity": complexity, "tier": tier}
+        
+        months = int(ret_map.get(code, 0))
+        # For Scenario C, no component selection yet - use default
+        out = _scenario_for_deliverable(
+            code, cat, spec_resolved,
+            payload.pricing_mode, payload.blended_rate, payload.rate_band,
+            use_slack, slack_i, slack_c, slack_pct, project_start,
+            scenario_letter="C",
+            retainer_months=months,   # NEW
+            selected_components=None  # No component selection for Scenario C yet
+        )
+        # Add names for readability
+        out["deliverable"] = str(row["Deliverable"].iloc[0])
+        out["category"] = cat
+        per_deliv.append(out)
+
+    # Sort deliverables by phase order
+    per_deliv = _sort_deliverables(per_deliv, "C")
+    
+    # Apply scenario-specific multipliers and add PM/QA overhead
+    per_deliv = _apply_scenario_knobs(
+        per_deliv, "C", complexity, tier,
+        payload.pricing_mode, payload.rate_band, DB, payload.blended_rate
+    )
+    
+    price_sum = sum(int(x["price"]) for x in per_deliv)
+    hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
+
+    # 5) Create Scenario C
+    scenario_c = {
+        "label": "Scenario C (Upsell)",
+        "pricing_mode": payload.pricing_mode,
+        "rate_band": payload.rate_band,
+        "blended_rate": payload.blended_rate,
+        "complexity": complexity,
+        "tier": tier,
+        "use_slack": use_slack,
+        "slack_after_internal": slack_i,
+        "slack_after_client": slack_c,
+        "slack_global_pct": slack_pct,
+        "project_start": project_start,
+        "items": per_deliv,
+        "totals": {"hours": int(hours_sum), "price": int(price_sum)}
+    }
+    
+    # Add budget metrics if client_budget_usd was provided
+    if payload.client_budget_usd and payload.client_budget_usd > 0:
+        scenario_price = int(price_sum)
+        budget_delta = scenario_price - payload.client_budget_usd
+        coverage_pct = (scenario_price / payload.client_budget_usd) * 100 if payload.client_budget_usd > 0 else 0
+        scale_factor = payload.client_budget_usd / scenario_price if scenario_price > 0 else 1.0
+        
+        scenario_c["budget_info"] = {
+            "client_budget_usd": payload.client_budget_usd,
+            "total_price": scenario_price,
+            "budget_delta": budget_delta,
+            "coverage_pct": round(coverage_pct, 1),
+            "scale_factor_if_fit": round(scale_factor, 3)
+        }
+
+    # 6) Store/update in memory next to A/B for this session
+    global _CURRENT_SCENARIOS
+    _CURRENT_SCENARIOS["C"] = scenario_c
+    
+    return {"C": scenario_c}
 
 @app.post("/api/auto_build")
 def api_auto_build(payload: AutoBuildPayload):
@@ -3637,11 +3798,13 @@ def api_auto_build(payload: AutoBuildPayload):
         return {
             "suggested": suggestions,
             "scenarios": {
-                "A": {"items": [], "totals": {"hours": 0.0, "price": 0.0}}
+                "A": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
+                "B": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
             }
         }
 
-    # 3) Build Scenario A only
+    # 3) Reuse the same logic as /api/build to assemble scenarios
+    #    (We inline the essential parts to keep it simple.)
     def _build_for(selected_deliverable_codes, scen_spec):
         per_deliv = []
         price_sum = 0.0
@@ -3658,8 +3821,8 @@ def api_auto_build(payload: AutoBuildPayload):
                 payload.pricing_mode, payload.blended_rate, payload.rate_band or "Standard_US",
                 bool(payload.use_slack), int(payload.slack_after_internal), int(payload.slack_after_client),
                 float(payload.slack_global_pct or 0), payload.project_start,
-                scenario_letter="A",
-                retainer_months=months
+                scenario_letter="A",  # letter doesn't affect numbers; acceptable here
+                retainer_months=months  # NEW
             )
             out["deliverable"] = str(row["Deliverable"].iloc[0])
             out["category"] = cat
@@ -3679,7 +3842,10 @@ def api_auto_build(payload: AutoBuildPayload):
             "totals": {"hours": round(hours_sum, 2), "price": round(price_sum, 2)}
         }
 
-    scenarios = {"A": _build_for(selected_codes, payload.scenario_a)}
+    scenarios = {
+        "A": _build_for(selected_codes, payload.scenario_a),
+        "B": _build_for(selected_codes, payload.scenario_b),
+    }
 
     return {"suggested": suggestions, "scenarios": scenarios}
 
