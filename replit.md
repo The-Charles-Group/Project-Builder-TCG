@@ -10,7 +10,21 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 2025)
 
-### GPT-5 Pro AI Matching Integration (Latest - October 9, 2025)
+### v3 Database Compatibility Fix (Latest - October 9, 2025)
+- **Complete v3 Database Support**: Fixed all "NoneType object is not subscriptable" errors caused by missing sheets in v3 database
+  - Added None checks for timeline_weighting, timeline_scaling, b_defaults, and scenario_templates
+  - Default fallback values: wc=0.6, wt=0.4, cmult=1.0, tmult=1.0 for timeline calculations
+  - All endpoints now work correctly with v3-only database structure
+- **"Proceed to Pricing" Button Fixed**: Resolved 500 Internal Server Error in Step 3
+  - /api/build endpoint now handles missing v3 sheets gracefully
+  - Pricing calculations verified working: $5,735 for 31 hours test case
+- **XML Export Verified**: Timeline and export functionality fully operational
+  - /api/export/xml/a generates valid Workfront-compatible MSPDI XML
+  - Business day calendars with US/MX holidays working correctly
+  - XML post-processing optimizes parallel tasks (e.g., 28d → 21d makespan reduction)
+- **End-to-End Testing**: Complete smoke test of Steps 1-5 confirms all features functional
+
+### GPT-5 Pro AI Matching Integration (October 9, 2025)
 - **1,583 AI Matching Rules**: Integrated comprehensive AI_Matching_Rules_full.xlsx database with admin-configurable matching rules
   - Covers all L1 (deliverables), L2 (components), and L3 (subtasks) with keyword matching
   - Priority scoring and auto-include related components
