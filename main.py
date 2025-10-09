@@ -693,10 +693,26 @@ class AgencyDB:
             return ([], [])
         df = self.drivers_v3.copy()
         cols = {c.lower(): c for c in df.columns}
-        # Try to find the columns
-        type_col = next((cols.get(x) for x in ["type","driver","driver_type","category"]), None)
-        key_col  = next((cols.get(x) for x in ["key","value","name","label","option"]), None)
-        order_col= next((cols.get(x) for x in ["sort","order","seq","priority"]), None)
+        
+        # Try to find the columns (check if search term is contained in column name)
+        type_col = None
+        for search in ["driver_type", "type", "driver", "category"]:
+            type_col = next((cols[k] for k in cols if search in k), None)
+            if type_col:
+                break
+        
+        key_col = None
+        for search in ["driver_name", "name", "key", "value", "label", "option"]:
+            key_col = next((cols[k] for k in cols if search in k), None)
+            if key_col:
+                break
+        
+        order_col = None
+        for search in ["sort", "order", "seq", "priority"]:
+            order_col = next((cols[k] for k in cols if search in k), None)
+            if order_col:
+                break
+        
         if not type_col or not key_col:
             return ([], [])
         if order_col:
@@ -2643,9 +2659,15 @@ def api_options():
     # Prefer v3 Drivers (3 each)
     v3_complexities, v3_tiers = DB.drivers_complexities_tiers_v3()
     if not v3_complexities:
-        v3_complexities = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Complexity"]["Key"].head(3).tolist()
+        if DB.timeline_scaling is not None:
+            v3_complexities = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Complexity"]["Key"].head(3).tolist()
+        else:
+            v3_complexities = ["Basic", "Standard", "Advanced"]
     if not v3_tiers:
-        v3_tiers = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].head(3).tolist()
+        if DB.timeline_scaling is not None:
+            v3_tiers = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].head(3).tolist()
+        else:
+            v3_tiers = ["T1_LowVolume", "T2_MediumVolume", "T3_HighVolume"]
 
     rate_bands = dedupe_list(DB.rate_bands["Band_Name"].head(3).tolist()) if DB.rate_bands is not None else []
     pricing_modes = dedupe_list(["Flat_Blended","Per_Resource"])  # Deduplicate
@@ -2660,16 +2682,33 @@ def api_options():
     deliverables_df["Sort_Order"] = deliverables_df.index
     deliverables = deliverables_df.to_dict(orient="records")
 
+    # Safe extraction with None checks
+    bundles = []
+    if DB.b_defaults is not None and "Bundle" in DB.b_defaults.columns:
+        bundles = DB.b_defaults["Bundle"].tolist()
+    
+    scenario_templates = []
+    if DB.scenario_templates is not None:
+        scenario_templates = DB.scenario_templates.to_dict(orient="records")
+    
+    pricing_settings = []
+    if DB.pricing_settings is not None:
+        pricing_settings = DB.pricing_settings.to_dict(orient="records")
+    
+    slack_settings = []
+    if DB.slack_settings is not None:
+        slack_settings = DB.slack_settings.to_dict(orient="records")
+    
     return {
         "complexities": v3_complexities,
         "tiers": v3_tiers,
         "rate_bands": rate_bands,
         "pricing_modes": pricing_modes,
-        "bundles": DB.b_defaults["Bundle"].tolist(),
+        "bundles": bundles,
         "deliverables": deliverables,
-        "scenario_templates": DB.scenario_templates.to_dict(orient="records"),
-        "pricing_settings": DB.pricing_settings.to_dict(orient="records"),
-        "slack_settings": DB.slack_settings.to_dict(orient="records"),
+        "scenario_templates": scenario_templates,
+        "pricing_settings": pricing_settings,
+        "slack_settings": slack_settings,
     }
 
 @app.get("/api/search_deliverables")
