@@ -10,7 +10,24 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 2025)
 
-### UI & Export Quality Improvements (Latest - October 8, 2025)
+### GPT-5 Pro AI Matching Integration (Latest - October 9, 2025)
+- **1,583 AI Matching Rules**: Integrated comprehensive AI_Matching_Rules_full.xlsx database with admin-configurable matching rules
+  - Covers all L1 (deliverables), L2 (components), and L3 (subtasks) with keyword matching
+  - Priority scoring and auto-include related components
+  - Configurable weights: rule-based (60%) + lexical TF-IDF (40%)
+- **Weighted Scoring API**: New `/api/step2/ai/weights` endpoint provides 0-100% match percentages
+  - Returns Service Department → Deliverable → Match % with detailed explanations
+  - Example: "Paid Media Buying & Activation" correctly scores 97.38% for paid media RFPs
+- **Ask AI for Suggestions Button**: New UI feature in Step 2 for deliverable recommendations
+  - Purple gradient button "🤖 Ask AI for Deliverable Suggestions"
+  - TCGWeights.render() displays weighted match results table
+  - Shows top components and tasks for each matched deliverable
+- **Simplified Scenarios**: Removed Scenario B and C from entire UI for cleaner user experience
+  - Steps 3, 4, 5 now only show Scenario A
+  - JavaScript updated with null checks to prevent errors
+- **Step 2A Labeling**: Bottom section renamed to "Step 2A: Detail Review & Selection" with visual separator
+
+### UI & Export Quality Improvements (October 8, 2025)
 - **Deliverable Selection UX**: Row click now previews only (shows components if already selected); checkbox is sole source of truth for selection
 - **XML Anchor Milestones**: Made optional with UI toggle in Step 2 Summary panel
   - Checkbox control: "Include Start/End anchors in XML" (default unchecked)
