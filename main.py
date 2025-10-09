@@ -4978,8 +4978,10 @@ async def api_summarize_by_file(file: UploadFile = File(...), background_tasks: 
     summary = ai_summarize_rfp_text(merged_text)
     
     # Return summary with job_id for progress tracking
+    # Use .dict() for Pydantic v1 compatibility
+    summary_dict = summary.dict() if hasattr(summary, 'dict') else summary.model_dump()
     return {
-        **summary.model_dump(),
+        **summary_dict,
         "job_id": job_id,
         "processing_images": True
     }
