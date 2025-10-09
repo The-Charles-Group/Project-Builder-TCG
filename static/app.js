@@ -773,16 +773,21 @@ async function onRunReconcile() {
       }
       
       const form = new FormData();
-      form.append('file', fileEl.files[0]);
+      // Append all selected files
+      for (let i = 0; i < fileEl.files.length; i++) {
+        form.append('files', fileEl.files[i]);
+      }
+      
       const res = await fetch('/api/summarize_by_file', { method: 'POST', body: form });
       if (!res.ok) {
         throw new Error(`Server error: ${res.status} ${res.statusText}`);
       }
-      summary = await res.json(); // { summary_text, deliverables: [{label, short_desc, tasks}], word_count, job_id?, processing_images? }
+      summary = await res.json(); // { summary_text, deliverables: [{label, short_desc, tasks}], word_count, job_ids?, filenames?, processing_images? }
       
-      // Start progress polling if image processing job was started
-      if (summary.job_id && summary.processing_images) {
-        startProgressPolling(summary.job_id);
+      // Start progress polling if image processing jobs were started
+      if (summary.job_ids && summary.job_ids.length > 0 && summary.processing_images) {
+        // Poll the first job (all jobs run in parallel, so they should complete around the same time)
+        startProgressPolling(summary.job_ids[0]);
       }
     } else if (rfpText) {
       // Disable button and show loading state
@@ -3463,6 +3468,22 @@ async function exportXMLScenario(letter) {
 // Wire up XML export button (Scenario A only)
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-export-xml-a')?.addEventListener('click', () => exportXMLScenario('A'));
+  
+  // Display selected file names when files are chosen
+  const fileInput = document.getElementById('rfpFile');
+  const filesList = document.getElementById('selected-files-list');
+  if (fileInput && filesList) {
+    fileInput.addEventListener('change', (e) => {
+      const files = e.target.files;
+      if (files && files.length > 0) {
+        const names = Array.from(files).map(f => f.name).join(', ');
+        filesList.textContent = `Selected: ${names}`;
+        filesList.style.color = 'var(--accent)';
+      } else {
+        filesList.textContent = '';
+      }
+    });
+  }
 });
 
 window.addEventListener("load", boot);

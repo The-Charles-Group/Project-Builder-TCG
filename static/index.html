@@ -26,7 +26,8 @@
 
       <!-- Upload option -->
       <label for="rfpFile">Upload File</label>
-      <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" />
+      <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" multiple />
+      <div id="selected-files-list" style="margin-top: 8px; font-size: 0.85em; color: var(--muted);"></div>
       
       <!-- Image Analysis Progress Bar -->
       <div id="image-progress-container" style="display: none; margin: 16px 0; padding: 12px; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px;">
