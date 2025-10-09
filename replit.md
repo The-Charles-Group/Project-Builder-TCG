@@ -10,7 +10,26 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 2025)
 
-### v3 Database Compatibility Fix (Latest - October 9, 2025)
+### Compatibility Wrapper & Response Format Update (Latest - October 9, 2025)
+- **Backend Compatibility Wrapper**: /api/build now returns both old and new response formats
+  - New format: `{ok: true, scenarios: {A, B}, ...}`
+  - Old format: Top-level A/B keys preserved for backward compatibility
+  - Single response contains both formats using Python dict unpacking `**scenarios`
+- **Frontend Defensive Parsing**: buildFromCurrentSelection() handles both response shapes
+  - Extracts scenarios from json.scenarios OR constructs from {A: json.A, B: json.B}
+  - Validates A and B exist before proceeding
+  - Maintains legacy state variables (window.BUILD, window.latestScenarios, etc.)
+- **New GET /api/scenarios**: Helper endpoint to refetch scenarios from server memory
+  - Useful for Step 4 recovery if client has transient parsing issues
+  - Returns `{ok: true, scenarios: {...}}`
+- **Smoke Test Results**: All features verified working
+  - ✅ Response includes both formats (scenarios.A == A verified)
+  - ✅ Pricing accurate (Scenario A: $5,735/31hrs, B: $8,695/54hrs)
+  - ✅ Schedule data embedded in deliverable items
+  - ✅ XML export generates 874 lines of valid MSPDI
+  - ✅ Backward compatibility maintained
+
+### v3 Database Compatibility Fix (October 9, 2025)
 - **Complete v3 Database Support**: Fixed all "NoneType object is not subscriptable" errors caused by missing sheets in v3 database
   - Added None checks for timeline_weighting, timeline_scaling, b_defaults, and scenario_templates
   - Default fallback values: wc=0.6, wt=0.4, cmult=1.0, tmult=1.0 for timeline calculations
