@@ -3576,7 +3576,7 @@ def api_build(payload: BuildPayload):
     return scenarios
 
 @app.post("/api/build_scenario_c")
-def api_build_scenario_c(payload: BuildScenarioCPayload):
+def api_build_scenario_c_deprecated(payload: dict):
     if not DB.loaded:
         DB.load()
 

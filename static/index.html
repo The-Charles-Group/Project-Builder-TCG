@@ -261,36 +261,13 @@
       </div>
 
       <div class="inline">
-        <button id="btnBuild">Build Scenarios A & B</button>
+        <button id="btnBuild">Build Scenario</button>
       </div>
 
       <div class="scenarios">
         <div class="scenario">
-          <h3>TCG App pricing (scope-only)</h3>
+          <h3>Project Scenario</h3>
           <div id="scenarioA">(No data)</div>
-        </div>
-
-        <div class="scenario">
-          <h3>Producer-edited</h3>
-          <div id="scenarioB">(No data)</div>
-        </div>
-        
-        <div class="scenario">
-          <h3>Scenario C (Upsell)</h3>
-          <div class="scenario-c-controls" style="margin-bottom: 12px;">
-            <label>Base:
-              <select id="c-base" style="margin-left: 8px;">
-                <option value="A">Scenario A</option>
-                <option value="B">Scenario B</option>
-              </select>
-            </label>
-            <div id="c-adds" style="margin-top: 8px; font-size: 0.9em;">
-              <em>Build scenarios A & B first to see upsell options</em>
-            </div>
-            <button type="button" id="btn-build-c" style="margin-top: 8px;" disabled>Build Scenario C</button>
-          </div>
-          <div id="scenarioC">(No data)</div>
-          <div id="c-delta" style="margin-top: 8px; font-weight: bold; color: var(--accent);"></div>
         </div>
       </div>
     </section>
@@ -299,9 +276,7 @@
     <section class="card" id="step4" style="display:none;">
       <h2>Step 4 — Timeline</h2>
       <div id="timeline-controls">
-        <button type="button" data-timeline-sel="A" id="tl-sel-A">Scenario A</button>
-        <button type="button" data-timeline-sel="B" id="tl-sel-B">Scenario B</button>
-        <button type="button" data-timeline-sel="C" id="tl-sel-C">Scenario C</button>
+        <!-- Timeline for Scenario A only -->
       </div>
       <table id="tl-table" class="table-compact" style="width:100%">
         <thead>
@@ -329,20 +304,12 @@
         </label>
       </div>
       <div class="inline">
-        <button id="btn-export-a">Export Scenario A</button>
-        <button id="btn-export-b">Export Scenario B</button>
-        <button id="btn-export-c">Export Scenario C</button>
-        <button id="btn-export-ab">Export A & B (one file)</button>
-        <button id="btn-export-abc">Export A, B & C (one file)</button>
+        <button id="btn-export-a">Export Excel</button>
       </div>
       
       <div class="inline" style="margin-top: 8px;">
         <small style="color: var(--muted); display: block; margin-bottom: 4px;">📊 Microsoft Project XML Export:</small>
-        <button id="btn-export-xml-a">Export XML Scenario A</button>
-        <button id="btn-export-xml-b">Export XML Scenario B</button>
-        <button id="btn-export-xml-c">Export XML Scenario C</button>
-        <button id="btn-export-xml-ab">Export XML A & B (zip)</button>
-        <button id="btn-export-xml-abc">Export XML A, B & C (zip)</button>
+        <button id="btn-export-xml-a">Export XML</button>
       </div>
     </section>
   </main>
