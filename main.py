@@ -3637,13 +3637,11 @@ def api_auto_build(payload: AutoBuildPayload):
         return {
             "suggested": suggestions,
             "scenarios": {
-                "A": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
-                "B": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
+                "A": {"items": [], "totals": {"hours": 0.0, "price": 0.0}}
             }
         }
 
-    # 3) Reuse the same logic as /api/build to assemble scenarios
-    #    (We inline the essential parts to keep it simple.)
+    # 3) Build Scenario A only
     def _build_for(selected_deliverable_codes, scen_spec):
         per_deliv = []
         price_sum = 0.0
@@ -3660,8 +3658,8 @@ def api_auto_build(payload: AutoBuildPayload):
                 payload.pricing_mode, payload.blended_rate, payload.rate_band or "Standard_US",
                 bool(payload.use_slack), int(payload.slack_after_internal), int(payload.slack_after_client),
                 float(payload.slack_global_pct or 0), payload.project_start,
-                scenario_letter="A",  # letter doesn't affect numbers; acceptable here
-                retainer_months=months  # NEW
+                scenario_letter="A",
+                retainer_months=months
             )
             out["deliverable"] = str(row["Deliverable"].iloc[0])
             out["category"] = cat
@@ -3681,10 +3679,7 @@ def api_auto_build(payload: AutoBuildPayload):
             "totals": {"hours": round(hours_sum, 2), "price": round(price_sum, 2)}
         }
 
-    scenarios = {
-        "A": _build_for(selected_codes, payload.scenario_a),
-        "B": _build_for(selected_codes, payload.scenario_b),
-    }
+    scenarios = {"A": _build_for(selected_codes, payload.scenario_a)}
 
     return {"suggested": suggestions, "scenarios": scenarios}
 
