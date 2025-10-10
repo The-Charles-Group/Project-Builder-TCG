@@ -1,0 +1,41 @@
+The drop‑in file is built to behave like a senior PM/strategist reading an unstructured request, not a keyword matcher. It uses a reasoning model (GPT‑5 Pro) to make evidence‑based decisions about which deliverables, components, and L2 tasks are actually needed for this request/RFP—then it explains why, assigns hours, builds milestones, and keeps everything within your six service departments.
+
+Here’s how it’s “real intelligence,” not static logic:
+
+Understands the request first.
+It summarizes the brief and extracts signals (goals, channels, markets, compliance, languages, timeline, complexity). That context drives everything that follows.
+
+High‑recall retrieval (no tunnel vision).
+It fans out with embeddings + lexical hits + your domain lexicon to gather all plausible deliverables/components/tasks (across your six departments), so the model can choose from a wide set rather than “three canned options.”
+
+Reasoning re‑scoring with GPT‑5 Pro.
+Every candidate is re‑scored by the reasoning model using structured JSON outputs. The model sees top evidence sentences from the request and returns: relevance (0‑100), confidence (0‑1), and a plain‑English why. This is where the “intelligence” happens—it reads the brief and makes the same calls your best PM would.
+
+Evidence‑backed suggestions.
+Suggestions ship with short, quoted evidence snippets (from the request) so PMs can see exactly why they were recommended.
+
+Dependency expansion (like a real team would).
+If “Buying & Activation” is selected, the engine knows you also need trafficking/launch, reporting, etc.—without being told separately.
+
+Strict six‑department gating.
+Everything is forced into Creative, Strategy, Paid Media, Content, Technology, or Integrated Marketing Management—no random categories.
+
+Calibrated confidence (no “everything = 95%”).
+It fuses retrieval and LLM scores, then applies a calibration curve so the UI shows honest High/Medium/Low confidence instead of noisy 80–100% everywhere.
+
+Planned hours, milestones, timelines.
+It converts the chosen scope into hours and a lightweight schedule using base_hours × context multipliers (channels, markets, compliance, complexity) and returns a milestone outline.
+
+Learns from edits.
+The design includes hooks to log “accepted/rejected/edited” suggestions so you can re‑fit the calibration and improve precision over time.
+
+Auto‑run UX.
+The summary and suggestions are generated together on paste/upload—no second button—replacing the two‑step flow your current screen shows. 
+
+Agency Project Builder too many…
+
+Why this fixes what you’re seeing now
+
+Your current “Weighted AI Match Results” panel often shows inflated 80–100% matches (even on marginal items) and makes users click a second time for suggestions. The new engine auto‑runs and uses reasoning + calibration to (a) pick what truly belongs (e.g., Planning → Buying/Activation → Trafficking/Performance → Reporting; GA4/Tagging if measurement is called out), and (b) push down off‑scope boilerplate (e.g., generic SEO blocks when the brief asks for paid + cross‑domain tracking). That addresses the noisy, over‑confident results and the extra click in your current UI. 
+
+Agency
