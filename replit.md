@@ -6,6 +6,19 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+### October 10, 2025 - Workspace Cleanup & Database Consolidation
+- **Workspace Organization**: Reduced root directory from 40+ files to 25 organized files by archiving 23 old/duplicate files
+- **Database Consolidation**: v4 database (`test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx`) is now the primary database with 1,916 rows and 52 deliverable codes
+- **Archive Structure**: Created `archive/` directory with three subdirectories:
+  - `old_code/`: Legacy AI planner and old main.py backups (preserved for reference)
+  - `old_databases/`: v3 database and duplicate v4 files
+  - `test_exports/`: 15 XML/XLSX test export files from Oct 9-10
+- **Critical Fix**: Added `app.state.db` initialization in startup event to properly load AgencyDB for AI planner
+- **Database Loading**: v4 database successfully loads at startup with 24 configuration sheets including Rate_Bands, Bundle_Rules_Table, Timeline_Scaling, UI_Options
+- **Active Dependencies**: `ai_weighted_matcher.py` (Step 1 RFP analysis) and `parallelize_same_name_links.py` (timeline parallelization) remain in root as they are actively used
+
 ## System Architecture
 
 ### Backend Architecture
@@ -42,7 +55,11 @@ Preferred communication style: Simple, everyday language.
   - **Deep Analysis**: Full 500-token analysis only for relevant images, reducing 72-image PDFs to ~8-10 relevant images
   - **User Control**: Optional toggle in UI to disable image analysis entirely for text-only processing
   - **Two-Phase Progress**: Real-time UI updates showing quick scan progress and deep analysis phase separately
-- **Database Compatibility**: Supports v3 database structure with graceful handling of missing sheets and fallback values.
+- **Database Architecture**: 
+  - **Primary Database**: v4 (`test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx`) with 1,916 rows, 52 deliverable codes (DEL-0001 to DEL-0052)
+  - **Initialization**: AgencyDB loaded into `app.state.db` during server startup via `@app.on_event("startup")` decorator
+  - **v4 Features**: 24 configuration sheets including Rate_Bands, Bundle_Rules_Table, Timeline_Scaling, UI_Options (removed "Category" column from v3)
+  - **Backwards Compatibility**: Gracefully handles v3 database structure with missing sheet detection and fallback values
 - **CORS**: Configured to allow cross-origin requests.
 
 ### Frontend Architecture
