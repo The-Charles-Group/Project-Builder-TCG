@@ -982,6 +982,21 @@ function renderAIPlan(aiPlan) {
                       <div style="font-weight: 500; color: #374151;">${comp.title}</div>
                       <div style="font-size: 0.85em; color: #6b7280; margin-top: 4px;">${comp.why || ''}</div>
                       <div style="font-size: 0.85em; color: #9ca3af; margin-top: 2px;">${comp.planned_hours || 0}h</div>
+                      
+                      ${(comp.tasks || []).length > 0 ? `
+                        <details style="margin-top: 8px;">
+                          <summary style="cursor: pointer; font-size: 0.85em; color: #6b7280;">✓ AI-Selected Tasks (${comp.tasks.length})</summary>
+                          <div style="margin-top: 6px; margin-left: 12px;">
+                            ${comp.tasks.map(task => `
+                              <div style="margin-bottom: 4px; padding: 6px; background: rgba(16, 185, 129, 0.05); border-left: 2px solid #10b981; border-radius: 3px;">
+                                <div style="font-size: 0.85em; color: #065f46; font-weight: 500;">✓ ${task.title}</div>
+                                ${task.why ? `<div style="font-size: 0.8em; color: #6b7280; margin-top: 2px;">${task.why}</div>` : ''}
+                                <div style="font-size: 0.8em; color: #9ca3af; margin-top: 2px;">${task.planned_hours || 0}h</div>
+                              </div>
+                            `).join('')}
+                          </div>
+                        </details>
+                      ` : '<div style="font-size: 0.85em; color: #9ca3af; margin-top: 6px; font-style: italic;">No specific tasks selected by AI</div>'}
                     </div>
                   `).join('')}
                 </div>
