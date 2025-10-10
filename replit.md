@@ -13,16 +13,27 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data, calculations, and manipulations.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **AI Planner (GPT-4o)**: Advanced reasoning-based AI intelligence layer that auto-generates comprehensive project analysis in a single API call:
-  - **One-Click Workflow**: "Analyze with AI" button triggers summary + deliverable suggestions simultaneously (eliminating the previous two-step UX)
+- **AI Planner v3 (GPT-4o + AgencyDB)**: Advanced reasoning-based AI intelligence layer connected to real database with granular task selection:
+  - **AgencyDB Integration**: Directly connects to AgencyDB (app.state.db) instead of ZIP catalogs, returns REAL deliverable codes (DEL-0027, etc.)
+  - **Granular L2 Task Selection**: AI explicitly selects/deselects individual L2 tasks based on relevance (not bulk inclusion) - sets select=true/false per task
+  - **Holistic Analysis**: Considers complete project flow from start to finish, includes dependency expansion automatically
+  - **One-Click Workflow**: "Analyze with AI" button triggers summary + deliverable suggestions simultaneously
   - **Evidence-Based Matching**: High-recall semantic retrieval (embeddings + lexical scoring) → LLM re-ranking → calibrated confidence scores
-  - **Dependency Expansion**: Automatically includes prerequisite deliverables (e.g., Planning → Buying → Trafficking → Reporting)
   - **Calibrated Confidence**: Bayesian-style calibration with configurable strictness (high/balanced/recall gates at 70%/58%/48%)
   - **Smart Multipliers**: Complexity, channel count, market count, and compliance factors dynamically adjust planned hours
-  - **Future-Proof Design**: Protocol-based abstraction (InprocPlanner) allows switching to HTTP sidecar in <1 hour
-  - **Catalog Support**: Loads deliverable catalog from ZIP files (XML/JSON/CSV) with flexible key mapping
+  - **Auto-Relax & Rescue**: Automatically relaxes thresholds and has fallback logic to guarantee non-empty suggestions
   - **Six Departments**: Creative, Strategy, Paid Media, Content, Technology, Integrated Marketing Management
-  - **API Endpoints**: `/api/ai/analyze` (main planner), `/api/ai/catalog/reload` (reload catalog), `/api/ai/health` (status check)
+  - **API Endpoints**: `/api/ai/analyze` (main planner with AgencyDB), `/api/ai/health` (status check with catalog stats)
+- **Timeline Scheduler Kit**: AI-powered timeline optimization with SS+lag overlaps:
+  - **MSPDI Pipeline**: Complete Microsoft Project XML parser, optimizer, and writer
+  - **Smart Overlaps**: Automatically converts FS dependencies to SS+lag based on predefined rules (e.g., Design 60% → Dev starts)
+  - **Gatekeeper Preservation**: Keeps review/approval chains intact (Internal Review → Client Review → Revisions → Final)
+  - **Cycle Breaking**: Automatically resolves circular dependencies
+  - **Duration Rounding**: Rounds all durations to whole days for cleaner timelines
+  - **Units Recalculation**: Recomputes resource units based on work and duration
+  - **Multi-Format Export**: Generates optimized XML, Gantt JSON, explanations JSON, and Excel audit trail
+  - **API Endpoints**: `/api/schedule/optimize` (run optimization), `/api/schedule/download/{file_type}/{base_name}` (download results)
+  - **Security**: Path traversal protection with regex validation and absolute path verification
 - **Legacy AI Matching**: Original weighted matching rules system (now deprecated in favor of GPT-4o planner but kept for reference)
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking. Includes job tracking, retry logic, and robust error handling.
 - **Smart Image Analysis**: Two-tier image processing system that dramatically reduces processing time and cost for PDFs with many decorative images:
