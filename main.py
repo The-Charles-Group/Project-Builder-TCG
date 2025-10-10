@@ -147,13 +147,9 @@ if not os.path.exists("static"):
     os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Include AI weights routers (v1 and v2)
+# Include AI weights router
 from routes_weights_fastapi import router as weights_router
 app.include_router(weights_router)
-
-# Include AI weights V2 router (with department gating, budget awareness, sparsity)
-from server.routes_weights_v2_fastapi import router as weights_v2_router
-app.include_router(weights_v2_router)
 
 # ===== Workfront column order (now includes Service_Department) =====
 WF_COLUMNS = [

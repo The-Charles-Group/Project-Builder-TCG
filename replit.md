@@ -13,19 +13,7 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data, calculations, and manipulations.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **AI Matching**: Integrates comprehensive AI matching rules for deliverables, components, and subtasks with priority scoring and configurable weights. Features two parallel AI scoring systems:
-  - **V1 (Weighted Matcher)**: Original weighted scoring API with interactive suggestions panel (`/api/step2/ai/weights`)
-  - **V2 (Sparse, Calibrated)**: Enhanced relevance engine with department gating, budget awareness, execution/strategy bias, and **user-configurable strictness levels** (`/api/step2/ai/weights_v2`). Fixes critical over-scoring issue where v1 scored everything 85-100%. Key features:
-    - **Strictness Levels**: User-selectable scoring sensitivity
-      - **High**: Very selective (max 3 items ≥90%, stricter penalties: dept 0.25×, strategy 0.5×, overbudget 0.5×)
-      - **Normal**: Balanced (max 4 items ≥85%, moderate penalties: dept 0.35×, strategy 0.6×, overbudget 0.6×) [default]
-      - **Loose**: Permissive (max 6 items ≥80%, lenient penalties: dept 0.45×, strategy 0.7×, overbudget 0.7×)
-    - **Department Gating**: Top 2 departments get 1.10× bonus, others get configurable penalty based on strictness
-    - **Execution vs Strategy Bias**: Execution keywords (buy, activate, traffic, optimize) get 1.15× bonus; strategy keywords (plan, strategy, deck) get configurable penalty
-    - **Sparsity Control**: Configurable maximum deliverables in "High" band based on strictness level
-    - **Budget Awareness**: Items exceeding 110% of budget get configurable penalty based on strictness
-    - **Hybrid Scoring**: Combines rule-based scores (Weight_Base from AI_Matching_Rules) with lexical TF-IDF similarity
-    - **Level Mapping**: L1=Deliverable, L2=Component, L3=Task (matches AI_Index sheet structure)
+- **AI Matching**: Integrates comprehensive AI matching rules for deliverables, components, and subtasks with priority scoring and configurable weights. Features a weighted scoring API and an interactive AI suggestions panel.
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking. Includes job tracking, retry logic, and robust error handling.
 - **Smart Image Analysis**: Two-tier image processing system that dramatically reduces processing time and cost for PDFs with many decorative images:
   - **Pre-filtering**: Hash-based deduplication and size filtering (<100px) to eliminate logos, icons, and repeated images
@@ -42,10 +30,7 @@ Preferred communication style: Simple, everyday language.
 - **Styling**: Uses CSS custom properties for theming, including a dark mode.
 - **State Management**: Centralized `selectionStore` as single source of truth with Proxy-backed compatibility layer for legacy code paths.
 - **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, and enhanced summary panel with hierarchical display and individual remove buttons.
-- **AI Integration**: Displays GPT-5 suggestions with reasoning, and action buttons for applying or replacing suggestions. Features dual AI scoring buttons in Step 2:
-  - **"🤖 Ask AI for Deliverable Suggestions"**: Uses V1 weighted matching
-  - **"✨ Ask AI V2 (Sparse, Calibrated)"**: Uses V2 enhanced relevance engine with department gating and sparsity control
-  - **Strictness Selector**: Dropdown menu to control V2 scoring sensitivity (High/Normal/Loose) with dynamic band thresholds and visual feedback
+- **AI Integration**: Displays GPT-5 suggestions with reasoning, and action buttons for applying or replacing suggestions.
 - **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends from timeline end dates.
 - **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 
@@ -58,11 +43,7 @@ Preferred communication style: Simple, everyday language.
 - Supports file uploads for RFP documents and Excel configuration files.
 - Uses JSON for configuration data and calculated scenario responses.
 - Serves static files for frontend assets.
-- Includes endpoints for:
-  - Weighted AI suggestions V1: `/api/step2/ai/weights`
-  - Weighted AI suggestions V2 (sparse, calibrated): `/api/step2/ai/weights_v2`
-  - Bulk L3 task retrieval: `/api/step2/l3/bulk`
-  - Scenario refetching: `/api/scenarios`
+- Includes new endpoints for weighted AI suggestions (`/api/step2/ai/weights`), bulk L3 task retrieval (`/api/step2/l3/bulk`), and scenario refetching (`/api/scenarios`).
 
 ## External Dependencies
 
