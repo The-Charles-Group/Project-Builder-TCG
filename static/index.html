@@ -66,8 +66,8 @@
     <section class="card" id="step2" style="display:none;">
       <h2>Step 2 — Select & Configure Deliverables</h2>
       
-      <!-- Weighted AI Suggestions Button -->
-      <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
+      <!-- DEPRECATED: Old weighted AI button (hidden - now using GPT-5 Pro planner) -->
+      <div style="margin-bottom: 16px; display: none; gap: 12px; align-items: center;">
         <button id="btn-ask-ai-weights" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
           🤖 Ask AI for Deliverable Suggestions
         </button>
@@ -85,40 +85,21 @@
         </div>
       </div>
       
-      <!-- AI Analysis Panel (Top, Full Width) -->
+      <!-- NEW: AI Planner Panel (GPT-5 Pro) -->
       <div class="ai-analysis-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-          <h3 style="margin: 0; color: var(--accent);">📋 AI Analysis & Suggestions</h3>
-          <a href="#" id="btnRunReconcile" style="font-size: 0.9em; color: var(--accent); text-decoration: none;">
-            🔄 Refresh AI Suggestions
-          </a>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="margin: 0; color: var(--accent);">🧠 GPT-5 Pro AI Planner</h3>
+          <span style="font-size: 0.85em; color: var(--muted);">Evidence-backed • Reasoning-powered</span>
         </div>
         
-        <!-- AI Suggested Deliverables -->
-        <div style="margin-bottom: 12px;">
-          <strong style="font-size: 0.95em;">Suggested Deliverables:</strong>
-          <div id="s2-ai-suggest" style="margin-top: 8px; min-height: 60px;">
-            <p style="color: var(--muted); font-size: 0.9em; margin: 0;">Run analysis to see AI suggestions.</p>
-          </div>
+        <!-- AI Summary Panel -->
+        <div id="ai-summary-panel">
+          <p style="color: var(--muted); font-size: 0.9em; margin: 0;">Click "Analyze with AI" above to get summary + suggestions in one call.</p>
         </div>
         
-        <!-- AI Summary (Collapsible) -->
-        <div style="border-top: 1px solid rgba(139, 92, 246, 0.2); padding-top: 12px;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <div>
-              <strong style="font-size: 0.95em;">RFP Summary</strong>
-              <small id="s2-ai-summary-count" style="opacity:.7; margin-left:8px;"></small>
-            </div>
-            <div style="display:flex; gap:8px;">
-              <button id="s2-ai-summary-copy" class="btn-sm">Copy</button>
-              <button id="s2-ai-summary-toggle" class="btn-sm">Hide</button>
-            </div>
-          </div>
-          <div id="s2-ai-summary-body" style="white-space:pre-wrap; max-height:180px; overflow:auto; font-size:0.9em; color: var(--muted); line-height: 1.5;"></div>
+        <!-- AI Suggestions Panel -->
+        <div id="ai-suggestions-panel">
         </div>
-        
-        <!-- GPT-5 AI Suggestions Panel -->
-        <div id="ai-suggest-panel" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(139, 92, 246, 0.2);"></div>
       </div>
       
       <!-- Selection Grid (3 Columns) -->

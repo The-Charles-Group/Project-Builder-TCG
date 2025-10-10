@@ -770,29 +770,27 @@ function startProgressPolling(jobId) {
   pollProgress(jobId);
 }
 
-// Step 1: Analyze with AI (updated to use summarize endpoints and show Step 2)
+// Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
-  const rfpText = (textEl?.value || '').trim();
+  let rfpText = (textEl?.value || '').trim();
   const btnAnalyze = document.querySelector('#btnAnalyze');
 
-  let summary;
+  let aiPlanResponse;
   try {
+    // First, extract text from file if provided
     if (fileEl?.files?.length) {
-      // Disable button and show loading state
       if (btnAnalyze) {
         btnAnalyze.disabled = true;
-        btnAnalyze.textContent = 'Analyzing...';
+        btnAnalyze.textContent = 'Extracting text...';
       }
       
       const form = new FormData();
-      // Append all selected files
       for (let i = 0; i < fileEl.files.length; i++) {
         form.append('files', fileEl.files[i]);
       }
       
-      // Get analyze_images preference from toggle (default true)
       const analyzeToggle = document.querySelector('#analyzeImagesToggle');
       const analyzeImages = analyzeToggle ? analyzeToggle.checked : true;
       form.append('analyze_images', analyzeImages);
@@ -801,42 +799,49 @@ async function onRunReconcile() {
       if (!res.ok) {
         throw new Error(`Server error: ${res.status} ${res.statusText}`);
       }
-      summary = await res.json(); // { summary_text, deliverables: [{label, short_desc, tasks}], word_count, job_ids?, filenames?, processing_images? }
+      const summary = await res.json();
+      
+      // Update rfpText from file extraction
+      rfpText = summary.summary_text || '';
       
       // Start progress polling if image processing jobs were started
       if (summary.job_ids && summary.job_ids.length > 0 && summary.processing_images) {
-        // Poll the first job (all jobs run in parallel, so they should complete around the same time)
         startProgressPolling(summary.job_ids[0]);
       }
-    } else if (rfpText) {
-      // Disable button and show loading state
-      if (btnAnalyze) {
-        btnAnalyze.disabled = true;
-        btnAnalyze.textContent = 'Analyzing...';
-      }
-      
-      const res = await fetch('/api/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rfp_text: rfpText })
-      });
-      if (!res.ok) {
-        throw new Error(`Server error: ${res.status} ${res.statusText}`);
-      }
-      summary = await res.json();
-    } else {
+    }
+    
+    if (!rfpText) {
       alert('Please enter RFP text or upload a file first.');
       return;
     }
 
+    // Now call the new AI planner with the extracted/provided text
+    if (btnAnalyze) {
+      btnAnalyze.disabled = true;
+      btnAnalyze.textContent = 'AI Analyzing (GPT-5)...';
+    }
+    
+    const aiRes = await fetch('/api/ai/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        request_text: rfpText,
+        strictness: 'balanced' 
+      })
+    });
+    
+    if (!aiRes.ok) {
+      throw new Error(`AI analysis error: ${aiRes.status} ${aiRes.statusText}`);
+    }
+    
+    aiPlanResponse = await aiRes.json();
+    
     // Persist for Step 2
     window.APP = window.APP || {};
     window.APP.rfpText = rfpText;
-    window.APP.summary = summary;
-    sessionStorage.setItem('apb:rfpSummary', JSON.stringify(summary));
+    window.APP.aiPlan = aiPlanResponse; // NEW: Store full AI plan
+    sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
     sessionStorage.setItem('apb.rfp_text', rfpText);
-    
-    // Also persist to localStorage for reliability across refreshes
     localStorage.setItem('apb.rfpText.v1', rfpText);
     
     // Update centralized state
@@ -849,8 +854,8 @@ async function onRunReconcile() {
       step2.scrollIntoView({ behavior: 'smooth' });
     }
 
-    // Render summary & suggestions on Step 2
-    initAISummaryAndSuggestions();
+    // Render NEW AI plan (summary + evidence-backed suggestions)
+    renderAIPlan(aiPlanResponse);
     
     // PATCH: Auto-fill project name from last upload
     try {
@@ -870,11 +875,127 @@ async function onRunReconcile() {
     console.error('Error analyzing RFP:', error);
     alert(`Error getting AI analysis: ${error.message}`);
   } finally {
-    // Re-enable button
     if (btnAnalyze) {
       btnAnalyze.disabled = false;
       btnAnalyze.textContent = 'Analyze with AI';
     }
+  }
+}
+
+// Render NEW AI Plan (GPT-5 Pro: Summary + Evidence-backed Suggestions)
+function renderAIPlan(aiPlan) {
+  if (!aiPlan || !aiPlan.plan) {
+    console.warn('No AI plan to render');
+    return;
+  }
+
+  const plan = aiPlan.plan;
+  const summary = plan.summary || {};
+  const suggestionsByDept = plan.suggestions_by_department || {};
+  
+  // Render summary panel
+  const summaryPanel = document.getElementById('ai-summary-panel');
+  if (summaryPanel) {
+    const goals = (summary.goals || []).map(g => `<li>${g}</li>`).join('');
+    const channels = (summary.channels || []).join(', ') || 'Not specified';
+    const markets = (summary.markets || []).join(', ') || 'Not specified';
+    
+    summaryPanel.innerHTML = `
+      <div style="background: rgba(59, 130, 246, 0.1); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+        <h3 style="margin: 0 0 12px 0; color: #2563eb;">📋 RFP Summary</h3>
+        <p style="margin: 0 0 12px 0; line-height: 1.6;">${summary.summary || 'No summary available'}</p>
+        
+        ${goals ? `
+          <div style="margin-bottom: 12px;">
+            <strong>Goals:</strong>
+            <ul style="margin: 4px 0 0 20px; line-height: 1.6;">${goals}</ul>
+          </div>
+        ` : ''}
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px;">
+          <div>
+            <strong>Channels:</strong> <span style="color: #6b7280;">${channels}</span>
+          </div>
+          <div>
+            <strong>Markets:</strong> <span style="color: #6b7280;">${markets}</span>
+          </div>
+          <div>
+            <strong>Complexity:</strong> <span style="color: #6b7280; text-transform: capitalize;">${summary.complexity || 'medium'}</span>
+          </div>
+        </div>
+        
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(0,0,0,0.1);">
+          <strong>Total Planned Hours:</strong> <span style="font-size: 1.2em; color: #2563eb;">${plan.totals?.planned_hours_total || 0}</span>
+        </div>
+      </div>
+    `;
+  }
+  
+  // Render suggestions by department
+  const suggestionsPanel = document.getElementById('ai-suggestions-panel');
+  if (suggestionsPanel) {
+    let html = '<div style="margin-top: 20px;"><h3 style="margin-bottom: 16px;">🤖 AI-Suggested Deliverables</h3>';
+    
+    const deptOrder = ['Creative', 'Strategy', 'Paid Media', 'Content', 'Technology', 'Integrated Marketing Management'];
+    
+    for (const dept of deptOrder) {
+      const deliverables = suggestionsByDept[dept] || [];
+      if (deliverables.length === 0) continue;
+      
+      html += `
+        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px;">
+          <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: #1f2937; margin-bottom: 12px;">
+            ${dept} <span style="color: #6b7280; font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
+          </summary>
+      `;
+      
+      for (const deliv of deliverables) {
+        const confidence = Math.round((deliv.calibrated_confidence || 0) * 100);
+        const confidenceColor = confidence >= 75 ? '#10b981' : confidence >= 50 ? '#f59e0b' : '#ef4444';
+        
+        html += `
+          <div class="ai-deliverable" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+              <h4 style="margin: 0; color: #111827;">${deliv.title}</h4>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}% confidence</span>
+                <span style="font-size: 0.85em; color: #6b7280;">${deliv.planned_hours || 0}h</span>
+              </div>
+            </div>
+            
+            ${deliv.why ? `
+              <p style="margin: 8px 0; font-size: 0.9em; color: #4b5563; line-height: 1.5;">${deliv.why}</p>
+            ` : ''}
+            
+            ${deliv.risks ? `
+              <div style="background: rgba(239, 68, 68, 0.1); padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 0.85em; color: #991b1b;">
+                <strong>⚠️ Risks:</strong> ${deliv.risks}
+              </div>
+            ` : ''}
+            
+            ${(deliv.components || []).length > 0 ? `
+              <details style="margin-top: 8px;">
+                <summary style="cursor: pointer; font-size: 0.9em; color: #4b5563; font-weight: 500;">Components (${deliv.components.length})</summary>
+                <div style="margin-top: 8px; margin-left: 16px;">
+                  ${deliv.components.map(comp => `
+                    <div style="margin-bottom: 8px; padding: 8px; background: white; border-radius: 4px;">
+                      <div style="font-weight: 500; color: #374151;">${comp.title}</div>
+                      <div style="font-size: 0.85em; color: #6b7280; margin-top: 4px;">${comp.why || ''}</div>
+                      <div style="font-size: 0.85em; color: #9ca3af; margin-top: 2px;">${comp.planned_hours || 0}h</div>
+                    </div>
+                  `).join('')}
+                </div>
+              </details>
+            ` : ''}
+          </div>
+        `;
+      }
+      
+      html += '</details>';
+    }
+    
+    html += '</div>';
+    suggestionsPanel.innerHTML = html;
   }
 }
 
