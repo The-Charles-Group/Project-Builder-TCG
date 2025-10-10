@@ -13,7 +13,7 @@ from pydantic import BaseModel
 # Config
 # ──────────────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-4o")  # Changed to gpt-4o (Chat Completions)
+REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "o1")  # GPT-5
 EMBEDDING_MODEL = "text-embedding-3-large"
 
 AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
@@ -52,6 +52,42 @@ def sanitize_for_json(text: str) -> str:
         text = text[:500] + "..."
     return text.strip()
 
+def repair_json_response(text: str) -> str:
+    """Attempt to repair malformed JSON responses from LLM"""
+    if not text:
+        return "{}"
+    
+    # Remove any leading/trailing whitespace
+    text = text.strip()
+    
+    # Fix common issues
+    # 1. Remove trailing commas before closing braces/brackets
+    text = re.sub(r',(\s*[}\]])', r'\1', text)
+    
+    # 2. Attempt to close unclosed strings at end of response
+    # Count quotes to see if we have an odd number (unclosed string)
+    quote_count = text.count('"') - text.count('\\"')
+    if quote_count % 2 != 0:
+        # Find last quote and try to close it
+        last_quote_pos = text.rfind('"')
+        if last_quote_pos > 0:
+            # Add closing quote and close any open objects/arrays
+            text = text[:last_quote_pos+1] + '"'
+            # Count unclosed braces
+            open_braces = text.count('{') - text.count('}')
+            open_brackets = text.count('[') - text.count(']')
+            text += '}' * open_braces + ']' * open_brackets
+    
+    # 3. Ensure text is properly closed
+    open_braces = text.count('{') - text.count('}')
+    open_brackets = text.count('[') - text.count(']')
+    if open_braces > 0:
+        text += '}' * open_braces
+    if open_brackets > 0:
+        text += ']' * open_brackets
+    
+    return text
+
 # ──────────────────────────────────────────────────────────────────────────────
 # OpenAI client (Chat Completions + Embeddings)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -87,7 +123,7 @@ def embed_many(texts: List[str]) -> List[List[float]]:
     return all_embeddings
 
 def chat_json_schema(messages: list, schema: dict, max_tokens: int = 2200) -> dict:
-    """Use Chat Completions with JSON schema for GPT-4o"""
+    """Use Chat Completions with JSON schema for GPT-5"""
     if not oai:
         # Return empty structure matching schema
         return {"summary": "", "goals": [], "channels": [], "markets": [], "complexity": "medium"}
@@ -99,7 +135,19 @@ def chat_json_schema(messages: list, schema: dict, max_tokens: int = 2200) -> di
         max_tokens=max_tokens,
     )
     text = response.choices[0].message.content
-    return json.loads(text)
+    
+    # Attempt to repair malformed JSON before parsing
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        print(f"[JSON Repair] Attempting to fix malformed response: {e}")
+        repaired = repair_json_response(text)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError as e2:
+            print(f"[JSON Repair Failed] Could not repair: {e2}")
+            # Return minimal valid structure
+            return {"items": []}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # AgencyDB Catalog Builder
@@ -574,50 +622,6 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
-def pre_filter_catalog(request_text: str, catalog: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Aggressively pre-filter catalog based on RFP keywords to reduce from 2289 to ~500 items"""
-    if not catalog:
-        return catalog
-    
-    # Extract key terms from RFP
-    text_lower = request_text.lower()
-    goals = [g.lower() for g in summary.get('goals', [])]
-    channels = [c.lower() for c in summary.get('channels', [])]
-    markets = [m.lower() for m in summary.get('markets', [])]
-    
-    # Build comprehensive keyword set
-    search_terms = set()
-    search_terms.update(goals)
-    search_terms.update(channels)
-    search_terms.update(markets)
-    
-    # Add key phrases from request text (5+ char words)
-    words = re.findall(r'\b\w{5,}\b', text_lower)
-    search_terms.update(words[:30])  # Top 30 significant words
-    
-    print(f"[PRE-FILTER] Filtering {len(catalog)} items with {len(search_terms)} search terms")
-    
-    filtered = []
-    for item in catalog:
-        title_lower = item.get('title', '').lower()
-        keywords_lower = [k.lower() for k in item.get('keywords', [])]
-        dept_lower = item.get('dept', '').lower()
-        
-        # Check if any search term matches
-        match = False
-        for term in search_terms:
-            if term in title_lower or term in dept_lower or any(term in kw for kw in keywords_lower):
-                match = True
-                break
-        
-        if match:
-            filtered.append(item)
-        elif item['level'] == 'deliverable':  # Keep all deliverables for safety
-            filtered.append(item)
-    
-    print(f"[PRE-FILTER] Reduced to {len(filtered)} relevant items")
-    return filtered if len(filtered) > 0 else catalog[:500]  # Fallback to top 500
-
 def analyze_with_agencydb(request_text: str, db, strictness: str = None) -> Dict[str, Any]:
     """Main analysis function using AgencyDB"""
     strictness = strictness or AI_STRICTNESS_DEFAULT
@@ -637,10 +641,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None) -> Dict
     
     summary = summarize_request(request_text)
     
-    # PRE-FILTER to reduce catalog size dramatically
-    filtered_catalog = pre_filter_catalog(request_text, catalog, summary)
-    
-    candidates, all_recall = recall_candidates(request_text, filtered_catalog)
+    # Process all items - let AI intelligence do the filtering
+    candidates, all_recall = recall_candidates(request_text, catalog)
     
     if not candidates:
         return {

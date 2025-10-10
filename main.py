@@ -3678,14 +3678,12 @@ def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
                 {"role":"system","content":"You are a senior agency program manager. Output STRICT JSON per schema."},
                 {"role":"user","content":json.dumps(user_payload)}
             ],
-            temperature=0.2,
             response_format={"type":"json_object"}
         )
         content = resp.output_text
     except Exception:
         chat = openai_client.chat.completions.create(
             model=OPENAI_MODEL,
-            temperature=0.2,
             messages=[
                 {"role":"system","content":"You are a senior agency program manager. Output STRICT JSON per schema."},
                 {"role":"user","content":json.dumps(user_payload)}
