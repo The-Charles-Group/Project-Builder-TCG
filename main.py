@@ -35,12 +35,8 @@ except Exception:
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0")
 
-# ---------- AI Planner Integration ----------
-from ai_planner_integrated import mount_routes as mount_ai_routes, load_catalog_zip
-from ai_port import create_ai_planner
-
-# Create AI planner instance (in-process by default, can switch to HTTP sidecar later)
-ai_planner = create_ai_planner(use_http=False)
+# ---------- AI Planner Integration (AgencyDB) ----------
+from ai_planner_agencydb import mount_routes_agencydb
 
 # ---------- Job Tracking System for Async Image Processing ----------
 class JobStatus(str, Enum):
@@ -158,31 +154,14 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 from routes_weights_fastapi import router as weights_router
 app.include_router(weights_router)
 
-# Mount AI planner routes
-mount_ai_routes(app, base="/api/ai")
+# Mount AI planner routes (connected to AgencyDB)
+mount_routes_agencydb(app, base="/api/ai")
 
-# Startup event to load catalog ZIP
+# Startup event (AI planner now uses AgencyDB directly, no ZIP catalog needed)
 @app.on_event("startup")
 async def startup_event():
-    """Load AI planner catalog on startup"""
-    # Check for catalog ZIP in data directory or root
-    catalog_paths = [
-        "./data/v281-prod-XML-RTNRs-NM-Deliverables (6).zip",
-        "./v281-prod-XML-RTNRs-NM-Deliverables (6).zip",
-        "./AI_Matching_Rules_full.xlsx"  # Fallback if ZIP not found
-    ]
-    
-    for zip_path in catalog_paths:
-        if os.path.exists(zip_path):
-            try:
-                result = load_catalog_zip(zip_path)
-                print(f"[AI PLANNER] Loaded catalog from {zip_path}: {result}")
-                break
-            except Exception as e:
-                print(f"[AI PLANNER] Failed to load {zip_path}: {e}")
-                continue
-    else:
-        print("[AI PLANNER] No catalog ZIP found, using minimal seed data")
+    """Initialize AI planner with AgencyDB catalog"""
+    print("[AI PLANNER] Using AgencyDB as catalog source (connected to app.state.db)")
 
 # ===== Workfront column order (now includes Service_Department) =====
 WF_COLUMNS = [
