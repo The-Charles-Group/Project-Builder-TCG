@@ -15,6 +15,12 @@ Preferred communication style: Simple, everyday language.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
 - **AI Matching**: Integrates comprehensive AI matching rules for deliverables, components, and subtasks with priority scoring and configurable weights. Features a weighted scoring API and an interactive AI suggestions panel.
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking. Includes job tracking, retry logic, and robust error handling.
+- **Smart Image Analysis**: Two-tier image processing system that dramatically reduces processing time and cost for PDFs with many decorative images:
+  - **Pre-filtering**: Hash-based deduplication and size filtering (<100px) to eliminate logos, icons, and repeated images
+  - **Quick Relevance Scan**: Fast 10-token GPT-5 check to identify images containing charts, diagrams, wireframes, or project requirements
+  - **Deep Analysis**: Full 500-token analysis only for relevant images, reducing 72-image PDFs to ~8-10 relevant images
+  - **User Control**: Optional toggle in UI to disable image analysis entirely for text-only processing
+  - **Two-Phase Progress**: Real-time UI updates showing quick scan progress and deep analysis phase separately
 - **Database Compatibility**: Supports v3 database structure with graceful handling of missing sheets and fallback values.
 - **CORS**: Configured to allow cross-origin requests.
 
