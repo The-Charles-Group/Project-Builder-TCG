@@ -1,0 +1,712 @@
+# ai_planner_integrated.py  (v2 - resilient suggestions)
+# One-file intelligence layer for your FastAPI Project Builder.
+# Requires: openai>=1.40, fastapi, uvicorn (if standalone), xmltodict, numpy, httpx (optional if you keep all in-process)
+
+import os, json, math, csv, zipfile, re
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass, field
+
+import numpy as np
+import xmltodict
+from fastapi import FastAPI, APIRouter, HTTPException
+from pydantic import BaseModel
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Config
+# ──────────────────────────────────────────────────────────────────────────────
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-5-pro")
+EMBEDDING_MODEL = "text-embedding-3-large"
+
+AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
+AI_AUTORELAX = os.environ.get("AI_AUTORELAX", "true").lower() == "true"
+AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "3"))
+AI_MIN_COMPONENTS_PER_DELIV = int(os.environ.get("AI_MIN_COMPONENTS_PER_DELIV", "2"))
+AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "2"))
+
+DEPARTMENTS = [
+    "Creative",
+    "Strategy",
+    "Paid Media",
+    "Content",
+    "Technology",
+    "Integrated Marketing Management",
+]
+LEVELS = ["deliverable", "component", "task"]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Domain models
+# ──────────────────────────────────────────────────────────────────────────────
+@dataclass
+class Task:
+    id: str
+    title: str
+    description: str = ""
+    keywords: List[str] = field(default_factory=list)
+    base_hours: float = 2.0
+
+@dataclass
+class Component:
+    id: str
+    title: str
+    description: str = ""
+    keywords: List[str] = field(default_factory=list)
+    base_hours: float = 4.0
+    l2: List[Task] = field(default_factory=list)
+
+@dataclass
+class Deliverable:
+    id: str
+    dept: str
+    title: str
+    description: str = ""
+    keywords: List[str] = field(default_factory=list)
+    base_hours: float = 8.0
+    depends_on: List[str] = field(default_factory=list)
+    components: List[Component] = field(default_factory=list)
+
+CATALOG: List[Deliverable] = []
+
+# Minimal seed to avoid total emptiness before loading ZIP
+if not CATALOG:
+    CATALOG = [
+        Deliverable(
+            id="pm_planning", dept="Paid Media", title="Paid Media Planning", base_hours=28,
+            keywords=["media plan","paid search","paid social","YouTube","Pinterest","programmatic"],
+            components=[Component(id="pm_plan", title="Paid Media Plan", base_hours=14,
+                                  l2=[Task(id="spec", title="Spec Page Build", base_hours=2)])]
+        ),
+        Deliverable(
+            id="pm_buy_activate", dept="Paid Media", title="Paid Media Buying & Activation", base_hours=24,
+            depends_on=["pm_planning"],
+            components=[Component(id="activation", title="Media Activation", base_hours=16)]
+        ),
+        Deliverable(
+            id="pm_traffic_perf", dept="Paid Media", title="Paid Media Trafficking & Performance", base_hours=30,
+            depends_on=["pm_buy_activate"],
+            components=[Component(id="exec", title="Execution & Monitoring", base_hours=12)]
+        ),
+        Deliverable(
+            id="pm_reporting", dept="Paid Media", title="Paid Media Reporting", base_hours=18,
+            components=[Component(id="biweekly", title="Campaign Reporting (Bi-Weekly)", base_hours=10)]
+        ),
+        Deliverable(
+            id="strategy_campaign", dept="Strategy", title="Creative Strategy / Campaign Plan Deck", base_hours=24,
+            components=[Component(id="brand_approach", title="Brand Approach", base_hours=10)]
+        ),
+        Deliverable(
+            id="creative_paid_assets", dept="Creative", title="Paid Media Assets / Ad Assets", base_hours=22,
+            components=[Component(id="awareness", title="Awareness Assets", base_hours=10)]
+        ),
+        Deliverable(
+            id="content_plan", dept="Content", title="Content Plan (Organic Social)", base_hours=16,
+            components=[Component(id="org_plan", title="Organic Social Plan", base_hours=8)]
+        ),
+        Deliverable(
+            id="tech_analytics_audit", dept="Technology", title="Web Analytics Audit", base_hours=14,
+            components=[Component(id="audit", title="Audit", base_hours=6,
+                                  l2=[Task(id="event_map", title="Event/Conversion Mapping", base_hours=4)])]
+        ),
+        Deliverable(
+            id="imm_reporting", dept="Integrated Marketing Management", title="Integrated Reporting (Organic + Paid)", base_hours=10,
+            components=[Component(id="monthly_org", title="Monthly Organic Social Report", base_hours=4)]
+        ),
+    ]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OpenAI client (Responses + Embeddings)
+# ──────────────────────────────────────────────────────────────────────────────
+if OPENAI_API_KEY:
+    from openai import OpenAI
+    oai = OpenAI(api_key=OPENAI_API_KEY)
+else:
+    oai = None
+
+def embed_many(texts: List[str]) -> List[List[float]]:
+    if not oai: raise RuntimeError("Missing OPENAI_API_KEY")
+    if not texts: return []
+    r = oai.embeddings.create(model=EMBEDDING_MODEL, input=texts)
+    return [e.embedding for e in r.data]
+
+def responses_json_schema(messages: list, schema: dict, max_output_tokens: int = 2200) -> dict:
+    if not oai: raise RuntimeError("Missing OPENAI_API_KEY")
+    r = oai.responses.create(
+        model=REASONING_MODEL,
+        input=messages,
+        response_format={"type": "json_schema", "json_schema": {"name": "Out", "schema": schema, "strict": True}},
+        max_output_tokens=max_output_tokens,
+    )
+    text = (getattr(r, "output_text", None) or "").strip()
+    return json.loads(text)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+_nonword = re.compile(r"[^a-z0-9\s\-\&\/\+]")
+def normalize_text(s: str) -> str: return _nonword.sub(" ", (s or "").lower())
+def tokenize(s: str) -> List[str]: return [t for t in normalize_text(s).split() if t]
+def sentence_split(text: str) -> List[str]:
+    return [s.strip() for s in re.split(r'(?<=[\.\?\!])\s+(?=[A-Z0-9])', text) if s.strip()]
+
+def cosine(a: np.ndarray, b: np.ndarray) -> float:
+    if a.size == 0 or b.size == 0: return 0.0
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    if denom == 0: return 0.0
+    return float(np.dot(a, b) / denom)
+
+def lexical_score(text: str, title: str, desc: str, keywords: List[str], dept: str) -> float:
+    tk_r = set(tokenize(text))
+    tk_c = set(tokenize(" ".join([title or "", desc or "", " ".join(keywords or [])])))
+    overlap = sum(1 for t in tk_c if t in tk_r)
+    dept_hit = 0.05 if dept.lower().split(" ")[0] in tk_r else 0
+    return min(1.0, (overlap / max(4, len(tk_c))) + dept_hit)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Catalog flattening / expansion
+# ──────────────────────────────────────────────────────────────────────────────
+def flatten_catalog(cat: List[Deliverable]) -> List[Dict[str, Any]]:
+    out = []
+    for d in cat:
+        if d.dept not in DEPARTMENTS: 
+            continue
+        out.append({"id": d.id, "level": "deliverable", "dept": d.dept,
+                    "title": d.title, "desc": d.description, "keywords": d.keywords})
+        for c in d.components:
+            cid = f"{d.id}::{c.id}"
+            out.append({"id": cid, "parentId": d.id, "level": "component", "dept": d.dept,
+                        "title": c.title, "desc": c.description, "keywords": c.keywords})
+            for t in c.l2:
+                tid = f"{d.id}::{c.id}::{t.id}"
+                out.append({"id": tid, "parentId": cid, "level": "task", "dept": d.dept,
+                            "title": t.title, "desc": t.description, "keywords": t.keywords})
+    return out
+
+def expand_prereqs(selected_ids: List[str], cat: List[Deliverable]) -> List[str]:
+    lookup = {d.id: d for d in cat}
+    need = set(selected_ids)
+    changed = True
+    while changed:
+        changed = False
+        for did in list(need):
+            d = lookup.get(did)
+            if not d: continue
+            for dep in d.depends_on:
+                if dep not in need:
+                    need.add(dep); changed = True
+    return list(need)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Summarize request
+# ──────────────────────────────────────────────────────────────────────────────
+def summarize_request(request_text: str) -> Dict[str, Any]:
+    schema = {
+        "type":"object","properties":{
+            "summary":{"type":"string"},
+            "goals":{"type":"array","items":{"type":"string"}},
+            "channels":{"type":"array","items":{"type":"string"}},
+            "markets":{"type":"array","items":{"type":"string"}},
+            "compliance":{"type":"array","items":{"type":"string"}},
+            "languages":{"type":"array","items":{"type":"string"}},
+            "timeline_weeks":{"type":"number"},
+            "budget_tier":{"type":"string","enum":["unknown","scrappy","moderate","premium"]},
+            "complexity":{"type":"string","enum":["low","medium","high"]},
+            "risk_flags":{"type":"array","items":{"type":"string"}}
+        },
+        "required":["summary","goals","channels","markets","complexity"]
+    }
+    messages = [
+        {"role":"system","content":"You are a senior agency PM/strategist in digital/creative/paid media/content/tech. Extract actionable signals."},
+        {"role":"user","content":[
+            {"type":"text","text":"REQUEST TEXT:\n"+request_text},
+            {"type":"text","text":"Summarize (<=120 words) and extract: goals, channels, markets, compliance, languages, timeline_weeks, budget_tier, complexity, risk_flags."}
+        ]}
+    ]
+    return responses_json_schema(messages, schema)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Recall candidates (embeddings + lexical)
+# ──────────────────────────────────────────────────────────────────────────────
+def recall_candidates(request_text: str, cat: List[Deliverable]) -> Tuple[List[Dict[str,Any]], List[Dict[str,Any]]]:
+    items = flatten_catalog(cat)
+    if not items:
+        return [], []
+    texts = [f"{i['dept']} • {i['level']} • {i['title']} :: {i.get('desc','')} :: {', '.join(i.get('keywords',[]))}" for i in items]
+    embs = embed_many([request_text] + texts)
+    req = np.array(embs[0], dtype=np.float32)
+    cands = []
+    for i, it in enumerate(items, start=1):
+        v = np.array(embs[i], dtype=np.float32)
+        emb = cosine(req, v)
+        lex = lexical_score(request_text, it["title"], it.get("desc",""), it.get("keywords",[]), it["dept"])
+        recall = 0.70*emb + 0.30*lex
+        cands.append({**it, "embScore":emb, "lexScore":lex, "recall":recall})
+    # generous cuts to feed re-ranker
+    topD = sorted([x for x in cands if x["level"]=="deliverable"], key=lambda z: z["recall"], reverse=True)[:60]
+    topC = sorted([x for x in cands if x["level"]=="component"],   key=lambda z: z["recall"], reverse=True)[:90]
+    topT = sorted([x for x in cands if x["level"]=="task"],        key=lambda z: z["recall"], reverse=True)[:120]
+    return topD+topC+topT, cands  # return both shortlist and full recall map
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Evidence & LLM re-score
+# ──────────────────────────────────────────────────────────────────────────────
+def best_evidence(request_text: str, candidate: Dict[str,Any], k:int=3) -> List[str]:
+    sents = sentence_split(request_text)
+    scored = [(s, lexical_score(s, candidate["title"], candidate.get("desc",""), candidate.get("keywords",[]), candidate["dept"])) for s in sents]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [s for s,score in scored[:k] if score>0]
+
+def rescore_with_llm(summary: Dict[str,Any], candidates: List[Dict[str,Any]], request_text: str) -> List[Dict[str,Any]]:
+    if not candidates:
+        return []
+    schema = {
+        "type":"object","properties":{
+            "items":{"type":"array","items":{
+                "type":"object","properties":{
+                    "id":{"type":"string"},
+                    "dept":{"type":"string","enum":DEPARTMENTS},
+                    "level":{"type":"string","enum":LEVELS},
+                    "relevance":{"type":"number","minimum":0,"maximum":100},
+                    "confidence":{"type":"number","minimum":0,"maximum":1},
+                    "why":{"type":"string"},
+                    "risks":{"type":"string"}
+                },
+                "required":["id","dept","level","relevance","confidence","why"]
+            }}
+        },
+        "required":["items"]
+    }
+    out = []
+    chunk = 50
+    for i in range(0, len(candidates), chunk):
+        block = candidates[i:i+chunk]
+        payload = [{"id":c["id"],"dept":c["dept"],"level":c["level"],"title":c["title"],
+                    "desc":c.get("desc",""),"evidence":best_evidence(request_text, c, 3)} for c in block]
+        messages = [
+            {"role":"system","content":"You are a senior agency PM/strategist across Creative, Strategy, Paid Media, Content, Technology, and Integrated Marketing Management. Score how necessary each candidate is to satisfy the request. Penalize boilerplate."},
+            {"role":"user","content":[
+                {"type":"text","text":f"REQUEST SUMMARY:\n{summary.get('summary','')}\n\nGOALS:\n- " + "\n- ".join(summary.get("goals",[]))},
+                {"type":"text","text":f"CHANNELS: {', '.join(summary.get('channels',[]))} | MARKETS: {', '.join(summary.get('markets',[]))} | COMPLIANCE: {', '.join(summary.get('compliance',[]))}"},
+                {"type":"text","text":"CANDIDATES:\n"+json.dumps(payload, indent=2)}
+            ]}
+        ]
+        r = responses_json_schema(messages, schema, max_output_tokens=1800)
+        out.extend(r.get("items", []))
+    return out
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Fusion, calibration, **AUTO‑RELAX & RESCUE**
+# ──────────────────────────────────────────────────────────────────────────────
+def fuse_and_calibrate(candidates: List[Dict[str,Any]], llm_scores: List[Dict[str,Any]], strictness: str="balanced") -> List[Dict[str,Any]]:
+    lookup = {x["id"]: x for x in llm_scores}
+    W = {"emb":0.15, "lex":0.10, "recall":0.10, "llm":0.55, "hist":0.10}
+    hist_prior = 0.65
+    gates = {"high":0.70, "balanced":0.58, "recall":0.48}
+
+    out = []
+    for c in candidates:
+        l = lookup.get(c["id"])
+        llm_val = (l["relevance"]/100.0) if l else 0.0
+        raw = W["emb"]*c["embScore"] + W["lex"]*c["lexScore"] + W["recall"]*c["recall"] + W["llm"]*llm_val + W["hist"]*hist_prior
+        calibrated = 1.0/(1.0 + math.exp(-(2.2*raw - 1.1)))
+        pass_gate = calibrated >= gates.get(strictness, gates["balanced"])
+        out.append({**c, "llm": l, "fused_score": raw, "calibrated_confidence": calibrated, "pass": pass_gate})
+    return out
+
+def _auto_rescue_if_empty(fused: List[Dict[str,Any]], all_recall: List[Dict[str,Any]], llm_scores: List[Dict[str,Any]]) -> List[Dict[str,Any]]:
+    """If no deliverables pass, relax and ensure a non-empty scope using recall + (if present) LLM relevance."""
+    passed_delivs = [x for x in fused if x["level"]=="deliverable" and x["pass"]]
+    if passed_delivs:
+        return fused
+
+    # Build maps
+    by_id = {x["id"]: x for x in fused}
+    llm_map = {x["id"]: x for x in llm_scores}
+    recall_map = {x["id"]: x for x in all_recall}
+
+    # Rank deliverables by LLM relevance (if any), else recall
+    deliv_cands = [x for x in all_recall if x["level"]=="deliverable"]
+    def deliv_key(x):
+        l = llm_map.get(x["id"])
+        return (l["relevance"] if l else 0.0, x["recall"])
+    deliv_cands.sort(key=deliv_key, reverse=True)
+    chosen_delivs = deliv_cands[:max(AI_MIN_DELIVERABLES, 3)]
+
+    # Mark chosen deliverables as pass with moderate confidence if they aren't already
+    for d in chosen_delivs:
+        if d["id"] not in by_id:
+            fused.append({**d, "llm": llm_map.get(d["id"]), "calibrated_confidence": 0.62, "pass": True, "fused_score": d["recall"]})
+        else:
+            by_id[d["id"]]["pass"] = True
+            by_id[d["id"]]["calibrated_confidence"] = max(by_id[d["id"]]["calibrated_confidence"], 0.62)
+
+    # Pick components/tasks under each chosen deliverable
+    comp_cands = [x for x in all_recall if x["level"]=="component"]
+    task_cands = [x for x in all_recall if x["level"]=="task"]
+
+    for d in chosen_delivs:
+        # top components under this deliverable
+        comps = [c for c in comp_cands if c.get("parentId")==d["id"]]
+        comps.sort(key=lambda z: (llm_map.get(z["id"], {"relevance":0}).get("relevance",0), z["recall"]), reverse=True)
+        for c in comps[:max(AI_MIN_COMPONENTS_PER_DELIV, 2)]:
+            if c["id"] not in by_id:
+                fused.append({**c, "llm": llm_map.get(c["id"]), "calibrated_confidence": 0.58, "pass": True, "fused_score": c["recall"]})
+            else:
+                by_id[c["id"]]["pass"] = True
+                by_id[c["id"]]["calibrated_confidence"] = max(by_id[c["id"]]["calibrated_confidence"], 0.58)
+            # tasks under this component
+            tasks = [t for t in task_cands if t.get("parentId")==c["id"]]
+            tasks.sort(key=lambda z: (llm_map.get(z["id"], {"relevance":0}).get("relevance",0), z["recall"]), reverse=True)
+            for t in tasks[:max(AI_MIN_TASKS_PER_COMPONENT, 2)]:
+                if t["id"] not in by_id:
+                    fused.append({**t, "llm": llm_map.get(t["id"]), "calibrated_confidence": 0.53, "pass": True, "fused_score": t["recall"]})
+                else:
+                    by_id[t["id"]]["pass"] = True
+                    by_id[t["id"]]["calibrated_confidence"] = max(by_id[t["id"]]["calibrated_confidence"], 0.53)
+
+    return fused
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Composition (deliverables → components → tasks) with fallbacks
+# ──────────────────────────────────────────────────────────────────────────────
+def multipliers_from_summary(sumdict: Dict[str,Any]) -> Dict[str,float]:
+    ch = len(sumdict.get("channels",[]))
+    mk = len(sumdict.get("markets",[]))
+    comp = len(sumdict.get("compliance",[]))
+    complexity = {"low":1.0,"medium":1.15,"high":1.35}.get(sumdict.get("complexity"), 1.0)
+    channel_multi = 1.25 if ch>4 else (1.12 if ch>2 else 1.0)
+    market_multi = 1.18 if mk>1 else 1.0
+    compliance_multi = 1.08 if comp>0 else 1.0
+    return {"complexity":complexity, "channelMulti":channel_multi, "marketMulti":market_multi, "complianceMulti":compliance_multi}
+
+def planned_hours(base: float, m: Dict[str,float]) -> float:
+    return round(base * m["complexity"] * m["channelMulti"] * m["marketMulti"] * m["complianceMulti"], 1)
+
+def compose_plan(fused: List[Dict[str,Any]], summary: Dict[str,Any], strictness: str,
+                 all_recall: List[Dict[str,Any]]) -> Dict[str,Any]:
+    passing = [x for x in fused if x["pass"]]
+    dels = [x for x in passing if x["level"]=="deliverable"]
+    comps_pass = {x["id"]:x for x in passing if x["level"]=="component"}
+    tasks_pass = {x["id"]:x for x in passing if x["level"]=="task"}
+
+    # If still nothing after auto-rescue, hard fallback to top recall deliverables.
+    if not dels:
+        topD = [x for x in all_recall if x["level"]=="deliverable"]
+        topD.sort(key=lambda z: z["recall"], reverse=True)
+        dels = topD[:max(AI_MIN_DELIVERABLES, 3)]
+
+    needed = expand_prereqs([d["id"] for d in dels], CATALOG)
+    include = set([d["id"] for d in dels] + needed)
+
+    # Build quick recall index for components/tasks
+    recall_idx = {x["id"]: x for x in all_recall}
+    by_dept: Dict[str, List[Dict[str,Any]]] = {}
+    m = multipliers_from_summary(summary)
+
+    for d in CATALOG:
+        if d.dept not in DEPARTMENTS: continue
+        if d.id not in include: continue
+        by_dept.setdefault(d.dept, [])
+
+        # deliverable confidence (from fused if present)
+        f_d = next((x for x in fused if x["id"]==d.id), None)
+        d_hours = planned_hours(d.base_hours or 8.0, m)
+
+        # Components: prefer passed; if none, take top by recall
+        comp_out = []
+        passed_any = False
+        for c in d.components:
+            cid = f"{d.id}::{c.id}"
+            sc = comps_pass.get(cid)
+            if sc:
+                passed_any = True
+                t_out = []
+                for t in c.l2 or []:
+                    tid = f"{d.id}::{c.id}::{t.id}"
+                    ts = tasks_pass.get(tid)
+                    t_out.append({
+                        "id": tid,
+                        "title": t.title,
+                        "calibrated_confidence": (ts or {}).get("calibrated_confidence", 0.50),
+                        "why": ((ts or {}).get("llm") or {}).get("why", "Core subtask for selected component."),
+                        "planned_hours": planned_hours(t.base_hours or 2.0, m),
+                    })
+                comp_out.append({
+                    "id": cid, "title": c.title,
+                    "calibrated_confidence": sc["calibrated_confidence"],
+                    "why": (sc.get("llm") or {}).get("why",""),
+                    "planned_hours": planned_hours(c.base_hours or 4.0, m),
+                    "tasks": t_out
+                })
+
+        if not passed_any:
+            # choose top components by recall under this deliverable
+            comps = [x for x in all_recall if x["level"]=="component" and x.get("parentId")==d.id]
+            comps.sort(key=lambda z: z["recall"], reverse=True)
+            for c in comps[:max(AI_MIN_COMPONENTS_PER_DELIV, 2)]:
+                # fill tasks by recall too
+                tasks = [x for x in all_recall if x["level"]=="task" and x.get("parentId")==c["id"]]
+                tasks.sort(key=lambda z: z["recall"], reverse=True)
+                t_out = []
+                # find original task objects to compute hours
+                comp_obj = next((cc for cc in d.components if f"{d.id}::{cc.id}" == c["id"]), None)
+                base_tasks = comp_obj.l2 if comp_obj else []
+                base_map = {f"{d.id}::{comp_obj.id}::{t.id}": t for t in base_tasks} if comp_obj else {}
+                for t in tasks[:max(AI_MIN_TASKS_PER_COMPONENT, 2)]:
+                    base_t = base_map.get(t["id"])
+                    base_h = base_t.base_hours if base_t else 2.0
+                    t_out.append({
+                        "id": t["id"], "title": t["title"],
+                        "calibrated_confidence": 0.50,
+                        "why": (t.get("llm") or {}).get("why","Selected by recall fallback."),
+                        "planned_hours": planned_hours(base_h, m)
+                    })
+                # compute hours from real component base if we have it
+                base_c = comp_obj.base_hours if comp_obj else 4.0
+                comp_out.append({
+                    "id": c["id"], "title": c["title"],
+                    "calibrated_confidence": 0.55,
+                    "why": (c.get("llm") or {}).get("why","Selected by recall fallback."),
+                    "planned_hours": planned_hours(base_c, m),
+                    "tasks": t_out
+                })
+
+        milestones = [
+            {"name":"Kickoff","offset_days":0},
+            {"name":"Plan/Strategy Complete","offset_days": math.ceil((d_hours or 8)/6)},
+            {"name":"Launch/Activations","offset_days": math.ceil((d_hours or 8)/6)+5},
+            {"name":"First Report","offset_days": math.ceil((d_hours or 8)/6)+14},
+        ]
+
+        by_dept[d.dept].append({
+            "id": d.id, "level":"deliverable", "title": d.title,
+            "calibrated_confidence": (f_d or {}).get("calibrated_confidence", 0.60),
+            "why": ((f_d or {}).get("llm") or {}).get("why",""),
+            "risks": ((f_d or {}).get("llm") or {}).get("risks",""),
+            "planned_hours": d_hours,
+            "components": comp_out,
+            "milestones": milestones
+        })
+
+    total = 0.0
+    for dept_items in by_dept.values():
+        for deliv in dept_items:
+            total += deliv["planned_hours"] or 0.0
+            for comp in deliv.get("components",[]):
+                total += comp["planned_hours"] or 0.0
+                for t in comp.get("tasks",[]):
+                    total += t["planned_hours"] or 0.0
+
+    return {
+        "summary": summary,
+        "strictness": strictness,
+        "totals": { "planned_hours_total": round(total,1) },
+        "suggestions_by_department": by_dept
+    }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ZIP loader (XML/JSON/CSV) — tolerant mapper to your DB export
+# ──────────────────────────────────────────────────────────────────────────────
+def _normalize_dept(s: str) -> str:
+    x = (s or "").lower()
+    if "paid" in x: return "Paid Media"
+    if "integrated" in x: return "Integrated Marketing Management"
+    if "strategy" in x: return "Strategy"
+    if "creative" in x: return "Creative"
+    if "content" in x: return "Content"
+    if any(k in x for k in ["tech","dev","web"]): return "Technology"
+    return "Strategy"
+
+def _num(v, d=0.0) -> float:
+    try: return float(v)
+    except: return d
+
+def _arr(v) -> List[Any]:
+    if v is None: return []
+    return v if isinstance(v, list) else [v]
+
+def _get(obj: dict, keys: List[str], default=None):
+    for k in keys:
+        if k in obj: return obj[k]
+        # case-insensitive
+        for kk in obj.keys():
+            if kk.lower() == k.lower():
+                return obj[kk]
+    return default
+
+def _coerce_deliverable(raw: dict) -> Optional[Deliverable]:
+    dept = _get(raw, ["dept","department","service","serviceDept","service_department"])
+    title = _get(raw, ["title","name","deliverable","deliverable_title"])
+    if not dept or not title: return None
+    d = Deliverable(
+        id=str(_get(raw, ["id","deliverable_id","slug"], f"{dept}:{title}")).replace(" ","_").lower(),
+        dept=_normalize_dept(str(dept)),
+        title=str(title),
+        description=_get(raw, ["description","desc","notes"], "") or "",
+        keywords=[str(x) for x in (_get(raw, ["keywords","tags"], []) or [])],
+        base_hours=_num(_get(raw, ["base_hours","hours","estimated_hours"], 8.0), 8.0),
+        depends_on=[str(x) for x in _arr(_get(raw, ["depends_on","dependencies"], []))],
+        components=[]
+    )
+    comps = _arr(_get(raw, ["components","component","items","children","parts"], []))
+    for c in comps:
+        ct = _get(c, ["title","name"])
+        if not ct: continue
+        comp = Component(
+            id=str(_get(c, ["id","component_id","slug"], ct)).replace(" ","_").lower(),
+            title=str(ct),
+            description=_get(c, ["description","desc","notes"], "") or "",
+            keywords=[str(x) for x in (_get(c, ["keywords","tags"], []) or [])],
+            base_hours=_num(_get(c, ["base_hours","hours","estimated_hours"], 4.0), 4.0),
+            l2=[]
+        )
+        tasks = _arr(_get(c, ["tasks","task","l2","subtasks","children","steps"], []))
+        for t in tasks:
+            tt = _get(t, ["title","name"])
+            if not tt: continue
+            comp.l2.append(Task(
+                id=str(_get(t, ["id","task_id","slug"], tt)).replace(" ","_").lower(),
+                title=str(tt),
+                description=_get(t, ["description","desc","notes"], "") or "",
+                keywords=[str(x) for x in (_get(t, ["keywords","tags"], []) or [])],
+                base_hours=_num(_get(t, ["base_hours","hours","estimated_hours"], 2.0), 2.0),
+            ))
+        d.components.append(comp)
+    return d if d.dept in DEPARTMENTS else None
+
+def _csv_to_json(data: str) -> List[dict]:
+    out = []
+    rdr = csv.DictReader(data.splitlines())
+    for row in rdr:
+        out.append({k: (v or "").strip() for k,v in row.items()})
+    return out
+
+def _find_deliverable_arrays(node) -> List[List[dict]]:
+    found = []
+    def walk(n):
+        if isinstance(n, list) and n and isinstance(n[0], dict):
+            keys = set(k.lower() for k in n[0].keys())
+            if any(k in keys for k in ["dept","department","service","service_department"]) and any(k in keys for k in ["title","name","deliverable"]):
+                found.append(n)
+        elif isinstance(n, dict):
+            for v in n.values():
+                walk(v)
+    walk(node)
+    return found
+
+def load_catalog_zip(zip_path: str) -> Dict[str, Any]:
+    if not os.path.exists(zip_path):
+        raise FileNotFoundError(zip_path)
+    blocks = []
+    with zipfile.ZipFile(zip_path, "r") as z:
+        for name in z.namelist():
+            if name.endswith("/"): continue
+            try:
+                data = z.read(name).decode("utf-8", errors="ignore").strip()
+            except Exception:
+                continue
+            if not data: continue
+            low = name.lower()
+            try:
+                if low.endswith(".json"):
+                    blocks.append(json.loads(data))
+                elif low.endswith(".xml"):
+                    blocks.append(xmltodict.parse(data))
+                elif low.endswith(".csv"):
+                    blocks.append(_csv_to_json(data))
+            except Exception:
+                continue
+
+    mapped: List[Deliverable] = []
+    for b in blocks:
+        for arr in _find_deliverable_arrays(b):
+            for raw in arr:
+                d = _coerce_deliverable(raw)
+                if d: mapped.append(d)
+
+    if not mapped:
+        raise RuntimeError("Could not map any deliverables from ZIP—adjust _coerce_deliverable key hints.")
+
+    uniq_map = {}
+    for d in mapped:
+        key = f"{d.id}::{d.title}"
+        if key not in uniq_map:
+            uniq_map[key] = d
+
+    global CATALOG
+    CATALOG = list(uniq_map.values())
+    return {"ok": True, "deliverables": len(CATALOG)}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Public API
+# ──────────────────────────────────────────────────────────────────────────────
+def analyze_text(request_text: str, strictness: str=None) -> Dict[str,Any]:
+    strictness = strictness or AI_STRICTNESS_DEFAULT
+    if not CATALOG:
+        return {"auto_run": True, "message": "Catalog is empty—load your ZIP before analyzing.", "plan": {"summary": {}, "suggestions_by_department": {}}, "diagnostics": {"candidates_considered": 0}}
+
+    summary = summarize_request(request_text)
+    candidates, all_recall = recall_candidates(request_text, CATALOG)
+    # If recall empty, bail early with clear message
+    if not candidates:
+        return {"auto_run": True, "message": "No candidates found—catalog likely not loaded correctly.", "plan": {"summary": summary, "suggestions_by_department": {}}, "diagnostics": {"candidates_considered": 0}}
+
+    llm_scores = rescore_with_llm(summary, candidates, request_text)
+    fused = fuse_and_calibrate(candidates, llm_scores, strictness)
+
+    # AUTO‑RELAX: if no deliverables passed, rescue with recall + moderate confidence
+    if AI_AUTORELAX:
+        fused = _auto_rescue_if_empty(fused, all_recall, llm_scores)
+
+    plan = compose_plan(fused, summary, strictness, all_recall)
+    return {
+        "auto_run": True,
+        "message": "Summary + AI Suggestions generated.",
+        "plan": plan,
+        "diagnostics": {"candidates_considered": len(candidates), "catalog_deliverables": len(CATALOG)}
+    }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FastAPI routes (mount in-app) or run standalone
+# ──────────────────────────────────────────────────────────────────────────────
+class AnalyzeIn(BaseModel):
+    request_text: str
+    strictness: Optional[str] = None
+
+class ReloadIn(BaseModel):
+    zipPath: str
+
+def mount_routes(app: FastAPI, base: str="/api/ai"):
+    router = APIRouter()
+
+    @router.post("/analyze")
+    def _analyze(payload: AnalyzeIn):
+        try:
+            return analyze_text(payload.request_text, payload.strictness)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/catalog/reload")
+    def _reload(payload: ReloadIn):
+        try:
+            return load_catalog_zip(payload.zipPath)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get("/health")
+    def _health():
+        return {"ok": True, "deliverables": len(CATALOG), "strictness_default": AI_STRICTNESS_DEFAULT, "autorelex": AI_AUTORELAX}
+
+    app.include_router(router, prefix=base)
+
+if __name__ == "__main__":
+    import uvicorn
+    app = FastAPI()
+    mount_routes(app)
+    zp = os.environ.get("CATALOG_ZIP")
+    if zp and os.path.exists(zp):
+        try:
+            print("Loading catalog from", zp)
+            print(load_catalog_zip(zp))
+        except Exception as e:
+            print("Catalog load failed:", e)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "3000")))
