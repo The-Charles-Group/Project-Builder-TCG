@@ -13,7 +13,17 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data, calculations, and manipulations.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **AI Matching**: Integrates comprehensive AI matching rules for deliverables, components, and subtasks with priority scoring and configurable weights. Features a weighted scoring API and an interactive AI suggestions panel.
+- **AI Planner (GPT-4o)**: Advanced reasoning-based AI intelligence layer that auto-generates comprehensive project analysis in a single API call:
+  - **One-Click Workflow**: "Analyze with AI" button triggers summary + deliverable suggestions simultaneously (eliminating the previous two-step UX)
+  - **Evidence-Based Matching**: High-recall semantic retrieval (embeddings + lexical scoring) → LLM re-ranking → calibrated confidence scores
+  - **Dependency Expansion**: Automatically includes prerequisite deliverables (e.g., Planning → Buying → Trafficking → Reporting)
+  - **Calibrated Confidence**: Bayesian-style calibration with configurable strictness (high/balanced/recall gates at 70%/58%/48%)
+  - **Smart Multipliers**: Complexity, channel count, market count, and compliance factors dynamically adjust planned hours
+  - **Future-Proof Design**: Protocol-based abstraction (InprocPlanner) allows switching to HTTP sidecar in <1 hour
+  - **Catalog Support**: Loads deliverable catalog from ZIP files (XML/JSON/CSV) with flexible key mapping
+  - **Six Departments**: Creative, Strategy, Paid Media, Content, Technology, Integrated Marketing Management
+  - **API Endpoints**: `/api/ai/analyze` (main planner), `/api/ai/catalog/reload` (reload catalog), `/api/ai/health` (status check)
+- **Legacy AI Matching**: Original weighted matching rules system (now deprecated in favor of GPT-4o planner but kept for reference)
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking. Includes job tracking, retry logic, and robust error handling.
 - **Smart Image Analysis**: Two-tier image processing system that dramatically reduces processing time and cost for PDFs with many decorative images:
   - **Pre-filtering**: Hash-based deduplication and size filtering (<100px) to eliminate logos, icons, and repeated images
@@ -30,7 +40,11 @@ Preferred communication style: Simple, everyday language.
 - **Styling**: Uses CSS custom properties for theming, including a dark mode.
 - **State Management**: Centralized `selectionStore` as single source of truth with Proxy-backed compatibility layer for legacy code paths.
 - **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, and enhanced summary panel with hierarchical display and individual remove buttons.
-- **AI Integration**: Displays GPT-5 suggestions with reasoning, and action buttons for applying or replacing suggestions.
+- **AI Planner UI**: New unified interface showing GPT-4o analysis results with:
+  - **Summary Panel**: RFP summary with goals, channels, markets, complexity, and total planned hours
+  - **Suggestions Panel**: Evidence-backed deliverable suggestions organized by department with calibrated confidence scores (75%+ green, 50-75% yellow, <50% red)
+  - **Component Details**: Expandable component and task breakdowns with reasoning and hour estimates
+  - **Risk Indicators**: Highlighted compliance and risk flags for alcohol/regulated industries
 - **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends from timeline end dates.
 - **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 

@@ -18,7 +18,8 @@ from pydantic import BaseModel
 # Config / Models
 # ──────────────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-5-pro")
+# Use gpt-4o for now (gpt-5-pro requires Responses API which has different syntax)
+REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-4o")
 EMBEDDING_MODEL = "text-embedding-3-large"
 
 DEPARTMENTS = [
@@ -126,13 +127,22 @@ def embed_many(texts: List[str]) -> List[List[float]]:
 def responses_json_schema(messages: list, schema: dict, max_output_tokens: int = 2200) -> dict:
     if not oai:
         raise RuntimeError("Missing OPENAI_API_KEY")
-    r = oai.responses.create(
+    
+    # Use chat completions API with JSON schema for structured outputs
+    r = oai.chat.completions.create(
         model=REASONING_MODEL,
-        input=messages,
-        response_format={"type": "json_schema", "json_schema": {"name": "Out", "schema": schema, "strict": True}},
-        max_output_tokens=max_output_tokens,
+        messages=messages,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "response",
+                "strict": True,
+                "schema": schema
+            }
+        },
+        max_tokens=max_output_tokens,
     )
-    text = (getattr(r, "output_text", None) or "").strip()
+    text = r.choices[0].message.content.strip()
     return json.loads(text)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -201,7 +211,8 @@ def expand_prereqs(selected_ids: List[str], cat: List[Deliverable]) -> List[str]
 # ──────────────────────────────────────────────────────────────────────────────
 def summarize_request(request_text: str) -> Dict[str, Any]:
     schema = {
-        "type":"object","properties":{
+        "type":"object",
+        "properties":{
             "summary":{"type":"string"},
             "goals":{"type":"array","items":{"type":"string"}},
             "channels":{"type":"array","items":{"type":"string"}},
@@ -213,7 +224,8 @@ def summarize_request(request_text: str) -> Dict[str, Any]:
             "complexity":{"type":"string","enum":["low","medium","high"]},
             "risk_flags":{"type":"array","items":{"type":"string"}}
         },
-        "required":["summary","goals","channels","markets","complexity"]
+        "required":["summary","goals","channels","markets","compliance","languages","timeline_weeks","budget_tier","complexity","risk_flags"],
+        "additionalProperties": False
     }
     messages = [
         {"role":"system","content":"You are a senior agency PM/strategist in digital/creative/paid media/content/tech. Extract actionable signals."},
@@ -256,9 +268,11 @@ def best_evidence(request_text: str, candidate: Dict[str,Any], k:int=3) -> List[
 
 def rescore_with_llm(summary: Dict[str,Any], candidates: List[Dict[str,Any]], request_text: str) -> List[Dict[str,Any]]:
     schema = {
-        "type":"object","properties":{
+        "type":"object",
+        "properties":{
             "items":{"type":"array","items":{
-                "type":"object","properties":{
+                "type":"object",
+                "properties":{
                     "id":{"type":"string"},
                     "dept":{"type":"string","enum":DEPARTMENTS},
                     "level":{"type":"string","enum":LEVELS},
@@ -267,10 +281,12 @@ def rescore_with_llm(summary: Dict[str,Any], candidates: List[Dict[str,Any]], re
                     "why":{"type":"string"},
                     "risks":{"type":"string"}
                 },
-                "required":["id","dept","level","relevance","confidence","why"]
+                "required":["id","dept","level","relevance","confidence","why","risks"],
+                "additionalProperties": False
             }}
         },
-        "required":["items"]
+        "required":["items"],
+        "additionalProperties": False
     }
     out = []
     chunk = 50
@@ -564,6 +580,9 @@ def mount_routes(app: FastAPI, base: str="/api/ai"):
         try:
             return analyze_text(payload.request_text, payload.strictness or "balanced")
         except Exception as e:
+            import traceback
+            error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+            print(f"[AI PLANNER ERROR] {error_detail}")
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/catalog/reload")
