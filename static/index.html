@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/static_weights.css" />
+  <link rel="stylesheet" href="/static/static_weights_v2.css" />
 </head>
 <body>
   <header>
@@ -67,11 +68,16 @@
       <h2>Step 2 — Select & Configure Deliverables</h2>
       
       <!-- Weighted AI Suggestions Button -->
-      <div style="margin-bottom: 16px; display: flex; gap: 12px; align-items: center;">
-        <button id="btn-ask-ai-weights" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-          🤖 Ask AI for Deliverable Suggestions
-        </button>
-        <small style="color: var(--muted);">Get AI-powered recommendations based on your RFP (using weighted matching)</small>
+      <div style="margin-bottom: 16px;">
+        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
+          <button id="btn-ask-ai-weights" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            🤖 Ask AI for Deliverable Suggestions
+          </button>
+          <button id="btn-ask-ai-weights-v2" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            ✨ Ask AI V2 (Sparse, Calibrated)
+          </button>
+        </div>
+        <small style="color: var(--muted);">V1: Weighted matching • V2: Department gating + budget awareness + sparsity control (max 4 high-scored items)</small>
       </div>
 
       <!-- Weighted Suggestions Display (initially hidden) -->
@@ -1599,9 +1605,10 @@
     loadOptions();
   </script>
   <script src="/static/static_weights.js"></script>
+  <script src="/static/static_weights_v2.js"></script>
   <script src="/static/app.js?v=5.6" defer></script>
   <script>
-    // Weighted AI Suggestions Handler
+    // Weighted AI Suggestions Handler (V1)
     document.addEventListener('DOMContentLoaded', () => {
       const btnAskWeights = document.getElementById('btn-ask-ai-weights');
       const weightsContainer = document.getElementById('step2-ai-weights-container');
@@ -1676,6 +1683,79 @@
       if (btnCloseWeights) {
         btnCloseWeights.addEventListener('click', () => {
           weightsContainer.style.display = 'none';
+        });
+      }
+    });
+    
+    // Weighted AI Suggestions Handler (V2 - Sparse, Calibrated)
+    document.addEventListener('DOMContentLoaded', () => {
+      const btnAskWeightsV2 = document.getElementById('btn-ask-ai-weights-v2');
+      const weightsContainer = document.getElementById('step2-ai-weights-container');
+      const btnCloseWeights = document.getElementById('btn-close-weights');
+      
+      if (btnAskWeightsV2) {
+        btnAskWeightsV2.addEventListener('click', async () => {
+          try {
+            btnAskWeightsV2.disabled = true;
+            btnAskWeightsV2.textContent = '⏳ Analyzing with V2...';
+            
+            // Get RFP text: first from session state, then from backend cache
+            let rfpText = window.APB?.step2?.rfpText || '';
+            
+            if (!rfpText) {
+              // Try to fetch from backend cache
+              const cacheRes = await fetch('/api/rfp/cache');
+              if (cacheRes.ok) {
+                const cacheData = await cacheRes.json();
+                rfpText = cacheData.text || '';
+                
+                // Sync to session state if we got text from cache
+                if (rfpText && window.APB?.step2) {
+                  window.APB.step2.rfpText = rfpText;
+                  sessionStorage.setItem('apb.rfp_text', rfpText);
+                }
+              }
+            }
+            
+            // Validate we have RFP text
+            if (!rfpText || !rfpText.trim()) {
+              // Show inline message instead of blocking
+              weightsContainer.style.display = 'block';
+              const container = weightsContainer.querySelector('#step2-ai-weights');
+              if (container) {
+                container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted);">Please enter RFP text in Step 1 to get AI V2 suggestions.</div>';
+              }
+              btnAskWeightsV2.textContent = '✨ Ask AI V2 (Sparse, Calibrated)';
+              btnAskWeightsV2.disabled = false;
+              return;
+            }
+            
+            // Call weighted AI V2 endpoint
+            const res = await fetch('/api/step2/ai/weights_v2', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ rfp_text: rfpText })
+            });
+            
+            if (!res.ok) throw new Error('Failed to get V2 suggestions');
+            
+            const data = await res.json();
+            
+            // Show and render V2 results
+            weightsContainer.style.display = 'block';
+            TCGWeightsV2.render('#step2-ai-weights', data);
+            
+            btnAskWeightsV2.textContent = '✓ AI V2 Suggestions Loaded';
+            setTimeout(() => {
+              btnAskWeightsV2.textContent = '✨ Ask AI V2 (Sparse, Calibrated)';
+              btnAskWeightsV2.disabled = false;
+            }, 2000);
+            
+          } catch (err) {
+            alert('Error getting AI V2 suggestions: ' + err.message);
+            btnAskWeightsV2.textContent = '✨ Ask AI V2 (Sparse, Calibrated)';
+            btnAskWeightsV2.disabled = false;
+          }
         });
       }
     });

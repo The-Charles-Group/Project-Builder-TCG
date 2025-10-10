@@ -1,0 +1,125 @@
+You’re right—the app is over‑scoring everything. In your AI results printout, nearly every deliverable shows ~90%+ match (e.g., “Creative — Campaign Strategy 100%,” “Creative — Web Assets 97.9%,” “Strategy — Brand Positioning 94.6%,” etc.), which makes the signal useless.
+
+From the Casa Dragones RFP, what should actually drive high relevance is very specific: activation/buying, trafficking & optimization, onboarding, plus light planning and reporting, all under a strict $100,000 budget with weekly reporting and constant optimization, and a Q1 onboarding→implementation timeline.
+
+What I changed (so the model stops saying everything is 85–100%)
+
+I packaged a drop‑in patch that rewires how matching is scored and calibrated across your six departments (Paid Media, Creative, Content, Strategy, Technology, Integrated Marketing Management) and enforces sparsity so only a few items land in the “High” band.
+
+⬇️ Download: TCG_Relevance_Patch_v2.zip
+Download the ZIP
+
+Core logic in the patch
+
+Department intent gating (sticks to your 6 departments).
+We classify the RFP text to department intent (e.g., Paid Media + Technology here because of campaign execution/optimization, conversion tracking, GA4/GTM). Deliverables outside the top 1–2 departments are penalized; inside they get a small bonus.
+Why: Closes the door on irrelevant departments (e.g., Content/Brand/Big Creative) when the RFP is execution‑heavy.
+
+Execution > Strategy bias.
+Names containing buy, activation, trafficking, optimize, onboard, report are boosted; plan, strategy, deck, guidelines are down‑weighted so decks don’t float to the top unless the RFP truly asks for them.
+Why: Casa Dragones asks for execution and optimization first, not big strategy decks.
+
+Budget‑aware penalty.
+We extract the stated budget (Casa Dragones: “The Budget is $100,000 and cannot go above that.”, slide 5) and down‑weight deliverables whose typical hours (from All_Task_Rows hour columns when present) would likely blow the budget.
+
+Sparsity shaping (the big fix).
+After computing base scores, we apply a low‑temperature softmax and then map results into bands with a hard cap on “High” items:
+
+High band ≥ 85%: at most 4 deliverables allowed (tunable).
+
+Mid 70–84% and Low < 70%: everything else is compressed down.
+Net effect: You’ll see 2–4 top deliverables, a small mid group, and a long low tail—no more “everything is 90%.”
+
+Self‑check metadata to the UI.
+The API returns the detected top departments and budget so humans can judge why the model is choosing what it’s choosing.
+
+Result for this RFP should look like: Paid Media Onboarding / Paid Media Buying & Activation / Paid Media Trafficking & Performance in the High band; Paid Media Reporting and a small dose of Paid Media Planning in Mid; most Creative/Content/Brand work at Low (< 65%)—mirroring what you actually used.
+
+Why the old scores were wrong
+
+The current flow relied heavily on lexical similarity over names, with no gating by department, no budget/timeline awareness, and no calibration—so lots of similarly named items clustered at the top and all looked “very relevant.” You can see that effect across many screens in your printout (90%+ for Creative, Strategy, Content, etc.).
+
+What’s inside the ZIP and how to wire it
+server/ai_relevance_v2.py                  # new scorer (dept gating + budget + sparsity bands)
+server/routes_weights_v2_fastapi.py        # POST /api/step2/ai/weights_v2
+server/routes_weights_v2_flask.py          # same for Flask
+static/static_weights_v2.js                # Step 2A renderer (shows Service Dept + % + bands)
+static/static_weights_v2.css               # minimal styles
+README_PATCH_V2.md                         # install & tuning notes
+
+
+FastAPI
+
+from server.routes_weights_v2_fastapi import router as weights_v2
+app.include_router(weights_v2)
+
+
+Step 2A UI
+
+<link rel="stylesheet" href="/static/static_weights_v2.css" />
+<div id="step2A-weights"></div>
+<script src="/static/static_weights_v2.js"></script>
+<script>
+  async function refreshWeights() {
+    const rfp_text = window.getRfpText ? getRfpText() : '';
+    const res = await fetch('/api/step2/ai/weights_v2', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ rfp_text })
+    });
+    const data = await res.json();
+    TCGWeightsV2.render('#step2A-weights', data);
+  }
+</script>
+
+
+If you’re already using the rules Excel (AI_Matching_Rules_full.xlsx / AI_Index), the engine can read it. If not, it builds from your existing Deliverable_Index + All_Task_Rows (and uses any Hours columns it finds to estimate budget pressure automatically).
+
+Tuning knobs you can change without code refactors
+
+Inside server/ai_relevance_v2.py (self.cfg at the top):
+
+Department gating: dept_topK (default 2), dept_penalty (0.35), dept_bonus (1.10).
+
+Execution vs strategy: execution_bonus (1.15), strategy_penalty (0.60).
+
+Sparsity: high_cap (max allowed ≥85%), band ranges band_top, band_mid, band_low.
+
+Budget: blended_rate (default 125), overbudget_penalty (0.6).
+
+Sanity tests (what you should observe on Casa Dragones)
+
+Only Paid Media execution items are high.*
+
+Onboarding; Buying & Activation; Trafficking & Performance → ≥85%.
+
+Planning and Reporting → 70–84%.
+
+Creative/Content/Brand/PR/Events → mostly < 65%.
+(RFP calls for execution, weekly reporting, conversion tracking/optimization, and strict $100k; it does not ask for big brand/creative programs.)
+
+Budget awareness kicks in.
+If a deliverable’s typical hours would obviously blow $100k, it’s down‑weighted so it doesn’t appear in High. (Budget line is explicit on slide 5.)
+
+UI shows “Top departments” and budget next to the table so the PM can gut‑check the picks.
+
+Why this generalizes for your whole agency
+
+The gating + sparsity approach is domain‑agnostic across Creative / Paid Media / Content / Strategy / Technology / Integrated Marketing Management.
+
+The execution>strategy bias mirrors how real creative‑digital marketing projects are staffed: build + ship first; decks and guidelines only when requested.
+
+Budget awareness prevents “nice‑to‑have” deliverables from crowding out the things that actually deliver the result.
+
+If you want the model even stricter
+
+Tighten high_cap to 3 and raise the high band to 90–100% so only the most obviously on‑brief deliverables ever show up in High.
+
+Seed more department‑specific keywords in your optional AI_Matching_Rules sheet; the new scorer will still respect those while enforcing sparsity.
+
+Why these changes are anchored in your artifacts
+
+Your current AI results clearly show inflated scores across many departments for this RFP, which is the failure mode we addressed.
+
+The Casa Dragones RFP explicitly asks for campaign execution/optimization, conversion tracking, weekly/monthly reporting, and states a $100k cap with a Q1 onboarding/implementation timeline. Those are exactly the signals now driving scoring.
+
+If you want, I can also regenerate a single ZIP that combines this v2 relevance module plus the previously provided seeded rules workbook so you have both the smarter ranking and your curated “auto‑include” relationships in one bundle.

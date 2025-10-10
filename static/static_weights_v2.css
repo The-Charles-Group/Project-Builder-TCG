@@ -1,0 +1,71 @@
+/* AI Weights V2 Styling - Sparse, Department-Gated Results */
+
+.tcg-weights {
+  margin: 12px 0 20px;
+}
+
+.tcg-weights .tcg-note {
+  margin: 6px 0 12px;
+  font-size: 0.9rem;
+  opacity: 0.85;
+  color: var(--muted);
+}
+
+.tcg-weights-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+
+.tcg-weights-table th,
+.tcg-weights-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  text-align: left;
+}
+
+.tcg-weights-table th {
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.tcg-weights-table tbody tr:hover {
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.tcg-subhead {
+  margin: 8px 0 6px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--accent);
+}
+
+.tcg-chip {
+  display: inline-block;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: rgba(139, 92, 246, 0.08);
+  padding: 4px 8px;
+  border-radius: 12px;
+  margin: 3px 6px 3px 0;
+  font-size: 0.85rem;
+}
+
+.tcg-chip-pct {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.tcg-legend {
+  margin-top: 12px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  opacity: 0.8;
+  background: rgba(139, 92, 246, 0.05);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+}
+
+.tcg-legend b {
+  color: var(--accent);
+}
