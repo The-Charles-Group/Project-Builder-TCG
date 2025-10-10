@@ -595,6 +595,7 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         by_dept[dept].append({
             "deliverable_code": deliv_code,  # Real database code
             "deliverable_title": deliv_info["title"],
+            "title": deliv_info["title"],  # Add title for frontend compatibility
             "calibrated_confidence": d_item.get("calibrated_confidence", 0.60),
             "why": (d_item.get("llm") or {}).get("why", ""),
             "risks": (d_item.get("llm") or {}).get("risks", ""),
