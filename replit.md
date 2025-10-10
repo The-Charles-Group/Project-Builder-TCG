@@ -26,7 +26,7 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data, calculations, and manipulations.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **AI Planner v3 (GPT-4o + AgencyDB)**: Advanced reasoning-based AI intelligence layer connected to real database with granular task selection:
+- **AI Planner v3 (GPT-5 + AgencyDB)**: Advanced reasoning-based AI intelligence layer connected to real database with granular task selection:
   - **AgencyDB Integration**: Directly connects to AgencyDB (app.state.db) instead of ZIP catalogs, returns REAL deliverable codes (DEL-0027, etc.)
   - **Granular L2 Task Selection**: AI explicitly selects/deselects individual L2 tasks based on relevance (not bulk inclusion) - sets select=true/false per task
   - **Holistic Analysis**: Considers complete project flow from start to finish, includes dependency expansion automatically
@@ -47,7 +47,7 @@ Preferred communication style: Simple, everyday language.
   - **Multi-Format Export**: Generates optimized XML, Gantt JSON, explanations JSON, and Excel audit trail
   - **API Endpoints**: `/api/schedule/optimize` (run optimization), `/api/schedule/download/{file_type}/{base_name}` (download results)
   - **Security**: Path traversal protection with regex validation and absolute path verification
-- **Legacy AI Matching**: Original weighted matching rules system (now deprecated in favor of GPT-4o planner but kept for reference)
+- **Legacy AI Matching**: Original weighted matching rules system (now deprecated in favor of GPT-5 planner but kept for reference)
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking. Includes job tracking, retry logic, and robust error handling.
 - **Smart Image Analysis**: Two-tier image processing system that dramatically reduces processing time and cost for PDFs with many decorative images:
   - **Pre-filtering**: Hash-based deduplication and size filtering (<100px) to eliminate logos, icons, and repeated images
@@ -68,7 +68,7 @@ Preferred communication style: Simple, everyday language.
 - **Styling**: Uses CSS custom properties for theming, including a dark mode.
 - **State Management**: Centralized `selectionStore` as single source of truth with Proxy-backed compatibility layer for legacy code paths.
 - **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, and enhanced summary panel with hierarchical display and individual remove buttons.
-- **AI Planner UI**: New unified interface showing GPT-4o analysis results with:
+- **AI Planner UI**: New unified interface showing GPT-5 analysis results with:
   - **Summary Panel**: RFP summary with goals, channels, markets, complexity, and total planned hours
   - **Suggestions Panel**: Evidence-backed deliverable suggestions organized by department with calibrated confidence scores (75%+ green, 50-75% yellow, <50% red)
   - **Component Details**: Expandable component and task breakdowns with reasoning and hour estimates
