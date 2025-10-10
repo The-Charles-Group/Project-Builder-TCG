@@ -13,7 +13,15 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data, calculations, and manipulations.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **AI Matching**: Integrates comprehensive AI matching rules for deliverables, components, and subtasks with priority scoring and configurable weights. Features a weighted scoring API and an interactive AI suggestions panel.
+- **AI Matching**: Integrates comprehensive AI matching rules for deliverables, components, and subtasks with priority scoring and configurable weights. Features two parallel AI scoring systems:
+  - **V1 (Weighted Matcher)**: Original weighted scoring API with interactive suggestions panel (`/api/step2/ai/weights`)
+  - **V2 (Sparse, Calibrated)**: Enhanced relevance engine with department gating, budget awareness, execution/strategy bias, and sparsity control (`/api/step2/ai/weights_v2`). Fixes critical over-scoring issue where v1 scored everything 85-100%. Key features:
+    - **Department Gating**: Top 2 departments get 1.10× bonus, others get 0.35× penalty
+    - **Execution vs Strategy Bias**: Execution keywords (buy, activate, traffic, optimize) get 1.15× bonus; strategy keywords (plan, strategy, deck) get 0.60× penalty
+    - **Sparsity Control**: Maximum 4 deliverables in "High" band (≥85%), proper score distribution across High/Mid/Low bands
+    - **Budget Awareness**: Items exceeding 110% of budget get 0.60× penalty
+    - **Hybrid Scoring**: Combines rule-based scores (Weight_Base from AI_Matching_Rules) with lexical TF-IDF similarity
+    - **Level Mapping**: L1=Deliverable, L2=Component, L3=Task (matches AI_Index sheet structure)
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking. Includes job tracking, retry logic, and robust error handling.
 - **Smart Image Analysis**: Two-tier image processing system that dramatically reduces processing time and cost for PDFs with many decorative images:
   - **Pre-filtering**: Hash-based deduplication and size filtering (<100px) to eliminate logos, icons, and repeated images
@@ -30,7 +38,9 @@ Preferred communication style: Simple, everyday language.
 - **Styling**: Uses CSS custom properties for theming, including a dark mode.
 - **State Management**: Centralized `selectionStore` as single source of truth with Proxy-backed compatibility layer for legacy code paths.
 - **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, and enhanced summary panel with hierarchical display and individual remove buttons.
-- **AI Integration**: Displays GPT-5 suggestions with reasoning, and action buttons for applying or replacing suggestions.
+- **AI Integration**: Displays GPT-5 suggestions with reasoning, and action buttons for applying or replacing suggestions. Features dual AI scoring buttons in Step 2:
+  - **"🤖 Ask AI for Deliverable Suggestions"**: Uses V1 weighted matching
+  - **"✨ Ask AI V2 (Sparse, Calibrated)"**: Uses V2 enhanced relevance engine with department gating and sparsity control
 - **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends from timeline end dates.
 - **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 
@@ -43,7 +53,11 @@ Preferred communication style: Simple, everyday language.
 - Supports file uploads for RFP documents and Excel configuration files.
 - Uses JSON for configuration data and calculated scenario responses.
 - Serves static files for frontend assets.
-- Includes new endpoints for weighted AI suggestions (`/api/step2/ai/weights`), bulk L3 task retrieval (`/api/step2/l3/bulk`), and scenario refetching (`/api/scenarios`).
+- Includes endpoints for:
+  - Weighted AI suggestions V1: `/api/step2/ai/weights`
+  - Weighted AI suggestions V2 (sparse, calibrated): `/api/step2/ai/weights_v2`
+  - Bulk L3 task retrieval: `/api/step2/l3/bulk`
+  - Scenario refetching: `/api/scenarios`
 
 ## External Dependencies
 
