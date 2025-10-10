@@ -17,10 +17,10 @@ from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
 import pandas as pd
 
-# Level constants
-LEVEL_DELIVERABLE = "Deliverable"
-LEVEL_L1 = "L1"
-LEVEL_L2 = "L2"
+# Level constants (mapped to AI_Index structure: L1=Deliverable, L2=Component, L3=Task)
+LEVEL_DELIVERABLE = "L1"  # Deliverable level in AI_Index
+LEVEL_L1 = "L2"  # Component level in AI_Index  
+LEVEL_L2 = "L3"  # Task level in AI_Index
 
 # Column name constants
 COL_SERVICE_DEPT = "Service_Department"
@@ -428,21 +428,27 @@ class RelevanceEngineV2:
             drow = drows.iloc[0]
             dept = str(drow.get(COL_SERVICE_DEPT, ""))
             
-            # Deliverable score
-            s0 = cfg["w_lex_deliverable"] * float(drow["lex"])
+            # Deliverable score (combine rule and lexical)
+            rule_score_d = float(drow.get("Weight_Base", 0.0)) if "Weight_Base" in drow else 0.0
+            s0 = (cfg["w_rule_deliverable"] * rule_score_d + 
+                  cfg["w_lex_deliverable"] * float(drow["lex"]))
             
-            # L1 component scores (max)
+            # L1 component scores (max of rule + lexical)
             l1rows = grp[grp["Level"] == LEVEL_L1]
             s1 = 0.0
             for _, r in l1rows.iterrows():
-                s = cfg["w_lex_l1"] * float(r["lex"])
+                rule_score_l1 = float(r.get("Weight_Base", 0.0)) if "Weight_Base" in r else 0.0
+                s = (cfg["w_rule_l1"] * rule_score_l1 + 
+                     cfg["w_lex_l1"] * float(r["lex"]))
                 s1 = max(s1, s)
             
-            # L2 task scores (max)
+            # L2 task scores (max of rule + lexical)
             l2rows = grp[grp["Level"] == LEVEL_L2]
             s2 = 0.0
             for _, r in l2rows.iterrows():
-                s = cfg["w_lex_l2"] * float(r["lex"])
+                rule_score_l2 = float(r.get("Weight_Base", 0.0)) if "Weight_Base" in r else 0.0
+                s = (cfg["w_rule_l2"] * rule_score_l2 + 
+                     cfg["w_lex_l2"] * float(r["lex"]))
                 s2 = max(s2, s)
             
             # Aggregate score
