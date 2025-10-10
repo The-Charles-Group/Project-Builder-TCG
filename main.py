@@ -56,6 +56,11 @@ class JobState:
     image_timings: List[float] = field(default_factory=list)  # Track time per image for ETA
     cancelled: bool = False
     
+    # Two-phase tracking
+    phase: str = "quick_scan"  # "quick_scan" or "deep_analysis"
+    skipped_images: int = 0  # Images filtered out (duplicates, tiny, irrelevant)
+    relevant_images: int = 0  # Images flagged for deep analysis
+    
     @property
     def percentage(self) -> float:
         if self.total_images == 0:
@@ -1668,6 +1673,92 @@ def _extract_text_from_upload(content: bytes, filename: str) -> str:
     raise HTTPException(415, f"Unsupported file type: {ext}. Use .pdf, .docx, or .txt.")
 
 # ---------- Helper: extract and analyze images from PDFs (with parallel processing) ----------
+
+# Image pre-filtering helpers
+import hashlib
+
+def _get_image_hash(img_bytes: bytes) -> str:
+    """Generate hash for image deduplication"""
+    return hashlib.md5(img_bytes).hexdigest()
+
+def _get_image_size(img_bytes: bytes) -> Tuple[int, int]:
+    """Get image dimensions using PIL"""
+    if not Image:
+        return (0, 0)
+    try:
+        img = Image.open(io.BytesIO(img_bytes))
+        return img.size
+    except:
+        return (0, 0)
+
+def _should_skip_image(img_bytes: bytes, width: int, height: int) -> Tuple[bool, str]:
+    """Determine if image should be skipped based on size"""
+    # Skip tiny images (likely icons, bullets, decorative)
+    if width < 100 or height < 100:
+        return (True, f"tiny_{width}x{height}")
+    return (False, "")
+
+async def _quick_relevance_check_async(img_bytes: bytes, page_num: int, img_index: int, semaphore: asyncio.Semaphore, job_id: str) -> Tuple[bool, str]:
+    """Quick check if image contains relevant content (charts, diagrams, requirements)"""
+    async with semaphore:
+        try:
+            # Convert image to PNG for OpenAI
+            if Image:
+                try:
+                    img = Image.open(io.BytesIO(img_bytes))
+                    if img.mode not in ('RGB', 'RGBA'):
+                        img = img.convert('RGB')
+                    png_buffer = io.BytesIO()
+                    img.save(png_buffer, format='PNG')
+                    img_base64 = base64.b64encode(png_buffer.getvalue()).decode('utf-8')
+                except:
+                    img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+            else:
+                img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+            
+            # Quick relevance check with minimal tokens
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: openai_client.chat.completions.create(
+                    model="gpt-5",
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Does this contain charts, diagrams, wireframes, mockups, or project requirements? Answer YES or NO only."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{img_base64}"}
+                            }
+                        ]
+                    }],
+                    max_completion_tokens=10  # Minimal token usage
+                )
+            )
+            
+            answer = response.choices[0].message.content.strip().upper()
+            is_relevant = "YES" in answer
+            
+            if job_id in JOB_STORE:
+                JOB_STORE[job_id].processed_images += 1
+                if is_relevant:
+                    JOB_STORE[job_id].relevant_images += 1
+                else:
+                    JOB_STORE[job_id].skipped_images += 1
+            
+            return (is_relevant, answer)
+            
+        except Exception as e:
+            print(f"[JOB {job_id}] Quick check failed for image {img_index} on page {page_num}: {e}")
+            # On error, assume relevant to be safe
+            if job_id in JOB_STORE:
+                JOB_STORE[job_id].processed_images += 1
+                JOB_STORE[job_id].relevant_images += 1
+            return (True, "error_assume_relevant")
+
 async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index: int, semaphore: asyncio.Semaphore, job_id: str) -> Optional[str]:
     """Analyze a single image with retry logic and rate limit handling"""
     async with semaphore:  # Limit concurrent OpenAI calls
@@ -1763,54 +1854,113 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
             JOB_STORE[job_id].processed_images += 1
         return None
 
-async def _extract_and_analyze_pdf_images_async(content: bytes, filename: str, job_id: str) -> str:
+async def _extract_and_analyze_pdf_images_async(content: bytes, filename: str, job_id: str, analyze_images: bool = True) -> str:
     """
-    Extract images from PDF and analyze them in parallel using OpenAI Vision API.
-    Tracks progress via job_id. Returns a text description of all images found.
+    Two-tier image analysis: Quick scan → Deep analysis of relevant images only.
+    Tracks progress via job_id. Returns a text description of relevant images.
     """
     ext = os.path.splitext(filename or "")[1].lower()
     if ext != ".pdf":
         return ""  # Only process PDFs for image analysis
+    
+    if not analyze_images:
+        return ""  # User disabled image analysis
     
     if not PdfReader or not openai_client:
         return ""  # Skip if dependencies missing
     
     try:
         reader = PdfReader(io.BytesIO(content))
-        image_tasks = []
         
-        # Semaphore to limit concurrent OpenAI API calls (prevents rate limiting)
-        semaphore = asyncio.Semaphore(3)
+        # Phase 1: Extract and pre-filter images
+        images_to_scan = []
+        seen_hashes = set()
         
-        # Extract all images first
         for page_num, page in enumerate(reader.pages, 1):
             if hasattr(page, 'images'):
                 for img_index, image in enumerate(page.images, 1):
                     try:
                         img_bytes = image.data
-                        # Create async task for this image
-                        task = _analyze_single_image_async(img_bytes, page_num, img_index, semaphore, job_id)
-                        image_tasks.append(task)
+                        
+                        # Check size
+                        width, height = _get_image_size(img_bytes)
+                        should_skip, skip_reason = _should_skip_image(img_bytes, width, height)
+                        
+                        if should_skip:
+                            print(f"[JOB {job_id}] Skipping image {img_index} on page {page_num}: {skip_reason}")
+                            if job_id in JOB_STORE:
+                                JOB_STORE[job_id].skipped_images += 1
+                            continue
+                        
+                        # Check for duplicates
+                        img_hash = _get_image_hash(img_bytes)
+                        if img_hash in seen_hashes:
+                            print(f"[JOB {job_id}] Skipping duplicate image {img_index} on page {page_num}")
+                            if job_id in JOB_STORE:
+                                JOB_STORE[job_id].skipped_images += 1
+                            continue
+                        
+                        seen_hashes.add(img_hash)
+                        images_to_scan.append((img_bytes, page_num, img_index))
+                        
                     except Exception as e:
                         print(f"[JOB {job_id}] Could not extract image {img_index} from page {page_num}: {e}")
                         continue
         
-        if not image_tasks:
-            return ""  # No images found
+        if not images_to_scan:
+            return ""  # No images to analyze
         
-        # Update job with total image count
+        # Update job for Phase 1: Quick scan
         if job_id in JOB_STORE:
-            JOB_STORE[job_id].total_images = len(image_tasks)
+            JOB_STORE[job_id].total_images = len(images_to_scan)
             JOB_STORE[job_id].status = JobStatus.PROCESSING
+            JOB_STORE[job_id].phase = "quick_scan"
         
-        # Process all images in parallel (with semaphore limiting concurrency)
-        image_descriptions = await asyncio.gather(*image_tasks)
+        # Phase 2: Quick relevance check
+        semaphore = asyncio.Semaphore(5)  # Higher concurrency for quick checks
+        quick_check_tasks = [
+            _quick_relevance_check_async(img_bytes, page_num, img_index, semaphore, job_id)
+            for img_bytes, page_num, img_index in images_to_scan
+        ]
+        
+        relevance_results = await asyncio.gather(*quick_check_tasks)
+        
+        # Identify relevant images for deep analysis
+        relevant_images = [
+            (img_bytes, page_num, img_index)
+            for (img_bytes, page_num, img_index), (is_relevant, _) in zip(images_to_scan, relevance_results)
+            if is_relevant
+        ]
+        
+        print(f"[JOB {job_id}] Quick scan complete: {len(relevant_images)} relevant of {len(images_to_scan)} images")
+        
+        if not relevant_images:
+            print(f"[JOB {job_id}] No relevant images found, skipping deep analysis")
+            if job_id in JOB_STORE:
+                JOB_STORE[job_id].status = JobStatus.COMPLETED
+            return ""
+        
+        # Phase 3: Deep analysis of relevant images only
+        if job_id in JOB_STORE:
+            JOB_STORE[job_id].phase = "deep_analysis"
+            JOB_STORE[job_id].total_images = len(relevant_images)
+            JOB_STORE[job_id].processed_images = 0  # Reset for deep analysis phase
+        
+        semaphore = asyncio.Semaphore(3)  # Lower concurrency for deep analysis
+        deep_analysis_tasks = [
+            _analyze_single_image_async(img_bytes, page_num, img_index, semaphore, job_id)
+            for img_bytes, page_num, img_index in relevant_images
+        ]
+        
+        image_descriptions = await asyncio.gather(*deep_analysis_tasks)
         
         # Filter out None results (failed analyses)
         valid_descriptions = [desc for desc in image_descriptions if desc]
         
         if valid_descriptions:
-            return "\n\n--- Visual Content Analysis ---\n\n" + "\n\n".join(valid_descriptions)
+            summary = f"--- Visual Content Analysis ({len(valid_descriptions)} relevant images) ---\n\n"
+            summary += "\n\n".join(valid_descriptions)
+            return "\n\n" + summary
         return ""
         
     except Exception as e:
@@ -1836,7 +1986,7 @@ def _extract_and_analyze_pdf_images(content: bytes, filename: str) -> str:
             del JOB_STORE[job_id]  # Clean up sync wrapper jobs immediately
 
 # Background task for async image processing
-async def _process_images_background(content: bytes, filename: str, job_id: str, text_content: str):
+async def _process_images_background(content: bytes, filename: str, job_id: str, text_content: str, analyze_images: bool = True):
     """Background task to process images and update cache when complete"""
     global RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, RFP_TEXT_CACHE_TEXTAREA
     
@@ -1847,8 +1997,8 @@ async def _process_images_background(content: bytes, filename: str, job_id: str,
             JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
             return
         
-        # Run image analysis
-        image_analysis = await _extract_and_analyze_pdf_images_async(content, filename, job_id)
+        # Run image analysis (with user preference)
+        image_analysis = await _extract_and_analyze_pdf_images_async(content, filename, job_id, analyze_images)
         
         # Check for cancellation after processing
         if job_id in JOB_STORE and JOB_STORE[job_id].cancelled:
@@ -2931,7 +3081,7 @@ async def get_cached_rfp_text():
 
 @app.get("/api/upload/progress/{job_id}")
 async def get_upload_progress(job_id: str):
-    """Get progress of image analysis job"""
+    """Get progress of image analysis job with two-phase tracking"""
     if job_id not in JOB_STORE:
         raise HTTPException(404, f"Job {job_id} not found")
     
@@ -2945,7 +3095,10 @@ async def get_upload_progress(job_id: str):
         "percentage": round(job.percentage, 1),
         "eta_seconds": round(job.eta_seconds, 1) if job.eta_seconds is not None else None,
         "errors": job.errors,
-        "result_text": job.result_text
+        "result_text": job.result_text,
+        "phase": job.phase,  # "quick_scan" or "deep_analysis"
+        "skipped_images": job.skipped_images,
+        "relevant_images": job.relevant_images
     }
 
 @app.post("/api/upload/cancel/{job_id}")
@@ -4980,7 +5133,11 @@ def api_summarize(p: SummarizePayload):
     return ai_summarize_rfp_text(merged_text)
 
 @app.post("/api/summarize_by_file")
-async def api_summarize_by_file(files: List[UploadFile] = File(...), background_tasks: BackgroundTasks = None):
+async def api_summarize_by_file(
+    files: List[UploadFile] = File(...), 
+    background_tasks: BackgroundTasks = None,
+    analyze_images: bool = Form(True)  # User preference for image analysis
+):
     # Validate we have at least one file
     if not files:
         raise HTTPException(400, "No files uploaded.")
@@ -5009,14 +5166,15 @@ async def api_summarize_by_file(files: List[UploadFile] = File(...), background_
             all_file_contents.append(labeled_content)
             filenames.append(file.filename)
             
-            # Create job for image processing for this file
-            job_id = str(uuid.uuid4())
-            JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
-            background_jobs.append(job_id)
-            
-            # Start background image processing for this file
-            if background_tasks:
-                background_tasks.add_task(_process_images_background, content, file.filename, job_id, text.strip())
+            # Create job for image processing for this file (only if enabled)
+            if analyze_images:
+                job_id = str(uuid.uuid4())
+                JOB_STORE[job_id] = JobState(job_id=job_id, status=JobStatus.PENDING)
+                background_jobs.append(job_id)
+                
+                # Start background image processing for this file
+                if background_tasks:
+                    background_tasks.add_task(_process_images_background, content, file.filename, job_id, text.strip(), analyze_images)
     
     # Combine all file contents
     file_content = "\n\n".join(all_file_contents) if all_file_contents else ""
