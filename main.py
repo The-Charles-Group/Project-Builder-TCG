@@ -5119,6 +5119,130 @@ def api_audit_pricing(p: AuditPricingPayload):
         "warnings": warnings
     }
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Timeline Scheduler Endpoints (AI-powered optimization with SS+lag overlaps)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ScheduleOptimizePayload(BaseModel):
+    xml_path: str  # Input MSPDI XML file path
+    changes: Optional[List[Dict[str, Any]]] = None  # Optional UI-driven changes
+
+@app.post("/api/schedule/optimize")
+def api_schedule_optimize(p: ScheduleOptimizePayload):
+    """
+    Optimize timeline using AI Scheduler Kit:
+    - Converts FS dependencies to SS+lag overlaps based on rules
+    - Preserves review/approval gates
+    - Rounds durations to whole days
+    - Recalculates resource units
+    """
+    try:
+        from AI_Scheduler_Kit_v2.src.orchestrator import run_pipeline
+        
+        # Generate output paths
+        base_name = os.path.splitext(os.path.basename(p.xml_path))[0]
+        output_xml = os.path.join("exports", f"{base_name}_optimized.xml")
+        gantt_json = os.path.join("exports", f"{base_name}_gantt.json")
+        explanations_json = os.path.join("exports", f"{base_name}_explanations.json")
+        audit_xlsx = os.path.join("exports", f"{base_name}_audit.xlsx")
+        
+        # Ensure exports directory exists
+        os.makedirs("exports", exist_ok=True)
+        
+        # Run optimization pipeline
+        result = run_pipeline(
+            xml_in=p.xml_path,
+            xml_out=output_xml,
+            gantt_json=gantt_json,
+            explanations_json=explanations_json,
+            excel_out=audit_xlsx,
+            changes=p.changes,
+            ai_callable=None,  # Could integrate GPT here for smarter overlaps
+            round_policy="ceil"
+        )
+        
+        # Load Gantt data for frontend visualization
+        gantt_data = None
+        if os.path.exists(gantt_json):
+            with open(gantt_json, 'r') as f:
+                gantt_data = json.load(f)
+        
+        # Load explanations
+        explanations = None
+        if os.path.exists(explanations_json):
+            with open(explanations_json, 'r') as f:
+                explanations = json.load(f)
+        
+        return {
+            "success": True,
+            "optimized_xml": output_xml,
+            "gantt_data": gantt_data,
+            "explanations": explanations,
+            "notes": result.get("notes", []),
+            "stats": {
+                "xml_out": output_xml,
+                "gantt_json": gantt_json if os.path.exists(gantt_json) else None,
+                "audit_file": audit_xlsx if os.path.exists(audit_xlsx) else None
+            }
+        }
+    
+    except Exception as e:
+        import traceback
+        error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+        print(f"[SCHEDULE OPTIMIZE ERROR] {error_detail}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/schedule/download/{file_type}/{base_name}")
+def api_schedule_download(file_type: str, base_name: str):
+    """Download optimized files (xml, gantt, explanations, audit)"""
+    # SECURITY: Sanitize base_name to prevent path traversal attacks
+    # Allow alphanumeric, dash, underscore, period, and space but block path separators
+    import re as re_module
+    if not re_module.match(r'^[a-zA-Z0-9_\-\.\s]+$', base_name):
+        raise HTTPException(400, "Invalid base_name: contains forbidden characters")
+    
+    # Block explicit path traversal patterns
+    if '..' in base_name or '/' in base_name or '\\' in base_name:
+        raise HTTPException(400, "Invalid base_name: path traversal detected")
+    
+    # Further sanitize by stripping any directory components
+    safe_base_name = os.path.basename(base_name)
+    
+    file_map = {
+        "xml": f"exports/{safe_base_name}_optimized.xml",
+        "gantt": f"exports/{safe_base_name}_gantt.json",
+        "explanations": f"exports/{safe_base_name}_explanations.json",
+        "audit": f"exports/{safe_base_name}_audit.xlsx"
+    }
+    
+    if file_type not in file_map:
+        raise HTTPException(400, f"Invalid file_type: {file_type}")
+    
+    file_path = file_map[file_type]
+    
+    # SECURITY: Resolve to absolute path and verify it's within exports directory
+    abs_file_path = os.path.abspath(file_path)
+    abs_exports_dir = os.path.abspath("exports")
+    
+    if not abs_file_path.startswith(abs_exports_dir + os.sep):
+        raise HTTPException(403, "Access denied: path outside exports directory")
+    
+    if not os.path.exists(abs_file_path):
+        raise HTTPException(404, f"File not found: {os.path.basename(file_path)}")
+    
+    media_types = {
+        "xml": "application/xml",
+        "gantt": "application/json",
+        "explanations": "application/json",
+        "audit": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
+    
+    return FileResponse(
+        abs_file_path,
+        filename=os.path.basename(abs_file_path),
+        media_type=media_types.get(file_type, "application/octet-stream")
+    )
+
 @app.post("/api/summarize", response_model=RfpSummary)
 def api_summarize(p: SummarizePayload):
     if not p.rfp_text:
