@@ -137,8 +137,9 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
         }
         items.append(deliv_item)
         
-        # Group by component under this deliverable
-        for comp_name, comp_group in deliv_group.groupby('Component'):
+        # Group by component under this deliverable (v4 uses Component_Task_L1)
+        comp_column = 'Component_Task_L1' if 'Component_Task_L1' in db.all_rows.columns else 'Component'
+        for comp_name, comp_group in deliv_group.groupby(comp_column):
             if pd.isna(comp_name) or not str(comp_name).strip() or str(comp_name) == 'nan':
                 comp_name = "General"
             
@@ -156,9 +157,14 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
             
             # Add all L2 tasks under this component
             for idx, row in comp_group.iterrows():
-                task_label = str(row.get('Task_Label', row.get('task_group', 'Task')))
+                # v4 uses Task_Task_L2, fallback to Task_Label or task_group
+                task_label = str(row.get('Task_Task_L2', row.get('Task_Label', row.get('task_group', 'Task'))))
                 if pd.isna(task_label) or not task_label.strip() or task_label == 'nan':
                     continue
+                
+                # v4 uses Estimated_Hours instead of Hours
+                hours = row.get('Estimated_Hours', row.get('Hours', 2.0))
+                base_hours = float(hours) if not pd.isna(hours) else 2.0
                 
                 task_id = f"{deliv_code}::{comp_name}::{task_label}"
                 task_item = {
@@ -169,7 +175,7 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
                     "title": sanitize_for_json(task_label),
                     "desc": "",
                     "keywords": _extract_keywords(task_label),
-                    "base_hours": float(row.get('Hours', 2.0)) if not pd.isna(row.get('Hours')) else 2.0
+                    "base_hours": base_hours
                 }
                 items.append(task_item)
     
@@ -312,12 +318,30 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     chunk = 40  # Smaller chunks for granular analysis
     for i in range(0, len(candidates), chunk):
         block = candidates[i:i + chunk]
-        payload = [{"id": c["id"], "dept": c["dept"], "level": c["level"], "title": c["title"],
-                    "desc": c.get("desc", ""), "evidence": best_evidence(request_text, c, 3)} for c in block]
+        
+        # Sanitize all text in payload to prevent JSON parsing errors
+        payload = []
+        for c in block:
+            evidence = best_evidence(request_text, c, 3)
+            payload.append({
+                "id": sanitize_for_json(c["id"]),
+                "dept": c["dept"],
+                "level": c["level"],
+                "title": sanitize_for_json(c["title"]),
+                "desc": sanitize_for_json(c.get("desc", "")),
+                "evidence": [sanitize_for_json(e) for e in evidence]
+            })
+        
+        # Sanitize summary fields
+        safe_summary = sanitize_for_json(summary.get('summary', ''))
+        safe_goals = [sanitize_for_json(g) for g in summary.get("goals", [])]
+        safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])]
+        safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])]
+        safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])]
         
         messages = [
             {"role": "system", "content": "You are a senior agency PM/strategist. Score how necessary each candidate is. For TASKS, set select=true ONLY if specifically relevant; set select=false for generic/boilerplate tasks that don't match the request. Think holistically about project flow from start to finish."},
-            {"role": "user", "content": f"REQUEST SUMMARY:\n{summary.get('summary','')}\n\nGOALS:\n- " + "\n- ".join(summary.get("goals", [])) + f"\n\nCHANNELS: {', '.join(summary.get('channels',[]))} | MARKETS: {', '.join(summary.get('markets',[]))} | COMPLIANCE: {', '.join(summary.get('compliance',[]))}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nFor each candidate, especially TASKS, decide if it should be selected (select=true) or excluded (select=false) based on relevance to this specific project."}
+            {"role": "user", "content": f"REQUEST SUMMARY:\n{safe_summary}\n\nGOALS:\n- " + "\n- ".join(safe_goals) + f"\n\nCHANNELS: {', '.join(safe_channels)} | MARKETS: {', '.join(safe_markets)} | COMPLIANCE: {', '.join(safe_compliance)}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nFor each candidate, especially TASKS, decide if it should be selected (select=true) or excluded (select=false) based on relevance to this specific project."}
         ]
         
         try:
