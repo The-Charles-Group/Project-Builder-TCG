@@ -69,15 +69,23 @@
       
       <!-- Weighted AI Suggestions Button -->
       <div style="margin-bottom: 16px;">
-        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px;">
+        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 8px; flex-wrap: wrap;">
           <button id="btn-ask-ai-weights" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
             🤖 Ask AI for Deliverable Suggestions
           </button>
           <button id="btn-ask-ai-weights-v2" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
             ✨ Ask AI V2 (Sparse, Calibrated)
           </button>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label for="strictness-select" style="font-size: 0.9em; color: var(--muted); white-space: nowrap;">Strictness:</label>
+            <select id="strictness-select" style="padding: 8px 12px; border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 0.9em; cursor: pointer;">
+              <option value="high">High (≤3 items ≥90%)</option>
+              <option value="normal" selected>Normal (≤4 items ≥85%)</option>
+              <option value="loose">Loose (≤6 items ≥80%)</option>
+            </select>
+          </div>
         </div>
-        <small style="color: var(--muted);">V1: Weighted matching • V2: Department gating + budget awareness + sparsity control (max 4 high-scored items)</small>
+        <small style="color: var(--muted);">V1: Weighted matching • V2: Department gating + budget awareness + configurable sparsity control</small>
       </div>
 
       <!-- Weighted Suggestions Display (initially hidden) -->
@@ -1730,11 +1738,15 @@
               return;
             }
             
+            // Get strictness level from dropdown
+            const strictnessSelect = document.getElementById('strictness-select');
+            const strictness = strictnessSelect ? strictnessSelect.value : 'normal';
+            
             // Call weighted AI V2 endpoint
             const res = await fetch('/api/step2/ai/weights_v2', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({ rfp_text: rfpText })
+              body: JSON.stringify({ rfp_text: rfpText, strictness: strictness })
             });
             
             if (!res.ok) throw new Error('Failed to get V2 suggestions');

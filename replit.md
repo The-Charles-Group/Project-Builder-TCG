@@ -15,11 +15,15 @@ Preferred communication style: Simple, everyday language.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
 - **AI Matching**: Integrates comprehensive AI matching rules for deliverables, components, and subtasks with priority scoring and configurable weights. Features two parallel AI scoring systems:
   - **V1 (Weighted Matcher)**: Original weighted scoring API with interactive suggestions panel (`/api/step2/ai/weights`)
-  - **V2 (Sparse, Calibrated)**: Enhanced relevance engine with department gating, budget awareness, execution/strategy bias, and sparsity control (`/api/step2/ai/weights_v2`). Fixes critical over-scoring issue where v1 scored everything 85-100%. Key features:
-    - **Department Gating**: Top 2 departments get 1.10× bonus, others get 0.35× penalty
-    - **Execution vs Strategy Bias**: Execution keywords (buy, activate, traffic, optimize) get 1.15× bonus; strategy keywords (plan, strategy, deck) get 0.60× penalty
-    - **Sparsity Control**: Maximum 4 deliverables in "High" band (≥85%), proper score distribution across High/Mid/Low bands
-    - **Budget Awareness**: Items exceeding 110% of budget get 0.60× penalty
+  - **V2 (Sparse, Calibrated)**: Enhanced relevance engine with department gating, budget awareness, execution/strategy bias, and **user-configurable strictness levels** (`/api/step2/ai/weights_v2`). Fixes critical over-scoring issue where v1 scored everything 85-100%. Key features:
+    - **Strictness Levels**: User-selectable scoring sensitivity
+      - **High**: Very selective (max 3 items ≥90%, stricter penalties: dept 0.25×, strategy 0.5×, overbudget 0.5×)
+      - **Normal**: Balanced (max 4 items ≥85%, moderate penalties: dept 0.35×, strategy 0.6×, overbudget 0.6×) [default]
+      - **Loose**: Permissive (max 6 items ≥80%, lenient penalties: dept 0.45×, strategy 0.7×, overbudget 0.7×)
+    - **Department Gating**: Top 2 departments get 1.10× bonus, others get configurable penalty based on strictness
+    - **Execution vs Strategy Bias**: Execution keywords (buy, activate, traffic, optimize) get 1.15× bonus; strategy keywords (plan, strategy, deck) get configurable penalty
+    - **Sparsity Control**: Configurable maximum deliverables in "High" band based on strictness level
+    - **Budget Awareness**: Items exceeding 110% of budget get configurable penalty based on strictness
     - **Hybrid Scoring**: Combines rule-based scores (Weight_Base from AI_Matching_Rules) with lexical TF-IDF similarity
     - **Level Mapping**: L1=Deliverable, L2=Component, L3=Task (matches AI_Index sheet structure)
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking. Includes job tracking, retry logic, and robust error handling.
@@ -41,6 +45,7 @@ Preferred communication style: Simple, everyday language.
 - **AI Integration**: Displays GPT-5 suggestions with reasoning, and action buttons for applying or replacing suggestions. Features dual AI scoring buttons in Step 2:
   - **"🤖 Ask AI for Deliverable Suggestions"**: Uses V1 weighted matching
   - **"✨ Ask AI V2 (Sparse, Calibrated)"**: Uses V2 enhanced relevance engine with department gating and sparsity control
+  - **Strictness Selector**: Dropdown menu to control V2 scoring sensitivity (High/Normal/Loose) with dynamic band thresholds and visual feedback
 - **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends from timeline end dates.
 - **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 

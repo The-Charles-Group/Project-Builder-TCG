@@ -25,10 +25,12 @@ window.TCGWeightsV2 = (function () {
     
     // Header with metadata
     const deptList = (meta.top_departments || []).join(', ') || 'None detected';
-    const budgetText = meta.budget ? ` • Budget detected: <b>$${Number(meta.budget).toLocaleString()}</b>` : '';
+    const budgetText = meta.budget ? ` • Budget: <b>$${Number(meta.budget).toLocaleString()}</b>` : '';
+    const strictnessLevel = meta.strictness || 'normal';
+    const strictnessLabel = strictnessLevel.charAt(0).toUpperCase() + strictnessLevel.slice(1);
     
     wrap.innerHTML = `<h3>🤖 AI Match V2 — Deliverables (Sparse, Calibrated)</h3>
-      <div class="tcg-note">Top departments: <b>${esc(deptList)}</b>${budgetText}</div>`;
+      <div class="tcg-note">Top departments: <b>${esc(deptList)}</b>${budgetText} • Strictness: <b>${strictnessLabel}</b></div>`;
     
     // Results table
     const table = document.createElement('table');
@@ -51,7 +53,7 @@ window.TCGWeightsV2 = (function () {
         <td>${esc(row.service_department || '')}</td>
         <td><strong>${esc(row.deliverable || '')}</strong></td>
         <td style="text-align:right">
-          <strong style="color: ${getBandColor(matchPct)}">${matchPct}%</strong>
+          <strong style="color: ${getBandColor(matchPct, strictnessLevel)}">${matchPct}%</strong>
         </td>`;
       tbody.appendChild(tr);
       
@@ -88,14 +90,26 @@ window.TCGWeightsV2 = (function () {
     table.appendChild(tbody);
     wrap.appendChild(table);
     
-    // Legend
+    // Dynamic legend based on strictness level
     const legend = document.createElement('div');
     legend.className = 'tcg-legend';
-    legend.innerHTML = `<div><b>Bands:</b> 
-      <span style="color: #10b981">High (≥85%)</span> — Strong fit • 
-      <span style="color: #f59e0b">Mid (70–84%)</span> — Consider • 
-      <span style="color: #6b7280">Low (&lt;70%)</span> — Usually exclude
-    </div>`;
+    
+    let bandInfo = '';
+    if (strictnessLevel === 'high') {
+      bandInfo = `<span style="color: #10b981">High (≥90%)</span> — Strong fit • 
+        <span style="color: #f59e0b">Mid (75–89%)</span> — Consider • 
+        <span style="color: #6b7280">Low (&lt;75%)</span> — Usually exclude`;
+    } else if (strictnessLevel === 'loose') {
+      bandInfo = `<span style="color: #10b981">High (≥80%)</span> — Strong fit • 
+        <span style="color: #f59e0b">Mid (65–79%)</span> — Consider • 
+        <span style="color: #6b7280">Low (&lt;65%)</span> — Usually exclude`;
+    } else {
+      bandInfo = `<span style="color: #10b981">High (≥85%)</span> — Strong fit • 
+        <span style="color: #f59e0b">Mid (70–84%)</span> — Consider • 
+        <span style="color: #6b7280">Low (&lt;70%)</span> — Usually exclude`;
+    }
+    
+    legend.innerHTML = `<div><b>Bands:</b> ${bandInfo}</div>`;
     wrap.appendChild(legend);
     
     // Replace container content
@@ -104,12 +118,22 @@ window.TCGWeightsV2 = (function () {
   }
   
   /**
-   * Get color for match percentage band
+   * Get color for match percentage band (dynamic based on strictness)
    */
-  function getBandColor(pct) {
-    if (pct >= 85) return '#10b981'; // Green - High
-    if (pct >= 70) return '#f59e0b'; // Amber - Mid
-    return '#6b7280'; // Gray - Low
+  function getBandColor(pct, strictness = 'normal') {
+    if (strictness === 'high') {
+      if (pct >= 90) return '#10b981'; // Green - High
+      if (pct >= 75) return '#f59e0b'; // Amber - Mid
+      return '#6b7280'; // Gray - Low
+    } else if (strictness === 'loose') {
+      if (pct >= 80) return '#10b981'; // Green - High
+      if (pct >= 65) return '#f59e0b'; // Amber - Mid
+      return '#6b7280'; // Gray - Low
+    } else {
+      if (pct >= 85) return '#10b981'; // Green - High
+      if (pct >= 70) return '#f59e0b'; // Amber - Mid
+      return '#6b7280'; // Gray - Low
+    }
   }
   
   /**

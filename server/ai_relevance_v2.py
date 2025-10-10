@@ -385,9 +385,47 @@ class RelevanceEngineV2:
             "quarters": [q.lower() for q in qtrs]
         }
     
-    def score(self, rfp_text: str, top_k: int = 25) -> Dict[str, Any]:
+    def _apply_strictness(self, strictness: str = "normal") -> Dict[str, Any]:
+        """Apply strictness preset to config"""
+        cfg = self.cfg.copy()
+        
+        if strictness == "high":
+            # High strictness: Very selective, only top 3 items, ≥90% threshold
+            cfg.update({
+                "high_cap": 3,
+                "band_top": (0.90, 1.00),
+                "band_mid": (0.75, 0.89),
+                "band_low": (0.50, 0.74),
+                "dept_penalty": 0.25,
+                "strategy_penalty": 0.5,
+                "overbudget_penalty": 0.5
+            })
+        elif strictness == "loose":
+            # Loose strictness: More permissive, 5-6 items, ≥80% threshold
+            cfg.update({
+                "high_cap": 6,
+                "band_top": (0.80, 1.00),
+                "band_mid": (0.65, 0.79),
+                "band_low": (0.35, 0.64),
+                "dept_penalty": 0.45,
+                "strategy_penalty": 0.7,
+                "overbudget_penalty": 0.7
+            })
+        # else: normal (default cfg values)
+        
+        return cfg
+    
+    def score(self, rfp_text: str, top_k: int = 25, strictness: str = "normal") -> Dict[str, Any]:
         """
         Score deliverables against RFP with department gating, budget awareness, and sparsity
+        
+        Args:
+            rfp_text: RFP text to analyze
+            top_k: Number of top deliverables to return (default 25)
+            strictness: Scoring strictness level - "high", "normal", or "loose" (default "normal")
+                - high: Very selective (max 3 items ≥90%)
+                - normal: Balanced (max 4 items ≥85%)
+                - loose: Permissive (max 6 items ≥80%)
         
         Returns:
             {
@@ -397,7 +435,7 @@ class RelevanceEngineV2:
                 "meta": {...}           # Detected departments and budget
             }
         """
-        cfg = self.cfg
+        cfg = self._apply_strictness(strictness)
         idx = self.index.reset_index(drop=True).copy()
         
         if idx.empty:
@@ -561,6 +599,7 @@ class RelevanceEngineV2:
             "tasks": tasks,
             "meta": {
                 "top_departments": top_depts,
-                "budget": budget
+                "budget": budget,
+                "strictness": strictness
             }
         }

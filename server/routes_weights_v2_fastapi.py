@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/step2/ai", tags=["ai-match-v2"])
 
 class WeightsReqV2(BaseModel):
     rfp_text: str
+    strictness: Optional[str] = "normal"  # "high", "normal", or "loose"
 
 
 # Global engine instance (lazy loaded)
@@ -53,15 +54,23 @@ def weights_v2(req: WeightsReqV2):
     - Department intent gating
     - Execution vs Strategy bias
     - Budget-aware filtering
-    - Sparsity shaping (max 4 in High band)
+    - Sparsity shaping (configurable by strictness level)
+    
+    Strictness levels:
+    - "high": Very selective (max 3 items ≥90%)
+    - "normal": Balanced (max 4 items ≥85%) [default]
+    - "loose": Permissive (max 6 items ≥80%)
     
     Returns:
         {
             "deliverables": [...],
             "components": {...},
             "tasks": {...},
-            "meta": {"top_departments": [...], "budget": ...}
+            "meta": {"top_departments": [...], "budget": ..., "strictness": ...}
         }
     """
     eng = _get_engine()
-    return eng.score(req.rfp_text or "")
+    strictness = req.strictness or "normal"
+    result = eng.score(req.rfp_text or "", strictness=strictness)
+    
+    return result
