@@ -665,12 +665,26 @@ function updateProgressUI(progress) {
   if (bar) bar.style.width = `${progress.percentage || 0}%`;
   if (percentage) percentage.textContent = `${Math.round(progress.percentage || 0)}%`;
   
-  // Update status message
+  // Update status message with two-phase support
   if (status) {
     if (progress.status === 'processing') {
-      status.textContent = `Processing ${progress.processed_images} of ${progress.total_images} images...`;
+      if (progress.phase === 'quick_scan') {
+        let msg = `🔍 Quick scan: ${progress.processed_images} of ${progress.total_images} images`;
+        if (progress.skipped_images > 0) {
+          msg += ` (${progress.skipped_images} filtered)`;
+        }
+        status.textContent = msg;
+      } else if (progress.phase === 'deep_analysis') {
+        status.textContent = `🧠 Deep analysis: ${progress.processed_images} of ${progress.total_images} relevant images`;
+      } else {
+        status.textContent = `Processing ${progress.processed_images} of ${progress.total_images} images...`;
+      }
     } else if (progress.status === 'completed') {
-      status.textContent = `✓ Complete! Analyzed ${progress.total_images} images`;
+      if (progress.relevant_images !== undefined && progress.skipped_images !== undefined) {
+        status.textContent = `✓ Complete: ${progress.relevant_images} relevant, ${progress.skipped_images} filtered`;
+      } else {
+        status.textContent = `✓ Complete! Analyzed ${progress.total_images} images`;
+      }
     } else if (progress.status === 'failed') {
       status.textContent = `✗ Analysis failed`;
     } else if (progress.status === 'cancelled') {
@@ -777,6 +791,11 @@ async function onRunReconcile() {
       for (let i = 0; i < fileEl.files.length; i++) {
         form.append('files', fileEl.files[i]);
       }
+      
+      // Get analyze_images preference from toggle (default true)
+      const analyzeToggle = document.querySelector('#analyzeImagesToggle');
+      const analyzeImages = analyzeToggle ? analyzeToggle.checked : true;
+      form.append('analyze_images', analyzeImages);
       
       const res = await fetch('/api/summarize_by_file', { method: 'POST', body: form });
       if (!res.ok) {
@@ -3468,6 +3487,22 @@ async function exportXMLScenario(letter) {
 // Wire up XML export button (Scenario A only)
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-export-xml-a')?.addEventListener('click', () => exportXMLScenario('A'));
+  
+  // Initialize image analysis toggle from localStorage
+  const analyzeToggle = document.getElementById('analyzeImagesToggle');
+  if (analyzeToggle) {
+    // Load saved preference (default true)
+    const savedPreference = localStorage.getItem('apb.analyzeImages');
+    if (savedPreference !== null) {
+      analyzeToggle.checked = savedPreference === 'true';
+    }
+    
+    // Save preference when changed
+    analyzeToggle.addEventListener('change', (e) => {
+      localStorage.setItem('apb.analyzeImages', e.target.checked);
+      console.log('[Image Analysis] Preference saved:', e.target.checked);
+    });
+  }
   
   // Display selected file names when files are chosen
   const fileInput = document.getElementById('rfpFile');

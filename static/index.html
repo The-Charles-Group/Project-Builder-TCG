@@ -29,6 +29,17 @@
       <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" multiple />
       <div id="selected-files-list" style="margin-top: 8px; font-size: 0.85em; color: var(--muted);"></div>
       
+      <!-- Image Analysis Toggle -->
+      <div style="margin: 12px 0; padding: 8px 12px; background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 6px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9em;">
+          <input type="checkbox" id="analyzeImagesToggle" checked style="width: auto; margin: 0;">
+          <span>Analyze images with AI Vision (GPT-5)</span>
+        </label>
+        <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted); padding-left: 28px;">
+          Smart two-tier analysis: Quick scan for relevance, then deep analysis of diagrams/charts only
+        </div>
+      </div>
+      
       <!-- Image Analysis Progress Bar -->
       <div id="image-progress-container" style="display: none; margin: 16px 0; padding: 12px; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
