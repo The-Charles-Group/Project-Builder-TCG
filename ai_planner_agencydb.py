@@ -122,7 +122,7 @@ def embed_many(texts: List[str]) -> List[List[float]]:
     print(f"[EMBED] Completed: {len(all_embeddings)} embeddings generated")
     return all_embeddings
 
-def chat_json_schema(messages: list, schema: dict, max_tokens: int = 2200) -> dict:
+def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 2200) -> dict:
     """Use Chat Completions with JSON schema for GPT-5"""
     if not oai:
         # Return empty structure matching schema
@@ -132,7 +132,7 @@ def chat_json_schema(messages: list, schema: dict, max_tokens: int = 2200) -> di
         model=REASONING_MODEL,
         messages=messages,
         response_format={"type": "json_schema", "json_schema": {"name": "Response", "schema": schema, "strict": True}},
-        max_tokens=max_tokens,
+        max_completion_tokens=max_completion_tokens,
     )
     text = response.choices[0].message.content
     
@@ -393,7 +393,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         ]
         
         try:
-            r = chat_json_schema(messages, schema, max_tokens=1800)
+            r = chat_json_schema(messages, schema, max_completion_tokens=1800)
             out.extend(r.get("items", []))
         except Exception as e:
             print(f"[LLM Re-score Error] {e}")
