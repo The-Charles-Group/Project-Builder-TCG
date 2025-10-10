@@ -161,7 +161,11 @@ mount_routes_agencydb(app, base="/api/ai")
 @app.on_event("startup")
 async def startup_event():
     """Initialize AI planner with AgencyDB catalog"""
-    print("[AI PLANNER] Using AgencyDB as catalog source (connected to app.state.db)")
+    app.state.db = AgencyDB()
+    app.state.db.load()
+    print(f"[AI PLANNER] Using AgencyDB as catalog source (connected to app.state.db)")
+    print(f"[AgencyDB] Loaded from: {app.state.db.src}")
+    print(f"[AgencyDB] Total rows: {len(app.state.db.all_rows) if app.state.db.all_rows is not None else 0}")
 
 # ===== Workfront column order (now includes Service_Department) =====
 WF_COLUMNS = [
@@ -241,10 +245,12 @@ def _find_v3_path() -> str | None:
 
 def _find_v4_path() -> str | None:
     import glob
-    # Check for xlsx files first
+    # Check for xlsx files first (including test_outputs directory)
     for p in [
         "Replit_App_DB_READABLE_FullRows_v4b.xlsx",
         "Replit_App_DB_READABLE_FullRows_v4.xlsx",
+        "test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx",  # v4 in test_outputs
+        "data/Replit_App_DB_READABLE_FullRows_v4.xlsx",
     ]:
         if os.path.exists(p):
             return p
