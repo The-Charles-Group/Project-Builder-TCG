@@ -45,7 +45,12 @@ def embed_many(texts: List[str]) -> List[List[float]]:
         # Return zero embeddings as fallback
         return [[0.0] * 1536 for _ in texts]
     if not texts: return []
-    r = oai.embeddings.create(model=EMBEDDING_MODEL, input=texts)
+    
+    # Filter out empty/invalid strings - OpenAI API rejects them
+    valid_texts = [str(t).strip() if t else "unknown" for t in texts]
+    valid_texts = [t if t else "unknown" for t in valid_texts]
+    
+    r = oai.embeddings.create(model=EMBEDDING_MODEL, input=valid_texts)
     return [e.embedding for e in r.data]
 
 def chat_json_schema(messages: list, schema: dict, max_tokens: int = 2200) -> dict:
@@ -211,7 +216,7 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]]) -> Tuple
     if not catalog:
         return [], []
     
-    texts = [f"{i['dept']} • {i['level']} • {i['title']} :: {i.get('desc','')} :: {', '.join(i.get('keywords',[]))}" for i in catalog]
+    texts = [f"{str(i.get('dept',''))} • {str(i.get('level',''))} • {str(i.get('title',''))} :: {str(i.get('desc',''))} :: {', '.join(str(k) for k in i.get('keywords',[]))}" for i in catalog]
     embs = embed_many([request_text] + texts)
     req = np.array(embs[0], dtype=np.float32)
     
