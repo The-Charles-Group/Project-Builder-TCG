@@ -50,19 +50,20 @@ def embed_many(texts: List[str]) -> List[List[float]]:
     valid_texts = [str(t).strip() if t else "unknown" for t in texts]
     valid_texts = [t if t else "unknown" for t in valid_texts]
     
-    # Debug: Check for problematic inputs
-    print(f"[EMBED DEBUG] Sending {len(valid_texts)} texts to embeddings API")
-    for idx, t in enumerate(valid_texts[:3]):  # Show first 3
-        print(f"[EMBED DEBUG] Text {idx}: {t[:100] if len(t) > 100 else t}")
+    # Batch process to avoid API limits (max ~2048 inputs per request)
+    BATCH_SIZE = 2000
+    all_embeddings = []
     
-    try:
-        r = oai.embeddings.create(model=EMBEDDING_MODEL, input=valid_texts)
-        return [e.embedding for e in r.data]
-    except Exception as e:
-        print(f"[EMBED ERROR] Failed with {len(valid_texts)} texts")
-        print(f"[EMBED ERROR] First text type: {type(valid_texts[0])}")
-        print(f"[EMBED ERROR] First text repr: {repr(valid_texts[0][:200])}")
-        raise
+    print(f"[EMBED] Processing {len(valid_texts)} texts in batches of {BATCH_SIZE}")
+    
+    for i in range(0, len(valid_texts), BATCH_SIZE):
+        batch = valid_texts[i:i + BATCH_SIZE]
+        print(f"[EMBED] Batch {i//BATCH_SIZE + 1}: {len(batch)} texts")
+        r = oai.embeddings.create(model=EMBEDDING_MODEL, input=batch)
+        all_embeddings.extend([e.embedding for e in r.data])
+    
+    print(f"[EMBED] Completed: {len(all_embeddings)} embeddings generated")
+    return all_embeddings
 
 def chat_json_schema(messages: list, schema: dict, max_tokens: int = 2200) -> dict:
     """Use Chat Completions with JSON schema for GPT-4o"""
