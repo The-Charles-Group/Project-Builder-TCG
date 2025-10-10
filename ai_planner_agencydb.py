@@ -195,7 +195,7 @@ def summarize_request(request_text: str) -> Dict[str, Any]:
             "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
             "risk_flags": {"type": "array", "items": {"type": "string"}}
         },
-        "required": ["summary", "goals", "channels", "markets", "compliance", "complexity"],
+        "required": ["summary", "goals", "channels", "markets", "compliance", "languages", "timeline_weeks", "budget_tier", "complexity", "risk_flags"],
         "additionalProperties": False
     }
     messages = [
