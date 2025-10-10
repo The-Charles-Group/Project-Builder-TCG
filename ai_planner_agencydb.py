@@ -278,7 +278,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
                         "risks": {"type": "string"},
                         "select": {"type": "boolean"}  # NEW: explicit selection flag for tasks
                     },
-                    "required": ["id", "dept", "level", "relevance", "confidence", "why", "select"],
+                    "required": ["id", "dept", "level", "relevance", "confidence", "why", "risks", "select"],
                     "additionalProperties": False
                 }
             }
@@ -451,7 +451,7 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         
         # Get deliverable base hours from DB
         deliv_rows = db.all_rows[db.all_rows['Deliverable_Code'] == deliv_code]
-        d_hours = deliv_rows['Hours'].sum() if not deliv_rows.empty else 8.0
+        d_hours = deliv_rows['Estimated_Hours'].sum() if not deliv_rows.empty else 8.0
         d_hours_planned = planned_hours(d_hours, m)
         
         # Components
@@ -479,8 +479,8 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
                         })
                 
                 # Calculate component hours
-                comp_rows = deliv_rows[deliv_rows['Component'] == comp_item["title"].split("::")[- 1]]
-                c_hours = comp_rows['Hours'].sum() if not comp_rows.empty else 4.0
+                comp_rows = deliv_rows[deliv_rows['Component_Task_L1'] == comp_item["title"].split("::")[- 1]]
+                c_hours = comp_rows['Estimated_Hours'].sum() if not comp_rows.empty else 4.0
                 
                 comp_out.append({
                     "id": comp_id,
