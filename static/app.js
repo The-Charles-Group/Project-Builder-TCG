@@ -786,7 +786,7 @@ function showAIProgressBar() {
       progressBar.innerHTML = `
         <div style="margin-bottom: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <strong id="ai-progress-stage">Initializing AI Analysis...</strong>
+            <strong id="ai-progress-stage" style="color: #000000;">Initializing AI Analysis...</strong>
             <span id="ai-progress-percent" style="color: #2563eb; font-weight: bold;">0%</span>
           </div>
           <div style="background: #e5e7eb; height: 24px; border-radius: 12px; overflow: hidden;">
@@ -880,12 +880,52 @@ async function pollAIAnalysis(jobId) {
   }
 }
 
+// Helper function for fetch with retry logic for 502 errors
+async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 2000) {
+  let lastError = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      
+      // If we get a 502 error, retry with exponential backoff
+      if (response.status === 502) {
+        if (attempt < maxRetries - 1) {
+          const delay = baseDelay * Math.pow(2, attempt); // 2s, 4s, 8s
+          console.log(`Got 502 error, retrying in ${delay/1000}s (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        throw new Error(`Gateway timeout (502). The server may be processing your request. Please wait and try again.`);
+      }
+      
+      return response;
+    } catch (error) {
+      lastError = error;
+      
+      // Network errors - retry
+      if (attempt < maxRetries - 1) {
+        const delay = baseDelay * Math.pow(2, attempt);
+        console.log(`Network error, retrying in ${delay/1000}s:`, error);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+    }
+  }
+  
+  throw lastError || new Error('Request failed after multiple retries');
+}
+
 // Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
   let rfpText = (textEl?.value || '').trim();
   const btnAnalyze = document.querySelector('#btnAnalyze');
+
+  // Show progress bar IMMEDIATELY when button is clicked
+  showAIProgressBar();
+  updateAIProgress({ progress: 0, current_stage: 'Preparing analysis...', elapsed_seconds: 0, eta_seconds: null });
 
   let aiPlanResponse;
   try {
@@ -896,6 +936,8 @@ async function onRunReconcile() {
         btnAnalyze.textContent = 'Extracting text...';
       }
       
+      updateAIProgress({ progress: 5, current_stage: 'Extracting text from file...', elapsed_seconds: 0, eta_seconds: null });
+      
       const form = new FormData();
       for (let i = 0; i < fileEl.files.length; i++) {
         form.append('files', fileEl.files[i]);
@@ -905,7 +947,7 @@ async function onRunReconcile() {
       const analyzeImages = analyzeToggle ? analyzeToggle.checked : true;
       form.append('analyze_images', analyzeImages);
       
-      const res = await fetch('/api/summarize_by_file', { method: 'POST', body: form });
+      const res = await fetchWithRetry('/api/summarize_by_file', { method: 'POST', body: form });
       if (!res.ok) {
         throw new Error(`Server error: ${res.status} ${res.statusText}`);
       }
@@ -921,6 +963,7 @@ async function onRunReconcile() {
     }
     
     if (!rfpText) {
+      hideAIProgressBar();
       alert('Please enter RFP text or upload a file first.');
       return;
     }
@@ -931,14 +974,16 @@ async function onRunReconcile() {
       btnAnalyze.textContent = 'Starting AI Analysis...';
     }
     
-    const aiRes = await fetch('/api/ai/analyze', {
+    updateAIProgress({ progress: 10, current_stage: 'Sending request to AI...', elapsed_seconds: 0, eta_seconds: null });
+    
+    const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         request_text: rfpText,
         strictness: 'balanced' 
       })
-    });
+    }, 3, 2000);
     
     if (!aiRes.ok) {
       throw new Error(`AI analysis error: ${aiRes.status} ${aiRes.statusText}`);
@@ -982,7 +1027,19 @@ async function onRunReconcile() {
     
   } catch (error) {
     console.error('Error analyzing RFP:', error);
-    alert(`Error getting AI analysis: ${error.message}`);
+    hideAIProgressBar();
+    
+    // Provide more user-friendly error messages
+    let errorMessage = 'Error getting AI analysis: ';
+    if (error.message.includes('502') || error.message.includes('Gateway timeout')) {
+      errorMessage = 'The AI analysis is taking longer than expected. This usually happens with complex documents. Please try again in a moment.';
+    } else if (error.message.includes('Network')) {
+      errorMessage = 'Network connection issue. Please check your internet connection and try again.';
+    } else {
+      errorMessage += error.message;
+    }
+    
+    alert(errorMessage);
     
     // Re-enable button only on error (not during normal operation - polling handles it)
     if (btnAnalyze) {
