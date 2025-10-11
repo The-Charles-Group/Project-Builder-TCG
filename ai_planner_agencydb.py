@@ -363,7 +363,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     }
     
     out = []
-    chunk = 40  # Smaller chunks for granular analysis
+    chunk = 70  # Optimized chunk size: keeps output under ~3.5k tokens while reducing API calls (2288 / 70 = ~33 calls @ ~8s each = ~4.4 min total)
     for i in range(0, len(candidates), chunk):
         block = candidates[i:i + chunk]
         
@@ -393,7 +393,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         ]
         
         try:
-            r = chat_json_schema(messages, schema, max_completion_tokens=1800)
+            r = chat_json_schema(messages, schema, max_completion_tokens=3500)  # Matched to chunk size (70 items × ~50 tokens/item)
             out.extend(r.get("items", []))
         except Exception as e:
             print(f"[LLM Re-score Error] {e}")
