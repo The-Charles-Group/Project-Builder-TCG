@@ -8,6 +8,15 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+### October 11, 2025 - AI Analysis Background Jobs & Real-Time Progress Tracking
+- **Background Job System**: Converted AI analysis from synchronous (4+ minute blocking) to async background jobs to eliminate 502 timeout errors
+- **Real-Time Progress Bar**: Added visual progress tracking with percentage complete, elapsed time, and ETA calculation
+- **Job Status API**: New `/api/ai/status/{job_id}` endpoint provides live updates during analysis (progress %, current stage, elapsed/ETA seconds)
+- **Chunk Progress Tracking**: AI analysis reports progress after each chunk (e.g., "Analyzing chunk 15/33" = 45% complete)
+- **Memory Management**: Implemented automatic job cleanup with 5-minute TTL to prevent memory leaks
+- **Improved UX**: Analyze button stays disabled during processing, progress bar appears immediately, results display automatically when complete
+- **Performance**: Analysis now runs in background (170s typical), no gateway timeouts, seamless user experience with real-time feedback
+
 ### October 10, 2025 - Workspace Cleanup & Database Consolidation
 - **Workspace Organization**: Reduced root directory from 40+ files to 25 organized files by archiving 23 old/duplicate files
 - **Database Consolidation**: v4 database (`test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx`) is now the primary database with 1,916 rows and 52 deliverable codes
@@ -28,15 +37,16 @@ Preferred communication style: Simple, everyday language.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
 - **AI Planner v3 (GPT-5 + AgencyDB)**: Advanced reasoning-based AI intelligence layer connected to real database with granular task selection:
   - **AgencyDB Integration**: Directly connects to AgencyDB (app.state.db) instead of ZIP catalogs, returns REAL deliverable codes (DEL-0027, etc.)
+  - **Background Job System**: Asynchronous processing with job tracking, progress updates, and automatic cleanup (5-minute TTL)
   - **Granular L2 Task Selection**: AI explicitly selects/deselects individual L2 tasks based on relevance (not bulk inclusion) - sets select=true/false per task
   - **Holistic Analysis**: Considers complete project flow from start to finish, includes dependency expansion automatically
-  - **One-Click Workflow**: "Analyze with AI" button triggers summary + deliverable suggestions simultaneously
+  - **One-Click Workflow**: "Analyze with AI" button triggers summary + deliverable suggestions simultaneously with real-time progress tracking
   - **Evidence-Based Matching**: High-recall semantic retrieval (embeddings + lexical scoring) → LLM re-ranking → calibrated confidence scores
   - **Calibrated Confidence**: Bayesian-style calibration with configurable strictness (high/balanced/recall gates at 70%/58%/48%)
   - **Smart Multipliers**: Complexity, channel count, market count, and compliance factors dynamically adjust planned hours
   - **Auto-Relax & Rescue**: Automatically relaxes thresholds and has fallback logic to guarantee non-empty suggestions
   - **Six Departments**: Creative, Strategy, Paid Media, Content, Technology, Integrated Marketing Management
-  - **API Endpoints**: `/api/ai/analyze` (main planner with AgencyDB), `/api/ai/health` (status check with catalog stats)
+  - **API Endpoints**: `/api/ai/analyze` (start analysis job), `/api/ai/status/{job_id}` (real-time progress), `/api/ai/health` (status check with catalog stats)
 - **Timeline Scheduler Kit**: AI-powered timeline optimization with SS+lag overlaps:
   - **MSPDI Pipeline**: Complete Microsoft Project XML parser, optimizer, and writer
   - **Smart Overlaps**: Automatically converts FS dependencies to SS+lag based on predefined rules (e.g., Design 60% → Dev starts)
@@ -69,10 +79,12 @@ Preferred communication style: Simple, everyday language.
 - **State Management**: Centralized `selectionStore` as single source of truth with Proxy-backed compatibility layer for legacy code paths.
 - **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, and enhanced summary panel with hierarchical display and individual remove buttons.
 - **AI Planner UI**: New unified interface showing GPT-5 analysis results with:
+  - **Real-Time Progress Bar**: Visual progress tracking with gradient bar showing percentage complete, elapsed time, and ETA during AI analysis
   - **Summary Panel**: RFP summary with goals, channels, markets, complexity, and total planned hours
   - **Suggestions Panel**: Evidence-backed deliverable suggestions organized by department with calibrated confidence scores (75%+ green, 50-75% yellow, <50% red)
   - **Component Details**: Expandable component and task breakdowns with reasoning and hour estimates
   - **Risk Indicators**: Highlighted compliance and risk flags for alcohol/regulated industries
+  - **Status Polling**: Frontend polls job status every 2 seconds, automatically displays results when complete
 - **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends from timeline end dates.
 - **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 
