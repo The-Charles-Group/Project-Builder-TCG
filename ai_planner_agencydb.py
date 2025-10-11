@@ -169,26 +169,43 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
         # Return empty structure matching schema
         return {"summary": "", "goals": [], "channels": [], "markets": [], "complexity": "medium"}
     
-    response = oai.chat.completions.create(
-        model=REASONING_MODEL,
-        messages=messages,
-        response_format={"type": "json_schema", "json_schema": {"name": "Response", "schema": schema, "strict": True}},
-        max_completion_tokens=max_completion_tokens,
-    )
-    text = response.choices[0].message.content
-    
-    # Attempt to repair malformed JSON before parsing
     try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        print(f"[JSON Repair] Attempting to fix malformed response: {e}")
-        repaired = repair_json_response(text)
-        try:
-            return json.loads(repaired)
-        except json.JSONDecodeError as e2:
-            print(f"[JSON Repair Failed] Could not repair: {e2}")
-            # Return minimal valid structure
+        response = oai.chat.completions.create(
+            model=REASONING_MODEL,
+            messages=messages,
+            response_format={"type": "json_schema", "json_schema": {"name": "Response", "schema": schema, "strict": True}},
+            max_completion_tokens=max_completion_tokens,
+        )
+        
+        # Check if response has valid content
+        if not response.choices or len(response.choices) == 0:
+            print(f"[API Warning] OpenAI returned no choices")
             return {"items": []}
+        
+        text = response.choices[0].message.content
+        
+        # Handle empty or None content
+        if not text or text.strip() == "":
+            print(f"[API Warning] OpenAI returned empty content")
+            return {"items": []}
+        
+        # Attempt to parse JSON
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"[JSON Repair] Attempting to fix malformed response: {e}")
+            print(f"[JSON Debug] Response text (first 200 chars): {text[:200] if text else 'Empty'}")
+            repaired = repair_json_response(text)
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError as e2:
+                print(f"[JSON Repair Failed] Could not repair: {e2}")
+                # Return minimal valid structure
+                return {"items": []}
+    
+    except Exception as e:
+        print(f"[API Error] OpenAI call failed: {e}")
+        return {"items": []}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # AgencyDB Catalog Builder
