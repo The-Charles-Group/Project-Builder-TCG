@@ -157,6 +157,9 @@ app.include_router(weights_router)
 # Mount AI planner routes (connected to AgencyDB)
 mount_routes_agencydb(app, base="/api/ai")
 
+# Import AI Timeline Manager
+from ai_timeline_manager import suggest_timeline_from_selection, generate_ai_timeline
+
 # Startup event (AI planner now uses AgencyDB directly, no ZIP catalog needed)
 @app.on_event("startup")
 async def startup_event():
@@ -4034,6 +4037,95 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         "monthly_price": monthly_price_int if months > 0 else None,
         "components": [{"name": c, "hours": float(comp_hours.get(c,0.0)), "selected": (not selected_components or c in selected_components)} for c in comp_names]
     }
+
+@app.post("/api/timeline/suggest")
+async def suggest_timeline(request: dict):
+    """
+    Generate AI-optimized timeline for selected deliverables
+    
+    Request body:
+    {
+        "selected_deliverable_codes": ["deck_strategy", "social_content"],
+        "rfp_text": "optional RFP text for context",
+        "project_start": "2024-01-15",
+        "optimization_mode": "balanced"  # "speed" | "quality" | "balanced" | "cost"
+    }
+    """
+    try:
+        selected_codes = request.get("selected_deliverable_codes", [])
+        rfp_text = request.get("rfp_text", "")
+        project_start = request.get("project_start")
+        optimization_mode = request.get("optimization_mode", "balanced")
+        
+        # Load database
+        db = app.state.db
+        if not db:
+            db = AgencyDB()
+            db.load()
+        
+        # Build deliverables data structure for timeline generation
+        deliverables_data = []
+        for code in selected_codes:
+            # Find deliverable in database
+            deliv_df = db.deliverables[db.deliverables["Deliverable_Code"] == code]
+            if deliv_df.empty:
+                continue
+            
+            # Get components and tasks for this deliverable
+            components = []
+            comp_df = db.all_rows[db.all_rows["Deliverable_Code"] == code]["Component"].unique()
+            for comp in comp_df:
+                if pd.isna(comp):
+                    continue
+                comp_tasks = db.all_rows[
+                    (db.all_rows["Deliverable_Code"] == code) & 
+                    (db.all_rows["Component"] == comp)
+                ]
+                hours = comp_tasks["Hours"].sum() if "Hours" in comp_tasks.columns else 0
+                components.append({
+                    "name": comp,
+                    "hours": float(hours)
+                })
+            
+            # Calculate total hours for deliverable
+            total_hours = db.all_rows[db.all_rows["Deliverable_Code"] == code]["Hours"].sum() if "Hours" in db.all_rows.columns else 0
+            
+            # Get department (try different column names)
+            dept_col = None
+            for col in ["Service_Department", "Service Department", "Department"]:
+                if col in deliv_df.columns:
+                    dept_col = col
+                    break
+            
+            department = deliv_df[dept_col].iloc[0] if dept_col and not deliv_df[dept_col].empty else "Strategy"
+            
+            deliverables_data.append({
+                "deliverable_code": code,
+                "deliverable_name": deliv_df["Deliverable"].iloc[0],
+                "components": components,
+                "total_hours": float(total_hours),
+                "department": str(department) if not pd.isna(department) else "Strategy"
+            })
+        
+        # Generate AI timeline
+        result = await suggest_timeline_from_selection(
+            selected_codes=selected_codes,
+            deliverables_db=deliverables_data,
+            rfp_text=rfp_text,
+            project_start=project_start,
+            optimization_mode=optimization_mode
+        )
+        
+        return JSONResponse(result)
+        
+    except Exception as e:
+        print(f"[Timeline API] Error: {e}")
+        return JSONResponse({
+            "error": str(e),
+            "tasks": [],
+            "reasoning": {},
+            "metadata": {}
+        }, status_code=500)
 
 @app.post("/api/build")
 def api_build(payload: BuildPayload):

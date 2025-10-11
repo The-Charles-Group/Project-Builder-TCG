@@ -133,6 +133,11 @@ let selectedCodes = [];
 let removedCodes = [];
 let addedCodes = [];
 
+// Gantt Chart Instance and Timeline State
+let ganttChart = null;
+let currentTimelineTasks = [];
+let timelineReasoning = null;
+
 // Cache for component data per deliverable code
 const componentDataCache = {};
 window.componentDataCache = componentDataCache;
@@ -178,6 +183,326 @@ function categoryFor(code) {
 function readSelectedCodesFromUI() {
   return Array.from(S2.selectedCodes);
 }
+
+// ================================================================================
+// Gantt Chart and AI Timeline Functions
+// ================================================================================
+async function initializeGanttChart(tasks = []) {
+  const container = document.querySelector('#gantt');
+  if (!container || !window.Gantt) {
+    console.warn('Gantt library not loaded, falling back to table view');
+    showFallbackTable(tasks);
+    return;
+  }
+  
+  // Clear any existing chart
+  container.innerHTML = '';
+  
+  if (tasks.length === 0) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">No timeline data. Click "Generate AI Timeline" to create one.</div>';
+    return;
+  }
+  
+  try {
+    // Initialize Frappe Gantt
+    ganttChart = new Gantt(container, tasks, {
+      view_mode: document.getElementById('gantt-view-mode')?.value || 'Day',
+      date_format: 'YYYY-MM-DD',
+      popup_trigger: 'click',
+      language: 'en',
+      custom_popup_html: function(task) {
+        const start = new Date(task._start);
+        const end = new Date(task._end);
+        const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+        
+        return `
+          <div class="gantt-popup" style="padding:12px;">
+            <h5 style="margin:0 0 8px;">${task.name}</h5>
+            <p style="margin:4px 0;"><strong>Department:</strong> ${task.department || 'N/A'}</p>
+            <p style="margin:4px 0;"><strong>Start:</strong> ${task.start}</p>
+            <p style="margin:4px 0;"><strong>End:</strong> ${task.end}</p>
+            <p style="margin:4px 0;"><strong>Duration:</strong> ${duration} days</p>
+            <p style="margin:4px 0;"><strong>Hours:</strong> ${task.hours || 0}</p>
+            ${task.critical_path ? '<p style="margin:4px 0;color:#fbbf24;"><strong>⚡ Critical Path</strong></p>' : ''}
+          </div>
+        `;
+      },
+      on_click: function(task) {
+        console.log('Task clicked:', task);
+      },
+      on_date_change: function(task, start, end) {
+        console.log('Task date changed:', task.name, start, end);
+        // Update the task in our state
+        const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
+        if (taskIndex >= 0) {
+          currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
+          currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
+        }
+        // Show save button
+        const saveBtn = document.getElementById('btn-save-timeline');
+        if (saveBtn) saveBtn.style.display = '';
+      },
+      on_progress_change: function(task, progress) {
+        console.log('Task progress changed:', task.name, progress);
+      },
+      on_view_change: function(mode) {
+        console.log('View mode changed to:', mode);
+      }
+    });
+    
+    // Apply custom classes for department colors and critical path
+    setTimeout(() => {
+      tasks.forEach(task => {
+        const taskElement = container.querySelector(`.bar[data-id="${task.id}"]`);
+        if (taskElement) {
+          // Add department class
+          if (task.custom_class) {
+            taskElement.classList.add(task.custom_class);
+          }
+          // Add critical path class
+          if (task.critical_path) {
+            taskElement.classList.add('critical-path');
+          }
+        }
+      });
+    }, 100);
+    
+  } catch (error) {
+    console.error('Error initializing Gantt chart:', error);
+    showFallbackTable(tasks);
+  }
+}
+
+function showFallbackTable(tasks) {
+  // Show the fallback table
+  const table = document.getElementById('tl-table');
+  const tbody = document.getElementById('tl-body');
+  
+  if (table) table.style.display = '';
+  
+  if (!tbody) return;
+  
+  tbody.innerHTML = tasks.map(task => `
+    <tr>
+      <td>${task.name}</td>
+      <td>${task.start}</td>
+      <td>${task.end}</td>
+      <td>${calculateDuration(task.start, task.end)} days</td>
+    </tr>
+  `).join('');
+}
+
+function calculateDuration(start, end) {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  return Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+}
+
+async function generateAITimeline() {
+  const btn = document.getElementById('btn-generate-timeline');
+  const loading = document.getElementById('timeline-loading');
+  const container = document.getElementById('gantt-container');
+  
+  if (!btn || !loading || !container) return;
+  
+  // Get selected deliverables from Step 2
+  const selectedCodes = readSelectedCodesFromUI();
+  if (selectedCodes.length === 0) {
+    alert('Please select deliverables in Step 2 first');
+    return;
+  }
+  
+  // Show loading state
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+  loading.style.display = 'block';
+  container.style.display = 'none';
+  
+  try {
+    // Get optimization mode
+    const optimizationMode = document.getElementById('timeline-optimization')?.value || 'balanced';
+    
+    // Get project start date from Step 3
+    const projectStart = document.getElementById('projectStart')?.value || null;
+    
+    // Get RFP text for context
+    const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
+    
+    // Call AI timeline endpoint
+    const response = await fetch('/api/timeline/suggest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        selected_deliverable_codes: selectedCodes,
+        rfp_text: rfpText,
+        project_start: projectStart,
+        optimization_mode: optimizationMode
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to generate timeline');
+    }
+    
+    const result = await response.json();
+    
+    // Store the timeline data
+    currentTimelineTasks = result.tasks || [];
+    timelineReasoning = result.reasoning || {};
+    
+    // Update reasoning panel
+    updateReasoningPanel(result.reasoning);
+    
+    // Update metadata
+    updateTimelineMetadata(result.metadata);
+    
+    // Initialize Gantt chart with AI-generated timeline
+    await initializeGanttChart(currentTimelineTasks);
+    
+    // Show the container
+    container.style.display = '';
+    
+    // Show metadata
+    const metadataDiv = document.getElementById('timeline-metadata');
+    if (metadataDiv) metadataDiv.style.display = '';
+    
+  } catch (error) {
+    console.error('Error generating AI timeline:', error);
+    alert('Failed to generate timeline: ' + error.message);
+  } finally {
+    // Hide loading state
+    btn.disabled = false;
+    btn.textContent = '🤖 Generate AI Timeline';
+    loading.style.display = 'none';
+  }
+}
+
+function updateReasoningPanel(reasoning) {
+  if (!reasoning) return;
+  
+  // Update strategy
+  const strategyEl = document.getElementById('ai-strategy');
+  if (strategyEl) {
+    strategyEl.textContent = reasoning.overall_strategy || 'Timeline optimized for balanced delivery';
+  }
+  
+  // Update confidence
+  const confidenceBar = document.getElementById('ai-confidence-bar');
+  const confidenceText = document.getElementById('ai-confidence-text');
+  if (confidenceBar && confidenceText) {
+    const confidence = Math.round((reasoning.confidence_score || 0.75) * 100);
+    confidenceBar.style.width = confidence + '%';
+    confidenceText.textContent = confidence + '%';
+  }
+  
+  // Update critical path
+  const criticalPathEl = document.getElementById('ai-critical-path');
+  if (criticalPathEl) {
+    criticalPathEl.textContent = reasoning.critical_path_explanation || 'All sequential tasks form the critical path';
+  }
+  
+  // Update dependencies
+  const depsEl = document.getElementById('ai-dependencies');
+  if (depsEl && reasoning.dependency_rationale) {
+    const deps = Object.entries(reasoning.dependency_rationale)
+      .filter(([k, v]) => v)
+      .map(([k, v]) => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">• ${v}</li>`)
+      .join('');
+    depsEl.innerHTML = deps || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">No specific dependencies noted</li>';
+  }
+  
+  // Update optimization notes
+  const optEl = document.getElementById('ai-optimization');
+  if (optEl && reasoning.optimization_notes) {
+    const notes = reasoning.optimization_notes
+      .map(note => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">• ${note}</li>`)
+      .join('');
+    optEl.innerHTML = notes || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Using standard scheduling</li>';
+  }
+  
+  // Update parallel opportunities
+  const parallelEl = document.getElementById('ai-parallel');
+  if (parallelEl && reasoning.parallel_opportunities) {
+    const parallel = reasoning.parallel_opportunities
+      .map(opp => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">• ${opp}</li>`)
+      .join('');
+    parallelEl.innerHTML = parallel || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">No parallel work opportunities identified</li>';
+  }
+  
+  // Update risks
+  const risksEl = document.getElementById('ai-risks');
+  if (risksEl && reasoning.risk_factors) {
+    const risks = reasoning.risk_factors
+      .map(risk => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">⚠️ ${risk}</li>`)
+      .join('');
+    risksEl.innerHTML = risks || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">No significant risks identified</li>';
+  }
+}
+
+function updateTimelineMetadata(metadata) {
+  if (!metadata) return;
+  
+  const elements = {
+    'meta-duration': metadata.total_duration_days ? `${metadata.total_duration_days} days` : '-',
+    'meta-tasks': metadata.total_tasks || '-',
+    'meta-critical': metadata.critical_tasks || '-',
+    'meta-departments': metadata.departments_involved ? metadata.departments_involved.join(', ') : '-'
+  };
+  
+  for (const [id, value] of Object.entries(elements)) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+}
+
+// Initialize Gantt event handlers when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  // Generate AI Timeline button
+  const btnGenerate = document.getElementById('btn-generate-timeline');
+  if (btnGenerate) {
+    btnGenerate.addEventListener('click', generateAITimeline);
+  }
+  
+  // Toggle AI Reasoning Panel
+  const btnToggleReasoning = document.getElementById('btn-toggle-reasoning');
+  if (btnToggleReasoning) {
+    btnToggleReasoning.addEventListener('click', () => {
+      const panel = document.getElementById('ai-reasoning-panel');
+      if (panel) {
+        panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      }
+    });
+  }
+  
+  // View mode change
+  const viewModeSelect = document.getElementById('gantt-view-mode');
+  if (viewModeSelect) {
+    viewModeSelect.addEventListener('change', (e) => {
+      if (ganttChart) {
+        ganttChart.change_view_mode(e.target.value);
+      }
+    });
+  }
+  
+  // Save timeline changes
+  const btnSave = document.getElementById('btn-save-timeline');
+  if (btnSave) {
+    btnSave.addEventListener('click', async () => {
+      // TODO: Implement save functionality to persist timeline changes
+      console.log('Saving timeline changes:', currentTimelineTasks);
+      alert('Timeline changes saved (in browser state)');
+      btnSave.style.display = 'none';
+    });
+  }
+});
+
+// Export timeline data for use in exports
+window.getTimelineData = function() {
+  return {
+    tasks: currentTimelineTasks,
+    reasoning: timelineReasoning
+  };
+};
 
 // Save component choices for a deliverable
 // If "all" are selected or empty, remove the key so server includes all by default

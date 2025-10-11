@@ -6,6 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/static_weights.css" />
+  <!-- Frappe Gantt Library -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
 </head>
 <body>
   <header>
@@ -351,23 +353,201 @@
       </div>
     </section>
 
-    <!-- Step 4: Timeline -->
+    <!-- Step 4: Project Timeline & Scheduling -->
     <section class="card" id="step4" style="display:none;">
-      <h2>Step 4 — Timeline</h2>
-      <div id="timeline-controls">
-        <!-- Timeline for Scenario A only -->
+      <h2>Step 4 — Project Timeline & Scheduling</h2>
+      
+      <!-- Timeline Controls & AI Actions -->
+      <div id="timeline-controls" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <div style="display:flex; gap:12px; align-items:center;">
+          <!-- View Mode Selector -->
+          <label style="display:flex; align-items:center; gap:6px;">
+            <span style="font-size:0.9em; color:var(--muted);">View:</span>
+            <select id="gantt-view-mode" style="padding:6px 10px; border-radius:6px;">
+              <option value="Quarter Day">Quarter Day</option>
+              <option value="Half Day">Half Day</option>
+              <option value="Day" selected>Day</option>
+              <option value="Week">Week</option>
+              <option value="Month">Month</option>
+            </select>
+          </label>
+          
+          <!-- Optimization Mode -->
+          <label style="display:flex; align-items:center; gap:6px;">
+            <span style="font-size:0.9em; color:var(--muted);">Optimize for:</span>
+            <select id="timeline-optimization" style="padding:6px 10px; border-radius:6px;">
+              <option value="balanced" selected>Balanced</option>
+              <option value="speed">Speed (Fastest Delivery)</option>
+              <option value="quality">Quality (More Time)</option>
+              <option value="cost">Cost (Resource Efficiency)</option>
+            </select>
+          </label>
+        </div>
+        
+        <!-- AI Actions -->
+        <div style="display:flex; gap:12px;">
+          <button id="btn-generate-timeline" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:10px 20px; border:none; border-radius:6px; cursor:pointer; font-weight:600;">
+            🤖 Generate AI Timeline
+          </button>
+          <button id="btn-toggle-reasoning" class="ghost" style="padding:10px 16px;">
+            📊 AI Reasoning
+          </button>
+          <button id="btn-save-timeline" class="btn-sm" style="display:none;">Save Changes</button>
+        </div>
       </div>
-      <table id="tl-table" class="table-compact" style="width:100%">
-        <thead>
-          <tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration (business days)</th></tr>
-        </thead>
-        <tbody id="tl-body"></tbody>
-      </table>
+      
+      <!-- Loading Indicator -->
+      <div id="timeline-loading" style="display:none; text-align:center; padding:40px;">
+        <div style="display:inline-block; padding:20px; background:rgba(139,92,246,0.1); border-radius:12px;">
+          <div style="font-size:2em; animation:pulse 1.5s infinite;">⚡</div>
+          <p style="margin:12px 0 0; color:var(--accent);">AI is optimizing your project timeline...</p>
+          <p style="margin:6px 0 0; font-size:0.9em; color:var(--muted);">Analyzing dependencies and resource allocation</p>
+        </div>
+      </div>
+      
+      <!-- Main Timeline Container (with AI Reasoning Panel) -->
+      <div style="display:flex; gap:16px; position:relative;">
+        <!-- Gantt Chart Container -->
+        <div id="gantt-container" style="flex:1; min-height:400px; background:#0b0e13; border:1px solid var(--border); border-radius:8px; padding:16px; overflow:auto;">
+          <!-- Fallback Table (shown when Gantt not loaded) -->
+          <table id="tl-table" class="table-compact" style="width:100%; display:none;">
+            <thead>
+              <tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration</th></tr>
+            </thead>
+            <tbody id="tl-body"></tbody>
+          </table>
+          
+          <!-- Gantt Chart SVG will be rendered here -->
+          <svg id="gantt"></svg>
+        </div>
+        
+        <!-- AI Reasoning Panel (initially hidden) -->
+        <div id="ai-reasoning-panel" style="width:350px; display:none; background:rgba(139,92,246,0.05); border:1px solid rgba(139,92,246,0.2); border-radius:8px; padding:16px; max-height:600px; overflow-y:auto;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h3 style="margin:0; color:var(--accent); font-size:1.1em;">🧠 AI Timeline Analysis</h3>
+            <button onclick="document.getElementById('ai-reasoning-panel').style.display='none'" class="btn-sm" style="padding:4px 8px;">×</button>
+          </div>
+          
+          <!-- Overall Strategy -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Strategy</h4>
+            <p id="ai-strategy" style="font-size:0.85em; color:var(--muted); line-height:1.4;">Waiting for AI analysis...</p>
+          </div>
+          
+          <!-- Confidence Score -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Confidence</h4>
+            <div style="display:flex; align-items:center; gap:10px;">
+              <div style="flex:1; height:8px; background:rgba(255,255,255,0.1); border-radius:4px; overflow:hidden;">
+                <div id="ai-confidence-bar" style="width:75%; height:100%; background:linear-gradient(90deg, #667eea, #764ba2);"></div>
+              </div>
+              <span id="ai-confidence-text" style="font-size:0.9em; color:var(--accent); font-weight:600;">75%</span>
+            </div>
+          </div>
+          
+          <!-- Critical Path -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Critical Path</h4>
+            <p id="ai-critical-path" style="font-size:0.85em; color:var(--muted); line-height:1.4;">Identifying critical tasks...</p>
+          </div>
+          
+          <!-- Task Dependencies -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Key Dependencies</h4>
+            <ul id="ai-dependencies" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Loading...</li>
+            </ul>
+          </div>
+          
+          <!-- Optimization Notes -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Optimization Notes</h4>
+            <ul id="ai-optimization" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Loading...</li>
+            </ul>
+          </div>
+          
+          <!-- Parallel Opportunities -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Parallel Work Opportunities</h4>
+            <ul id="ai-parallel" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Analyzing...</li>
+            </ul>
+          </div>
+          
+          <!-- Risk Factors -->
+          <div class="reasoning-section">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Risk Factors</h4>
+            <ul id="ai-risks" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Evaluating risks...</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Timeline Metadata -->
+      <div id="timeline-metadata" style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.02); border-radius:6px; display:none;">
+        <div style="display:flex; justify-content:space-around; text-align:center;">
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Total Duration</div>
+            <div id="meta-duration" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Tasks</div>
+            <div id="meta-tasks" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Critical Tasks</div>
+            <div id="meta-critical" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Departments</div>
+            <div id="meta-departments" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+        </div>
+      </div>
       
       <style>
-        #timeline-controls button.active{font-weight:700;text-decoration:underline}
-        #tl-body .tl-row{cursor:move}
-        #tl-body .tl-row.dragging{opacity:.6;outline:2px dashed #aaa}
+        /* Gantt Chart Custom Styles */
+        #gantt .gantt-container {
+          font-family: system-ui, -apple-system, sans-serif;
+          font-size: 13px;
+        }
+        #gantt .bar {
+          cursor: move;
+        }
+        #gantt .bar-progress {
+          opacity: 0.8;
+        }
+        /* Department-based colors */
+        #gantt .dept-strategy .bar { fill: #667eea !important; }
+        #gantt .dept-creative .bar { fill: #f56565 !important; }
+        #gantt .dept-paid-media .bar { fill: #48bb78 !important; }
+        #gantt .dept-content .bar { fill: #ed8936 !important; }
+        #gantt .dept-technology .bar { fill: #4299e1 !important; }
+        #gantt .dept-integrated-marketing-management .bar { fill: #9f7aea !important; }
+        
+        /* Critical path highlighting */
+        #gantt .critical-path .bar {
+          stroke: #fbbf24 !important;
+          stroke-width: 2px !important;
+        }
+        
+        /* Animation */
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        
+        /* Timeline controls */
+        #timeline-controls button.active {
+          font-weight: 700;
+          text-decoration: underline;
+        }
+        
+        /* Fallback table styles */
+        #tl-body .tl-row { cursor: move; }
+        #tl-body .tl-row.dragging { opacity: .6; outline: 2px dashed #aaa; }
       </style>
     </section>
 
@@ -1629,6 +1809,8 @@
     // Initialize
     loadOptions();
   </script>
+  <!-- Frappe Gantt Library -->
+  <script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
   <script src="/static/static_weights.js"></script>
   <script src="/static/app.js?v=5.6" defer></script>
   <script>
