@@ -2395,9 +2395,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             parent_hours_exact = float(d.get("total_hours", calculated_total))
             parent_hours_display = int(round(parent_hours_exact))
 
+            # Check if this is a retainer deliverable
             months = int((d.get("retainer") or {}).get("months", 0))
             monthly_hours = int(d.get("monthly_hours") or 0)
             monthly_price = int(d.get("monthly_price") or 0)
+            is_retainer = months > 0 or d.get("is_retainer", False)
+            deliverable_type = "Retainer" if is_retainer else "One-Time"
 
             # price/rate at deliverable
             if pricing_mode == "Flat_Blended":
@@ -2431,7 +2434,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Duration_Days": (total_deliv_duration * months) if months else total_deliv_duration,
                 "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": deliv_notes,
                 "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
-                "Price_USD": round(deliv_price, 2)
+                "Price_USD": round(deliv_price, 2),
+                "Type": deliverable_type  # NEW: Add Type column
             })
 
             comps = DB.components_for_deliverable(dcode, tg_order)
@@ -2825,6 +2829,88 @@ def _current_scenarios():
 
 # Alias for XML export endpoints
 _get_scenarios = _current_scenarios
+
+# ---------- Helper function to create retainer summary sheet ----------
+def create_retainer_summary(scenario: dict) -> pd.DataFrame:
+    """Create a detailed retainer summary sheet for Excel export"""
+    rows = []
+    
+    items = scenario.get("items", [])
+    retainer_items = []
+    
+    # Find all retainer deliverables
+    for item in items:
+        months = int((item.get("retainer") or {}).get("months", 0))
+        is_retainer = months > 0 or item.get("is_retainer", False)
+        if is_retainer:
+            retainer_items.append(item)
+    
+    if not retainer_items:
+        # No retainers, return empty dataframe with headers
+        return pd.DataFrame(columns=[
+            "Deliverable", "Deliverable_Code", "Service_Department",
+            "Total_Months", "Monthly_Hours", "Monthly_Cost", 
+            "Total_Hours", "Total_Cost", "Start_Month", "End_Month"
+        ])
+    
+    # Generate summary rows
+    for item in retainer_items:
+        dcode = str(item.get("deliverable_code", item.get("code", "")))
+        deliv_label = str(item.get("deliverable", dcode))
+        months = int((item.get("retainer") or {}).get("months", 12))
+        monthly_hours = item.get("monthly_hours", 0)
+        
+        # Calculate costs
+        pricing_mode = scenario.get("pricing_mode", "Flat_Blended")
+        if pricing_mode == "Flat_Blended":
+            blended_rate = scenario.get("blended_rate", 195.0)
+            monthly_cost = monthly_hours * blended_rate
+        else:
+            # Use average rate from hours_by_role
+            hrs_df = pd.DataFrame(item.get("hours_by_role") or [])
+            if not hrs_df.empty and "Rate" in hrs_df.columns:
+                avg_rate = hrs_df["Rate"].mean()
+            else:
+                avg_rate = 195.0
+            monthly_cost = monthly_hours * avg_rate
+        
+        total_hours = monthly_hours * months
+        total_cost = monthly_cost * months
+        
+        # Get department
+        dept = item.get("_service_department", "Strategy")
+        
+        # Summary row
+        rows.append({
+            "Deliverable": deliv_label,
+            "Deliverable_Code": dcode,
+            "Service_Department": dept,
+            "Total_Months": months,
+            "Monthly_Hours": monthly_hours,
+            "Monthly_Cost": round(monthly_cost, 2),
+            "Total_Hours": total_hours,
+            "Total_Cost": round(total_cost, 2),
+            "Start_Month": "Month 1",
+            "End_Month": f"Month {months}"
+        })
+        
+        # Add monthly breakdown
+        for month in range(1, months + 1):
+            rows.append({
+                "Deliverable": f"  └─ Month {month}",
+                "Deliverable_Code": dcode,
+                "Service_Department": dept,
+                "Total_Months": "",
+                "Monthly_Hours": monthly_hours,
+                "Monthly_Cost": round(monthly_cost, 2),
+                "Total_Hours": "",
+                "Total_Cost": "",
+                "Start_Month": "",
+                "End_Month": ""
+            })
+    
+    df = pd.DataFrame(rows)
+    return df
 
 # ---------- OpenAI Integration Functions (Stage 2) ----------
 
@@ -4425,6 +4511,7 @@ async def api_redistribute_hours(payload: RedistributeHoursPayload):
     }
     """
     try:
+        from ai_pricing_optimizer import redistribute_hours
         result = await redistribute_hours(
             deliverable_name=payload.deliverable_name,
             deliverable_code=payload.deliverable_code,
@@ -4784,6 +4871,13 @@ def api_export_workbook(payload: ExportWorkbookPayload):
     
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
+    
+    # Generate retainer summaries if any retainer items exist
+    retainer_summaryA = create_retainer_summary(scenario_a)
+    retainer_summaryB = create_retainer_summary(scenario_b)
+    has_retainersA = not retainer_summaryA.empty
+    has_retainersB = not retainer_summaryB.empty
+    
     base = _export_basename(project, "Scenarios A & B")  # includes EST timestamp
     out_path = f"{base}.xlsx"
     # Always use stable, distinct tab names to prevent accidental overwrite
@@ -4792,8 +4886,21 @@ def api_export_workbook(payload: ExportWorkbookPayload):
     with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
         dfA.to_excel(xw, sheet_name=sheetA, index=False)
         dfB.to_excel(xw, sheet_name=sheetB, index=False)
+        
+        # Add retainer summary sheets if there are retainers
+        if has_retainersA:
+            retainer_summaryA.to_excel(xw, sheet_name="Retainer Summary A", index=False)
+        if has_retainersB:
+            retainer_summaryB.to_excel(xw, sheet_name="Retainer Summary B", index=False)
+        
         _apply_number_formats(xw.sheets[sheetA], dfA)
         _apply_number_formats(xw.sheets[sheetB], dfB)
+        
+        # Apply formatting to retainer sheets
+        if has_retainersA:
+            _apply_number_formats(xw.sheets["Retainer Summary A"], retainer_summaryA)
+        if has_retainersB:
+            _apply_number_formats(xw.sheets["Retainer Summary B"], retainer_summaryB)
     return FileResponse(
         out_path, filename=os.path.basename(out_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -4824,20 +4931,44 @@ def api_export_workbook_abc(payload: ExportWorkbookABCPayload):
     dfB = _ensure_v3_ae_columns(dfB)
     dfC = _ensure_v3_ae_columns(dfC)
     
+    # Generate retainer summaries if any retainer items exist
+    retainer_summaryA = create_retainer_summary(scenario_a)
+    retainer_summaryB = create_retainer_summary(scenario_b)
+    retainer_summaryC = create_retainer_summary(scenario_c)
+    has_retainersA = not retainer_summaryA.empty
+    has_retainersB = not retainer_summaryB.empty
+    has_retainersC = not retainer_summaryC.empty
+    
     # Generate filename with EST timestamp
     base = _export_basename(project, "Scenarios A, B & C")  # includes EST timestamp
     out_path = f"{base}.xlsx"
     
-    # Create Excel file with three sheets
+    # Create Excel file with three sheets plus retainer summaries
     with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
         dfA.to_excel(xw, sheet_name=payload.sheet_name_a or "Scenario A", index=False)
         dfB.to_excel(xw, sheet_name=payload.sheet_name_b or "Scenario B", index=False)
         dfC.to_excel(xw, sheet_name=payload.sheet_name_c or "Scenario C", index=False)
         
+        # Add retainer summary sheets if there are retainers
+        if has_retainersA:
+            retainer_summaryA.to_excel(xw, sheet_name="Retainer Summary A", index=False)
+        if has_retainersB:
+            retainer_summaryB.to_excel(xw, sheet_name="Retainer Summary B", index=False)
+        if has_retainersC:
+            retainer_summaryC.to_excel(xw, sheet_name="Retainer Summary C", index=False)
+        
         # Apply number formatting to all sheets
         _apply_number_formats(xw.sheets[payload.sheet_name_a or "Scenario A"], dfA)
         _apply_number_formats(xw.sheets[payload.sheet_name_b or "Scenario B"], dfB)
         _apply_number_formats(xw.sheets[payload.sheet_name_c or "Scenario C"], dfC)
+        
+        # Apply formatting to retainer sheets
+        if has_retainersA:
+            _apply_number_formats(xw.sheets["Retainer Summary A"], retainer_summaryA)
+        if has_retainersB:
+            _apply_number_formats(xw.sheets["Retainer Summary B"], retainer_summaryB)
+        if has_retainersC:
+            _apply_number_formats(xw.sheets["Retainer Summary C"], retainer_summaryC)
     
     return FileResponse(
         out_path, filename=os.path.basename(out_path),
