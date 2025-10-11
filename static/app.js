@@ -238,6 +238,23 @@ async function selectDeliverable(code) {
   // Hydrate components for this deliverable
   await hydrateComponentsFor(code);
   
+  // Update AI checkbox if present (bi-directional sync)
+  const aiCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${code}"]`);
+  if (aiCheckbox) {
+    aiCheckbox.checked = true;
+  }
+  
+  // Update AI "Add to Selection" button if present
+  const aiDiv = document.querySelector(`.ai-deliverable[data-deliv-code="${code}"]`);
+  if (aiDiv) {
+    const btn = aiDiv.querySelector('button[onclick*="addAIDeliverableToSelection"]');
+    if (btn) {
+      btn.textContent = 'Added';
+      btn.style.background = '#10b981';
+      btn.disabled = true;
+    }
+  }
+  
   // Re-render all panels
   if (window.renderDeliverablesPanel) renderDeliverablesPanel();
   if (window.renderComponentsPanel) renderComponentsPanel(code);
@@ -277,7 +294,31 @@ async function deselectDeliverable(code) {
     .filter(k => k.startsWith(`${code}::`))
     .forEach(k => selectionStore.l3ByComponent.delete(k));
   
+  // Also clean up S2 state for compatibility
+  delete S2.selectedComponentsByCode[code];
+  
   APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
+  
+  // Update AI checkbox if present (bi-directional sync)
+  const aiCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${code}"]`);
+  if (aiCheckbox) {
+    aiCheckbox.checked = false;
+  }
+  
+  // Update AI "Add to Selection" button if present
+  const aiDiv = document.querySelector(`.ai-deliverable[data-deliv-code="${code}"]`);
+  if (aiDiv) {
+    const btn = aiDiv.querySelector('button[onclick*="addAIDeliverableToSelection"]');
+    if (btn) {
+      btn.textContent = 'Add to Selection';
+      btn.style.background = '#3b82f6';
+      btn.disabled = false;
+    }
+  }
+  
+  // Uncheck all components and tasks for this deliverable in AI suggestions
+  document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${code}"]`).forEach(cb => cb.checked = false);
+  document.querySelectorAll(`.ai-task-checkbox[data-deliv="${code}"]`).forEach(cb => cb.checked = false);
   
   // Re-render panels
   if (window.renderDeliverablesPanel) renderDeliverablesPanel();
@@ -285,6 +326,7 @@ async function deselectDeliverable(code) {
   
   // If this was an AI suggestion, show Add button again
   if (APB.step2.aiSuggestedCodes.has(code)) {
+    APB.step2.aiSuggestedCodes.delete(code);
     if (window.renderAISuggestions) renderAISuggestions();
   }
 }
@@ -1258,9 +1300,24 @@ function addAIDeliverableToSelection(delivCode, button) {
   // Add deliverable to selection
   if (!selectionStore.deliverables.has(delivCode)) {
     selectDeliverable(delivCode).then(() => {
+      // Mark as AI-suggested for tracking
+      APB.step2.aiSuggestedCodes.add(delivCode);
+      
+      // Update button state
       button.textContent = 'Added';
       button.style.background = '#10b981';
       button.disabled = true;
+      
+      // Update AI checkbox state
+      const aiCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
+      if (aiCheckbox) {
+        aiCheckbox.checked = true;
+      }
+      
+      // Update task panel if visible
+      if (window.renderTasksPanel && APB.step2.activeComponentName && APB.step2.activeDeliverableCode === delivCode) {
+        renderTasksPanel();
+      }
     });
   } else {
     button.textContent = 'Already Added';
@@ -1294,6 +1351,9 @@ async function applyAllSelectedFromAI() {
       await selectDeliverable(delivCode);
     }
     
+    // Mark as AI-suggested for tracking
+    APB.step2.aiSuggestedCodes.add(delivCode);
+    
     // Collect selected components for this deliverable
     const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]:checked`);
     const selectedComps = new Set();
@@ -1322,17 +1382,43 @@ async function applyAllSelectedFromAI() {
       }
     }
     
-    // Store selected components
+    // Store selected components in both selectionStore and S2 (for compatibility)
     if (selectedComps.size > 0) {
       selectionStore.componentsByDeliv.set(delivCode, selectedComps);
+      S2.selectedComponentsByCode[delivCode] = selectedComps;
     }
   }
   
-  // Update all panels
+  // Update all panels properly
   if (window.renderDeliverablesPanel) renderDeliverablesPanel();
-  if (window.renderComponentsPanel) renderComponentsPanel();
-  if (window.renderTasksPanel) renderTasksPanel(); // New tasks panel
+  if (window.renderComponentsPanel) {
+    const activeCode = APB.step2.activeDeliverableCode || Array.from(selectionStore.deliverables)[0];
+    if (activeCode) {
+      await refreshComponentsPanel();
+    }
+  }
+  // Call renderTasksPanel with the active component key
+  if (window.renderTasksPanel && APB.step2.activeComponentName && APB.step2.activeDeliverableCode) {
+    const componentKey = `${APB.step2.activeDeliverableCode}::${APB.step2.activeComponentName}`;
+    renderTasksPanel(componentKey);
+  }
+  
+  // Update summary and counts
+  updateSummaryCounts();
   if (window.renderSummary) renderSummary();
+  
+  // Update all "Add to Selection" buttons to show they've been added
+  document.querySelectorAll('.ai-deliverable').forEach(div => {
+    const code = div.dataset.delivCode;
+    if (selectionStore.deliverables.has(code)) {
+      const btn = div.querySelector('button[onclick*="addAIDeliverableToSelection"]');
+      if (btn) {
+        btn.textContent = 'Added';
+        btn.style.background = '#10b981';
+        btn.disabled = true;
+      }
+    }
+  });
   
   alert('Selected items have been added to your manual selection!');
 }
@@ -1539,7 +1625,12 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// Export renderTasksPanel globally
+// Export all AI-related functions globally for HTML access
+window.addAIDeliverableToSelection = addAIDeliverableToSelection;
+window.selectAllComponents = selectAllComponents;
+window.selectAllTasks = selectAllTasks;
+window.clearAllAISelections = clearAllAISelections;
+window.applyAllSelectedFromAI = applyAllSelectedFromAI;
 window.renderTasksPanel = renderTasksPanel;
 window.updateTasksSummary = updateTasksSummary;
 
