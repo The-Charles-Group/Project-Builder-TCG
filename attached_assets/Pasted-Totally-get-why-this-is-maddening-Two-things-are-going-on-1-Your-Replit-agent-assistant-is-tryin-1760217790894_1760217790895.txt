@@ -1,0 +1,171 @@
+Totally get why this is maddening. Two things are going on:
+
+1. Your Replit agent/assistant is trying to “help” by auto‑upgrading or “fixing” model names (e.g., swapping to o1, gpt‑4.1, etc.), based on its own heuristics and its internal notion of “best available” or “known good” models. Replit’s Assistant can directly modify code in Advanced mode and it’s built to propose—and, if you approve, apply—edits like dependency bumps or model swaps. You can force it to stop touching your code and require explicit review. 
+
+
+2. GPT‑5 does have multiple variants and names, and using the wrong one (or a name the SDK doesn’t recognize) can trigger tools to “fix” the string to an older model. The official model IDs you likely want to pin are below.
+
+
+
+
+---
+
+The exact model names to use
+
+OpenAI’s docs and system card describe the GPT‑5 family and its “thinking” variants. The relevant, API-usable model IDs are:
+
+gpt-5-thinking-mini – the small/fast thinking variant. 
+
+gpt-5-thinking – the full thinking model for harder problems. 
+
+gpt-5-pro – the highest‑compute reasoning/“pro” tier exposed via the Responses API (defaults to high reasoning effort). This is distinct from the older o‑series naming. 
+
+
+> Background: the system card uses terms like gpt‑5‑thinking / …‑mini and notes “thinking‑pro” in ChatGPT UX. In the API, the pro reasoning tier is exposed as gpt-5-pro. 
+
+
+
+
+---
+
+Minimal, correct API calls (copy/paste)
+
+JavaScript (Node, official SDK, Responses API):
+
+import OpenAI from "openai";
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Thinking Mini
+const mini = await client.responses.create({
+  model: "gpt-5-thinking-mini",
+  input: "Summarize the core steps to integrate GPT‑5 into a Node app."
+});
+
+// Thinking (full)
+const thinking = await client.responses.create({
+  model: "gpt-5-thinking",
+  input: "Given this code snippet, identify scalability risks and propose fixes:\n" + code
+});
+
+// Pro (highest compute; may run longer)
+const pro = await client.responses.create({
+  model: "gpt-5-pro",
+  input: "Do a deep design review of this architecture diagram and propose a migration plan."
+  // For long-running work, consider background jobs or streaming per docs.
+});
+
+Python:
+
+from openai import OpenAI
+client = OpenAI()
+
+mini = client.responses.create(
+    model="gpt-5-thinking-mini",
+    input="Draft a 3-bullet executive summary of this PR."
+)
+
+thinking = client.responses.create(
+    model="gpt-5-thinking",
+    input="Explain the algorithmic complexity of this function and suggest improvements:\n" + code
+)
+
+pro = client.responses.create(
+    model="gpt-5-pro",
+    input="Do deep error-budget analysis and propose SLOs from these logs."
+)
+
+These use the Responses API, which OpenAI recommends for GPT‑5 and other reasoning models. gpt‑5‑pro specifically notes high reasoning effort and longer runtimes; use it when you truly need the extra compute. 
+
+> Tip: If you want to pin a specific snapshot for stability, use the snapshot name from the Models page instead of the alias (e.g., gpt-5-thinking-2025-08-07). See the Models pages for available snapshots. 
+
+
+
+
+---
+
+How to stop Replit from changing your model lines
+
+Hard stop (no code changes at all):
+
+1. Use Plan Mode for your sessions until you’re ready to implement. In Plan Mode, Agent is prohibited from making any code changes. It can inspect and discuss, but cannot edit files. Switch back to Build mode when you actually want edits. 
+
+
+
+If you still want AI help, but with review gates:
+
+2. In Assistant → Advanced mode, keep “Preview and approve code modifications” on and don’t click Apply. Advanced mode is capable of automatic edits, but it’s designed to show you a diff first; you control whether changes are applied. 
+
+
+3. Open Assistant settings (gear icon) and set:
+
+AI model selection → your preferred models (so it doesn’t “optimize” to older ones).
+
+Disable streamlined workflow / auto‑apply so edits don’t slip through. 
+
+
+
+
+Defense-in-depth inside your repo:
+
+4. Centralize the model in config, not scattered literals. For example, put it in a single config.ts / .py or environment variable:
+
+
+
+export const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5-thinking";
+
+Then import that everywhere. Agents are less likely to “fix” a single well‑named constant than dozens of inline strings.
+
+5. Add a guard test that fails CI if someone (or an agent) changes the model:
+
+
+
+# test-model-pin.sh (run in CI)
+! git grep -nE 'model:\\s*"(o1|o3|gpt-4(\\.1|o)?|gpt-4\\.5)"' -- . && echo "OK"
+
+Make your deploy pipeline run this script; if it finds an unwanted model string, it fails the build.
+
+6. Pre-commit hook to block unwanted edits locally:
+
+
+
+# .git/hooks/pre-commit
+if git diff --cached | grep -E 'model: "(o1|o3|gpt-4(\.1|o)?|gpt-4\.5)"'; then
+  echo "Blocked: model name changed away from GPT-5*" >&2
+  exit 1
+fi
+
+7. Pin your SDK versions in package.json/requirements.txt to avoid “helpful” migrations tied to newer SDKs that might suggest legacy models.
+
+
+8. Use Replit rollbacks if something slips through. The Assistant product provides checkpoints & one‑click rollbacks for applied edits. 
+
+
+
+
+---
+
+Why it kept switching to o1 / gpt‑4.x
+
+If the agent thinks your specified model is unknown/unavailable (typo, old SDK, org/model access, or a transient API error), it may “correct” to the nearest known model.
+
+Some templates or example code within tools still reference older names; if your repo has those, the agent may propagate them during refactors.
+
+The Replit Assistant is designed to propose code changes (including model updates) in its Advanced mode; without careful review, these can creep in. 
+
+
+
+---
+
+Quick checklist to lock this down
+
+[ ] Switch to Plan Mode when you just want to ask/talk; flip to Build only when you want edits. 
+
+[ ] In Assistant settings: select your model preference and keep review-before-apply on. 
+
+[ ] Replace all hardcoded model strings with a single config/env variable and add a CI guard.
+
+[ ] Pin the exact model ID you want (e.g., gpt-5-thinking / gpt-5-thinking-mini / gpt-5-pro) and optionally pin a snapshot. 
+
+
+If you paste one of your current API calls here, I’ll convert it to the exact GPT‑5 variant you want and show the minimal diff to make it stick.
+

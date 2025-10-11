@@ -14,7 +14,7 @@ from pydantic import BaseModel
 # Config
 # ──────────────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "o1")  # GPT-5
+REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-4o-mini")  # Fallback to working model
 EMBEDDING_MODEL = "text-embedding-3-large"
 
 AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
@@ -105,27 +105,92 @@ def repair_json_response(text: str) -> str:
     # 1. Remove trailing commas before closing braces/brackets
     text = re.sub(r',(\s*[}\]])', r'\1', text)
     
-    # 2. Attempt to close unclosed strings at end of response
+    # 2. Fix malformed confidence values with spaces (e.g., "confidence":   0" -> "confidence": 0)
+    text = re.sub(r'"confidence"\s*:\s*(\s+)(\d+(?:\.\d+)?)', r'"confidence": \2', text)
+    text = re.sub(r'"confidence"\s*:\s*([^\d,}\]]+)(?=[,}\]])', r'"confidence": 0', text)
+    
+    # 3. Fix malformed relevance values
+    text = re.sub(r'"relevance"\s*:\s*(\s+)(\d+(?:\.\d+)?)', r'"relevance": \2', text)
+    text = re.sub(r'"relevance"\s*:\s*([^\d,}\]]+)(?=[,}\]])', r'"relevance": 0', text)
+    
+    # 4. Fix missing quotes around string values (common for enum fields)
+    text = re.sub(r'("level"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
+    text = re.sub(r'("dept"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
+    text = re.sub(r'("budget_tier"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
+    text = re.sub(r'("complexity"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
+    
+    # 5. Attempt to close unclosed strings at end of response
     # Count quotes to see if we have an odd number (unclosed string)
     quote_count = text.count('"') - text.count('\\"')
     if quote_count % 2 != 0:
         # Find last quote and try to close it
         last_quote_pos = text.rfind('"')
         if last_quote_pos > 0:
-            # Add closing quote and close any open objects/arrays
-            text = text[:last_quote_pos+1] + '"'
-            # Count unclosed braces
-            open_braces = text.count('{') - text.count('}')
-            open_brackets = text.count('[') - text.count(']')
-            text += '}' * open_braces + ']' * open_brackets
+            # Check if it's a field name or value
+            # Look for : after the last quote
+            after_quote = text[last_quote_pos+1:].strip()
+            if after_quote and after_quote[0] == ':':
+                # It's a field name, add a value
+                text = text + '""'
+            else:
+                # It's a value, just close it
+                text = text[:last_quote_pos+1] + '"'
     
-    # 3. Ensure text is properly closed
+    # 6. Fix incomplete objects in arrays (add missing fields with defaults)
+    # This is a simplistic approach - just ensure proper closure
     open_braces = text.count('{') - text.count('}')
     open_brackets = text.count('[') - text.count(']')
-    if open_braces > 0:
-        text += '}' * open_braces
-    if open_brackets > 0:
-        text += ']' * open_brackets
+    
+    # If we have unclosed structures, try to close them properly
+    if open_braces > 0 or open_brackets > 0:
+        # Add closing braces/brackets
+        text += '}' * open_braces + ']' * open_brackets
+    
+    # 7. Final validation - try to parse and fix any remaining issues
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        # As a last resort, try to extract the largest valid JSON substring
+        # Look for the first { and last matching }
+        first_brace = text.find('{')
+        if first_brace >= 0:
+            # Try to find matching closing brace
+            brace_count = 0
+            last_brace = -1
+            for i, char in enumerate(text[first_brace:], first_brace):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        last_brace = i
+                        break
+            
+            if last_brace > first_brace:
+                text = text[first_brace:last_brace+1]
+            else:
+                # Just close it at the end
+                text = text[first_brace:] + '}'
+        
+        # If it's an array, handle similarly
+        first_bracket = text.find('[')
+        if first_bracket >= 0 and (first_brace < 0 or first_bracket < first_brace):
+            bracket_count = 0
+            last_bracket = -1
+            for i, char in enumerate(text[first_bracket:], first_bracket):
+                if char == '[':
+                    bracket_count += 1
+                elif char == ']':
+                    bracket_count -= 1
+                    if bracket_count == 0:
+                        last_bracket = i
+                        break
+            
+            if last_bracket > first_bracket:
+                text = text[first_bracket:last_bracket+1]
+            else:
+                text = text[first_bracket:] + ']'
     
     return text
 
@@ -163,49 +228,262 @@ def embed_many(texts: List[str]) -> List[List[float]]:
     print(f"[EMBED] Completed: {len(all_embeddings)} embeddings generated")
     return all_embeddings
 
-def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 2200) -> dict:
-    """Use Chat Completions with JSON schema for GPT-5"""
+def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 2200) -> dict:
+    """Use GPT-5 Responses API for reasoning models"""
     if not oai:
-        # Return empty structure matching schema
-        return {"summary": "", "goals": [], "channels": [], "markets": [], "complexity": "medium"}
+        # Return proper error structure based on schema
+        if "items" in schema.get("properties", {}):
+            return {"items": []}
+        # For summarize_request, return all required fields
+        return {
+            "summary": "",
+            "goals": [],
+            "channels": [],
+            "markets": [],
+            "compliance": [],
+            "languages": [],
+            "timeline_weeks": 0,
+            "budget_tier": "unknown",
+            "complexity": "medium",
+            "risk_flags": []
+        }
     
     try:
-        response = oai.chat.completions.create(
+        print(f"[GPT-5 API] Using Responses API with model: {REASONING_MODEL}")
+        
+        # Add schema instruction to the prompt
+        schema_instruction = f"\n\nReturn a valid JSON object matching this schema: {json.dumps(schema, indent=2)}"
+        full_prompt = prompt + schema_instruction
+        
+        response = oai.responses.create(
             model=REASONING_MODEL,
-            messages=messages,
-            response_format={"type": "json_schema", "json_schema": {"name": "Response", "schema": schema, "strict": True}},
-            max_completion_tokens=max_completion_tokens,
+            input=full_prompt,
+            max_output_tokens=max_output_tokens
         )
         
-        # Check if response has valid content
-        if not response.choices or len(response.choices) == 0:
-            print(f"[API Warning] OpenAI returned no choices")
-            return {"items": []}
-        
-        text = response.choices[0].message.content
+        # GPT-5 Responses API returns content directly
+        text = response.content if hasattr(response, 'content') else str(response)
         
         # Handle empty or None content
         if not text or text.strip() == "":
-            print(f"[API Warning] OpenAI returned empty content")
-            return {"items": []}
+            print(f"[GPT-5 Warning] Response returned empty content")
+            if "items" in schema.get("properties", {}):
+                return {"items": []}
+            # For summarize_request
+            return {
+                "summary": "",
+                "goals": [],
+                "channels": [],
+                "markets": [],
+                "compliance": [],
+                "languages": [],
+                "timeline_weeks": 0,
+                "budget_tier": "unknown",
+                "complexity": "medium",
+                "risk_flags": []
+            }
         
         # Attempt to parse JSON
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            print(f"[JSON Repair] Attempting to fix malformed response: {e}")
-            print(f"[JSON Debug] Response text (first 200 chars): {text[:200] if text else 'Empty'}")
+            print(f"[GPT-5 JSON Repair] Attempting to fix malformed response: {e}")
+            print(f"[GPT-5 Debug] Response text (first 200 chars): {text[:200] if text else 'Empty'}")
             repaired = repair_json_response(text)
             try:
                 return json.loads(repaired)
             except json.JSONDecodeError as e2:
-                print(f"[JSON Repair Failed] Could not repair: {e2}")
-                # Return minimal valid structure
+                print(f"[GPT-5 JSON Repair Failed] Could not repair: {e2}")
+                # Return proper structure based on schema
+                if "items" in schema.get("properties", {}):
+                    return {"items": []}
+                return {
+                    "summary": "",
+                    "goals": [],
+                    "channels": [],
+                    "markets": [],
+                    "compliance": [],
+                    "languages": [],
+                    "timeline_weeks": 0,
+                    "budget_tier": "unknown",
+                    "complexity": "medium",
+                    "risk_flags": []
+                }
+    
+    except Exception as e:
+        print(f"[GPT-5 API Error] OpenAI call failed: {e}")
+        # Return proper error structure based on schema
+        if "items" in schema.get("properties", {}):
+            return {"items": []}
+        return {
+            "summary": "",
+            "goals": [],
+            "channels": [],
+            "markets": [],
+            "compliance": [],
+            "languages": [],
+            "timeline_weeks": 0,
+            "budget_tier": "unknown",
+            "complexity": "medium",
+            "risk_flags": []
+        }
+
+def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 2200) -> dict:
+    """Use Chat Completions or GPT-5 Responses API based on model"""
+    if not oai:
+        # Return proper error structure based on schema
+        if "items" in schema.get("properties", {}):
+            return {"items": []}
+        # For summarize_request
+        return {
+            "summary": "",
+            "goals": [],
+            "channels": [],
+            "markets": [],
+            "compliance": [],
+            "languages": [],
+            "timeline_weeks": 0,
+            "budget_tier": "unknown",
+            "complexity": "medium",
+            "risk_flags": []
+        }
+    
+    # Check if using a GPT-5 model
+    if REASONING_MODEL.startswith("gpt-5"):
+        # Convert messages to a single prompt for GPT-5 Responses API
+        prompt_parts = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "system":
+                prompt_parts.append(f"System: {content}")
+            elif role == "user":
+                prompt_parts.append(f"User: {content}")
+            elif role == "assistant":
+                prompt_parts.append(f"Assistant: {content}")
+        
+        prompt = "\n\n".join(prompt_parts)
+        return gpt5_json_response(prompt, schema, max_completion_tokens)
+    
+    # For non-GPT-5 models, use chat completions (backward compatibility)
+    try:
+        # For gpt-4o models, use simpler JSON mode without strict schema validation
+        if REASONING_MODEL.startswith("gpt-4o"):
+            # Enhance messages to explicitly request JSON format matching the schema
+            enhanced_messages = messages.copy()
+            # Add schema instruction to the last user message
+            if enhanced_messages and enhanced_messages[-1]["role"] == "user":
+                enhanced_messages[-1]["content"] += f"\n\nIMPORTANT: You MUST return a valid JSON object that exactly matches this schema:\n{json.dumps(schema, indent=2)}\n\nEnsure all required fields are present and properly formatted."
+            
+            response = oai.chat.completions.create(
+                model=REASONING_MODEL,
+                messages=enhanced_messages,
+                response_format={"type": "json_object"},  # Simpler JSON mode
+                max_completion_tokens=max_completion_tokens,
+                temperature=0.1  # Lower temperature for more consistent output
+            )
+        else:
+            # For other models that support strict schema
+            response = oai.chat.completions.create(
+                model=REASONING_MODEL,
+                messages=messages,
+                response_format={"type": "json_schema", "json_schema": {"name": "Response", "schema": schema, "strict": True}},
+                max_completion_tokens=max_completion_tokens,
+            )
+        
+        # Check if response has valid content
+        if not response.choices or len(response.choices) == 0:
+            print(f"[API Warning] OpenAI returned no choices")
+            if "items" in schema.get("properties", {}):
                 return {"items": []}
+            # For summarize_request
+            return {
+                "summary": "",
+                "goals": [],
+                "channels": [],
+                "markets": [],
+                "compliance": [],
+                "languages": [],
+                "timeline_weeks": 0,
+                "budget_tier": "unknown",
+                "complexity": "medium",
+                "risk_flags": []
+            }
+        
+        text = response.choices[0].message.content
+        
+        # Log model used for debugging
+        print(f"[API Response] Model: {REASONING_MODEL}, Response length: {len(text) if text else 0} chars")
+        
+        # Handle empty or None content
+        if not text or text.strip() == "":
+            print(f"[API Warning] OpenAI returned empty content")
+            if "items" in schema.get("properties", {}):
+                return {"items": []}
+            return {
+                "summary": "",
+                "goals": [],
+                "channels": [],
+                "markets": [],
+                "compliance": [],
+                "languages": [],
+                "timeline_weeks": 0,
+                "budget_tier": "unknown",
+                "complexity": "medium",
+                "risk_flags": []
+            }
+        
+        # Attempt to parse JSON
+        try:
+            result = json.loads(text)
+            print(f"[JSON Success] Successfully parsed JSON response")
+            return result
+        except json.JSONDecodeError as e:
+            print(f"[JSON Repair] Attempting to fix malformed response: {e}")
+            print(f"[JSON Debug] Model: {REASONING_MODEL}")
+            print(f"[JSON Debug] Response text (first 500 chars): {text[:500] if text else 'Empty'}")
+            print(f"[JSON Debug] Response text (last 500 chars): {text[-500:] if text and len(text) > 500 else ''}")
+            
+            repaired = repair_json_response(text)
+            try:
+                result = json.loads(repaired)
+                print(f"[JSON Repair Success] Successfully repaired and parsed JSON")
+                return result
+            except json.JSONDecodeError as e2:
+                print(f"[JSON Repair Failed] Could not repair: {e2}")
+                print(f"[JSON Repair Debug] Repaired text (first 500 chars): {repaired[:500] if repaired else 'Empty'}")
+                # Return proper structure based on schema
+                if "items" in schema.get("properties", {}):
+                    return {"items": []}
+                return {
+                    "summary": "",
+                    "goals": [],
+                    "channels": [],
+                    "markets": [],
+                    "compliance": [],
+                    "languages": [],
+                    "timeline_weeks": 0,
+                    "budget_tier": "unknown",
+                    "complexity": "medium",
+                    "risk_flags": []
+                }
     
     except Exception as e:
         print(f"[API Error] OpenAI call failed: {e}")
-        return {"items": []}
+        if "items" in schema.get("properties", {}):
+            return {"items": []}
+        return {
+            "summary": "",
+            "goals": [],
+            "channels": [],
+            "markets": [],
+            "compliance": [],
+            "languages": [],
+            "timeline_weeks": 0,
+            "budget_tier": "unknown",
+            "complexity": "medium",
+            "risk_flags": []
+        }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # AgencyDB Catalog Builder
