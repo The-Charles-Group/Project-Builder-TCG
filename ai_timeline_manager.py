@@ -53,10 +53,13 @@ class TimelineTask:
     color: str = ""
     is_milestone: bool = False
     critical_path: bool = False
+    is_retainer: bool = False  # NEW: Flag for retainer tasks
+    retainer_month: Optional[int] = None  # NEW: Month number for retainer tasks
+    monthly_hours: Optional[float] = None  # NEW: Monthly hours for retainer
     
     def to_gantt_format(self) -> Dict[str, Any]:
         """Convert to Frappe Gantt format"""
-        return {
+        result = {
             "id": self.id,
             "name": self.name,
             "start": self.start_date,
@@ -71,6 +74,15 @@ class TimelineTask:
             "is_milestone": self.is_milestone,
             "critical_path": self.critical_path
         }
+        
+        # Add retainer-specific fields
+        if self.is_retainer:
+            result["is_retainer"] = True
+            result["retainer_month"] = self.retainer_month
+            result["monthly_hours"] = self.monthly_hours
+            result["custom_class"] += " retainer-task"  # Add visual indicator
+        
+        return result
 
 @dataclass 
 class TimelineReasoning:
@@ -521,6 +533,91 @@ def generate_fallback_timeline(
         }
     }
 
+def generate_retainer_tasks(
+    deliverable: Dict[str, Any],
+    start_date: datetime,
+    months: int = 12,
+    monthly_hours: Optional[Dict[str, float]] = None
+) -> List[TimelineTask]:
+    """
+    Generate recurring monthly tasks for retainer deliverables
+    
+    Args:
+        deliverable: Deliverable data including name, code, department
+        start_date: Project start date
+        months: Number of months for retainer
+        monthly_hours: Optional dict of monthly hour allocations
+        
+    Returns:
+        List of monthly timeline tasks
+    """
+    tasks = []
+    month_names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    
+    current_date = start_date
+    code = deliverable.get('deliverable_code', 'retainer')
+    name = deliverable.get('deliverable_name', 'Retainer Service')
+    dept = deliverable.get('department', 'Strategy')
+    base_hours = deliverable.get('total_hours', 0) / months if months > 0 else 0
+    
+    for i in range(months):
+        month_idx = current_date.month - 1
+        month_name = month_names[month_idx]
+        year = current_date.year
+        
+        # Calculate month boundaries (first and last business day of month)
+        first_day = current_date.replace(day=1)
+        if first_day.weekday() >= 5:  # Skip weekend
+            days_until_monday = 7 - first_day.weekday() + 1
+            first_day = first_day + timedelta(days=days_until_monday % 7)
+        
+        # Get last day of month
+        if current_date.month == 12:
+            last_day = current_date.replace(day=31)
+        else:
+            last_day = (current_date.replace(month=current_date.month + 1, day=1) - timedelta(days=1))
+        
+        # Skip weekend for last day
+        while last_day.weekday() >= 5:
+            last_day = last_day - timedelta(days=1)
+        
+        # Get hours for this month
+        if monthly_hours and f"{month_name}" in monthly_hours:
+            hours = monthly_hours[f"{month_name}"]
+        elif monthly_hours and f"{month_name} Y{(i // 12) + 1}" in monthly_hours:
+            hours = monthly_hours[f"{month_name} Y{(i // 12) + 1}"]
+        else:
+            hours = base_hours
+        
+        task_id = f"{code}_month_{i+1}"
+        task_name = f"{name} - {month_name} {year}"
+        
+        task = TimelineTask(
+            id=task_id,
+            name=task_name,
+            deliverable_code=code,
+            deliverable_name=name,
+            department=dept,
+            start_date=first_day.strftime('%Y-%m-%d'),
+            end_date=last_day.strftime('%Y-%m-%d'),
+            dependencies=[f"{code}_month_{i}"] if i > 0 else [],
+            hours=hours,
+            color=DEPARTMENT_COLORS.get(dept, '#718096'),
+            is_retainer=True,
+            retainer_month=i + 1,
+            monthly_hours=hours
+        )
+        tasks.append(task)
+        
+        # Move to next month
+        if current_date.month == 12:
+            current_date = current_date.replace(year=current_date.year + 1, month=1)
+        else:
+            current_date = current_date.replace(month=current_date.month + 1)
+    
+    return tasks
+
 async def suggest_timeline_from_selection(
     selected_codes: List[str],
     deliverables_db: List[Dict[str, Any]],
@@ -556,10 +653,47 @@ async def suggest_timeline_from_selection(
             "metadata": {}
         }
     
-    # Generate timeline using AI or fallback
-    return await generate_ai_timeline(
-        selected_deliverables,
+    # Separate retainer and project deliverables
+    retainer_deliverables = []
+    project_deliverables = []
+    
+    for deliv in selected_deliverables:
+        if deliv.get('is_retainer') or deliv.get('retainer_months'):
+            retainer_deliverables.append(deliv)
+        else:
+            project_deliverables.append(deliv)
+    
+    # Generate timeline for project deliverables using AI or fallback
+    result = await generate_ai_timeline(
+        project_deliverables,
         rfp_text,
         project_start,
         optimization_mode
     )
+    
+    # Add retainer tasks if any
+    if retainer_deliverables:
+        start_date = datetime.fromisoformat(project_start) if project_start else datetime.now()
+        
+        for retainer_deliv in retainer_deliverables:
+            retainer_months = retainer_deliv.get('retainer_months', 12)
+            monthly_hours = retainer_deliv.get('monthly_hours')
+            
+            retainer_tasks = generate_retainer_tasks(
+                retainer_deliv,
+                start_date,
+                retainer_months,
+                monthly_hours
+            )
+            
+            # Add retainer tasks to result
+            result['tasks'].extend([t.to_gantt_format() for t in retainer_tasks])
+        
+        # Update metadata
+        result['metadata']['total_tasks'] = len(result['tasks'])
+        result['metadata']['retainer_tasks'] = len(retainer_deliverables)
+        result['reasoning']['optimization_notes'].append(
+            f"Added {len(retainer_deliverables)} retainer deliverables as recurring monthly tasks"
+        )
+    
+    return result

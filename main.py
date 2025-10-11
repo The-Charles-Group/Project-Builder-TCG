@@ -160,6 +160,9 @@ mount_routes_agencydb(app, base="/api/ai")
 # Import AI Timeline Manager
 from ai_timeline_manager import suggest_timeline_from_selection, generate_ai_timeline
 
+# Import AI Pricing Optimizer
+from ai_pricing_optimizer import redistribute_hours, calculate_retainer_distribution, analyze_retainer_vs_project
+
 # Startup event (AI planner now uses AgencyDB directly, no ZIP catalog needed)
 @app.on_event("startup")
 async def startup_event():
@@ -4377,6 +4380,157 @@ def api_build(payload: BuildPayload):
     # Return scenarios (A only)
     return {"scenarios": scenarios}
 
+# ========== NEW PRICING API ENDPOINTS ==========
+
+class RedistributeHoursPayload(BaseModel):
+    """Request payload for hour redistribution"""
+    deliverable_name: str
+    deliverable_code: str
+    new_total_hours: float
+    components: List[Dict[str, Any]]
+    complexity: str = "Advanced"
+    tier: str = "T2_MediumVolume"
+    use_ai: bool = True
+    context: Optional[str] = None
+
+class RetainerAnalysisPayload(BaseModel):
+    """Request payload for retainer analysis"""
+    deliverable_name: str
+    total_hours: float
+    duration_months: int = 12
+
+class RetainerDistributionPayload(BaseModel):
+    """Request payload for retainer hour distribution"""
+    monthly_hours: float
+    duration_months: int = 12
+    ramp_up: bool = True
+    seasonality: Optional[List[float]] = None
+
+@app.post("/api/pricing/redistribute-hours")
+async def api_redistribute_hours(payload: RedistributeHoursPayload):
+    """
+    Redistribute hours among components using AI or rule-based logic.
+    
+    Example request:
+    {
+        "deliverable_name": "Brand Strategy",
+        "deliverable_code": "deck_strategy",
+        "new_total_hours": 150,
+        "components": [
+            {"name": "Market Research", "hours": 40},
+            {"name": "Competitor Analysis", "hours": 30},
+            {"name": "Strategy Development", "hours": 50}
+        ],
+        "use_ai": true
+    }
+    """
+    try:
+        result = await redistribute_hours(
+            deliverable_name=payload.deliverable_name,
+            deliverable_code=payload.deliverable_code,
+            new_total_hours=payload.new_total_hours,
+            components=payload.components,
+            complexity=payload.complexity,
+            tier=payload.tier,
+            use_ai=payload.use_ai,
+            context=payload.context
+        )
+        
+        # Convert dataclass result to dict for JSON response
+        return {
+            "success": True,
+            "result": {
+                "deliverable_name": result.deliverable_name,
+                "total_hours": result.total_hours,
+                "original_total": result.original_total,
+                "components": [
+                    {
+                        "name": c.name,
+                        "current_hours": c.current_hours,
+                        "suggested_hours": c.suggested_hours,
+                        "change": c.change,
+                        "percentage_of_total": c.percentage_of_total,
+                        "reasoning": c.reasoning,
+                        "complexity_factor": c.complexity_factor,
+                        "confidence": c.confidence
+                    }
+                    for c in result.components
+                ],
+                "reasoning": result.reasoning,
+                "confidence": result.confidence,
+                "methodology": result.methodology
+            }
+        }
+    except Exception as e:
+        print(f"[Pricing API] Error redistributing hours: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.post("/api/pricing/analyze-retainer")
+async def api_analyze_retainer(payload: RetainerAnalysisPayload):
+    """
+    Analyze whether a deliverable should be retainer vs project-based.
+    
+    Example request:
+    {
+        "deliverable_name": "Social Media Management",
+        "total_hours": 480,
+        "duration_months": 12
+    }
+    """
+    try:
+        result = analyze_retainer_vs_project(
+            deliverable_name=payload.deliverable_name,
+            total_hours=payload.total_hours,
+            duration_months=payload.duration_months
+        )
+        
+        return {
+            "success": True,
+            "result": result
+        }
+    except Exception as e:
+        print(f"[Pricing API] Error analyzing retainer: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.post("/api/pricing/retainer-distribution")
+async def api_retainer_distribution(payload: RetainerDistributionPayload):
+    """
+    Calculate monthly hour distribution for retainer engagements.
+    
+    Example request:
+    {
+        "monthly_hours": 40,
+        "duration_months": 12,
+        "ramp_up": true
+    }
+    """
+    try:
+        distribution = calculate_retainer_distribution(
+            monthly_hours=payload.monthly_hours,
+            duration_months=payload.duration_months,
+            ramp_up=payload.ramp_up,
+            seasonality=payload.seasonality
+        )
+        
+        return {
+            "success": True,
+            "distribution": distribution,
+            "total_hours": sum(distribution.values()),
+            "average_monthly": sum(distribution.values()) / len(distribution) if distribution else 0
+        }
+    except Exception as e:
+        print(f"[Pricing API] Error calculating distribution: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
 @app.get("/api/scenarios")
 def api_get_scenarios():
     """
@@ -5601,6 +5755,148 @@ def api_retainer_detect(p: dict):
             continue
     
     return {"retainers": retainers}
+
+# --- AI Pricing Optimization Models and Endpoints ---
+from typing import Dict, Any, List, Optional
+from pydantic import BaseModel
+
+class ComponentHours(BaseModel):
+    name: str
+    current_hours: float
+    
+class HourRedistributionRequest(BaseModel):
+    deliverable_code: str
+    deliverable_name: str
+    new_total_hours: float
+    components: List[ComponentHours]
+    rfp_text: Optional[str] = ""
+    
+class HourRedistributionResponse(BaseModel):
+    suggested_distribution: List[Dict[str, Any]]
+    reasoning: str
+    confidence_score: float
+    original_total: float
+    new_total: float
+    
+class RetainerSuggestionRequest(BaseModel):
+    deliverable_codes: List[str]
+    rfp_text: str
+    
+@app.post("/api/pricing/redistribute-hours", response_model=HourRedistributionResponse)
+async def redistribute_hours(request: HourRedistributionRequest):
+    """
+    AI-powered hour redistribution endpoint.
+    Takes a deliverable with new total hours and redistributes among components.
+    """
+    try:
+        from ai_pricing_optimizer import redistribute_hours
+        
+        # Call AI redistribution
+        result = await redistribute_hours(
+            deliverable_name=request.deliverable_name,
+            deliverable_code=request.deliverable_code,
+            new_total_hours=request.new_total_hours,
+            components=[{"name": c.name, "hours": c.current_hours} for c in request.components],
+            context=request.rfp_text
+        )
+        
+        # Map the result from PricingOptimizer to the response model
+        return HourRedistributionResponse(
+            suggested_distribution=[
+                {
+                    "name": comp.name,
+                    "original_hours": comp.current_hours,
+                    "suggested_hours": comp.suggested_hours,
+                    "change": comp.change,
+                    "percentage": comp.percentage_of_total,
+                    "reasoning": comp.reasoning
+                }
+                for comp in result.components
+            ],
+            reasoning=result.reasoning,
+            confidence_score=result.confidence,
+            original_total=result.original_total,
+            new_total=result.total_hours
+        )
+        
+    except Exception as e:
+        print(f"[PRICING] Error in redistribution: {str(e)}")
+        # Return proportional redistribution as fallback
+        original_total = sum(c.current_hours for c in request.components)
+        scale = request.new_total_hours / original_total if original_total > 0 else 1.0
+        
+        suggested = []
+        for comp in request.components:
+            suggested.append({
+                "name": comp.name,
+                "original_hours": comp.current_hours,
+                "suggested_hours": round(comp.current_hours * scale, 1),
+                "change": round(comp.current_hours * scale - comp.current_hours, 1)
+            })
+        
+        return HourRedistributionResponse(
+            suggested_distribution=suggested,
+            reasoning="Proportional distribution (fallback mode - AI not available)",
+            confidence_score=0.5,
+            original_total=original_total,
+            new_total=request.new_total_hours
+        )
+
+@app.post("/api/pricing/retainer_suggest")
+async def suggest_retainer_configuration(request: RetainerSuggestionRequest):
+    """
+    AI-powered retainer suggestion endpoint.
+    Analyzes deliverables and suggests which should be retainers.
+    """
+    try:
+        from ai_pricing_optimizer import PricingOptimizer
+        optimizer = PricingOptimizer()
+        
+        suggestions = []
+        for code in request.deliverable_codes:
+            # Get deliverable name from DB
+            deliv_row = DB.deliverables[DB.deliverables["Deliverable_Code"] == code]
+            if deliv_row.empty:
+                continue
+                
+            deliv_name = deliv_row["Deliverable"].iloc[0]
+            
+            # Check if it should be a retainer
+            is_retainer = await optimizer.should_be_retainer(deliv_name, request.rfp_text)
+            
+            if is_retainer["is_retainer"]:
+                suggestions.append({
+                    "deliverable_code": code,
+                    "deliverable_name": deliv_name,
+                    "suggested_months": is_retainer["suggested_months"],
+                    "reasoning": is_retainer["reasoning"]
+                })
+        
+        return {"suggestions": suggestions}
+        
+    except Exception as e:
+        print(f"[PRICING] Error in retainer suggestion: {str(e)}")
+        # Fallback to rule-based detection
+        retainer_keywords = ["management", "social media", "seo", "optimization", 
+                            "maintenance", "support", "monitoring", "reporting"]
+        suggestions = []
+        
+        for code in request.deliverable_codes:
+            deliv_row = DB.deliverables[DB.deliverables["Deliverable_Code"] == code]
+            if deliv_row.empty:
+                continue
+                
+            deliv_name = str(deliv_row["Deliverable"].iloc[0]).lower()
+            
+            if any(keyword in deliv_name for keyword in retainer_keywords):
+                suggestions.append({
+                    "deliverable_code": code,
+                    "deliverable_name": deliv_row["Deliverable"].iloc[0],
+                    "suggested_months": 12,
+                    "reasoning": "Ongoing service based on name pattern (fallback mode)"
+                })
+        
+        return {"suggestions": suggestions}
 
 @app.post("/api/reconcile", response_model=ReconcileResult)
 def api_reconcile(p: ReconcilePayload):
