@@ -693,10 +693,13 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         ]
         
         by_dept[dept].append({
-            "deliverable_code": deliv_code,  # Real database code
-            "deliverable_title": deliv_info["title"],
-            "title": deliv_info["title"],  # Add title for frontend compatibility
-            "calibrated_confidence": d_item.get("calibrated_confidence", 0.60),
+            "code": deliv_code,  # Real database code (renamed from deliverable_code)
+            "name": deliv_info["title"],  # Frontend expects 'name' not 'deliverable_title'
+            "title": deliv_info["title"],  # Keep for backward compatibility
+            "confidence": d_item.get("calibrated_confidence", 0.60),  # Renamed from calibrated_confidence
+            "deliverable_code": deliv_code,  # Keep old field for backward compatibility
+            "deliverable_title": deliv_info["title"],  # Keep old field for backward compatibility
+            "calibrated_confidence": d_item.get("calibrated_confidence", 0.60),  # Keep old field for backward compatibility
             "why": (d_item.get("llm") or {}).get("why", ""),
             "risks": (d_item.get("llm") or {}).get("risks", ""),
             "planned_hours": d_hours_planned,
