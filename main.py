@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
 import numpy as np
+from convert_excel_to_mspdi import convert_excel_to_mspdi
 
 try:
     from docx import Document  # pip install python-docx
