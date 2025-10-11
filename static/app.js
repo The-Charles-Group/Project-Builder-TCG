@@ -770,6 +770,116 @@ function startProgressPolling(jobId) {
   pollProgress(jobId);
 }
 
+// AI Analysis Progress Tracking
+let aiAnalysisJobId = null;
+let aiAnalysisInterval = null;
+
+function showAIProgressBar() {
+  let progressBar = document.getElementById('ai-progress-bar');
+  if (!progressBar) {
+    // Create progress bar if it doesn't exist
+    const step1 = document.getElementById('step1');
+    if (step1) {
+      progressBar = document.createElement('div');
+      progressBar.id = 'ai-progress-bar';
+      progressBar.style.cssText = 'margin: 20px 0; padding: 20px; background: #f3f4f6; border-radius: 8px; display: none;';
+      progressBar.innerHTML = `
+        <div style="margin-bottom: 12px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong id="ai-progress-stage">Initializing AI Analysis...</strong>
+            <span id="ai-progress-percent" style="color: #2563eb; font-weight: bold;">0%</span>
+          </div>
+          <div style="background: #e5e7eb; height: 24px; border-radius: 12px; overflow: hidden;">
+            <div id="ai-progress-fill" style="background: linear-gradient(90deg, #3b82f6, #2563eb); height: 100%; width: 0%; transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 14px; color: #6b7280;">
+          <span id="ai-progress-elapsed">Elapsed: 0s</span>
+          <span id="ai-progress-eta">Estimating...</span>
+        </div>
+      `;
+      step1.appendChild(progressBar);
+    }
+  }
+  if (progressBar) {
+    progressBar.style.display = 'block';
+  }
+}
+
+function hideAIProgressBar() {
+  const progressBar = document.getElementById('ai-progress-bar');
+  if (progressBar) {
+    progressBar.style.display = 'none';
+  }
+}
+
+function updateAIProgress(status) {
+  const fillEl = document.getElementById('ai-progress-fill');
+  const percentEl = document.getElementById('ai-progress-percent');
+  const stageEl = document.getElementById('ai-progress-stage');
+  const elapsedEl = document.getElementById('ai-progress-elapsed');
+  const etaEl = document.getElementById('ai-progress-eta');
+  
+  if (fillEl) fillEl.style.width = `${status.progress || 0}%`;
+  if (percentEl) percentEl.textContent = `${status.progress || 0}%`;
+  if (stageEl) stageEl.textContent = status.current_stage || 'Processing...';
+  if (elapsedEl) elapsedEl.textContent = `Elapsed: ${Math.round(status.elapsed_seconds || 0)}s`;
+  if (etaEl) {
+    if (status.eta_seconds !== null && status.eta_seconds !== undefined) {
+      etaEl.textContent = `ETA: ${Math.round(status.eta_seconds)}s`;
+    } else {
+      etaEl.textContent = 'Estimating...';
+    }
+  }
+}
+
+async function pollAIAnalysis(jobId) {
+  try {
+    const res = await fetch(`/api/ai/status/${jobId}`);
+    if (!res.ok) return;
+    
+    const status = await res.json();
+    updateAIProgress(status);
+    
+    if (status.status === 'completed' && status.result) {
+      clearInterval(aiAnalysisInterval);
+      hideAIProgressBar();
+      
+      // Handle completed analysis
+      const aiPlanResponse = status.result;
+      window.APP = window.APP || {};
+      window.APP.aiPlan = aiPlanResponse;
+      sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
+      
+      const step2 = document.getElementById('step2');
+      if (step2) {
+        step2.style.display = 'block';
+        step2.scrollIntoView({ behavior: 'smooth' });
+      }
+      
+      renderAIPlan(aiPlanResponse);
+      
+      const btnAnalyze = document.querySelector('#btnAnalyze');
+      if (btnAnalyze) {
+        btnAnalyze.disabled = false;
+        btnAnalyze.textContent = 'Analyze with AI';
+      }
+    } else if (status.status === 'failed') {
+      clearInterval(aiAnalysisInterval);
+      hideAIProgressBar();
+      alert(`AI analysis failed: ${status.error || 'Unknown error'}`);
+      
+      const btnAnalyze = document.querySelector('#btnAnalyze');
+      if (btnAnalyze) {
+        btnAnalyze.disabled = false;
+        btnAnalyze.textContent = 'Analyze with AI';
+      }
+    }
+  } catch (error) {
+    console.error('Error polling AI analysis:', error);
+  }
+}
+
 // Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
@@ -815,10 +925,10 @@ async function onRunReconcile() {
       return;
     }
 
-    // Now call the new AI planner with the extracted/provided text
+    // Start AI analysis as background job
     if (btnAnalyze) {
       btnAnalyze.disabled = true;
-      btnAnalyze.textContent = 'AI Analyzing (GPT-5)...';
+      btnAnalyze.textContent = 'Starting AI Analysis...';
     }
     
     const aiRes = await fetch('/api/ai/analyze', {
@@ -834,47 +944,47 @@ async function onRunReconcile() {
       throw new Error(`AI analysis error: ${aiRes.status} ${aiRes.statusText}`);
     }
     
-    aiPlanResponse = await aiRes.json();
+    const jobInfo = await aiRes.json();
     
-    // Persist for Step 2
+    // Persist RFP text for Step 2
     window.APP = window.APP || {};
     window.APP.rfpText = rfpText;
-    window.APP.aiPlan = aiPlanResponse; // NEW: Store full AI plan
-    sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
     sessionStorage.setItem('apb.rfp_text', rfpText);
     localStorage.setItem('apb.rfpText.v1', rfpText);
-    
-    // Update centralized state
     APB.step2.rfpText = rfpText;
-
-    // Show Step 2
-    const step2 = document.getElementById('step2');
-    if (step2) {
-      step2.style.display = 'block';
-      step2.scrollIntoView({ behavior: 'smooth' });
-    }
-
-    // Render NEW AI plan (summary + evidence-backed suggestions)
-    renderAIPlan(aiPlanResponse);
     
-    // PATCH: Auto-fill project name from last upload
-    try {
-      const nameRes = await fetch('/api/last_upload_name');
-      if (nameRes.ok) {
-        const {project_name_default} = await nameRes.json();
-        const projectInput = document.querySelector('#projectName');
-        if (projectInput && project_name_default && !projectInput.value) {
-          projectInput.value = project_name_default;
+    // Start polling for AI analysis progress
+    if (jobInfo.job_id) {
+      aiAnalysisJobId = jobInfo.job_id;
+      showAIProgressBar();
+      updateAIProgress({ progress: 0, current_stage: 'Starting AI analysis...', elapsed_seconds: 0, eta_seconds: null });
+      
+      // Poll every 2 seconds
+      aiAnalysisInterval = setInterval(() => pollAIAnalysis(aiAnalysisJobId), 2000);
+      pollAIAnalysis(aiAnalysisJobId); // Initial fetch
+      
+      // PATCH: Auto-fill project name from last upload
+      try {
+        const nameRes = await fetch('/api/last_upload_name');
+        if (nameRes.ok) {
+          const {project_name_default} = await nameRes.json();
+          const projectInput = document.querySelector('#projectName');
+          if (projectInput && project_name_default && !projectInput.value) {
+            projectInput.value = project_name_default;
+          }
         }
+      } catch (e) {
+        console.warn('Could not fetch project name default:', e);
       }
-    } catch (e) {
-      console.warn('Could not fetch project name default:', e);
+      
+      return; // Exit early - polling will handle completion
     }
     
   } catch (error) {
     console.error('Error analyzing RFP:', error);
     alert(`Error getting AI analysis: ${error.message}`);
-  } finally {
+    
+    // Re-enable button only on error (not during normal operation - polling handles it)
     if (btnAnalyze) {
       btnAnalyze.disabled = false;
       btnAnalyze.textContent = 'Analyze with AI';

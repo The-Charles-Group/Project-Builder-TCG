@@ -1,12 +1,13 @@
 # ai_planner_agencydb.py (v3 - AgencyDB Integration with Granular L2 Selection)
 # Resilient AI suggestions connected to real database with specific task selection
 
-import os, json, math, re
+import os, json, math, re, datetime, asyncio, uuid
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass, field
+from enum import Enum
 import pandas as pd
 import numpy as np
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -30,6 +31,46 @@ DEPARTMENTS = [
     "Technology",
     "Integrated Marketing Management",
 ]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Background Job Tracking for AI Analysis
+# ──────────────────────────────────────────────────────────────────────────────
+class AIJobStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+@dataclass
+class AIAnalysisJob:
+    job_id: str
+    status: AIJobStatus
+    start_time: float = field(default_factory=lambda: datetime.datetime.now().timestamp())
+    end_time: Optional[float] = None
+    total_chunks: int = 0
+    processed_chunks: int = 0
+    current_stage: str = "Initializing..."
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+# Global job store
+AI_JOB_STORE: Dict[str, AIAnalysisJob] = {}
+AI_JOB_TTL_SECONDS = 300  # Clean up jobs after 5 minutes
+
+def cleanup_ai_jobs():
+    """Remove expired completed/failed jobs to prevent memory leaks"""
+    now = datetime.datetime.now().timestamp()
+    to_remove = []
+    
+    for job_id, job in AI_JOB_STORE.items():
+        if job.end_time and (now - job.end_time > AI_JOB_TTL_SECONDS):
+            to_remove.append(job_id)
+    
+    for job_id in to_remove:
+        del AI_JOB_STORE[job_id]
+    
+    if to_remove:
+        print(f"[AI JOB CLEANUP] Removed {len(to_remove)} expired jobs")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Text Sanitization for LLM Safety
@@ -331,7 +372,7 @@ def best_evidence(request_text: str, candidate: Dict[str, Any], k: int = 3) -> L
     scored.sort(key=lambda x: x[1], reverse=True)
     return [s for s, score in scored[:k] if score > 0]
 
-def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str, Any]], request_text: str) -> List[Dict[str, Any]]:
+def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str, Any]], request_text: str, job_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """LLM re-scoring with GRANULAR task-level selection - only select relevant tasks, exclude irrelevant ones"""
     if not candidates or not oai:
         return []
@@ -364,8 +405,20 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     
     out = []
     chunk = 70  # Optimized chunk size: keeps output under ~3.5k tokens while reducing API calls (2288 / 70 = ~33 calls @ ~8s each = ~4.4 min total)
+    total_chunks = math.ceil(len(candidates) / chunk)
+    
+    # Update job with total chunks if job_id provided
+    if job_id and job_id in AI_JOB_STORE:
+        AI_JOB_STORE[job_id].total_chunks = total_chunks
+        AI_JOB_STORE[job_id].current_stage = f"Analyzing with GPT-5 (0/{total_chunks} chunks)"
+    
     for i in range(0, len(candidates), chunk):
         block = candidates[i:i + chunk]
+        chunk_num = (i // chunk) + 1
+        
+        # Update job progress
+        if job_id and job_id in AI_JOB_STORE:
+            AI_JOB_STORE[job_id].current_stage = f"Analyzing with GPT-5 (chunk {chunk_num}/{total_chunks})"
         
         # Sanitize all text in payload to prevent JSON parsing errors
         payload = []
@@ -409,6 +462,10 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
                     "risks": "",
                     "select": c["recall"] > 0.4  # Threshold for auto-select
                 })
+        
+        # Update chunk completion
+        if job_id and job_id in AI_JOB_STORE:
+            AI_JOB_STORE[job_id].processed_chunks = chunk_num
     
     return out
 
@@ -623,9 +680,14 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
-def analyze_with_agencydb(request_text: str, db, strictness: str = None) -> Dict[str, Any]:
+def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None) -> Dict[str, Any]:
     """Main analysis function using AgencyDB"""
     strictness = strictness or AI_STRICTNESS_DEFAULT
+    
+    # Update job status
+    if job_id and job_id in AI_JOB_STORE:
+        AI_JOB_STORE[job_id].status = AIJobStatus.RUNNING
+        AI_JOB_STORE[job_id].current_stage = "Building catalog from database..."
     
     # Build catalog from AgencyDB
     catalog = build_catalog_from_agencydb(db)
@@ -640,7 +702,15 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None) -> Dict
     
     print(f"[AI Planner] Built catalog with {len(catalog)} items from AgencyDB")
     
+    # Update job status
+    if job_id and job_id in AI_JOB_STORE:
+        AI_JOB_STORE[job_id].current_stage = "Summarizing request with GPT-5..."
+    
     summary = summarize_request(request_text)
+    
+    # Update job status
+    if job_id and job_id in AI_JOB_STORE:
+        AI_JOB_STORE[job_id].current_stage = "Finding candidate deliverables..."
     
     # Process all items - let AI intelligence do the filtering
     candidates, all_recall = recall_candidates(request_text, catalog)
@@ -653,7 +723,12 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None) -> Dict
             "diagnostics": {"candidates_considered": 0, "catalog_items": len(catalog)}
         }
     
-    llm_scores = rescore_with_llm_granular(summary, candidates, request_text)
+    llm_scores = rescore_with_llm_granular(summary, candidates, request_text, job_id)
+    
+    # Update job status
+    if job_id and job_id in AI_JOB_STORE:
+        AI_JOB_STORE[job_id].current_stage = "Calibrating scores and finalizing plan..."
+    
     fused = fuse_and_calibrate(candidates, llm_scores, strictness)
     
     # AUTO-RELAX & RESCUE
@@ -674,6 +749,26 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None) -> Dict
         }
     }
 
+def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None):
+    """Background task to run AI analysis"""
+    try:
+        result = analyze_with_agencydb(request_text, db, strictness, job_id)
+        
+        if job_id in AI_JOB_STORE:
+            AI_JOB_STORE[job_id].status = AIJobStatus.COMPLETED
+            AI_JOB_STORE[job_id].result = result
+            AI_JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
+            AI_JOB_STORE[job_id].current_stage = "Complete"
+    except Exception as e:
+        import traceback
+        error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+        print(f"[AI JOB {job_id} ERROR] {error_detail}")
+        
+        if job_id in AI_JOB_STORE:
+            AI_JOB_STORE[job_id].status = AIJobStatus.FAILED
+            AI_JOB_STORE[job_id].error = str(e)
+            AI_JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FastAPI routes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -685,17 +780,80 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
     router = APIRouter()
     
     @router.post("/analyze")
-    def _analyze(payload: AnalyzeRequest):
+    def _analyze(payload: AnalyzeRequest, background_tasks: BackgroundTasks):
+        """Start AI analysis as a background job and return job ID immediately"""
         try:
             db = app.state.db
             if not getattr(db, "loaded", False):
                 db.load()
-            return analyze_with_agencydb(payload.request_text, db, payload.strictness)
+            
+            # Clean up old jobs to prevent memory leaks
+            cleanup_ai_jobs()
+            
+            # Create job
+            job_id = str(uuid.uuid4())
+            AI_JOB_STORE[job_id] = AIAnalysisJob(
+                job_id=job_id,
+                status=AIJobStatus.PENDING
+            )
+            
+            # Start background task
+            background_tasks.add_task(
+                _run_analysis_background,
+                job_id,
+                payload.request_text,
+                db,
+                payload.strictness
+            )
+            
+            return {
+                "job_id": job_id,
+                "status": "started",
+                "message": "AI analysis started in background"
+            }
         except Exception as e:
             import traceback
             error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             print(f"[AI PLANNER ERROR] {error_detail}")
             raise HTTPException(status_code=500, detail=str(e))
+    
+    @router.get("/status/{job_id}")
+    def _status(job_id: str):
+        """Get status of AI analysis job"""
+        if job_id not in AI_JOB_STORE:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        job = AI_JOB_STORE[job_id]
+        now = datetime.datetime.now().timestamp()
+        elapsed = now - job.start_time
+        
+        # Calculate progress percentage
+        progress = 0
+        eta = None
+        if job.total_chunks > 0 and job.processed_chunks > 0:
+            progress = int((job.processed_chunks / job.total_chunks) * 100)
+            # Estimate remaining time based on average time per chunk
+            if job.processed_chunks < job.total_chunks:
+                avg_time_per_chunk = elapsed / job.processed_chunks
+                remaining_chunks = job.total_chunks - job.processed_chunks
+                eta = avg_time_per_chunk * remaining_chunks
+        
+        response = {
+            "job_id": job.job_id,
+            "status": job.status.value,
+            "progress": progress,
+            "current_stage": job.current_stage,
+            "elapsed_seconds": round(elapsed, 1),
+            "eta_seconds": round(eta, 1) if eta else None
+        }
+        
+        if job.status == AIJobStatus.COMPLETED and job.result:
+            response["result"] = job.result
+        
+        if job.status == AIJobStatus.FAILED and job.error:
+            response["error"] = job.error
+        
+        return response
     
     @router.get("/health")
     def _health():
