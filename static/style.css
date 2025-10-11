@@ -465,3 +465,200 @@ button:disabled{opacity:.6;cursor:not-allowed}
   cursor: not-allowed;
   opacity: 0.4;
 }
+/* ================================================================================
+   Pricing and Retainer Styles
+   ================================================================================ */
+.retainer-toggle {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+}
+
+.monthly-hours-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+  padding: 15px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+}
+
+.month-input {
+  display: flex;
+  flex-direction: column;
+}
+
+.month-input label {
+  font-size: 12px;
+  margin-bottom: 3px;
+  color: #888;
+}
+
+.month-input input {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--text);
+}
+
+.redistribute-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: 5px;
+  font-size: 12px;
+  transition: transform 0.2s;
+}
+
+.redistribute-btn:hover {
+  transform: scale(1.05);
+}
+
+.retainer-indicator {
+  background: var(--accent2);
+  color: white;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  margin-left: 5px;
+  font-weight: 500;
+}
+
+/* AI Pricing Panel */
+.ai-pricing-panel {
+  animation: fadeIn 0.3s ease-in;
+}
+
+/* Pricing Table Styles */
+#pricing-details-table input[type="number"] {
+  transition: background 0.2s;
+}
+
+#pricing-details-table input[type="number"]:focus {
+  background: var(--bg);
+  outline: 1px solid var(--accent);
+}
+
+#pricing-details-table input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+/* Pricing Summary Cards */
+.pricing-summary-panel > div {
+  transition: transform 0.2s;
+}
+
+.pricing-summary-panel > div:hover {
+  transform: translateY(-2px);
+}
+
+/* Modal Overlay */
+.modal {
+  animation: fadeIn 0.2s;
+}
+
+.modal-content {
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { 
+    transform: translate(-50%, -50%) scale(0.9); 
+    opacity: 0;
+  }
+  to { 
+    transform: translate(-50%, -50%) scale(1); 
+    opacity: 1;
+  }
+}
+
+/* Retainer Configuration Card */
+#retainer-config {
+  transition: max-height 0.3s ease-out;
+}
+
+/* Export Button */
+#btn-export-pricing {
+  margin-left: 12px;
+}
+
+/* Grand Total Display */
+#grand-total-cost {
+  text-shadow: 0 0 20px rgba(139, 92, 246, 0.5);
+}
+
+/* Optimize Button Animation */
+#btn-ai-optimize-pricing {
+  position: relative;
+  overflow: hidden;
+}
+
+#btn-ai-optimize-pricing::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(45deg, transparent, rgba(255,255,255,0.1), transparent);
+  transform: rotate(45deg);
+  transition: all 0.5s;
+}
+
+#btn-ai-optimize-pricing:hover::before {
+  animation: shine 0.5s ease-in-out;
+}
+
+@keyframes shine {
+  0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
+  100% { transform: translateX(100%) translateY(100%) rotate(45deg); }
+}
+
+/* Monthly Hours Modal Specific */
+#monthly-hours-modal .modal-content {
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+#monthly-hours-modal .month-input {
+  transition: background 0.2s;
+}
+
+#monthly-hours-modal .month-input:hover {
+  background: rgba(139, 92, 246, 0.1);
+}
+
+/* Redistribution Modal Specific */
+#redistribution-modal table {
+  font-size: 0.9em;
+}
+
+#redistribution-modal .modal-content {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) var(--card);
+}
+
+#redistribution-modal .modal-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+#redistribution-modal .modal-content::-webkit-scrollbar-track {
+  background: var(--card);
+}
+
+#redistribution-modal .modal-content::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 4px;
+}

@@ -138,6 +138,15 @@ let ganttChart = null;
 let currentTimelineTasks = [];
 let timelineReasoning = null;
 
+// Pricing and Retainer State
+let pricingData = {
+  deliverables: new Map(),
+  retainers: new Map(),
+  monthlyHours: new Map(),
+  currentRedistribution: null,
+  currentMonthlyItem: null
+};
+
 // Cache for component data per deliverable code
 const componentDataCache = {};
 window.componentDataCache = componentDataCache;
@@ -298,6 +307,634 @@ function calculateDuration(start, end) {
   return Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
 }
 
+// ================================================================================
+// Pricing and Retainer Management Functions
+// ================================================================================
+
+// Hour redistribution function
+async function redistributeHours(deliverableCode, newTotalHours, level) {
+  try {
+    const response = await fetch('/api/pricing/redistribute-hours', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deliverable_code: deliverableCode,
+        new_total_hours: newTotalHours,
+        level: level // 'deliverable' or 'component'
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    showRedistributionModal(result);
+  } catch (error) {
+    console.error('Error redistributing hours:', error);
+    alert('Error redistributing hours. Please try again.');
+  }
+}
+
+// Show AI redistribution modal
+function showRedistributionModal(data) {
+  const modal = document.getElementById('redistribution-modal');
+  const content = document.getElementById('redistribution-content');
+  
+  if (!modal || !content) return;
+  
+  pricingData.currentRedistribution = data;
+  
+  let html = `
+    <div style="margin-bottom: 16px;">
+      <h4 style="color: var(--text); margin-bottom: 8px;">AI Recommendation</h4>
+      <p style="color: var(--muted); font-size: 0.9em; line-height: 1.4;">${data.reasoning || 'Based on project requirements and optimal resource allocation.'}</p>
+    </div>
+    <div style="background: rgba(0,0,0,0.3); border-radius: 8px; padding: 12px;">
+      <h5 style="color: var(--text); margin-bottom: 12px;">Suggested Hour Distribution</h5>
+  `;
+  
+  if (data.distribution) {
+    html += '<table style="width: 100%; border-collapse: collapse;">';
+    html += '<thead><tr><th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border); color: var(--muted);">Component</th>';
+    html += '<th style="text-align: center; padding: 8px; border-bottom: 1px solid var(--border); color: var(--muted);">Current Hours</th>';
+    html += '<th style="text-align: center; padding: 8px; border-bottom: 1px solid var(--border); color: var(--muted);">Suggested Hours</th>';
+    html += '<th style="text-align: center; padding: 8px; border-bottom: 1px solid var(--border); color: var(--muted);">Change</th></tr></thead>';
+    html += '<tbody>';
+    
+    for (const [component, hours] of Object.entries(data.distribution)) {
+      const currentHours = data.currentDistribution?.[component] || 0;
+      const change = hours - currentHours;
+      const changeClass = change > 0 ? 'color: var(--accent2);' : change < 0 ? 'color: #dc3545;' : 'color: var(--muted);';
+      const changePrefix = change > 0 ? '+' : '';
+      
+      html += `<tr>
+        <td style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1);">${component}</td>
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1);">${currentHours}</td>
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); font-weight: 500;">${hours}</td>
+        <td style="padding: 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); ${changeClass}">${changePrefix}${change}</td>
+      </tr>`;
+    }
+    
+    html += '</tbody></table>';
+  }
+  
+  html += '</div>';
+  
+  content.innerHTML = html;
+  modal.style.display = 'block';
+}
+
+// Close redistribution modal
+function closeRedistributionModal() {
+  const modal = document.getElementById('redistribution-modal');
+  if (modal) modal.style.display = 'none';
+  pricingData.currentRedistribution = null;
+}
+
+// Apply redistribution
+function applyRedistribution() {
+  if (!pricingData.currentRedistribution) return;
+  
+  const data = pricingData.currentRedistribution;
+  
+  // Apply the new hour distribution to the pricing table
+  if (data.distribution) {
+    for (const [component, hours] of Object.entries(data.distribution)) {
+      const input = document.querySelector(`input[data-component="${component}"]`);
+      if (input) {
+        input.value = hours;
+      }
+    }
+  }
+  
+  updatePricingCalculations();
+  closeRedistributionModal();
+}
+
+// Toggle retainer for a deliverable or component
+function toggleRetainer(itemId, isRetainer) {
+  if (isRetainer) {
+    pricingData.retainers.set(itemId, true);
+    showMonthlyHoursModal(itemId);
+  } else {
+    pricingData.retainers.delete(itemId);
+    pricingData.monthlyHours.delete(itemId);
+  }
+  updatePricingCalculations();
+}
+
+// Show monthly hours modal
+function showMonthlyHoursModal(itemId) {
+  const modal = document.getElementById('monthly-hours-modal');
+  const content = document.getElementById('monthly-hours-content');
+  
+  if (!modal || !content) return;
+  
+  pricingData.currentMonthlyItem = itemId;
+  
+  const existingHours = pricingData.monthlyHours.get(itemId) || {};
+  
+  content.innerHTML = createMonthlyHoursGrid(itemId, existingHours);
+  modal.style.display = 'block';
+}
+
+// Close monthly hours modal
+function closeMonthlyHoursModal() {
+  const modal = document.getElementById('monthly-hours-modal');
+  if (modal) modal.style.display = 'none';
+  pricingData.currentMonthlyItem = null;
+}
+
+// Create monthly hours grid
+function createMonthlyHoursGrid(itemId, existingHours = {}) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  let html = `
+    <div style="margin-bottom: 16px;">
+      <h4 style="color: var(--text);">Monthly Hour Allocation for: ${itemId}</h4>
+      <p style="color: var(--muted); font-size: 0.85em;">Configure hours for each month of the retainer period</p>
+    </div>
+    <div class="monthly-hours-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
+  `;
+  
+  months.forEach(month => {
+    const value = existingHours[month] || 0;
+    html += `
+      <div class="month-input" style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 6px;">
+        <label style="font-size: 0.85em; color: var(--muted); margin-bottom: 4px; display: block;">${month}</label>
+        <input type="number" data-month="${month}" value="${value}" placeholder="0" 
+               style="width: 100%; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text);" />
+      </div>
+    `;
+  });
+  
+  html += `
+    </div>
+    <div style="margin-top: 16px; display: flex; gap: 12px; align-items: center;">
+      <button onclick="copyToAllMonths()" class="btn-secondary" style="padding: 6px 12px;">
+        Copy First Month to All
+      </button>
+      <div style="flex: 1; text-align: center;">
+        <span style="color: var(--muted);">Total Hours: </span>
+        <strong id="monthly-total-hours" style="color: var(--accent); font-size: 1.1em;">0</strong>
+      </div>
+    </div>
+  `;
+  
+  return html;
+}
+
+// Save monthly hours
+function saveMonthlyHours() {
+  if (!pricingData.currentMonthlyItem) return;
+  
+  const itemId = pricingData.currentMonthlyItem;
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monthlyHours = {};
+  
+  months.forEach(month => {
+    const input = document.querySelector(`input[data-month="${month}"]`);
+    if (input) {
+      monthlyHours[month] = parseFloat(input.value) || 0;
+    }
+  });
+  
+  pricingData.monthlyHours.set(itemId, monthlyHours);
+  updatePricingCalculations();
+  closeMonthlyHoursModal();
+}
+
+// Copy first month hours to all months
+function copyToAllMonths() {
+  const firstInput = document.querySelector('input[data-month="Jan"]');
+  if (!firstInput) return;
+  
+  const value = firstInput.value;
+  const months = ['Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  months.forEach(month => {
+    const input = document.querySelector(`input[data-month="${month}"]`);
+    if (input) input.value = value;
+  });
+  
+  updateMonthlyTotal();
+}
+
+// Update monthly total hours display
+function updateMonthlyTotal() {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  let total = 0;
+  
+  months.forEach(month => {
+    const input = document.querySelector(`input[data-month="${month}"]`);
+    if (input) {
+      total += parseFloat(input.value) || 0;
+    }
+  });
+  
+  const totalEl = document.getElementById('monthly-total-hours');
+  if (totalEl) totalEl.textContent = total.toFixed(1);
+}
+
+// AI suggest monthly distribution
+async function aiSuggestMonthlyDistribution() {
+  if (!pricingData.currentMonthlyItem) return;
+  
+  try {
+    const response = await fetch('/api/pricing/suggest-monthly-distribution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        item_id: pricingData.currentMonthlyItem,
+        total_hours: 100, // Default or calculated from current values
+        seasonality: 'balanced' // Could be 'front-loaded', 'back-loaded', 'seasonal'
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    // Apply suggested distribution
+    if (result.distribution) {
+      for (const [month, hours] of Object.entries(result.distribution)) {
+        const input = document.querySelector(`input[data-month="${month}"]`);
+        if (input) input.value = hours;
+      }
+      updateMonthlyTotal();
+    }
+    
+  } catch (error) {
+    console.error('Error getting AI suggestions:', error);
+    alert('Error getting AI suggestions. Using balanced distribution.');
+    
+    // Fallback to balanced distribution
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const hoursPerMonth = 10; // Default hours
+    
+    months.forEach(month => {
+      const input = document.querySelector(`input[data-month="${month}"]`);
+      if (input) input.value = hoursPerMonth;
+    });
+    
+    updateMonthlyTotal();
+  }
+}
+
+// Update pricing calculations
+function updatePricingCalculations() {
+  updatePricingTable();
+  updatePricingSummary();
+}
+
+// Update pricing table with current scenario data
+function updatePricingTable() {
+  const tbody = document.getElementById('pricing-tbody');
+  if (!tbody || !SCENARIOS) return;
+  
+  const scenario = SCENARIOS.A || SCENARIOS[0];
+  if (!scenario || !scenario.items) return;
+  
+  let html = '';
+  let oneTimeTotal = 0;
+  let retainerMonthlyTotal = 0;
+  
+  scenario.items.forEach(item => {
+    const isRetainer = pricingData.retainers.has(item.deliverable_code);
+    const monthlyHours = pricingData.monthlyHours.get(item.deliverable_code) || {};
+    const totalMonthlyHours = Object.values(monthlyHours).reduce((sum, h) => sum + h, 0);
+    
+    // Main deliverable row
+    html += `
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+        <td style="padding: 12px; font-weight: 500;">
+          ${item.deliverable}
+          ${isRetainer ? '<span class="retainer-indicator" style="background: var(--accent2); color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin-left: 8px;">RETAINER</span>' : ''}
+        </td>
+        <td style="padding: 8px; text-align: center;">
+          <input type="number" value="${item.hours}" data-deliverable="${item.deliverable_code}" 
+                 style="width: 60px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center;" />
+          <button onclick="redistributeHours('${item.deliverable_code}', this.previousElementSibling.value, 'deliverable')" 
+                  class="redistribute-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; margin-left: 4px;">
+            🤖
+          </button>
+        </td>
+        <td style="padding: 8px; text-align: center;">-</td>
+        <td style="padding: 8px; text-align: center;">
+          <input type="checkbox" ${isRetainer ? 'checked' : ''} 
+                 onchange="toggleRetainer('${item.deliverable_code}', this.checked)" 
+                 style="cursor: pointer;" />
+        </td>
+        <td style="padding: 8px; text-align: center;">
+          ${isRetainer ? `<button onclick="showMonthlyHoursModal('${item.deliverable_code}')" class="btn-sm">Configure</button>` : '-'}
+        </td>
+        <td style="padding: 8px; text-align: right;">$${item.blended_rate || 195}</td>
+        <td style="padding: 8px; text-align: right; font-weight: 500; color: var(--accent);">
+          $${((isRetainer ? totalMonthlyHours : item.hours) * (item.blended_rate || 195)).toLocaleString()}
+        </td>
+      </tr>
+    `;
+    
+    // Component rows (if expanded)
+    if (item.components) {
+      item.components.forEach(comp => {
+        const compIsRetainer = pricingData.retainers.has(`${item.deliverable_code}_${comp.name}`);
+        html += `
+          <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+            <td style="padding: 8px 8px 8px 32px; color: var(--muted); font-size: 0.9em;">
+              ↳ ${comp.name}
+            </td>
+            <td style="padding: 8px; text-align: center;">
+              <input type="number" value="${comp.hours}" data-component="${comp.name}" 
+                     style="width: 50px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
+            </td>
+            <td style="padding: 8px; text-align: center;">-</td>
+            <td style="padding: 8px; text-align: center;">
+              <input type="checkbox" ${compIsRetainer ? 'checked' : ''} 
+                     onchange="toggleRetainer('${item.deliverable_code}_${comp.name}', this.checked)" 
+                     style="cursor: pointer; transform: scale(0.9);" />
+            </td>
+            <td style="padding: 8px; text-align: center;">
+              ${compIsRetainer ? `<button onclick="showMonthlyHoursModal('${item.deliverable_code}_${comp.name}')" class="btn-sm" style="font-size: 0.8em;">Config</button>` : '-'}
+            </td>
+            <td style="padding: 8px; text-align: right; font-size: 0.9em;">$${comp.rate || 195}</td>
+            <td style="padding: 8px; text-align: right; font-size: 0.9em;">
+              $${(comp.hours * (comp.rate || 195)).toLocaleString()}
+            </td>
+          </tr>
+        `;
+      });
+    }
+    
+    // Calculate totals
+    if (isRetainer) {
+      retainerMonthlyTotal += totalMonthlyHours * (item.blended_rate || 195) / 12;
+    } else {
+      oneTimeTotal += item.price || (item.hours * (item.blended_rate || 195));
+    }
+  });
+  
+  tbody.innerHTML = html;
+}
+
+// Update pricing summary panels
+function updatePricingSummary() {
+  if (!SCENARIOS) return;
+  
+  const scenario = SCENARIOS.A || SCENARIOS[0];
+  if (!scenario || !scenario.items) return;
+  
+  let oneTimeCount = 0;
+  let oneTimeHours = 0;
+  let oneTimeCost = 0;
+  
+  let retainerCount = 0;
+  let retainerMonthlyHours = 0;
+  let retainerMonthlyCost = 0;
+  
+  const retainerItemsList = [];
+  
+  scenario.items.forEach(item => {
+    const isRetainer = pricingData.retainers.has(item.deliverable_code);
+    
+    if (isRetainer) {
+      retainerCount++;
+      const monthlyHours = pricingData.monthlyHours.get(item.deliverable_code) || {};
+      const avgMonthlyHours = Object.values(monthlyHours).reduce((sum, h) => sum + h, 0) / 12;
+      retainerMonthlyHours += avgMonthlyHours;
+      retainerMonthlyCost += avgMonthlyHours * (item.blended_rate || 195);
+      retainerItemsList.push(item.deliverable);
+    } else {
+      oneTimeCount++;
+      oneTimeHours += item.hours || 0;
+      oneTimeCost += item.price || (item.hours * (item.blended_rate || 195));
+    }
+  });
+  
+  // Update One-Time Summary
+  document.getElementById('one-time-count').textContent = oneTimeCount;
+  document.getElementById('one-time-hours').textContent = oneTimeHours.toFixed(1);
+  document.getElementById('one-time-cost').textContent = `$${oneTimeCost.toLocaleString()}`;
+  
+  // Update Retainer Summary
+  document.getElementById('retainer-count').textContent = retainerCount;
+  document.getElementById('retainer-monthly-hours').textContent = retainerMonthlyHours.toFixed(1);
+  document.getElementById('retainer-monthly-cost').textContent = `$${retainerMonthlyCost.toLocaleString()}`;
+  document.getElementById('retainer-annual-cost').textContent = `$${(retainerMonthlyCost * 12).toLocaleString()}`;
+  
+  // Update Retainer Items List
+  const retainerListEl = document.getElementById('retainer-items-list');
+  if (retainerListEl) {
+    if (retainerItemsList.length > 0) {
+      retainerListEl.innerHTML = retainerItemsList.map(item => 
+        `<div style="padding: 4px 0; color: var(--muted); font-size: 0.85em;">• ${item}</div>`
+      ).join('');
+    } else {
+      retainerListEl.innerHTML = '<div style="color: var(--muted); font-size: 0.85em; font-style: italic;">No retainer services configured</div>';
+    }
+  }
+  
+  // Update Grand Total
+  const grandTotal = oneTimeCost + (retainerMonthlyCost * 12);
+  document.getElementById('grand-total-cost').textContent = `$${grandTotal.toLocaleString()}`;
+  document.getElementById('grand-total-breakdown').textContent = retainerCount > 0 
+    ? `One-time ($${oneTimeCost.toLocaleString()}) + 12 months retainer ($${(retainerMonthlyCost * 12).toLocaleString()})`
+    : 'One-time project cost';
+}
+
+// Export pricing details
+async function exportPricingDetails() {
+  // Implementation for exporting pricing details to Excel/CSV
+  console.log('Exporting pricing details...');
+  
+  // Prepare data for export
+  const exportData = {
+    project_name: document.getElementById('projectName')?.value || 'Project',
+    one_time_deliverables: [],
+    retainer_services: [],
+    monthly_breakdown: []
+  };
+  
+  // Call export endpoint
+  try {
+    const response = await fetch('/api/export/pricing-details', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(exportData)
+    });
+    
+    if (response.ok) {
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${exportData.project_name}_pricing_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }
+  } catch (error) {
+    console.error('Error exporting pricing details:', error);
+    alert('Error exporting pricing details. Please try again.');
+  }
+}
+
+// AI Optimize All Pricing Function
+async function optimizeAllPricing() {
+  const btn = document.getElementById('btn-ai-optimize-pricing');
+  if (!btn) return;
+  
+  // Show loading state
+  btn.disabled = true;
+  btn.textContent = 'Optimizing...';
+  
+  try {
+    // Get current scenario data
+    const scenario = SCENARIOS?.A || SCENARIOS?.[0];
+    if (!scenario || !scenario.items) {
+      alert('Please build a scenario first');
+      return;
+    }
+    
+    // Get client budget and project details
+    const clientBudget = Number(document.getElementById('clientBudget')?.value || 0);
+    const projectName = document.getElementById('projectName')?.value || '';
+    const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
+    
+    // Call AI optimization endpoint
+    const response = await fetch('/api/pricing/optimize-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scenario_data: scenario,
+        client_budget: clientBudget,
+        project_name: projectName,
+        rfp_context: rfpText,
+        optimization_goals: ['budget_fit', 'resource_balance', 'timeline_efficiency']
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    // Show results in a modal or apply directly
+    if (result.optimized_hours) {
+      showOptimizationResults(result);
+    }
+    
+  } catch (error) {
+    console.error('Error optimizing pricing:', error);
+    alert('Error optimizing pricing. Using fallback optimization.');
+    
+    // Fallback: Simple budget-based optimization
+    optimizePricingFallback();
+  } finally {
+    // Reset button state
+    btn.disabled = false;
+    btn.textContent = 'Optimize All Pricing';
+  }
+}
+
+// Show optimization results modal
+function showOptimizationResults(data) {
+  const modal = document.getElementById('redistribution-modal');
+  const content = document.getElementById('redistribution-content');
+  
+  if (!modal || !content) return;
+  
+  let html = `
+    <div style="margin-bottom: 16px;">
+      <h4 style="color: var(--text); margin-bottom: 8px;">AI Pricing Optimization Complete</h4>
+      <p style="color: var(--muted); font-size: 0.9em; line-height: 1.4;">${data.summary || 'Optimized for budget, resources, and timeline efficiency.'}</p>
+    </div>
+  `;
+  
+  if (data.savings) {
+    html += `
+      <div style="background: rgba(61, 220, 151, 0.1); border: 1px solid rgba(61, 220, 151, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+        <div style="font-size: 0.9em; color: var(--accent2);">
+          <strong>Potential Savings:</strong> $${data.savings.toLocaleString()}
+        </div>
+        <div style="font-size: 0.85em; color: var(--muted); margin-top: 4px;">
+          ${data.efficiency_gain ? `Efficiency Gain: ${data.efficiency_gain}%` : ''}
+        </div>
+      </div>
+    `;
+  }
+  
+  if (data.recommendations) {
+    html += '<div style="margin-top: 16px;"><h5 style="color: var(--text);">Recommendations:</h5><ul style="padding-left: 20px;">';
+    data.recommendations.forEach(rec => {
+      html += `<li style="color: var(--muted); margin: 8px 0; font-size: 0.9em;">${rec}</li>`;
+    });
+    html += '</ul></div>';
+  }
+  
+  content.innerHTML = html;
+  modal.style.display = 'block';
+}
+
+// Fallback optimization (client-side)
+function optimizePricingFallback() {
+  const clientBudget = Number(document.getElementById('clientBudget')?.value || 0);
+  if (!clientBudget) {
+    alert('Please enter a client budget for optimization');
+    return;
+  }
+  
+  // Simple optimization: scale hours to fit budget
+  const scenario = SCENARIOS?.A || SCENARIOS?.[0];
+  if (scenario && scenario.totals) {
+    const currentTotal = scenario.totals.price;
+    const scaleFactor = clientBudget / currentTotal;
+    
+    if (scaleFactor < 1) {
+      // Need to reduce hours
+      const reduction = ((1 - scaleFactor) * 100).toFixed(1);
+      alert(`Recommendation: Reduce all hours by ${reduction}% to fit budget`);
+    } else if (scaleFactor > 1.2) {
+      // Have room to add more
+      const increase = ((scaleFactor - 1) * 100).toFixed(1);
+      alert(`Opportunity: Budget allows for ${increase}% more hours if needed`);
+    } else {
+      alert('Current pricing is well-aligned with budget');
+    }
+  }
+}
+
+// Export pricing functions to global scope
+window.redistributeHours = redistributeHours;
+window.showRedistributionModal = showRedistributionModal;
+window.closeRedistributionModal = closeRedistributionModal;
+window.applyRedistribution = applyRedistribution;
+window.toggleRetainer = toggleRetainer;
+window.showMonthlyHoursModal = showMonthlyHoursModal;
+window.closeMonthlyHoursModal = closeMonthlyHoursModal;
+window.createMonthlyHoursGrid = createMonthlyHoursGrid;
+window.saveMonthlyHours = saveMonthlyHours;
+window.copyToAllMonths = copyToAllMonths;
+window.updateMonthlyTotal = updateMonthlyTotal;
+window.aiSuggestMonthlyDistribution = aiSuggestMonthlyDistribution;
+window.updatePricingCalculations = updatePricingCalculations;
+window.updatePricingTable = updatePricingTable;
+window.updatePricingSummary = updatePricingSummary;
+window.exportPricingDetails = exportPricingDetails;
+window.optimizeAllPricing = optimizeAllPricing;
+window.showOptimizationResults = showOptimizationResults;
+window.optimizePricingFallback = optimizePricingFallback;
+
 async function generateAITimeline() {
   const btn = document.getElementById('btn-generate-timeline');
   const loading = document.getElementById('timeline-loading');
@@ -328,6 +965,15 @@ async function generateAITimeline() {
     // Get RFP text for context
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
     
+    // Prepare retainer information
+    const retainerData = {};
+    pricingData.retainers.forEach((value, key) => {
+      retainerData[key] = {
+        is_retainer: true,
+        monthly_hours: pricingData.monthlyHours.get(key) || {}
+      };
+    });
+    
     // Call AI timeline endpoint
     const response = await fetch('/api/timeline/suggest', {
       method: 'POST',
@@ -336,7 +982,8 @@ async function generateAITimeline() {
         selected_deliverable_codes: selectedCodes,
         rfp_text: rfpText,
         project_start: projectStart,
-        optimization_mode: optimizationMode
+        optimization_mode: optimizationMode,
+        retainer_services: retainerData  // Include retainer information
       })
     });
     

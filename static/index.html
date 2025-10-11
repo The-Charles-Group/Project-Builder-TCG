@@ -274,20 +274,23 @@
 
     <!-- Step 3: Pricing -->
     <section class="card" id="step3" style="display:none;">
-      <h2>Step 3 — Pricing</h2>
+      <h2>Step 3 — Pricing Configuration</h2>
       
-      <!-- Retainer Toggle -->
-      <div style="margin-bottom: 20px; padding: 12px; background: rgba(139, 92, 246, 0.1); border-radius: 6px;">
-        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-          <input id="retainersToggle" type="checkbox" style="width: 18px; height: 18px;">
-          <span style="font-weight: 500;">Use retainers for selected deliverables</span>
-        </label>
-        <small style="color: var(--muted); display: block; margin-top: 6px; margin-left: 26px;">
-          Retainers repeat a deliverable's components each month and multiply hours and price by the number of months.
-        </small>
+      <!-- AI Pricing Assistant Panel -->
+      <div class="ai-pricing-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; color: var(--accent); font-size: 1.1em;">🤖 AI Pricing Assistant</h3>
+          <button id="btn-ai-optimize-pricing" class="btn-primary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
+            Optimize All Pricing
+          </button>
+        </div>
+        <p style="color: var(--muted); font-size: 0.85em; margin-top: 8px; margin-bottom: 0;">
+          Edit hours inline, use AI to redistribute work, and configure retainer services with monthly schedules.
+        </p>
       </div>
       
-      <div class="grid" style="margin-bottom:16px;">
+      <!-- Project Configuration Grid -->
+      <div class="grid" style="margin-bottom:20px;">
         <div>
           <label for="projectStart">Project start</label>
           <input id="projectStart" type="datetime-local" />
@@ -332,17 +335,87 @@
         </div>
       </div>
 
-      <!-- Retainer Configuration -->
-      <div id="retainer-config" class="card" style="display: none; margin: 16px 0; background: #0b0e13; border: 1px dashed var(--accent2);">
-        <h3 style="color: var(--accent2); margin-bottom: 12px;">🔄 Retainer Configuration</h3>
-        <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
-          Configure monthly retainer engagements for selected deliverables
-        </p>
-        <div id="retainer-list-controls"></div>
+      <!-- Pricing Details Table -->
+      <div class="pricing-table-container" style="margin-bottom: 20px;">
+        <h3 style="font-size: 1.1em; margin-bottom: 12px; color: var(--text);">📊 Deliverable Pricing Details</h3>
+        <div id="pricing-table-wrapper" style="background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto;">
+          <table id="pricing-details-table" style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid var(--border);">
+                <th style="padding: 8px; text-align: left; color: var(--muted);">Deliverable / Component</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Hours</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">AI</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Retainer</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Months</th>
+                <th style="padding: 8px; text-align: right; color: var(--muted);">Rate</th>
+                <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
+              </tr>
+            </thead>
+            <tbody id="pricing-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Enhanced Summary Panel -->
+      <div class="pricing-summary-panel" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+        <!-- One-Time Deliverables -->
+        <div style="background: rgba(106, 163, 255, 0.08); border: 1px solid rgba(106, 163, 255, 0.2); border-radius: 8px; padding: 16px;">
+          <h4 style="margin: 0 0 12px 0; color: var(--accent); font-size: 1em;">📦 One-Time Deliverables</h4>
+          <div id="one-time-summary">
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Items:</span>
+              <strong id="one-time-count" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Total Hours:</span>
+              <strong id="one-time-hours" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0 0 0;">
+              <span style="color: var(--text); font-weight: 500;">Total Cost:</span>
+              <strong id="one-time-cost" style="color: var(--accent); font-size: 1.1em;">$0</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monthly Retainer Services -->
+        <div style="background: rgba(61, 220, 151, 0.08); border: 1px solid rgba(61, 220, 151, 0.2); border-radius: 8px; padding: 16px;">
+          <h4 style="margin: 0 0 12px 0; color: var(--accent2); font-size: 1em;">🔄 Monthly Retainer Services</h4>
+          <div id="retainer-summary">
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Items:</span>
+              <strong id="retainer-count" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Monthly Hours:</span>
+              <strong id="retainer-monthly-hours" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Monthly Cost:</span>
+              <strong id="retainer-monthly-cost" style="color: var(--text);">$0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0 0 0;">
+              <span style="color: var(--text); font-weight: 500;">Annual Cost:</span>
+              <strong id="retainer-annual-cost" style="color: var(--accent2); font-size: 1.1em;">$0</strong>
+            </div>
+            <div id="retainer-items-list" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); max-height: 150px; overflow-y: auto;">
+              <!-- List of retainer items -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grand Total -->
+      <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(106, 163, 255, 0.1)); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 20px; text-align: center;">
+        <h4 style="margin: 0 0 8px 0; color: var(--text);">Grand Total</h4>
+        <div style="font-size: 2em; font-weight: bold; color: var(--accent);" id="grand-total-cost">$0</div>
+        <small style="color: var(--muted);" id="grand-total-breakdown">One-time + 12 months retainer</small>
       </div>
 
       <div class="inline">
         <button id="btnBuild">Build Scenario</button>
+        <button id="btn-export-pricing" class="btn-secondary">Export Pricing Details</button>
       </div>
 
       <div class="scenarios">
@@ -352,6 +425,45 @@
         </div>
       </div>
     </section>
+
+    <!-- AI Redistribution Modal -->
+    <div id="redistribution-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000;">
+      <div class="modal-content" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--card); border: 1px solid var(--accent); border-radius: 12px; padding: 24px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h3 style="margin: 0; color: var(--accent);">🤖 AI Hour Redistribution</h3>
+          <button onclick="closeRedistributionModal()" style="background: transparent; border: none; color: var(--text); font-size: 1.5em; cursor: pointer;">×</button>
+        </div>
+        <div id="redistribution-content">
+          <!-- AI suggestions will be populated here -->
+        </div>
+        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px;">
+          <button onclick="applyRedistribution()" class="btn-primary">Apply Changes</button>
+          <button onclick="closeRedistributionModal()" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Monthly Hours Grid Modal -->
+    <div id="monthly-hours-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000;">
+      <div class="modal-content" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--card); border: 1px solid var(--accent2); border-radius: 12px; padding: 24px; width: 90%; max-width: 800px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h3 style="margin: 0; color: var(--accent2);">📅 Configure Monthly Hours</h3>
+          <button onclick="closeMonthlyHoursModal()" style="background: transparent; border: none; color: var(--text); font-size: 1.5em; cursor: pointer;">×</button>
+        </div>
+        <div id="monthly-hours-content">
+          <!-- Monthly hours grid will be populated here -->
+        </div>
+        <div style="display: flex; gap: 12px; justify-content: space-between; margin-top: 20px;">
+          <button onclick="aiSuggestMonthlyDistribution()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
+            🤖 AI Suggest Distribution
+          </button>
+          <div style="display: flex; gap: 12px;">
+            <button onclick="saveMonthlyHours()" class="btn-primary">Save</button>
+            <button onclick="closeMonthlyHoursModal()" class="btn-secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Step 4: Project Timeline & Scheduling -->
     <section class="card" id="step4" style="display:none;">
@@ -1710,6 +1822,13 @@
       
       const btnBuild = document.getElementById('btnBuild');
       if (btnBuild) btnBuild.onclick = buildScenariosAB;
+      
+      // Wire up new pricing buttons
+      const btnExportPricing = document.getElementById('btn-export-pricing');
+      if (btnExportPricing) btnExportPricing.onclick = exportPricingDetails;
+      
+      const btnAiOptimize = document.getElementById('btn-ai-optimize-pricing');
+      if (btnAiOptimize) btnAiOptimize.onclick = optimizeAllPricing;
       
       // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
     });
