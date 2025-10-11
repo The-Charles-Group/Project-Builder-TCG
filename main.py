@@ -4043,68 +4043,132 @@ async def suggest_timeline(request: dict):
     """
     Generate AI-optimized timeline for selected deliverables
     
-    Request body:
+    Request body (either format):
+    Format 1 (legacy):
     {
         "selected_deliverable_codes": ["deck_strategy", "social_content"],
         "rfp_text": "optional RFP text for context",
         "project_start": "2024-01-15",
-        "optimization_mode": "balanced"  # "speed" | "quality" | "balanced" | "cost"
+        "optimization_mode": "balanced"
+    }
+    
+    Format 2 (new):
+    {
+        "deliverables": [
+            {
+                "code": "DEL-0034",
+                "name": "Brand Positioning Strategy",
+                "department": "Strategy",
+                "hours": 120,
+                "components": [{"name": "...", "hours": 40}]
+            }
+        ],
+        "start_date": "2025-07-07",
+        "optimization_mode": "balanced"
     }
     """
     try:
+        # Handle both input formats
+        deliverables = request.get("deliverables", [])
         selected_codes = request.get("selected_deliverable_codes", [])
         rfp_text = request.get("rfp_text", "")
-        project_start = request.get("project_start")
+        project_start = request.get("project_start") or request.get("start_date")  # Support both field names
         optimization_mode = request.get("optimization_mode", "balanced")
         
-        # Load database
-        db = app.state.db
-        if not db:
-            db = AgencyDB()
-            db.load()
-        
-        # Build deliverables data structure for timeline generation
         deliverables_data = []
-        for code in selected_codes:
-            # Find deliverable in database
-            deliv_df = db.deliverables[db.deliverables["Deliverable_Code"] == code]
-            if deliv_df.empty:
-                continue
-            
-            # Get components and tasks for this deliverable
-            components = []
-            comp_df = db.all_rows[db.all_rows["Deliverable_Code"] == code]["Component"].unique()
-            for comp in comp_df:
-                if pd.isna(comp):
+        
+        # If deliverables are provided directly (new format), use them
+        if deliverables:
+            for deliv in deliverables:
+                # Validate deliverable structure
+                if not isinstance(deliv, dict):
                     continue
-                comp_tasks = db.all_rows[
-                    (db.all_rows["Deliverable_Code"] == code) & 
-                    (db.all_rows["Component"] == comp)
-                ]
-                hours = comp_tasks["Hours"].sum() if "Hours" in comp_tasks.columns else 0
-                components.append({
-                    "name": comp,
-                    "hours": float(hours)
+                
+                # Extract data from provided deliverable
+                code = deliv.get("code", f"CUSTOM-{len(deliverables_data)+1}")
+                name = deliv.get("name", "Untitled Deliverable")
+                department = deliv.get("department", "Strategy")
+                hours = deliv.get("hours", 0)
+                components = deliv.get("components", [])
+                
+                # Format components
+                formatted_components = []
+                for comp in components:
+                    if isinstance(comp, dict):
+                        formatted_components.append({
+                            "name": comp.get("name", "Component"),
+                            "hours": float(comp.get("hours", 0))
+                        })
+                
+                deliverables_data.append({
+                    "deliverable_code": code,
+                    "deliverable_name": name,
+                    "components": formatted_components,
+                    "total_hours": float(hours),
+                    "department": department
                 })
+                
+                # Also add to selected_codes for compatibility
+                selected_codes.append(code)
+        
+        # Otherwise, use legacy format with database lookup
+        elif selected_codes:
+            # Load database
+            db = app.state.db
+            if not db:
+                db = AgencyDB()
+                db.load()
             
-            # Calculate total hours for deliverable
-            total_hours = db.all_rows[db.all_rows["Deliverable_Code"] == code]["Hours"].sum() if "Hours" in db.all_rows.columns else 0
-            
-            # Get department (try different column names)
-            dept_col = None
-            for col in ["Service_Department", "Service Department", "Department"]:
-                if col in deliv_df.columns:
-                    dept_col = col
-                    break
-            
-            department = deliv_df[dept_col].iloc[0] if dept_col and not deliv_df[dept_col].empty else "Strategy"
-            
-            deliverables_data.append({
-                "deliverable_code": code,
-                "deliverable_name": deliv_df["Deliverable"].iloc[0],
-                "components": components,
-                "total_hours": float(total_hours),
-                "department": str(department) if not pd.isna(department) else "Strategy"
+            # Build deliverables data structure for timeline generation
+            for code in selected_codes:
+                # Find deliverable in database
+                deliv_df = db.deliverables[db.deliverables["Deliverable_Code"] == code]
+                if deliv_df.empty:
+                    continue
+                
+                # Get components and tasks for this deliverable
+                components = []
+                comp_df = db.all_rows[db.all_rows["Deliverable_Code"] == code]["Component"].unique()
+                for comp in comp_df:
+                    if pd.isna(comp):
+                        continue
+                    comp_tasks = db.all_rows[
+                        (db.all_rows["Deliverable_Code"] == code) & 
+                        (db.all_rows["Component"] == comp)
+                    ]
+                    hours = comp_tasks["Hours"].sum() if "Hours" in comp_tasks.columns else 0
+                    components.append({
+                        "name": comp,
+                        "hours": float(hours)
+                    })
+                
+                # Calculate total hours for deliverable
+                total_hours = db.all_rows[db.all_rows["Deliverable_Code"] == code]["Hours"].sum() if "Hours" in db.all_rows.columns else 0
+                
+                # Get department (try different column names)
+                dept_col = None
+                for col in ["Service_Department", "Service Department", "Department"]:
+                    if col in deliv_df.columns:
+                        dept_col = col
+                        break
+                
+                department = deliv_df[dept_col].iloc[0] if dept_col and not deliv_df[dept_col].empty else "Strategy"
+                
+                deliverables_data.append({
+                    "deliverable_code": code,
+                    "deliverable_name": deliv_df["Deliverable"].iloc[0],
+                    "components": components,
+                    "total_hours": float(total_hours),
+                    "department": str(department) if not pd.isna(department) else "Strategy"
+                })
+        
+        # Check if we have any valid deliverables
+        if not deliverables_data:
+            return JSONResponse({
+                "error": "No valid deliverables selected",
+                "tasks": [],
+                "reasoning": {},
+                "metadata": {}
             })
         
         # Generate AI timeline
