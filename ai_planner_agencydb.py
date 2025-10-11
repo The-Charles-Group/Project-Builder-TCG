@@ -441,8 +441,24 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])]
         
         messages = [
-            {"role": "system", "content": "You are a senior agency PM/strategist. Score how necessary each candidate is. For TASKS, set select=true ONLY if specifically relevant; set select=false for generic/boilerplate tasks that don't match the request. Think holistically about project flow from start to finish."},
-            {"role": "user", "content": f"REQUEST SUMMARY:\n{safe_summary}\n\nGOALS:\n- " + "\n- ".join(safe_goals) + f"\n\nCHANNELS: {', '.join(safe_channels)} | MARKETS: {', '.join(safe_markets)} | COMPLIANCE: {', '.join(safe_compliance)}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nFor each candidate, especially TASKS, decide if it should be selected (select=true) or excluded (select=false) based on relevance to this specific project."}
+            {"role": "system", "content": """You are a Senior Agency Executive (CEO/President level) with 20+ years experience running successful marketing/advertising/digital agencies. 
+You think strategically about:
+- Client value and ROI
+- Resource allocation and team capabilities  
+- Risk management and quality assurance
+- Competitive differentiation and innovation
+- Long-term client relationships
+
+Score each deliverable/component/task with REALISTIC confidence scores:
+- 90-100: Essential, directly requested, mission-critical
+- 70-89: Very relevant, strongly recommended, adds significant value
+- 50-69: Moderately relevant, nice-to-have, enhances project
+- 30-49: Tangentially related, optional, limited value
+- 0-29: Not relevant, would not recommend
+
+For TASKS, set select=true ONLY if specifically needed for THIS project. Exclude generic/boilerplate tasks that don't match the specific request.
+Think about the complete project lifecycle, dependencies, and what will actually deliver results for the client."""},
+            {"role": "user", "content": f"REQUEST SUMMARY:\n{safe_summary}\n\nGOALS:\n- " + "\n- ".join(safe_goals) + f"\n\nCHANNELS: {', '.join(safe_channels)} | MARKETS: {', '.join(safe_markets)} | COMPLIANCE: {', '.join(safe_compliance)}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nProvide realistic confidence scores based on actual relevance. Do NOT default to any specific score like 62%. Each item should have a unique, justified confidence level."}
         ]
         
         try:
@@ -515,15 +531,26 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
         l = llm_map.get(x["id"])
         return (l["relevance"] if l else 0.0, x["recall"])
     deliv_cands.sort(key=deliv_key, reverse=True)
-    chosen_delivs = deliv_cands[:max(AI_MIN_DELIVERABLES, 3)]
+    # CHANGED: Remove limit - suggest ALL deliverables that have decent scores
+    # Filter by minimum threshold instead of hard limit
+    min_threshold = 0.30  # Deliverables with at least 30% recall/relevance
+    chosen_delivs = [d for d in deliv_cands if d["recall"] > min_threshold or (llm_map.get(d["id"], {}).get("relevance", 0) > 30)]
     
-    # Mark chosen deliverables as pass
+    # If still no deliverables, take at least the minimum
+    if not chosen_delivs:
+        chosen_delivs = deliv_cands[:max(AI_MIN_DELIVERABLES, 3)]
+    
+    # Mark chosen deliverables as pass with REAL SCORES
     for d in chosen_delivs:
+        llm_d = llm_map.get(d["id"])
+        # Use actual LLM confidence if available, else calculate from recall
+        actual_confidence = llm_d.get("confidence", d["recall"]) if llm_d else d["recall"]
+        
         if d["id"] not in by_id:
-            fused.append({**d, "llm": llm_map.get(d["id"]), "calibrated_confidence": 0.62, "pass": True, "fused_score": d["recall"], "ai_selected": True})
+            fused.append({**d, "llm": llm_d, "calibrated_confidence": actual_confidence, "pass": True, "fused_score": d["recall"], "ai_selected": True})
         else:
             by_id[d["id"]]["pass"] = True
-            by_id[d["id"]]["calibrated_confidence"] = max(by_id[d["id"]]["calibrated_confidence"], 0.62)
+            by_id[d["id"]]["calibrated_confidence"] = max(by_id[d["id"]]["calibrated_confidence"], actual_confidence)
     
     # Pick components/tasks under each chosen deliverable
     comp_cands = [x for x in all_recall if x["level"] == "component"]
@@ -533,24 +560,36 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
         # top components under this deliverable
         comps = [c for c in comp_cands if c.get("parentId") == d["id"]]
         comps.sort(key=lambda z: (llm_map.get(z["id"], {"relevance": 0}).get("relevance", 0), z["recall"]), reverse=True)
-        for c in comps[:max(AI_MIN_COMPONENTS_PER_DELIV, 2)]:
+        # CHANGED: Don't limit components - suggest all relevant ones
+        for c in comps:
+            llm_c = llm_map.get(c["id"])
+            # Skip components with very low relevance
+            if c["recall"] < 0.25 and (not llm_c or llm_c.get("relevance", 0) < 25):
+                continue
+                
+            # Use actual LLM confidence if available
+            actual_comp_confidence = llm_c.get("confidence", c["recall"]) if llm_c else c["recall"]
+            
             if c["id"] not in by_id:
-                fused.append({**c, "llm": llm_map.get(c["id"]), "calibrated_confidence": 0.58, "pass": True, "fused_score": c["recall"], "ai_selected": True})
+                fused.append({**c, "llm": llm_c, "calibrated_confidence": actual_comp_confidence, "pass": True, "fused_score": c["recall"], "ai_selected": True})
             else:
                 by_id[c["id"]]["pass"] = True
-                by_id[c["id"]]["calibrated_confidence"] = max(by_id[c["id"]]["calibrated_confidence"], 0.58)
+                by_id[c["id"]]["calibrated_confidence"] = max(by_id[c["id"]]["calibrated_confidence"], actual_comp_confidence)
             # tasks under this component - respect AI selection
             tasks = [t for t in task_cands if t.get("parentId") == c["id"]]
             tasks.sort(key=lambda z: (llm_map.get(z["id"], {"relevance": 0}).get("relevance", 0), z["recall"]), reverse=True)
             # Only include AI-selected tasks
-            for t in tasks[:max(AI_MIN_TASKS_PER_COMPONENT * 2, 4)]:  # Get more candidates
+            for t in tasks:  # CHANGED: No limit on tasks
                 llm_t = llm_map.get(t["id"])
                 if llm_t and llm_t.get("select", False):  # Only if AI selected
+                    # Use actual LLM confidence for tasks
+                    actual_task_confidence = llm_t.get("confidence", t["recall"]) if llm_t else t["recall"]
+                    
                     if t["id"] not in by_id:
-                        fused.append({**t, "llm": llm_t, "calibrated_confidence": 0.53, "pass": True, "fused_score": t["recall"], "ai_selected": True})
+                        fused.append({**t, "llm": llm_t, "calibrated_confidence": actual_task_confidence, "pass": True, "fused_score": t["recall"], "ai_selected": True})
                     else:
                         by_id[t["id"]]["pass"] = True
-                        by_id[t["id"]]["calibrated_confidence"] = max(by_id[t["id"]]["calibrated_confidence"], 0.53)
+                        by_id[t["id"]]["calibrated_confidence"] = max(by_id[t["id"]]["calibrated_confidence"], actual_task_confidence)
     
     return fused
 
@@ -581,7 +620,11 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
     if not dels:
         topD = [x for x in all_recall if x["level"] == "deliverable"]
         topD.sort(key=lambda z: z["recall"], reverse=True)
-        dels = topD[:max(AI_MIN_DELIVERABLES, 3)]
+        # CHANGED: Take all deliverables with reasonable scores, not just 3
+        min_score = 0.20  # Minimum 20% recall to be included
+        dels = [d for d in topD if d["recall"] > min_score]
+        if not dels:  # If still nothing, take at least minimum
+            dels = topD[:max(AI_MIN_DELIVERABLES, 3)]
     
     by_dept: Dict[str, List[Dict[str, Any]]] = {}
     m = multipliers_from_summary(summary)

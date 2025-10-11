@@ -168,6 +168,56 @@
           </div>
         </div>
       </div>
+      
+      <!-- Section 2B: Tasks Panel (L3) -->
+      <div class="tasks-panel-section" style="margin-top: 24px; border-top: 2px solid rgba(139, 92, 246, 0.3); padding-top: 20px;">
+        <h3 style="font-size: 1.2em; margin: 0 0 16px 0; color: var(--accent);">📝 Section 2B: Tasks (Level 3)</h3>
+        
+        <div class="tasks-panel-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <!-- Left: Available Tasks -->
+          <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <h4 style="font-size: 1em; margin: 0;">3️⃣ Available Tasks</h4>
+              <span id="s2-tasks-active-component" style="font-size: 0.85em; color: var(--muted);">Select a component</span>
+            </div>
+            <input id="s2-task-search" type="search" placeholder="Search tasks…" autocomplete="off" 
+                   style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
+            <div style="display:flex; gap:6px; margin-bottom:8px;">
+              <button id="s2-task-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Select All</button>
+              <button id="s2-task-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Clear All</button>
+              <button id="s2-task-ai-filter" type="button" class="btn-ghost" style="flex:1; font-size:0.85em;" title="Show only AI-recommended tasks">AI Only</button>
+            </div>
+            <div id="s2-task-list" style="border:1px solid #2a2a2a; border-radius:6px; height:350px; overflow:auto; padding: 8px;">
+              <p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its tasks</p>
+            </div>
+          </div>
+          
+          <!-- Right: Selected Tasks Summary -->
+          <div class="selection-panel" style="border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 12px; background: rgba(139, 92, 246, 0.05);">
+            <h4 style="font-size: 1em; margin: 0 0 12px 0; color: var(--accent);">✅ Selected Tasks Summary</h4>
+            <div id="s2-selected-tasks-summary" style="font-size: 0.9em;">
+              <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <span>Total Tasks Selected:</span>
+                <strong id="s2-summary-tasks">0</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <span>AI-Recommended:</span>
+                <strong id="s2-summary-ai-tasks" style="color: #10b981;">0</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <span>Manual Additions:</span>
+                <strong id="s2-summary-manual-tasks">0</strong>
+              </div>
+            </div>
+            
+            <div id="s2-selected-tasks-details" style="margin-top: 16px; max-height: 250px; overflow-y: auto;">
+              <div style="color: var(--muted); text-align: center; padding: 20px; font-size: 0.85em;">
+                No tasks selected yet
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div class="actions" style="margin-top: 20px;">
         <button id="btnProceedToStep3" class="btn-primary">Proceed to Pricing</button>

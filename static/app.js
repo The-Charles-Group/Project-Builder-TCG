@@ -1119,14 +1119,27 @@ function renderAIPlan(aiPlan) {
       for (const deliv of deliverables) {
         const confidence = Math.round((deliv.calibrated_confidence || 0) * 100);
         const confidenceColor = confidence >= 75 ? '#10b981' : confidence >= 50 ? '#f59e0b' : '#ef4444';
+        const delivCode = deliv.deliverable_code || deliv.code;
         
         html += `
-          <div class="ai-deliverable" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
+          <div class="ai-deliverable" data-deliv-code="${delivCode}" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
-              <h4 style="margin: 0; color: #111827;">${deliv.title}</h4>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" 
+                       class="ai-deliv-checkbox" 
+                       data-code="${delivCode}" 
+                       data-title="${deliv.title}"
+                       style="cursor: pointer;">
+                <h4 style="margin: 0; color: #111827;">${deliv.title}</h4>
+              </div>
               <div style="display: flex; gap: 8px; align-items: center;">
                 <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}% confidence</span>
                 <span style="font-size: 0.85em; color: #6b7280;">${deliv.planned_hours || 0}h</span>
+                <button class="btn-small" 
+                        onclick="addAIDeliverableToSelection('${delivCode}', this)"
+                        style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                  Add to Selection
+                </button>
               </div>
             </div>
             
@@ -1142,28 +1155,70 @@ function renderAIPlan(aiPlan) {
             
             ${(deliv.components || []).length > 0 ? `
               <details style="margin-top: 8px;">
-                <summary style="cursor: pointer; font-size: 0.9em; color: #4b5563; font-weight: 500;">Components (${deliv.components.length})</summary>
+                <summary style="cursor: pointer; font-size: 0.9em; color: #4b5563; font-weight: 500;">
+                  Components (${deliv.components.length})
+                  <button onclick="event.stopPropagation(); selectAllComponents('${delivCode}', true)" 
+                          style="margin-left: 8px; padding: 2px 8px; font-size: 0.8em; background: #e5e7eb; border: none; border-radius: 3px;">
+                    Select All
+                  </button>
+                  <button onclick="event.stopPropagation(); selectAllComponents('${delivCode}', false)" 
+                          style="margin-left: 4px; padding: 2px 8px; font-size: 0.8em; background: #e5e7eb; border: none; border-radius: 3px;">
+                    Deselect All
+                  </button>
+                </summary>
                 <div style="margin-top: 8px; margin-left: 16px;">
-                  ${deliv.components.map(comp => `
+                  ${deliv.components.map((comp, idx) => `
                     <div style="margin-bottom: 8px; padding: 8px; background: white; border-radius: 4px;">
-                      <div style="font-weight: 500; color: #374151;">${comp.title}</div>
-                      <div style="font-size: 0.85em; color: #6b7280; margin-top: 4px;">${comp.why || ''}</div>
-                      <div style="font-size: 0.85em; color: #9ca3af; margin-top: 2px;">${comp.planned_hours || 0}h</div>
+                      <div style="display: flex; align-items: start; gap: 8px;">
+                        <input type="checkbox" 
+                               class="ai-comp-checkbox" 
+                               data-deliv="${delivCode}" 
+                               data-comp="${comp.title}"
+                               data-comp-id="${comp.id || comp.title}"
+                               style="cursor: pointer; margin-top: 2px;">
+                        <div style="flex: 1;">
+                          <div style="font-weight: 500; color: #374151;">${comp.title}</div>
+                          <div style="font-size: 0.85em; color: #6b7280; margin-top: 4px;">${comp.why || ''}</div>
+                          <div style="font-size: 0.85em; color: #9ca3af; margin-top: 2px;">${comp.planned_hours || 0}h</div>
+                        </div>
+                      </div>
                       
                       ${(comp.tasks || []).length > 0 ? `
-                        <details style="margin-top: 8px;">
-                          <summary style="cursor: pointer; font-size: 0.85em; color: #6b7280;">✓ AI-Selected Tasks (${comp.tasks.length})</summary>
+                        <details style="margin-top: 8px; margin-left: 24px;">
+                          <summary style="cursor: pointer; font-size: 0.85em; color: #6b7280;">
+                            ✓ AI-Selected Tasks (${comp.tasks.length})
+                            <button onclick="event.stopPropagation(); selectAllTasks('${delivCode}', '${comp.title}', true)" 
+                                    style="margin-left: 8px; padding: 2px 6px; font-size: 0.75em; background: #e5e7eb; border: none; border-radius: 3px;">
+                              Select All
+                            </button>
+                            <button onclick="event.stopPropagation(); selectAllTasks('${delivCode}', '${comp.title}', false)" 
+                                    style="margin-left: 4px; padding: 2px 6px; font-size: 0.75em; background: #e5e7eb; border: none; border-radius: 3px;">
+                              Deselect All
+                            </button>
+                          </summary>
                           <div style="margin-top: 6px; margin-left: 12px;">
-                            ${comp.tasks.map(task => `
+                            ${comp.tasks.map((task, tIdx) => `
                               <div style="margin-bottom: 4px; padding: 6px; background: rgba(16, 185, 129, 0.05); border-left: 2px solid #10b981; border-radius: 3px;">
-                                <div style="font-size: 0.85em; color: #065f46; font-weight: 500;">✓ ${task.title}</div>
-                                ${task.why ? `<div style="font-size: 0.8em; color: #6b7280; margin-top: 2px;">${task.why}</div>` : ''}
-                                <div style="font-size: 0.8em; color: #9ca3af; margin-top: 2px;">${task.planned_hours || 0}h</div>
+                                <div style="display: flex; align-items: start; gap: 8px;">
+                                  <input type="checkbox" 
+                                         class="ai-task-checkbox" 
+                                         data-deliv="${delivCode}" 
+                                         data-comp="${comp.title}"
+                                         data-task="${task.title}"
+                                         data-task-id="${task.id || task.title}"
+                                         ${task.ai_selected ? 'checked' : ''}
+                                         style="cursor: pointer; margin-top: 2px;">
+                                  <div style="flex: 1;">
+                                    <div style="font-size: 0.85em; color: #065f46; font-weight: 500;">${task.title}</div>
+                                    ${task.why ? `<div style="font-size: 0.8em; color: #6b7280; margin-top: 2px;">${task.why}</div>` : ''}
+                                    <div style="font-size: 0.8em; color: #9ca3af; margin-top: 2px;">${task.planned_hours || 0}h</div>
+                                  </div>
+                                </div>
                               </div>
                             `).join('')}
                           </div>
                         </details>
-                      ` : '<div style="font-size: 0.85em; color: #9ca3af; margin-top: 6px; font-style: italic;">No specific tasks selected by AI</div>'}
+                      ` : '<div style="font-size: 0.85em; color: #9ca3af; margin-top: 6px; font-style: italic; margin-left: 24px;">No specific tasks selected by AI</div>'}
                     </div>
                   `).join('')}
                 </div>
@@ -1176,10 +1231,317 @@ function renderAIPlan(aiPlan) {
       html += '</details>';
     }
     
+    // Add button to apply all selected items
+    html += `
+      <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e5e7eb; display: flex; gap: 12px;">
+        <button onclick="applyAllSelectedFromAI()" 
+                style="padding: 10px 24px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          Apply Selected to Manual Selection
+        </button>
+        <button onclick="clearAllAISelections()" 
+                style="padding: 10px 24px; background: #ef4444; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          Clear All Selections
+        </button>
+      </div>
+    `;
+    
     html += '</div>';
     suggestionsPanel.innerHTML = html;
+    
+    // Store AI plan for later use
+    window.lastAIPlan = plan;
   }
 }
+
+// Helper functions for AI selection checkboxes
+function addAIDeliverableToSelection(delivCode, button) {
+  // Add deliverable to selection
+  if (!selectionStore.deliverables.has(delivCode)) {
+    selectDeliverable(delivCode).then(() => {
+      button.textContent = 'Added';
+      button.style.background = '#10b981';
+      button.disabled = true;
+    });
+  } else {
+    button.textContent = 'Already Added';
+    button.disabled = true;
+  }
+}
+
+function selectAllComponents(delivCode, select) {
+  const checkboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
+  checkboxes.forEach(cb => cb.checked = select);
+}
+
+function selectAllTasks(delivCode, compTitle, select) {
+  const checkboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compTitle}"]`);
+  checkboxes.forEach(cb => cb.checked = select);
+}
+
+function clearAllAISelections() {
+  document.querySelectorAll('.ai-deliv-checkbox, .ai-comp-checkbox, .ai-task-checkbox').forEach(cb => cb.checked = false);
+}
+
+async function applyAllSelectedFromAI() {
+  // Collect selected deliverables
+  const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
+  
+  for (const delivCb of delivCheckboxes) {
+    const delivCode = delivCb.dataset.code;
+    
+    // Add deliverable to selection if not already there
+    if (!selectionStore.deliverables.has(delivCode)) {
+      await selectDeliverable(delivCode);
+    }
+    
+    // Collect selected components for this deliverable
+    const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]:checked`);
+    const selectedComps = new Set();
+    
+    for (const compCb of compCheckboxes) {
+      const compTitle = compCb.dataset.comp;
+      selectedComps.add(compTitle);
+      
+      // Ensure component is hydrated
+      if (!selectionStore.componentsByDeliv.get(delivCode)?.has(compTitle)) {
+        await hydrateComponentsFor(delivCode);
+      }
+      
+      // Collect selected tasks for this component
+      const taskCheckboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compTitle}"]:checked`);
+      const selectedTasks = new Set();
+      
+      for (const taskCb of taskCheckboxes) {
+        selectedTasks.add(taskCb.dataset.task);
+      }
+      
+      // Store selected tasks
+      if (selectedTasks.size > 0) {
+        const key = `${delivCode}::${compTitle}`;
+        selectionStore.l3ByComponent.set(key, selectedTasks);
+      }
+    }
+    
+    // Store selected components
+    if (selectedComps.size > 0) {
+      selectionStore.componentsByDeliv.set(delivCode, selectedComps);
+    }
+  }
+  
+  // Update all panels
+  if (window.renderDeliverablesPanel) renderDeliverablesPanel();
+  if (window.renderComponentsPanel) renderComponentsPanel();
+  if (window.renderTasksPanel) renderTasksPanel(); // New tasks panel
+  if (window.renderSummary) renderSummary();
+  
+  alert('Selected items have been added to your manual selection!');
+}
+
+// Tasks Panel rendering function
+async function renderTasksPanel(componentKey) {
+  const taskList = document.getElementById('s2-task-list');
+  if (!taskList) return;
+  
+  if (!componentKey && APB.step2.activeComponentName && APB.step2.activeDeliverableCode) {
+    componentKey = `${APB.step2.activeDeliverableCode}::${APB.step2.activeComponentName}`;
+  }
+  
+  if (!componentKey) {
+    taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its tasks</p>';
+    document.getElementById('s2-tasks-active-component').textContent = 'Select a component';
+    return;
+  }
+  
+  // Parse component key
+  const [delivCode, compName] = componentKey.split('::');
+  
+  // Update active component display
+  document.getElementById('s2-tasks-active-component').textContent = `${compName}`;
+  
+  // Get available tasks for this component
+  const availableTasks = selectionStore.l3ByComponent.get(componentKey) || new Set();
+  const selectedTasks = selectionStore.l3ByComponent.get(componentKey) || new Set();
+  
+  if (availableTasks.size === 0) {
+    // Fetch tasks if not loaded
+    try {
+      const tasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(compName)}`);
+      tasks.forEach(task => availableTasks.add(task));
+      selectionStore.l3ByComponent.set(componentKey, availableTasks);
+    } catch (e) {
+      console.error('Error fetching tasks:', e);
+      taskList.innerHTML = '<p style="color: #ef4444; text-align: center; padding: 20px;">Error loading tasks</p>';
+      return;
+    }
+  }
+  
+  // Render task checkboxes
+  if (availableTasks.size === 0) {
+    taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding: 20px;">No tasks available for this component</p>';
+    return;
+  }
+  
+  const tasksHtml = Array.from(availableTasks).map(task => {
+    const isAiRecommended = window.lastAIPlan && isTaskAIRecommended(delivCode, compName, task);
+    const isChecked = selectedTasks.has(task);
+    const taskColor = isAiRecommended ? '#10b981' : '#6b7280';
+    
+    return `
+      <label style="display: flex; align-items: start; gap: 8px; padding: 8px; border-radius: 4px; cursor: pointer; hover:background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05);">
+        <input type="checkbox" 
+               class="task-checkbox" 
+               data-task="${task}" 
+               data-component="${componentKey}"
+               ${isChecked ? 'checked' : ''}
+               style="margin-top: 2px; cursor: pointer;">
+        <div style="flex: 1;">
+          <span style="color: ${taskColor}; font-size: 0.9em;">${task}</span>
+          ${isAiRecommended ? '<span style="margin-left: 8px; font-size: 0.75em; color: #10b981; background: rgba(16,185,129,0.1); padding: 2px 6px; border-radius: 3px;">AI ✓</span>' : ''}
+        </div>
+      </label>
+    `;
+  }).join('');
+  
+  taskList.innerHTML = tasksHtml;
+  
+  // Add event listeners to checkboxes
+  taskList.querySelectorAll('.task-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const task = e.target.dataset.task;
+      const compKey = e.target.dataset.component;
+      
+      if (!selectionStore.l3ByComponent.has(compKey)) {
+        selectionStore.l3ByComponent.set(compKey, new Set());
+      }
+      
+      if (e.target.checked) {
+        selectionStore.l3ByComponent.get(compKey).add(task);
+      } else {
+        selectionStore.l3ByComponent.get(compKey).delete(task);
+      }
+      
+      updateTasksSummary();
+    });
+  });
+  
+  updateTasksSummary();
+}
+
+// Helper to check if a task was AI-recommended
+function isTaskAIRecommended(delivCode, compName, taskName) {
+  if (!window.lastAIPlan) return false;
+  
+  const depts = window.lastAIPlan.suggestions_by_department || {};
+  for (const dept of Object.values(depts)) {
+    for (const deliv of dept) {
+      if (deliv.deliverable_code === delivCode) {
+        for (const comp of (deliv.components || [])) {
+          if (comp.title === compName) {
+            return (comp.tasks || []).some(t => t.title === taskName && t.ai_selected);
+          }
+        }
+      }
+    }
+  }
+  return false;
+}
+
+// Update tasks summary panel
+function updateTasksSummary() {
+  let totalTasks = 0;
+  let aiTasks = 0;
+  let manualTasks = 0;
+  
+  // Count all selected tasks
+  for (const [compKey, tasks] of selectionStore.l3ByComponent.entries()) {
+    const [delivCode, compName] = compKey.split('::');
+    for (const task of tasks) {
+      totalTasks++;
+      if (isTaskAIRecommended(delivCode, compName, task)) {
+        aiTasks++;
+      } else {
+        manualTasks++;
+      }
+    }
+  }
+  
+  // Update counts
+  const summaryTasks = document.getElementById('s2-summary-tasks');
+  const summaryAiTasks = document.getElementById('s2-summary-ai-tasks');
+  const summaryManualTasks = document.getElementById('s2-summary-manual-tasks');
+  
+  if (summaryTasks) summaryTasks.textContent = totalTasks;
+  if (summaryAiTasks) summaryAiTasks.textContent = aiTasks;
+  if (summaryManualTasks) summaryManualTasks.textContent = manualTasks;
+  
+  // Update details list
+  const detailsDiv = document.getElementById('s2-selected-tasks-details');
+  if (detailsDiv) {
+    if (totalTasks === 0) {
+      detailsDiv.innerHTML = '<div style="color: var(--muted); text-align: center; padding: 20px; font-size: 0.85em;">No tasks selected yet</div>';
+    } else {
+      const detailsHtml = Array.from(selectionStore.l3ByComponent.entries())
+        .filter(([_, tasks]) => tasks.size > 0)
+        .map(([compKey, tasks]) => {
+          const [delivCode, compName] = compKey.split('::');
+          return `
+            <div style="margin-bottom: 12px; padding: 8px; background: rgba(255,255,255,0.03); border-radius: 4px;">
+              <div style="font-size: 0.85em; color: var(--accent); margin-bottom: 4px;">${compName}</div>
+              <div style="margin-left: 12px; font-size: 0.8em;">
+                ${Array.from(tasks).map(task => {
+                  const isAI = isTaskAIRecommended(delivCode, compName, task);
+                  return `<div style="color: ${isAI ? '#10b981' : '#9ca3af'};">• ${task}</div>`;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }).join('');
+      detailsDiv.innerHTML = detailsHtml;
+    }
+  }
+}
+
+// Wire up tasks panel buttons
+window.addEventListener('DOMContentLoaded', () => {
+  // Task panel buttons
+  const taskSelectAll = document.getElementById('s2-task-selectall');
+  const taskClear = document.getElementById('s2-task-clear');
+  const taskAiFilter = document.getElementById('s2-task-ai-filter');
+  
+  if (taskSelectAll) {
+    taskSelectAll.addEventListener('click', () => {
+      document.querySelectorAll('.task-checkbox').forEach(cb => {
+        cb.checked = true;
+        cb.dispatchEvent(new Event('change'));
+      });
+    });
+  }
+  
+  if (taskClear) {
+    taskClear.addEventListener('click', () => {
+      document.querySelectorAll('.task-checkbox').forEach(cb => {
+        cb.checked = false;
+        cb.dispatchEvent(new Event('change'));
+      });
+    });
+  }
+  
+  if (taskAiFilter) {
+    taskAiFilter.addEventListener('click', () => {
+      document.querySelectorAll('.task-checkbox').forEach(cb => {
+        const task = cb.dataset.task;
+        const [delivCode, compName] = cb.dataset.component.split('::');
+        const isAI = isTaskAIRecommended(delivCode, compName, task);
+        cb.checked = isAI;
+        cb.dispatchEvent(new Event('change'));
+      });
+    });
+  }
+});
+
+// Export renderTasksPanel globally
+window.renderTasksPanel = renderTasksPanel;
+window.updateTasksSummary = updateTasksSummary;
 
 // Initialize AI Summary and Suggestions on Step 2
 function initAISummaryAndSuggestions() {
