@@ -14,7 +14,7 @@ from pydantic import BaseModel
 # Config
 # ──────────────────────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-4o-mini")  # Fallback to working model
+REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-5-thinking")  # GPT-5 model
 EMBEDDING_MODEL = "text-embedding-3-large"
 
 AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
