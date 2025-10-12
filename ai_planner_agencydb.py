@@ -348,8 +348,9 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
             "risk_flags": []
         }
     
-    # Check if using a GPT-5 model
+    # Check if using a GPT-5 model (only use Responses API for actual GPT-5 models)
     if REASONING_MODEL.startswith("gpt-5"):
+        print(f"[GPT-5 API] Using Responses API with model: {REASONING_MODEL}")
         # Convert messages to a single prompt for GPT-5 Responses API
         prompt_parts = []
         for msg in messages:
@@ -699,7 +700,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     }
     
     out = []
-    chunk = 70  # Optimized chunk size: keeps output under ~3.5k tokens while reducing API calls (2288 / 70 = ~33 calls @ ~8s each = ~4.4 min total)
+    chunk = 35  # Reduced chunk size for better reliability with gpt-4o-mini
     total_chunks = math.ceil(len(candidates) / chunk)
     
     # Update job with total chunks if job_id provided
