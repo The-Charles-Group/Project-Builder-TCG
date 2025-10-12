@@ -309,7 +309,7 @@ Return a JSON object with this structure:
 
         # Call GPT-5 for intelligent timeline generation
         response = await client.chat.completions.create(
-            model=os.getenv("AI_REASONING_MODEL", "gpt-4o"),
+            model=os.getenv("AI_REASONING_MODEL", "gpt-5-thinking"),
             messages=[
                 {"role": "system", "content": "You are a project scheduling expert. Provide realistic timelines based on industry standards."},
                 {"role": "user", "content": prompt}

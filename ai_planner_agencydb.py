@@ -368,8 +368,8 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
     
     # For non-GPT-5 models, use chat completions (backward compatibility)
     try:
-        # For gpt-4o models, use simpler JSON mode without strict schema validation
-        if REASONING_MODEL.startswith("gpt-4o"):
+        # For other models (which we don't use), use simpler JSON mode without strict schema validation
+        if False:  # We only use GPT-5
             # Enhance messages to explicitly request JSON format matching the schema
             enhanced_messages = messages.copy()
             # Add schema instruction to the last user message
@@ -700,7 +700,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     }
     
     out = []
-    chunk = 35  # Reduced chunk size for better reliability with gpt-4o-mini
+    chunk = 35  # Reduced chunk size for better reliability with GPT-5
     total_chunks = math.ceil(len(candidates) / chunk)
     
     # Update job with total chunks if job_id provided

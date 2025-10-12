@@ -204,7 +204,7 @@ Return a JSON object with:
 
     try:
         response = await client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-5-thinking",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -261,7 +261,7 @@ Return a JSON object with:
             components=allocations,
             reasoning=result.get('overall_reasoning', 'AI-optimized distribution based on complexity and dependencies'),
             confidence=float(result.get('confidence', 0.85)),
-            methodology="AI-powered (GPT-4)"
+            methodology="AI-powered (GPT-5)"
         )
         
     except Exception as e:
