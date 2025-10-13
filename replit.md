@@ -14,6 +14,13 @@ Preferred communication style: Simple, everyday language.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
 - **AI Planner v3 (GPT-5 + AgencyDB)**: Advanced reasoning-based AI intelligence layer connected to a real database for granular task selection. Features include asynchronous processing with job tracking, real-time progress updates, granular L2 task selection, holistic project flow analysis, and evidence-based matching with calibrated confidence scores. It also incorporates smart multipliers for complexity, channel, market, and compliance factors, and auto-relaxation/rescue logic.
+- **GPT-5 Enforcer System**: Centralized model enforcement through `sitecustomize.py` that:
+  - **Blocks ALL non-GPT-5 models** automatically at SDK level (no silent downgrades to gpt-4, o1, o3)
+  - **Auto-converts** Chat Completions API calls to Responses API transparently
+  - **Enforces allowed models**: gpt-5, gpt-5-pro, gpt-5-mini, gpt-5-thinking, gpt-5-thinking-mini
+  - **Tier system**: mini (low compute), thinking (medium compute), pro (high compute)
+  - **Zero code changes needed** - Python automatically loads enforcer on startup
+  - **Helper functions**: `gpt5_json_schema()` for strict JSON, `gpt5_text()` for text responses
 - **Timeline Scheduler Kit**: AI-powered timeline optimization with Microsoft Project XML parsing, smart SS+lag overlaps, gatekeeper preservation, cycle breaking, duration rounding, and units recalculation. Supports multi-format export (XML, Gantt JSON, explanations JSON, Excel audit trail).
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking, including job tracking, retry logic, and robust error handling.
 - **Smart Image Analysis**: Two-tier image processing system using pre-filtering, quick relevance scans (GPT-5), and deep analysis for relevant images to reduce processing time and cost for PDFs with many decorative images. User control is available to disable image analysis.
