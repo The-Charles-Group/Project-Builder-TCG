@@ -26,6 +26,9 @@ Preferred communication style: Simple, everyday language.
 - **Styling**: Uses CSS custom properties for theming, including a dark mode.
 - **State Management**: Centralized `selectionStore` with Proxy-backed compatibility layer.
 - **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, enhanced summary panel, and new unified AI Planner UI with real-time progress bar, summary panel, evidence-backed suggestions, component details, and risk indicators.
+  - **Select All/Deselect All**: Added buttons at the top of AI-Suggested Deliverables for bulk selection control
+  - **Department Labels**: Each deliverable shows color-coded department tags ([Strategy], [Creative], [Content], [Paid Media], [Technology], [Integrated Marketing Management])
+  - **Department Grouping**: Deliverables are organized by department with visual distinction and project flow explanation
 - **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends.
 - **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 
