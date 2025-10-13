@@ -2115,17 +2115,55 @@ function renderAIPlan(aiPlan) {
   // Render suggestions by department
   const suggestionsPanel = document.getElementById('ai-suggestions-panel');
   if (suggestionsPanel) {
-    let html = '<div style="margin-top: 20px;"><h3 style="margin-bottom: 16px;">🤖 AI-Suggested Deliverables</h3>';
+    let html = `<div style="margin-top: 20px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0;">🤖 AI-Suggested Deliverables</h3>
+        <div style="display: flex; gap: 8px;">
+          <button onclick="selectAllAIDeliverables(true)" 
+                  style="padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            ✅ Select All
+          </button>
+          <button onclick="selectAllAIDeliverables(false)" 
+                  style="padding: 8px 16px; background: #6b7280; color: white; border: none; border-radius: 6px; cursor: pointer;">
+            Deselect All
+          </button>
+        </div>
+      </div>
+      
+      <div style="background: #f0f9ff; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
+        <h4 style="margin: 0 0 8px 0; color: #1e40af;">📊 Project Flow & Department Sequencing</h4>
+        <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: #1e3a8a;">
+          <strong>From a PM perspective, here's how these departments flow together:</strong><br>
+          <strong>1. Strategy</strong> → Sets foundation & direction<br>
+          <strong>2. Creative</strong> → Develops visual identity & concepts<br>
+          <strong>3. Content</strong> → Creates messaging & narratives<br>
+          <strong>4. Paid Media</strong> → Plans distribution & reach<br>
+          <strong>5. Technology</strong> → Builds digital infrastructure<br>
+          <strong>6. Integrated Marketing</strong> → Orchestrates & optimizes all channels
+        </p>
+      </div>
+    `;
     
-    const deptOrder = ['Creative', 'Strategy', 'Paid Media', 'Content', 'Technology', 'Integrated Marketing Management'];
+    const deptOrder = ['Strategy', 'Creative', 'Content', 'Paid Media', 'Technology', 'Integrated Marketing Management'];
     
     for (const dept of deptOrder) {
       const deliverables = suggestionsByDept[dept] || [];
       if (deliverables.length === 0) continue;
       
+      // Department colors for visual distinction
+      const deptColors = {
+        'Strategy': '#8b5cf6',
+        'Creative': '#f59e0b', 
+        'Content': '#10b981',
+        'Paid Media': '#3b82f6',
+        'Technology': '#6366f1',
+        'Integrated Marketing Management': '#ec4899'
+      };
+      
       html += `
-        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px;">
+        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
           <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: #1f2937; margin-bottom: 12px;">
+            <span style="color: ${deptColors[dept]}; margin-right: 8px;">●</span>
             ${dept} <span style="color: #6b7280; font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
           </summary>
       `;
@@ -2136,15 +2174,21 @@ function renderAIPlan(aiPlan) {
         const delivCode = deliv.deliverable_code || deliv.code;
         
         html += `
-          <div class="ai-deliverable" data-deliv-code="${delivCode}" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
+          <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
-              <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
                 <input type="checkbox" 
                        class="ai-deliv-checkbox" 
                        data-code="${delivCode}" 
                        data-title="${deliv.title}"
+                       data-dept="${dept}"
                        style="cursor: pointer;">
-                <h4 style="margin: 0; color: #111827;">${deliv.title}</h4>
+                <div style="flex: 1;">
+                  <h4 style="margin: 0; color: #111827;">
+                    <span style="color: ${deptColors[dept]}; font-weight: 500; font-size: 0.85em;">[${dept}]</span>
+                    ${deliv.title}
+                  </h4>
+                </div>
               </div>
               <div style="display: flex; gap: 8px; align-items: center;">
                 <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}% confidence</span>
@@ -2297,6 +2341,21 @@ function addAIDeliverableToSelection(delivCode, button) {
   }
 }
 
+// Select/Deselect all AI-suggested deliverables
+function selectAllAIDeliverables(select) {
+  const checkboxes = document.querySelectorAll('.ai-deliv-checkbox');
+  checkboxes.forEach(checkbox => {
+    checkbox.checked = select;
+  });
+  
+  // Update UI to show selection state
+  if (select) {
+    console.log('Selected all AI deliverables');
+  } else {
+    console.log('Deselected all AI deliverables');
+  }
+}
+
 function selectAllComponents(delivCode, select) {
   const checkboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
   checkboxes.forEach(cb => cb.checked = select);
@@ -2307,8 +2366,14 @@ function selectAllTasks(delivCode, compTitle, select) {
   checkboxes.forEach(cb => cb.checked = select);
 }
 
+// Clear all AI selections
 function clearAllAISelections() {
-  document.querySelectorAll('.ai-deliv-checkbox, .ai-comp-checkbox, .ai-task-checkbox').forEach(cb => cb.checked = false);
+  // Clear all checkboxes
+  document.querySelectorAll('.ai-deliv-checkbox').forEach(cb => cb.checked = false);
+  document.querySelectorAll('.ai-comp-checkbox').forEach(cb => cb.checked = false);
+  document.querySelectorAll('.ai-task-checkbox').forEach(cb => cb.checked = false);
+  
+  console.log('Cleared all AI selections');
 }
 
 async function applyAllSelectedFromAI() {
