@@ -252,8 +252,16 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 2200)
     try:
         # Use the helper from gpt5_helpers - it handles model selection and enforcement
         tier = os.environ.get("AI_TIER", "thinking")  # Default to balanced tier
+        
+        # Create messages format from prompt
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        
+        # gpt5_json_schema needs a client, messages, json_schema
         result = gpt5_json_schema(
-            prompt=prompt,
+            client=oai,  # Use the global OpenAI client
+            messages=messages,
             json_schema=schema,
             tier=tier,
             max_output_tokens=max_output_tokens

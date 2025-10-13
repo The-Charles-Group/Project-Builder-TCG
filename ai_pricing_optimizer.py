@@ -203,6 +203,10 @@ Return a JSON object with:
 }}"""
 
     try:
+        # Check if client is available
+        if not client:
+            raise RuntimeError("OpenAI client not available")
+            
         # Model will be auto-enforced by sitecustomize.py based on tier
         tier = os.getenv("AI_TIER", "thinking")
         model = {"mini": "gpt-5-mini", "thinking": "gpt-5", "pro": "gpt-5-pro"}.get(tier, "gpt-5")
@@ -217,7 +221,11 @@ Return a JSON object with:
             response_format={"type": "json_object"}
         )
         
-        result = json.loads(response.choices[0].message.content)
+        content = response.choices[0].message.content if response.choices and response.choices[0].message else None
+        if not content:
+            raise RuntimeError("No response content from GPT-5")
+        
+        result = json.loads(content)
         
         # Build allocations
         allocations = []
