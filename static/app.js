@@ -1930,12 +1930,34 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 200
   throw lastError || new Error('Request failed after multiple retries');
 }
 
+// Handle Fast/Deep mode selection
+function setAnalysisMode(mode) {
+  const fastBtn = document.getElementById('mode-fast');
+  const deepBtn = document.getElementById('mode-deep');
+  const modeInput = document.getElementById('analysis-mode');
+  
+  if (mode === 'fast') {
+    fastBtn.style.background = '#10b981';
+    fastBtn.style.color = 'white';
+    deepBtn.style.background = 'white';
+    deepBtn.style.color = '#6366f1';
+    modeInput.value = 'fast';
+  } else {
+    deepBtn.style.background = '#6366f1';
+    deepBtn.style.color = 'white';
+    fastBtn.style.background = 'white';
+    fastBtn.style.color = '#10b981';
+    modeInput.value = 'deep';
+  }
+}
+
 // Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
   let rfpText = (textEl?.value || '').trim();
   const btnAnalyze = document.querySelector('#btnAnalyze');
+  const analysisMode = document.getElementById('analysis-mode')?.value || 'fast';
 
   // Show progress bar IMMEDIATELY when button is clicked
   showAIProgressBar();
@@ -1990,12 +2012,20 @@ async function onRunReconcile() {
     
     updateAIProgress({ progress: 10, current_stage: 'Sending request to AI...', elapsed_seconds: 0, eta_seconds: null });
     
+    // Map mode to tier
+    const tierMap = {
+      'fast': 'mini',
+      'deep': 'thinking'
+    };
+    const tier = tierMap[analysisMode] || 'thinking';
+    
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         request_text: rfpText,
-        strictness: 'balanced' 
+        strictness: 'balanced',
+        tier: tier 
       })
     }, 3, 2000);
     

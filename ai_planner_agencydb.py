@@ -497,6 +497,129 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]]) -> Tuple
     return topD + topC + topT, cands
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Background Batch Analyzer for Job Runner
+# ──────────────────────────────────────────────────────────────────────────────
+async def analyze_one_batch(batch_data: List[Dict[str, Any]], tier: str = "thinking") -> Dict[str, Any]:
+    """
+    Analyze a single batch of candidates for the background job runner.
+    This is the function that will be called by sitecustomize.py's job runner.
+    
+    Args:
+        batch_data: List containing dicts with keys:
+            - candidate: The candidate dict
+            - request_text: The RFP text
+            - summary: The analysis summary
+        tier: Compute tier (mini/thinking/pro)
+    
+    Returns:
+        Dict containing analyzed results for this batch
+    """
+    if not batch_data:
+        return {"items": []}
+    
+    # Import here to avoid circular dependency
+    from sitecustomize import agpt5_json_schema
+    from openai import AsyncOpenAI
+    
+    client = AsyncOpenAI()
+    
+    # First item contains the shared context
+    first_item = batch_data[0]
+    request_text = first_item.get("request_text", "")
+    summary = first_item.get("summary", {})
+    
+    # Extract candidates from batch
+    candidates = [item["candidate"] for item in batch_data]
+    
+    schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "dept": {"type": "string", "enum": DEPARTMENTS},
+                        "level": {"type": "string", "enum": ["deliverable", "component", "task"]},
+                        "relevance": {"type": "number", "minimum": 0, "maximum": 100},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "why": {"type": "string"},
+                        "risks": {"type": "string"},
+                        "select": {"type": "boolean"}
+                    },
+                    "required": ["id", "dept", "level", "relevance", "confidence", "why", "risks", "select"],
+                    "additionalProperties": False
+                }
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False
+    }
+    
+    # Prepare payload with sanitized data
+    payload = []
+    for c in candidates:
+        evidence = best_evidence(request_text, c, 3)
+        payload.append({
+            "id": sanitize_for_json(c["id"]),
+            "dept": c["dept"],
+            "level": c["level"],
+            "title": sanitize_for_json(c["title"]),
+            "desc": sanitize_for_json(c.get("desc", "")),
+            "evidence": [sanitize_for_json(e) for e in evidence]
+        })
+    
+    # Sanitize summary fields
+    safe_summary = sanitize_for_json(summary.get('summary', ''))
+    safe_goals = [sanitize_for_json(g) for g in summary.get("goals", [])]
+    safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])]
+    safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])]
+    safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])]
+    
+    messages = [
+        {"role": "system", "content": """You are a Senior Agency Executive (CEO/President level) with 20+ years experience running successful marketing/advertising/digital agencies. 
+You think strategically about:
+- Client value and ROI
+- Resource allocation and team capabilities  
+- Risk management and quality assurance
+- Competitive differentiation and innovation
+- Long-term client relationships
+
+Score each deliverable/component/task with REALISTIC confidence scores:
+- 90-100: Essential, directly requested, mission-critical
+- 70-89: Very relevant, strongly recommended, adds significant value
+- 50-69: Moderately relevant, nice-to-have, enhances project
+- 30-49: Tangentially related, optional, limited value
+- 0-29: Not relevant, would not recommend
+
+For TASKS, set select=true ONLY if specifically needed for THIS project. Exclude generic/boilerplate tasks that don't match the specific request.
+Think about the complete project lifecycle, dependencies, and what will actually deliver results for the client."""},
+        {"role": "user", "content": f"REQUEST SUMMARY:\n{safe_summary}\n\nGOALS:\n- " + "\n- ".join(safe_goals) + f"\n\nCHANNELS: {', '.join(safe_channels)} | MARKETS: {', '.join(safe_markets)} | COMPLIANCE: {', '.join(safe_compliance)}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nProvide realistic confidence scores based on actual relevance. Do NOT default to any specific score like 62%. Each item should have a unique, justified confidence level."}
+    ]
+    
+    try:
+        # Use sitecustomize's helper for proper GPT-5 JSON response
+        result = await agpt5_json_schema(client, messages, schema, tier=tier, max_output_tokens=3500)
+        return result
+    except Exception as e:
+        print(f"[Batch Analysis Error] {e}")
+        # Fallback: mark items based on recall score
+        fallback_items = []
+        for c in candidates:
+            fallback_items.append({
+                "id": c["id"],
+                "dept": c["dept"],
+                "level": c["level"],
+                "relevance": min(100, c.get("recall", 0.5) * 100),
+                "confidence": c.get("recall", 0.5),
+                "why": "Recall-based selection (LLM unavailable)",
+                "risks": "",
+                "select": c.get("recall", 0.5) > 0.4
+            })
+        return {"items": fallback_items}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Evidence & LLM re-score with GRANULAR TASK SELECTION
 # ──────────────────────────────────────────────────────────────────────────────
 def best_evidence(request_text: str, candidate: Dict[str, Any], k: int = 3) -> List[str]:
@@ -505,8 +628,78 @@ def best_evidence(request_text: str, candidate: Dict[str, Any], k: int = 3) -> L
     scored.sort(key=lambda x: x[1], reverse=True)
     return [s for s, score in scored[:k] if score > 0]
 
+async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: List[Dict[str, Any]], 
+                                          request_text: str, tier: str = "thinking") -> List[Dict[str, Any]]:
+    """
+    New async LLM re-scoring using the sitecustomize job runner.
+    This starts a background job and returns the results.
+    """
+    if not candidates:
+        return []
+    
+    # Get the appropriate batch size based on tier
+    batch_sizes = {
+        "mini": 150,
+        "thinking": 90,
+        "pro": 45,
+        "fast": 150,
+        "balanced": 90,
+        "accurate": 45
+    }
+    batch_size = batch_sizes.get(tier, 90)
+    
+    # Prepare candidates for job runner
+    batch_data = []
+    for candidate in candidates:
+        batch_data.append({
+            "candidate": candidate,
+            "request_text": request_text,
+            "summary": summary
+        })
+    
+    # Create batches
+    import httpx
+    
+    # Call the job runner API
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Start the job
+        response = await client.post(
+            "http://localhost:5000/api/ai/analyze_job",
+            json={
+                "analyzer": "ai_planner_agencydb.analyze_one_batch",
+                "candidates": batch_data,
+                "tier": tier,
+                "batch_size": batch_size
+            }
+        )
+        response.raise_for_status()
+        job_data = response.json()
+        job_id = job_data["job_id"]
+        
+        # Poll for completion
+        while True:
+            status_resp = await client.get(f"http://localhost:5000/api/ai/jobs/{job_id}")
+            status_resp.raise_for_status()
+            status = status_resp.json()
+            
+            if status["status"] in ("done", "error", "timeout", "canceled"):
+                if status["status"] == "done" and status["result"]:
+                    # Flatten the results from all batches
+                    all_items = []
+                    for batch_result in status["result"]:
+                        if isinstance(batch_result, dict) and "items" in batch_result:
+                            all_items.extend(batch_result["items"])
+                    return all_items
+                else:
+                    # Return empty list on error
+                    print(f"[Job Runner Error] Job {job_id} failed with status: {status['status']}")
+                    return []
+            
+            # Wait before polling again
+            await asyncio.sleep(1.0)
+
 def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str, Any]], request_text: str, job_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """LLM re-scoring with GRANULAR task-level selection - only select relevant tasks, exclude irrelevant ones"""
+    """LLM re-scoring with GRANULAR task-level selection - SYNCHRONOUS FALLBACK for compatibility"""
     if not candidates or not oai:
         return []
     
@@ -537,7 +730,17 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     }
     
     out = []
-    chunk = 35  # Reduced chunk size for better reliability with GPT-5
+    # Use tier-based batch sizing
+    tier = os.environ.get("AI_TIER", "thinking")
+    batch_sizes = {
+        "mini": 150,
+        "thinking": 90,
+        "pro": 45,
+        "fast": 150,
+        "balanced": 90,
+        "accurate": 45
+    }
+    chunk = batch_sizes.get(tier, 90)
     total_chunks = math.ceil(len(candidates) / chunk)
     
     # Update job with total chunks if job_id provided
@@ -859,9 +1062,10 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
-def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None) -> Dict[str, Any]:
+def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None) -> Dict[str, Any]:
     """Main analysis function using AgencyDB"""
     strictness = strictness or AI_STRICTNESS_DEFAULT
+    tier = tier or "thinking"  # Default to thinking tier
     
     # Update job status
     if job_id and job_id in AI_JOB_STORE:
@@ -928,10 +1132,10 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         }
     }
 
-def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None):
+def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None):
     """Background task to run AI analysis"""
     try:
-        result = analyze_with_agencydb(request_text, db, strictness, job_id)
+        result = analyze_with_agencydb(request_text, db, strictness, job_id, tier)
         
         if job_id in AI_JOB_STORE:
             AI_JOB_STORE[job_id].status = AIJobStatus.COMPLETED
@@ -954,6 +1158,7 @@ def _run_analysis_background(job_id: str, request_text: str, db, strictness: str
 class AnalyzeRequest(BaseModel):
     request_text: str
     strictness: Optional[str] = None
+    tier: Optional[str] = None  # 'mini', 'thinking', 'pro'
 
 def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
     router = APIRouter()
@@ -982,7 +1187,8 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 job_id,
                 payload.request_text,
                 db,
-                payload.strictness
+                payload.strictness,
+                payload.tier
             )
             
             return {

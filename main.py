@@ -36,6 +36,18 @@ except Exception:
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0")
 
+# ---------- Wire Job Runner from sitecustomize ----------
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from sitecustomize import register_job_routes, register_health_route
+    register_job_routes(app)
+    register_health_route(app)
+except ImportError as e:
+    print(f"[WARNING] Could not import job runner from sitecustomize: {e}")
+    # Continue without job runner - will use existing background task system
+
 # ---------- AI Planner Integration (AgencyDB) ----------
 from ai_planner_agencydb import mount_routes_agencydb
 
