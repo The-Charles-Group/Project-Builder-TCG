@@ -2115,17 +2115,23 @@ function renderAIPlan(aiPlan) {
   // Render suggestions by department
   const suggestionsPanel = document.getElementById('ai-suggestions-panel');
   if (suggestionsPanel) {
-    let html = `<div style="margin-top: 20px;">
+    // Start with the main container and button section
+    let html = `
+    <div style="margin-top: 20px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
         <h3 style="margin: 0;">🤖 AI-Suggested Deliverables</h3>
         <div style="display: flex; gap: 8px;">
           <button onclick="selectAllAIDeliverables(true)" 
-                  style="padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                  style="padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;"
+                  onmouseover="this.style.opacity='0.9'" 
+                  onmouseout="this.style.opacity='1'">
             ✅ Select All
           </button>
           <button onclick="selectAllAIDeliverables(false)" 
-                  style="padding: 8px 16px; background: #6b7280; color: white; border: none; border-radius: 6px; cursor: pointer;">
-            Deselect All
+                  style="padding: 8px 16px; background: #6b7280; color: white; border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s;"
+                  onmouseover="this.style.opacity='0.9'" 
+                  onmouseout="this.style.opacity='1'">
+            ❌ Deselect All
           </button>
         </div>
       </div>
@@ -2346,13 +2352,37 @@ function selectAllAIDeliverables(select) {
   const checkboxes = document.querySelectorAll('.ai-deliv-checkbox');
   checkboxes.forEach(checkbox => {
     checkbox.checked = select;
+    
+    // Also trigger component checkboxes if selecting
+    if (select) {
+      const delivCode = checkbox.dataset.code;
+      const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
+      compCheckboxes.forEach(cb => cb.checked = true);
+    }
   });
   
+  // Also update component and task checkboxes
+  if (!select) {
+    // If deselecting all, also deselect all components and tasks
+    document.querySelectorAll('.ai-comp-checkbox').forEach(cb => cb.checked = false);
+    document.querySelectorAll('.ai-task-checkbox').forEach(cb => cb.checked = false);
+  }
+  
+  // Update button visual feedback
+  const selectAllBtn = event?.target;
+  if (selectAllBtn) {
+    selectAllBtn.style.transform = 'scale(0.95)';
+    setTimeout(() => {
+      selectAllBtn.style.transform = 'scale(1)';
+    }, 100);
+  }
+  
   // Update UI to show selection state
+  const count = checkboxes.length;
   if (select) {
-    console.log('Selected all AI deliverables');
+    console.log(`Selected all ${count} AI deliverables`);
   } else {
-    console.log('Deselected all AI deliverables');
+    console.log(`Deselected all ${count} AI deliverables`);
   }
 }
 
