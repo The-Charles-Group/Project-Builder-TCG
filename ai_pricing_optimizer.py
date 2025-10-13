@@ -203,8 +203,12 @@ Return a JSON object with:
 }}"""
 
     try:
+        # Model will be auto-enforced by sitecustomize.py based on tier
+        tier = os.getenv("AI_TIER", "thinking")
+        model = {"mini": "gpt-5-mini", "thinking": "gpt-5", "pro": "gpt-5-pro"}.get(tier, "gpt-5")
+        
         response = await client.chat.completions.create(
-            model="gpt-5-thinking",
+            model=model,  # sitecustomize.py will enforce GPT-5
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}

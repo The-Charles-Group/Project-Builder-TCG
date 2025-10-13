@@ -1746,7 +1746,7 @@ async def _quick_relevance_check_async(img_bytes: bytes, page_num: int, img_inde
             response = await loop.run_in_executor(
                 None,
                 lambda: openai_client.chat.completions.create(
-                    model="gpt-5",
+                    model=os.getenv("AI_TIER", "thinking"),  # Will be mapped by sitecustomize
                     messages=[{
                         "role": "user",
                         "content": [
@@ -1821,7 +1821,7 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
                 response = await loop.run_in_executor(
                     None,
                     lambda: openai_client.chat.completions.create(
-                        model="gpt-5",
+                        model=os.getenv("AI_TIER", "thinking"),  # Will be mapped by sitecustomize
                         messages=[
                             {
                                 "role": "user",
@@ -2978,7 +2978,7 @@ Guidelines:
         user_prompt = f"Analyze this RFP text and extract the key deliverables:\n\n{text[:8000]}"  # Limit input size
         
         response = openai_client.chat.completions.create(
-            model="gpt-5",
+            model=os.getenv("AI_TIER", "thinking"),  # Will be mapped by sitecustomize
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -3629,7 +3629,8 @@ def suggest_l3(req: SuggestL3Req):
     return JSONResponse(resp)
 
 # ========= AI Suggest (GPT-5) =========
-OPENAI_MODEL = os.getenv("APB_SUGGEST_MODEL", "gpt-5")
+# Model will be selected based on tier and enforced by sitecustomize
+OPENAI_MODEL = os.getenv("AI_TIER", "thinking")  # Will be mapped to appropriate GPT-5 model
 
 class AISuggestReq(BaseModel):
     deliverable_code: str

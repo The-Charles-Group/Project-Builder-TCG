@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
+from gpt5_helpers import gpt5_json_schema, gpt5_text
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Config
@@ -229,8 +230,8 @@ def embed_many(texts: List[str]) -> List[List[float]]:
     return all_embeddings
 
 def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 2200) -> dict:
-    """Use GPT-5 Responses API for reasoning models"""
-    if not oai:
+    """Use GPT-5 helper for JSON responses with schema"""
+    if not OPENAI_API_KEY:
         # Return proper error structure based on schema
         if "items" in schema.get("properties", {}):
             return {"items": []}
@@ -249,66 +250,15 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 2200)
         }
     
     try:
-        print(f"[GPT-5 API] Using Responses API with model: {REASONING_MODEL}")
-        
-        # Add schema instruction to the prompt
-        schema_instruction = f"\n\nReturn a valid JSON object matching this schema: {json.dumps(schema, indent=2)}"
-        full_prompt = prompt + schema_instruction
-        
-        response = oai.responses.create(
-            model=REASONING_MODEL,
-            input=full_prompt,
+        # Use the helper from gpt5_helpers - it handles model selection and enforcement
+        tier = os.environ.get("AI_TIER", "thinking")  # Default to balanced tier
+        result = gpt5_json_schema(
+            prompt=prompt,
+            json_schema=schema,
+            tier=tier,
             max_output_tokens=max_output_tokens
         )
-        
-        # GPT-5 Responses API returns content directly
-        text = response.content if hasattr(response, 'content') else str(response)
-        
-        # Handle empty or None content
-        if not text or text.strip() == "":
-            print(f"[GPT-5 Warning] Response returned empty content")
-            if "items" in schema.get("properties", {}):
-                return {"items": []}
-            # For summarize_request
-            return {
-                "summary": "",
-                "goals": [],
-                "channels": [],
-                "markets": [],
-                "compliance": [],
-                "languages": [],
-                "timeline_weeks": 0,
-                "budget_tier": "unknown",
-                "complexity": "medium",
-                "risk_flags": []
-            }
-        
-        # Attempt to parse JSON
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            print(f"[GPT-5 JSON Repair] Attempting to fix malformed response: {e}")
-            print(f"[GPT-5 Debug] Response text (first 200 chars): {text[:200] if text else 'Empty'}")
-            repaired = repair_json_response(text)
-            try:
-                return json.loads(repaired)
-            except json.JSONDecodeError as e2:
-                print(f"[GPT-5 JSON Repair Failed] Could not repair: {e2}")
-                # Return proper structure based on schema
-                if "items" in schema.get("properties", {}):
-                    return {"items": []}
-                return {
-                    "summary": "",
-                    "goals": [],
-                    "channels": [],
-                    "markets": [],
-                    "compliance": [],
-                    "languages": [],
-                    "timeline_weeks": 0,
-                    "budget_tier": "unknown",
-                    "complexity": "medium",
-                    "risk_flags": []
-                }
+        return result
     
     except Exception as e:
         print(f"[GPT-5 API Error] OpenAI call failed: {e}")
@@ -329,8 +279,8 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 2200)
         }
 
 def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 2200) -> dict:
-    """Use Chat Completions or GPT-5 Responses API based on model"""
-    if not oai:
+    """Use simplified GPT-5 helper for JSON schema responses"""
+    if not OPENAI_API_KEY:
         # Return proper error structure based on schema
         if "items" in schema.get("properties", {}):
             return {"items": []}
@@ -348,143 +298,22 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
             "risk_flags": []
         }
     
-    # Check if using a GPT-5 model (only use Responses API for actual GPT-5 models)
-    if REASONING_MODEL.startswith("gpt-5"):
-        print(f"[GPT-5 API] Using Responses API with model: {REASONING_MODEL}")
-        # Convert messages to a single prompt for GPT-5 Responses API
-        prompt_parts = []
-        for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-            if role == "system":
-                prompt_parts.append(f"System: {content}")
-            elif role == "user":
-                prompt_parts.append(f"User: {content}")
-            elif role == "assistant":
-                prompt_parts.append(f"Assistant: {content}")
-        
-        prompt = "\n\n".join(prompt_parts)
-        return gpt5_json_response(prompt, schema, max_completion_tokens)
+    # Convert messages to a single prompt for the helper
+    prompt_parts = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role == "system":
+            prompt_parts.append(f"System: {content}")
+        elif role == "user":
+            prompt_parts.append(f"User: {content}")
+        elif role == "assistant":
+            prompt_parts.append(f"Assistant: {content}")
     
-    # For non-GPT-5 models, use chat completions (backward compatibility)
-    try:
-        # For other models (which we don't use), use simpler JSON mode without strict schema validation
-        if False:  # We only use GPT-5
-            # Enhance messages to explicitly request JSON format matching the schema
-            enhanced_messages = messages.copy()
-            # Add schema instruction to the last user message
-            if enhanced_messages and enhanced_messages[-1]["role"] == "user":
-                enhanced_messages[-1]["content"] += f"\n\nIMPORTANT: You MUST return a valid JSON object that exactly matches this schema:\n{json.dumps(schema, indent=2)}\n\nEnsure all required fields are present and properly formatted."
-            
-            response = oai.chat.completions.create(
-                model=REASONING_MODEL,
-                messages=enhanced_messages,
-                response_format={"type": "json_object"},  # Simpler JSON mode
-                max_completion_tokens=max_completion_tokens,
-                temperature=0.1  # Lower temperature for more consistent output
-            )
-        else:
-            # For other models that support strict schema
-            response = oai.chat.completions.create(
-                model=REASONING_MODEL,
-                messages=messages,
-                response_format={"type": "json_schema", "json_schema": {"name": "Response", "schema": schema, "strict": True}},
-                max_completion_tokens=max_completion_tokens,
-            )
-        
-        # Check if response has valid content
-        if not response.choices or len(response.choices) == 0:
-            print(f"[API Warning] OpenAI returned no choices")
-            if "items" in schema.get("properties", {}):
-                return {"items": []}
-            # For summarize_request
-            return {
-                "summary": "",
-                "goals": [],
-                "channels": [],
-                "markets": [],
-                "compliance": [],
-                "languages": [],
-                "timeline_weeks": 0,
-                "budget_tier": "unknown",
-                "complexity": "medium",
-                "risk_flags": []
-            }
-        
-        text = response.choices[0].message.content
-        
-        # Log model used for debugging
-        print(f"[API Response] Model: {REASONING_MODEL}, Response length: {len(text) if text else 0} chars")
-        
-        # Handle empty or None content
-        if not text or text.strip() == "":
-            print(f"[API Warning] OpenAI returned empty content")
-            if "items" in schema.get("properties", {}):
-                return {"items": []}
-            return {
-                "summary": "",
-                "goals": [],
-                "channels": [],
-                "markets": [],
-                "compliance": [],
-                "languages": [],
-                "timeline_weeks": 0,
-                "budget_tier": "unknown",
-                "complexity": "medium",
-                "risk_flags": []
-            }
-        
-        # Attempt to parse JSON
-        try:
-            result = json.loads(text)
-            print(f"[JSON Success] Successfully parsed JSON response")
-            return result
-        except json.JSONDecodeError as e:
-            print(f"[JSON Repair] Attempting to fix malformed response: {e}")
-            print(f"[JSON Debug] Model: {REASONING_MODEL}")
-            print(f"[JSON Debug] Response text (first 500 chars): {text[:500] if text else 'Empty'}")
-            print(f"[JSON Debug] Response text (last 500 chars): {text[-500:] if text and len(text) > 500 else ''}")
-            
-            repaired = repair_json_response(text)
-            try:
-                result = json.loads(repaired)
-                print(f"[JSON Repair Success] Successfully repaired and parsed JSON")
-                return result
-            except json.JSONDecodeError as e2:
-                print(f"[JSON Repair Failed] Could not repair: {e2}")
-                print(f"[JSON Repair Debug] Repaired text (first 500 chars): {repaired[:500] if repaired else 'Empty'}")
-                # Return proper structure based on schema
-                if "items" in schema.get("properties", {}):
-                    return {"items": []}
-                return {
-                    "summary": "",
-                    "goals": [],
-                    "channels": [],
-                    "markets": [],
-                    "compliance": [],
-                    "languages": [],
-                    "timeline_weeks": 0,
-                    "budget_tier": "unknown",
-                    "complexity": "medium",
-                    "risk_flags": []
-                }
+    prompt = "\n\n".join(prompt_parts)
     
-    except Exception as e:
-        print(f"[API Error] OpenAI call failed: {e}")
-        if "items" in schema.get("properties", {}):
-            return {"items": []}
-        return {
-            "summary": "",
-            "goals": [],
-            "channels": [],
-            "markets": [],
-            "compliance": [],
-            "languages": [],
-            "timeline_weeks": 0,
-            "budget_tier": "unknown",
-            "complexity": "medium",
-            "risk_flags": []
-        }
+    # Use the GPT-5 helper - sitecustomize will enforce GPT-5 automatically
+    return gpt5_json_response(prompt, schema, max_completion_tokens)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # AgencyDB Catalog Builder
