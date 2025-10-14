@@ -15,3 +15,10 @@ psycopg2-binary
 httpx
 xmltodict
 requests
+aiolimiter
+httpx
+orjson
+playwright
+pytest
+pytest-asyncio
+uvicorn[standard]
