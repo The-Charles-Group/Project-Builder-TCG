@@ -5,7 +5,7 @@ integrations = ["python_openai:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["glibcLocales", "libxcrypt"]
+packages = ["glibcLocales", "libxcrypt", "unzip"]
 
 [workflows]
 runButton = "Project"
