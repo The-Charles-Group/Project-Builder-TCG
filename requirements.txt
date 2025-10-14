@@ -22,3 +22,5 @@ playwright
 pytest
 pytest-asyncio
 uvicorn[standard]
+httptools
+uvloop

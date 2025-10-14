@@ -5,7 +5,7 @@ integrations = ["python_openai:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["gitFull", "glibcLocales", "libiconv", "libxcrypt", "playwright-driver", "unzip"]
+packages = ["gitFull", "glibcLocales", "libiconv", "libuv", "libxcrypt", "playwright-driver", "unzip"]
 
 [workflows]
 runButton = "Project"
@@ -28,16 +28,12 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "uvicorn main:app --host 0.0.0.0 --port 5000 --reload --timeout-keep-alive 300"
+args = "python -m uvicorn main:app --host 0.0.0.0 --port 5000 --reload --timeout-keep-alive 300 --loop uvloop --http httptools"
 waitForPort = 5000
 
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 33671
-externalPort = 8000
 
 [[ports]]
 localPort = 34659
