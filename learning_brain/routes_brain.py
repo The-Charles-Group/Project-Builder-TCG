@@ -43,7 +43,7 @@ def params(payload: ParamsPayload, ok: bool = Depends(require_admin)):
     return brain.set_params({k:str(v) for k,v in p.items()})
 
 @router.post("/learn")
-def learn(payload: LearnPayload):
+def learn(payload: LearnPayload, ok: bool = Depends(require_admin)):
     return brain.learn(
         rfp_text=payload.rfp_text,
         selected_deliverables=payload.selected_deliverables,
