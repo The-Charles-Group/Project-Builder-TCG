@@ -17,6 +17,12 @@ from pydantic import BaseModel
 import pandas as pd
 import numpy as np
 from convert_excel_to_mspdi import convert_excel_to_mspdi
+from contextlib import asynccontextmanager
+import httpx
+import hashlib
+import time
+from functools import lru_cache
+import pickle
 
 try:
     from docx import Document  # pip install python-docx
@@ -33,8 +39,110 @@ try:
 except Exception:
     Image = None
 
+# ---------- Performance Optimization: Cache Excel to Pickle ----------
+# Note: This function will be called after AgencyDB is defined
+def load_database_with_pickle_cache():
+    """Cache heavy Excel reads; convert to pickle for subsequent boots"""
+    # Import here to avoid circular dependency issues
+    # Find the v4 Excel file
+    xlsx_paths = [
+        "test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx",
+        "Replit_App_DB_READABLE_FullRows_v4.xlsx",
+        "data/Replit_App_DB_READABLE_FullRows_v4.xlsx"
+    ]
+    
+    xlsx_path = None
+    for path in xlsx_paths:
+        if os.path.exists(path):
+            xlsx_path = path
+            break
+    
+    if not xlsx_path:
+        print("[STARTUP] No database file found, will use mock data")
+        return None
+        
+    pkl_path = xlsx_path + ".pkl"
+    
+    # Check if pickle exists and is newer than Excel
+    if os.path.exists(pkl_path) and os.path.getmtime(pkl_path) >= os.path.getmtime(xlsx_path):
+        try:
+            print(f"[STARTUP] Loading cached database from {pkl_path}")
+            start = time.time()
+            with open(pkl_path, "rb") as f:
+                db = pickle.load(f)
+            print(f"[STARTUP] Pickle cache loaded in {(time.time()-start)*1000:.1f}ms")
+            return db
+        except Exception as e:
+            print(f"[STARTUP][WARN] Failed to load pickle cache: {e}")
+    
+    # Load from Excel and save to pickle
+    print(f"[STARTUP] Loading database from {xlsx_path} (first boot, will cache)")
+    start = time.time()
+    db = AgencyDB()  # This will be available when function is called
+    db.load()
+    print(f"[STARTUP] Excel loaded in {(time.time()-start)*1000:.1f}ms")
+    
+    # Save to pickle for next boot
+    try:
+        with open(pkl_path, "wb") as f:
+            pickle.dump(db, f)
+        print(f"[STARTUP] Saved pickle cache to {pkl_path}")
+    except Exception as e:
+        print(f"[STARTUP][WARN] Failed to save pickle cache: {e}")
+    
+    return db
+
+# ---------- Lifespan for Resource Management ----------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage app lifecycle: startup preloading and shutdown cleanup"""
+    # STARTUP
+    print("[STARTUP] Initializing Agency Project Builder...")
+    
+    # 1) Global HTTP client for OpenAI/external APIs (connection pooling)
+    app.state.http = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_connections=100))
+    print("[STARTUP] HTTP client initialized with connection pooling")
+    
+    # 2) Preload database with pickle caching
+    try:
+        app.state.db = load_database_with_pickle_cache()
+        if app.state.db:
+            print(f"[STARTUP] Database loaded: {getattr(app.state.db, 'src', 'unknown')} with {len(getattr(app.state.db, 'all_rows', []))} rows")
+        else:
+            print("[STARTUP] Using mock database")
+    except Exception as e:
+        print(f"[STARTUP][ERROR] Failed to preload database: {e}")
+        app.state.db = None
+    
+    # 3) Start background job cleanup task
+    async def periodic_cleanup():
+        while True:
+            await asyncio.sleep(300)  # Every 5 minutes
+            await cleanup_old_jobs()
+    
+    app.state._cleanup_task = asyncio.create_task(periodic_cleanup())
+    print("[STARTUP] Background job cleanup task started")
+    
+    print("[STARTUP] ✅ Agency Project Builder ready!")
+    
+    yield  # App runs here
+    
+    # SHUTDOWN
+    print("[SHUTDOWN] Cleaning up resources...")
+    try:
+        await app.state.http.aclose()
+        print("[SHUTDOWN] HTTP client closed")
+    except Exception:
+        pass
+    
+    if hasattr(app.state, "_cleanup_task"):
+        app.state._cleanup_task.cancel()
+        print("[SHUTDOWN] Cleanup task cancelled")
+    
+    print("[SHUTDOWN] ✅ Cleanup complete")
+
 # ---------- App & CORS ----------
-app = FastAPI(title="Agency Project Builder", version="1.0")
+app = FastAPI(title="Agency Project Builder", version="1.0", lifespan=lifespan)
 
 # ---------- Wire Job Runner from sitecustomize ----------
 import sys
