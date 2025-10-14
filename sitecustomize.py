@@ -408,12 +408,12 @@ CALL_TIMEOUT = float(os.getenv("AI_CALL_TIMEOUT", "50"))
 WALL_TIMEOUT = float(os.getenv("AI_WALL_TIMEOUT", "900"))
 DEFAULT_TIER = os.getenv("AI_TIER", "thinking")
 DEFAULT_BATCH_BY_TIER = {
-    "mini": int(os.getenv("APB_BATCH_MINI", "150")),
-    "thinking": int(os.getenv("APB_BATCH_THINKING", "90")),
-    "pro": int(os.getenv("APB_BATCH_PRO", "45")),
-    "fast": int(os.getenv("APB_BATCH_MINI", "150")),
-    "balanced": int(os.getenv("APB_BATCH_THINKING", "90")),
-    "accurate": int(os.getenv("APB_BATCH_PRO", "45")),
+    "mini": int(os.getenv("APB_BATCH_MINI", "20")),  # Reduced from 150 to prevent GPT-5 errors
+    "thinking": int(os.getenv("APB_BATCH_THINKING", "15")),  # Reduced from 90 to prevent errors
+    "pro": int(os.getenv("APB_BATCH_PRO", "15")),  # Reduced from 45 to prevent errors
+    "fast": int(os.getenv("APB_BATCH_MINI", "20")),  # Reduced for reliability
+    "balanced": int(os.getenv("APB_BATCH_THINKING", "15")),  # Reduced for reliability
+    "accurate": int(os.getenv("APB_BATCH_PRO", "15")),  # Reduced for reliability
 }
 
 class _Job:

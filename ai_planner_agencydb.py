@@ -652,16 +652,16 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
     if not candidates:
         return []
     
-    # Get the appropriate batch size based on tier - PERFORMANCE FIX: Increased for Fast mode
+    # Get the appropriate batch size based on tier - PERFORMANCE FIX: Reduced to prevent GPT-5 errors
     batch_sizes = {
-        "mini": 50,  # PERFORMANCE FIX: Dramatically increased for Fast mode
-        "thinking": 15,  # Keep smaller for accuracy
-        "pro": 10,  # Keep smaller for accuracy
-        "fast": 50,  # PERFORMANCE FIX: Dramatically increased for Fast mode
-        "balanced": 15,  # Keep smaller for accuracy
-        "accurate": 10  # Keep smaller for accuracy
+        "mini": 20,  # Reduced from 50 to prevent insufficient items errors
+        "thinking": 15,  # Optimal size for GPT-5 reliability
+        "pro": 15,  # Increased from 10 to 15 for better efficiency
+        "fast": 20,  # Reduced from 50 to prevent errors
+        "balanced": 15,  # Optimal for balanced mode
+        "accurate": 15  # Increased from 10 to 15 for better efficiency
     }
-    batch_size = batch_sizes.get(tier, 30)
+    batch_size = batch_sizes.get(tier, 15)
     
     # Prepare candidates for job runner
     batch_data = []
@@ -822,17 +822,17 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         "additionalProperties": False
     }
     
-    # Use tier-based batch sizing - PERFORMANCE FIX: Dramatically increased for Fast mode
+    # Use tier-based batch sizing - PERFORMANCE FIX: Reduced to prevent GPT-5 errors
     tier = os.environ.get("AI_TIER", "thinking")
     batch_sizes = {
-        "mini": 40,  # PERFORMANCE FIX: Increased for Fast mode parallel processing
-        "thinking": 8,  # Keep smaller for accuracy
-        "pro": 5,  # Keep smaller for accuracy
-        "fast": 40,  # PERFORMANCE FIX: Increased for Fast mode parallel processing
-        "balanced": 8,  # Keep smaller for accuracy
-        "accurate": 5  # Keep smaller for accuracy
+        "mini": 18,  # Reduced from 40 to prevent insufficient items errors
+        "thinking": 15,  # Increased from 8 for better efficiency
+        "pro": 15,  # Increased from 5 for better parallel processing
+        "fast": 18,  # Reduced from 40 to prevent errors
+        "balanced": 15,  # Increased from 8 for better efficiency
+        "accurate": 15  # Increased from 5 for better parallel processing
     }
-    chunk_size = batch_sizes.get(tier, 8)
+    chunk_size = batch_sizes.get(tier, 15)
     
     # Prepare chunks for parallel processing
     chunks = []

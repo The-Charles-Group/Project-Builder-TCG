@@ -114,7 +114,17 @@ async def lifespan(app: FastAPI):
         print(f"[STARTUP][ERROR] Failed to preload database: {e}")
         app.state.db = None
     
-    # 3) Start background job cleanup task
+    # 3) Preload Fast2 TF-IDF analyzer
+    try:
+        from app_perf.fast_pipeline import initialize_analyzer
+        if initialize_analyzer(app.state):
+            print("[STARTUP] Fast2 TF-IDF analyzer preloaded and cached")
+        else:
+            print("[STARTUP] Fast2 analyzer will be loaded on first use")
+    except Exception as e:
+        print(f"[STARTUP][WARN] Could not preload Fast2 analyzer: {e}")
+    
+    # 4) Start background job cleanup task
     async def periodic_cleanup():
         while True:
             await asyncio.sleep(300)  # Every 5 minutes
@@ -282,6 +292,11 @@ app.mount("/admin/brain", StaticFiles(directory="learning_brain/static", html=Tr
 
 # Mount AI planner routes (connected to AgencyDB)
 mount_routes_agencydb(app, base="/api/ai")
+
+# Mount Performance Optimization routers (Fast2 and SSE)
+from app_perf import fast_router, stream_router
+app.include_router(fast_router)  # Fast2 TF-IDF endpoint
+app.include_router(stream_router)  # SSE streaming endpoint
 
 # Import AI Timeline Manager
 from ai_timeline_manager import suggest_timeline_from_selection, generate_ai_timeline
