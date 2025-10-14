@@ -229,8 +229,8 @@ def embed_many(texts: List[str]) -> List[List[float]]:
     print(f"[EMBED] Completed: {len(all_embeddings)} embeddings generated")
     return all_embeddings
 
-def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 2200) -> dict:
-    """Use GPT-5 helper for JSON responses with schema"""
+def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 8192) -> dict:
+    """Use GPT-5 helper for JSON responses with schema - FIXED: Increased to 8192 tokens"""
     if not OPENAI_API_KEY:
         # Return proper error structure based on schema
         if "items" in schema.get("properties", {}):
@@ -286,7 +286,7 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 2200)
             "risk_flags": []
         }
 
-def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 2200) -> dict:
+def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 8192) -> dict:
     """Use simplified GPT-5 helper for JSON schema responses"""
     if not OPENAI_API_KEY:
         # Return proper error structure based on schema
@@ -619,22 +619,35 @@ Think about the complete project lifecycle, dependencies, and what will actually
     
     try:
         # Use sitecustomize's helper for proper GPT-5 JSON response
-        result = await agpt5_json_schema(client, messages, schema, tier=tier, max_output_tokens=3500)
+        result = await agpt5_json_schema(client, messages, schema, tier=tier, max_output_tokens=8192)
         return result
     except Exception as e:
-        print(f"[Batch Analysis Error] {e}")
-        # Fallback: mark items based on recall score
+        print(f"[Batch Analysis Error] {e} - Using fallback scoring")
+        # FIXED: Enhanced fallback scoring - always provide usable results
         fallback_items = []
+        media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
+                         'social', 'analytics', 'reporting', 'planning', 'buying'}
+        
         for c in candidates:
+            # Calculate fallback confidence: 40% base + (50% * embedding/recall score)
+            base_confidence = 0.4
+            embedding_bonus = c.get("recall", 0.5) * 0.5
+            fallback_confidence = min(0.9, base_confidence + embedding_bonus)
+            
+            # Apply media keyword boost
+            title_words = set(tokenize(c.get("title", "").lower()))
+            if title_words & media_keywords:
+                fallback_confidence = min(0.95, fallback_confidence * 1.2)
+            
             fallback_items.append({
                 "id": c["id"],
                 "dept": c["dept"],
                 "level": c["level"],
-                "relevance": min(100, c.get("recall", 0.5) * 100),
-                "confidence": c.get("recall", 0.5),
-                "why": "Recall-based selection (LLM unavailable)",
-                "risks": "",
-                "select": c.get("recall", 0.5) > 0.4
+                "relevance": min(100, fallback_confidence * 100),
+                "confidence": fallback_confidence,
+                "why": f"Embedding-based match (score: {c.get('recall', 0.5):.2f})",
+                "risks": "GPT-5 unavailable - using embedding fallback",
+                "select": fallback_confidence > 0.45  # Select if confidence > 45%
             })
         return {"items": fallback_items}
 
@@ -658,12 +671,12 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
     
     # Get the appropriate batch size based on tier
     batch_sizes = {
-        "mini": 50,  # FIXED: Reduced from 150 to avoid token limits
-        "thinking": 30,  # FIXED: Reduced from 90 to avoid token limits
-        "pro": 20,  # FIXED: Reduced from 45 to avoid token limits
-        "fast": 50,  # FIXED: Reduced from 150 to avoid token limits
-        "balanced": 30,  # FIXED: Reduced from 90 to avoid token limits
-        "accurate": 20  # FIXED: Reduced from 45 to avoid token limits
+        "mini": 20,  # FIXED: Reduced to 20 to avoid token exhaustion
+        "thinking": 15,  # FIXED: Reduced to 15 to avoid token exhaustion
+        "pro": 10,  # FIXED: Reduced to 10 to avoid token exhaustion
+        "fast": 20,  # FIXED: Reduced to 20 to avoid token exhaustion
+        "balanced": 15,  # FIXED: Reduced to 15 to avoid token exhaustion
+        "accurate": 10  # FIXED: Reduced to 10 to avoid token exhaustion
     }
     batch_size = batch_sizes.get(tier, 30)
     
@@ -752,14 +765,14 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     # Use tier-based batch sizing
     tier = os.environ.get("AI_TIER", "thinking")
     batch_sizes = {
-        "mini": 50,  # FIXED: Reduced from 150 to avoid token limits
-        "thinking": 30,  # FIXED: Reduced from 90 to avoid token limits
-        "pro": 20,  # FIXED: Reduced from 45 to avoid token limits
-        "fast": 50,  # FIXED: Reduced from 150 to avoid token limits
-        "balanced": 30,  # FIXED: Reduced from 90 to avoid token limits
-        "accurate": 20  # FIXED: Reduced from 45 to avoid token limits
+        "mini": 20,  # FIXED: Reduced to 20 to avoid token exhaustion
+        "thinking": 15,  # FIXED: Reduced to 15 to avoid token exhaustion
+        "pro": 10,  # FIXED: Reduced to 10 to avoid token exhaustion
+        "fast": 20,  # FIXED: Reduced to 20 to avoid token exhaustion
+        "balanced": 15,  # FIXED: Reduced to 15 to avoid token exhaustion
+        "accurate": 10  # FIXED: Reduced to 10 to avoid token exhaustion
     }
-    chunk = batch_sizes.get(tier, 30)
+    chunk = batch_sizes.get(tier, 15)
     total_chunks = math.ceil(len(candidates) / chunk)
     
     # Update job with total chunks if job_id provided
@@ -817,21 +830,33 @@ Think about the complete project lifecycle, dependencies, and what will actually
         ]
         
         try:
-            r = chat_json_schema(messages, schema, max_completion_tokens=3500)  # Matched to chunk size (70 items × ~50 tokens/item)
+            r = chat_json_schema(messages, schema, max_completion_tokens=8192)  # FIXED: Increased to 8192 for complete responses
             out.extend(r.get("items", []))
         except Exception as e:
-            print(f"[LLM Re-score Error] {e}")
-            # Fallback: mark items based on recall score
+            print(f"[LLM Re-score Error] {e} - Using fallback scoring")
+            # FIXED: Enhanced fallback scoring - always provide usable results
             for c in block:
+                # Calculate fallback confidence: 40% base + (50% * embedding/recall score)
+                base_confidence = 0.4
+                embedding_bonus = c.get("recall", 0.5) * 0.5
+                fallback_confidence = min(0.9, base_confidence + embedding_bonus)
+                
+                # Apply media keyword boost
+                media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
+                                 'social', 'analytics', 'reporting', 'planning', 'buying'}
+                title_words = set(tokenize(c.get("title", "").lower()))
+                if title_words & media_keywords:
+                    fallback_confidence = min(0.95, fallback_confidence * 1.2)
+                
                 out.append({
                     "id": c["id"],
                     "dept": c["dept"],
                     "level": c["level"],
-                    "relevance": min(100, c["recall"] * 100),
-                    "confidence": c["recall"],
-                    "why": "Recall-based selection (LLM unavailable)",
-                    "risks": "",
-                    "select": c["recall"] > 0.4  # Threshold for auto-select
+                    "relevance": min(100, fallback_confidence * 100),
+                    "confidence": fallback_confidence,
+                    "why": f"Embedding-based match (score: {c.get('recall', 0.5):.2f})",
+                    "risks": "GPT-5 unavailable - using embedding fallback",
+                    "select": fallback_confidence > 0.45  # Select if confidence > 45%
                 })
         
         # Update chunk completion
@@ -883,30 +908,43 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
     return out
 
 def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """If no deliverables pass, relax and ensure a non-empty scope"""
+    """FIXED: Always ensure minimum 15 deliverables, not just when empty"""
     passed_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
-    if passed_delivs:
-        return fused
+    
+    # FIXED: Always check and ensure minimum deliverables
+    if len(passed_delivs) >= 15:
+        return fused  # Already have enough deliverables
     
     # Build maps
     by_id = {x["id"]: x for x in fused}
     llm_map = {x["id"]: x for x in llm_scores}
     recall_map = {x["id"]: x for x in all_recall}
     
-    # Rank deliverables by LLM relevance (if any), else recall
+    # FIXED: Get additional deliverables to reach minimum of 15
+    needed = 15 - len(passed_delivs)
+    if needed <= 0:
+        return fused
+    
+    print(f"[AUTO-RESCUE] Only {len(passed_delivs)} deliverables passed, adding {needed} more to reach minimum of 15")
+    
+    # Rank all deliverables by score
     deliv_cands = [x for x in all_recall if x["level"] == "deliverable"]
+    
+    # Exclude already-passed deliverables
+    passed_ids = {d["id"] for d in passed_delivs}
+    unpassed_delivs = [d for d in deliv_cands if d["id"] not in passed_ids]
+    
+    # Sort by combination of LLM relevance and recall score
     def deliv_key(x):
         l = llm_map.get(x["id"])
-        return (l["relevance"] if l else 0.0, x["recall"])
-    deliv_cands.sort(key=deliv_key, reverse=True)
-    # FIXED: Lower threshold and ensure minimum of 15 deliverables
-    # Filter by minimum threshold instead of hard limit
-    min_threshold = 0.20  # FIXED: Lowered from 0.30 to 0.20 for broader matching
-    chosen_delivs = [d for d in deliv_cands if d["recall"] > min_threshold or (llm_map.get(d["id"], {}).get("relevance", 0) > 20)]
+        llm_score = (l.get("relevance", 0) / 100.0) if l else 0.0
+        combined = (llm_score * 0.6) + (x.get("recall", 0) * 0.4)
+        return combined
     
-    # If still not enough deliverables, take at least 15
-    if len(chosen_delivs) < 15:
-        chosen_delivs = deliv_cands[:15]  # FIXED: Ensure at least 15 deliverables
+    unpassed_delivs.sort(key=deliv_key, reverse=True)
+    
+    # Take top N deliverables to reach minimum
+    chosen_delivs = unpassed_delivs[:needed]
     
     # Mark chosen deliverables as pass with REAL SCORES
     for d in chosen_delivs:
@@ -986,13 +1024,12 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
     
     # If still nothing after auto-rescue, hard fallback
     if not dels:
+        print("[COMPOSE] No deliverables after rescue - using hard fallback")
         topD = [x for x in all_recall if x["level"] == "deliverable"]
         topD.sort(key=lambda z: z["recall"], reverse=True)
-        # CHANGED: Take all deliverables with reasonable scores, not just 3
-        min_score = 0.20  # Minimum 20% recall to be included
-        dels = [d for d in topD if d["recall"] > min_score]
-        if not dels:  # If still nothing, take at least minimum
-            dels = topD[:max(AI_MIN_DELIVERABLES, 3)]
+        # FIXED: Always take at least 15 deliverables
+        dels = topD[:max(AI_MIN_DELIVERABLES, 15)]
+        print(f"[COMPOSE] Hard fallback: selected {len(dels)} deliverables")
     
     by_dept: Dict[str, List[Dict[str, Any]]] = {}
     m = multipliers_from_summary(summary)
