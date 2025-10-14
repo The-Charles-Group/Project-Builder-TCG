@@ -24,19 +24,25 @@ const SessionManager = {
   startNewSession() {
     const newSessionId = this.generateSessionId();
     
-    // Clear ALL apb localStorage data from previous sessions
+    // Clear ALL apb localStorage data from previous sessions (both 'apb.' and 'apb:' patterns)
     Object.keys(localStorage).forEach(key => {
-      if (key.startsWith('apb.')) {
+      if (key.startsWith('apb.') || key.startsWith('apb:')) {
         localStorage.removeItem(key);
       }
     });
     
-    // Clear sessionStorage
+    // Clear sessionStorage (all patterns)
     Object.keys(sessionStorage).forEach(key => {
-      if (key.startsWith('apb.') || key === 'rfp_text') {
+      if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
         sessionStorage.removeItem(key);
       }
     });
+    
+    // Clear in-memory summary to prevent persistence
+    if (window.APP) {
+      window.APP.summary = null;
+      window.APP.rfpText = '';
+    }
     
     // Set new session ID
     localStorage.setItem('apb.currentSession', newSessionId);
@@ -48,19 +54,28 @@ const SessionManager = {
   async clearAllData() {
     const sessionId = this.getCurrentSessionId();
     
-    // Clear localStorage
+    // Clear localStorage (ALL patterns: 'apb.' AND 'apb:')
     Object.keys(localStorage).forEach(key => {
-      if (key.startsWith('apb.')) {
+      if (key.startsWith('apb.') || key.startsWith('apb:')) {
         localStorage.removeItem(key);
       }
     });
     
-    // Clear sessionStorage
+    // Clear sessionStorage (ALL patterns)
     Object.keys(sessionStorage).forEach(key => {
-      if (key.startsWith('apb.') || key === 'rfp_text') {
+      if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
         sessionStorage.removeItem(key);
       }
     });
+    
+    // Clear in-memory data to prevent persistence across sessions
+    if (window.APP) {
+      window.APP.summary = null;
+      window.APP.rfpText = '';
+    }
+    if (window.APB && window.APB.step2) {
+      window.APB.step2.rfpText = '';
+    }
     
     // Clear server-side cache
     try {
