@@ -4008,84 +4008,174 @@ async def generate_timeline(request: TimelineGenerationRequest):
     """
     Generate intelligent project timeline with parallel workstreams and dependencies.
     Uses the new intelligent scheduler for realistic project planning.
+    Now with real-time SSE progress streaming!
     """
     
     if not DB.loaded:
         DB.load()
     
-    try:
-        # Enrich deliverables with database information
-        enriched_deliverables = []
-        for deliv in request.deliverables:
-            code = deliv.get('deliverable_code', '')
+    # Import SSE streaming functions
+    from app_perf.stream import create_sse_job, update_sse_job, StreamJobStatus
+    
+    # Create a job for progress tracking
+    job_id = str(uuid.uuid4())
+    job = create_sse_job(job_id)
+    
+    # Start the timeline generation in background
+    async def generate_with_progress():
+        try:
+            # Update job status
+            update_sse_job(job_id, 
+                          status=StreamJobStatus.PROCESSING,
+                          progress=5.0,
+                          message="Preparing timeline generation...",
+                          current_stage="initialization")
+            await asyncio.sleep(0.1)  # Allow UI to update
             
-            # Get deliverable details from database
-            db_row = DB.deliverables[DB.deliverables['Deliverable_Code'] == code]
-            if not db_row.empty:
-                # Enrich with database data
-                enriched = {
-                    'deliverable_code': code,
-                    'deliverable_name': db_row['Deliverable'].iloc[0] if 'Deliverable' in db_row.columns else deliv.get('name', ''),
-                    'department': db_row['Department'].iloc[0] if 'Department' in db_row.columns else deliv.get('department', 'Strategy'),
-                    'total_hours': deliv.get('hours', 0) or deliv.get('total_hours', 0),
-                    'components': deliv.get('components', []),
-                    'is_retainer': deliv.get('is_retainer', False),
-                    'retainer_months': deliv.get('retainer_months', 0)
-                }
-            else:
-                # Use provided data
-                enriched = deliv
+            # Enrich deliverables with database information
+            enriched_deliverables = []
+            total_deliverables = len(request.deliverables)
             
-            enriched_deliverables.append(enriched)
-        
-        # Use the intelligent timeline generator
-        if request.use_intelligent_scheduler:
-            # Use the new intelligent scheduler
-            result = await generate_intelligent_timeline(
-                enriched_deliverables,
-                request.project_start,
-                request.optimization_mode
-            )
+            for i, deliv in enumerate(request.deliverables):
+                code = deliv.get('deliverable_code', '')
+                
+                # Update progress for deliverable enrichment
+                progress = 10 + (i / total_deliverables) * 20  # 10-30% for enrichment
+                update_sse_job(job_id,
+                              status=StreamJobStatus.PROCESSING,
+                              progress=progress,
+                              message=f"Processing deliverable {i+1} of {total_deliverables}...",
+                              current_stage="analyzing_deliverables",
+                              processed_items=i+1,
+                              total_items=total_deliverables)
+                
+                # Get deliverable details from database
+                db_row = DB.deliverables[DB.deliverables['Deliverable_Code'] == code]
+                if not db_row.empty:
+                    # Enrich with database data
+                    enriched = {
+                        'deliverable_code': code,
+                        'deliverable_name': db_row['Deliverable'].iloc[0] if 'Deliverable' in db_row.columns else deliv.get('name', ''),
+                        'department': db_row['Department'].iloc[0] if 'Department' in db_row.columns else deliv.get('department', 'Strategy'),
+                        'total_hours': deliv.get('hours', 0) or deliv.get('total_hours', 0),
+                        'components': deliv.get('components', []),
+                        'is_retainer': deliv.get('is_retainer', False),
+                        'retainer_months': deliv.get('retainer_months', 0)
+                    }
+                else:
+                    # Use provided data
+                    enriched = deliv
+                
+                enriched_deliverables.append(enriched)
             
-            # Enhance with AI reasoning if RFP text is provided
-            if request.rfp_text:
-                from ai_timeline_manager import enhance_with_ai_reasoning
-                result = await enhance_with_ai_reasoning(
-                    result,
-                    request.rfp_text,
-                    enriched_deliverables
+            # Progress: Creating dependencies (30-50%)
+            update_sse_job(job_id,
+                          status=StreamJobStatus.PROCESSING,
+                          progress=35.0,
+                          message="Creating dependencies and workstreams...",
+                          current_stage="creating_dependencies")
+            await asyncio.sleep(0.1)
+            
+            # Use the intelligent timeline generator
+            if request.use_intelligent_scheduler:
+                # Progress: Using intelligent scheduler (40-70%)
+                update_sse_job(job_id,
+                              status=StreamJobStatus.PROCESSING,
+                              progress=40.0,
+                              message="Using intelligent scheduler to optimize timeline...",
+                              current_stage="optimizing_schedule")
+                
+                # Use the new intelligent scheduler
+                result = await generate_intelligent_timeline(
+                    enriched_deliverables,
+                    request.project_start,
+                    request.optimization_mode
                 )
-        else:
-            # Use the standard AI timeline generator
-            result = await generate_ai_timeline(
-                enriched_deliverables,
-                request.rfp_text or RFP_TEXT_CACHE or "",
-                request.project_start,
-                request.optimization_mode,
-                use_intelligent_scheduler=False
-            )
-        
-        # Add success flag
-        result['success'] = True
-        result['message'] = f"Generated timeline with {len(result.get('tasks', []))} tasks using {'intelligent' if request.use_intelligent_scheduler else 'standard'} scheduler"
-        
-        return JSONResponse(result)
-        
-    except Exception as e:
-        print(f"[Timeline Generation] Error: {e}")
-        import traceback
-        traceback.print_exc()
-        
-        # Return error response
-        return JSONResponse({
-            'success': False,
-            'error': str(e),
-            'tasks': [],
-            'reasoning': {
-                'error': f"Failed to generate timeline: {str(e)}"
-            },
-            'metadata': {}
-        }, status_code=500)
+                
+                # Progress: AI reasoning (70-90%)
+                if request.rfp_text:
+                    update_sse_job(job_id,
+                                  status=StreamJobStatus.PROCESSING,
+                                  progress=75.0,
+                                  message="Enhancing timeline with AI reasoning...",
+                                  current_stage="ai_reasoning")
+                    
+                    from ai_timeline_manager import enhance_with_ai_reasoning
+                    result = await enhance_with_ai_reasoning(
+                        result,
+                        request.rfp_text,
+                        enriched_deliverables
+                    )
+            else:
+                # Progress: Using standard scheduler (40-90%)
+                update_sse_job(job_id,
+                              status=StreamJobStatus.PROCESSING,
+                              progress=50.0,
+                              message="Generating timeline with standard scheduler...",
+                              current_stage="generating_timeline")
+                
+                # Use the standard AI timeline generator
+                result = await generate_ai_timeline(
+                    enriched_deliverables,
+                    request.rfp_text or RFP_TEXT_CACHE or "",
+                    request.project_start,
+                    request.optimization_mode,
+                    use_intelligent_scheduler=False
+                )
+            
+            # Progress: Finalizing (90-100%)
+            update_sse_job(job_id,
+                          status=StreamJobStatus.PROCESSING,
+                          progress=95.0,
+                          message="Finalizing timeline and preparing visualization...",
+                          current_stage="finalizing")
+            
+            # Add success flag
+            result['success'] = True
+            result['message'] = f"Generated timeline with {len(result.get('tasks', []))} tasks using {'intelligent' if request.use_intelligent_scheduler else 'standard'} scheduler"
+            
+            # Complete the job
+            update_sse_job(job_id,
+                          status=StreamJobStatus.COMPLETED,
+                          progress=100.0,
+                          message="Timeline generation complete!",
+                          current_stage="completed",
+                          result=result)
+            
+            return result
+            
+        except Exception as e:
+            print(f"[Timeline Generation] Error: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Update job with error
+            update_sse_job(job_id,
+                          status=StreamJobStatus.FAILED,
+                          progress=0.0,
+                          message=f"Timeline generation failed: {str(e)}",
+                          error=str(e))
+            
+            # Return error response
+            return {
+                'success': False,
+                'error': str(e),
+                'tasks': [],
+                'reasoning': {
+                    'error': f"Failed to generate timeline: {str(e)}"
+                },
+                'metadata': {}
+            }
+    
+    # Start the background task
+    asyncio.create_task(generate_with_progress())
+    
+    # Return immediately with the job ID
+    return JSONResponse({
+        'success': True,
+        'job_id': job_id,
+        'message': 'Timeline generation started. Connect to SSE stream for progress updates.'
+    })
 
 @app.get("/api/db/status")
 def db_status():

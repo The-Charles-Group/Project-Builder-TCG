@@ -1557,11 +1557,38 @@ async function generateAITimeline() {
     return;
   }
   
-  // Show loading state
+  // Show loading state with progress UI
   btn.disabled = true;
-  btn.textContent = 'Generating...';
+  btn.textContent = 'Starting...';
+  
+  // Create comprehensive progress UI
+  const progressHTML = `
+    <div id="timeline-progress-container" style="padding: 20px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; margin-bottom: 20px;">
+      <h3 style="margin: 0 0 12px 0; color: #6366f1;">🚀 Generating AI Timeline</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <strong id="timeline-progress-stage" style="color: #6366f1;">Initializing...</strong>
+        <span id="timeline-progress-percentage" style="font-weight: 600; color: #6366f1;">0%</span>
+      </div>
+      <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; overflow: hidden;">
+        <div id="timeline-progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.3s ease;"></div>
+      </div>
+      <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+        <small id="timeline-progress-message" style="color: var(--muted);">Preparing timeline generation...</small>
+        <small id="timeline-progress-eta" style="color: var(--muted);"></small>
+      </div>
+      <div id="timeline-progress-details" style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.05); border-radius: 6px; display: none;">
+        <div style="font-size: 0.85em; color: var(--muted);">
+          <span id="timeline-progress-items"></span>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  loading.innerHTML = progressHTML;
   loading.style.display = 'block';
   container.style.display = 'none';
+  
+  let eventSource = null;
   
   try {
     // Get optimization mode
@@ -1573,59 +1600,169 @@ async function generateAITimeline() {
     // Get RFP text for context
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
     
-    // Prepare retainer information
-    const retainerData = {};
-    pricingData.retainers.forEach((value, key) => {
-      retainerData[key] = {
-        is_retainer: true,
-        monthly_hours: pricingData.monthlyHours.get(key) || {}
+    // Prepare deliverables with components and hours from current scenario
+    const deliverables = selectedCodes.map(code => {
+      const scenario = SCENARIOS?.A;
+      const item = scenario?.items?.find(i => i.deliverable_code === code);
+      
+      return {
+        deliverable_code: code,
+        name: labelFor(code),
+        department: item?.department || 'Strategy',
+        hours: item?.total_hours || 0,
+        components: item?.components || [],
+        is_retainer: pricingData.retainers.has(code),
+        retainer_months: pricingData.retainers.get(code) || 0
       };
     });
     
-    // Call AI timeline endpoint
-    const response = await fetch('/api/timeline/suggest', {
+    // Call NEW SSE-enabled timeline endpoint
+    const response = await fetch('/api/ai/generate_timeline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        selected_deliverable_codes: selectedCodes,
+        deliverables: deliverables,
         rfp_text: rfpText,
         project_start: projectStart,
         optimization_mode: optimizationMode,
-        retainer_services: retainerData  // Include retainer information
+        use_intelligent_scheduler: true
       })
     });
     
     if (!response.ok) {
-      throw new Error('Failed to generate timeline');
+      throw new Error(`Server error: ${response.status}`);
     }
     
-    const result = await response.json();
+    const jobData = await response.json();
     
-    // Store the timeline data
-    currentTimelineTasks = result.tasks || [];
-    timelineReasoning = result.reasoning || {};
+    if (!jobData.job_id) {
+      throw new Error('No job ID returned from server');
+    }
     
-    // Update reasoning panel
-    updateReasoningPanel(result.reasoning);
+    // Connect to SSE stream for progress updates
+    eventSource = new EventSource(`/api/stream/${jobData.job_id}`);
     
-    // Update metadata
-    updateTimelineMetadata(result.metadata);
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        // Update progress UI based on SSE data
+        const progressBar = document.getElementById('timeline-progress-bar');
+        const progressPercentage = document.getElementById('timeline-progress-percentage');
+        const progressStage = document.getElementById('timeline-progress-stage');
+        const progressMessage = document.getElementById('timeline-progress-message');
+        const progressETA = document.getElementById('timeline-progress-eta');
+        const progressDetails = document.getElementById('timeline-progress-details');
+        const progressItems = document.getElementById('timeline-progress-items');
+        
+        if (progressBar && data.progress !== undefined) {
+          progressBar.style.width = `${data.progress}%`;
+        }
+        
+        if (progressPercentage) {
+          progressPercentage.textContent = `${Math.round(data.progress || 0)}%`;
+        }
+        
+        // Map stage names to user-friendly messages
+        const stageMessages = {
+          'initialization': '⚙️ Initializing timeline generation...',
+          'analyzing_deliverables': '📊 Analyzing deliverables...',
+          'creating_dependencies': '🔗 Creating dependencies and workstreams...',
+          'optimizing_schedule': '⚡ Optimizing schedule with AI...',
+          'ai_reasoning': '🧠 Enhancing with AI reasoning...',
+          'generating_timeline': '📅 Generating timeline...',
+          'finalizing': '✨ Finalizing timeline...',
+          'completed': '✅ Timeline generation complete!'
+        };
+        
+        if (progressStage && data.current_stage) {
+          progressStage.textContent = stageMessages[data.current_stage] || data.current_stage;
+        }
+        
+        if (progressMessage && data.message) {
+          progressMessage.textContent = data.message;
+        }
+        
+        // Show ETA if available
+        if (progressETA && data.eta_seconds !== undefined) {
+          if (data.eta_seconds > 0) {
+            const minutes = Math.floor(data.eta_seconds / 60);
+            const seconds = Math.round(data.eta_seconds % 60);
+            progressETA.textContent = minutes > 0 
+              ? `ETA: ${minutes}m ${seconds}s`
+              : `ETA: ${seconds}s`;
+          } else {
+            progressETA.textContent = 'Almost done...';
+          }
+        }
+        
+        // Show item processing details if available
+        if (data.processed_items !== undefined && data.total_items !== undefined) {
+          if (progressDetails && progressItems) {
+            progressDetails.style.display = 'block';
+            progressItems.textContent = `Processing: ${data.processed_items} of ${data.total_items} deliverables`;
+          }
+        }
+        
+        // Handle completion
+        if (data.status === 'completed' && data.result) {
+          eventSource.close();
+          
+          // Process the result
+          const result = data.result;
+          currentTimelineTasks = result.tasks || [];
+          timelineReasoning = result.reasoning || {};
+          
+          // Update reasoning panel
+          updateReasoningPanel(result.reasoning);
+          
+          // Update metadata
+          updateTimelineMetadata(result.metadata);
+          
+          // Initialize Gantt chart with AI-generated timeline
+          initializeGanttChart(currentTimelineTasks).then(() => {
+            // Show the container
+            container.style.display = '';
+            
+            // Show metadata
+            const metadataDiv = document.getElementById('timeline-metadata');
+            if (metadataDiv) metadataDiv.style.display = '';
+            
+            // Hide loading
+            loading.style.display = 'none';
+            btn.disabled = false;
+            btn.textContent = '🤖 Generate AI Timeline';
+          });
+        }
+        
+        // Handle errors
+        if (data.status === 'failed') {
+          eventSource.close();
+          throw new Error(data.error || 'Timeline generation failed');
+        }
+        
+      } catch (parseError) {
+        console.error('Error parsing SSE data:', parseError);
+      }
+    };
     
-    // Initialize Gantt chart with AI-generated timeline
-    await initializeGanttChart(currentTimelineTasks);
-    
-    // Show the container
-    container.style.display = '';
-    
-    // Show metadata
-    const metadataDiv = document.getElementById('timeline-metadata');
-    if (metadataDiv) metadataDiv.style.display = '';
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+      eventSource.close();
+      
+      // Fallback to polling or show error
+      alert('Lost connection to timeline generation. Please try again.');
+      btn.disabled = false;
+      btn.textContent = '🤖 Generate AI Timeline';
+      loading.style.display = 'none';
+    };
     
   } catch (error) {
     console.error('Error generating AI timeline:', error);
     alert('Failed to generate timeline: ' + error.message);
-  } finally {
-    // Hide loading state
+    
+    // Clean up
+    if (eventSource) eventSource.close();
     btn.disabled = false;
     btn.textContent = '🤖 Generate AI Timeline';
     loading.style.display = 'none';
@@ -2385,11 +2522,55 @@ function startProgressPolling(jobId) {
   showProgressUI();
   updateProgressUI({ status: 'pending', percentage: 0, processed_images: 0, total_images: 0 });
   
-  // Poll every 500ms
-  progressInterval = setInterval(() => pollProgress(jobId), 500);
+  // Use SSE instead of polling for real-time updates
+  const eventSource = new EventSource(`/api/stream/${jobId}`);
   
-  // Initial fetch
-  pollProgress(jobId);
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      
+      // Update progress UI with SSE data
+      updateProgressUI({
+        status: data.status || 'processing',
+        percentage: Math.round(data.progress || 0),
+        processed_images: data.processed_items || 0,
+        total_images: data.total_items || 0,
+        current_stage: data.current_stage || '',
+        message: data.message || '',
+        eta_seconds: data.eta_seconds
+      });
+      
+      // Handle completion
+      if (data.status === 'completed') {
+        eventSource.close();
+        hideProgressUI();
+        currentJobId = null;
+      }
+      
+      // Handle errors
+      if (data.status === 'failed') {
+        eventSource.close();
+        console.error('Image processing failed:', data.error);
+        hideProgressUI();
+        currentJobId = null;
+      }
+    } catch (error) {
+      console.error('Error parsing SSE data:', error);
+    }
+  };
+  
+  eventSource.onerror = (error) => {
+    console.error('SSE connection error:', error);
+    eventSource.close();
+    
+    // Fallback to polling if SSE fails
+    if (!progressInterval) {
+      progressInterval = setInterval(() => pollProgress(jobId), 500);
+    }
+  };
+  
+  // Store event source for cleanup
+  window.currentEventSource = eventSource;
 }
 
 // AI Analysis Progress Tracking
@@ -2659,15 +2840,98 @@ async function onRunReconcile() {
     localStorage.setItem('apb.rfpText.v1', rfpText);
     APB.step2.rfpText = rfpText;
     
-    // Start polling for AI analysis progress
+    // Start SSE streaming for AI analysis progress
     if (jobInfo.job_id) {
       aiAnalysisJobId = jobInfo.job_id;
       showAIProgressBar();
       updateAIProgress({ progress: 0, current_stage: 'Starting AI analysis...', elapsed_seconds: 0, eta_seconds: null });
       
-      // Poll every 2 seconds
-      aiAnalysisInterval = setInterval(() => pollAIAnalysis(aiAnalysisJobId), 2000);
-      pollAIAnalysis(aiAnalysisJobId); // Initial fetch
+      // Use SSE for real-time progress updates
+      const eventSource = new EventSource(`/api/stream/${jobInfo.job_id}`);
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // Update progress UI with detailed status
+          const progressUpdate = {
+            progress: Math.round(data.progress || 0),
+            current_stage: data.current_stage || data.message || 'Processing...',
+            elapsed_seconds: data.elapsed_seconds || 0,
+            eta_seconds: data.eta_seconds
+          };
+          
+          // Map stages to user-friendly messages
+          const stageMap = {
+            'extracting_text': '📄 Extracting text from document...',
+            'analyzing_content': '🧠 Analyzing content with AI...',
+            'processing_deliverables': '📋 Processing deliverables...',
+            'generating_suggestions': '💡 Generating AI suggestions...',
+            'finalizing': '✨ Finalizing analysis...'
+          };
+          
+          if (data.current_stage && stageMap[data.current_stage]) {
+            progressUpdate.current_stage = stageMap[data.current_stage];
+          }
+          
+          updateAIProgress(progressUpdate);
+          
+          // Handle completion
+          if (data.status === 'completed' && data.result) {
+            eventSource.close();
+            hideAIProgressBar();
+            
+            // Handle completed analysis
+            const aiPlanResponse = data.result;
+            window.APP = window.APP || {};
+            window.APP.aiPlan = aiPlanResponse;
+            sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
+            
+            const step2 = document.getElementById('step2');
+            if (step2) {
+              step2.style.display = 'block';
+              step2.scrollIntoView({ behavior: 'smooth' });
+            }
+            
+            renderAIPlan(aiPlanResponse);
+            
+            const btnAnalyze = document.querySelector('#btnAnalyze');
+            if (btnAnalyze) {
+              btnAnalyze.disabled = false;
+              btnAnalyze.textContent = 'Analyze with AI';
+            }
+          }
+          
+          // Handle errors
+          if (data.status === 'failed') {
+            eventSource.close();
+            hideAIProgressBar();
+            alert(`AI analysis failed: ${data.error || 'Unknown error'}`);
+            
+            const btnAnalyze = document.querySelector('#btnAnalyze');
+            if (btnAnalyze) {
+              btnAnalyze.disabled = false;
+              btnAnalyze.textContent = 'Analyze with AI';
+            }
+          }
+        } catch (error) {
+          console.error('Error parsing SSE data:', error);
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error('SSE connection error:', error);
+        eventSource.close();
+        
+        // Fallback to polling if SSE fails
+        if (!aiAnalysisInterval) {
+          aiAnalysisInterval = setInterval(() => pollAIAnalysis(aiAnalysisJobId), 2000);
+          pollAIAnalysis(aiAnalysisJobId);
+        }
+      };
+      
+      // Store event source for cleanup
+      window.aiAnalysisEventSource = eventSource;
       
       // PATCH: Auto-fill project name from last upload
       try {
