@@ -180,6 +180,158 @@ async function clearAllDataWithConfirmation() {
 
 window.clearAllDataWithConfirmation = clearAllDataWithConfirmation;
 
+// ISSUE 3: Retainer Options Functions
+function toggleRetainerType(code, isRetainer) {
+  if (isRetainer) {
+    pricingData.deliverableTypes.set(code, 'RETAINER');
+    pricingData.retainers.set(code, 12); // Default 12 months
+    // Show months input
+    const monthsWrap = document.querySelector(`.retainer-months-wrap[data-code="${code}"]`);
+    if (monthsWrap) monthsWrap.style.display = 'flex';
+  } else {
+    pricingData.deliverableTypes.set(code, 'PROJECT');
+    pricingData.retainers.delete(code);
+    // Hide months input
+    const monthsWrap = document.querySelector(`.retainer-months-wrap[data-code="${code}"]`);
+    if (monthsWrap) monthsWrap.style.display = 'none';
+  }
+  
+  console.log(`[RETAINER] ${code} set to ${isRetainer ? 'RETAINER' : 'PROJECT'}`);
+}
+
+function updateRetainerMonths(code, months) {
+  const monthsNum = parseInt(months) || 12;
+  const clampedMonths = Math.min(Math.max(monthsNum, 1), 24);
+  pricingData.retainers.set(code, clampedMonths);
+  
+  console.log(`[RETAINER] ${code} set to ${clampedMonths} months`);
+}
+
+async function suggestRetainerConfig(code) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Analyzing...';
+  
+  try {
+    // Get RFP text
+    const rfpText = window.APP?.rfpText || APB.step2.rfpText || 
+                   sessionStorage.getItem('apb.rfp_text') || 
+                   document.getElementById('rfpText')?.value || '';
+    
+    if (!rfpText) {
+      alert('Please provide RFP text before using AI suggestions');
+      return;
+    }
+    
+    // Call AI to analyze if this should be a retainer
+    const analyzeRes = await fetch('/api/ai/analyze_project_retainer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rfp_text: rfpText,
+        deliverables: [{ code, name: labelFor(code) || code }]
+      })
+    });
+    
+    if (analyzeRes.ok) {
+      const analysis = await analyzeRes.json();
+      const suggestion = analysis.suggestions?.[0];
+      
+      if (suggestion) {
+        // Update retainer type
+        const isRetainer = suggestion.type === 'RETAINER';
+        const retainerToggle = document.querySelector(`.retainer-toggle[data-code="${code}"]`);
+        if (retainerToggle) {
+          retainerToggle.checked = isRetainer;
+          toggleRetainerType(code, isRetainer);
+        }
+        
+        // If retainer, get month suggestion
+        if (isRetainer) {
+          const monthsRes = await fetch('/api/pricing/retainer_suggest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              deliverables: [{ 
+                code, 
+                name: labelFor(code) || code,
+                type: 'RETAINER'
+              }],
+              rfp_text: rfpText
+            })
+          });
+          
+          if (monthsRes.ok) {
+            const monthsData = await monthsRes.json();
+            const monthsSuggestion = monthsData.suggestions?.[0];
+            
+            if (monthsSuggestion && monthsSuggestion.recommended_months) {
+              const monthsInput = document.querySelector(`.retainer-months[data-code="${code}"]`);
+              if (monthsInput) {
+                monthsInput.value = monthsSuggestion.recommended_months;
+                updateRetainerMonths(code, monthsSuggestion.recommended_months);
+              }
+            }
+          }
+        }
+        
+        // Show feedback
+        alert(`Suggested: ${isRetainer ? 'RETAINER' : 'PROJECT'}${isRetainer && suggestion.recommended_months ? ' for ' + suggestion.recommended_months + ' months' : ''}\n\nReason: ${suggestion.reason || 'Based on RFP analysis'}`);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to get AI suggestion:', error);
+    alert('Failed to get AI suggestion. Please try again.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'AI Suggest';
+  }
+}
+
+// Auto-detect retainer items after smart selection
+async function autoDetectRetainers() {
+  const rfpText = window.APP?.rfpText || APB.step2.rfpText || 
+                 sessionStorage.getItem('apb.rfp_text') || 
+                 document.getElementById('rfpText')?.value || '';
+  
+  if (!rfpText || APB.step2.selectedCodes.size === 0) return;
+  
+  const deliverables = Array.from(APB.step2.selectedCodes).map(code => ({
+    code,
+    name: labelFor(code) || code
+  }));
+  
+  try {
+    const res = await fetch('/api/ai/analyze_project_retainer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rfp_text: rfpText,
+        deliverables
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      data.suggestions?.forEach(suggestion => {
+        if (suggestion.type === 'RETAINER') {
+          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'RETAINER');
+          pricingData.retainers.set(suggestion.deliverable_code, suggestion.recommended_months || 12);
+        }
+      });
+      
+      // Re-render to show retainer badges
+      renderDeliverablesPanel();
+    }
+  } catch (error) {
+    console.warn('Failed to auto-detect retainers:', error);
+  }
+}
+
+window.toggleRetainerType = toggleRetainerType;
+window.updateRetainerMonths = updateRetainerMonths;
+window.suggestRetainerConfig = suggestRetainerConfig;
+
 // ================================================================================
 // Centralized Step 2 State - Single Source of Truth (selectionStore)
 // ================================================================================
@@ -2403,6 +2555,68 @@ async function boot() {
     retainersToggle.addEventListener('change', onToggleRetainers);
   }
   
+  // ISSUE 2 FIX: Auto-clear on first keystroke in RFP text area
+  const rfpTextEl = document.querySelector("#rfpText");
+  if (rfpTextEl && !rfpTextEl.dataset.clearOnKeystrokeWired) {
+    rfpTextEl.dataset.clearOnKeystrokeWired = 'true';
+    let hasTyped = false;
+    rfpTextEl.addEventListener('keydown', async (e) => {
+      // Skip modifier keys and navigation keys
+      if (e.ctrlKey || e.metaKey || e.altKey || ['Tab', 'Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) {
+        return;
+      }
+      
+      // Only clear on first real character typed in a new session
+      if (!hasTyped && rfpTextEl.value.trim().length === 0 && !['Backspace', 'Delete', 'Enter'].includes(e.key)) {
+        hasTyped = true;
+        console.log('[SESSION] Auto-clearing on first keystroke');
+        
+        // Clear server cache but don't reset the entire UI
+        const sessionId = SessionManager.getCurrentSessionId();
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId })
+          });
+          
+          // Start fresh session
+          SessionManager.startNewSession();
+          console.log('[SESSION] Session cleared on first keystroke');
+        } catch (err) {
+          console.warn('[SESSION] Failed to clear on keystroke:', err);
+        }
+      }
+    });
+  }
+  
+  // ISSUE 2 FIX: Auto-clear on new file upload
+  const rfpFileEl = document.querySelector("#rfpFile");
+  if (rfpFileEl && !rfpFileEl.dataset.clearOnUploadWired) {
+    rfpFileEl.dataset.clearOnUploadWired = 'true';
+    rfpFileEl.addEventListener('change', async (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        console.log('[SESSION] Auto-clearing on file upload');
+        
+        // Clear server cache
+        const sessionId = SessionManager.getCurrentSessionId();
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId })
+          });
+          
+          // Start fresh session
+          SessionManager.startNewSession();
+          console.log('[SESSION] Session cleared on file upload');
+        } catch (err) {
+          console.warn('[SESSION] Failed to clear on file upload:', err);
+        }
+      }
+    });
+  }
+  
   // Export functions globally for index.html
   window.onRunReconcile = onRunReconcile;
   window.buildFromCurrentSelection = buildFromCurrentSelection;
@@ -2492,9 +2706,17 @@ async function buildFromCurrentSelection() {
     }
   });
 
-  // Include retainers if toggle is enabled
-  const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
-  const retainersPayload = retainersEnabled ? (window.APP?.retainers || []) : [];
+  // ISSUE 3 FIX: Build retainers payload from pricingData
+  const retainersPayload = [];
+  pricingData.deliverableTypes.forEach((type, code) => {
+    if (type === 'RETAINER' && codes.includes(code)) {
+      retainersPayload.push({
+        deliverable_code: code,
+        months: pricingData.retainers.get(code) || 12,
+        type: 'RETAINER'
+      });
+    }
+  });
 
   const payload = {
     selected_deliverable_codes: codes,
@@ -3671,9 +3893,16 @@ function clearAllAISelections() {
 async function applyAllSelectedFromAI() {
   // Collect selected deliverables
   const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
+  let firstDelivCode = null;
+  let firstCompName = null;
   
   for (const delivCb of delivCheckboxes) {
     const delivCode = delivCb.dataset.code;
+    
+    // Track first selected deliverable
+    if (!firstDelivCode) {
+      firstDelivCode = delivCode;
+    }
     
     // Add deliverable to selection if not already there
     if (!selectionStore.deliverables.has(delivCode)) {
@@ -3690,6 +3919,11 @@ async function applyAllSelectedFromAI() {
     for (const compCb of compCheckboxes) {
       const compTitle = compCb.dataset.comp;
       selectedComps.add(compTitle);
+      
+      // Track first component
+      if (!firstCompName && delivCode === firstDelivCode) {
+        firstCompName = compTitle;
+      }
       
       // Ensure component is hydrated
       if (!selectionStore.componentsByDeliv.get(delivCode)?.has(compTitle)) {
@@ -3718,18 +3952,65 @@ async function applyAllSelectedFromAI() {
     }
   }
   
+  // ISSUE 1 FIX: Auto-select first deliverable and fetch L2 tasks
+  if (firstDelivCode) {
+    // Set the active deliverable
+    APB.step2.activeDeliverableCode = firstDelivCode;
+    
+    // Get components for bulk L2 fetch
+    const components = selectionStore.componentsByDeliv.get(firstDelivCode);
+    
+    if (components && components.size > 0) {
+      const componentArray = Array.from(components);
+      
+      // Set the first component as active
+      firstCompName = firstCompName || componentArray[0];
+      APB.step2.activeComponentName = firstCompName;
+      
+      try {
+        // Fetch L2 tasks in bulk for all selected components
+        const res = await fetch('/api/step2/l3/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deliverable: firstDelivCode,
+            components: componentArray
+          })
+        });
+        
+        if (res.ok) {
+          const l3Data = await res.json();
+          
+          // Store L2 tasks for each component
+          for (const [compName, tasks] of Object.entries(l3Data)) {
+            const key = `${firstDelivCode}::${compName}`;
+            if (!selectionStore.l3ByComponent.has(key)) {
+              selectionStore.l3ByComponent.set(key, new Set());
+            }
+            const existingTasks = selectionStore.l3ByComponent.get(key);
+            tasks.forEach(task => existingTasks.add(task));
+          }
+          
+          console.log(`Fetched L2 tasks for ${firstDelivCode} components:`, Object.keys(l3Data));
+        }
+      } catch (error) {
+        console.error('Failed to fetch L2 tasks after smart selection:', error);
+      }
+    }
+  }
+  
   // Update all panels properly
   if (window.renderDeliverablesPanel) renderDeliverablesPanel();
   if (window.renderComponentsPanel) {
-    const activeCode = APB.step2.activeDeliverableCode || Array.from(selectionStore.deliverables)[0];
-    if (activeCode) {
+    if (firstDelivCode) {
       await refreshComponentsPanel();
     }
   }
-  // Call renderTasksPanel with the active component key
-  if (window.renderTasksPanel && APB.step2.activeComponentName && APB.step2.activeDeliverableCode) {
-    const componentKey = `${APB.step2.activeDeliverableCode}::${APB.step2.activeComponentName}`;
-    renderTasksPanel(componentKey);
+  
+  // ISSUE 1 FIX: Render L3/Tasks panel with the active component
+  if (window.renderTasksPanel && firstCompName && firstDelivCode) {
+    const componentKey = `${firstDelivCode}::${firstCompName}`;
+    await renderTasksPanel(componentKey);
   }
   
   // Update summary and counts
@@ -4322,13 +4603,49 @@ function renderDeliverablesPanel() {
     selected.forEach(d => {
       const code = String(d.Deliverable_Code);
       const isActive = APB.step2.activeDeliverableCode === code;
+      const isRetainer = pricingData.deliverableTypes.get(code) === 'RETAINER';
+      const retainerMonths = pricingData.retainers.get(code) || 12;
+      
       html += `
-        <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;background:${isActive ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.03)'};border-left:${isActive ? '3px solid var(--accent)' : '3px solid transparent'};">
-          <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked data-visible="1" />
-          <span>${d.Deliverable}</span>
-          <button onclick="event.stopPropagation(); removeDeliverableX('${code}')" style="margin-left:auto;background:none;border:none;color:var(--danger);cursor:pointer;font-size:1.2em;padding:0 8px;">×</button>
-          <small style="opacity:.75">${d.Category || ''}</small>
-        </label>
+        <div class="deliv-row" data-code="${code}" style="background:${isActive ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.03)'};border-left:${isActive ? '3px solid var(--accent)' : '3px solid transparent'};">
+          <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+            <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked data-visible="1" />
+            <span>${d.Deliverable}</span>
+            ${isRetainer ? '<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER</span>' : ''}
+            <button onclick="event.stopPropagation(); removeDeliverableX('${code}')" style="margin-left:auto;background:none;border:none;color:var(--danger);cursor:pointer;font-size:1.2em;padding:0 8px;">×</button>
+            <small style="opacity:.75">${d.Category || ''}</small>
+          </label>
+          
+          <!-- ISSUE 3 FIX: Retainer Options -->
+          <div style="display:flex;gap:12px;align-items:center;padding:4px 8px 8px 32px;background:rgba(0,0,0,0.1);border-top:1px solid rgba(255,255,255,0.05);">
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;">
+              <input type="checkbox" 
+                     class="retainer-toggle" 
+                     data-code="${code}" 
+                     ${isRetainer ? 'checked' : ''}
+                     onchange="toggleRetainerType('${code}', this.checked)"
+                     style="cursor:pointer;">
+              <span style="color:${isRetainer ? '#10b981' : 'var(--muted)'};">Retainer</span>
+            </label>
+            
+            <div class="retainer-months-wrap" data-code="${code}" style="display:${isRetainer ? 'flex' : 'none'};align-items:center;gap:4px;">
+              <span style="font-size:0.85em;color:var(--muted);">Months:</span>
+              <input type="number" 
+                     class="retainer-months" 
+                     data-code="${code}"
+                     value="${retainerMonths}"
+                     min="1" 
+                     max="24"
+                     onchange="updateRetainerMonths('${code}', this.value)"
+                     style="width:50px;padding:2px 4px;border:1px solid rgba(255,255,255,0.2);border-radius:3px;background:rgba(0,0,0,0.2);">
+            </div>
+            
+            <button onclick="event.stopPropagation(); suggestRetainerConfig('${code}')" 
+                    style="margin-left:auto;background:#3b82f6;color:white;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:0.8em;">
+              AI Suggest
+            </button>
+          </div>
+        </div>
       `;
     });
   }

@@ -3764,8 +3764,16 @@ async def step2_l3_bulk(payload: dict):
     for comp in comps:
         if not comp:
             continue
-            
-        rows = df[(df["Deliverable_Code"] == dcode) & (df["Component"] == comp)]
+        
+        # ISSUE 1 FIX: Treat "General" or "general" as empty component
+        comp_query = comp.lower() if comp.lower() in ['general', 'generic'] else comp
+        if comp_query in ['general', 'generic']:
+            # For "General", find rows with empty or missing Component
+            rows = df[(df["Deliverable_Code"] == dcode) & 
+                     ((df["Component"].isna()) | (df["Component"] == "") | 
+                      (df["Component"].str.lower() == "general"))]
+        else:
+            rows = df[(df["Deliverable_Code"] == dcode) & (df["Component"] == comp)]
         
         # Prefer Task_Label (normalized), fallback to task_group if empty
         label_col = "Task_Label"

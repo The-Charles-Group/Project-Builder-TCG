@@ -1588,18 +1588,21 @@
     window.fmtUSD2 = window.fmtUSD2 || function(n){ return '$' + (Number(n)||0).toFixed(2); };
     window.fmtUSD = window.fmtUSD || (n => Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n));
 
-    // Enhanced scenario rendering function with retainer support
+    // ISSUE 4 FIX: Enhanced scenario rendering function with editable pricing
     function renderScenario(targetId, scenario) {
       if (!scenario || !scenario.items || !scenario.items.length) {
         document.getElementById(targetId).innerHTML = '<p>(No data)</p>';
         return;
       }
       
+      // Store scenario globally for editing
+      window[`currentScenario_${targetId}`] = scenario;
+      
       // Check for retainer items
       const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
       const hasRetainers = retainerItems.length > 0;
       
-      let html = `<div class="totals">Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
+      let html = `<div class="totals" id="${targetId}-totals">Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
       
       if (hasRetainers) {
         const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
@@ -1614,11 +1617,18 @@
       }
       
       html += `</div>
-        <table>
-          <thead><tr><th>Deliverable</th><th>Hours</th><th>Rate (USD)</th><th>Price (USD)</th><th>Tasks</th></tr></thead>
+        <table id="${targetId}-table">
+          <thead><tr>
+            <th>Deliverable</th>
+            <th>Hours</th>
+            <th>Rate (USD)</th>
+            <th>Price (USD)</th>
+            <th>Tasks</th>
+            <th style="width: 80px;">Actions</th>
+          </tr></thead>
           <tbody>
       `;
-      scenario.items.forEach(it => {
+      scenario.items.forEach((it, idx) => {
         const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
         const rate = (typeof it.effective_rate !== 'undefined') ? it.effective_rate : (it.total_hours ? (it.price/it.total_hours) : 0);
         
@@ -1628,12 +1638,29 @@
           deliverableName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${it.retainer_months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
         }
         
-        html += `<tr>
+        html += `<tr data-row="${idx}" data-deliverable="${it.deliverable_code || it.deliverable}">
           <td>${deliverableName}</td>
-          <td>${window.fmtInt(it.total_hours)}</td>
-          <td>${window.fmtUSD2(rate)}</td>
-          <td>${window.fmtUSD0(it.price)}</td>
-          <td>${tasks}</td>
+          <td class="editable-hours" data-field="hours" data-original="${it.total_hours}">
+            <span class="display-value">${window.fmtInt(it.total_hours)}</span>
+            <input type="number" class="edit-input" style="display:none;width:80px;padding:4px;" min="0" max="9999" value="${it.total_hours}">
+          </td>
+          <td class="editable-rate" data-field="rate" data-original="${rate}">
+            <span class="display-value">${window.fmtUSD2(rate)}</span>
+            <input type="number" class="edit-input" style="display:none;width:100px;padding:4px;" min="0" max="999999" step="0.01" value="${rate}">
+          </td>
+          <td class="calculated-price">${window.fmtUSD0(it.price)}</td>
+          <td style="font-size:0.85em;color:var(--muted);">${tasks}</td>
+          <td class="actions">
+            <button onclick="editPricingRow('${targetId}', ${idx})" class="edit-btn" style="background:#3b82f6;color:white;border:none;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:0.85em;">
+              ✏️ Edit
+            </button>
+            <button onclick="savePricingRow('${targetId}', ${idx})" class="save-btn" style="display:none;background:#10b981;color:white;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:0.85em;margin-right:4px;">
+              Save
+            </button>
+            <button onclick="cancelPricingEdit('${targetId}', ${idx})" class="cancel-btn" style="display:none;background:#ef4444;color:white;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:0.85em;">
+              Cancel
+            </button>
+          </td>
         </tr>`;
       });
       html += `
@@ -1642,6 +1669,169 @@
       `;
       document.getElementById(targetId).innerHTML = html;
     }
+    
+    // ISSUE 4: Functions for editing pricing table
+    function editPricingRow(targetId, rowIndex) {
+      const table = document.getElementById(`${targetId}-table`);
+      const row = table.querySelector(`tr[data-row="${rowIndex}"]`);
+      
+      // Hide display values, show inputs
+      row.querySelectorAll('.display-value').forEach(el => el.style.display = 'none');
+      row.querySelectorAll('.edit-input').forEach(el => el.style.display = 'block');
+      
+      // Toggle buttons
+      row.querySelector('.edit-btn').style.display = 'none';
+      row.querySelector('.save-btn').style.display = 'inline-block';
+      row.querySelector('.cancel-btn').style.display = 'inline-block';
+    }
+    
+    function cancelPricingEdit(targetId, rowIndex) {
+      const table = document.getElementById(`${targetId}-table`);
+      const row = table.querySelector(`tr[data-row="${rowIndex}"]`);
+      
+      // Reset input values to original
+      row.querySelectorAll('.edit-input').forEach(input => {
+        const cell = input.parentElement;
+        const original = cell.dataset.original;
+        input.value = original;
+      });
+      
+      // Show display values, hide inputs
+      row.querySelectorAll('.display-value').forEach(el => el.style.display = 'block');
+      row.querySelectorAll('.edit-input').forEach(el => el.style.display = 'none');
+      
+      // Toggle buttons
+      row.querySelector('.edit-btn').style.display = 'inline-block';
+      row.querySelector('.save-btn').style.display = 'none';
+      row.querySelector('.cancel-btn').style.display = 'none';
+    }
+    
+    async function savePricingRow(targetId, rowIndex) {
+      const table = document.getElementById(`${targetId}-table`);
+      const row = table.querySelector(`tr[data-row="${rowIndex}"]`);
+      const scenario = window[`currentScenario_${targetId}`];
+      const item = scenario.items[rowIndex];
+      
+      // Get new values
+      const newHours = parseFloat(row.querySelector('.editable-hours .edit-input').value) || 0;
+      const newRate = parseFloat(row.querySelector('.editable-rate .edit-input').value) || 0;
+      
+      // Validate
+      if (newHours < 0 || newHours > 9999) {
+        alert('Hours must be between 0 and 9999');
+        return;
+      }
+      if (newRate < 0 || newRate > 999999) {
+        alert('Rate must be between 0 and 999999');
+        return;
+      }
+      
+      // Show loading state
+      row.querySelector('.save-btn').textContent = 'Saving...';
+      row.querySelector('.save-btn').disabled = true;
+      
+      try {
+        // Calculate new price
+        const newPrice = Math.round(newHours * newRate);
+        
+        // Update the scenario item
+        item.total_hours = newHours;
+        item.effective_rate = newRate;
+        item.price = newPrice;
+        
+        // For complex deliverables with components, redistribute hours
+        if (item.components && item.components.length > 0) {
+          const res = await fetch('/api/pricing/redistribute-hours', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              deliverable_name: item.deliverable,
+              deliverable_code: item.deliverable_code || item.deliverable,
+              new_total_hours: newHours,
+              components: item.components.map(comp => ({
+                name: comp.component,
+                current_hours: comp.hours
+              })),
+              use_ai: true
+            })
+          });
+          
+          if (res.ok) {
+            const data = await res.json();
+            // Update component hours from redistribution
+            if (data.suggested_distribution) {
+              data.suggested_distribution.forEach(dist => {
+                const comp = item.components.find(c => c.component === dist.name);
+                if (comp) {
+                  comp.hours = dist.new_hours;
+                }
+              });
+            }
+          }
+        }
+        
+        // Update display values
+        row.querySelector('.editable-hours .display-value').textContent = window.fmtInt(newHours);
+        row.querySelector('.editable-rate .display-value').textContent = window.fmtUSD2(newRate);
+        row.querySelector('.calculated-price').textContent = window.fmtUSD0(newPrice);
+        
+        // Update data attributes
+        row.querySelector('.editable-hours').dataset.original = newHours;
+        row.querySelector('.editable-rate').dataset.original = newRate;
+        
+        // Recalculate scenario totals
+        scenario.totals.hours = scenario.items.reduce((sum, it) => sum + it.total_hours, 0);
+        scenario.totals.price = scenario.items.reduce((sum, it) => sum + it.price, 0);
+        
+        // Update totals display
+        const totalsDiv = document.getElementById(`${targetId}-totals`);
+        if (totalsDiv) {
+          const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
+          const hasRetainers = retainerItems.length > 0;
+          
+          let totalsHtml = `Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
+          
+          if (hasRetainers) {
+            const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
+            const oneTimeTotal = scenario.totals.price - retainerTotal;
+            totalsHtml += `
+              <div style="margin-top: 8px; padding: 8px; background: var(--card); border-radius: 4px; border-left: 3px solid var(--accent2); font-size: 12px;">
+                <strong style="color: var(--accent2);">💼 Breakdown:</strong>
+                ${oneTimeTotal > 0 ? ` One-time: ${window.fmtUSD0(oneTimeTotal)} •` : ''}
+                Retainers: ${window.fmtUSD0(retainerTotal)} (${retainerItems.length} deliverable${retainerItems.length > 1 ? 's' : ''})
+              </div>
+            `;
+          }
+          
+          totalsDiv.innerHTML = totalsHtml;
+        }
+        
+        // Exit edit mode
+        row.querySelectorAll('.display-value').forEach(el => el.style.display = 'block');
+        row.querySelectorAll('.edit-input').forEach(el => el.style.display = 'none');
+        
+        // Toggle buttons
+        row.querySelector('.edit-btn').style.display = 'inline-block';
+        row.querySelector('.save-btn').style.display = 'none';
+        row.querySelector('.cancel-btn').style.display = 'none';
+        
+        // Update global state
+        if (window.APP_STATE?.scenarios?.A && targetId === 'scenarioA') {
+          window.APP_STATE.scenarios.A = scenario;
+        }
+        
+      } catch (error) {
+        console.error('Failed to save pricing changes:', error);
+        alert('Failed to save changes. Please try again.');
+      } finally {
+        row.querySelector('.save-btn').textContent = 'Save';
+        row.querySelector('.save-btn').disabled = false;
+      }
+    }
+    
+    window.editPricingRow = editPricingRow;
+    window.cancelPricingEdit = cancelPricingEdit;
+    window.savePricingRow = savePricingRow;
 
     // Safe render functions using DOM helpers
     function renderLeftPanel(items, totals) {
