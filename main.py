@@ -3096,6 +3096,46 @@ def _truncate_to_2_sentences(s: str) -> str:
     parts = _SENT_SPLIT.split((s or "").strip())
     return " ".join(parts[:2]).strip()
 
+def validate_ai_response(rfp_text: str, ai_deliverables: List[dict]) -> bool:
+    """
+    Validate that AI-generated deliverables are relevant to the RFP content.
+    Returns False if there's clear contamination from other sources.
+    """
+    # Extract key terms from RFP
+    rfp_lower = rfp_text.lower()
+    
+    # Check for common contamination patterns
+    contamination_patterns = [
+        # Music/Audio industry specific
+        ("soundcloud", "artist accelerator", "music streaming"),
+        # Education specific  
+        ("charter school", "uncommon schools", "student enrollment", "teacher recruitment"),
+        # E-commerce specific
+        ("shopify", "woocommerce", "e-commerce platform"),
+        # Healthcare specific
+        ("patient care", "medical practice", "healthcare provider"),
+    ]
+    
+    # Identify which domain the RFP belongs to
+    rfp_domain = None
+    for pattern_group in contamination_patterns:
+        if any(term in rfp_lower for term in pattern_group):
+            rfp_domain = pattern_group
+            break
+    
+    # Check deliverables for contamination
+    for deliverable in ai_deliverables:
+        desc_lower = (deliverable.get("short_desc", "") + " " + deliverable.get("label", "")).lower()
+        
+        # Check if deliverables mention terms from OTHER domains
+        for pattern_group in contamination_patterns:
+            if pattern_group != rfp_domain:  # Different domain than RFP
+                if any(term in desc_lower for term in pattern_group):
+                    print(f"[VALIDATION] WARNING: Deliverable contaminated - mentions '{pattern_group[0]}' but RFP is about '{rfp_domain[0] if rfp_domain else 'general'}'")
+                    return False
+    
+    return True
+
 def ai_summarize_rfp_text(text: str) -> RfpSummary:
     """
     Call GPT‑5 (max compute) with a structured prompt that returns JSON:
@@ -3122,6 +3162,7 @@ Guidelines:
 - Use common agency taxonomy for "label" so it will match a database later (e.g., "Brand Strategy", "Campaign Creative", "Content Production (Video/Audio)", "Social Media & Community", "Editorial Microsite & Livestream", "Experiential Activation", "Media Planning & Buying", "Measurement & Reporting", "Program Management & Timeline").
 - Do NOT quote the RFP; summarize the work we must deliver.
 - Keep total text concise (UI cap is 500 words).
+- IMPORTANT: Your response MUST be specific to the actual RFP content provided. Do not use generic templates.
 """
 
         user_prompt = f"Analyze this RFP text and extract the key deliverables:\n\n{text[:8000]}"  # Limit input size
@@ -3180,6 +3221,17 @@ Guidelines:
                              "short_desc":"Create a production timeline and rollout schedule with milestones and owners.",
                              "tasks":[]}]
 
+    # Validate deliverables match the RFP (prevent contamination)
+    if not validate_ai_response(text, deliverables):
+        print("[VALIDATION] AI response failed validation - using generic fallback")
+        # Reset to safe generic deliverables
+        deliverables = [
+            {"label": "Strategy Development", "short_desc": "Develop strategy aligned with project objectives.", "tasks": []},
+            {"label": "Creative Development", "short_desc": "Create campaign concepts and messaging.", "tasks": []},
+            {"label": "Media Planning", "short_desc": "Plan media strategy and budget allocation.", "tasks": []},
+            {"label": "Analytics & Reporting", "short_desc": "Define KPIs and measurement framework.", "tasks": []}
+        ]
+    
     # enforce constraints
     for d in deliverables:
         d["short_desc"] = _truncate_to_2_sentences(d.get("short_desc",""))
