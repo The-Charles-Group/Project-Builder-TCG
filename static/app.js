@@ -5384,3 +5384,32 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 window.addEventListener("load", boot);
+
+// LEARN button functionality (Learning Brain integration)
+(function attachLearn(){
+  const btn = document.getElementById('learnBtn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const rfpText = (window.APB?.step2?.rfpText) || "";
+    const selected = Array.from(window.APB?.step2?.selectedCodes || []);
+    const components = (window.APB?.selectionStore?.componentsByDeliv)
+      ? Object.fromEntries(window.APB.selectionStore.componentsByDeliv) : {};
+    try {
+      const res = await fetch("/api/brain/learn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rfp_text: rfpText,
+          selected_deliverables: selected,
+          components_by_deliv: components,
+          outcome: "accepted",
+          notes: "learn-from-ui"
+        })
+      });
+      const data = await res.json();
+      alert("Learning event: " + (data?.message || res.status));
+    } catch (e) {
+      alert("Learn call failed: " + e);
+    }
+  });
+})();

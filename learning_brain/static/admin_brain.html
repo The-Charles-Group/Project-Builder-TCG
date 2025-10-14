@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Learning Brain Admin</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; padding: 16px; border-radius: 8px; margin: 12px 0; }
+    pre { background: #f6f8fa; padding: 10px; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>Learning Brain — Admin</h1>
+  <div class="row">
+    <input id="token" type="password" placeholder="Admin token (Bearer)" style="min-width: 320px;" />
+    <select id="mode">
+      <option value="off">OFF</option>
+      <option value="shadow">SHADOW</option>
+      <option value="active">ACTIVE</option>
+    </select>
+    <button onclick="setMode()">Set Mode</button>
+    <button onclick="getStatus()">Refresh Status</button>
+    <button onclick="publish()">Publish Draft</button>
+    <button onclick="undo()">Undo Last</button>
+    <button onclick="resetAll()">Reset All</button>
+  </div>
+  <div class="card">
+    <h3>Status</h3>
+    <pre id="status">...</pre>
+  </div>
+  <div class="card">
+    <h3>Episodes</h3>
+    <button onclick="loadEpisodes()">Load Episodes</button>
+    <pre id="episodes">...</pre>
+  </div>
+  <div class="card">
+    <h3>Preview</h3>
+    <textarea id="rfp" rows="6" style="width:100%" placeholder="Sample RFP text"></textarea>
+    <textarea id="base" rows="6" style="width:100%" placeholder='{"DEL-0036": 0.42, "DEL-0029": 0.35}'></textarea>
+    <button onclick="preview('published')">Preview Published</button>
+    <button onclick="preview('draft')">Preview Draft</button>
+    <pre id="preview">...</pre>
+  </div>
+<script>
+function auth(){ const t=document.getElementById('token').value.trim(); return t?{Authorization:'Bearer '+t}:{ }; }
+async function getStatus(){ const r=await fetch('/api/brain/status'); document.getElementById('status').textContent=JSON.stringify(await r.json(),null,2); }
+async function setMode(){ const m=document.getElementById('mode').value; const r=await fetch('/api/brain/toggle',{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify({mode:m})}); alert(JSON.stringify(await r.json())); }
+async function publish(){ const r=await fetch('/api/brain/publish',{method:'POST',headers:auth()}); alert((await r.json()).message||r.status); }
+async function undo(){ const r=await fetch('/api/brain/undo',{method:'POST',headers:auth()}); alert((await r.json()).message||r.status); }
+async function resetAll(){ if(!confirm('Clear all learning?'))return; const r=await fetch('/api/brain/reset',{method:'POST',headers:auth()}); alert((await r.json()).message||r.status); }
+async function loadEpisodes(){ const r=await fetch('/api/brain/episodes?limit=50',{headers:auth()}); document.getElementById('episodes').textContent=JSON.stringify(await r.json(),null,2); }
+async function preview(which){ const rfp=document.getElementById('rfp').value||''; let base={}; try{ base=JSON.parse(document.getElementById('base').value||'{}'); }catch(e){} const r=await fetch('/api/brain/preview',{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify({rfp_text:rfp,base_scores:base,which})}); document.getElementById('preview').textContent=JSON.stringify(await r.json(),null,2); }
+getStatus();
+</script>
+</body>
+</html>

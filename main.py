@@ -275,6 +275,11 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 from routes_weights_fastapi import router as weights_router
 app.include_router(weights_router)
 
+# Include Learning Brain router and admin UI
+from learning_brain.routes_brain import router as brain_router
+app.include_router(brain_router, prefix="/api/brain", tags=["learning"])
+app.mount("/admin/brain", StaticFiles(directory="learning_brain/static", html=True), name="brain_admin")
+
 # Mount AI planner routes (connected to AgencyDB)
 mount_routes_agencydb(app, base="/api/ai")
 
