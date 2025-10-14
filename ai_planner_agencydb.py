@@ -230,24 +230,10 @@ def embed_many(texts: List[str]) -> List[List[float]]:
     return all_embeddings
 
 def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 8192) -> dict:
-    """Use GPT-5 helper for JSON responses with schema - FIXED: Increased to 8192 tokens"""
+    """Use GPT-5 helper for JSON responses with schema - FIXED: Raises exceptions for empty results"""
     if not OPENAI_API_KEY:
-        # Return proper error structure based on schema
-        if "items" in schema.get("properties", {}):
-            return {"items": []}
-        # For summarize_request, return all required fields
-        return {
-            "summary": "",
-            "goals": [],
-            "channels": [],
-            "markets": [],
-            "compliance": [],
-            "languages": [],
-            "timeline_weeks": 0,
-            "budget_tier": "unknown",
-            "complexity": "medium",
-            "risk_flags": []
-        }
+        # FIXED: Raise exception instead of returning empty results
+        raise Exception("[GPT-5] No API key available - cannot process request")
     
     try:
         # Use the helper from gpt5_helpers - it handles model selection and enforcement
@@ -266,25 +252,20 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 8192)
             tier=tier,
             max_output_tokens=max_output_tokens
         )
+        
+        # FIXED: Check if result has sufficient items
+        if "items" in schema.get("properties", {}):
+            items = result.get("items", [])
+            if len(items) < AI_MIN_DELIVERABLES:
+                print(f"[GPT-5 INSUFFICIENT] Got only {len(items)} items, less than minimum {AI_MIN_DELIVERABLES}")
+                raise Exception(f"GPT-5 returned insufficient items: {len(items)} < {AI_MIN_DELIVERABLES}")
+        
         return result
     
     except Exception as e:
-        print(f"[GPT-5 API Error] OpenAI call failed: {e}")
-        # Return proper error structure based on schema
-        if "items" in schema.get("properties", {}):
-            return {"items": []}
-        return {
-            "summary": "",
-            "goals": [],
-            "channels": [],
-            "markets": [],
-            "compliance": [],
-            "languages": [],
-            "timeline_weeks": 0,
-            "budget_tier": "unknown",
-            "complexity": "medium",
-            "risk_flags": []
-        }
+        print(f"[GPT-5 API Error] OpenAI call failed or returned insufficient results: {e}")
+        # FIXED: Raise exception to trigger rescue function
+        raise Exception(f"GPT-5 failed: {str(e)}")
 
 def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 8192) -> dict:
     """Use simplified GPT-5 helper for JSON schema responses"""
@@ -1026,10 +1007,10 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
     return out
 
 def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """FIXED: Aggressively ensure minimum 25 deliverables for better coverage"""
+    """FIXED: Aggressively ensure minimum 25 deliverables ALWAYS"""
     passed_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
     
-    # FIXED: Increased minimum from 15 to 25 for better coverage
+    # FIXED: Force minimum of 25 deliverables ALWAYS
     MINIMUM_DELIVERABLES = 25  
     
     # FIXED: Always check and ensure minimum deliverables
@@ -1042,38 +1023,23 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
     llm_map = {x["id"]: x for x in llm_scores}
     recall_map = {x["id"]: x for x in all_recall}
     
-    # FIXED: Get additional deliverables to reach minimum
+    # FIXED: ALWAYS add deliverables to reach minimum, regardless of scores
     needed = MINIMUM_DELIVERABLES - len(passed_delivs)
-    if needed <= 0:
-        return fused
     
-    print(f"[AUTO-RESCUE TRIGGERED] Only {len(passed_delivs)} deliverables passed, forcibly adding {needed} more to reach minimum of {MINIMUM_DELIVERABLES}")
+    print(f"[AUTO-RESCUE TRIGGERED AGGRESSIVELY] Only {len(passed_delivs)} deliverables passed, FORCIBLY adding {needed} more to reach minimum of {MINIMUM_DELIVERABLES}")
     
-    # Rank all deliverables by score
+    # Get ALL deliverables and rank them
     deliv_cands = [x for x in all_recall if x["level"] == "deliverable"]
     
     # Exclude already-passed deliverables
     passed_ids = {d["id"] for d in passed_delivs}
     unpassed_delivs = [d for d in deliv_cands if d["id"] not in passed_ids]
     
-    # FIXED: If no LLM scores (GPT-5 failed), use pure embedding scores
-    if not llm_scores:
-        print(f"[AUTO-RESCUE] WARNING: No LLM scores available (GPT-5 failure), using pure embedding fallback")
-        # Sort by recall (embedding) score only
-        unpassed_delivs.sort(key=lambda x: x.get("recall", 0), reverse=True)
-    else:
-        # Sort by combination of LLM relevance and recall score
-        def deliv_key(x):
-            l = llm_map.get(x["id"])
-            llm_score = (l.get("relevance", 0) / 100.0) if l else 0.0
-            # FIXED: If no LLM score, weight embedding score more heavily
-            if llm_score == 0:
-                combined = x.get("recall", 0)  # Pure embedding score
-            else:
-                combined = (llm_score * 0.6) + (x.get("recall", 0) * 0.4)
-            return combined
-        
-        unpassed_delivs.sort(key=deliv_key, reverse=True)
+    # FIXED: Sort by embedding score (always available)
+    # Don't care about LLM scores for rescue - just use embedding scores
+    unpassed_delivs.sort(key=lambda x: x.get("recall", 0), reverse=True)
+    
+    print(f"[AUTO-RESCUE] Have {len(unpassed_delivs)} unpassed deliverables to choose from")
     
     # Take top N deliverables to reach minimum
     chosen_delivs = unpassed_delivs[:needed]
@@ -1367,8 +1333,19 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     try:
         llm_scores = rescore_with_llm_granular(summary, candidates, request_text, job_id)
         print(f"[ANALYZE] LLM scoring completed, {len(llm_scores)} scores generated")
+        
+        # FIXED: Check if we got enough deliverables from LLM
+        llm_delivs = [s for s in llm_scores if s["level"] == "deliverable"]
+        print(f"[ANALYZE] LLM returned {len(llm_delivs)} deliverable scores")
+        
+        if len(llm_delivs) < AI_MIN_DELIVERABLES:
+            print(f"[ANALYZE WARNING] LLM returned only {len(llm_delivs)} deliverables, less than minimum {AI_MIN_DELIVERABLES}")
+            print(f"[ANALYZE] Rescue function WILL be triggered to ensure minimum deliverables")
+            
     except Exception as e:
         print(f"[ANALYZE ERROR] LLM scoring failed completely: {e}")
+        print(f"[ANALYZE ERROR] Exception type: {type(e).__name__}")
+        print(f"[ANALYZE] RESCUE FUNCTION WILL BE TRIGGERED due to GPT-5 failure")
         # Generate pure fallback scores
         llm_scores = _generate_embedding_fallback_scores(candidates, summary)
         print(f"[ANALYZE] Using pure fallback scores for {len(llm_scores)} candidates")
@@ -1457,10 +1434,21 @@ def _run_analysis_background(job_id: str, request_text: str, db, strictness: str
         result = analyze_with_agencydb(request_text, db, strictness, job_id, tier)
         
         if job_id in AI_JOB_STORE:
-            AI_JOB_STORE[job_id].status = AIJobStatus.COMPLETED
+            # FIXED: Save result BEFORE marking as completed
             AI_JOB_STORE[job_id].result = result
             AI_JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
             AI_JOB_STORE[job_id].current_stage = "Complete"
+            
+            # Log deliverables count for debugging
+            delivs_count = 0
+            if result and "plan" in result:
+                delivs_by_dept = result["plan"].get("deliverables_by_dept", {})
+                for dept_delivs in delivs_by_dept.values():
+                    delivs_count += len(dept_delivs)
+            print(f"[AI JOB {job_id}] Saved {delivs_count} deliverables to job result")
+            
+            # FIXED: Mark as completed ONLY AFTER saving result
+            AI_JOB_STORE[job_id].status = AIJobStatus.COMPLETED
     except Exception as e:
         import traceback
         error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
