@@ -3149,30 +3149,31 @@ Guidelines:
             if any(k in t for k in keys) and not any(d["label"] == label for d in deliverables):
                 deliverables.append({"label": label, "short_desc": desc[:300], "tasks": []})
 
-        add("Program Design (Artist Accelerator)",
-            "Define cohort structure, creator services, milestones and governance for a year‑long program that introduces, elevates and celebrates artists.", 
-            "accelerator", "year long", "program")
-        add("Campaign Strategy & Creative Platform",
-            "Create the organizing idea, audience strategy, KPIs and messaging architecture anchored to 'What's next in music is first on SoundCloud.'",
-            "objectives", "kpi", "platform", "strategy", "creative")
-        add("Content Production (Video/Audio/Stills)",
-            "Produce hero and cutdown assets telling authentic artist stories across video, audio and stills sized for paid/owned social, digital and OOH.",
-            "video", "audio", "stills")
-        add("Editorial Microsite & Livestream",
-            "Propose an editorial destination and livestream approach with UX outline, tech options and content governance.",
-            "editorial", "platform", "live streaming")
-        add("Social Media & Community",
-            "Define an always‑on social calendar, creator collab mechanics and community management playbook.",
-            "social")
-        add("Experiential Activation",
-            "Design a nimble IRL/virtual activation concept with budget tiers and contingency planning.",
-            "experiential")
+        # Generic fallback deliverables - NO hardcoded client-specific content
+        add("Strategy Development",
+            "Develop comprehensive strategy based on objectives, target audience analysis, and market research.", 
+            "strategy", "objectives", "goals", "audience")
+        add("Campaign Creative & Messaging",
+            "Create campaign concepts, messaging framework, and creative platform aligned with brand objectives.",
+            "campaign", "creative", "messaging", "brand")
+        add("Content Production",
+            "Produce multimedia content assets including video, audio, and visual materials for various channels.",
+            "video", "audio", "content", "production", "assets")
+        add("Digital Platform Development",
+            "Design and develop digital experiences, websites, or applications as needed.",
+            "digital", "website", "platform", "app", "web")
+        add("Social Media Strategy",
+            "Develop social media strategy, content calendar, and community engagement approach.",
+            "social", "community", "engagement")
         add("Media Planning & Buying",
-            "Provide paid media plan and flighting to support brand spend, with channel mix and pacing across the year.",
-            "media")
-        add("Measurement & Reporting",
-            "Define KPI framework, reporting cadence and learning agenda; include a production timeline and rollout plan.",
-            "measurement", "kpi", "production timeline", "rollout")
+            "Create comprehensive media plan with channel strategy, budget allocation, and optimization approach.",
+            "media", "advertising", "paid", "budget")
+        add("Analytics & Reporting",
+            "Establish measurement framework, KPIs, and reporting structure for campaign performance.",
+            "analytics", "measurement", "kpi", "reporting", "metrics")
+        add("Project Management",
+            "Provide project timeline, resource planning, and stakeholder coordination.",
+            "timeline", "project", "management", "coordination")
 
         if not deliverables:
             deliverables = [{"label":"Program Management & Timeline",
