@@ -25,6 +25,14 @@ Preferred communication style: Simple, everyday language.
 - **Parallel Processing**: Implemented parallel processing of PDF images with OpenAI Vision API for faster analysis and real-time progress tracking, including job tracking, retry logic, and robust error handling.
 - **Smart Image Analysis**: Two-tier image processing system using pre-filtering, quick relevance scans (GPT-5), and deep analysis for relevant images to reduce processing time and cost for PDFs with many decorative images. User control is available to disable image analysis.
 - **Database Architecture**: Primary database is v4 (`test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx`) loaded into `app.state.db` during server startup. It contains 24 configuration sheets and handles backwards compatibility.
+- **Session Isolation System**: Complete data isolation between different RFPs to prevent cross-contamination:
+  - **Frontend Session Management**: Unique session IDs (`session_<timestamp>_<random>`) generated for each new RFP analysis
+  - **Auto-Clear Mechanism**: All localStorage data automatically cleared when new RFP uploaded or analyzed
+  - **Session-Scoped Embedding Cache**: Embedding cache strictly isolated by session_id with NO fallback to global cache (prevents old RFP data from appearing in new analyses)
+  - **24-Hour TTL**: Automatic expiration and cleanup of old session data
+  - **Clear All Data Button**: Manual control for users to wipe all cached data anytime
+  - **Background Cleanup**: Hourly task removes expired sessions to prevent storage bloat
+  - **Critical Fix (Oct 2025)**: Eliminated data contamination bug where previous RFP content (e.g., SoundCloud) appeared in new RFP summaries by removing global cache fallback in `embedding_cache.py`
 - **CORS**: Configured to allow cross-origin requests.
 
 ### Frontend Architecture
