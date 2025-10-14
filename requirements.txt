@@ -24,3 +24,4 @@ pytest-asyncio
 uvicorn[standard]
 httptools
 uvloop
+aiohttp

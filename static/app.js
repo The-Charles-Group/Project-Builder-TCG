@@ -5995,6 +5995,232 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// ========== New Features: Import, Second Scenario, Final Ship ==========
+
+// Import Previous Project functionality
+document.addEventListener('DOMContentLoaded', () => {
+  const importBtn = document.getElementById('btnImportProject');
+  const importFile = document.getElementById('importFile');
+  
+  if (importBtn && importFile) {
+    importBtn.addEventListener('click', () => {
+      importFile.click();
+    });
+    
+    importFile.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      try {
+        importBtn.textContent = 'Importing...';
+        importBtn.disabled = true;
+        
+        const response = await fetch('/api/project/import', {
+          method: 'POST',
+          body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          alert(`✅ Project imported successfully!\n\nProject: ${result.project_name}\nDeliverables: ${result.deliverables_count}\nTotal Hours: ${result.total_hours}\nTotal Price: $${result.total_price}`);
+          
+          // Store imported scenario and refresh UI
+          if (result.import_id && result.scenario) {
+            window.SCENARIOS = window.SCENARIOS || {};
+            window.SCENARIOS.imported = result.scenario;
+            
+            // Populate Step 2 with imported deliverables
+            if (result.scenario.items) {
+              const codes = result.scenario.items.map(item => item.deliverable_code);
+              codes.forEach(code => {
+                if (S2.selectedCodes) S2.selectedCodes.add(code);
+              });
+              
+              // Refresh Step 2 display
+              if (typeof s2RenderDelivs === 'function') {
+                s2RenderDelivs();
+              }
+            }
+            
+            // Show Step 2
+            document.getElementById('step2').style.display = 'block';
+          }
+        } else {
+          alert('❌ Import failed: ' + (result.detail || result.message || 'Unknown error'));
+        }
+      } catch (err) {
+        alert(`❌ Import error: ${err.message}`);
+      } finally {
+        importBtn.textContent = 'Import XML/Excel';
+        importBtn.disabled = false;
+        importFile.value = ''; // Reset file input
+      }
+    });
+  }
+  
+  // Build Second Scenario functionality
+  const buildSecondBtn = document.getElementById('btn-build-second-scenario');
+  const compareBtn = document.getElementById('btn-compare-versions');
+  const versionList = document.getElementById('version-list');
+  const versionItems = document.getElementById('version-items');
+  
+  if (buildSecondBtn) {
+    buildSecondBtn.addEventListener('click', async () => {
+      if (!window.SCENARIOS || !window.SCENARIOS.A) {
+        alert('Please build Scenario A first before creating a second version.');
+        return;
+      }
+      
+      try {
+        buildSecondBtn.textContent = 'Creating Version 2...';
+        buildSecondBtn.disabled = true;
+        
+        const response = await fetch('/api/scenario/duplicate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scenario_id: 'scenario_a',
+            scenario_data: window.SCENARIOS.A,
+            version_name: 'Version 2 - Alternative'
+          })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          alert(`✅ Version 2 created successfully!\n\nVersion ID: ${result.version_id}\nYou can now modify this version independently.`);
+          
+          // Store the new version
+          window.SCENARIOS[`A_${result.version_id}`] = window.SCENARIOS.A;
+          
+          // Update version list display
+          if (versionList && versionItems) {
+            versionList.style.display = 'block';
+            versionItems.innerHTML += `
+              <div style="padding: 8px; margin: 4px 0; background: rgba(255,255,255,0.05); border-radius: 4px;">
+                <strong>${result.version_name}</strong> - Created ${new Date(result.created_date).toLocaleDateString()}
+              </div>
+            `;
+          }
+        }
+      } catch (err) {
+        alert(`❌ Error creating second scenario: ${err.message}`);
+      } finally {
+        buildSecondBtn.textContent = 'Create Version 2';
+        buildSecondBtn.disabled = false;
+      }
+    });
+  }
+  
+  if (compareBtn) {
+    compareBtn.addEventListener('click', async () => {
+      try {
+        const response = await fetch('/api/scenario/versions/scenario_a');
+        const result = await response.json();
+        
+        if (result.versions && result.versions.length > 0) {
+          let versionInfo = 'Available Versions:\n\n';
+          versionInfo += 'Version 1 (Original)\n';
+          result.versions.forEach(v => {
+            versionInfo += `${v.version_name} - Created ${new Date(v.created_date).toLocaleDateString()}\n`;
+          });
+          alert(versionInfo);
+        } else {
+          alert('No alternative versions found. Create a second scenario first.');
+        }
+      } catch (err) {
+        alert(`❌ Error fetching versions: ${err.message}`);
+      }
+    });
+  }
+  
+  // Final Ship functionality
+  const finalShipBtn = document.getElementById('btn-final-ship');
+  const finalShipStatus = document.getElementById('final-ship-status');
+  const finalShipDownloads = document.getElementById('final-ship-downloads');
+  
+  if (finalShipBtn) {
+    finalShipBtn.addEventListener('click', async () => {
+      if (!window.SCENARIOS || !window.SCENARIOS.A) {
+        alert('Please build at least Scenario A before final shipping.');
+        return;
+      }
+      
+      const projectName = document.getElementById('projectName')?.value || 
+                          sessionStorage.getItem('apb.uploadTitle') || 
+                          'Project Export';
+      
+      const confirmShip = confirm(`🚢 FINAL SHIP CONFIRMATION\n\nThis will:\n• Lock all scenario data\n• Generate comprehensive exports\n• Prevent further edits\n\nProject: ${projectName}\n\nProceed with final ship?`);
+      
+      if (!confirmShip) return;
+      
+      try {
+        finalShipBtn.textContent = 'Processing Final Ship...';
+        finalShipBtn.disabled = true;
+        
+        const payload = {
+          scenario_a: window.SCENARIOS.A,
+          scenario_b: window.SCENARIOS.B || null,
+          scenario_c: window.SCENARIOS.C || null,
+          project_name: projectName,
+          notes: 'Final ship from UI'
+        };
+        
+        const response = await fetch('/api/project/final_ship', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          // Show success status
+          if (finalShipStatus) {
+            finalShipStatus.style.display = 'block';
+          }
+          
+          // Add download links
+          if (finalShipDownloads) {
+            finalShipDownloads.innerHTML = `
+              <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                ${result.exports.excel ? `<a href="${result.download_url}" class="btn-primary" style="text-decoration: none;">📥 Download Complete Package</a>` : ''}
+                <span style="color: var(--muted);">Ship ID: ${result.ship_id}</span>
+              </div>
+              <div style="margin-top: 8px; font-size: 0.85em; color: var(--muted);">
+                Shipped on ${new Date(result.shipped_date).toLocaleString()}
+              </div>
+            `;
+          }
+          
+          // Disable editing controls
+          finalShipBtn.style.display = 'none';
+          document.querySelectorAll('#step3 button, #step4 button').forEach(btn => {
+            if (!btn.id.includes('export')) {
+              btn.disabled = true;
+            }
+          });
+          
+          alert(`✅ PROJECT SHIPPED SUCCESSFULLY!\n\nShip ID: ${result.ship_id}\nAll data has been locked and exported.\n\nYou can download the complete package using the link provided.`);
+        } else {
+          alert('❌ Final ship failed: ' + (result.detail || result.message || 'Unknown error'));
+        }
+      } catch (err) {
+        alert(`❌ Final ship error: ${err.message}`);
+      } finally {
+        if (!finalShipStatus || finalShipStatus.style.display === 'none') {
+          finalShipBtn.textContent = '🔒 Final Ship Project';
+          finalShipBtn.disabled = false;
+        }
+      }
+    });
+  }
+});
+
 window.addEventListener("load", boot);
 
 // LEARN button functionality (Learning Brain integration)

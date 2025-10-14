@@ -7495,5 +7495,430 @@ def convert_excel_to_mspdi(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"MSPDI conversion failed: {str(e)}")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Missing Features Implementation: Final Ship, Second Scenario, Import
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Store for shipped scenarios (locked versions) and scenario versions
+SHIPPED_SCENARIOS: Dict[str, Dict[str, Any]] = {}
+SCENARIO_VERSIONS: Dict[str, List[Dict[str, Any]]] = {}
+
+class FinalShipPayload(BaseModel):
+    """Payload for final ship endpoint - locks scenario and exports all data"""
+    scenario_a: Dict[str, Any]
+    scenario_b: Optional[Dict[str, Any]] = None
+    scenario_c: Optional[Dict[str, Any]] = None
+    project_name: str
+    project_id: Optional[str] = None
+    notes: Optional[str] = None
+
+class DuplicateScenarioPayload(BaseModel):
+    """Payload for duplicating/versioning scenarios"""
+    scenario_data: Dict[str, Any]
+    scenario_id: str
+    version_name: Optional[str] = None
+    
+class ImportProjectPayload(BaseModel):
+    """Payload for importing existing projects"""
+    file_type: str  # "excel" or "xml"
+    file_content: str  # Base64 encoded file content
+
+@app.post("/api/project/final_ship")
+async def final_ship(payload: FinalShipPayload):
+    """
+    Final Ship: Lock all scenario data and generate comprehensive exports.
+    This creates immutable versions of scenarios with full Excel and XML exports.
+    """
+    if not DB.loaded:
+        DB.load()
+        
+    # Generate unique ship ID with timestamp
+    ship_id = f"SHIP_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    
+    # Create shipped package
+    shipped_package = {
+        "ship_id": ship_id,
+        "project_name": payload.project_name,
+        "project_id": payload.project_id or uuid.uuid4().hex,
+        "shipped_date": datetime.datetime.now(ZoneInfo("America/New_York")).isoformat(),
+        "scenarios": {
+            "A": payload.scenario_a,
+            "B": payload.scenario_b,
+            "C": payload.scenario_c
+        },
+        "notes": payload.notes,
+        "locked": True,
+        "exports": {}
+    }
+    
+    # Generate comprehensive Excel export with all scenarios
+    excel_base = _export_basename(payload.project_name, "FINAL_SHIP")
+    excel_path = f"{excel_base}.xlsx"
+    
+    try:
+        # Build DataFrames for all scenarios
+        dfA = build_wbs_dataframe_from_scenario(payload.scenario_a, payload.project_name)
+        dfA = _ensure_v3_ae_columns(dfA)
+        
+        with pd.ExcelWriter(excel_path, engine="openpyxl") as xw:
+            # Write Scenario A
+            dfA.to_excel(xw, sheet_name="Scenario A - Final", index=False)
+            _apply_number_formats(xw.sheets["Scenario A - Final"], dfA)
+            
+            # Write Scenario B if provided
+            if payload.scenario_b:
+                dfB = build_wbs_dataframe_from_scenario(payload.scenario_b, payload.project_name)
+                dfB = _ensure_v3_ae_columns(dfB)
+                dfB.to_excel(xw, sheet_name="Scenario B - Final", index=False)
+                _apply_number_formats(xw.sheets["Scenario B - Final"], dfB)
+                
+            # Write Scenario C if provided
+            if payload.scenario_c:
+                dfC = build_wbs_dataframe_from_scenario(payload.scenario_c, payload.project_name)
+                dfC = _ensure_v3_ae_columns(dfC)
+                dfC.to_excel(xw, sheet_name="Scenario C - Final", index=False)
+                _apply_number_formats(xw.sheets["Scenario C - Final"], dfC)
+                
+            # Add metadata sheet
+            metadata_df = pd.DataFrame([{
+                "Ship ID": ship_id,
+                "Project Name": payload.project_name,
+                "Shipped Date": shipped_package["shipped_date"],
+                "Total Scenarios": sum(1 for s in [payload.scenario_a, payload.scenario_b, payload.scenario_c] if s),
+                "Notes": payload.notes or ""
+            }])
+            metadata_df.to_excel(xw, sheet_name="Metadata", index=False)
+        
+        shipped_package["exports"]["excel"] = excel_path
+        
+    except Exception as e:
+        print(f"[FINAL SHIP] Excel export failed: {e}")
+        raise HTTPException(500, f"Excel export failed: {str(e)}")
+    
+    # Generate XML exports for all scenarios
+    xml_files = []
+    try:
+        for label, scenario in [("A", payload.scenario_a), ("B", payload.scenario_b), ("C", payload.scenario_c)]:
+            if scenario:
+                xml_path = _export_single_scenario_xml(
+                    scenario=scenario,
+                    scenario_label=f"Scenario {label} - FINAL",
+                    project_name=payload.project_name
+                )
+                xml_files.append(xml_path)
+                shipped_package["exports"][f"xml_{label}"] = xml_path
+                
+    except Exception as e:
+        print(f"[FINAL SHIP] XML export failed: {e}")
+    
+    # Create ZIP archive with all exports
+    import zipfile
+    zip_path = f"{excel_base}_COMPLETE.zip"
+    
+    try:
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            # Add Excel file
+            if os.path.exists(excel_path):
+                zipf.write(excel_path, f"Final_Export/{os.path.basename(excel_path)}")
+            
+            # Add XML files
+            for xml_path in xml_files:
+                if os.path.exists(xml_path):
+                    zipf.write(xml_path, f"Final_Export/XML/{os.path.basename(xml_path)}")
+            
+            # Add ship metadata
+            zipf.writestr("Final_Export/ship_metadata.json", json.dumps(shipped_package, indent=2))
+            
+        shipped_package["exports"]["zip"] = zip_path
+        
+    except Exception as e:
+        print(f"[FINAL SHIP] ZIP creation failed: {e}")
+    
+    # Store shipped package (locked and immutable)
+    SHIPPED_SCENARIOS[ship_id] = shipped_package
+    
+    # Update current scenarios to locked state
+    if ship_id in _CURRENT_SCENARIOS:
+        _CURRENT_SCENARIOS[ship_id]["locked"] = True
+    
+    return {
+        "success": True,
+        "ship_id": ship_id,
+        "project_name": payload.project_name,
+        "shipped_date": shipped_package["shipped_date"],
+        "exports": {
+            "excel": os.path.basename(excel_path) if excel_path else None,
+            "xml_count": len(xml_files),
+            "zip": os.path.basename(zip_path) if os.path.exists(zip_path) else None
+        },
+        "download_url": f"/api/project/download/{ship_id}"
+    }
+
+@app.get("/api/project/download/{ship_id}")
+def download_shipped_project(ship_id: str):
+    """Download the complete shipped project package"""
+    if ship_id not in SHIPPED_SCENARIOS:
+        raise HTTPException(404, f"Shipped project {ship_id} not found")
+    
+    package = SHIPPED_SCENARIOS[ship_id]
+    zip_path = package.get("exports", {}).get("zip")
+    
+    if not zip_path or not os.path.exists(zip_path):
+        raise HTTPException(404, "Export package not found")
+    
+    return FileResponse(
+        zip_path,
+        filename=f"{package['project_name']}_FINAL_{ship_id}.zip",
+        media_type="application/zip"
+    )
+
+@app.post("/api/scenario/duplicate")
+async def duplicate_scenario(payload: DuplicateScenarioPayload):
+    """
+    Build Second Scenario: Create a new version based on existing scenario.
+    Maintains version history and allows switching between versions.
+    """
+    scenario_id = payload.scenario_id
+    base_scenario = payload.scenario_data
+    
+    # Generate version ID
+    version_id = f"v{len(SCENARIO_VERSIONS.get(scenario_id, [])) + 2}"  # v2, v3, etc.
+    version_name = payload.version_name or f"Version {version_id}"
+    
+    # Create new version with metadata
+    new_version = {
+        "version_id": version_id,
+        "version_name": version_name,
+        "created_date": datetime.datetime.now(ZoneInfo("America/New_York")).isoformat(),
+        "base_version": "v1" if scenario_id not in SCENARIO_VERSIONS else SCENARIO_VERSIONS[scenario_id][-1]["version_id"],
+        "scenario_data": base_scenario.copy(),
+        "editable": True
+    }
+    
+    # Store version
+    if scenario_id not in SCENARIO_VERSIONS:
+        SCENARIO_VERSIONS[scenario_id] = []
+    SCENARIO_VERSIONS[scenario_id].append(new_version)
+    
+    # Update current scenarios with new version
+    _CURRENT_SCENARIOS[f"{scenario_id}_{version_id}"] = new_version["scenario_data"]
+    
+    return {
+        "success": True,
+        "version_id": version_id,
+        "version_name": version_name,
+        "scenario_id": f"{scenario_id}_{version_id}",
+        "created_date": new_version["created_date"],
+        "total_versions": len(SCENARIO_VERSIONS[scenario_id]) + 1  # +1 for original
+    }
+
+@app.get("/api/scenario/versions/{scenario_id}")
+def get_scenario_versions(scenario_id: str):
+    """Get all versions of a scenario for comparison"""
+    if scenario_id not in SCENARIO_VERSIONS:
+        return {"versions": [], "message": "No versions found"}
+    
+    versions = SCENARIO_VERSIONS[scenario_id]
+    return {
+        "scenario_id": scenario_id,
+        "versions": [
+            {
+                "version_id": v["version_id"],
+                "version_name": v["version_name"],
+                "created_date": v["created_date"],
+                "editable": v["editable"]
+            }
+            for v in versions
+        ],
+        "total_versions": len(versions) + 1  # +1 for original
+    }
+
+@app.post("/api/project/import")
+async def import_project(file: UploadFile = File(...)):
+    """
+    Import XML/Excel: Parse uploaded file and recreate scenario.
+    Supports both Excel exports and MS Project XML files.
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    # Read uploaded file
+    content = await file.read()
+    filename = file.filename.lower()
+    
+    try:
+        if filename.endswith('.xlsx') or filename.endswith('.xls'):
+            # Import from Excel
+            import_data = await _import_from_excel(content, filename)
+        elif filename.endswith('.xml'):
+            # Import from MS Project XML
+            import_data = await _import_from_xml(content, filename)
+        else:
+            raise HTTPException(400, "Unsupported file format. Please upload Excel (.xlsx) or XML (.xml) file.")
+        
+        # Generate import ID
+        import_id = f"IMP_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+        
+        # Store imported scenario
+        _CURRENT_SCENARIOS[import_id] = import_data["scenario"]
+        
+        return {
+            "success": True,
+            "import_id": import_id,
+            "project_name": import_data.get("project_name", "Imported Project"),
+            "scenario_count": import_data.get("scenario_count", 1),
+            "deliverables_count": len(import_data["scenario"].get("items", [])),
+            "total_hours": import_data.get("total_hours", 0),
+            "total_price": import_data.get("total_price", 0),
+            "message": "Project imported successfully. You can now edit and work with the imported data."
+        }
+        
+    except Exception as e:
+        print(f"[IMPORT ERROR] {str(e)}")
+        raise HTTPException(500, f"Import failed: {str(e)}")
+
+async def _import_from_excel(content: bytes, filename: str) -> Dict[str, Any]:
+    """Parse Excel file and extract scenario data"""
+    import io
+    
+    # Read Excel file
+    df = pd.read_excel(io.BytesIO(content), sheet_name=0)
+    
+    # Extract project info
+    project_name = df["Project_Name"].iloc[0] if "Project_Name" in df.columns else "Imported Project"
+    
+    # Group by deliverable to reconstruct scenario
+    deliverables = []
+    for deliverable_code, group in df.groupby("Deliverable_Code"):
+        deliverable = {
+            "deliverable_code": deliverable_code,
+            "deliverable": group["Deliverable"].iloc[0],
+            "hours": float(group["Planned_Hours"].sum()),
+            "price": float(group["Price_USD"].sum()) if "Price_USD" in group.columns else 0,
+            "included_task_groups": group["Task_Code"].unique().tolist() if "Task_Code" in group.columns else [],
+            "components": []
+        }
+        
+        # Extract components if present
+        if "Component" in group.columns:
+            for component, comp_group in group.groupby("Component"):
+                if pd.notna(component):
+                    deliverable["components"].append({
+                        "name": component,
+                        "hours": float(comp_group["Planned_Hours"].sum()),
+                        "tasks": comp_group["Task"].unique().tolist() if "Task" in comp_group.columns else []
+                    })
+        
+        deliverables.append(deliverable)
+    
+    # Create scenario structure
+    scenario = {
+        "project_name": project_name,
+        "items": deliverables,
+        "pricing_mode": "Per_Resource",  # Default, can be detected from data
+        "rate_band": "Standard_US",
+        "total_hours": float(df["Planned_Hours"].sum()) if "Planned_Hours" in df.columns else 0,
+        "total_price": float(df["Price_USD"].sum()) if "Price_USD" in df.columns else 0
+    }
+    
+    return {
+        "scenario": scenario,
+        "project_name": project_name,
+        "scenario_count": 1,
+        "total_hours": scenario["total_hours"],
+        "total_price": scenario["total_price"]
+    }
+
+async def _import_from_xml(content: bytes, filename: str) -> Dict[str, Any]:
+    """Parse MS Project XML and extract scenario data"""
+    from xml.etree import ElementTree as ET
+    
+    # Parse XML
+    root = ET.fromstring(content)
+    
+    # Extract project name
+    project_elem = root.find(".//Name")
+    project_name = project_elem.text if project_elem is not None else "Imported Project"
+    
+    # Extract tasks
+    tasks = []
+    tasks_elem = root.find(".//Tasks")
+    if tasks_elem is not None:
+        for task_elem in tasks_elem.findall("Task"):
+            task = {}
+            
+            # Extract task fields
+            for field in ["UID", "Name", "WBS", "OutlineLevel", "Work", "Cost"]:
+                elem = task_elem.find(field)
+                if elem is not None:
+                    task[field] = elem.text
+            
+            # Convert Work from PT format to hours
+            if "Work" in task and task["Work"]:
+                # Parse PT480H format
+                import re as re_module
+                match = re_module.match(r'PT(\d+)([HM])', task["Work"])
+                if match:
+                    value, unit = match.groups()
+                    task["Hours"] = float(value) if unit == 'H' else float(value) / 60
+            
+            tasks.append(task)
+    
+    # Group tasks into deliverables
+    deliverables = []
+    deliverable_tasks = {}
+    
+    for task in tasks:
+        outline_level = int(task.get("OutlineLevel", 0))
+        if outline_level == 1:  # Deliverable level
+            deliverable_code = f"IMP_{task.get('UID', '')}"
+            deliverable = {
+                "deliverable_code": deliverable_code,
+                "deliverable": task.get("Name", ""),
+                "hours": float(task.get("Hours", 0)),
+                "price": float(task.get("Cost", 0)) if task.get("Cost") else 0,
+                "included_task_groups": [],
+                "components": []
+            }
+            deliverables.append(deliverable)
+            deliverable_tasks[deliverable_code] = deliverable
+    
+    # Create scenario
+    scenario = {
+        "project_name": project_name,
+        "items": deliverables,
+        "pricing_mode": "Per_Resource",
+        "rate_band": "Standard_US",
+        "total_hours": sum(d["hours"] for d in deliverables),
+        "total_price": sum(d["price"] for d in deliverables)
+    }
+    
+    return {
+        "scenario": scenario,
+        "project_name": project_name,
+        "scenario_count": 1,
+        "total_hours": scenario["total_hours"],
+        "total_price": scenario["total_price"]
+    }
+
+@app.get("/api/shipped/list")
+def list_shipped_projects():
+    """List all shipped (finalized) projects"""
+    shipped_list = []
+    for ship_id, package in SHIPPED_SCENARIOS.items():
+        shipped_list.append({
+            "ship_id": ship_id,
+            "project_name": package["project_name"],
+            "shipped_date": package["shipped_date"],
+            "scenario_count": sum(1 for s in package["scenarios"].values() if s),
+            "has_exports": bool(package.get("exports", {})),
+            "locked": package.get("locked", True)
+        })
+    
+    return {
+        "shipped_projects": shipped_list,
+        "total_count": len(shipped_list)
+    }
+
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload

@@ -51,6 +51,20 @@
       <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" multiple />
       <div id="selected-files-list" style="margin-top: 8px; font-size: 0.85em; color: var(--muted);"></div>
       
+      <!-- Import Previous Project -->
+      <div style="margin: 16px 0; padding: 12px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 6px;">
+        <label style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-weight: 600; color: #3b82f6;">📂 Import Previous Project</span>
+          <button id="btnImportProject" class="btn-sm" style="background: #3b82f6; color: white; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer;">
+            Import XML/Excel
+          </button>
+        </label>
+        <div style="font-size: 0.85em; color: var(--muted);">
+          Load a previously exported project from Excel or MS Project XML file
+        </div>
+        <input id="importFile" type="file" accept=".xlsx,.xls,.xml" style="display: none;" />
+      </div>
+      
       <!-- Image Analysis Toggle -->
       <div style="margin: 12px 0; padding: 8px 12px; background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 6px;">
         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9em;">
@@ -769,6 +783,43 @@
       <div class="inline" style="margin-top: 8px;">
         <small style="color: var(--muted); display: block; margin-bottom: 4px;">📊 Microsoft Project XML Export:</small>
         <button id="btn-export-xml-a">Export XML</button>
+      </div>
+      
+      <!-- Final Ship Section -->
+      <div style="margin-top: 32px; padding: 20px; background: linear-gradient(135deg, rgba(220, 38, 38, 0.1), rgba(239, 68, 68, 0.1)); border: 2px solid rgba(220, 38, 38, 0.3); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #ef4444;">🚢 Final Ship - Lock & Export All</h3>
+        <p style="color: var(--muted); font-size: 0.9em; margin-bottom: 16px;">
+          This will finalize your project, lock all data, and generate comprehensive exports including all scenarios, pricing, and timeline data.
+        </p>
+        <button id="btn-final-ship" style="background: linear-gradient(135deg, #dc2626, #ef4444); color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1em;">
+          🔒 Final Ship Project
+        </button>
+        <div id="final-ship-status" style="margin-top: 12px; display: none;">
+          <div style="padding: 12px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 6px;">
+            <strong style="color: #22c55e;">✅ Project Shipped Successfully!</strong>
+            <div id="final-ship-downloads" style="margin-top: 8px;"></div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Build Second Scenario Section -->
+      <div style="margin-top: 24px; padding: 20px; background: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(16, 185, 129, 0.1)); border: 2px solid rgba(5, 150, 105, 0.3); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #10b981;">🔄 Build Alternative Scenarios</h3>
+        <p style="color: var(--muted); font-size: 0.9em; margin-bottom: 16px;">
+          Create alternative versions of your project while preserving the original. Compare different approaches side-by-side.
+        </p>
+        <div style="display: flex; gap: 12px;">
+          <button id="btn-build-second-scenario" style="background: #059669; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Create Version 2
+          </button>
+          <button id="btn-compare-versions" style="background: #0891b2; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Compare Versions
+          </button>
+        </div>
+        <div id="version-list" style="margin-top: 16px; display: none;">
+          <h4 style="color: var(--accent); margin-bottom: 8px;">Available Versions:</h4>
+          <div id="version-items"></div>
+        </div>
       </div>
     </section>
   </main>
