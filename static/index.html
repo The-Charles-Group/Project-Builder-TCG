@@ -316,6 +316,14 @@
         </div>
       </div>
 
+      <!-- AI Suggest Type Button -->
+      <div style="margin-bottom: 16px; display: flex; justify-content: flex-end; gap: 12px;">
+        <button id="btn-ai-suggest-type" onclick="analyzeProjectRetainer()" 
+                style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          🤖 AI Suggest Type
+        </button>
+      </div>
+
       <!-- Pricing Details Table -->
       <div class="pricing-table-container" style="margin-bottom: 20px;">
         <h3 style="font-size: 1.1em; margin-bottom: 12px; color: var(--text);">📊 Deliverable Pricing Details</h3>
@@ -324,18 +332,25 @@
             <thead>
               <tr style="border-bottom: 2px solid var(--border);">
                 <th style="padding: 8px; text-align: left; color: var(--muted);">Deliverable / Component</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Type</th>
                 <th style="padding: 8px; text-align: center; color: var(--muted);">Hours</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">AI</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Retainer</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Months</th>
-                <th style="padding: 8px; text-align: right; color: var(--muted);">Rate</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Rate</th>
                 <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
+                <th style="padding: 8px; text-align: left; color: var(--muted);">Resources</th>
               </tr>
             </thead>
             <tbody id="pricing-tbody">
               <!-- Dynamically populated -->
             </tbody>
           </table>
+        </div>
+        
+        <!-- Re-build Scenario Button -->
+        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+          <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
+                  style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            🔄 Re-build Scenario
+          </button>
         </div>
       </div>
 

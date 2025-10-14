@@ -4760,6 +4760,107 @@ async def api_retainer_distribution(payload: RetainerDistributionPayload):
             status_code=500
         )
 
+@app.post("/api/ai/analyze_project_retainer")
+async def analyze_project_retainer(request: dict):
+    """Analyze RFP text to suggest PROJECT or RETAINER type for each deliverable"""
+    rfp_text = request.get('rfp_text', '')
+    deliverables = request.get('deliverables', [])
+    
+    if not rfp_text or not deliverables:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "RFP text and deliverables are required"}
+        )
+    
+    try:
+        # Create the prompt for analysis
+        deliverable_list = "\n".join([f"- {d['code']}: {d['name']}" for d in deliverables])
+        
+        prompt = f"""Analyze the following RFP text and determine whether each deliverable should be categorized as PROJECT (one-time) or RETAINER (ongoing monthly).
+
+RFP TEXT (truncated to 3000 chars):
+{rfp_text[:3000]}
+
+DELIVERABLES TO ANALYZE:
+{deliverable_list}
+
+CLASSIFICATION RULES:
+- PROJECT: One-time deliverables like strategy documents, brand guidelines, website builds, initial setup
+- RETAINER: Ongoing monthly services like paid media management, content production, social media management, optimization
+
+Look for indicators:
+- Duration words: "monthly", "ongoing", "continuous", "12-month", "annual", "recurring"
+- Frequency patterns: "weekly reports", "monthly optimization", "10 posts/month", "daily monitoring"
+- One-time indicators: "initial", "launch", "setup", "development", "design", "creation", "build"
+
+Return a JSON object with deliverable codes as keys and classification objects as values.
+Example: {{"deck_strategy": {{"type": "PROJECT", "confidence": 0.9, "reasoning": "Strategy deck is a one-time deliverable"}}, ...}}"""
+
+        # Check if we have OpenAI client configured
+        if hasattr(app.state, 'openai_client') and app.state.openai_client:
+            # Call OpenAI API
+            client = app.state.openai_client
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are an expert at analyzing project scopes and determining whether deliverables are one-time projects or ongoing retainer services."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+                max_tokens=2000
+            )
+            
+            # Parse AI response
+            ai_suggestions = json.loads(response.choices[0].message.content)
+            
+            return JSONResponse(content={
+                "suggestions": ai_suggestions,
+                "method": "ai"
+            })
+        else:
+            # Fallback to heuristic analysis
+            raise Exception("OpenAI client not configured, using heuristics")
+            
+    except Exception as e:
+        print(f"[PROJECT_RETAINER_ANALYSIS] Using heuristic fallback: {e}")
+        
+        # Heuristic-based suggestions
+        suggestions = {}
+        for deliv in deliverables:
+            code = deliv['code']
+            name = deliv['name'].lower()
+            
+            # Check for retainer indicators in RFP text
+            rfp_lower = rfp_text.lower()
+            has_ongoing = any(word in rfp_lower for word in ['monthly', 'ongoing', 'continuous', 'recurring', 'retainer'])
+            
+            # Analyze deliverable name
+            if any(word in name for word in ['management', 'optimization', 'monitoring', 'monthly', 'ongoing', 'retainer', 'maintenance']):
+                suggestions[code] = {
+                    "type": "RETAINER",
+                    "confidence": 0.8 if has_ongoing else 0.6,
+                    "reasoning": "Ongoing service keywords detected in deliverable name"
+                }
+            elif any(word in name for word in ['strategy', 'design', 'development', 'build', 'setup', 'launch', 'guide', 'creation', 'audit']):
+                suggestions[code] = {
+                    "type": "PROJECT",
+                    "confidence": 0.8,
+                    "reasoning": "One-time deliverable keywords detected"
+                }
+            else:
+                # Default based on RFP context
+                suggestions[code] = {
+                    "type": "RETAINER" if has_ongoing else "PROJECT",
+                    "confidence": 0.5,
+                    "reasoning": "Default classification based on RFP context"
+                }
+        
+        return JSONResponse(content={
+            "suggestions": suggestions,
+            "method": "heuristic"
+        })
+
 @app.get("/api/scenarios")
 def api_get_scenarios():
     """

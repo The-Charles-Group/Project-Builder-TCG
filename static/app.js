@@ -144,7 +144,13 @@ let pricingData = {
   retainers: new Map(),
   monthlyHours: new Map(),
   currentRedistribution: null,
-  currentMonthlyItem: null
+  currentMonthlyItem: null,
+  deliverableTypes: new Map(), // Maps deliverable_code -> 'PROJECT' or 'RETAINER'
+  customHours: new Map(),      // Maps deliverable_code -> custom hours
+  customRates: new Map(),       // Maps deliverable_code -> custom rate
+  originalScenario: null,       // Store original scenario for comparison
+  rebuildVersion: 0,            // Track rebuild versions
+  resourceBreakdown: new Map()  // Maps deliverable_code -> resource allocation
 };
 
 // Cache for component data per deliverable code
@@ -603,82 +609,144 @@ function updatePricingTable() {
   const scenario = SCENARIOS.A || SCENARIOS[0];
   if (!scenario || !scenario.items) return;
   
+  // Store original scenario on first load
+  if (!pricingData.originalScenario) {
+    pricingData.originalScenario = JSON.parse(JSON.stringify(scenario));
+  }
+  
   let html = '';
   let oneTimeTotal = 0;
   let retainerMonthlyTotal = 0;
   
   scenario.items.forEach(item => {
-    const isRetainer = pricingData.retainers.has(item.deliverable_code);
-    const monthlyHours = pricingData.monthlyHours.get(item.deliverable_code) || {};
-    const totalMonthlyHours = Object.values(monthlyHours).reduce((sum, h) => sum + h, 0);
+    // Determine type (PROJECT or RETAINER)
+    const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
+    const isRetainer = (delivType === 'RETAINER');
     
-    // Main deliverable row
+    // Get custom values or defaults
+    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours;
+    const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
+    const cost = customHours * customRate;
+    
+    // Get resource breakdown if available
+    const resources = pricingData.resourceBreakdown.get(item.deliverable_code) || 
+                     extractResourceAllocation(item);
+    
+    // Main deliverable row with expand button
     html += `
-      <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);" data-deliverable="${item.deliverable_code}">
         <td style="padding: 12px; font-weight: 500;">
-          ${item.deliverable}
-          ${isRetainer ? '<span class="retainer-indicator" style="background: var(--accent2); color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px; margin-left: 8px;">RETAINER</span>' : ''}
-        </td>
-        <td style="padding: 8px; text-align: center;">
-          <input type="number" value="${item.hours}" data-deliverable="${item.deliverable_code}" 
-                 style="width: 60px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center;" />
-          <button onclick="redistributeHours('${item.deliverable_code}', this.previousElementSibling.value, 'deliverable')" 
-                  class="redistribute-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; margin-left: 4px;">
-            🤖
+          <button onclick="toggleDeliverableExpand('${item.deliverable_code}')" 
+                  style="background: transparent; border: none; color: var(--text); cursor: pointer; padding: 0 8px 0 0;">
+            <span id="expand-${item.deliverable_code}">▼</span>
           </button>
-        </td>
-        <td style="padding: 8px; text-align: center;">-</td>
-        <td style="padding: 8px; text-align: center;">
-          <input type="checkbox" ${isRetainer ? 'checked' : ''} 
-                 onchange="toggleRetainer('${item.deliverable_code}', this.checked)" 
-                 style="cursor: pointer;" />
+          ${item.deliverable}
         </td>
         <td style="padding: 8px; text-align: center;">
-          ${isRetainer ? `<button onclick="showMonthlyHoursModal('${item.deliverable_code}')" class="btn-sm">Configure</button>` : '-'}
+          <select onchange="updateDeliverableType('${item.deliverable_code}', this.value)" 
+                  style="padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text);">
+            <option value="PROJECT" ${!isRetainer ? 'selected' : ''}>PROJECT</option>
+            <option value="RETAINER" ${isRetainer ? 'selected' : ''}>RETAINER</option>
+          </select>
         </td>
-        <td style="padding: 8px; text-align: right;">$${item.blended_rate || 195}</td>
+        <td style="padding: 8px; text-align: center;">
+          <input type="number" value="${customHours}" 
+                 onchange="updateCustomHours('${item.deliverable_code}', this.value)"
+                 style="width: 70px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center;" />
+          ${isRetainer ? '<small style="color: var(--muted); display: block;">/month</small>' : ''}
+        </td>
+        <td style="padding: 8px; text-align: center;">
+          <input type="number" value="${customRate}" 
+                 onchange="updateCustomRate('${item.deliverable_code}', this.value)"
+                 style="width: 70px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center;" />
+        </td>
         <td style="padding: 8px; text-align: right; font-weight: 500; color: var(--accent);">
-          $${((isRetainer ? totalMonthlyHours : item.hours) * (item.blended_rate || 195)).toLocaleString()}
+          ${isRetainer ? 
+            `<div>$${cost.toLocaleString()}/mo</div><small style="color: var(--muted);">($${(cost * 12).toLocaleString()}/yr)</small>` : 
+            `$${cost.toLocaleString()}`}
+        </td>
+        <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
+          ${formatResourceDisplay(resources)}
         </td>
       </tr>
     `;
     
-    // Component rows (if expanded)
-    if (item.components) {
+    // Component rows (initially hidden)
+    if (item.components && item.components.length > 0) {
       item.components.forEach(comp => {
-        const compIsRetainer = pricingData.retainers.has(`${item.deliverable_code}_${comp.name}`);
+        const compKey = `${item.deliverable_code}_${comp.name}`;
+        const compType = pricingData.deliverableTypes.get(compKey) || delivType; // Inherit parent type
+        const compIsRetainer = (compType === 'RETAINER');
+        const compCustomHours = pricingData.customHours.get(compKey) || comp.hours || 0;
+        const compCustomRate = pricingData.customRates.get(compKey) || comp.rate || customRate;
+        const compCost = compCustomHours * compCustomRate;
+        const compResources = extractComponentResources(comp);
+        
         html += `
-          <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-            <td style="padding: 8px 8px 8px 32px; color: var(--muted); font-size: 0.9em;">
+          <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); display: none;" 
+              class="component-row-${item.deliverable_code}">
+            <td style="padding: 8px 8px 8px 48px; color: var(--muted); font-size: 0.9em;">
               ↳ ${comp.name}
             </td>
             <td style="padding: 8px; text-align: center;">
-              <input type="number" value="${comp.hours}" data-component="${comp.name}" 
-                     style="width: 50px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
-            </td>
-            <td style="padding: 8px; text-align: center;">-</td>
-            <td style="padding: 8px; text-align: center;">
-              <input type="checkbox" ${compIsRetainer ? 'checked' : ''} 
-                     onchange="toggleRetainer('${item.deliverable_code}_${comp.name}', this.checked)" 
-                     style="cursor: pointer; transform: scale(0.9);" />
+              <select onchange="updateDeliverableType('${compKey}', this.value)" 
+                      style="padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); font-size: 0.85em;">
+                <option value="PROJECT" ${!compIsRetainer ? 'selected' : ''}>PROJECT</option>
+                <option value="RETAINER" ${compIsRetainer ? 'selected' : ''}>RETAINER</option>
+              </select>
             </td>
             <td style="padding: 8px; text-align: center;">
-              ${compIsRetainer ? `<button onclick="showMonthlyHoursModal('${item.deliverable_code}_${comp.name}')" class="btn-sm" style="font-size: 0.8em;">Config</button>` : '-'}
+              <input type="number" value="${compCustomHours}" 
+                     onchange="updateCustomHours('${compKey}', this.value)"
+                     style="width: 60px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
+              ${compIsRetainer ? '<small style="color: var(--muted); display: block; font-size: 0.75em;">/mo</small>' : ''}
             </td>
-            <td style="padding: 8px; text-align: right; font-size: 0.9em;">$${comp.rate || 195}</td>
+            <td style="padding: 8px; text-align: center;">
+              <input type="number" value="${compCustomRate}" 
+                     onchange="updateCustomRate('${compKey}', this.value)"
+                     style="width: 60px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
+            </td>
             <td style="padding: 8px; text-align: right; font-size: 0.9em;">
-              $${(comp.hours * (comp.rate || 195)).toLocaleString()}
+              ${compIsRetainer ? 
+                `<div>$${compCost.toLocaleString()}/mo</div><small style="color: var(--muted); font-size: 0.8em;">($${(compCost * 12).toLocaleString()}/yr)</small>` : 
+                `$${compCost.toLocaleString()}`}
+            </td>
+            <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
+              ${formatResourceDisplay(compResources)}
             </td>
           </tr>
         `;
+        
+        // Show L2 tasks if available
+        if (comp.tasks && comp.tasks.length > 0) {
+          comp.tasks.forEach(task => {
+            html += `
+              <tr style="border-bottom: 1px solid rgba(255,255,255,0.03); display: none;" 
+                  class="task-row-${item.deliverable_code}">
+                <td style="padding: 6px 8px 6px 64px; color: var(--muted); font-size: 0.8em;">
+                  ⤷ ${task.name}
+                </td>
+                <td colspan="3" style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
+                  ${task.hours || 0} hours
+                </td>
+                <td style="padding: 6px; text-align: right; font-size: 0.8em; color: var(--muted);">
+                  $${((task.hours || 0) * compCustomRate).toLocaleString()}
+                </td>
+                <td style="padding: 6px; font-size: 0.7em; color: var(--muted);">
+                  ${task.role || ''}
+                </td>
+              </tr>
+            `;
+          });
+        }
       });
     }
     
     // Calculate totals
     if (isRetainer) {
-      retainerMonthlyTotal += totalMonthlyHours * (item.blended_rate || 195) / 12;
+      retainerMonthlyTotal += cost;
     } else {
-      oneTimeTotal += item.price || (item.hours * (item.blended_rate || 195));
+      oneTimeTotal += cost;
     }
   });
   
@@ -695,40 +763,74 @@ function updatePricingSummary() {
   let oneTimeCount = 0;
   let oneTimeHours = 0;
   let oneTimeCost = 0;
+  const projectItemsList = [];
   
   let retainerCount = 0;
   let retainerMonthlyHours = 0;
   let retainerMonthlyCost = 0;
-  
   const retainerItemsList = [];
   
   scenario.items.forEach(item => {
-    const isRetainer = pricingData.retainers.has(item.deliverable_code);
+    const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
+    const isRetainer = (delivType === 'RETAINER');
+    
+    // Get custom values or defaults
+    const hours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
+    const rate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
+    const cost = hours * rate;
     
     if (isRetainer) {
       retainerCount++;
-      const monthlyHours = pricingData.monthlyHours.get(item.deliverable_code) || {};
-      const avgMonthlyHours = Object.values(monthlyHours).reduce((sum, h) => sum + h, 0) / 12;
-      retainerMonthlyHours += avgMonthlyHours;
-      retainerMonthlyCost += avgMonthlyHours * (item.blended_rate || 195);
+      retainerMonthlyHours += hours;
+      retainerMonthlyCost += cost;
       retainerItemsList.push(item.deliverable);
     } else {
       oneTimeCount++;
-      oneTimeHours += item.hours || 0;
-      oneTimeCost += item.price || (item.hours * (item.blended_rate || 195));
+      oneTimeHours += hours;
+      oneTimeCost += cost;
+      projectItemsList.push(item.deliverable);
+    }
+    
+    // Also count components
+    if (item.components && item.components.length > 0) {
+      item.components.forEach(comp => {
+        const compKey = `${item.deliverable_code}_${comp.name}`;
+        const compType = pricingData.deliverableTypes.get(compKey) || delivType;
+        const compIsRetainer = (compType === 'RETAINER');
+        const compHours = pricingData.customHours.get(compKey) || comp.hours || 0;
+        const compRate = pricingData.customRates.get(compKey) || comp.rate || rate;
+        const compCost = compHours * compRate;
+        
+        if (compIsRetainer) {
+          retainerMonthlyHours += compHours;
+          retainerMonthlyCost += compCost;
+        } else {
+          oneTimeHours += compHours;
+          oneTimeCost += compCost;
+        }
+      });
     }
   });
   
   // Update One-Time Summary
-  document.getElementById('one-time-count').textContent = oneTimeCount;
-  document.getElementById('one-time-hours').textContent = oneTimeHours.toFixed(1);
-  document.getElementById('one-time-cost').textContent = `$${oneTimeCost.toLocaleString()}`;
+  const oneTimeCountEl = document.getElementById('one-time-count');
+  const oneTimeHoursEl = document.getElementById('one-time-hours');
+  const oneTimeCostEl = document.getElementById('one-time-cost');
+  
+  if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
+  if (oneTimeHoursEl) oneTimeHoursEl.textContent = oneTimeHours.toFixed(1);
+  if (oneTimeCostEl) oneTimeCostEl.textContent = `$${oneTimeCost.toLocaleString()}`;
   
   // Update Retainer Summary
-  document.getElementById('retainer-count').textContent = retainerCount;
-  document.getElementById('retainer-monthly-hours').textContent = retainerMonthlyHours.toFixed(1);
-  document.getElementById('retainer-monthly-cost').textContent = `$${retainerMonthlyCost.toLocaleString()}`;
-  document.getElementById('retainer-annual-cost').textContent = `$${(retainerMonthlyCost * 12).toLocaleString()}`;
+  const retainerCountEl = document.getElementById('retainer-count');
+  const retainerHoursEl = document.getElementById('retainer-monthly-hours');
+  const retainerCostEl = document.getElementById('retainer-monthly-cost');
+  const retainerAnnualEl = document.getElementById('retainer-annual-cost');
+  
+  if (retainerCountEl) retainerCountEl.textContent = retainerCount;
+  if (retainerHoursEl) retainerHoursEl.textContent = retainerMonthlyHours.toFixed(1);
+  if (retainerCostEl) retainerCostEl.textContent = `$${retainerMonthlyCost.toLocaleString()}`;
+  if (retainerAnnualEl) retainerAnnualEl.textContent = `$${(retainerMonthlyCost * 12).toLocaleString()}`;
   
   // Update Retainer Items List
   const retainerListEl = document.getElementById('retainer-items-list');
@@ -744,10 +846,344 @@ function updatePricingSummary() {
   
   // Update Grand Total
   const grandTotal = oneTimeCost + (retainerMonthlyCost * 12);
-  document.getElementById('grand-total-cost').textContent = `$${grandTotal.toLocaleString()}`;
-  document.getElementById('grand-total-breakdown').textContent = retainerCount > 0 
-    ? `One-time ($${oneTimeCost.toLocaleString()}) + 12 months retainer ($${(retainerMonthlyCost * 12).toLocaleString()})`
-    : 'One-time project cost';
+  const grandTotalEl = document.getElementById('grand-total-cost');
+  const grandBreakdownEl = document.getElementById('grand-total-breakdown');
+  
+  if (grandTotalEl) grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
+  if (grandBreakdownEl) {
+    grandBreakdownEl.textContent = retainerCount > 0 
+      ? `One-time ($${oneTimeCost.toLocaleString()}) + 12 months retainer ($${(retainerMonthlyCost * 12).toLocaleString()})`
+      : 'One-time project cost';
+  }
+}
+
+// Helper function to extract resource allocation from item
+function extractResourceAllocation(item) {
+  const resources = {};
+  
+  // Try to get from existing data structure
+  if (item.resources) {
+    return item.resources;
+  }
+  
+  // Try to parse from tasks if available
+  if (item.tasks && Array.isArray(item.tasks)) {
+    item.tasks.forEach(task => {
+      const role = task.role || 'General';
+      const hours = task.hours || 0;
+      if (hours > 0) {
+        resources[role] = (resources[role] || 0) + hours;
+      }
+    });
+  }
+  
+  // Fallback to basic allocation
+  if (Object.keys(resources).length === 0 && item.hours > 0) {
+    resources['Team'] = item.hours;
+  }
+  
+  return resources;
+}
+
+// Helper function to extract component resources
+function extractComponentResources(comp) {
+  if (comp.resources) return comp.resources;
+  
+  const resources = {};
+  if (comp.tasks && Array.isArray(comp.tasks)) {
+    comp.tasks.forEach(task => {
+      const role = task.role || 'General';
+      const hours = task.hours || 0;
+      if (hours > 0) {
+        resources[role] = (resources[role] || 0) + hours;
+      }
+    });
+  }
+  
+  if (Object.keys(resources).length === 0 && comp.hours > 0) {
+    resources['Team'] = comp.hours;
+  }
+  
+  return resources;
+}
+
+// Format resource display for the table
+function formatResourceDisplay(resources) {
+  if (!resources || Object.keys(resources).length === 0) {
+    return '-';
+  }
+  
+  const entries = Object.entries(resources)
+    .sort((a, b) => b[1] - a[1]) // Sort by hours descending
+    .slice(0, 3) // Show top 3
+    .map(([role, hours]) => `${role}: ${hours}h`);
+  
+  return entries.join(' • ');
+}
+
+// Toggle deliverable expansion
+function toggleDeliverableExpand(deliverableCode) {
+  const expandIcon = document.getElementById(`expand-${deliverableCode}`);
+  const componentRows = document.querySelectorAll(`.component-row-${deliverableCode}`);
+  const taskRows = document.querySelectorAll(`.task-row-${deliverableCode}`);
+  
+  if (expandIcon.textContent === '▼') {
+    expandIcon.textContent = '▶';
+    componentRows.forEach(row => row.style.display = 'none');
+    taskRows.forEach(row => row.style.display = 'none');
+  } else {
+    expandIcon.textContent = '▼';
+    componentRows.forEach(row => row.style.display = '');
+    // Tasks remain hidden until component is expanded
+  }
+}
+
+// Update deliverable type (PROJECT/RETAINER)
+function updateDeliverableType(deliverableCode, type) {
+  pricingData.deliverableTypes.set(deliverableCode, type);
+  updatePricingCalculations();
+}
+
+// Update custom hours
+function updateCustomHours(deliverableCode, hours) {
+  const numHours = parseFloat(hours) || 0;
+  pricingData.customHours.set(deliverableCode, numHours);
+  updatePricingCalculations();
+}
+
+// Update custom rate
+function updateCustomRate(deliverableCode, rate) {
+  const numRate = parseFloat(rate) || 195;
+  pricingData.customRates.set(deliverableCode, numRate);
+  updatePricingCalculations();
+}
+
+// Analyze PROJECT vs RETAINER with AI
+async function analyzeProjectRetainer() {
+  const rfpText = document.getElementById('rfpText')?.value || 
+                  sessionStorage.getItem('rfp_text') || '';
+  
+  if (!rfpText) {
+    alert('Please upload an RFP in Step 1 first to analyze project types.');
+    return;
+  }
+  
+  if (!SCENARIOS || !SCENARIOS.A) {
+    alert('Please build a scenario first.');
+    return;
+  }
+  
+  const btn = document.getElementById('btn-ai-suggest-type');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '🔄 Analyzing...';
+  }
+  
+  try {
+    // Get deliverables from current scenario
+    const deliverables = (SCENARIOS.A.items || []).map(item => ({
+      code: item.deliverable_code,
+      name: item.deliverable
+    }));
+    
+    const response = await fetch('/api/ai/analyze_project_retainer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rfp_text: rfpText,
+        deliverables: deliverables
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    if (result.suggestions) {
+      // Apply suggestions to pricing data
+      Object.entries(result.suggestions).forEach(([code, suggestion]) => {
+        pricingData.deliverableTypes.set(code, suggestion.type);
+        
+        // Also apply to components (inherit from parent)
+        const scenario = SCENARIOS.A || SCENARIOS[0];
+        const item = scenario.items.find(i => i.deliverable_code === code);
+        if (item && item.components) {
+          item.components.forEach(comp => {
+            const compKey = `${code}_${comp.name}`;
+            if (!pricingData.deliverableTypes.has(compKey)) {
+              pricingData.deliverableTypes.set(compKey, suggestion.type);
+            }
+          });
+        }
+      });
+      
+      // Refresh the pricing table
+      updatePricingCalculations();
+      
+      // Show summary of suggestions
+      const projectCount = Object.values(result.suggestions).filter(s => s.type === 'PROJECT').length;
+      const retainerCount = Object.values(result.suggestions).filter(s => s.type === 'RETAINER').length;
+      
+      alert(`AI Analysis Complete!\n\n` +
+            `✅ ${projectCount} deliverables marked as PROJECT\n` +
+            `🔄 ${retainerCount} deliverables marked as RETAINER\n\n` +
+            `Method: ${result.method === 'ai' ? 'GPT-4 Analysis' : 'Heuristic Analysis'}`);
+    }
+  } catch (error) {
+    console.error('Error analyzing project/retainer types:', error);
+    alert('Error analyzing deliverable types. Please try again.');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🤖 AI Suggest Type';
+    }
+  }
+}
+
+// Re-build scenario with current pricing settings
+async function rebuildScenario() {
+  if (!SCENARIOS || !SCENARIOS.A) {
+    alert('No scenario to rebuild. Please build a scenario first.');
+    return;
+  }
+  
+  // Store current version
+  if (!pricingData.originalScenario) {
+    pricingData.originalScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
+  }
+  
+  // Increment rebuild version
+  pricingData.rebuildVersion++;
+  
+  // Create rebuilt scenario with custom values
+  const rebuiltScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
+  
+  rebuiltScenario.items.forEach(item => {
+    const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
+    const customHours = pricingData.customHours.get(item.deliverable_code);
+    const customRate = pricingData.customRates.get(item.deliverable_code);
+    
+    if (customHours !== undefined) item.hours = customHours;
+    if (customRate !== undefined) item.blended_rate = customRate;
+    
+    // Update price calculation
+    item.price = item.hours * (item.blended_rate || 195);
+    
+    // Mark as retainer if applicable
+    item.is_retainer = (delivType === 'RETAINER');
+    
+    // Update components
+    if (item.components) {
+      item.components.forEach(comp => {
+        const compKey = `${item.deliverable_code}_${comp.name}`;
+        const compHours = pricingData.customHours.get(compKey);
+        const compRate = pricingData.customRates.get(compKey);
+        
+        if (compHours !== undefined) comp.hours = compHours;
+        if (compRate !== undefined) comp.rate = compRate;
+        
+        comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
+      });
+    }
+  });
+  
+  // Show comparison modal
+  showScenarioComparison(pricingData.originalScenario, rebuiltScenario);
+  
+  // Update current scenario
+  SCENARIOS.A = rebuiltScenario;
+  updatePricingCalculations();
+}
+
+// Show scenario comparison modal
+function showScenarioComparison(original, rebuilt) {
+  // Calculate totals for each version
+  let originalTotal = 0;
+  let rebuiltTotal = 0;
+  let originalRetainerMonthly = 0;
+  let rebuiltRetainerMonthly = 0;
+  
+  original.items.forEach(item => {
+    const isRetainer = pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER';
+    if (isRetainer) {
+      originalRetainerMonthly += item.price || (item.hours * (item.blended_rate || 195));
+    } else {
+      originalTotal += item.price || (item.hours * (item.blended_rate || 195));
+    }
+  });
+  
+  rebuilt.items.forEach(item => {
+    const isRetainer = item.is_retainer;
+    if (isRetainer) {
+      rebuiltRetainerMonthly += item.price;
+    } else {
+      rebuiltTotal += item.price;
+    }
+  });
+  
+  const originalGrandTotal = originalTotal + (originalRetainerMonthly * 12);
+  const rebuiltGrandTotal = rebuiltTotal + (rebuiltRetainerMonthly * 12);
+  const difference = rebuiltGrandTotal - originalGrandTotal;
+  const percentChange = ((difference / originalGrandTotal) * 100).toFixed(1);
+  
+  // Create comparison modal
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+    background: rgba(0,0,0,0.8); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+  `;
+  
+  modal.innerHTML = `
+    <div style="background: var(--card); border: 1px solid var(--accent); border-radius: 12px; 
+                padding: 24px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+      <h3 style="margin: 0 0 20px; color: var(--accent);">📊 Scenario Comparison</h3>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+        <div style="padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+          <h4 style="margin: 0 0 12px; color: var(--muted);">Version 1 (Original)</h4>
+          <div style="font-size: 0.9em;">
+            <div>One-Time: <strong>$${originalTotal.toLocaleString()}</strong></div>
+            <div>Monthly Retainer: <strong>$${originalRetainerMonthly.toLocaleString()}</strong></div>
+            <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
+              <strong>Total: $${originalGrandTotal.toLocaleString()}</strong>
+            </div>
+          </div>
+        </div>
+        
+        <div style="padding: 16px; background: rgba(139, 92, 246, 0.1); border-radius: 8px;">
+          <h4 style="margin: 0 0 12px; color: var(--accent);">Version ${pricingData.rebuildVersion} (Rebuilt)</h4>
+          <div style="font-size: 0.9em;">
+            <div>One-Time: <strong>$${rebuiltTotal.toLocaleString()}</strong></div>
+            <div>Monthly Retainer: <strong>$${rebuiltRetainerMonthly.toLocaleString()}</strong></div>
+            <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
+              <strong>Total: $${rebuiltGrandTotal.toLocaleString()}</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div style="padding: 12px; background: ${difference > 0 ? 'rgba(220, 38, 38, 0.1)' : 'rgba(16, 185, 129, 0.1)'}; 
+                  border-radius: 8px; text-align: center; margin-bottom: 20px;">
+        <div style="font-size: 1.2em; font-weight: bold; color: ${difference > 0 ? '#fca5a5' : '#6ee7b7'};">
+          ${difference > 0 ? '↑' : '↓'} ${Math.abs(difference).toLocaleString()} (${percentChange}%)
+        </div>
+        <div style="font-size: 0.9em; color: var(--muted); margin-top: 4px;">
+          ${difference > 0 ? 'Increase from original' : 'Decrease from original'}
+        </div>
+      </div>
+      
+      <button onclick="this.parentElement.parentElement.remove()" 
+              style="width: 100%; padding: 10px; background: var(--accent); color: white; 
+                     border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+        Close
+      </button>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
 }
 
 // Export pricing details
@@ -934,6 +1370,12 @@ window.exportPricingDetails = exportPricingDetails;
 window.optimizeAllPricing = optimizeAllPricing;
 window.showOptimizationResults = showOptimizationResults;
 window.optimizePricingFallback = optimizePricingFallback;
+window.toggleDeliverableExpand = toggleDeliverableExpand;
+window.updateDeliverableType = updateDeliverableType;
+window.updateCustomHours = updateCustomHours;
+window.updateCustomRate = updateCustomRate;
+window.analyzeProjectRetainer = analyzeProjectRetainer;
+window.rebuildScenario = rebuildScenario;
 
 async function generateAITimeline() {
   const btn = document.getElementById('btn-generate-timeline');

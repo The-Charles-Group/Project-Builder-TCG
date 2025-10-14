@@ -68,6 +68,92 @@ button:disabled{opacity:.6;cursor:not-allowed}
 .hint{font-style:italic;color:var(--muted);margin-top:12px}
 .actions{margin-top:14px;display:flex;gap:12px;flex-wrap:wrap}
 
+/* Pricing Table Styles */
+#pricing-details-table input[type="number"] {
+  width: 70px;
+  padding: 4px 8px;
+  border: 1px solid rgba(106, 163, 255, 0.3);
+  background: rgba(106, 163, 255, 0.05);
+  color: var(--text);
+  border-radius: 4px;
+  text-align: center;
+  font-size: 0.9em;
+  transition: all 0.2s ease;
+}
+
+#pricing-details-table input[type="number"]:hover {
+  border-color: rgba(106, 163, 255, 0.5);
+  background: rgba(106, 163, 255, 0.08);
+}
+
+#pricing-details-table input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(106, 163, 255, 0.1);
+  box-shadow: 0 0 0 2px rgba(106, 163, 255, 0.2);
+}
+
+#pricing-details-table select {
+  padding: 4px 8px;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: rgba(139, 92, 246, 0.05);
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 0.85em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+#pricing-details-table select:hover {
+  border-color: rgba(139, 92, 246, 0.5);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+#pricing-details-table select:focus {
+  outline: none;
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
+/* Type toggle styling */
+#pricing-details-table select option[value="PROJECT"] {
+  background: #151a22;
+}
+
+#pricing-details-table select option[value="RETAINER"] {
+  background: #151a22;
+}
+
+/* Expand/collapse button */
+#pricing-details-table button[onclick*="toggleDeliverableExpand"] {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 8px 0 0;
+  font-size: 0.9em;
+  transition: transform 0.2s ease;
+}
+
+#pricing-details-table button[onclick*="toggleDeliverableExpand"]:hover {
+  color: var(--accent);
+}
+
+/* Component and task row styling */
+.component-row {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.task-row {
+  background: rgba(255, 255, 255, 0.01);
+}
+
+/* Resource display styling */
+#pricing-details-table td:last-child {
+  font-size: 0.85em;
+  color: rgba(154, 164, 178, 0.9);
+}
+
 .pillbox{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
 .pill{border:1px solid var(--border);background:#0b0e13;border-radius:999px;padding:6px 10px;color:var(--muted)}
 .pill .hit{color:#fff;margin-left:6px}
