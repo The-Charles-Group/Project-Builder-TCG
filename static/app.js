@@ -2394,79 +2394,89 @@ function applySmartSelection() {
   const threshold = parseFloat(thresholdInput.value) || 60;
   console.log(`Applying smart selection with threshold: ${threshold}%`);
   
+  // Check if AI data is available
+  if (!window.lastAIPlan || !window.lastAIPlan.suggestions_by_department) {
+    console.warn('No AI suggestions available. Please run AI analysis first.');
+    alert('No AI suggestions available. Please run AI analysis first.');
+    return;
+  }
+  
   // Clear all current selections first
   clearAllAISelections();
   
-  // Get all deliverable checkboxes
-  const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox');
   let selectedDelivCount = 0;
   let selectedCompCount = 0;
   let selectedTaskCount = 0;
   
-  delivCheckboxes.forEach(delivCheckbox => {
-    const delivCode = delivCheckbox.getAttribute('data-code');
-    const delivDiv = delivCheckbox.closest('.ai-deliverable');
-    if (!delivDiv) return;
+  // Iterate through AI suggestions data directly
+  const suggestionsByDept = window.lastAIPlan.suggestions_by_department || {};
+  
+  for (const dept in suggestionsByDept) {
+    const deliverables = suggestionsByDept[dept] || [];
     
-    // Get confidence from the confidence span
-    const confidenceSpan = delivDiv.querySelector('span[style*="confidence"]');
-    let confidence = 0;
-    if (confidenceSpan) {
-      const match = confidenceSpan.textContent.match(/(\d+)%\s*confidence/);
-      if (match) {
-        confidence = parseFloat(match[1]);
+    for (const deliv of deliverables) {
+      // Get confidence score from the AI data (0-1 scale, convert to percentage)
+      const confidence = Math.round((deliv.calibrated_confidence || deliv.confidence || 0) * 100);
+      const delivCode = deliv.deliverable_code || deliv.code;
+      
+      console.log(`Deliverable ${delivCode}: ${confidence}% confidence vs threshold ${threshold}%`);
+      
+      // Get the checkbox for this deliverable
+      const delivCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
+      if (!delivCheckbox) {
+        console.warn(`Checkbox not found for deliverable ${delivCode}`);
+        continue;
+      }
+      
+      // Check if deliverable meets threshold
+      if (confidence >= threshold) {
+        delivCheckbox.checked = true;
+        selectedDelivCount++;
+        
+        // For components within this deliverable
+        const components = deliv.components || [];
+        for (const comp of components) {
+          // Components inherit deliverable confidence (since they don't have their own)
+          const compCheckbox = document.querySelector(`.ai-comp-checkbox[data-deliv="${delivCode}"][data-comp="${comp.title}"]`);
+          if (compCheckbox) {
+            compCheckbox.checked = true;
+            selectedCompCount++;
+            
+            // For tasks within this component
+            const tasks = comp.tasks || [];
+            for (const task of tasks) {
+              // Check if task was AI-selected
+              const taskCheckbox = document.querySelector(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${comp.title}"][data-task="${task.title}"]`);
+              if (taskCheckbox) {
+                // Only select AI-recommended tasks when deliverable meets threshold
+                if (task.ai_selected) {
+                  taskCheckbox.checked = true;
+                  selectedTaskCount++;
+                } else {
+                  taskCheckbox.checked = false;
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // Uncheck this deliverable and all its components/tasks
+        delivCheckbox.checked = false;
+        
+        // Uncheck all components for this deliverable
+        const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
+        compCheckboxes.forEach(compCheckbox => {
+          compCheckbox.checked = false;
+        });
+        
+        // Uncheck all tasks for this deliverable
+        const taskCheckboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"]`);
+        taskCheckboxes.forEach(taskCheckbox => {
+          taskCheckbox.checked = false;
+        });
       }
     }
-    
-    // Check if deliverable meets threshold
-    if (confidence >= threshold) {
-      delivCheckbox.checked = true;
-      selectedDelivCount++;
-      
-      // For components within this deliverable
-      const compCheckboxes = delivDiv.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
-      compCheckboxes.forEach(compCheckbox => {
-        // Components inherit deliverable confidence (since they don't have their own)
-        // You can modify this logic if components have their own confidence scores
-        if (confidence >= threshold) {
-          compCheckbox.checked = true;
-          selectedCompCount++;
-          
-          // For tasks within this component
-          const compName = compCheckbox.getAttribute('data-comp');
-          const taskCheckboxes = delivDiv.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compName}"]`);
-          taskCheckboxes.forEach(taskCheckbox => {
-            // Tasks: Check if they were AI-selected (100% confidence) or not (0% confidence)
-            // This is a simplified approach - modify if tasks have actual confidence scores
-            const wasAISelected = taskCheckbox.hasAttribute('checked') || taskCheckbox.checked;
-            const taskConfidence = wasAISelected ? 100 : 0;
-            
-            if (taskConfidence >= threshold) {
-              taskCheckbox.checked = true;
-              selectedTaskCount++;
-            } else {
-              taskCheckbox.checked = false;
-            }
-          });
-        } else {
-          compCheckbox.checked = false;
-        }
-      });
-    } else {
-      delivCheckbox.checked = false;
-      
-      // Uncheck all components and tasks for this deliverable
-      const compCheckboxes = delivDiv.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
-      compCheckboxes.forEach(compCheckbox => {
-        compCheckbox.checked = false;
-      });
-      
-      const taskCheckboxes = delivDiv.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"]`);
-      taskCheckboxes.forEach(taskCheckbox => {
-        taskCheckbox.checked = false;
-      });
-    }
-  });
+  }
   
   // Show feedback
   const feedbackMessage = `Smart Selection Applied: ${selectedDelivCount} deliverables, ${selectedCompCount} components, ${selectedTaskCount} tasks selected (threshold: ${threshold}%)`;
