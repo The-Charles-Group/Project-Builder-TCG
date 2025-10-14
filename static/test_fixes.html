@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test L2 Tasks and Retainer Features</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a1a; color: #e0e0e0; }
+        .test-section { margin-bottom: 30px; padding: 20px; border: 1px solid #333; border-radius: 8px; background: #242424; }
+        .success { color: #10b981; font-weight: bold; }
+        .fail { color: #ef4444; font-weight: bold; }
+        .code-block { background: #2d2d2d; padding: 15px; border-radius: 4px; margin: 10px 0; border-left: 3px solid #8b5cf6; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; background: #8b5cf6; color: white; border: none; border-radius: 4px; }
+        button:hover { background: #7c3aed; }
+        h1 { color: #8b5cf6; }
+        h2 { color: #e0e0e0; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        h3 { color: #10b981; }
+        .summary-box { background: #1f1f1f; padding: 15px; border-radius: 8px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Agency Project Builder - Fix Verification Report</h1>
+    
+    <div class="summary-box">
+        <h2>📊 Fix Summary</h2>
+        <p>Based on thorough code analysis of <strong>static/app.js</strong>:</p>
+        <ul>
+            <li class="success">✅ Issue 1 (L2 Tasks): ALREADY FIXED - API calls present at lines 3969-4000</li>
+            <li class="success">✅ Issue 2 (Retainer UI): ALREADY FIXED - UI code present in both sections</li>
+        </ul>
+    </div>
+    
+    <div class="test-section">
+        <h2>🔍 Issue 1: L2 Tasks API Call Implementation</h2>
+        
+        <div class="code-block">
+            <h3>✅ Fix Already Present:</h3>
+            <p><strong>Lines 3969-4000:</strong> The code already contains:</p>
+            <ol>
+                <li>Loop through <code>allDeliverablesToFetch</code> array</li>
+                <li>Calls <code>POST /api/step2/l3/bulk</code> for each deliverable</li>
+                <li>Stores results in <code>selectionStore.l3ByComponent</code> with format <code>${delivCode}::${componentName}</code></li>
+                <li>Proper error handling with try/catch block</li>
+            </ol>
+            
+            <p><strong>Line 4019-4020:</strong> Calls <code>populateAllL2Tasks()</code> after fetching ✓</p>
+            
+            <p><strong>Lines 4048-4170+:</strong> <code>populateAllL2Tasks()</code> function fully implemented:</p>
+            <ul>
+                <li>Reads from <code>selectionStore.l3ByComponent</code></li>
+                <li>Groups tasks by Deliverable → Component</li>
+                <li>Renders HTML with proper hierarchy</li>
+                <li>Includes task checkboxes with event handlers</li>
+                <li>Shows total task count in header</li>
+            </ul>
+        </div>
+        
+        <button onclick="showCodeSnippet('issue1')">View Actual Code</button>
+        <div id="issue1-code" style="display:none;" class="code-block">
+            <pre style="overflow-x: auto; color: #10b981;">
+// Lines 3969-4000 - The fix is already there:
+if (allDeliverablesToFetch.length > 0) {
+  console.log('Fetching L2 tasks for all selected deliverables:', allDeliverablesToFetch);
+  
+  try {
+    // Fetch L2 tasks for each deliverable
+    for (const fetchItem of allDeliverablesToFetch) {
+      const res = await fetch('/api/step2/l3/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fetchItem)
+      });
+      
+      if (res.ok) {
+        const l3Data = await res.json();
+        
+        // Store L2 tasks for each component
+        for (const [compName, tasks] of Object.entries(l3Data)) {
+          const key = `${fetchItem.deliverable}::${compName}`;
+          if (!selectionStore.l3ByComponent.has(key)) {
+            selectionStore.l3ByComponent.set(key, new Set());
+          }
+          const existingTasks = selectionStore.l3ByComponent.get(key);
+          tasks.forEach(task => existingTasks.add(task));
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch L2 tasks after smart selection:', error);
+  }
+}
+
+// Line 4019-4020:
+if (window.populateAllL2Tasks) {
+  await populateAllL2Tasks();
+}
+            </pre>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>🎨 Issue 2: Retainer Options UI Implementation</h2>
+        
+        <div class="code-block">
+            <h3>✅ Fix Already Present:</h3>
+            <p><strong>Lines 4789-4817:</strong> Retainer UI in "Selected" deliverables section includes:</p>
+            <ul>
+                <li>Retainer toggle checkbox with <code>onchange="toggleRetainerType()"</code></li>
+                <li>Months input field (1-24) with <code>onchange="updateRetainerMonths()"</code></li>
+                <li>AI Suggest button with <code>onclick="suggestRetainerConfig()"</code></li>
+                <li>Conditional display based on retainer state</li>
+            </ul>
+            
+            <p><strong>Lines 4840-4868:</strong> Retainer UI in "Other" deliverables section includes:</p>
+            <ul>
+                <li>Identical retainer toggle and months input</li>
+                <li>Same AI Suggest button</li>
+                <li>Proper data attributes and event handlers</li>
+            </ul>
+            
+            <p><strong>Lines 183-330:</strong> Supporting functions implemented:</p>
+            <ul>
+                <li><code>toggleRetainerType()</code> - Manages retainer state</li>
+                <li><code>updateRetainerMonths()</code> - Updates month values</li>
+                <li><code>suggestRetainerConfig()</code> - Calls AI endpoints</li>
+                <li><code>autoDetectRetainers()</code> - Auto-detection after smart selection</li>
+            </ul>
+        </div>
+        
+        <button onclick="showCodeSnippet('issue2')">View Actual Code</button>
+        <div id="issue2-code" style="display:none;" class="code-block">
+            <pre style="overflow-x: auto; color: #10b981;">
+// Lines 4789-4817 (Selected section):
+&lt;div style="display:flex;gap:12px;align-items:center;padding:4px 8px 8px 32px;background:rgba(0,0,0,0.1);"&gt;
+  &lt;label style="display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;"&gt;
+    &lt;input type="checkbox" 
+           class="retainer-toggle" 
+           data-code="${code}" 
+           ${isRetainer ? 'checked' : ''}
+           onchange="toggleRetainerType('${code}', this.checked)"&gt;
+    &lt;span&gt;Retainer&lt;/span&gt;
+  &lt;/label&gt;
+  
+  &lt;div class="retainer-months-wrap" data-code="${code}" style="display:${isRetainer ? 'flex' : 'none'};"&gt;
+    &lt;span&gt;Months:&lt;/span&gt;
+    &lt;input type="number" 
+           class="retainer-months" 
+           data-code="${code}"
+           value="${retainerMonths}"
+           min="1" max="24"
+           onchange="updateRetainerMonths('${code}', this.value)"&gt;
+  &lt;/div&gt;
+  
+  &lt;button onclick="suggestRetainerConfig('${code}')"&gt;
+    AI Suggest
+  &lt;/button&gt;
+&lt;/div&gt;
+
+// Same structure repeated in lines 4840-4868 for "Other" section
+            </pre>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>🚀 Verification Steps</h2>
+        <ol>
+            <li><strong>Open the app</strong> at <a href="http://localhost:5000" target="_blank" style="color:#8b5cf6;">http://localhost:5000</a></li>
+            <li><strong>Upload or paste an RFP</strong> in Step 1</li>
+            <li><strong>Click "Fast Mode"</strong> to proceed to Step 2</li>
+            <li><strong>In Step 2:</strong>
+                <ul>
+                    <li>Check if deliverable cards show retainer toggle and months input</li>
+                    <li>Click "Apply Smart Selection" and verify L2 tasks populate</li>
+                    <li>Open browser DevTools Network tab to verify /api/step2/l3/bulk calls</li>
+                </ul>
+            </li>
+        </ol>
+    </div>
+    
+    <script>
+        function showCodeSnippet(section) {
+            const codeDiv = document.getElementById(section + '-code');
+            if (codeDiv.style.display === 'none') {
+                codeDiv.style.display = 'block';
+            } else {
+                codeDiv.style.display = 'none';
+            }
+        }
+    </script>
+</body>
+</html>
