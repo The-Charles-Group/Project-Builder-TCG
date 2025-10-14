@@ -18,7 +18,13 @@
   <main>
     <!-- Step 1: Upload RFP -->
     <section class="card" id="step1">
-      <h2>Step 1 — Upload Your RFP / Brief</h2>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2 style="margin: 0;">Step 1 — Upload Your RFP / Brief</h2>
+        <button id="btnClearAllData" onclick="clearAllDataWithConfirmation()" 
+                style="background: #dc2626; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+          🗑️ Clear All Data
+        </button>
+      </div>
       
       <!-- Fast/Deep Mode Selector -->
       <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px;">

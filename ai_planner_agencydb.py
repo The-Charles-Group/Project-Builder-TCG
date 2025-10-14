@@ -456,7 +456,7 @@ def summarize_request(request_text: str) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Recall candidates (embeddings + lexical)
 # ──────────────────────────────────────────────────────────────────────────────
-def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=None, mode: str = "deep") -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=None, mode: str = "deep", session_id: Optional[str] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not catalog:
         return [], []
     
@@ -479,8 +479,8 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
     # DEEP MODE: Use embeddings + lexical for better accuracy
     texts = [f"{str(i.get('dept',''))} • {str(i.get('level',''))} • {str(i.get('title',''))} :: {str(i.get('desc',''))} :: {', '.join(str(k) for k in i.get('keywords',[]))}" for i in catalog]
     
-    # Use cached embed_many with client
-    embs = embed_many([request_text] + texts, client=client)
+    # Use cached embed_many with client and session_id for isolation
+    embs = embed_many([request_text] + texts, client=client, session_id=session_id)
     req = np.array(embs[0], dtype=np.float32)
     
     cands = []
@@ -1319,8 +1319,8 @@ def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks:
             progress_pct = int((job.processed_chunks / job.total_chunks) * 100)
         print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%)")
 
-def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None) -> Dict[str, Any]:
-    """Main analysis function using AgencyDB with Fast/Deep mode support
+def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None) -> Dict[str, Any]:
+    """Main analysis function using AgencyDB with Fast/Deep mode support and session isolation
     
     Args:
         request_text: The RFP or project request text
@@ -1330,6 +1330,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         tier: GPT-5 tier (mini/thinking/pro)
         mode: 'fast' for lexical-only (no LLM), 'deep' for full LLM re-ranking
         client: HTTP client for API calls (uses app.state.http if available)
+        session_id: Optional session ID for cache isolation
     """
     strictness = strictness or AI_STRICTNESS_DEFAULT
     # PERFORMANCE FIX: Fast mode always uses "mini" tier for speed
@@ -1401,7 +1402,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     _update_job(job_id, f"Stage 3/7: {'Finding candidates with keywords...' if mode == 'fast' else 'Computing embeddings and similarity scores...'}", 30)
     
     # Pass mode to skip embeddings in Fast mode
-    candidates, all_recall = recall_candidates(request_text, catalog, client=client or oai, mode=mode)
+    candidates, all_recall = recall_candidates(request_text, catalog, client=client or oai, mode=mode, session_id=session_id)
     
     if not candidates:
         # FIXED: If no candidates, use entire catalog as fallback
@@ -1602,10 +1603,10 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     print(f"[ANALYZE COMPLETE] Mode: {mode}, Deliverables: {delivs_in_plan}, Time: {datetime.datetime.now().timestamp() - (AI_JOB_STORE[job_id].start_time if job_id and job_id in AI_JOB_STORE else datetime.datetime.now().timestamp()):.1f}s")
     return result
 
-def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None, mode: str = "deep", client=None):
-    """Background task to run AI analysis with Fast/Deep mode support"""
+def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None):
+    """Background task to run AI analysis with Fast/Deep mode support and session isolation"""
     try:
-        result = analyze_with_agencydb(request_text, db, strictness, job_id, tier, mode, client)
+        result = analyze_with_agencydb(request_text, db, strictness, job_id, tier, mode, client, session_id)
         
         if job_id in AI_JOB_STORE:
             # FIXED: Save result BEFORE marking as completed
@@ -1641,6 +1642,7 @@ class AnalyzeRequest(BaseModel):
     strictness: Optional[str] = None
     tier: Optional[str] = None  # 'mini', 'thinking', 'pro'
     mode: Optional[str] = "deep"  # 'fast' or 'deep'
+    session_id: Optional[str] = None  # Session ID for cache isolation
 
 def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
     router = APIRouter()
@@ -1663,7 +1665,7 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 status=AIJobStatus.PENDING
             )
             
-            # Start background task with mode and client
+            # Start background task with mode, client, and session_id for isolation
             # FIXED: Pass None instead of app.state.http for embedding client
             # embed_many will create its own OpenAI client
             background_tasks.add_task(
@@ -1674,7 +1676,8 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 payload.strictness,
                 payload.tier,
                 payload.mode or "deep",
-                None  # Pass None - embed_many will create its own OpenAI client
+                None,  # Pass None - embed_many will create its own OpenAI client
+                payload.session_id  # Pass session_id for cache isolation
             )
             
             return {

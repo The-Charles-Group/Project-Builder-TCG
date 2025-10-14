@@ -5,6 +5,167 @@ let DELIV_INDEX = {};     // code -> deliverable object lookup for fast renderin
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ================================================================================
+// Session Management - Data Isolation Between RFPs
+// ================================================================================
+const SessionManager = {
+  generateSessionId() {
+    return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+  },
+  
+  getCurrentSessionId() {
+    let sessionId = localStorage.getItem('apb.currentSession');
+    if (!sessionId) {
+      sessionId = this.generateSessionId();
+      localStorage.setItem('apb.currentSession', sessionId);
+    }
+    return sessionId;
+  },
+  
+  startNewSession() {
+    const newSessionId = this.generateSessionId();
+    
+    // Clear ALL apb localStorage data from previous sessions
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('apb.')) {
+        localStorage.removeItem(key);
+      }
+    });
+    
+    // Clear sessionStorage
+    Object.keys(sessionStorage).forEach(key => {
+      if (key.startsWith('apb.') || key === 'rfp_text') {
+        sessionStorage.removeItem(key);
+      }
+    });
+    
+    // Set new session ID
+    localStorage.setItem('apb.currentSession', newSessionId);
+    
+    console.log('[SESSION] Started new session:', newSessionId);
+    return newSessionId;
+  },
+  
+  async clearAllData() {
+    const sessionId = this.getCurrentSessionId();
+    
+    // Clear localStorage
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith('apb.')) {
+        localStorage.removeItem(key);
+      }
+    });
+    
+    // Clear sessionStorage
+    Object.keys(sessionStorage).forEach(key => {
+      if (key.startsWith('apb.') || key === 'rfp_text') {
+        sessionStorage.removeItem(key);
+      }
+    });
+    
+    // Clear server-side cache
+    try {
+      await fetch('/api/clear_session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId })
+      });
+      console.log('[SESSION] Server cache cleared for session:', sessionId);
+    } catch (err) {
+      console.warn('[SESSION] Failed to clear server cache:', err);
+    }
+    
+    // Start fresh session
+    this.startNewSession();
+    
+    console.log('[SESSION] All data cleared, new session started');
+  },
+  
+  getSessionKey(key) {
+    const sessionId = this.getCurrentSessionId();
+    return `apb.${sessionId}.${key}`;
+  },
+  
+  setSessionItem(key, value) {
+    const sessionKey = this.getSessionKey(key);
+    localStorage.setItem(sessionKey, value);
+  },
+  
+  getSessionItem(key) {
+    const sessionKey = this.getSessionKey(key);
+    return localStorage.getItem(sessionKey);
+  },
+  
+  removeSessionItem(key) {
+    const sessionKey = this.getSessionKey(key);
+    localStorage.removeItem(sessionKey);
+  }
+};
+
+window.SessionManager = SessionManager;
+
+// Clear All Data with Confirmation Dialog
+async function clearAllDataWithConfirmation() {
+  const confirmed = confirm(
+    '⚠️ Clear All Data?\n\n' +
+    'This will:\n' +
+    '• Delete all stored RFP data\n' +
+    '• Clear all analysis results\n' +
+    '• Reset the application to fresh state\n' +
+    '• Clear server-side cache\n\n' +
+    'This action cannot be undone. Continue?'
+  );
+  
+  if (!confirmed) return;
+  
+  try {
+    // Show loading state
+    const btn = document.getElementById('btnClearAllData');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '⏳ Clearing...';
+    }
+    
+    // Clear all data
+    await SessionManager.clearAllData();
+    
+    // Reset UI
+    document.getElementById('rfpText').value = '';
+    document.getElementById('rfpFile').value = '';
+    
+    // Hide all steps except Step 1
+    document.getElementById('step1').style.display = 'block';
+    document.getElementById('step2').style.display = 'none';
+    const step3 = document.getElementById('step3');
+    if (step3) step3.style.display = 'none';
+    const step4 = document.getElementById('step4');
+    if (step4) step4.style.display = 'none';
+    
+    // Reset button state
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '🗑️ Clear All Data';
+    }
+    
+    alert('✅ All data cleared successfully!\n\nThe application has been reset to a fresh state.');
+    
+    // Reload page for complete reset
+    setTimeout(() => window.location.reload(), 500);
+  } catch (err) {
+    console.error('[CLEAR] Error clearing data:', err);
+    alert('❌ Error clearing data. Please try again or refresh the page.');
+    
+    // Reset button state
+    const btn = document.getElementById('btnClearAllData');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '🗑️ Clear All Data';
+    }
+  }
+}
+
+window.clearAllDataWithConfirmation = clearAllDataWithConfirmation;
+
+// ================================================================================
 // Centralized Step 2 State - Single Source of Truth (selectionStore)
 // ================================================================================
 window.APB = window.APB || {};
@@ -2753,6 +2914,27 @@ async function onRunReconcile() {
   const btnAnalyze = document.querySelector('#btnAnalyze');
   const analysisMode = document.getElementById('analysis-mode')?.value || 'fast';
 
+  // ============================================================================
+  // SESSION ISOLATION: Start fresh session for each new analysis
+  // ============================================================================
+  const sessionId = SessionManager.startNewSession();
+  console.log('[SESSION] New analysis session:', sessionId);
+  
+  // Reset global state for fresh analysis
+  SCENARIOS = null;
+  DELIVERABLES = [];
+  DELIV_INDEX = {};
+  DELIV_INDEX_LO = {};
+  
+  // Reset Step 2 state
+  selectionStore.deliverables.clear();
+  selectionStore.componentsByDeliv.clear();
+  selectionStore.l3ByComponent.clear();
+  S2.selectedComponentsByCode = {};
+  S2.aiSuggestedCodes = new Set();
+  S2.activeDeliverableCode = null;
+  S2.activeComponentName = null;
+  
   // Show progress bar IMMEDIATELY when button is clicked
   showAIProgressBar();
   updateAIProgress({ progress: 0, current_stage: 'Preparing analysis...', elapsed_seconds: 0, eta_seconds: null });
@@ -2823,7 +3005,8 @@ async function onRunReconcile() {
         request_text: rfpText,
         strictness: 'balanced',
         tier: tier,
-        mode: selectedMode  // Add mode parameter
+        mode: selectedMode,  // Add mode parameter
+        session_id: sessionId  // Add session_id for cache isolation
       })
     }, 3, 2000);
     
@@ -2836,8 +3019,11 @@ async function onRunReconcile() {
     // Persist RFP text for Step 2
     window.APP = window.APP || {};
     window.APP.rfpText = rfpText;
-    sessionStorage.setItem('apb.rfp_text', rfpText);
-    localStorage.setItem('apb.rfpText.v1', rfpText);
+    
+    // Store RFP text with session isolation
+    SessionManager.setSessionItem('rfp_text', rfpText);
+    sessionStorage.setItem('apb.rfp_text', rfpText);  // Keep for backward compatibility
+    
     APB.step2.rfpText = rfpText;
     
     // Start SSE streaming for AI analysis progress

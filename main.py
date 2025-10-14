@@ -3339,6 +3339,39 @@ async def get_cached_rfp_text():
     """Retrieve cached RFP text for Step 2."""
     return {"text": RFP_TEXT_CACHE or ""}
 
+class ClearSessionPayload(BaseModel):
+    session_id: str
+
+@app.post("/api/clear_session")
+async def clear_session(payload: ClearSessionPayload):
+    """Clear all session-specific data including embedding cache"""
+    session_id = payload.session_id
+    
+    # Clear embedding cache for this session
+    from embedding_cache import clear_cache
+    clear_cache(session_id=session_id)
+    
+    # Clear any session-specific global data
+    global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE
+    RFP_TEXT_CACHE_TEXTAREA = None
+    RFP_TEXT_CACHE_FILE = None
+    RFP_TEXT_CACHE = None
+    
+    # Clear job store entries for this session (if we tracked session_id in jobs)
+    # Note: Current job store doesn't have session_id tracking yet
+    # This would be a future enhancement
+    
+    print(f"[SESSION] Cleared server-side data for session: {session_id}")
+    
+    return {
+        "ok": True,
+        "message": f"Session {session_id} cleared successfully",
+        "cleared": {
+            "embedding_cache": True,
+            "rfp_text_cache": True
+        }
+    }
+
 @app.get("/api/upload/progress/{job_id}")
 async def get_upload_progress(job_id: str):
     """Get progress of image analysis job with two-phase tracking"""
