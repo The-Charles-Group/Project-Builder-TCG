@@ -3891,10 +3891,13 @@ function clearAllAISelections() {
 }
 
 async function applyAllSelectedFromAI() {
-  // Collect selected deliverables
+  // ISSUE 1 FIX: Collect ALL selected deliverables and their components
   const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
   let firstDelivCode = null;
   let firstCompName = null;
+  
+  // Store all deliverables and their components for bulk L2 fetch
+  const allDeliverablesToFetch = [];
   
   for (const delivCb of delivCheckboxes) {
     const delivCode = delivCb.dataset.code;
@@ -3915,10 +3918,12 @@ async function applyAllSelectedFromAI() {
     // Collect selected components for this deliverable
     const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]:checked`);
     const selectedComps = new Set();
+    const componentsToFetch = [];
     
     for (const compCb of compCheckboxes) {
       const compTitle = compCb.dataset.comp;
       selectedComps.add(compTitle);
+      componentsToFetch.push(compTitle);
       
       // Track first component
       if (!firstCompName && delivCode === firstDelivCode) {
@@ -3949,33 +3954,28 @@ async function applyAllSelectedFromAI() {
     if (selectedComps.size > 0) {
       selectionStore.componentsByDeliv.set(delivCode, selectedComps);
       S2.selectedComponentsByCode[delivCode] = selectedComps;
+      
+      // Add to bulk fetch list
+      if (componentsToFetch.length > 0) {
+        allDeliverablesToFetch.push({
+          deliverable: delivCode,
+          components: componentsToFetch
+        });
+      }
     }
   }
   
-  // ISSUE 1 FIX: Auto-select first deliverable and fetch L2 tasks
-  if (firstDelivCode) {
-    // Set the active deliverable
-    APB.step2.activeDeliverableCode = firstDelivCode;
+  // ISSUE 1 FIX: Fetch L2 tasks for ALL selected deliverables
+  if (allDeliverablesToFetch.length > 0) {
+    console.log('Fetching L2 tasks for all selected deliverables:', allDeliverablesToFetch);
     
-    // Get components for bulk L2 fetch
-    const components = selectionStore.componentsByDeliv.get(firstDelivCode);
-    
-    if (components && components.size > 0) {
-      const componentArray = Array.from(components);
-      
-      // Set the first component as active
-      firstCompName = firstCompName || componentArray[0];
-      APB.step2.activeComponentName = firstCompName;
-      
-      try {
-        // Fetch L2 tasks in bulk for all selected components
+    try {
+      // Fetch L2 tasks for each deliverable
+      for (const fetchItem of allDeliverablesToFetch) {
         const res = await fetch('/api/step2/l3/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            deliverable: firstDelivCode,
-            components: componentArray
-          })
+          body: JSON.stringify(fetchItem)
         });
         
         if (res.ok) {
@@ -3983,7 +3983,7 @@ async function applyAllSelectedFromAI() {
           
           // Store L2 tasks for each component
           for (const [compName, tasks] of Object.entries(l3Data)) {
-            const key = `${firstDelivCode}::${compName}`;
+            const key = `${fetchItem.deliverable}::${compName}`;
             if (!selectionStore.l3ByComponent.has(key)) {
               selectionStore.l3ByComponent.set(key, new Set());
             }
@@ -3991,11 +3991,19 @@ async function applyAllSelectedFromAI() {
             tasks.forEach(task => existingTasks.add(task));
           }
           
-          console.log(`Fetched L2 tasks for ${firstDelivCode} components:`, Object.keys(l3Data));
+          console.log(`Fetched L2 tasks for ${fetchItem.deliverable}:`, Object.keys(l3Data).length, 'components');
         }
-      } catch (error) {
-        console.error('Failed to fetch L2 tasks after smart selection:', error);
       }
+    } catch (error) {
+      console.error('Failed to fetch L2 tasks after smart selection:', error);
+    }
+  }
+  
+  // Set first deliverable as active
+  if (firstDelivCode) {
+    APB.step2.activeDeliverableCode = firstDelivCode;
+    if (firstCompName) {
+      APB.step2.activeComponentName = firstCompName;
     }
   }
   
@@ -4007,8 +4015,11 @@ async function applyAllSelectedFromAI() {
     }
   }
   
-  // ISSUE 1 FIX: Render L3/Tasks panel with the active component
-  if (window.renderTasksPanel && firstCompName && firstDelivCode) {
+  // ISSUE 1 FIX: Display ALL L2 tasks in the panel (not just active component)
+  if (window.populateAllL2Tasks) {
+    await populateAllL2Tasks();
+  } else if (window.renderTasksPanel && firstCompName && firstDelivCode) {
+    // Fallback to old behavior if new function doesn't exist
     const componentKey = `${firstDelivCode}::${firstCompName}`;
     await renderTasksPanel(componentKey);
   }
@@ -4033,20 +4044,178 @@ async function applyAllSelectedFromAI() {
   alert('Selected items have been added to your manual selection!');
 }
 
-// Tasks Panel rendering function
-async function renderTasksPanel(componentKey) {
+// ISSUE 1 FIX: New function to populate ALL L2 tasks
+async function populateAllL2Tasks() {
   const taskList = document.getElementById('s2-task-list');
   if (!taskList) return;
   
-  if (!componentKey && APB.step2.activeComponentName && APB.step2.activeDeliverableCode) {
-    componentKey = `${APB.step2.activeDeliverableCode}::${APB.step2.activeComponentName}`;
+  // Collect all L2 tasks from selectionStore
+  const allTasksByDeliverable = new Map();
+  let totalTaskCount = 0;
+  
+  for (const [componentKey, tasks] of selectionStore.l3ByComponent.entries()) {
+    if (tasks.size === 0) continue;
+    
+    const [delivCode, compName] = componentKey.split('::');
+    
+    if (!allTasksByDeliverable.has(delivCode)) {
+      allTasksByDeliverable.set(delivCode, new Map());
+    }
+    
+    allTasksByDeliverable.get(delivCode).set(compName, tasks);
+    totalTaskCount += tasks.size;
   }
   
-  if (!componentKey) {
-    taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its tasks</p>';
-    document.getElementById('s2-tasks-active-component').textContent = 'Select a component';
+  // Update header to show total count
+  const headerElement = document.getElementById('s2-tasks-active-component');
+  if (headerElement) {
+    headerElement.textContent = `All L2 Tasks (${totalTaskCount} selected)`;
+  }
+  
+  if (allTasksByDeliverable.size === 0) {
+    taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L2 tasks selected yet. Apply smart selection to populate tasks.</p>';
     return;
   }
+  
+  // Build HTML grouped by Deliverable → Component → Tasks
+  let tasksHtml = '';
+  
+  for (const [delivCode, componentMap] of allTasksByDeliverable) {
+    const delivName = labelFor(delivCode) || delivCode;
+    
+    tasksHtml += `
+      <div style="margin-bottom: 16px; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; overflow: hidden;">
+        <div style="background: rgba(139,92,246,0.1); padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+          <strong style="color: var(--accent); font-size: 0.95em;">📦 ${delivName}</strong>
+        </div>
+    `;
+    
+    for (const [compName, tasks] of componentMap) {
+      const componentKey = `${delivCode}::${compName}`;
+      
+      tasksHtml += `
+        <div style="padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+          <div style="color: #10b981; font-size: 0.9em; margin-bottom: 6px; font-weight: 600;">
+            ➤ ${compName} (${tasks.size} tasks)
+          </div>
+          <div style="margin-left: 16px;">
+      `;
+      
+      for (const task of tasks) {
+        const isAiRecommended = window.lastAIPlan && isTaskAIRecommended(delivCode, compName, task);
+        const taskColor = isAiRecommended ? '#10b981' : '#9ca3af';
+        
+        tasksHtml += `
+          <label style="display: flex; align-items: start; gap: 8px; padding: 4px 8px; border-radius: 4px; cursor: pointer; hover:background: rgba(255,255,255,0.03);">
+            <input type="checkbox" 
+                   class="task-checkbox" 
+                   data-task="${task}" 
+                   data-component="${componentKey}"
+                   checked
+                   style="margin-top: 2px; cursor: pointer;">
+            <div style="flex: 1;">
+              <span style="color: ${taskColor}; font-size: 0.85em;">• ${task}</span>
+              ${isAiRecommended ? '<span style="margin-left: 8px; font-size: 0.7em; color: #10b981; background: rgba(16,185,129,0.1); padding: 1px 4px; border-radius: 2px;">AI</span>' : ''}
+            </div>
+          </label>
+        `;
+      }
+      
+      tasksHtml += `
+          </div>
+        </div>
+      `;
+    }
+    
+    tasksHtml += '</div>';
+  }
+  
+  // Add search box at the top
+  const searchAndButtons = `
+    <div style="margin-bottom: 12px;">
+      <input id="s2-task-search" type="search" placeholder="Search L2 tasks..." 
+             style="width: 100%; padding: 6px 10px; border: 1px solid #2a2a2a; border-radius: 4px; background: #1a1a1a; color: #fff; font-size: 0.9em; margin-bottom: 8px;">
+      <div style="display: flex; gap: 6px;">
+        <button id="s2-task-selectall-new" class="btn-sm" style="flex: 1; font-size: 0.85em;">Select All</button>
+        <button id="s2-task-clear-new" class="btn-sm" style="flex: 1; font-size: 0.85em;">Clear All</button>
+      </div>
+    </div>
+  `;
+  
+  taskList.innerHTML = searchAndButtons + tasksHtml;
+  
+  // Add event listeners to checkboxes
+  taskList.querySelectorAll('.task-checkbox').forEach(cb => {
+    cb.addEventListener('change', (e) => {
+      const task = e.target.dataset.task;
+      const compKey = e.target.dataset.component;
+      
+      if (!selectionStore.l3ByComponent.has(compKey)) {
+        selectionStore.l3ByComponent.set(compKey, new Set());
+      }
+      
+      if (e.target.checked) {
+        selectionStore.l3ByComponent.get(compKey).add(task);
+      } else {
+        selectionStore.l3ByComponent.get(compKey).delete(task);
+        
+        // If no tasks left in this component, remove it
+        if (selectionStore.l3ByComponent.get(compKey).size === 0) {
+          selectionStore.l3ByComponent.delete(compKey);
+        }
+      }
+      
+      updateTasksSummary();
+    });
+  });
+  
+  // Wire up search functionality
+  const searchBox = document.getElementById('s2-task-search');
+  if (searchBox) {
+    searchBox.addEventListener('input', (e) => {
+      const searchTerm = e.target.value.toLowerCase();
+      taskList.querySelectorAll('label').forEach(label => {
+        const taskText = label.textContent.toLowerCase();
+        label.style.display = taskText.includes(searchTerm) ? 'flex' : 'none';
+      });
+    });
+  }
+  
+  // Wire up Select All / Clear All buttons
+  const selectAllBtn = document.getElementById('s2-task-selectall-new');
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener('click', () => {
+      taskList.querySelectorAll('.task-checkbox').forEach(cb => {
+        if (cb.style.display !== 'none') {
+          cb.checked = true;
+          cb.dispatchEvent(new Event('change'));
+        }
+      });
+    });
+  }
+  
+  const clearBtn = document.getElementById('s2-task-clear-new');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      taskList.querySelectorAll('.task-checkbox').forEach(cb => {
+        cb.checked = false;
+        cb.dispatchEvent(new Event('change'));
+      });
+    });
+  }
+  
+  updateTasksSummary();
+}
+
+// Original Tasks Panel rendering function (keep for backward compatibility)
+async function renderTasksPanel(componentKey) {
+  // If no component key provided, show all L2 tasks
+  if (!componentKey) {
+    return populateAllL2Tasks();
+  }
+  
+  const taskList = document.getElementById('s2-task-list');
+  if (!taskList) return;
   
   // Parse component key
   const [delivCode, compName] = componentKey.split('::');
@@ -4243,6 +4412,7 @@ window.clearAllAISelections = clearAllAISelections;
 window.applyAllSelectedFromAI = applyAllSelectedFromAI;
 window.renderTasksPanel = renderTasksPanel;
 window.updateTasksSummary = updateTasksSummary;
+window.populateAllL2Tasks = populateAllL2Tasks; // ISSUE 1 FIX: Export the new function
 
 // Initialize AI Summary and Suggestions on Step 2
 function initAISummaryAndSuggestions() {
@@ -4655,12 +4825,48 @@ function renderDeliverablesPanel() {
     html += '<div style="font-weight:600;padding:8px;color:var(--muted);margin-top:8px;">Other</div>';
     other.forEach(d => {
       const code = String(d.Deliverable_Code);
+      const isRetainer = pricingData.deliverableTypes.get(code) === 'RETAINER';
+      const retainerMonths = pricingData.retainers.get(code) || 12;
+      
       html += `
-        <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
-          <input type="checkbox" class="deliv-checkbox" data-code="${code}" data-visible="1" />
-          <span>${d.Deliverable}</span>
-          <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
-        </label>
+        <div class="deliv-row" data-code="${code}" style="border-left:3px solid transparent;">
+          <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+            <input type="checkbox" class="deliv-checkbox" data-code="${code}" data-visible="1" />
+            <span>${d.Deliverable}</span>
+            ${isRetainer ? '<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER</span>' : ''}
+            <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+          </label>
+          
+          <!-- ISSUE 2 FIX: Add Retainer Options to Other deliverables -->
+          <div style="display:flex;gap:12px;align-items:center;padding:4px 8px 8px 32px;background:rgba(0,0,0,0.1);border-top:1px solid rgba(255,255,255,0.05);">
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;">
+              <input type="checkbox" 
+                     class="retainer-toggle" 
+                     data-code="${code}" 
+                     ${isRetainer ? 'checked' : ''}
+                     onchange="toggleRetainerType('${code}', this.checked)"
+                     style="cursor:pointer;">
+              <span style="color:${isRetainer ? '#10b981' : 'var(--muted)'};">Retainer</span>
+            </label>
+            
+            <div class="retainer-months-wrap" data-code="${code}" style="display:${isRetainer ? 'flex' : 'none'};align-items:center;gap:4px;">
+              <span style="font-size:0.85em;color:var(--muted);">Months:</span>
+              <input type="number" 
+                     class="retainer-months" 
+                     data-code="${code}"
+                     value="${retainerMonths}"
+                     min="1" 
+                     max="24"
+                     onchange="updateRetainerMonths('${code}', this.value)"
+                     style="width:50px;padding:2px 4px;border:1px solid rgba(255,255,255,0.2);border-radius:3px;background:rgba(0,0,0,0.2);">
+            </div>
+            
+            <button onclick="event.stopPropagation(); suggestRetainerConfig('${code}')" 
+                    style="margin-left:auto;background:#3b82f6;color:white;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:0.8em;">
+              AI Suggest
+            </button>
+          </div>
+        </div>
       `;
     });
   }
