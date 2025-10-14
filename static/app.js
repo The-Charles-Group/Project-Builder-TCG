@@ -2175,6 +2175,33 @@ function renderAIPlan(aiPlan) {
         </div>
       </div>
       
+      <!-- Smart Select by Relevancy -->
+      <div id="smart-select-container" style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
+          <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+            <label style="margin: 0; font-weight: 600; color: var(--accent);">🎯 Smart Select by Relevancy:</label>
+            <input type="number" 
+                   id="smart-select-threshold" 
+                   min="0" 
+                   max="100" 
+                   value="60"
+                   placeholder="Min relevancy %" 
+                   style="width: 100px; padding: 6px 10px; background: #0b0e13; border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+            <span style="color: var(--muted); font-size: 0.9em;">%</span>
+          </div>
+          <button onclick="applySmartSelection()" 
+                  id="btn-smart-select"
+                  style="padding: 8px 20px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;"
+                  onmouseover="this.style.opacity='0.9'" 
+                  onmouseout="this.style.opacity='1'">
+            🎯 Apply Smart Selection
+          </button>
+        </div>
+        <div style="margin-top: 8px; font-size: 0.85em; color: var(--muted);">
+          Automatically select deliverables, components, and tasks with confidence ≥ threshold
+        </div>
+      </div>
+      
       <div style="background: #f0f9ff; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
         <h4 style="margin: 0 0 8px 0; color: #1e40af;">📊 Project Flow & Department Sequencing</h4>
         <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: #1e3a8a;">
@@ -2355,6 +2382,119 @@ function renderAIPlan(aiPlan) {
     window.lastAIPlan = plan;
   }
 }
+
+// Smart Selection Function - Select based on confidence threshold
+function applySmartSelection() {
+  const thresholdInput = document.getElementById('smart-select-threshold');
+  if (!thresholdInput) {
+    console.warn('Smart select threshold input not found');
+    return;
+  }
+  
+  const threshold = parseFloat(thresholdInput.value) || 60;
+  console.log(`Applying smart selection with threshold: ${threshold}%`);
+  
+  // Clear all current selections first
+  clearAllAISelections();
+  
+  // Get all deliverable checkboxes
+  const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox');
+  let selectedDelivCount = 0;
+  let selectedCompCount = 0;
+  let selectedTaskCount = 0;
+  
+  delivCheckboxes.forEach(delivCheckbox => {
+    const delivCode = delivCheckbox.getAttribute('data-code');
+    const delivDiv = delivCheckbox.closest('.ai-deliverable');
+    if (!delivDiv) return;
+    
+    // Get confidence from the confidence span
+    const confidenceSpan = delivDiv.querySelector('span[style*="confidence"]');
+    let confidence = 0;
+    if (confidenceSpan) {
+      const match = confidenceSpan.textContent.match(/(\d+)%\s*confidence/);
+      if (match) {
+        confidence = parseFloat(match[1]);
+      }
+    }
+    
+    // Check if deliverable meets threshold
+    if (confidence >= threshold) {
+      delivCheckbox.checked = true;
+      selectedDelivCount++;
+      
+      // For components within this deliverable
+      const compCheckboxes = delivDiv.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
+      compCheckboxes.forEach(compCheckbox => {
+        // Components inherit deliverable confidence (since they don't have their own)
+        // You can modify this logic if components have their own confidence scores
+        if (confidence >= threshold) {
+          compCheckbox.checked = true;
+          selectedCompCount++;
+          
+          // For tasks within this component
+          const compName = compCheckbox.getAttribute('data-comp');
+          const taskCheckboxes = delivDiv.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compName}"]`);
+          taskCheckboxes.forEach(taskCheckbox => {
+            // Tasks: Check if they were AI-selected (100% confidence) or not (0% confidence)
+            // This is a simplified approach - modify if tasks have actual confidence scores
+            const wasAISelected = taskCheckbox.hasAttribute('checked') || taskCheckbox.checked;
+            const taskConfidence = wasAISelected ? 100 : 0;
+            
+            if (taskConfidence >= threshold) {
+              taskCheckbox.checked = true;
+              selectedTaskCount++;
+            } else {
+              taskCheckbox.checked = false;
+            }
+          });
+        } else {
+          compCheckbox.checked = false;
+        }
+      });
+    } else {
+      delivCheckbox.checked = false;
+      
+      // Uncheck all components and tasks for this deliverable
+      const compCheckboxes = delivDiv.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
+      compCheckboxes.forEach(compCheckbox => {
+        compCheckbox.checked = false;
+      });
+      
+      const taskCheckboxes = delivDiv.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"]`);
+      taskCheckboxes.forEach(taskCheckbox => {
+        taskCheckbox.checked = false;
+      });
+    }
+  });
+  
+  // Show feedback
+  const feedbackMessage = `Smart Selection Applied: ${selectedDelivCount} deliverables, ${selectedCompCount} components, ${selectedTaskCount} tasks selected (threshold: ${threshold}%)`;
+  console.log(feedbackMessage);
+  
+  // Show visual feedback (optional - add a temporary notification)
+  const smartSelectContainer = document.getElementById('smart-select-container');
+  if (smartSelectContainer) {
+    const existingFeedback = smartSelectContainer.querySelector('.smart-select-feedback');
+    if (existingFeedback) {
+      existingFeedback.remove();
+    }
+    
+    const feedbackDiv = document.createElement('div');
+    feedbackDiv.className = 'smart-select-feedback';
+    feedbackDiv.style = 'margin-top: 8px; padding: 8px; background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; border-radius: 4px; color: #10b981; font-size: 0.9em;';
+    feedbackDiv.textContent = feedbackMessage;
+    smartSelectContainer.appendChild(feedbackDiv);
+    
+    // Remove feedback after 5 seconds
+    setTimeout(() => {
+      feedbackDiv.remove();
+    }, 5000);
+  }
+}
+
+// Make function available globally
+window.applySmartSelection = applySmartSelection;
 
 // Helper functions for AI selection checkboxes
 function addAIDeliverableToSelection(delivCode, button) {
