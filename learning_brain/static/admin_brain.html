@@ -1,58 +1,964 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Learning Brain Admin</title>
+  <title>Learning Brain Admin - Confidence Adjustment System</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; }
-    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-    .card { border: 1px solid #ddd; padding: 16px; border-radius: 8px; margin: 12px 0; }
-    pre { background: #f6f8fa; padding: 10px; overflow: auto; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+    
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    
+    .header {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    h1 {
+      font-size: 28px;
+      color: #333;
+      margin-bottom: 16px;
+    }
+    
+    .mode-selector {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    
+    .mode-button {
+      padding: 8px 24px;
+      border: 2px solid #ddd;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+    
+    .mode-button.active {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+    
+    .mode-button:hover:not(.active) {
+      border-color: #667eea;
+      background: #f7f7ff;
+    }
+    
+    .auth-section {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+    
+    input[type="password"], input[type="text"], input[type="number"], textarea, select {
+      padding: 10px 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    
+    input[type="password"] {
+      min-width: 320px;
+    }
+    
+    button {
+      padding: 10px 20px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.3s;
+    }
+    
+    button:hover {
+      background: #5a67d8;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    
+    .danger-button {
+      background: #e53e3e;
+    }
+    
+    .danger-button:hover {
+      background: #c53030;
+    }
+    
+    .warning-button {
+      background: #ed8936;
+    }
+    
+    .warning-button:hover {
+      background: #dd6b20;
+    }
+    
+    .success-button {
+      background: #48bb78;
+    }
+    
+    .success-button:hover {
+      background: #38a169;
+    }
+    
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      margin-bottom: 24px;
+    }
+    
+    @media (max-width: 768px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .card h3 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #333;
+    }
+    
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    
+    .status-item {
+      padding: 12px;
+      background: #f7fafc;
+      border-radius: 6px;
+    }
+    
+    .status-label {
+      font-size: 12px;
+      color: #718096;
+      margin-bottom: 4px;
+    }
+    
+    .status-value {
+      font-size: 20px;
+      font-weight: 600;
+      color: #2d3748;
+    }
+    
+    .adjustment-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .form-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    
+    .form-row label {
+      min-width: 140px;
+      font-weight: 500;
+      color: #4a5568;
+    }
+    
+    .form-row input, .form-row textarea {
+      flex: 1;
+    }
+    
+    .slider-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .slider {
+      flex: 1;
+      height: 6px;
+      border-radius: 3px;
+      background: #e2e8f0;
+      outline: none;
+      -webkit-appearance: none;
+    }
+    
+    .slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      background: #667eea;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    
+    .slider::-moz-range-thumb {
+      width: 20px;
+      height: 20px;
+      background: #667eea;
+      border-radius: 50%;
+      cursor: pointer;
+      border: none;
+    }
+    
+    .slider-value {
+      min-width: 50px;
+      font-weight: 600;
+      color: #2d3748;
+    }
+    
+    .adjustments-list {
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+    
+    .adjustment-item {
+      padding: 12px;
+      border-bottom: 1px solid #e2e8f0;
+      transition: background 0.2s;
+    }
+    
+    .adjustment-item:hover {
+      background: #f7fafc;
+    }
+    
+    .adjustment-item:last-child {
+      border-bottom: none;
+    }
+    
+    .adjustment-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    
+    .deliverable-code {
+      font-weight: 600;
+      color: #2d3748;
+    }
+    
+    .adjustment-delta {
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    
+    .delta-positive {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+    
+    .delta-negative {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+    
+    .delta-neutral {
+      background: #e2e8f0;
+      color: #4a5568;
+    }
+    
+    .adjustment-details {
+      font-size: 14px;
+      color: #4a5568;
+      line-height: 1.5;
+    }
+    
+    .timestamp {
+      font-size: 12px;
+      color: #a0aec0;
+      margin-top: 4px;
+    }
+    
+    pre {
+      background: #f7fafc;
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .alert {
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .alert-info {
+      background: #bee3f8;
+      color: #2c5282;
+    }
+    
+    .alert-success {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+    
+    .alert-warning {
+      background: #feebc8;
+      color: #7c2d12;
+    }
+    
+    .alert-error {
+      background: #fed7d7;
+      color: #742a2a;
+    }
+    
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      border-bottom: 2px solid #e2e8f0;
+    }
+    
+    .tab {
+      padding: 10px 20px;
+      background: transparent;
+      border: none;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+      font-weight: 500;
+      color: #718096;
+      transition: all 0.3s;
+    }
+    
+    .tab:hover {
+      color: #4a5568;
+    }
+    
+    .tab.active {
+      color: #667eea;
+      border-bottom-color: #667eea;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 3px solid #e2e8f0;
+      border-top-color: #667eea;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: #718096;
+    }
+    
+    .empty-state svg {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 16px;
+      opacity: 0.4;
+    }
   </style>
 </head>
 <body>
-  <h1>Learning Brain — Admin</h1>
-  <div class="row">
-    <input id="token" type="password" placeholder="Admin token (Bearer)" style="min-width: 320px;" />
-    <select id="mode">
-      <option value="off">OFF</option>
-      <option value="shadow">SHADOW</option>
-      <option value="active">ACTIVE</option>
-    </select>
-    <button onclick="setMode()">Set Mode</button>
-    <button onclick="getStatus()">Refresh Status</button>
-    <button onclick="publish()">Publish Draft</button>
-    <button onclick="undo()">Undo Last</button>
-    <button onclick="resetAll()">Reset All</button>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>🧠 Learning Brain - Confidence Adjustment System</h1>
+      
+      <!-- Authentication -->
+      <div class="auth-section">
+        <input id="token" type="password" placeholder="Admin Bearer Token" />
+        <button onclick="authenticate()">🔐 Authenticate</button>
+        <span id="auth-status" style="margin-left:12px;"></span>
+      </div>
+      
+      <!-- Mode Selector -->
+      <div class="mode-selector">
+        <label style="font-weight:600;">Operating Mode:</label>
+        <button class="mode-button" id="mode-off" onclick="setMode('off')">OFF</button>
+        <button class="mode-button" id="mode-shadow" onclick="setMode('shadow')">SHADOW</button>
+        <button class="mode-button" id="mode-active" onclick="setMode('active')">ACTIVE</button>
+        <button onclick="refreshStatus()" style="margin-left:auto;">🔄 Refresh</button>
+      </div>
+    </div>
+    
+    <!-- Alert Messages -->
+    <div id="alert-container"></div>
+    
+    <!-- Main Grid -->
+    <div class="grid">
+      <!-- Status Card -->
+      <div class="card">
+        <h3>📊 System Status</h3>
+        <div class="status-grid">
+          <div class="status-item">
+            <div class="status-label">Current Mode</div>
+            <div class="status-value" id="current-mode">-</div>
+          </div>
+          <div class="status-item">
+            <div class="status-label">Total Adjustments</div>
+            <div class="status-value" id="total-adjustments">0</div>
+          </div>
+          <div class="status-item">
+            <div class="status-label">Pending</div>
+            <div class="status-value" id="pending-adjustments">0</div>
+          </div>
+          <div class="status-item">
+            <div class="status-label">Published</div>
+            <div class="status-value" id="published-adjustments">0</div>
+          </div>
+        </div>
+        
+        <div style="margin-top:16px;">
+          <h4 style="margin-bottom:8px;">Learning Parameters</h4>
+          <div style="font-size:14px;color:#4a5568;">
+            <div>Delta Cap: <span id="delta-cap">-</span></div>
+            <div>Min Support: <span id="min-support">-</span></div>
+            <div>Learning Rate: <span id="learning-rate">-</span></div>
+          </div>
+        </div>
+        
+        <div style="margin-top:16px;display:flex;gap:8px;">
+          <button class="success-button" onclick="publish()">📤 Publish</button>
+          <button class="warning-button" onclick="undo()">↩️ Undo</button>
+          <button class="danger-button" onclick="resetAll()">🔄 Reset All</button>
+        </div>
+      </div>
+      
+      <!-- Confidence Adjustment Form -->
+      <div class="card">
+        <h3>🎯 Submit Confidence Adjustment</h3>
+        <div class="adjustment-form">
+          <div class="form-row">
+            <label>Deliverable Code:</label>
+            <input type="text" id="deliv-code" placeholder="e.g., DEL-0001" />
+          </div>
+          <div class="form-row">
+            <label>Deliverable Name:</label>
+            <input type="text" id="deliv-name" placeholder="e.g., Website Design" />
+          </div>
+          <div class="form-row">
+            <label>Original Confidence:</label>
+            <div class="slider-container">
+              <input type="range" class="slider" id="original-conf" min="0" max="100" value="50" 
+                     oninput="updateSliderValue('original')"/>
+              <span class="slider-value" id="original-conf-value">50%</span>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Adjusted Confidence:</label>
+            <div class="slider-container">
+              <input type="range" class="slider" id="adjusted-conf" min="0" max="100" value="75" 
+                     oninput="updateSliderValue('adjusted')"/>
+              <span class="slider-value" id="adjusted-conf-value">75%</span>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>Reason:</label>
+            <select id="adjustment-reason">
+              <option value="">Select reason...</option>
+              <option value="domain_expertise">Domain Expertise</option>
+              <option value="historical_data">Historical Data</option>
+              <option value="client_feedback">Client Feedback</option>
+              <option value="market_conditions">Market Conditions</option>
+              <option value="resource_availability">Resource Availability</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Notes:</label>
+            <textarea id="adjustment-notes" rows="3" 
+                      placeholder="Additional context for this adjustment..."></textarea>
+          </div>
+          <button onclick="submitAdjustment()" style="align-self:flex-start;">
+            ✅ Submit Adjustment
+          </button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Tabs for History/Audit/Preview -->
+    <div class="card">
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab('history')">📜 Adjustment History</button>
+        <button class="tab" onclick="switchTab('audit')">🔍 Audit Log</button>
+        <button class="tab" onclick="switchTab('preview')">👁️ Preview</button>
+        <button class="tab" onclick="switchTab('episodes')">📚 Episodes</button>
+      </div>
+      
+      <!-- History Tab -->
+      <div class="tab-content active" id="tab-history">
+        <div class="adjustments-list" id="adjustments-list">
+          <div class="empty-state">
+            <p>No adjustments yet. Submit your first confidence adjustment above.</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Audit Tab -->
+      <div class="tab-content" id="tab-audit">
+        <pre id="audit-log">Loading audit log...</pre>
+      </div>
+      
+      <!-- Preview Tab -->
+      <div class="tab-content" id="tab-preview">
+        <div style="margin-bottom:16px;">
+          <h4>Test Confidence Blending</h4>
+          <textarea id="preview-rfp" rows="4" style="width:100%;margin:8px 0;" 
+                    placeholder="Enter RFP text to test token-based adjustments..."></textarea>
+          <textarea id="preview-scores" rows="4" style="width:100%;margin:8px 0;" 
+                    placeholder='{"DEL-0001": 0.5, "DEL-0002": 0.7}'></textarea>
+          <div style="display:flex;gap:8px;">
+            <button onclick="preview('published')">Preview Published</button>
+            <button onclick="preview('draft')">Preview Draft</button>
+          </div>
+        </div>
+        <pre id="preview-result">Preview results will appear here...</pre>
+      </div>
+      
+      <!-- Episodes Tab -->
+      <div class="tab-content" id="tab-episodes">
+        <pre id="episodes-list">Loading episodes...</pre>
+      </div>
+    </div>
   </div>
-  <div class="card">
-    <h3>Status</h3>
-    <pre id="status">...</pre>
-  </div>
-  <div class="card">
-    <h3>Episodes</h3>
-    <button onclick="loadEpisodes()">Load Episodes</button>
-    <pre id="episodes">...</pre>
-  </div>
-  <div class="card">
-    <h3>Preview</h3>
-    <textarea id="rfp" rows="6" style="width:100%" placeholder="Sample RFP text"></textarea>
-    <textarea id="base" rows="6" style="width:100%" placeholder='{"DEL-0036": 0.42, "DEL-0029": 0.35}'></textarea>
-    <button onclick="preview('published')">Preview Published</button>
-    <button onclick="preview('draft')">Preview Draft</button>
-    <pre id="preview">...</pre>
-  </div>
+
 <script>
-function auth(){ const t=document.getElementById('token').value.trim(); return t?{Authorization:'Bearer '+t}:{ }; }
-async function getStatus(){ const r=await fetch('/api/brain/status'); document.getElementById('status').textContent=JSON.stringify(await r.json(),null,2); }
-async function setMode(){ const m=document.getElementById('mode').value; const r=await fetch('/api/brain/toggle',{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify({mode:m})}); alert(JSON.stringify(await r.json())); }
-async function publish(){ const r=await fetch('/api/brain/publish',{method:'POST',headers:auth()}); alert((await r.json()).message||r.status); }
-async function undo(){ const r=await fetch('/api/brain/undo',{method:'POST',headers:auth()}); alert((await r.json()).message||r.status); }
-async function resetAll(){ if(!confirm('Clear all learning?'))return; const r=await fetch('/api/brain/reset',{method:'POST',headers:auth()}); alert((await r.json()).message||r.status); }
-async function loadEpisodes(){ const r=await fetch('/api/brain/episodes?limit=50',{headers:auth()}); document.getElementById('episodes').textContent=JSON.stringify(await r.json(),null,2); }
-async function preview(which){ const rfp=document.getElementById('rfp').value||''; let base={}; try{ base=JSON.parse(document.getElementById('base').value||'{}'); }catch(e){} const r=await fetch('/api/brain/preview',{method:'POST',headers:{'Content-Type':'application/json',...auth()},body:JSON.stringify({rfp_text:rfp,base_scores:base,which})}); document.getElementById('preview').textContent=JSON.stringify(await r.json(),null,2); }
-getStatus();
+// Global state
+let authToken = '';
+let currentMode = 'off';
+
+// Initialize
+document.addEventListener('DOMContentLoaded', function() {
+  // Try to load token from localStorage
+  const savedToken = localStorage.getItem('brain_admin_token');
+  if (savedToken) {
+    document.getElementById('token').value = savedToken;
+    authenticate();
+  }
+  refreshStatus();
+});
+
+// Authentication
+function authenticate() {
+  const token = document.getElementById('token').value.trim();
+  if (!token) {
+    showAlert('Please enter an admin token', 'error');
+    return;
+  }
+  
+  authToken = token;
+  localStorage.setItem('brain_admin_token', token);
+  document.getElementById('auth-status').innerHTML = '✅ Authenticated';
+  refreshStatus();
+}
+
+function getHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': authToken ? `Bearer ${authToken}` : ''
+  };
+}
+
+// Alert system
+function showAlert(message, type = 'info') {
+  const container = document.getElementById('alert-container');
+  const alert = document.createElement('div');
+  alert.className = `alert alert-${type}`;
+  alert.innerHTML = `
+    <span>${message}</span>
+    <button onclick="this.parentElement.remove()" style="margin-left:auto;background:transparent;color:inherit;">✕</button>
+  `;
+  container.appendChild(alert);
+  setTimeout(() => alert.remove(), 5000);
+}
+
+// Status management
+async function refreshStatus() {
+  try {
+    const response = await fetch('/api/brain/status');
+    const data = await response.json();
+    
+    // Update mode buttons
+    currentMode = data.mode;
+    document.querySelectorAll('.mode-button').forEach(btn => {
+      btn.classList.remove('active');
+    });
+    document.getElementById(`mode-${currentMode}`).classList.add('active');
+    document.getElementById('current-mode').textContent = currentMode.toUpperCase();
+    
+    // Update statistics
+    const stats = data.statistics || {};
+    document.getElementById('total-adjustments').textContent = stats.total_adjustments || 0;
+    document.getElementById('pending-adjustments').textContent = stats.pending_adjustments || 0;
+    document.getElementById('published-adjustments').textContent = stats.applied_adjustments || 0;
+    
+    // Update parameters
+    const params = data.params || {};
+    document.getElementById('delta-cap').textContent = params.LEARNING_DELTA_CAP || '-';
+    document.getElementById('min-support').textContent = params.LEARNING_MIN_SUPPORT || '-';
+    document.getElementById('learning-rate').textContent = params.LEARNING_RATE || '-';
+    
+    // Load adjustments history
+    loadAdjustments();
+    
+  } catch (error) {
+    console.error('Failed to refresh status:', error);
+    showAlert('Failed to refresh status', 'error');
+  }
+}
+
+// Mode management
+async function setMode(mode) {
+  if (!authToken) {
+    showAlert('Please authenticate first', 'warning');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/brain/mode', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ mode })
+    });
+    
+    if (!response.ok) throw new Error(await response.text());
+    
+    const data = await response.json();
+    showAlert(`Mode changed to ${mode.toUpperCase()}`, 'success');
+    refreshStatus();
+    
+  } catch (error) {
+    console.error('Failed to change mode:', error);
+    showAlert(`Failed to change mode: ${error.message}`, 'error');
+  }
+}
+
+// Slider management
+function updateSliderValue(type) {
+  const slider = document.getElementById(`${type}-conf`);
+  const value = document.getElementById(`${type}-conf-value`);
+  value.textContent = `${slider.value}%`;
+}
+
+// Submit adjustment
+async function submitAdjustment() {
+  if (!authToken) {
+    showAlert('Please authenticate first', 'warning');
+    return;
+  }
+  
+  const delivCode = document.getElementById('deliv-code').value.trim();
+  const delivName = document.getElementById('deliv-name').value.trim();
+  const originalConf = parseFloat(document.getElementById('original-conf').value) / 100;
+  const adjustedConf = parseFloat(document.getElementById('adjusted-conf').value) / 100;
+  const reason = document.getElementById('adjustment-reason').value;
+  const notes = document.getElementById('adjustment-notes').value;
+  
+  if (!delivCode || !delivName) {
+    showAlert('Please provide deliverable code and name', 'warning');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/brain/feedback', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        deliverable_code: delivCode,
+        deliverable_name: delivName,
+        original_confidence: originalConf,
+        adjusted_confidence: adjustedConf,
+        reason: reason || null,
+        notes: notes || null
+      })
+    });
+    
+    if (!response.ok) throw new Error(await response.text());
+    
+    const data = await response.json();
+    showAlert('Adjustment submitted successfully', 'success');
+    
+    // Clear form
+    document.getElementById('deliv-code').value = '';
+    document.getElementById('deliv-name').value = '';
+    document.getElementById('adjustment-reason').value = '';
+    document.getElementById('adjustment-notes').value = '';
+    
+    refreshStatus();
+    
+  } catch (error) {
+    console.error('Failed to submit adjustment:', error);
+    showAlert(`Failed to submit: ${error.message}`, 'error');
+  }
+}
+
+// Load adjustments
+async function loadAdjustments() {
+  if (!authToken) return;
+  
+  try {
+    const response = await fetch('/api/brain/adjustments?limit=50', {
+      headers: getHeaders()
+    });
+    
+    if (!response.ok) return;
+    
+    const data = await response.json();
+    const list = document.getElementById('adjustments-list');
+    
+    if (!data.adjustments || data.adjustments.length === 0) {
+      list.innerHTML = `
+        <div class="empty-state">
+          <p>No adjustments yet. Submit your first confidence adjustment above.</p>
+        </div>
+      `;
+      return;
+    }
+    
+    list.innerHTML = data.adjustments.map(adj => {
+      const delta = adj.adjusted_confidence - adj.original_confidence;
+      const deltaClass = delta > 0 ? 'delta-positive' : delta < 0 ? 'delta-negative' : 'delta-neutral';
+      const deltaSign = delta > 0 ? '+' : '';
+      
+      return `
+        <div class="adjustment-item">
+          <div class="adjustment-header">
+            <span class="deliverable-code">${adj.deliverable_code}</span>
+            <span class="adjustment-delta ${deltaClass}">${deltaSign}${(delta * 100).toFixed(1)}%</span>
+          </div>
+          <div class="adjustment-details">
+            <div>${adj.deliverable_name}</div>
+            <div style="margin-top:4px;">
+              ${(adj.original_confidence * 100).toFixed(1)}% → ${(adj.adjusted_confidence * 100).toFixed(1)}%
+            </div>
+            ${adj.reason ? `<div style="margin-top:4px;">Reason: ${adj.reason}</div>` : ''}
+            ${adj.notes ? `<div style="margin-top:4px;">Notes: ${adj.notes}</div>` : ''}
+            <div class="timestamp">${new Date(adj.timestamp).toLocaleString()}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    
+  } catch (error) {
+    console.error('Failed to load adjustments:', error);
+  }
+}
+
+// Actions
+async function publish() {
+  if (!authToken) {
+    showAlert('Please authenticate first', 'warning');
+    return;
+  }
+  
+  if (!confirm('Publish all draft adjustments to production?')) return;
+  
+  try {
+    const response = await fetch('/api/brain/publish', {
+      method: 'POST',
+      headers: getHeaders()
+    });
+    
+    if (!response.ok) throw new Error(await response.text());
+    
+    showAlert('Adjustments published successfully', 'success');
+    refreshStatus();
+    
+  } catch (error) {
+    console.error('Failed to publish:', error);
+    showAlert(`Failed to publish: ${error.message}`, 'error');
+  }
+}
+
+async function undo() {
+  if (!authToken) {
+    showAlert('Please authenticate first', 'warning');
+    return;
+  }
+  
+  if (!confirm('Undo the last adjustment?')) return;
+  
+  try {
+    const response = await fetch('/api/brain/undo', {
+      method: 'POST',
+      headers: getHeaders()
+    });
+    
+    if (!response.ok) throw new Error(await response.text());
+    
+    const data = await response.json();
+    showAlert(data.message || 'Undo completed', 'success');
+    refreshStatus();
+    
+  } catch (error) {
+    console.error('Failed to undo:', error);
+    showAlert(`Failed to undo: ${error.message}`, 'error');
+  }
+}
+
+async function resetAll() {
+  if (!authToken) {
+    showAlert('Please authenticate first', 'warning');
+    return;
+  }
+  
+  if (!confirm('⚠️ Reset all learning data? This cannot be undone!')) return;
+  if (!confirm('Are you absolutely sure? All adjustments will be lost!')) return;
+  
+  try {
+    const response = await fetch('/api/brain/reset', {
+      method: 'POST',
+      headers: getHeaders()
+    });
+    
+    if (!response.ok) throw new Error(await response.text());
+    
+    showAlert('All learning data reset', 'warning');
+    refreshStatus();
+    
+  } catch (error) {
+    console.error('Failed to reset:', error);
+    showAlert(`Failed to reset: ${error.message}`, 'error');
+  }
+}
+
+// Tab management
+function switchTab(tabName) {
+  document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+  
+  event.target.classList.add('active');
+  document.getElementById(`tab-${tabName}`).classList.add('active');
+  
+  if (tabName === 'audit') loadAuditLog();
+  if (tabName === 'episodes') loadEpisodes();
+}
+
+async function loadAuditLog() {
+  if (!authToken) return;
+  
+  try {
+    const response = await fetch('/api/brain/audit?limit=100', {
+      headers: getHeaders()
+    });
+    
+    if (!response.ok) return;
+    
+    const data = await response.json();
+    document.getElementById('audit-log').textContent = JSON.stringify(data, null, 2);
+    
+  } catch (error) {
+    console.error('Failed to load audit log:', error);
+  }
+}
+
+async function loadEpisodes() {
+  if (!authToken) return;
+  
+  try {
+    const response = await fetch('/api/brain/episodes?limit=50', {
+      headers: getHeaders()
+    });
+    
+    if (!response.ok) return;
+    
+    const data = await response.json();
+    document.getElementById('episodes-list').textContent = JSON.stringify(data, null, 2);
+    
+  } catch (error) {
+    console.error('Failed to load episodes:', error);
+  }
+}
+
+async function preview(which) {
+  if (!authToken) {
+    showAlert('Please authenticate first', 'warning');
+    return;
+  }
+  
+  const rfpText = document.getElementById('preview-rfp').value;
+  let baseScores = {};
+  
+  try {
+    baseScores = JSON.parse(document.getElementById('preview-scores').value || '{}');
+  } catch (e) {
+    showAlert('Invalid JSON in base scores', 'error');
+    return;
+  }
+  
+  try {
+    const response = await fetch('/api/brain/preview', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({
+        rfp_text: rfpText,
+        base_scores: baseScores,
+        which: which
+      })
+    });
+    
+    if (!response.ok) throw new Error(await response.text());
+    
+    const data = await response.json();
+    document.getElementById('preview-result').textContent = JSON.stringify(data, null, 2);
+    
+  } catch (error) {
+    console.error('Failed to preview:', error);
+    showAlert(`Failed to preview: ${error.message}`, 'error');
+  }
+}
 </script>
 </body>
 </html>
