@@ -6593,6 +6593,60 @@ async function exportXMLScenario(letter) {
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-export-xml-a')?.addEventListener('click', () => exportXMLScenario('A'));
   
+  // Auto-clear when RFP textarea content is typed
+  const rfpTextarea = document.getElementById('rfpText');
+  if (rfpTextarea) {
+    let hasCleared = false; // Track if we've already cleared for this typing session
+    
+    rfpTextarea.addEventListener('input', async (e) => {
+      // Only clear once when user starts typing, not on every keystroke
+      if (!hasCleared && e.target.value.length > 0) {
+        hasCleared = true;
+        console.log('[AUTO-CLEAR] New RFP text entered, clearing old session data...');
+        
+        // Clear all localStorage and sessionStorage
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            localStorage.removeItem(key);
+          }
+        }
+        for (const key of Object.keys(sessionStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            sessionStorage.removeItem(key);
+          }
+        }
+        
+        // Clear in-memory state
+        if (window.APP) {
+          window.APP.summary = null;
+          window.APP.rfpText = null;
+        }
+        if (window.APB && window.APB.step2) {
+          window.APB.step2.rfpText = null;
+        }
+        
+        // Start fresh session
+        const newSessionId = SessionManager.startNewSession();
+        
+        // Clear server-side cache
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: newSessionId })
+          });
+        } catch (err) {
+          console.warn('[AUTO-CLEAR] Failed to clear server cache:', err);
+        }
+      }
+      
+      // Reset the flag when textarea is cleared
+      if (e.target.value.length === 0) {
+        hasCleared = false;
+      }
+    });
+  }
+  
   // Initialize image analysis toggle from localStorage
   const analyzeToggle = document.getElementById('analyzeImagesToggle');
   if (analyzeToggle) {
@@ -6609,16 +6663,56 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   
-  // Display selected file names when files are chosen
+  // Display selected file names when files are chosen AND auto-clear old data
   const fileInput = document.getElementById('rfpFile');
   const filesList = document.getElementById('selected-files-list');
   if (fileInput && filesList) {
-    fileInput.addEventListener('change', (e) => {
+    fileInput.addEventListener('change', async (e) => {
       const files = e.target.files;
       if (files && files.length > 0) {
         const names = Array.from(files).map(f => f.name).join(', ');
         filesList.textContent = `Selected: ${names}`;
         filesList.style.color = 'var(--accent)';
+        
+        // AUTO-CLEAR: Automatically clear old data when new file is selected
+        console.log('[AUTO-CLEAR] New file selected, clearing old session data...');
+        
+        // Clear all localStorage and sessionStorage
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            localStorage.removeItem(key);
+          }
+        }
+        for (const key of Object.keys(sessionStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            sessionStorage.removeItem(key);
+          }
+        }
+        
+        // Clear in-memory state
+        if (window.APP) {
+          window.APP.summary = null;
+          window.APP.rfpText = null;
+        }
+        if (window.APB && window.APB.step2) {
+          window.APB.step2.rfpText = null;
+        }
+        
+        // Start fresh session
+        const newSessionId = SessionManager.startNewSession();
+        
+        // Clear server-side cache
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: newSessionId })
+          });
+        } catch (err) {
+          console.warn('[AUTO-CLEAR] Failed to clear server cache:', err);
+        }
+        
+        console.log('[AUTO-CLEAR] Session cleared, ready for new RFP analysis');
       } else {
         filesList.textContent = '';
       }
