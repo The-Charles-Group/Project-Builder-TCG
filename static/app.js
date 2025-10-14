@@ -4190,32 +4190,58 @@ async function renderComponentsPanel() {
   if (btnClear) btnClear.disabled = false;
   
   // Render checkboxes with deliverable badges
+  const activeKey = `${S2.activeDeliverableCode}::${S2.activeComponentName}`;
+  
   listEl.innerHTML = filteredComponents.map(comp => {
     const key = `${comp.delivCode}::${comp.compName}`;
     const isSelected = S2.selectedComponentsByCode[comp.delivCode]?.has?.(comp.compName) || false;
+    const isActive = key === activeKey;
     const isVisible = !searchFilter || (
       comp.compName.toLowerCase().includes(searchFilter) ||
       comp.delivLabel.toLowerCase().includes(searchFilter)
     );
     
     return `
-      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px;" 
-             class="comp-checkbox-label">
+      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px; ${isActive ? 'background:rgba(139,92,246,0.2); border:1px solid var(--accent);' : ''}" 
+             class="comp-checkbox-label"
+             data-deliv="${comp.delivCode}" 
+             data-comp="${comp.compName}">
         <input type="checkbox" 
                data-deliv="${comp.delivCode}" 
                data-comp="${comp.compName}"
                data-visible="${isVisible ? '1' : '0'}"
                ${isSelected ? 'checked' : ''}
                style="cursor:pointer;"/>
-        <span style="font-size:0.9em;">${comp.compName}</span>
+        <span style="font-size:0.9em; ${isActive ? 'color:var(--accent);' : ''}">${comp.compName}</span>
         <span style="margin-left:auto; opacity:.6; font-size:0.75em; padding:2px 6px; background:rgba(255,255,255,.1); border-radius:3px;">${comp.delivLabel}</span>
       </label>
     `;
   }).join('');
   
-  // Add change listeners
+  // Add click listeners for component selection (sets active component)
+  listEl.querySelectorAll('.comp-checkbox-label').forEach(label => {
+    label.addEventListener('click', async e => {
+      if (e.target.type === 'checkbox') return; // Let checkbox handle its own click
+      
+      const delivCode = label.getAttribute('data-deliv');
+      const compName = label.getAttribute('data-comp');
+      
+      // Set as active component
+      S2.activeDeliverableCode = delivCode;
+      S2.activeComponentName = compName;
+      
+      // Re-render components to show active state
+      renderComponentsPanel();
+      
+      // Update L2 tasks panel
+      if (window.renderL3Panel) await renderL3Panel();
+    });
+  });
+  
+  // Add change listeners for checkboxes
   listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
     cb.addEventListener('change', e => {
+      e.stopPropagation(); // Don't trigger the label click
       const delivCode = e.target.getAttribute('data-deliv');
       const compName = e.target.getAttribute('data-comp');
       
@@ -4232,12 +4258,17 @@ async function renderComponentsPanel() {
       
       if (e.target.checked) {
         S2.selectedComponentsByCode[delivCode].add(compName);
+        
+        // Also set as active component when checked
+        S2.activeDeliverableCode = delivCode;
+        S2.activeComponentName = compName;
+        renderComponentsPanel(); // Re-render to show active state
+        if (window.renderL3Panel) renderL3Panel(); // Update L2 tasks
       } else {
         S2.selectedComponentsByCode[delivCode].delete(compName);
       }
       
       if (window.updateStep2Summary) updateStep2Summary();
-      if (window.renderL3Panel) renderL3Panel();
     });
   });
   
@@ -4245,7 +4276,7 @@ async function renderComponentsPanel() {
 }
 
 
-// Render L3 Subtasks panel - aggregates ALL L3 from ALL selected components
+// Render L2 Tasks panel - shows tasks for the active component
 async function renderL3Panel() {
   const listEl = document.getElementById('s2-l3-list');
   const btnAll = document.getElementById('s2-l3-selectall');
@@ -4253,47 +4284,41 @@ async function renderL3Panel() {
   
   if (!listEl) return;
   
-  const selectedCodes = Array.from(selectionStore.deliverables);
+  // Check if we have an active component selected
+  const activeDeliv = S2.activeDeliverableCode;
+  const activeComp = S2.activeComponentName;
   
-  if (selectedCodes.length === 0) {
-    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select deliverables and components to view L3 subtasks</p>';
+  if (!activeDeliv || !activeComp) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its L2 tasks</p>';
     if (btnAll) btnAll.disabled = true;
     if (btnClear) btnClear.disabled = true;
     return;
   }
   
-  // Aggregate all L3 from all selected components across all deliverables
+  const key = `${activeDeliv}::${activeComp}`;
+  
+  // Ensure L3 is hydrated for this component
+  if (!selectionStore.l3ByComponent.has(key)) {
+    await hydrateL3For(activeDeliv, activeComp);
+  }
+  
+  const l3Set = selectionStore.l3ByComponent.get(key);
   const allL3 = [];
-  for (const delivCode of selectedCodes) {
-    const selectedComponents = S2.selectedComponentsByCode[delivCode];
-    
-    if (selectedComponents && selectedComponents.size > 0) {
-      for (const compName of selectedComponents) {
-        const key = `${delivCode}::${compName}`;
-        
-        // Ensure L3 is hydrated for this component
-        if (!selectionStore.l3ByComponent.has(key)) {
-          await hydrateL3For(delivCode, compName);
-        }
-        
-        const l3Set = selectionStore.l3ByComponent.get(key);
-        if (l3Set && l3Set.size > 0) {
-          l3Set.forEach(l3Name => {
-            allL3.push({
-              delivCode,
-              delivLabel: labelFor(delivCode),
-              compName,
-              l3Name,
-              key
-            });
-          });
-        }
-      }
-    }
+  
+  if (l3Set && l3Set.size > 0) {
+    l3Set.forEach(l3Name => {
+      allL3.push({
+        delivCode: activeDeliv,
+        delivLabel: labelFor(activeDeliv),
+        compName: activeComp,
+        l3Name,
+        key
+      });
+    });
   }
   
   if (allL3.length === 0) {
-    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L3 subtasks available for selected components</p>';
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L2 tasks available for this component</p>';
     if (btnAll) btnAll.disabled = true;
     if (btnClear) btnClear.disabled = true;
     return;
@@ -4303,26 +4328,20 @@ async function renderL3Panel() {
   const searchFilter = (APB.step2.filters.l3 || '').toLowerCase();
   const filteredL3 = searchFilter
     ? allL3.filter(l => 
-        l.l3Name.toLowerCase().includes(searchFilter) ||
-        l.compName.toLowerCase().includes(searchFilter) ||
-        l.delivLabel.toLowerCase().includes(searchFilter)
+        l.l3Name.toLowerCase().includes(searchFilter)
       )
     : allL3;
   
-  if (btnAll) btnAll.disabled = false;
-  if (btnClear) btnClear.disabled = false;
+  if (btnAll) btnAll.disabled = filteredL3.length > 0;
+  if (btnClear) btnClear.disabled = filteredL3.length === 0;
   
-  // Render checkboxes grouped by component
+  // Render checkboxes for L2 tasks
   listEl.innerHTML = filteredL3.map(item => {
     const isSelected = S2.selectedL3ByKey[item.key]?.has?.(item.l3Name) || false;
-    const isVisible = !searchFilter || (
-      item.l3Name.toLowerCase().includes(searchFilter) ||
-      item.compName.toLowerCase().includes(searchFilter) ||
-      item.delivLabel.toLowerCase().includes(searchFilter)
-    );
+    const isVisible = !searchFilter || item.l3Name.toLowerCase().includes(searchFilter);
     
     return `
-      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px;" 
+      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px; ${isSelected ? 'background:rgba(139,92,246,0.1);' : ''}" 
              class="l3-checkbox-label">
         <input type="checkbox" 
                data-key="${item.key}" 
@@ -4330,8 +4349,7 @@ async function renderL3Panel() {
                data-visible="${isVisible ? '1' : '0'}"
                ${isSelected ? 'checked' : ''}
                style="cursor:pointer;"/>
-        <span style="font-size:0.9em;">${item.l3Name}</span>
-        <span style="margin-left:auto; opacity:.6; font-size:0.75em; padding:2px 6px; background:rgba(255,255,255,.1); border-radius:3px;">${item.compName}</span>
+        <span style="font-size:0.9em; ${isSelected ? 'color:var(--accent);' : ''}">${item.l3Name}</span>
       </label>
     `;
   }).join('');
@@ -4355,8 +4373,10 @@ async function renderL3Panel() {
       
       if (e.target.checked) {
         S2.selectedL3ByKey[key].add(l3Name);
+        e.target.parentElement.style.background = 'rgba(139,92,246,0.1)';
       } else {
         S2.selectedL3ByKey[key].delete(l3Name);
+        e.target.parentElement.style.background = '';
       }
       
       if (window.updateStep2Summary) updateStep2Summary();
