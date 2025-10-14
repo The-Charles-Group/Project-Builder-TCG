@@ -20,7 +20,7 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 
 AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
 AI_AUTORELAX = os.environ.get("AI_AUTORELAX", "true").lower() == "true"
-AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "3"))
+AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "15"))  # FIXED: Increased from 3 to 15
 AI_MIN_COMPONENTS_PER_DELIV = int(os.environ.get("AI_MIN_COMPONENTS_PER_DELIV", "2"))
 AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "2"))
 
@@ -341,7 +341,11 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
         # Get deliverable info from first row
         first_row = deliv_group.iloc[0]
         deliv_name = str(first_row.get('Deliverable', deliv_code))
-        service_dept = str(first_row.get('Service Department', 'Strategy'))
+        # FIXED: Handle missing or nan Service Department field properly
+        service_dept = first_row.get('Service Department', 'Strategy')
+        if pd.isna(service_dept) or str(service_dept) == 'nan':
+            service_dept = 'Strategy'
+        service_dept = str(service_dept)
         
         # Normalize department
         dept = _normalize_dept(service_dept)
@@ -441,7 +445,22 @@ def lexical_score(text: str, title: str, desc: str, keywords: List[str], dept: s
     tk_c = set(tokenize(" ".join([title or "", desc or "", " ".join(keywords or [])])))
     overlap = sum(1 for t in tk_c if t in tk_r)
     dept_hit = 0.05 if dept.lower().split(" ")[0] in tk_r else 0
-    return min(1.0, (overlap / max(4, len(tk_c))) + dept_hit)
+    base_score = min(1.0, (overlap / max(4, len(tk_c))) + dept_hit)
+    
+    # FIXED: Add media/advertising keyword boosting
+    media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital', 
+                     'social', 'analytics', 'reporting', 'planning', 'buying', 'activation',
+                     'advertising', 'marketing', 'performance', 'programmatic', 'audience'}
+    
+    # Check if any media keywords are in the title or keywords
+    title_words = set(tokenize(title.lower()))
+    keyword_set = set([k.lower() for k in keywords]) if keywords else set()
+    
+    # Boost if media keywords present
+    if title_words & media_keywords or keyword_set & media_keywords:
+        base_score = min(1.0, base_score * 1.2)  # 1.2x boost for media keywords
+    
+    return base_score
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Summarize request
@@ -639,14 +658,14 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
     
     # Get the appropriate batch size based on tier
     batch_sizes = {
-        "mini": 150,
-        "thinking": 90,
-        "pro": 45,
-        "fast": 150,
-        "balanced": 90,
-        "accurate": 45
+        "mini": 50,  # FIXED: Reduced from 150 to avoid token limits
+        "thinking": 30,  # FIXED: Reduced from 90 to avoid token limits
+        "pro": 20,  # FIXED: Reduced from 45 to avoid token limits
+        "fast": 50,  # FIXED: Reduced from 150 to avoid token limits
+        "balanced": 30,  # FIXED: Reduced from 90 to avoid token limits
+        "accurate": 20  # FIXED: Reduced from 45 to avoid token limits
     }
-    batch_size = batch_sizes.get(tier, 90)
+    batch_size = batch_sizes.get(tier, 30)
     
     # Prepare candidates for job runner
     batch_data = []
@@ -733,14 +752,14 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     # Use tier-based batch sizing
     tier = os.environ.get("AI_TIER", "thinking")
     batch_sizes = {
-        "mini": 150,
-        "thinking": 90,
-        "pro": 45,
-        "fast": 150,
-        "balanced": 90,
-        "accurate": 45
+        "mini": 50,  # FIXED: Reduced from 150 to avoid token limits
+        "thinking": 30,  # FIXED: Reduced from 90 to avoid token limits
+        "pro": 20,  # FIXED: Reduced from 45 to avoid token limits
+        "fast": 50,  # FIXED: Reduced from 150 to avoid token limits
+        "balanced": 30,  # FIXED: Reduced from 90 to avoid token limits
+        "accurate": 20  # FIXED: Reduced from 45 to avoid token limits
     }
-    chunk = batch_sizes.get(tier, 90)
+    chunk = batch_sizes.get(tier, 30)
     total_chunks = math.ceil(len(candidates) / chunk)
     
     # Update job with total chunks if job_id provided
@@ -829,7 +848,12 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
     lookup = {x["id"]: x for x in llm_scores}
     W = {"emb": 0.15, "lex": 0.10, "recall": 0.10, "llm": 0.55, "hist": 0.10}
     hist_prior = 0.65
-    gates = {"high": 0.70, "balanced": 0.58, "recall": 0.48}
+    gates = {"high": 0.55, "balanced": 0.40, "recall": 0.30}  # FIXED: Lowered thresholds for better recall
+    
+    # FIXED: Media agency keywords for boosting
+    media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital', 
+                     'social', 'analytics', 'reporting', 'planning', 'buying', 'activation',
+                     'advertising', 'marketing', 'performance', 'programmatic', 'audience'}
     
     out = []
     for c in candidates:
@@ -838,6 +862,14 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
         llm_select = l.get("select", True) if l else True  # Respect AI's select flag
         
         raw = W["emb"] * c["embScore"] + W["lex"] * c["lexScore"] + W["recall"] * c["recall"] + W["llm"] * llm_val + W["hist"] * hist_prior
+        
+        # FIXED: Apply media keyword boost if deliverable contains relevant keywords
+        if c.get("title"):
+            title_words = set(tokenize(c["title"].lower()))
+            keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
+            if title_words & media_keywords or keyword_set & media_keywords:
+                raw = min(1.0, raw * 1.2)  # 1.2x boost for media keywords
+        
         calibrated = 1.0 / (1.0 + math.exp(-(2.2 * raw - 1.1)))
         
         # For tasks: only pass if AI explicitly selected it
@@ -867,14 +899,14 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
         l = llm_map.get(x["id"])
         return (l["relevance"] if l else 0.0, x["recall"])
     deliv_cands.sort(key=deliv_key, reverse=True)
-    # CHANGED: Remove limit - suggest ALL deliverables that have decent scores
+    # FIXED: Lower threshold and ensure minimum of 15 deliverables
     # Filter by minimum threshold instead of hard limit
-    min_threshold = 0.30  # Deliverables with at least 30% recall/relevance
-    chosen_delivs = [d for d in deliv_cands if d["recall"] > min_threshold or (llm_map.get(d["id"], {}).get("relevance", 0) > 30)]
+    min_threshold = 0.20  # FIXED: Lowered from 0.30 to 0.20 for broader matching
+    chosen_delivs = [d for d in deliv_cands if d["recall"] > min_threshold or (llm_map.get(d["id"], {}).get("relevance", 0) > 20)]
     
-    # If still no deliverables, take at least the minimum
-    if not chosen_delivs:
-        chosen_delivs = deliv_cands[:max(AI_MIN_DELIVERABLES, 3)]
+    # If still not enough deliverables, take at least 15
+    if len(chosen_delivs) < 15:
+        chosen_delivs = deliv_cands[:15]  # FIXED: Ensure at least 15 deliverables
     
     # Mark chosen deliverables as pass with REAL SCORES
     for d in chosen_delivs:
