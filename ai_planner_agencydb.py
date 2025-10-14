@@ -1442,7 +1442,7 @@ def _run_analysis_background(job_id: str, request_text: str, db, strictness: str
             # Log deliverables count for debugging
             delivs_count = 0
             if result and "plan" in result:
-                delivs_by_dept = result["plan"].get("deliverables_by_dept", {})
+                delivs_by_dept = result["plan"].get("suggestions_by_department", {})  # FIXED: Use correct key name
                 for dept_delivs in delivs_by_dept.values():
                     delivs_count += len(dept_delivs)
             print(f"[AI JOB {job_id}] Saved {delivs_count} deliverables to job result")
