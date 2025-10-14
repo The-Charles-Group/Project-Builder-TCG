@@ -1936,6 +1936,9 @@ function setAnalysisMode(mode) {
   const deepBtn = document.getElementById('mode-deep');
   const modeInput = document.getElementById('analysis-mode');
   
+  // Set global variable for analysis
+  window.selectedAnalysisMode = mode;
+  
   if (mode === 'fast') {
     fastBtn.style.background = '#10b981';
     fastBtn.style.color = 'white';
@@ -1949,6 +1952,8 @@ function setAnalysisMode(mode) {
     fastBtn.style.color = '#10b981';
     modeInput.value = 'deep';
   }
+  
+  console.log('Analysis mode set to:', mode);
 }
 
 // Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
@@ -2019,13 +2024,17 @@ async function onRunReconcile() {
     };
     const tier = tierMap[analysisMode] || 'thinking';
     
+    // Get selected mode (Fast or Deep) - default to Deep
+    const selectedMode = window.selectedAnalysisMode || 'deep';
+    
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         request_text: rfpText,
         strictness: 'balanced',
-        tier: tier 
+        tier: tier,
+        mode: selectedMode  // Add mode parameter
       })
     }, 3, 2000);
     

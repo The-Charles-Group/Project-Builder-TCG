@@ -10,6 +10,7 @@ import numpy as np
 from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from gpt5_helpers import gpt5_json_schema, gpt5_text
+from embedding_cache import embed_many, get_cache_stats  # Import embedding cache
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Config
@@ -23,6 +24,10 @@ AI_AUTORELAX = os.environ.get("AI_AUTORELAX", "true").lower() == "true"
 AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "15"))  # FIXED: Increased from 3 to 15
 AI_MIN_COMPONENTS_PER_DELIV = int(os.environ.get("AI_MIN_COMPONENTS_PER_DELIV", "2"))
 AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "2"))
+
+# Fast vs Deep mode configuration
+FAST_TOP_K = int(os.getenv("FAST_TOP_K", "80"))     # Lexical prefilter for Fast mode
+DEEP_TOP_K = int(os.getenv("DEEP_TOP_K", "20"))     # LLM rescoring set for Deep mode
 
 DEPARTMENTS = [
     "Creative",
@@ -204,30 +209,8 @@ if OPENAI_API_KEY:
 else:
     oai = None
 
-def embed_many(texts: List[str]) -> List[List[float]]:
-    if not oai: 
-        # Return zero embeddings as fallback
-        return [[0.0] * 1536 for _ in texts]
-    if not texts: return []
-    
-    # Filter out empty/invalid strings - OpenAI API rejects them
-    valid_texts = [str(t).strip() if t else "unknown" for t in texts]
-    valid_texts = [t if t else "unknown" for t in valid_texts]
-    
-    # Batch process to avoid API limits (max ~2048 inputs per request)
-    BATCH_SIZE = 2000
-    all_embeddings = []
-    
-    print(f"[EMBED] Processing {len(valid_texts)} texts in batches of {BATCH_SIZE}")
-    
-    for i in range(0, len(valid_texts), BATCH_SIZE):
-        batch = valid_texts[i:i + BATCH_SIZE]
-        print(f"[EMBED] Batch {i//BATCH_SIZE + 1}: {len(batch)} texts")
-        r = oai.embeddings.create(model=EMBEDDING_MODEL, input=batch)
-        all_embeddings.extend([e.embedding for e in r.data])
-    
-    print(f"[EMBED] Completed: {len(all_embeddings)} embeddings generated")
-    return all_embeddings
+# Note: embed_many is imported from embedding_cache at the top of the file
+# The embedding_cache module handles caching automatically
 
 def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 8192) -> dict:
     """Use GPT-5 helper for JSON responses with schema - FIXED: Raises exceptions for empty results"""
@@ -473,12 +456,14 @@ def summarize_request(request_text: str) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Recall candidates (embeddings + lexical)
 # ──────────────────────────────────────────────────────────────────────────────
-def recall_candidates(request_text: str, catalog: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not catalog:
         return [], []
     
     texts = [f"{str(i.get('dept',''))} • {str(i.get('level',''))} • {str(i.get('title',''))} :: {str(i.get('desc',''))} :: {', '.join(str(k) for k in i.get('keywords',[]))}" for i in catalog]
-    embs = embed_many([request_text] + texts)
+    
+    # Use cached embed_many with client
+    embs = embed_many([request_text] + texts, client=client)
     req = np.array(embs[0], dtype=np.float32)
     
     cands = []
@@ -1262,17 +1247,40 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
-def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None) -> Dict[str, Any]:
-    """Main analysis function using AgencyDB - FIXED to always return results"""
-    strictness = strictness or AI_STRICTNESS_DEFAULT
-    tier = tier or "thinking"  # Default to thinking tier
-    
-    print(f"[ANALYZE START] Request text length: {len(request_text)}, strictness: {strictness}, tier: {tier}")
-    
-    # Update job status
+def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks: int = None, processed_chunks: int = None):
+    """Helper to update job progress with granular tracking"""
     if job_id and job_id in AI_JOB_STORE:
-        AI_JOB_STORE[job_id].status = AIJobStatus.RUNNING
-        AI_JOB_STORE[job_id].current_stage = "Building catalog from database..."
+        job = AI_JOB_STORE[job_id]
+        job.current_stage = stage
+        if total_chunks is not None:
+            job.total_chunks = total_chunks
+        if processed_chunks is not None:
+            job.processed_chunks = processed_chunks
+        # Calculate progress from chunks if not explicitly set
+        if progress_pct is None and job.total_chunks > 0:
+            progress_pct = int((job.processed_chunks / job.total_chunks) * 100)
+        print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%)")
+
+def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None) -> Dict[str, Any]:
+    """Main analysis function using AgencyDB with Fast/Deep mode support
+    
+    Args:
+        request_text: The RFP or project request text
+        db: AgencyDB instance
+        strictness: Filter strictness level
+        job_id: Background job ID for progress tracking
+        tier: GPT-5 tier (mini/thinking/pro)
+        mode: 'fast' for lexical-only (no LLM), 'deep' for full LLM re-ranking
+        client: HTTP client for API calls (uses app.state.http if available)
+    """
+    strictness = strictness or AI_STRICTNESS_DEFAULT
+    tier = tier or "thinking"
+    mode = mode or "deep"
+    
+    print(f"[ANALYZE START] Mode: {mode}, Request length: {len(request_text)}, strictness: {strictness}, tier: {tier}")
+    
+    # Update job status - Stage 1
+    _update_job(job_id, "Stage 1/7: Loading database catalog...", 10)
     
     # Build catalog from AgencyDB
     catalog = build_catalog_from_agencydb(db)
@@ -1282,7 +1290,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             "auto_run": True,
             "message": "No deliverables found in database.",
             "plan": {"summary": {}, "suggestions_by_department": {}},
-            "diagnostics": {"candidates_considered": 0, "catalog_items": 0, "error": "empty_catalog"}
+            "diagnostics": {"candidates_considered": 0, "catalog_items": 0, "error": "empty_catalog", "mode": mode}
         }
         print(f"[ANALYZE ERROR] Empty catalog")
         return error_result
@@ -1291,35 +1299,47 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     deliverable_count = len([x for x in catalog if x["level"] == "deliverable"])
     print(f"[ANALYZE] Catalog contains {deliverable_count} deliverables")
     
-    # Update job status
-    if job_id and job_id in AI_JOB_STORE:
-        AI_JOB_STORE[job_id].current_stage = "Summarizing request with GPT-5..."
-    
-    # FIXED: Wrap summarize in try/except
-    try:
-        summary = summarize_request(request_text)
-        print(f"[ANALYZE] Summary generated successfully")
-    except Exception as e:
-        print(f"[ANALYZE WARNING] Summary failed: {e}, using default summary")
+    # Stage 2: Summarize request (skip for Fast mode to save time)
+    if mode == "deep":
+        _update_job(job_id, "Stage 2/7: Summarizing request with GPT-5...", 20)
+        try:
+            summary = summarize_request(request_text)
+            print(f"[ANALYZE] Summary generated successfully")
+        except Exception as e:
+            print(f"[ANALYZE WARNING] Summary failed: {e}, using default summary")
+            summary = {
+                "summary": request_text[:500],
+                "goals": ["Provide comprehensive services"],
+                "channels": ["Digital", "Social", "Traditional"],
+                "markets": ["US"],
+                "compliance": [],
+                "languages": ["English"],
+                "timeline_weeks": 12,
+                "budget_tier": "moderate",
+                "complexity": "medium",
+                "risk_flags": []
+            }
+    else:
+        # Fast mode: Skip GPT-5 summarization
+        _update_job(job_id, "Stage 2/7: Fast mode - skipping summarization...", 20)
         summary = {
             "summary": request_text[:500],
-            "goals": ["Provide comprehensive services"],
-            "channels": ["Digital", "Social", "Traditional"],
+            "goals": ["Fast analysis"],
+            "channels": ["Digital"],
             "markets": ["US"],
             "compliance": [],
             "languages": ["English"],
-            "timeline_weeks": 12,
+            "timeline_weeks": 8,
             "budget_tier": "moderate",
             "complexity": "medium",
             "risk_flags": []
         }
     
-    # Update job status
-    if job_id and job_id in AI_JOB_STORE:
-        AI_JOB_STORE[job_id].current_stage = "Finding candidate deliverables..."
+    # Stage 3: Compute embeddings and find candidates
+    _update_job(job_id, "Stage 3/7: Computing embeddings and similarity scores...", 30)
     
-    # Process all items - let AI intelligence do the filtering
-    candidates, all_recall = recall_candidates(request_text, catalog)
+    # Pass client for embedding cache
+    candidates, all_recall = recall_candidates(request_text, catalog, client=client or oai)
     
     if not candidates:
         # FIXED: If no candidates, use entire catalog as fallback
@@ -1329,30 +1349,106 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     
     print(f"[ANALYZE] Found {len(candidates)} candidates")
     
-    # FIXED: Wrap LLM scoring in try/except with guaranteed fallback
-    try:
-        llm_scores = rescore_with_llm_granular(summary, candidates, request_text, job_id)
-        print(f"[ANALYZE] LLM scoring completed, {len(llm_scores)} scores generated")
+    # Stage 4: Fast vs Deep mode divergence
+    if mode == "fast":
+        # FAST MODE: No LLM calls, use TF-IDF/lexical scoring only
+        _update_job(job_id, "Stage 4/7: Fast mode - scoring with TF-IDF only...", 50)
         
-        # FIXED: Check if we got enough deliverables from LLM
-        llm_delivs = [s for s in llm_scores if s["level"] == "deliverable"]
-        print(f"[ANALYZE] LLM returned {len(llm_delivs)} deliverable scores")
+        # Filter to top FAST_TOP_K deliverables based on lexical+embedding scores
+        deliverable_candidates = [c for c in candidates if c["level"] == "deliverable"]
+        deliverable_candidates.sort(key=lambda x: x.get("recall", 0), reverse=True)
+        top_deliverables = deliverable_candidates[:FAST_TOP_K]
         
-        if len(llm_delivs) < AI_MIN_DELIVERABLES:
-            print(f"[ANALYZE WARNING] LLM returned only {len(llm_delivs)} deliverables, less than minimum {AI_MIN_DELIVERABLES}")
-            print(f"[ANALYZE] Rescue function WILL be triggered to ensure minimum deliverables")
+        # Generate fake LLM scores for compatibility with fusion logic
+        llm_scores = []
+        for c in top_deliverables:
+            # Use lexical and embedding scores to generate confidence
+            confidence = min(95, int(c.get("recall", 0.5) * 100))
+            llm_scores.append({
+                "id": c["id"],
+                "level": c["level"],
+                "confidence": confidence,
+                "relevance": confidence,
+                "select": True,
+                "why": f"Selected based on TF-IDF similarity (score: {c.get('recall', 0):.2f})"
+            })
+        
+        # Add components and tasks for selected deliverables
+        for deliv in top_deliverables:
+            # Get components for this deliverable
+            components = [c for c in candidates if c["level"] == "component" and c.get("parentId") == deliv["id"]]
+            components.sort(key=lambda x: x.get("recall", 0), reverse=True)
             
-    except Exception as e:
-        print(f"[ANALYZE ERROR] LLM scoring failed completely: {e}")
-        print(f"[ANALYZE ERROR] Exception type: {type(e).__name__}")
-        print(f"[ANALYZE] RESCUE FUNCTION WILL BE TRIGGERED due to GPT-5 failure")
-        # Generate pure fallback scores
-        llm_scores = _generate_embedding_fallback_scores(candidates, summary)
-        print(f"[ANALYZE] Using pure fallback scores for {len(llm_scores)} candidates")
+            for comp in components[:3]:  # Top 3 components per deliverable
+                llm_scores.append({
+                    "id": comp["id"],
+                    "level": comp["level"],
+                    "confidence": min(90, int(comp.get("recall", 0.4) * 100)),
+                    "relevance": min(90, int(comp.get("recall", 0.4) * 100)),
+                    "select": True,
+                    "why": "Component selected by TF-IDF similarity"
+                })
+                
+                # Get tasks for this component
+                tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
+                tasks.sort(key=lambda x: x.get("recall", 0), reverse=True)
+                
+                for task in tasks[:2]:  # Top 2 tasks per component
+                    llm_scores.append({
+                        "id": task["id"],
+                        "level": task["level"],
+                        "confidence": min(85, int(task.get("recall", 0.3) * 100)),
+                        "relevance": min(85, int(task.get("recall", 0.3) * 100)),
+                        "select": True,
+                        "why": "Task selected by TF-IDF similarity"
+                    })
+        
+        print(f"[ANALYZE FAST] Generated {len(llm_scores)} scores without LLM")
+        
+    else:
+        # DEEP MODE: Use LLM for intelligent re-ranking
+        _update_job(job_id, "Stage 4/7: Deep mode - pre-filtering candidates...", 40)
+        
+        # Pre-filter to DEEP_TOP_K candidates for LLM scoring
+        deliverable_candidates = [c for c in candidates if c["level"] == "deliverable"]
+        deliverable_candidates.sort(key=lambda x: x.get("recall", 0), reverse=True)
+        top_deliverables = deliverable_candidates[:DEEP_TOP_K]
+        
+        # Build focused candidate set for LLM
+        llm_candidates = []
+        for deliv in top_deliverables:
+            llm_candidates.append(deliv)
+            # Add components and tasks for this deliverable
+            components = [c for c in candidates if c["level"] == "component" and c.get("parentId") == deliv["id"]]
+            for comp in components[:5]:  # Up to 5 components per deliverable
+                llm_candidates.append(comp)
+                tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
+                llm_candidates.extend(tasks[:3])  # Up to 3 tasks per component
+        
+        _update_job(job_id, "Stage 5/7: Deep mode - scoring with GPT-5...", 50)
+        
+        # Wrap LLM scoring in try/except with guaranteed fallback
+        try:
+            llm_scores = rescore_with_llm_granular(summary, llm_candidates, request_text, job_id)
+            print(f"[ANALYZE DEEP] LLM scoring completed, {len(llm_scores)} scores generated")
+            
+            # Check if we got enough deliverables from LLM
+            llm_delivs = [s for s in llm_scores if s["level"] == "deliverable"]
+            print(f"[ANALYZE DEEP] LLM returned {len(llm_delivs)} deliverable scores")
+            
+            if len(llm_delivs) < AI_MIN_DELIVERABLES:
+                print(f"[ANALYZE WARNING] LLM returned only {len(llm_delivs)} deliverables, less than minimum {AI_MIN_DELIVERABLES}")
+                print(f"[ANALYZE] Rescue function WILL be triggered to ensure minimum deliverables")
+                
+        except Exception as e:
+            print(f"[ANALYZE ERROR] LLM scoring failed: {e}")
+            print(f"[ANALYZE] Falling back to lexical scores")
+            # Generate fallback scores
+            llm_scores = _generate_embedding_fallback_scores(llm_candidates, summary)
+            print(f"[ANALYZE] Using fallback scores for {len(llm_scores)} candidates")
     
-    # Update job status
-    if job_id and job_id in AI_JOB_STORE:
-        AI_JOB_STORE[job_id].current_stage = "Calibrating scores and finalizing plan..."
+    # Stage 6: Calibrate and fuse scores
+    _update_job(job_id, "Stage 6/7: Calibrating scores and selecting deliverables...", 70)
     
     # FIXED: Ensure fusion always happens
     try:
@@ -1376,6 +1472,9 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     # Check final deliverable count
     final_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
     print(f"[ANALYZE] After rescue: {len(final_delivs)} deliverables will be included")
+    
+    # Stage 7: Compose final plan
+    _update_job(job_id, "Stage 7/7: Building final project plan...", 90)
     
     # FIXED: Ensure plan composition always succeeds
     try:
@@ -1410,28 +1509,41 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     # Count final results
     delivs_in_plan = sum(len(dept_items) for dept_items in plan.get("suggestions_by_department", {}).values())
     
+    # Mark job complete
+    _update_job(job_id, "Complete!", 100)
+    
     result = {
         "auto_run": True,
-        "message": f"AI analysis complete. Selected {delivs_in_plan} deliverables.",
+        "message": f"AI analysis complete ({mode} mode). Selected {delivs_in_plan} deliverables.",
         "plan": plan,
         "diagnostics": {
+            "mode": mode,
             "candidates_considered": len(candidates),
             "catalog_items": len(catalog),
             "deliverables_selected": len(final_delivs),
             "deliverables_in_plan": delivs_in_plan,
             "tasks_ai_selected": len([x for x in fused if x["level"] == "task" and x.get("ai_selected", False) and x["pass"]]),
-            "rescue_triggered": len(final_delivs) >= 25,  # Indicates rescue was likely used
-            "llm_scores_available": len(llm_scores) > 0
+            "rescue_triggered": len(final_delivs) >= 25,
+            "llm_scores_available": len(llm_scores) > 0,
+            "fast_top_k": FAST_TOP_K if mode == "fast" else None,
+            "deep_top_k": DEEP_TOP_K if mode == "deep" else None
         }
     }
     
-    print(f"[ANALYZE COMPLETE] Returning {delivs_in_plan} deliverables in plan")
+    # Log cache stats
+    try:
+        cache_stats = get_cache_stats()
+        print(f"[CACHE STATS] {cache_stats}")
+    except Exception:
+        pass
+    
+    print(f"[ANALYZE COMPLETE] Mode: {mode}, Deliverables: {delivs_in_plan}, Time: {datetime.datetime.now().timestamp() - (AI_JOB_STORE[job_id].start_time if job_id and job_id in AI_JOB_STORE else datetime.datetime.now().timestamp()):.1f}s")
     return result
 
-def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None):
-    """Background task to run AI analysis"""
+def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None, mode: str = "deep", client=None):
+    """Background task to run AI analysis with Fast/Deep mode support"""
     try:
-        result = analyze_with_agencydb(request_text, db, strictness, job_id, tier)
+        result = analyze_with_agencydb(request_text, db, strictness, job_id, tier, mode, client)
         
         if job_id in AI_JOB_STORE:
             # FIXED: Save result BEFORE marking as completed
@@ -1466,6 +1578,7 @@ class AnalyzeRequest(BaseModel):
     request_text: str
     strictness: Optional[str] = None
     tier: Optional[str] = None  # 'mini', 'thinking', 'pro'
+    mode: Optional[str] = "deep"  # 'fast' or 'deep'
 
 def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
     router = APIRouter()
@@ -1488,14 +1601,17 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 status=AIJobStatus.PENDING
             )
             
-            # Start background task
+            # Start background task with mode and client
+            client = getattr(app.state, 'http', None)
             background_tasks.add_task(
                 _run_analysis_background,
                 job_id,
                 payload.request_text,
                 db,
                 payload.strictness,
-                payload.tier
+                payload.tier,
+                payload.mode or "deep",
+                client
             )
             
             return {
