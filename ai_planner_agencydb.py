@@ -456,10 +456,27 @@ def summarize_request(request_text: str) -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────────
 # Recall candidates (embeddings + lexical)
 # ──────────────────────────────────────────────────────────────────────────────
-def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=None, mode: str = "deep") -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not catalog:
         return [], []
     
+    # FAST MODE: Skip embeddings entirely, use only lexical scoring
+    if mode == "fast":
+        cands = []
+        for it in catalog:
+            # Use lexical scoring only for speed
+            lex = lexical_score(request_text, it["title"], it.get("desc", ""), it.get("keywords", []), it["dept"])
+            # For fast mode, use lexical score as the recall score
+            cands.append({**it, "embScore": 0, "lexScore": lex, "recall": lex})
+        
+        # Select top candidates based on lexical score only
+        topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:80]
+        topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:120]
+        topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:160]
+        
+        return topD + topC + topT, cands
+    
+    # DEEP MODE: Use embeddings + lexical for better accuracy
     texts = [f"{str(i.get('dept',''))} • {str(i.get('level',''))} • {str(i.get('title',''))} :: {str(i.get('desc',''))} :: {', '.join(str(k) for k in i.get('keywords',[]))}" for i in catalog]
     
     # Use cached embed_many with client
@@ -1335,11 +1352,11 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             "risk_flags": []
         }
     
-    # Stage 3: Compute embeddings and find candidates
-    _update_job(job_id, "Stage 3/7: Computing embeddings and similarity scores...", 30)
+    # Stage 3: Compute embeddings and find candidates (skip embeddings for Fast mode)
+    _update_job(job_id, f"Stage 3/7: {'Finding candidates with keywords...' if mode == 'fast' else 'Computing embeddings and similarity scores...'}", 30)
     
-    # Pass client for embedding cache
-    candidates, all_recall = recall_candidates(request_text, catalog, client=client or oai)
+    # Pass mode to skip embeddings in Fast mode
+    candidates, all_recall = recall_candidates(request_text, catalog, client=client or oai, mode=mode)
     
     if not candidates:
         # FIXED: If no candidates, use entire catalog as fallback
@@ -1602,7 +1619,8 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             )
             
             # Start background task with mode and client
-            client = getattr(app.state, 'http', None)
+            # FIXED: Pass None instead of app.state.http for embedding client
+            # embed_many will create its own OpenAI client
             background_tasks.add_task(
                 _run_analysis_background,
                 job_id,
@@ -1611,7 +1629,7 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 payload.strictness,
                 payload.tier,
                 payload.mode or "deep",
-                client
+                None  # Pass None - embed_many will create its own OpenAI client
             )
             
             return {
