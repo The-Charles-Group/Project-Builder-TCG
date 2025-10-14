@@ -652,14 +652,14 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
     if not candidates:
         return []
     
-    # Get the appropriate batch size based on tier
+    # Get the appropriate batch size based on tier - PERFORMANCE FIX: Increased for Fast mode
     batch_sizes = {
-        "mini": 20,  # FIXED: Reduced to 20 to avoid token exhaustion
-        "thinking": 15,  # FIXED: Reduced to 15 to avoid token exhaustion
-        "pro": 10,  # FIXED: Reduced to 10 to avoid token exhaustion
-        "fast": 20,  # FIXED: Reduced to 20 to avoid token exhaustion
-        "balanced": 15,  # FIXED: Reduced to 15 to avoid token exhaustion
-        "accurate": 10  # FIXED: Reduced to 10 to avoid token exhaustion
+        "mini": 50,  # PERFORMANCE FIX: Dramatically increased for Fast mode
+        "thinking": 15,  # Keep smaller for accuracy
+        "pro": 10,  # Keep smaller for accuracy
+        "fast": 50,  # PERFORMANCE FIX: Dramatically increased for Fast mode
+        "balanced": 15,  # Keep smaller for accuracy
+        "accurate": 10  # Keep smaller for accuracy
     }
     batch_size = batch_sizes.get(tier, 30)
     
@@ -713,8 +713,80 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
             # Wait before polling again
             await asyncio.sleep(1.0)
 
+async def _process_single_chunk_async(block: List[Dict[str, Any]], chunk_num: int, total_chunks: int, summary: Dict[str, Any], 
+                                      request_text: str, schema: dict, job_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Process a single chunk asynchronously for parallel processing"""
+    # Sanitize all text in payload to prevent JSON parsing errors
+    payload = []
+    for c in block:
+        evidence = best_evidence(request_text, c, 2)
+        payload.append({
+            "id": sanitize_for_json(c["id"]),
+            "dept": c["dept"],
+            "level": c["level"],
+            "title": sanitize_for_json(c["title"])[:100],
+            "desc": sanitize_for_json(c.get("desc", ""))[:100],
+            "evidence": [sanitize_for_json(e)[:100] for e in evidence]
+        })
+    
+    # Sanitize summary fields (keep shorter to save tokens)
+    safe_summary = sanitize_for_json(summary.get('summary', ''))[:200]
+    safe_goals = [sanitize_for_json(g)[:50] for g in summary.get("goals", [])][:3]
+    safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])][:3]
+    safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])][:3]
+    safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])][:2]
+    
+    messages = [
+        {"role": "system", "content": """Senior Agency Executive scoring deliverables.
+Score 90-100: Essential
+Score 70-89: Very relevant
+Score 50-69: Moderately relevant
+Score 30-49: Optional
+Score 0-29: Not relevant
+For TASKS, set select=true ONLY if specifically needed."""},
+        {"role": "user", "content": f"SUMMARY:\n{safe_summary}\n\nGOALS:\n" + "\n".join(safe_goals) + f"\n\nCANDIDATES:\n{json.dumps(payload, indent=1)}\n\nScore each item."}
+    ]
+    
+    try:
+        # Use asyncio.to_thread for synchronous function call
+        r = await asyncio.to_thread(chat_json_schema, messages, schema, max_completion_tokens=4096)
+        if r and r.get("items"):
+            print(f"[LLM Re-score] Chunk {chunk_num}/{total_chunks} succeeded with {len(r.get('items', []))} items")
+            return r.get("items", [])
+        else:
+            raise Exception("Empty response from GPT-5")
+    except Exception as e:
+        print(f"[LLM Re-score ERROR] Chunk {chunk_num}/{total_chunks} failed: {e} - Using aggressive fallback scoring")
+        # Fallback scoring for this chunk
+        out = []
+        for c in block:
+            base_confidence = 0.55
+            embedding_bonus = c.get("recall", 0.5) * 0.4
+            fallback_confidence = min(0.95, base_confidence + embedding_bonus)
+            
+            media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
+                             'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
+                             'marketing', 'performance', 'programmatic', 'audience', 'content'}
+            title_words = set(tokenize(c.get("title", "").lower()))
+            keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
+            
+            if title_words & media_keywords or keyword_set & media_keywords:
+                fallback_confidence = min(0.95, fallback_confidence * 1.3)
+            
+            out.append({
+                "id": c["id"],
+                "dept": c["dept"],
+                "level": c["level"],
+                "relevance": min(100, fallback_confidence * 100),
+                "confidence": fallback_confidence,
+                "why": f"Embedding match (score: {c.get('recall', 0.5):.2f}, boosted for media keywords)",
+                "risks": "GPT-5 error - using boosted embedding fallback",
+                "select": True if c["level"] == "deliverable" else fallback_confidence > 0.40
+            })
+        return out
+
 def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str, Any]], request_text: str, job_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """LLM re-scoring with GRANULAR task-level selection - SYNCHRONOUS FALLBACK for compatibility"""
+    """LLM re-scoring with GRANULAR task-level selection - PERFORMANCE FIX: Now uses PARALLEL processing"""
     if not candidates:
         print("[LLM Re-score] No candidates to score")
         return []
@@ -739,7 +811,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
                         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                         "why": {"type": "string"},
                         "risks": {"type": "string"},
-                        "select": {"type": "boolean"}  # NEW: explicit selection flag for tasks
+                        "select": {"type": "boolean"}
                     },
                     "required": ["id", "dept", "level", "relevance", "confidence", "why", "risks", "select"],
                     "additionalProperties": False
@@ -750,107 +822,76 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         "additionalProperties": False
     }
     
-    out = []
-    failed_chunks = 0  # Track failed chunks
-    
-    # Use tier-based batch sizing
+    # Use tier-based batch sizing - PERFORMANCE FIX: Dramatically increased for Fast mode
     tier = os.environ.get("AI_TIER", "thinking")
     batch_sizes = {
-        "mini": 10,  # FIXED: Further reduced to avoid token limits
-        "thinking": 8,  # FIXED: Further reduced to avoid token limits
-        "pro": 5,  # FIXED: Further reduced to avoid token limits
-        "fast": 10,  # FIXED: Further reduced to avoid token limits
-        "balanced": 8,  # FIXED: Further reduced to avoid token limits
-        "accurate": 5  # FIXED: Further reduced to avoid token limits
+        "mini": 40,  # PERFORMANCE FIX: Increased for Fast mode parallel processing
+        "thinking": 8,  # Keep smaller for accuracy
+        "pro": 5,  # Keep smaller for accuracy
+        "fast": 40,  # PERFORMANCE FIX: Increased for Fast mode parallel processing
+        "balanced": 8,  # Keep smaller for accuracy
+        "accurate": 5  # Keep smaller for accuracy
     }
-    chunk = batch_sizes.get(tier, 8)
-    total_chunks = math.ceil(len(candidates) / chunk)
+    chunk_size = batch_sizes.get(tier, 8)
+    
+    # Prepare chunks for parallel processing
+    chunks = []
+    for i in range(0, len(candidates), chunk_size):
+        block = candidates[i:i + chunk_size]
+        chunk_num = (i // chunk_size) + 1
+        chunks.append((block, chunk_num))
+    
+    total_chunks = len(chunks)
     
     # Update job with total chunks if job_id provided
     if job_id and job_id in AI_JOB_STORE:
         AI_JOB_STORE[job_id].total_chunks = total_chunks
-        AI_JOB_STORE[job_id].current_stage = f"Analyzing with GPT-5 (0/{total_chunks} chunks)"
+        AI_JOB_STORE[job_id].current_stage = f"Analyzing with GPT-5 in parallel (0/{total_chunks} chunks)"
     
-    for i in range(0, len(candidates), chunk):
-        block = candidates[i:i + chunk]
-        chunk_num = (i // chunk) + 1
+    print(f"[LLM Re-score] Processing {total_chunks} chunks in PARALLEL with chunk_size={chunk_size}")
+    
+    # PERFORMANCE FIX: Run async event loop for parallel processing
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    # Create tasks for parallel processing
+    async def run_parallel():
+        tasks = []
+        for block, chunk_num in chunks:
+            # Create async task for each chunk
+            task = _process_single_chunk_async(block, chunk_num, total_chunks, summary, request_text, schema, job_id)
+            tasks.append(task)
+        
+        # PERFORMANCE FIX: Process all chunks in parallel
+        print(f"[LLM Re-score] Starting parallel processing of {len(tasks)} chunks...")
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Update job progress
         if job_id and job_id in AI_JOB_STORE:
-            AI_JOB_STORE[job_id].current_stage = f"Analyzing with GPT-5 (chunk {chunk_num}/{total_chunks})"
+            AI_JOB_STORE[job_id].processed_chunks = total_chunks
+            AI_JOB_STORE[job_id].current_stage = f"Completed parallel analysis of {total_chunks} chunks"
         
-        # Sanitize all text in payload to prevent JSON parsing errors
-        payload = []
-        for c in block:
-            evidence = best_evidence(request_text, c, 2)  # FIXED: Reduced from 3 to 2 to save tokens
-            payload.append({
-                "id": sanitize_for_json(c["id"]),
-                "dept": c["dept"],
-                "level": c["level"],
-                "title": sanitize_for_json(c["title"])[:100],  # FIXED: Limit title length
-                "desc": sanitize_for_json(c.get("desc", ""))[:100],  # FIXED: Limit desc length
-                "evidence": [sanitize_for_json(e)[:100] for e in evidence]  # FIXED: Limit evidence length
-            })
-        
-        # Sanitize summary fields (keep shorter to save tokens)
-        safe_summary = sanitize_for_json(summary.get('summary', ''))[:200]  # FIXED: Limit summary length
-        safe_goals = [sanitize_for_json(g)[:50] for g in summary.get("goals", [])][:3]  # FIXED: Limit goals
-        safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])][:3]  # FIXED: Limit channels
-        safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])][:3]  # FIXED: Limit markets
-        safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])][:2]  # FIXED: Limit compliance
-        
-        messages = [
-            {"role": "system", "content": """Senior Agency Executive scoring deliverables.
-Score 90-100: Essential
-Score 70-89: Very relevant
-Score 50-69: Moderately relevant
-Score 30-49: Optional
-Score 0-29: Not relevant
-For TASKS, set select=true ONLY if specifically needed."""},  # FIXED: Shortened system prompt
-            {"role": "user", "content": f"SUMMARY:\n{safe_summary}\n\nGOALS:\n" + "\n".join(safe_goals) + f"\n\nCANDIDATES:\n{json.dumps(payload, indent=1)}\n\nScore each item."}  # FIXED: Shortened user prompt
-        ]
-        
-        try:
-            r = chat_json_schema(messages, schema, max_completion_tokens=4096)  # FIXED: Reduced from 8192 to 4096
-            if r and r.get("items"):
-                out.extend(r.get("items", []))
-                print(f"[LLM Re-score] Chunk {chunk_num}/{total_chunks} succeeded with {len(r.get('items', []))} items")
-            else:
-                raise Exception("Empty response from GPT-5")
-        except Exception as e:
+        return results
+    
+    # Run the async parallel processing
+    chunk_results = loop.run_until_complete(run_parallel())
+    
+    # Collect all results
+    out = []
+    failed_chunks = 0
+    
+    for result in chunk_results:
+        if isinstance(result, Exception):
             failed_chunks += 1
-            print(f"[LLM Re-score ERROR] Chunk {chunk_num}/{total_chunks} failed: {e} - Using aggressive fallback scoring")
-            # FIXED: More aggressive fallback scoring - always provide usable results
-            for c in block:
-                # FIXED: Higher base confidence for fallback
-                base_confidence = 0.55  # Increased from 0.4
-                embedding_bonus = c.get("recall", 0.5) * 0.4
-                fallback_confidence = min(0.95, base_confidence + embedding_bonus)
-                
-                # Apply media keyword boost
-                media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
-                                 'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
-                                 'marketing', 'performance', 'programmatic', 'audience', 'content'}
-                title_words = set(tokenize(c.get("title", "").lower()))
-                keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
-                
-                if title_words & media_keywords or keyword_set & media_keywords:
-                    fallback_confidence = min(0.95, fallback_confidence * 1.3)  # FIXED: Increased boost to 1.3x
-                
-                out.append({
-                    "id": c["id"],
-                    "dept": c["dept"],
-                    "level": c["level"],
-                    "relevance": min(100, fallback_confidence * 100),
-                    "confidence": fallback_confidence,
-                    "why": f"Embedding match (score: {c.get('recall', 0.5):.2f}, boosted for media keywords)",
-                    "risks": "GPT-5 error - using boosted embedding fallback",
-                    "select": True if c["level"] == "deliverable" else fallback_confidence > 0.40  # FIXED: Lower threshold
-                })
-        
-        # Update chunk completion
-        if job_id and job_id in AI_JOB_STORE:
-            AI_JOB_STORE[job_id].processed_chunks = chunk_num
+            print(f"[LLM Re-score ERROR] Chunk failed with exception: {result}")
+        elif isinstance(result, list):
+            out.extend(result)
+        else:
+            failed_chunks += 1
+            print(f"[LLM Re-score WARNING] Unexpected result type: {type(result)}")
     
     # FIXED: If too many chunks failed, ensure we have enough results
     if failed_chunks > total_chunks / 2:
@@ -1291,7 +1332,11 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         client: HTTP client for API calls (uses app.state.http if available)
     """
     strictness = strictness or AI_STRICTNESS_DEFAULT
-    tier = tier or "thinking"
+    # PERFORMANCE FIX: Fast mode always uses "mini" tier for speed
+    if mode == "fast":
+        tier = "mini"
+    else:
+        tier = tier or "thinking"
     mode = mode or "deep"
     
     print(f"[ANALYZE START] Mode: {mode}, Request length: {len(request_text)}, strictness: {strictness}, tier: {tier}")

@@ -2067,7 +2067,7 @@ async def _extract_and_analyze_pdf_images_async(content: bytes, filename: str, j
             JOB_STORE[job_id].phase = "quick_scan"
         
         # Phase 2: Quick relevance check
-        semaphore = asyncio.Semaphore(5)  # Higher concurrency for quick checks
+        semaphore = asyncio.Semaphore(10)  # PERFORMANCE FIX: Increased concurrency for fast mode
         quick_check_tasks = [
             _quick_relevance_check_async(img_bytes, page_num, img_index, semaphore, job_id)
             for img_bytes, page_num, img_index in images_to_scan
@@ -2096,7 +2096,7 @@ async def _extract_and_analyze_pdf_images_async(content: bytes, filename: str, j
             JOB_STORE[job_id].total_images = len(relevant_images)
             JOB_STORE[job_id].processed_images = 0  # Reset for deep analysis phase
         
-        semaphore = asyncio.Semaphore(3)  # Lower concurrency for deep analysis
+        semaphore = asyncio.Semaphore(15)  # PERFORMANCE FIX: Dramatically increased concurrency for parallel processing
         deep_analysis_tasks = [
             _analyze_single_image_async(img_bytes, page_num, img_index, semaphore, job_id)
             for img_bytes, page_num, img_index in relevant_images
