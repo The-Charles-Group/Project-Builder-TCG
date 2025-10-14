@@ -322,8 +322,8 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
         # Get deliverable info from first row
         first_row = deliv_group.iloc[0]
         deliv_name = str(first_row.get('Deliverable', deliv_code))
-        # FIXED: Handle missing or nan Service Department field properly
-        service_dept = first_row.get('Service Department', 'Strategy')
+        # FIXED: Use correct column name 'Service_Department' with underscore
+        service_dept = first_row.get('Service_Department', 'Strategy')
         if pd.isna(service_dept) or str(service_dept) == 'nan':
             service_dept = 'Strategy'
         service_dept = str(service_dept)
