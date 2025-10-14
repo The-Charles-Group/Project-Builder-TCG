@@ -328,10 +328,85 @@ async function autoDetectRetainers() {
   }
 }
 
+// ISSUE D FIX: Consolidated retainer suggestion function  
+async function suggestAllRetainerItems() {
+  const btn = document.getElementById('btn-ai-suggest-retainer-items');
+  if (!btn) return;
+  
+  btn.disabled = true;
+  btn.textContent = '⏳ Analyzing...';
+  
+  try {
+    // Get RFP text
+    const rfpText = window.APP?.rfpText || APB.step2.rfpText || 
+                   sessionStorage.getItem('apb.rfp_text') || 
+                   document.getElementById('rfpText')?.value || '';
+    
+    if (!rfpText) {
+      alert('Please provide RFP text before using AI retainer suggestions');
+      return;
+    }
+    
+    // Get selected deliverable codes
+    const deliverableCodes = Array.from(APB.step2.selectedCodes || selectionStore.deliverables);
+    
+    if (deliverableCodes.length === 0) {
+      alert('Please select deliverables first');
+      return;
+    }
+    
+    // Call the retainer suggest endpoint
+    const response = await fetch('/api/pricing/retainer_suggest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deliverable_codes: deliverableCodes,
+        rfp_text: rfpText
+      })
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      
+      // Process suggestions
+      const suggestions = data.suggestions || [];
+      let updatedCount = 0;
+      
+      suggestions.forEach(suggestion => {
+        const code = suggestion.deliverable_code;
+        if (suggestion.is_retainer) {
+          pricingData.deliverableTypes.set(code, 'RETAINER');
+          pricingData.retainers.set(code, suggestion.recommended_months || 12);
+          updatedCount++;
+        } else {
+          pricingData.deliverableTypes.set(code, 'PROJECT');
+          pricingData.retainers.delete(code);
+        }
+      });
+      
+      // Re-render to show retainer badges
+      renderDeliverablesPanel();
+      
+      // Show feedback
+      alert(`AI Analysis Complete!\n\n${updatedCount} deliverables identified as retainers.\n\nRetainer items are now marked with green badges showing months.`);
+    } else {
+      const error = await response.text();
+      alert(`Failed to get retainer suggestions: ${error}`);
+    }
+  } catch (error) {
+    console.error('Failed to get retainer suggestions:', error);
+    alert('Failed to get AI retainer suggestions. Please try again.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🤖 AI SUGGEST RETAINER ITEMS';
+  }
+}
+
 // Ensure retainer functions are globally accessible (ISSUE 2 FIX)
 window.toggleRetainerType = toggleRetainerType;
 window.updateRetainerMonths = updateRetainerMonths;
 window.suggestRetainerConfig = suggestRetainerConfig;
+window.suggestAllRetainerItems = suggestAllRetainerItems;
 
 // ================================================================================
 // Centralized Step 2 State - Single Source of Truth (selectionStore)
@@ -1719,7 +1794,7 @@ async function exportPricingDetails() {
   }
 }
 
-// AI Optimize All Pricing Function
+// ISSUE F FIX: AI Optimize All Pricing Function wired to redistribute-hours endpoint
 async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
   if (!btn) return;
@@ -1741,30 +1816,48 @@ async function optimizeAllPricing() {
     const projectName = document.getElementById('projectName')?.value || '';
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
     
-    // Call AI optimization endpoint
-    const response = await fetch('/api/pricing/optimize-all', {
+    // Call redistribute-hours endpoint for optimization
+    const response = await fetch('/api/pricing/redistribute-hours', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         scenario_data: scenario,
         client_budget: clientBudget,
         project_name: projectName,
-        rfp_context: rfpText,
-        optimization_goals: ['budget_fit', 'resource_balance', 'timeline_efficiency']
+        optimization_mode: 'balanced',
+        rfp_context: rfpText
       })
     });
     
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    if (response.ok) {
+      const result = await response.json();
+      
+      // Apply the redistributed hours back to the scenario
+      if (result.redistributed_scenario) {
+        SCENARIOS.A = result.redistributed_scenario;
+        
+        // Update the pricing display with new values
+        if (window.renderPricingTable) {
+          window.renderPricingTable(SCENARIOS.A);
+        }
+        
+        // Update pricing summary
+        if (window.updatePricingSummary) {
+          window.updatePricingSummary();
+        }
+        
+        alert('✅ Pricing optimized successfully!\n\nHours have been redistributed for optimal balance.');
+      } else if (result.optimized_hours) {
+        showOptimizationResults(result);
+      } else {
+        alert('Optimization completed. Check the pricing table for updates.');
+      }
+    } else {
+      const errorText = await response.text();
+      console.error('Optimization failed:', errorText);
+      alert('Error optimizing pricing. Using fallback optimization.');
+      optimizePricingFallback();
     }
-    
-    const result = await response.json();
-    
-    // Show results in a modal or apply directly
-    if (result.optimized_hours) {
-      showOptimizationResults(result);
-    }
-    
   } catch (error) {
     console.error('Error optimizing pricing:', error);
     alert('Error optimizing pricing. Using fallback optimization.');
@@ -2669,30 +2762,52 @@ async function buildFromCurrentSelection() {
   if (window.appState) window.appState.selectedCodes = codes;
   window.selectedCodes = codes;
 
-  // Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
+  // ISSUE C FIX: Convert S2.selectedComponentsMap to API format with task filters
   const selectedComponentsPayload = {};
   
-  // For all selected deliverables, ensure we have component info
+  // For all selected deliverables, ensure we have component info with task filters
   codes.forEach(code => {
-    const compSet = S2.selectedComponentsMap[code];
+    const compSet = S2.selectedComponentsMap[code] || selectionStore.componentsByDeliv.get(code);
     
-    if (compSet instanceof Set) {
-      // User has customized component selection (could be all, some, or none)
-      if (compSet.size > 0) {
-        // User has selected specific components
-        const dict = Object.create(null);
-        compSet.forEach(label => { dict[label] = null; });
-        selectedComponentsPayload[code] = dict;
-      } else {
-        // Empty Set means user unchecked all - send empty object
-        selectedComponentsPayload[code] = {};
-      }
+    if (compSet instanceof Set && compSet.size > 0) {
+      // User has selected specific components - build component:task map
+      const componentTaskMap = {};
+      compSet.forEach(compName => {
+        const taskKey = `${code}::${compName}`;
+        const tasks = selectionStore.l3ByComponent.get(taskKey);
+        
+        if (tasks && tasks.size > 0) {
+          // Include specific tasks for this component
+          componentTaskMap[compName] = {
+            tasks: Array.from(tasks),
+            hours: null // Let backend calculate
+          };
+        } else {
+          // Component selected but no specific tasks
+          componentTaskMap[compName] = null;
+        }
+      });
+      selectedComponentsPayload[code] = componentTaskMap;
     } else if (compSet && typeof compSet === 'object') {
-      // Already in object format
-      selectedComponentsPayload[code] = compSet;
+      // Already in object format - enhance with task info
+      const enhancedMap = {};
+      Object.keys(compSet).forEach(compName => {
+        const taskKey = `${code}::${compName}`;
+        const tasks = selectionStore.l3ByComponent.get(taskKey);
+        if (tasks && tasks.size > 0) {
+          enhancedMap[compName] = {
+            tasks: Array.from(tasks),
+            hours: compSet[compName]
+          };
+        } else {
+          enhancedMap[compName] = compSet[compName];
+        }
+      });
+      selectedComponentsPayload[code] = enhancedMap;
     } else {
-      // No customization - send "__ALL__" sentinel to include all default components
-      selectedComponentsPayload[code] = "__ALL__";
+      // No components selected - send empty object instead of "__ALL__"
+      // This ensures only explicitly selected tasks flow to Step 3
+      selectedComponentsPayload[code] = {};
     }
   });
 
@@ -4776,9 +4891,19 @@ function renderDeliverablesPanel() {
   
   let html = '';
   
-  // Render Selected group
+  // ISSUE D FIX: Add consolidated retainer button at the top  
   if (selected.length > 0) {
-    html += '<div style="font-weight:600;padding:8px;color:var(--accent);background:rgba(139,92,246,0.05);border-bottom:1px solid rgba(255,255,255,0.1);">Selected</div>';
+    html += `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:rgba(139,92,246,0.05);border-bottom:1px solid rgba(255,255,255,0.1);">
+        <span style="font-weight:600;color:var(--accent);">Selected</span>
+        <button onclick="suggestAllRetainerItems()" 
+                id="btn-ai-suggest-retainer-items"
+                style="background:linear-gradient(135deg, #3b82f6, #8b5cf6);color:white;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:0.85em;font-weight:600;">
+          🤖 AI SUGGEST RETAINER ITEMS
+        </button>
+      </div>
+    `;
+    
     selected.forEach(d => {
       const code = String(d.Deliverable_Code);
       const isActive = APB.step2.activeDeliverableCode === code;
@@ -4787,43 +4912,13 @@ function renderDeliverablesPanel() {
       
       html += `
         <div class="deliv-row" data-code="${code}" style="background:${isActive ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.03)'};border-left:${isActive ? '3px solid var(--accent)' : '3px solid transparent'};">
-          <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+          <label style="display:flex;gap:8px;align-items:center;padding:8px 12px;cursor:pointer;">
             <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked data-visible="1" />
             <span>${d.Deliverable}</span>
-            ${isRetainer ? '<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER</span>' : ''}
+            ${isRetainer ? `<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER ${retainerMonths}m</span>` : ''}
             <button onclick="event.stopPropagation(); removeDeliverableX('${code}')" style="margin-left:auto;background:none;border:none;color:var(--danger);cursor:pointer;font-size:1.2em;padding:0 8px;">×</button>
             <small style="opacity:.75">${d.Category || ''}</small>
           </label>
-          
-          <!-- ISSUE 3 FIX: Retainer Options -->
-          <div style="display:flex;gap:12px;align-items:center;padding:4px 8px 8px 32px;background:rgba(0,0,0,0.1);border-top:1px solid rgba(255,255,255,0.05);">
-            <label style="display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;">
-              <input type="checkbox" 
-                     class="retainer-toggle" 
-                     data-code="${code}" 
-                     ${isRetainer ? 'checked' : ''}
-                     onchange="toggleRetainerType('${code}', this.checked)"
-                     style="cursor:pointer;">
-              <span style="color:${isRetainer ? '#10b981' : 'var(--muted)'};">Retainer</span>
-            </label>
-            
-            <div class="retainer-months-wrap" data-code="${code}" style="display:${isRetainer ? 'flex' : 'none'};align-items:center;gap:4px;">
-              <span style="font-size:0.85em;color:var(--muted);">Months:</span>
-              <input type="number" 
-                     class="retainer-months" 
-                     data-code="${code}"
-                     value="${retainerMonths}"
-                     min="1" 
-                     max="24"
-                     onchange="updateRetainerMonths('${code}', this.value)"
-                     style="width:50px;padding:2px 4px;border:1px solid rgba(255,255,255,0.2);border-radius:3px;background:rgba(0,0,0,0.2);">
-            </div>
-            
-            <button onclick="event.stopPropagation(); suggestRetainerConfig('${code}')" 
-                    style="margin-left:auto;background:#3b82f6;color:white;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:0.8em;">
-              AI Suggest
-            </button>
-          </div>
         </div>
       `;
     });
@@ -4839,42 +4934,12 @@ function renderDeliverablesPanel() {
       
       html += `
         <div class="deliv-row" data-code="${code}" style="border-left:3px solid transparent;">
-          <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+          <label style="display:flex;gap:8px;align-items:center;padding:8px 12px;cursor:pointer;">
             <input type="checkbox" class="deliv-checkbox" data-code="${code}" data-visible="1" />
             <span>${d.Deliverable}</span>
-            ${isRetainer ? '<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER</span>' : ''}
+            ${isRetainer ? `<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER ${retainerMonths}m</span>` : ''}
             <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
           </label>
-          
-          <!-- ISSUE 2 FIX: Add Retainer Options to Other deliverables -->
-          <div style="display:flex;gap:12px;align-items:center;padding:4px 8px 8px 32px;background:rgba(0,0,0,0.1);border-top:1px solid rgba(255,255,255,0.05);">
-            <label style="display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;">
-              <input type="checkbox" 
-                     class="retainer-toggle" 
-                     data-code="${code}" 
-                     ${isRetainer ? 'checked' : ''}
-                     onchange="toggleRetainerType('${code}', this.checked)"
-                     style="cursor:pointer;">
-              <span style="color:${isRetainer ? '#10b981' : 'var(--muted)'};">Retainer</span>
-            </label>
-            
-            <div class="retainer-months-wrap" data-code="${code}" style="display:${isRetainer ? 'flex' : 'none'};align-items:center;gap:4px;">
-              <span style="font-size:0.85em;color:var(--muted);">Months:</span>
-              <input type="number" 
-                     class="retainer-months" 
-                     data-code="${code}"
-                     value="${retainerMonths}"
-                     min="1" 
-                     max="24"
-                     onchange="updateRetainerMonths('${code}', this.value)"
-                     style="width:50px;padding:2px 4px;border:1px solid rgba(255,255,255,0.2);border-radius:3px;background:rgba(0,0,0,0.2);">
-            </div>
-            
-            <button onclick="event.stopPropagation(); suggestRetainerConfig('${code}')" 
-                    style="margin-left:auto;background:#3b82f6;color:white;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:0.8em;">
-              AI Suggest
-            </button>
-          </div>
         </div>
       `;
     });
@@ -5695,8 +5760,12 @@ window.renderL3Panel = renderL3Panel;
 
 // Update summary panel with current selection counts
 function updateStep2Summary() {
+  // ISSUE B FIX: Add null checks for all DOM elements
   const delivCount = window.step2PickerState?.selected?.size || 0;
-  document.getElementById('s2-summary-deliverables').textContent = delivCount;
+  const delivEl = document.getElementById('s2-summary-deliverables');
+  if (delivEl) {
+    delivEl.textContent = delivCount;
+  }
   
   // Count total components selected across all deliverables
   let compCount = 0;
@@ -5714,7 +5783,10 @@ function updateStep2Summary() {
       compCount += Object.keys(rawSel).length;
     }
   });
-  document.getElementById('s2-summary-components').textContent = compCount;
+  const compEl = document.getElementById('s2-summary-components');
+  if (compEl) {
+    compEl.textContent = compCount;
+  }
   
   // Count L3 subtasks
   let l3Count = 0;
@@ -5724,16 +5796,21 @@ function updateStep2Summary() {
       else if (Array.isArray(l3Set)) l3Count += l3Set.length;
     });
   });
-  document.getElementById('s2-summary-l3').textContent = l3Count;
+  const l3El = document.getElementById('s2-summary-l3');
+  if (l3El) {
+    l3El.textContent = l3Count;
+  }
   
   // Update status message
   const statusEl = document.getElementById('s2-summary-status');
-  if (delivCount === 0) {
-    statusEl.textContent = 'No deliverables selected';
-    statusEl.style.color = 'var(--muted)';
-  } else {
-    statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
-    statusEl.style.color = 'var(--accent)';
+  if (statusEl) {
+    if (delivCount === 0) {
+      statusEl.textContent = 'No deliverables selected';
+      statusEl.style.color = 'var(--muted)';
+    } else {
+      statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
+      statusEl.style.color = 'var(--accent)';
+    }
   }
 }
 
@@ -7097,23 +7174,81 @@ async function s2ApplyAndBuild() {
 // Bind buttons
 S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
-// ========== XML Export Functions ==========
+// ISSUE G FIX: XML Export Functions with validation and defaults
 async function exportXMLScenario(letter) {
+  // Validate scenario exists before attempting export
+  const scenario = SCENARIOS?.[letter];
+  if (!scenario || !scenario.items || scenario.items.length === 0) {
+    alert('❌ No build context available.\n\nPlease build a scenario first before exporting.');
+    return;
+  }
+  
   // Check if anchors should be included
   const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
   
-  // Build endpoint with query parameter
-  const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+  // Get project name and other defaults  
+  const projectName = document.getElementById('projectName')?.value || 'Scenario ' + letter;
+  const sheetName = projectName || 'Scenario A';
+  const hoursPerDay = 8; // Default hours per day
+  
+  // Build endpoint with query parameters including defaults
+  const params = new URLSearchParams({
+    add_anchors: addAnchors,
+    sheet_name: sheetName,
+    hours_per_day: hoursPerDay,
+    project_name: projectName
+  });
+  const endpoint = `/api/export/xml/${letter.toLowerCase()}?${params.toString()}`;
   
   try {
     const response = await fetch(endpoint);
-    if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
     
+    if (!response.ok) {
+      // Handle 500 error specifically
+      if (response.status === 500) {
+        const msg = await response.text().catch(() => 'Server error occurred');
+        console.error('XML Export 500 Error:', msg);
+        alert(`❌ Export failed due to server error.\n\nPlease ensure:\n1. You have built a scenario first\n2. The scenario contains valid data\n3. Try rebuilding the scenario if the error persists`);
+      } else {
+        throw new Error(`Export failed: ${response.statusText}`);
+      }
+      return;
+    }
+    
+    // Get export stats from header if available
+    const exportStats = response.headers.get('X-Export-Stats');
+    if (exportStats) {
+      try {
+        const stats = JSON.parse(exportStats);
+        console.log('Export stats:', stats);
+        
+        // Show success toast with stats
+        const toast = document.createElement('div');
+        toast.style.cssText = `
+          position: fixed;
+          bottom: 20px;
+          right: 20px;
+          background: #10b981;
+          color: white;
+          padding: 12px 20px;
+          border-radius: 8px;
+          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+          z-index: 10000;
+        `;
+        toast.innerHTML = `✅ Export successful!<br><small>${stats.task_count || 0} tasks exported</small>`;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 5000);
+      } catch (e) {
+        console.log('Could not parse export stats');
+      }
+    }
+    
+    // Download the file
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Project_Scenario_${letter}.xml`;
+    a.download = `${sheetName.replace(/[^a-zA-Z0-9]/g, '_')}_Scenario_${letter}.xml`;
     a.click();
     window.URL.revokeObjectURL(url);
   } catch (err) {
