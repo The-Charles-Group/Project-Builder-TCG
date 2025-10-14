@@ -75,10 +75,10 @@ def _enforce_size_limit(conn):
         print(f"[EMBED CACHE] Size limit exceeded, deleted {to_delete} oldest entries")
 
 def _get_cached_embed(conn, model: str, text: str, session_id: Optional[str] = None) -> Optional[List[float]]:
-    """Retrieve cached embedding if exists (session-scoped)"""
+    """Retrieve cached embedding if exists (session-scoped - NO FALLBACK to prevent contamination)"""
     text_hash = _hash_text(text)
     
-    # Try session-specific cache first if session_id provided
+    # Session-specific cache lookup (strict isolation - no global fallback)
     if session_id:
         key = f"{session_id}:{model}:{text_hash}"
         row = conn.execute(
@@ -87,8 +87,11 @@ def _get_cached_embed(conn, model: str, text: str, session_id: Optional[str] = N
         ).fetchone()
         if row:
             return json.loads(row[0])
+        # CRITICAL FIX: Do NOT fallback to global cache when session_id provided
+        # This prevents old RFP data from contaminating new sessions
+        return None
     
-    # Fallback to global cache (no session_id)
+    # Only use global cache when NO session_id provided (legacy support)
     key = f"{model}:{text_hash}"
     row = conn.execute(
         "SELECT vec, expires_at FROM embeds WHERE key=? AND session_id IS NULL AND (expires_at IS NULL OR expires_at > ?)",
