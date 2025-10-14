@@ -218,11 +218,91 @@ class TimelineOptimizer:
         
         return critical_path
 
+async def enhance_with_ai_reasoning(
+    timeline_result: Dict[str, Any],
+    rfp_text: str,
+    deliverables: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Enhance timeline with AI-generated strategic reasoning"""
+    
+    if not OPENAI_AVAILABLE or not client:
+        return timeline_result
+        
+    try:
+        # Extract key metrics from timeline
+        total_days = timeline_result['metadata'].get('total_duration_days', 0)
+        workstreams = timeline_result['metadata'].get('workstreams', [])
+        phases = timeline_result['metadata'].get('phases', [])
+        critical_tasks = timeline_result['metadata'].get('critical_tasks', 0)
+        
+        prompt = f"""As an expert project manager, analyze this project timeline and provide strategic insights.
+
+PROJECT CONTEXT:
+{rfp_text[:1000] if rfp_text else 'Standard agency project'}
+
+TIMELINE METRICS:
+- Duration: {total_days} days
+- Workstreams: {', '.join(workstreams)}
+- Phases: {', '.join(phases)}
+- Critical tasks: {critical_tasks}
+- Total deliverables: {len(deliverables)}
+
+CURRENT REASONING:
+{json.dumps(timeline_result.get('reasoning', {}), indent=2)[:1000]}
+
+Provide strategic insights on:
+1. Why this timeline structure makes sense for this specific project
+2. Key risks and how the timeline mitigates them
+3. Opportunities for acceleration if needed
+4. Resource optimization strategies
+5. Client communication checkpoints
+
+Return as JSON with keys:
+- strategic_rationale: Overall timeline strategy explanation
+- risk_mitigation: How timeline addresses project risks
+- acceleration_opportunities: Ways to speed up if needed
+- resource_optimization: How to best utilize team resources
+- client_touchpoints: Key review and approval milestones
+- confidence_level: 0-100 score
+"""
+
+        response = await client.chat.completions.create(
+            model="gpt-5-mini",  # Use mini for reasoning enhancement
+            messages=[
+                {"role": "system", "content": "You are a senior project management consultant."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.4,
+            max_tokens=1000
+        )
+        
+        ai_insights = json.loads(response.choices[0].message.content)
+        
+        # Merge AI insights with existing reasoning
+        if 'reasoning' not in timeline_result:
+            timeline_result['reasoning'] = {}
+            
+        timeline_result['reasoning'].update({
+            'ai_strategic_rationale': ai_insights.get('strategic_rationale', ''),
+            'risk_mitigation': ai_insights.get('risk_mitigation', []),
+            'acceleration_opportunities': ai_insights.get('acceleration_opportunities', []),
+            'resource_optimization': ai_insights.get('resource_optimization', ''),
+            'client_touchpoints': ai_insights.get('client_touchpoints', []),
+            'confidence_level': ai_insights.get('confidence_level', 75)
+        })
+        
+    except Exception as e:
+        print(f"[AI Timeline] Error enhancing with AI reasoning: {e}")
+    
+    return timeline_result
+
 async def generate_ai_timeline(
     deliverables: List[Dict[str, Any]], 
     rfp_text: str = "",
     project_start: Optional[str] = None,
-    optimization_mode: str = "balanced"
+    optimization_mode: str = "balanced",
+    use_intelligent_scheduler: bool = True
 ) -> Dict[str, Any]:
     """
     Generate an AI-optimized project timeline
@@ -232,10 +312,27 @@ async def generate_ai_timeline(
         rfp_text: Original RFP text for context
         project_start: ISO date string for project start (defaults to next Monday)
         optimization_mode: "speed" | "quality" | "balanced" | "cost"
+        use_intelligent_scheduler: Use new intelligent scheduler with workstreams
     
     Returns:
         Dictionary with timeline tasks, reasoning, and metadata
     """
+    
+    # Use the new intelligent scheduler if available
+    if use_intelligent_scheduler:
+        try:
+            from timeline_scheduler import generate_intelligent_timeline
+            result = await generate_intelligent_timeline(
+                deliverables,
+                project_start,
+                optimization_mode
+            )
+            # Enhance with AI reasoning if available
+            if OPENAI_AVAILABLE and client and rfp_text:
+                result = await enhance_with_ai_reasoning(result, rfp_text, deliverables)
+            return result
+        except ImportError:
+            print("[AI Timeline] Intelligent scheduler not available, falling back to standard")
     
     if not OPENAI_AVAILABLE or not client:
         return generate_fallback_timeline(deliverables, project_start)

@@ -301,6 +301,9 @@ app.include_router(stream_router)  # SSE streaming endpoint
 # Import AI Timeline Manager
 from ai_timeline_manager import suggest_timeline_from_selection, generate_ai_timeline
 
+# Import Intelligent Timeline Scheduler
+from timeline_scheduler import generate_intelligent_timeline
+
 # Import AI Pricing Optimizer
 from ai_pricing_optimizer import redistribute_hours, calculate_retainer_distribution, analyze_retainer_vs_project
 
@@ -3781,6 +3784,15 @@ class AISuggestReq(BaseModel):
     exclude_labels: List[str] | None = None
     weighted_context: dict | None = None  # Pre-filter context from weighted rules
 
+# ========= AI Timeline Generation =========
+class TimelineGenerationRequest(BaseModel):
+    """Request model for AI timeline generation"""
+    deliverables: List[Dict[str, Any]]  # Selected deliverables with metadata
+    rfp_text: Optional[str] = None  # RFP context text
+    project_start: Optional[str] = None  # ISO date format YYYY-MM-DD
+    optimization_mode: str = "balanced"  # "speed" | "quality" | "balanced" | "cost"
+    use_intelligent_scheduler: bool = True  # Use new intelligent scheduler
+
 def _component_catalog_for_deliverable(db: AgencyDB, dcode: str, max_tasks_per_comp: int = 40) -> Dict[str, List[str]]:
     """Return {component: [top task labels]} limited for token safety."""
     sub = db.all_rows[db.all_rows["Deliverable_Code"].astype(str) == str(dcode)]
@@ -3984,6 +3996,90 @@ def api_weighted_scores(payload: dict):
         return JSONResponse(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Weighted scoring failed: {str(e)}")
+
+@app.post("/api/ai/generate_timeline")
+async def generate_timeline(request: TimelineGenerationRequest):
+    """
+    Generate intelligent project timeline with parallel workstreams and dependencies.
+    Uses the new intelligent scheduler for realistic project planning.
+    """
+    
+    if not DB.loaded:
+        DB.load()
+    
+    try:
+        # Enrich deliverables with database information
+        enriched_deliverables = []
+        for deliv in request.deliverables:
+            code = deliv.get('deliverable_code', '')
+            
+            # Get deliverable details from database
+            db_row = DB.deliverables[DB.deliverables['Deliverable_Code'] == code]
+            if not db_row.empty:
+                # Enrich with database data
+                enriched = {
+                    'deliverable_code': code,
+                    'deliverable_name': db_row['Deliverable'].iloc[0] if 'Deliverable' in db_row.columns else deliv.get('name', ''),
+                    'department': db_row['Department'].iloc[0] if 'Department' in db_row.columns else deliv.get('department', 'Strategy'),
+                    'total_hours': deliv.get('hours', 0) or deliv.get('total_hours', 0),
+                    'components': deliv.get('components', []),
+                    'is_retainer': deliv.get('is_retainer', False),
+                    'retainer_months': deliv.get('retainer_months', 0)
+                }
+            else:
+                # Use provided data
+                enriched = deliv
+            
+            enriched_deliverables.append(enriched)
+        
+        # Use the intelligent timeline generator
+        if request.use_intelligent_scheduler:
+            # Use the new intelligent scheduler
+            result = await generate_intelligent_timeline(
+                enriched_deliverables,
+                request.project_start,
+                request.optimization_mode
+            )
+            
+            # Enhance with AI reasoning if RFP text is provided
+            if request.rfp_text:
+                from ai_timeline_manager import enhance_with_ai_reasoning
+                result = await enhance_with_ai_reasoning(
+                    result,
+                    request.rfp_text,
+                    enriched_deliverables
+                )
+        else:
+            # Use the standard AI timeline generator
+            result = await generate_ai_timeline(
+                enriched_deliverables,
+                request.rfp_text or RFP_TEXT_CACHE or "",
+                request.project_start,
+                request.optimization_mode,
+                use_intelligent_scheduler=False
+            )
+        
+        # Add success flag
+        result['success'] = True
+        result['message'] = f"Generated timeline with {len(result.get('tasks', []))} tasks using {'intelligent' if request.use_intelligent_scheduler else 'standard'} scheduler"
+        
+        return JSONResponse(result)
+        
+    except Exception as e:
+        print(f"[Timeline Generation] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Return error response
+        return JSONResponse({
+            'success': False,
+            'error': str(e),
+            'tasks': [],
+            'reasoning': {
+                'error': f"Failed to generate timeline: {str(e)}"
+            },
+            'metadata': {}
+        }, status_code=500)
 
 @app.get("/api/db/status")
 def db_status():

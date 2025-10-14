@@ -656,6 +656,98 @@
         /* Fallback table styles */
         #tl-body .tl-row { cursor: move; }
         #tl-body .tl-row.dragging { opacity: .6; outline: 2px dashed #aaa; }
+        
+        /* Timeline workstream headers */
+        .workstream-header {
+          background: rgba(139, 92, 246, 0.1);
+          border-left: 3px solid var(--accent);
+        }
+        .workstream-header td {
+          padding: 10px 12px;
+          font-size: 0.95em;
+          color: var(--accent);
+        }
+        
+        /* Retainer task styling */
+        .retainer-task {
+          background: rgba(34, 197, 94, 0.05);
+          border-left: 2px solid #22c55e;
+        }
+        .retainer-task td:first-child::after {
+          content: ' (monthly)';
+          color: var(--muted);
+          font-size: 0.85em;
+        }
+        
+        /* Milestone marker styling */
+        .milestone-task {
+          background: rgba(251, 191, 36, 0.05);
+          border-left: 2px solid #fbbf24;
+          font-weight: 600;
+        }
+        
+        /* Critical path highlighting */
+        .critical-path {
+          background: rgba(251, 191, 36, 0.08);
+          position: relative;
+        }
+        .critical-path::before {
+          content: '⚡';
+          position: absolute;
+          left: -20px;
+          color: #fbbf24;
+        }
+        
+        /* AI reasoning panel */
+        #ai-reasoning-panel {
+          animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+          from { 
+            transform: translateX(20px); 
+            opacity: 0; 
+          }
+          to { 
+            transform: translateX(0); 
+            opacity: 1; 
+          }
+        }
+        
+        /* Timeline loading animation */
+        #timeline-loading {
+          animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        
+        /* Gantt container improvements */
+        #gantt-container {
+          position: relative;
+          min-height: 500px;
+        }
+        #gantt-container::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: linear-gradient(180deg, transparent 0%, rgba(139, 92, 246, 0.03) 100%);
+          pointer-events: none;
+          z-index: 0;
+        }
+        
+        /* Timeline metadata styling */
+        #timeline-metadata {
+          border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+        #timeline-metadata > div > div > div:first-child {
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          font-size: 0.75em;
+        }
       </style>
     </section>
 
@@ -1661,6 +1753,7 @@
       window.renderTimeline = renderTimeline;
       const scen = window.getScenario(letter);
       const body = document.getElementById('tl-body');
+      const ganttContainer = document.getElementById('gantt-chart');
       
       // Safety check - if timeline elements don't exist, skip rendering
       if (!body) {
@@ -1673,8 +1766,87 @@
       );
       if (!scen || !Array.isArray(scen.items) || !scen.items.length) {
         window.setHTML('tl-body','<tr><td colspan="4"><em>Build scenarios in Step 3 to see a timeline.</em></td></tr>');
+        if (ganttContainer) ganttContainer.innerHTML = '';
         return;
       }
+      
+      // Check for intelligent timeline data
+      if (scen.intelligent_timeline && scen.intelligent_timeline.tasks) {
+        // Use intelligent timeline with parallel tracks and dependencies
+        renderIntelligentTimeline(letter, scen);
+      } else {
+        // Fall back to sequential timeline
+        renderSequentialTimeline(letter, scen);
+      }
+      
+      enableTimelineDnD(letter);
+    }
+    
+    // New function for intelligent timeline rendering
+    function renderIntelligentTimeline(letter, scen) {
+      const body = document.getElementById('tl-body');
+      const ganttContainer = document.getElementById('gantt-chart');
+      const timeline = scen.intelligent_timeline;
+      
+      // Group tasks by workstream for parallel visualization
+      const workstreams = {};
+      timeline.tasks.forEach(task => {
+        const stream = task.workstream || 'General';
+        if (!workstreams[stream]) workstreams[stream] = [];
+        workstreams[stream].push(task);
+      });
+      
+      // Create table rows with workstream grouping
+      let rows = '';
+      Object.keys(workstreams).sort().forEach(stream => {
+        const streamTasks = workstreams[stream];
+        streamTasks.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+        
+        rows += `<tr class="workstream-header">
+          <td colspan="4"><strong>${stream}</strong></td>
+        </tr>`;
+        
+        streamTasks.forEach(task => {
+          const start = new Date(task.start_date);
+          const end = new Date(task.end_date);
+          const duration = task.duration_days || businessDaysInclusive(start, end);
+          const phase = task.phase || 'Execution';
+          const isRetainer = task.is_retainer || false;
+          const isMilestone = task.is_milestone || false;
+          const criticalPath = task.critical_path || false;
+          
+          const rowClass = [
+            'tl-row',
+            isRetainer ? 'retainer-task' : '',
+            isMilestone ? 'milestone-task' : '',
+            criticalPath ? 'critical-path' : ''
+          ].filter(Boolean).join(' ');
+          
+          rows += `<tr class="${rowClass}" data-dcode="${task.deliverable_code}" data-task-id="${task.id}">
+            <td>${task.name || task.deliverable_name}${isRetainer ? ' 🔄' : ''}${isMilestone ? ' 🎯' : ''}</td>
+            <td>${task.start_date}</td>
+            <td>${task.end_date}</td>
+            <td>${duration}${isRetainer ? ' (recurring)' : ''}</td>
+          </tr>`;
+        });
+      });
+      
+      window.setHTML('tl-body', rows);
+      
+      // Render Gantt chart if container exists
+      if (ganttContainer && timeline.gantt_data) {
+        renderGanttChart(ganttContainer, timeline.gantt_data, timeline.metadata);
+      }
+      
+      // Show AI reasoning if available
+      if (timeline.reasoning) {
+        displayTimelineReasoning(timeline.reasoning);
+      }
+    }
+    
+    // Fallback sequential timeline rendering
+    function renderSequentialTimeline(letter, scen) {
+      const body = document.getElementById('tl-body');
       
       // Get project start date for business day calculation
       const projectStart = scen.project_start || new Date().toISOString().split('T')[0];
@@ -1704,7 +1876,6 @@
         </tr>`;
       }).join('');
       window.setHTML('tl-body', rows);
-      enableTimelineDnD(letter);
     }
 
     // ——— drag & drop wiring ———
@@ -1826,6 +1997,35 @@
       const btnAiOptimize = document.getElementById('btn-ai-optimize-pricing');
       if (btnAiOptimize) btnAiOptimize.onclick = optimizeAllPricing;
       
+      // Wire up Generate AI Timeline button
+      const btnGenerateTimeline = document.getElementById('btn-generate-timeline');
+      if (btnGenerateTimeline) {
+        btnGenerateTimeline.onclick = () => {
+          const letter = document.querySelector('[data-timeline-sel].active')?.dataset?.timelineSel || 'A';
+          generateIntelligentTimeline(letter);
+        };
+      }
+      
+      // Wire up AI Reasoning toggle button
+      const btnToggleReasoning = document.getElementById('btn-toggle-reasoning');
+      if (btnToggleReasoning) {
+        btnToggleReasoning.onclick = () => {
+          const panel = document.getElementById('ai-reasoning-panel');
+          if (panel) {
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+          }
+        };
+      }
+      
+      // Wire up Gantt view mode selector
+      const ganttViewMode = document.getElementById('gantt-view-mode');
+      if (ganttViewMode) {
+        ganttViewMode.onchange = () => {
+          const letter = document.querySelector('[data-timeline-sel].active')?.dataset?.timelineSel || 'A';
+          renderTimeline(letter);
+        };
+      }
+      
       // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
     });
     
@@ -1921,6 +2121,167 @@
       return retainers;
     }
 
+    // Helper function to render Gantt chart using Frappe Gantt
+    function renderGanttChart(container, ganttData, metadata) {
+      if (!ganttData || !ganttData.length) {
+        container.innerHTML = '<p>No Gantt data available</p>';
+        return;
+      }
+      
+      // Clear container
+      container.innerHTML = '';
+      
+      // Create Gantt chart
+      if (typeof Gantt !== 'undefined') {
+        try {
+          const gantt = new Gantt(container, ganttData, {
+            view_mode: metadata?.view_mode || 'Week',
+            date_format: 'YYYY-MM-DD',
+            custom_popup_html: function(task) {
+              return `
+                <div class="details-container">
+                  <h5>${task.name}</h5>
+                  <p>Start: ${task.start}</p>
+                  <p>End: ${task.end}</p>
+                  <p>Duration: ${task.duration} days</p>
+                  ${task.dependencies ? `<p>Dependencies: ${task.dependencies}</p>` : ''}
+                  ${task.workstream ? `<p>Workstream: ${task.workstream}</p>` : ''}
+                </div>
+              `;
+            }
+          });
+        } catch (e) {
+          console.error('Error rendering Gantt chart:', e);
+          container.innerHTML = '<p>Error rendering Gantt chart</p>';
+        }
+      } else {
+        container.innerHTML = '<p>Gantt library not loaded</p>';
+      }
+    }
+    
+    // Helper function to display timeline reasoning
+    function displayTimelineReasoning(reasoning) {
+      const reasoningContainer = document.getElementById('timeline-reasoning');
+      if (!reasoningContainer) return;
+      
+      let html = '<div class="reasoning-panel">';
+      html += '<h4>AI Timeline Analysis</h4>';
+      
+      if (reasoning.phases) {
+        html += '<div class="phases-section"><h5>Project Phases</h5><ul>';
+        reasoning.phases.forEach(phase => {
+          html += `<li><strong>${phase.name}</strong>: ${phase.description}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      if (reasoning.dependencies) {
+        html += '<div class="dependencies-section"><h5>Key Dependencies</h5><ul>';
+        reasoning.dependencies.forEach(dep => {
+          html += `<li>${dep}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      if (reasoning.parallel_opportunities) {
+        html += '<div class="parallel-section"><h5>Parallel Work Opportunities</h5><ul>';
+        reasoning.parallel_opportunities.forEach(opp => {
+          html += `<li>${opp}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      if (reasoning.critical_path) {
+        html += '<div class="critical-path-section"><h5>Critical Path</h5>';
+        html += `<p>${reasoning.critical_path}</p></div>`;
+      }
+      
+      if (reasoning.risks) {
+        html += '<div class="risks-section"><h5>Risk Areas</h5><ul>';
+        reasoning.risks.forEach(risk => {
+          html += `<li>${risk}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      html += '</div>';
+      reasoningContainer.innerHTML = html;
+      reasoningContainer.style.display = 'block';
+    }
+    
+    // Function to generate intelligent timeline
+    async function generateIntelligentTimeline(letter = 'A') {
+      const scen = window.getScenario(letter);
+      if (!scen || !scen.items || !scen.items.length) {
+        alert('Please build scenarios first in Step 3');
+        return;
+      }
+      
+      const btn = document.getElementById('btn-ai-timeline');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Generating Intelligent Timeline...';
+      }
+      
+      try {
+        // Prepare deliverables for timeline generation
+        const deliverables = scen.items.map(item => ({
+          deliverable_code: item.deliverable_code,
+          deliverable_name: item.deliverable || item.deliverable_name,
+          department: item.department || item['Service Department'] || 'Strategy',
+          total_hours: item.hours || item.total_hours || 0,
+          components: item.components || [],
+          is_retainer: item.is_retainer || false,
+          retainer_months: item.retainer_months || 0
+        }));
+        
+        const response = await fetch('/api/ai/generate_timeline', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deliverables: deliverables,
+            rfp_text: window.APB?.step2?.rfpText || '',
+            project_start: scen.project_start,
+            optimization_mode: 'balanced',
+            use_intelligent_scheduler: true
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to generate timeline');
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          // Store the intelligent timeline in the scenario
+          scen.intelligent_timeline = result;
+          window.appState.scenarios[letter] = scen;
+          
+          // Re-render the timeline with new data
+          renderTimeline(letter);
+          
+          // Show success message
+          if (btn) {
+            btn.textContent = '✓ Intelligent Timeline Generated';
+            setTimeout(() => {
+              btn.textContent = '🤖 Generate Intelligent Timeline';
+              btn.disabled = false;
+            }, 3000);
+          }
+        } else {
+          throw new Error(result.error || 'Timeline generation failed');
+        }
+        
+      } catch (error) {
+        alert('Error generating timeline: ' + error.message);
+        if (btn) {
+          btn.textContent = '🤖 Generate Intelligent Timeline';
+          btn.disabled = false;
+        }
+      }
+    }
+    
     // Initialize
     loadOptions();
   </script>
