@@ -601,7 +601,7 @@ function updatePricingCalculations() {
   updatePricingSummary();
 }
 
-// Update pricing table with current scenario data
+// Update pricing table with current scenario data - FULLY ENHANCED VERSION
 function updatePricingTable() {
   const tbody = document.getElementById('pricing-tbody');
   if (!tbody || !SCENARIOS) return;
@@ -624,7 +624,7 @@ function updatePricingTable() {
     const isRetainer = (delivType === 'RETAINER');
     
     // Get custom values or defaults
-    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours;
+    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
     const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
     const cost = customHours * customRate;
     
@@ -632,38 +632,48 @@ function updatePricingTable() {
     const resources = pricingData.resourceBreakdown.get(item.deliverable_code) || 
                      extractResourceAllocation(item);
     
-    // Main deliverable row with expand button
+    // Main deliverable row with expand button - FULLY EDITABLE
     html += `
-      <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);" data-deliverable="${item.deliverable_code}">
-        <td style="padding: 12px; font-weight: 500;">
+      <tr style="border-bottom: 2px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.02);" data-deliverable="${item.deliverable_code}">
+        <td style="padding: 12px; font-weight: 600;">
           <button onclick="toggleDeliverableExpand('${item.deliverable_code}')" 
-                  style="background: transparent; border: none; color: var(--text); cursor: pointer; padding: 0 8px 0 0;">
-            <span id="expand-${item.deliverable_code}">▼</span>
+                  style="background: transparent; border: none; color: var(--text); cursor: pointer; padding: 0 8px 0 0; font-size: 1.1em;"
+                  title="Click to expand/collapse components">
+            <span id="expand-${item.deliverable_code}">▶</span>
           </button>
           ${item.deliverable}
         </td>
         <td style="padding: 8px; text-align: center;">
           <select onchange="updateDeliverableType('${item.deliverable_code}', this.value)" 
-                  style="padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text);">
+                  style="padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); cursor: pointer;">
             <option value="PROJECT" ${!isRetainer ? 'selected' : ''}>PROJECT</option>
             <option value="RETAINER" ${isRetainer ? 'selected' : ''}>RETAINER</option>
           </select>
         </td>
         <td style="padding: 8px; text-align: center;">
           <input type="number" value="${customHours}" 
+                 min="0" step="0.5"
                  onchange="updateCustomHours('${item.deliverable_code}', this.value)"
-                 style="width: 70px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center;" />
-          ${isRetainer ? '<small style="color: var(--muted); display: block;">/month</small>' : ''}
+                 oninput="updatePricingCalculations()"
+                 style="width: 80px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-weight: 500;" />
+          ${isRetainer ? '<small style="color: var(--accent2); display: block; margin-top: 2px;">/month</small>' : ''}
         </td>
         <td style="padding: 8px; text-align: center;">
-          <input type="number" value="${customRate}" 
-                 onchange="updateCustomRate('${item.deliverable_code}', this.value)"
-                 style="width: 70px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center;" />
+          <div style="display: flex; align-items: center; gap: 2px;">
+            <span style="color: var(--muted);">$</span>
+            <input type="number" value="${customRate}" 
+                   min="0" step="5"
+                   onchange="updateCustomRate('${item.deliverable_code}', this.value)"
+                   oninput="updatePricingCalculations()"
+                   style="width: 70px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-weight: 500;" />
+          </div>
         </td>
-        <td style="padding: 8px; text-align: right; font-weight: 500; color: var(--accent);">
-          ${isRetainer ? 
-            `<div>$${cost.toLocaleString()}/mo</div><small style="color: var(--muted);">($${(cost * 12).toLocaleString()}/yr)</small>` : 
-            `$${cost.toLocaleString()}`}
+        <td style="padding: 8px; text-align: right; font-weight: 600;">
+          <div id="cost-${item.deliverable_code}" style="color: ${isRetainer ? 'var(--accent2)' : 'var(--accent)'};">
+            ${isRetainer ? 
+              `<div>$${cost.toLocaleString()}/mo</div><small style="color: var(--muted);">($${(cost * 12).toLocaleString()}/yr)</small>` : 
+              `$${cost.toLocaleString()}`}
+          </div>
         </td>
         <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
           ${formatResourceDisplay(resources)}
@@ -671,10 +681,10 @@ function updatePricingTable() {
       </tr>
     `;
     
-    // Component rows (initially hidden)
+    // Component rows (initially hidden) - FULLY EDITABLE
     if (item.components && item.components.length > 0) {
       item.components.forEach(comp => {
-        const compKey = `${item.deliverable_code}_${comp.name}`;
+        const compKey = `${item.deliverable_code}::${comp.name}`;
         const compType = pricingData.deliverableTypes.get(compKey) || delivType; // Inherit parent type
         const compIsRetainer = (compType === 'RETAINER');
         const compCustomHours = pricingData.customHours.get(compKey) || comp.hours || 0;
@@ -683,33 +693,46 @@ function updatePricingTable() {
         const compResources = extractComponentResources(comp);
         
         html += `
-          <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); display: none;" 
+          <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); display: none; background: rgba(255,255,255,0.01);" 
               class="component-row-${item.deliverable_code}">
-            <td style="padding: 8px 8px 8px 48px; color: var(--muted); font-size: 0.9em;">
+            <td style="padding: 10px 8px 10px 48px; color: var(--text); font-size: 0.9em;">
+              <button onclick="toggleComponentExpand('${item.deliverable_code}', '${comp.name}')" 
+                      style="background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 6px 0 0;">
+                <span id="expand-comp-${item.deliverable_code}-${comp.name.replace(/\s+/g, '_')}">▶</span>
+              </button>
               ↳ ${comp.name}
             </td>
             <td style="padding: 8px; text-align: center;">
               <select onchange="updateDeliverableType('${compKey}', this.value)" 
-                      style="padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); font-size: 0.85em;">
+                      style="padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); font-size: 0.9em; cursor: pointer;">
                 <option value="PROJECT" ${!compIsRetainer ? 'selected' : ''}>PROJECT</option>
                 <option value="RETAINER" ${compIsRetainer ? 'selected' : ''}>RETAINER</option>
               </select>
             </td>
             <td style="padding: 8px; text-align: center;">
               <input type="number" value="${compCustomHours}" 
+                     min="0" step="0.5"
                      onchange="updateCustomHours('${compKey}', this.value)"
-                     style="width: 60px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
-              ${compIsRetainer ? '<small style="color: var(--muted); display: block; font-size: 0.75em;">/mo</small>' : ''}
+                     oninput="updatePricingCalculations()"
+                     style="width: 70px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
+              ${compIsRetainer ? '<small style="color: var(--accent2); display: block; font-size: 0.75em; margin-top: 2px;">/mo</small>' : ''}
             </td>
             <td style="padding: 8px; text-align: center;">
-              <input type="number" value="${compCustomRate}" 
-                     onchange="updateCustomRate('${compKey}', this.value)"
-                     style="width: 60px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
+              <div style="display: flex; align-items: center; gap: 2px;">
+                <span style="color: var(--muted); font-size: 0.9em;">$</span>
+                <input type="number" value="${compCustomRate}" 
+                       min="0" step="5"
+                       onchange="updateCustomRate('${compKey}', this.value)"
+                       oninput="updatePricingCalculations()"
+                       style="width: 60px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
+              </div>
             </td>
             <td style="padding: 8px; text-align: right; font-size: 0.9em;">
-              ${compIsRetainer ? 
-                `<div>$${compCost.toLocaleString()}/mo</div><small style="color: var(--muted); font-size: 0.8em;">($${(compCost * 12).toLocaleString()}/yr)</small>` : 
-                `$${compCost.toLocaleString()}`}
+              <div id="cost-${compKey.replace(/[::]/g, '_')}" style="color: ${compIsRetainer ? 'var(--accent2)' : 'var(--accent)'};">
+                ${compIsRetainer ? 
+                  `<div>$${compCost.toLocaleString()}/mo</div><small style="color: var(--muted); font-size: 0.8em;">($${(compCost * 12).toLocaleString()}/yr)</small>` : 
+                  `$${compCost.toLocaleString()}`}
+              </div>
             </td>
             <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
               ${formatResourceDisplay(compResources)}
@@ -717,23 +740,32 @@ function updatePricingTable() {
           </tr>
         `;
         
-        // Show L2 tasks if available
+        // Show L3 tasks if available (read-only)
         if (comp.tasks && comp.tasks.length > 0) {
           comp.tasks.forEach(task => {
+            const taskHours = task.hours || 0;
+            const taskCost = taskHours * compCustomRate;
+            
             html += `
               <tr style="border-bottom: 1px solid rgba(255,255,255,0.03); display: none;" 
-                  class="task-row-${item.deliverable_code}">
-                <td style="padding: 6px 8px 6px 64px; color: var(--muted); font-size: 0.8em;">
+                  class="task-row-${item.deliverable_code} task-row-comp-${item.deliverable_code}-${comp.name.replace(/\s+/g, '_')}">
+                <td style="padding: 6px 8px 6px 72px; color: var(--muted); font-size: 0.8em;">
                   ⤷ ${task.name}
                 </td>
-                <td colspan="3" style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
-                  ${task.hours || 0} hours
+                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
+                  -
+                </td>
+                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
+                  ${taskHours}h
+                </td>
+                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
+                  -
                 </td>
                 <td style="padding: 6px; text-align: right; font-size: 0.8em; color: var(--muted);">
-                  $${((task.hours || 0) * compCustomRate).toLocaleString()}
+                  $${taskCost.toLocaleString()}
                 </td>
                 <td style="padding: 6px; font-size: 0.7em; color: var(--muted);">
-                  ${task.role || ''}
+                  ${task.role || 'Team'}
                 </td>
               </tr>
             `;
@@ -748,12 +780,33 @@ function updatePricingTable() {
     } else {
       oneTimeTotal += cost;
     }
+    
+    // Also add component costs to totals
+    if (item.components && item.components.length > 0) {
+      item.components.forEach(comp => {
+        const compKey = `${item.deliverable_code}::${comp.name}`;
+        const compType = pricingData.deliverableTypes.get(compKey) || delivType;
+        const compIsRetainer = (compType === 'RETAINER');
+        const compHours = pricingData.customHours.get(compKey) || comp.hours || 0;
+        const compRate = pricingData.customRates.get(compKey) || comp.rate || customRate;
+        const compCost = compHours * compRate;
+        
+        if (compIsRetainer) {
+          retainerMonthlyTotal += compCost;
+        } else {
+          oneTimeTotal += compCost;
+        }
+      });
+    }
   });
   
   tbody.innerHTML = html;
+  
+  // Update summary automatically
+  updatePricingSummary();
 }
 
-// Update pricing summary panels
+// Update pricing summary panels - FIXED CALCULATION VERSION
 function updatePricingSummary() {
   if (!SCENARIOS) return;
   
@@ -791,10 +844,10 @@ function updatePricingSummary() {
       projectItemsList.push(item.deliverable);
     }
     
-    // Also count components
+    // Also count components (FIXED KEY FORMAT)
     if (item.components && item.components.length > 0) {
       item.components.forEach(comp => {
-        const compKey = `${item.deliverable_code}_${comp.name}`;
+        const compKey = `${item.deliverable_code}::${comp.name}`;  // Fixed to use :: separator
         const compType = pricingData.deliverableTypes.get(compKey) || delivType;
         const compIsRetainer = (compType === 'RETAINER');
         const compHours = pricingData.customHours.get(compKey) || comp.hours || 0;
@@ -819,7 +872,7 @@ function updatePricingSummary() {
   
   if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
   if (oneTimeHoursEl) oneTimeHoursEl.textContent = oneTimeHours.toFixed(1);
-  if (oneTimeCostEl) oneTimeCostEl.textContent = `$${oneTimeCost.toLocaleString()}`;
+  if (oneTimeCostEl) oneTimeCostEl.textContent = `$${Math.round(oneTimeCost).toLocaleString()}`;
   
   // Update Retainer Summary
   const retainerCountEl = document.getElementById('retainer-count');
@@ -829,8 +882,8 @@ function updatePricingSummary() {
   
   if (retainerCountEl) retainerCountEl.textContent = retainerCount;
   if (retainerHoursEl) retainerHoursEl.textContent = retainerMonthlyHours.toFixed(1);
-  if (retainerCostEl) retainerCostEl.textContent = `$${retainerMonthlyCost.toLocaleString()}`;
-  if (retainerAnnualEl) retainerAnnualEl.textContent = `$${(retainerMonthlyCost * 12).toLocaleString()}`;
+  if (retainerCostEl) retainerCostEl.textContent = `$${Math.round(retainerMonthlyCost).toLocaleString()}`;
+  if (retainerAnnualEl) retainerAnnualEl.textContent = `$${Math.round(retainerMonthlyCost * 12).toLocaleString()}`;
   
   // Update Retainer Items List
   const retainerListEl = document.getElementById('retainer-items-list');
@@ -849,11 +902,15 @@ function updatePricingSummary() {
   const grandTotalEl = document.getElementById('grand-total-cost');
   const grandBreakdownEl = document.getElementById('grand-total-breakdown');
   
-  if (grandTotalEl) grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
+  if (grandTotalEl) grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
   if (grandBreakdownEl) {
-    grandBreakdownEl.textContent = retainerCount > 0 
-      ? `One-time ($${oneTimeCost.toLocaleString()}) + 12 months retainer ($${(retainerMonthlyCost * 12).toLocaleString()})`
-      : 'One-time project cost';
+    if (retainerCount > 0 && oneTimeCount > 0) {
+      grandBreakdownEl.textContent = `One-time ($${Math.round(oneTimeCost).toLocaleString()}) + 12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
+    } else if (retainerCount > 0) {
+      grandBreakdownEl.textContent = `12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
+    } else {
+      grandBreakdownEl.textContent = 'One-time project cost';
+    }
   }
 }
 
@@ -927,14 +984,34 @@ function toggleDeliverableExpand(deliverableCode) {
   const componentRows = document.querySelectorAll(`.component-row-${deliverableCode}`);
   const taskRows = document.querySelectorAll(`.task-row-${deliverableCode}`);
   
-  if (expandIcon.textContent === '▼') {
-    expandIcon.textContent = '▶';
-    componentRows.forEach(row => row.style.display = 'none');
-    taskRows.forEach(row => row.style.display = 'none');
-  } else {
+  if (expandIcon.textContent === '▶') {
     expandIcon.textContent = '▼';
     componentRows.forEach(row => row.style.display = '');
     // Tasks remain hidden until component is expanded
+  } else {
+    expandIcon.textContent = '▶';
+    componentRows.forEach(row => row.style.display = 'none');
+    taskRows.forEach(row => row.style.display = 'none');
+    // Reset all component expand icons
+    componentRows.forEach(row => {
+      const compButton = row.querySelector('span[id^="expand-comp-"]');
+      if (compButton) compButton.textContent = '▶';
+    });
+  }
+}
+
+// Toggle component expansion to show/hide tasks
+function toggleComponentExpand(deliverableCode, componentName) {
+  const safeCompName = componentName.replace(/\s+/g, '_');
+  const expandIcon = document.getElementById(`expand-comp-${deliverableCode}-${safeCompName}`);
+  const taskRows = document.querySelectorAll(`.task-row-comp-${deliverableCode}-${safeCompName}`);
+  
+  if (expandIcon.textContent === '▶') {
+    expandIcon.textContent = '▼';
+    taskRows.forEach(row => row.style.display = '');
+  } else {
+    expandIcon.textContent = '▶';
+    taskRows.forEach(row => row.style.display = 'none');
   }
 }
 
@@ -958,18 +1035,38 @@ function updateCustomRate(deliverableCode, rate) {
   updatePricingCalculations();
 }
 
-// Analyze PROJECT vs RETAINER with AI
+// Analyze PROJECT vs RETAINER with AI - FIXED VERSION
 async function analyzeProjectRetainer() {
-  const rfpText = document.getElementById('rfpText')?.value || 
-                  sessionStorage.getItem('rfp_text') || '';
+  // Try multiple sources for RFP text
+  let rfpText = '';
+  
+  // First try from textarea if still visible
+  const rfpTextarea = document.getElementById('rfpText');
+  if (rfpTextarea) rfpText = rfpTextarea.value;
+  
+  // If empty, try from sessionStorage (using correct key)
+  if (!rfpText) rfpText = sessionStorage.getItem('apb.rfp_text') || sessionStorage.getItem('rfp_text') || '';
+  
+  // If empty, try from APB.step2
+  if (!rfpText && window.APB && window.APB.step2) {
+    rfpText = window.APB.step2.rfpText || '';
+  }
+  
+  // If empty, try from app.state (if stored during analysis)
+  if (!rfpText && window.appState && window.appState.rfpText) {
+    rfpText = window.appState.rfpText || '';
+  }
   
   if (!rfpText) {
-    alert('Please upload an RFP in Step 1 first to analyze project types.');
-    return;
+    console.warn('No RFP text found in any storage location');
+    // Instead of failing, use a generic analysis based on deliverable names
+    const useGenericAnalysis = confirm('No RFP text found. Would you like to analyze based on deliverable names only?');
+    if (!useGenericAnalysis) return;
+    rfpText = 'Analyze based on deliverable names only';
   }
   
   if (!SCENARIOS || !SCENARIOS.A) {
-    alert('Please build a scenario first.');
+    alert('Please build a scenario first (click Build Scenario button).');
     return;
   }
   
@@ -996,7 +1093,8 @@ async function analyzeProjectRetainer() {
     });
     
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
     
     const result = await response.json();
@@ -1011,7 +1109,7 @@ async function analyzeProjectRetainer() {
         const item = scenario.items.find(i => i.deliverable_code === code);
         if (item && item.components) {
           item.components.forEach(comp => {
-            const compKey = `${code}_${comp.name}`;
+            const compKey = `${code}::${comp.name}`;
             if (!pricingData.deliverableTypes.has(compKey)) {
               pricingData.deliverableTypes.set(compKey, suggestion.type);
             }
@@ -1026,18 +1124,86 @@ async function analyzeProjectRetainer() {
       const projectCount = Object.values(result.suggestions).filter(s => s.type === 'PROJECT').length;
       const retainerCount = Object.values(result.suggestions).filter(s => s.type === 'RETAINER').length;
       
-      alert(`AI Analysis Complete!\n\n` +
-            `✅ ${projectCount} deliverables marked as PROJECT\n` +
-            `🔄 ${retainerCount} deliverables marked as RETAINER\n\n` +
-            `Method: ${result.method === 'ai' ? 'GPT-4 Analysis' : 'Heuristic Analysis'}`);
+      alert(`✨ AI Analysis Complete!\n\n` +
+            `📦 ${projectCount} deliverables marked as PROJECT (one-time)\n` +
+            `🔄 ${retainerCount} deliverables marked as RETAINER (monthly)\n\n` +
+            `Analysis Method: ${result.method === 'ai' ? 'GPT-4 Analysis' : 'Smart Heuristics'}`);
     }
   } catch (error) {
     console.error('Error analyzing project/retainer types:', error);
-    alert('Error analyzing deliverable types. Please try again.');
+    alert('Error analyzing deliverable types: ' + error.message);
   } finally {
     if (btn) {
       btn.disabled = false;
       btn.textContent = '🤖 AI Suggest Type';
+    }
+  }
+}
+
+// Update Pricing Function - saves all changes and recalculates
+async function updatePricing() {
+  if (!SCENARIOS || !SCENARIOS.A) {
+    alert('No scenario to update. Please build a scenario first.');
+    return;
+  }
+  
+  const btn = document.getElementById('btn-update-pricing');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '🔄 Updating...';
+  }
+  
+  try {
+    // Recalculate all totals
+    updatePricingCalculations();
+    
+    // Save to scenario
+    const scenario = SCENARIOS.A;
+    scenario.items.forEach(item => {
+      const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
+      const customHours = pricingData.customHours.get(item.deliverable_code);
+      const customRate = pricingData.customRates.get(item.deliverable_code);
+      
+      if (customHours !== undefined) item.hours = customHours;
+      if (customRate !== undefined) item.blended_rate = customRate;
+      item.price = (item.hours || 0) * (item.blended_rate || 195);
+      item.is_retainer = (delivType === 'RETAINER');
+      
+      // Update components
+      if (item.components) {
+        item.components.forEach(comp => {
+          const compKey = `${item.deliverable_code}::${comp.name}`;
+          const compHours = pricingData.customHours.get(compKey);
+          const compRate = pricingData.customRates.get(compKey);
+          
+          if (compHours !== undefined) comp.hours = compHours;
+          if (compRate !== undefined) comp.rate = compRate;
+          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
+        });
+      }
+    });
+    
+    // Update displays
+    updatePricingTable();
+    updatePricingSummary();
+    
+    // Show success message
+    const oneTimeCount = document.getElementById('one-time-count')?.textContent || '0';
+    const retainerCount = document.getElementById('retainer-count')?.textContent || '0';
+    const grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
+    
+    alert(`✅ Pricing Updated Successfully!\n\n` +
+          `📦 One-Time Items: ${oneTimeCount}\n` +
+          `🔄 Retainer Items: ${retainerCount}\n` +
+          `💰 Grand Total: ${grandTotal}`);
+    
+  } catch (error) {
+    console.error('Error updating pricing:', error);
+    alert('Error updating pricing. Please try again.');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '💾 Update Pricing';
     }
   }
 }

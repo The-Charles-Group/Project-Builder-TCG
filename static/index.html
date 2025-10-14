@@ -330,8 +330,12 @@
         </div>
       </div>
 
-      <!-- AI Suggest Type Button -->
-      <div style="margin-bottom: 16px; display: flex; justify-content: flex-end; gap: 12px;">
+      <!-- AI Suggest Type & Update Pricing Buttons -->
+      <div style="margin-bottom: 16px; display: flex; justify-content: space-between;">
+        <button id="btn-update-pricing" onclick="updatePricing()" 
+                style="background: #10b981; color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          💾 Update Pricing
+        </button>
         <button id="btn-ai-suggest-type" onclick="analyzeProjectRetainer()" 
                 style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
           🤖 AI Suggest Type
