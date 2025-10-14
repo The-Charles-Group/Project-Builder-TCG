@@ -1,0 +1,97 @@
+A) L2 Tasks not showing in Step 2 (root cause + fix)
+
+Root causes
+
+The AI endpoint returns l3_by_component (legacy name) while the UI is expecting “L2 tasks.” The data is there, but under the old key, so the L2 widget renders empty.
+
+When you “Apply Smart Selection,” the UI passes no per‑component task filter into the Step‑3 build call. With no filter, the server treats this as “include all tasks in a component,” so Step‑3 shows everything (not just the AI‑picked tasks). This follows the build API’s sentinel/empty-map behavior.
+
+What to change (no code, just wiring)
+
+UI mapping: Treat l3_by_component from /api/step2/ai/suggest as L2 tasks and render them in the third widget. (Optionally, alias to l2_by_component before storing in state.)
+
+Build payload: When the user clicks Apply Selected to Manual Selection, construct selected_components_map with task picks (component → { task_group: hours or null }) instead of sending an empty dict or "__ALL__". This ensures only the AI‑picked tasks flow to Step‑3.
+
+Acceptance check
+
+After Smart Select → Apply: L2 widget lists tasks; Step‑3 shows only those tasks, not all tasks in the selected components.
+
+B) “AI SUGGEST RETAINER ITEMS” – single button
+
+What exists: A consolidated backend route to ask AI which deliverables should be retainers and for how many months:
+POST /api/pricing/retainer_suggest (inputs: deliverable_codes[], rfp_text) → returns suggested_months + reasoning.
+
+Wire it like this
+
+Replace per‑deliverable “retainer suggest” buttons with one button at the top: AI SUGGEST RETAINER ITEMS.
+
+On click, call /api/pricing/retainer_suggest with the currently selected deliverable codes and the cached RFP text. Map the response to the retainer months selector in Step 2 (pre‑fill months and show reasoning tooltip).
+
+(If you also want a “type = PROJECT vs RETAINER” label in the UI, reuse the same suggestions and, if needed, the classification helper included in the build that outputs project/retainer judgments.)
+
+C) Step‑3 Pricing table must be editable and persist to exports
+
+What’s already supported in the backend
+
+The workbook creator and exporter take hours/rates from your scenario and propagate them to Excel/MS Project XML. Rates and prices are carried through (Rate_USD, Price_USD) and price is enforced as Hours × Rate in the export layer.
+
+XML export builds the dataframe from the scenario you send, then converts it; it also pulls rate/pricing fields directly from the scenario rows (“Task 16: Extract Rate_USD and Price_USD from scenario pricing”).
+
+Wire it like this
+
+Make each editable cell update the scenario object in memory (e.g., role hours, blended rate, pricing mode/band, totals).
+
+Use that same scenario object when calling POST /api/export_xml (send scenario + scenario_label + project_name). The exported XML will reflect the edited hours/prices.
+
+Optional sanity check: run POST /api/audit_pricing to compare “expected” vs “shown” prices before export.
+
+D) Buttons that currently “don’t work” — what to connect to
+
+Optimize Pricing → call POST /api/pricing/redistribute-hours. It returns a suggested per‑component hour redistribution with reasoning/confidence—apply back to the table when accepted.
+
+AI Suggest Type → use the single retainer suggest endpoint above to mark deliverables as retainers and months (and/or display PROJECT vs RETAINER labels).
+
+Rebuild Scenario → simply re‑call POST /api/build with the updated selected_components_map, retainers, pricing mode/band, etc. This is the supported way to regenerate Scenario A.
+
+Export Pricing Details → the existing exports include pricing columns. If you need a pricing‑only workbook, call the Excel export you’re already using in Step 5—or reuse the audit produced by the scheduler pipeline where relevant. (Downloads for XML/Gantt/Audit are exposed at /api/schedule/download/{file_type}/{base_name}.)
+
+AI Reasoning (Step 4) → make sure the Step‑4 call sets use_intelligent_scheduler=true and passes rfp_text. The stream/job includes the “AI reasoning” enhancement phase and SSE progress.
+
+E) 500 error on Export XML
+
+Most common causes & guards to add now
+
+Empty or stale scenario (no items). The export endpoint explicitly guards for this—surface the server’s “No build context” message in the UI and block the button until a build has run.
+
+Missing basics in payload (e.g., sheet name, hours/day). UI should provide defaults: sheet_name="Scenario A", hours_per_day=8, and a safe project name (server sanitizes filenames).
+
+If it still throws 500
+Bubble up the X-Export-Stats header + error text from the server to the UI toast; that header is already set on success to help diagnose.
+
+F) Caching/“holding onto past SOW references”
+
+A server‑side clear session route exists (POST /api/clear_session) to reset RFP caches and the per‑session embedding cache; add a “Clear Session” button in Step 1 or Settings for testers.
+
+G) What you’ll see after these fixes (acceptance checklist)
+
+Step 2
+
+Smart Select populates Deliverables, Components, and L2 Tasks (renamed/mapped from l3_by_component).
+
+“AI SUGGEST RETAINER ITEMS” pre‑fills months for selected deliverables; retainer flags are visible immediately.
+
+Clicking Apply Selected to Manual Selection sends a task‑filtered selected_components_map so only chosen tasks reach Step‑3.
+
+Step 3
+
+Pricing table is editable; totals update; Audit Pricing shows deltas (0 if consistent).
+
+Optimize Pricing distributes hours across components with AI reasoning.
+
+Step 4
+
+AI timeline generation shows SSE progress; AI reasoning content appears when rfp_text is given.
+
+Step 5
+
+Export Excel/XML completes without 500s; edited hours/rates appear in the files (pricing = Hours × Rate).
