@@ -10,6 +10,10 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
+import logging
+
+# Configure logging for debugging
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
 def convert_excel_to_mspdi(
@@ -49,13 +53,15 @@ def convert_excel_to_mspdi(
     
     # Read the Excel file
     try:
+        logging.info(f"Reading Excel file: {input_xlsx}, sheet: {sheet_name}")
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
+        logging.info(f"Successfully loaded {len(df)} rows from Excel")
     except Exception as e:
-        print(f"[MSPDI] Error reading Excel file: {e}")
+        logging.error(f"Error reading Excel file: {e}")
         return {"error": str(e), "task_count": 0}
     
     if df.empty:
-        print(f"[MSPDI] Warning: Empty DataFrame from {input_xlsx}")
+        logging.warning(f"Empty DataFrame from {input_xlsx}")
         # Create minimal XML with just project header
         root = create_empty_mspdi_xml(project_name or "Empty Project", fixed_start_iso)
         tree = ET.ElementTree(root)
@@ -104,7 +110,9 @@ def convert_excel_to_mspdi(
     
     # Extract unique roles/resources
     if "Role" in df.columns:
-        unique_roles = df["Role"].dropna().unique()
+        # Ensure we're working with a pandas Series, not a numpy array
+        role_series = df["Role"] if isinstance(df["Role"], pd.Series) else pd.Series(df["Role"])
+        unique_roles = role_series.dropna().unique()
         for role in unique_roles:
             res = ET.SubElement(resources, "{%s}Resource" % ns)
             ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
@@ -149,7 +157,12 @@ def convert_excel_to_mspdi(
     
     # Group by deliverable to create hierarchy
     if "Deliverable" in df.columns:
-        grouped = df.groupby("Deliverable", sort=False)
+        logging.info("Processing tasks grouped by deliverable")
+        try:
+            grouped = df.groupby("Deliverable", sort=False)
+        except Exception as e:
+            logging.error(f"Error grouping by deliverable: {e}")
+            grouped = []
         
         for deliverable_name, group in grouped:
             # Create deliverable summary task
@@ -173,49 +186,66 @@ def convert_excel_to_mspdi(
             deliverable_finish = current_date
             
             for idx, row in group.iterrows():
-                task = ET.SubElement(tasks, "{%s}Task" % ns)
-                uid = task_uid
-                task_uid += 1
-                
-                # Get task details
-                task_name = row.get("Task_Name", row.get("Component", f"Task {uid}"))
-                hours = float(row.get("Planned_Hours", row.get("Hours", 8)))
-                duration_days = max(1, int(np.ceil(hours / hours_per_day)))
-                
-                # Calculate dates
-                task_start = current_date
-                task_end = add_business_days(task_start, duration_days)
-                
-                # Add task elements
-                ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
-                ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
-                ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
-                ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
-                ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-                ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliv_uid}.{uid - deliv_uid}"
-                ET.SubElement(task, "{%s}OutlineLevel" % ns).text = "2"
-                ET.SubElement(task, "{%s}Priority" % ns).text = "500"
-                ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
-                ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
-                ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{int(hours * 60)}M"
-                ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
-                ET.SubElement(task, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
-                ET.SubElement(task, "{%s}Summary" % ns).text = "0"
-                ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"
-                
-                # Add cost if available
-                if "Price_USD" in row and pd.notna(row["Price_USD"]):
-                    ET.SubElement(task, "{%s}Cost" % ns).text = str(float(row["Price_USD"]))
-                    ET.SubElement(task, "{%s}FixedCost" % ns).text = str(float(row["Price_USD"]))
-                
-                # Track deliverable finish date
-                if task_end > deliverable_finish:
-                    deliverable_finish = task_end
-                
-                # Update current date for next task
-                current_date = task_end
-                
-                task_map[uid] = task
+                try:
+                    task = ET.SubElement(tasks, "{%s}Task" % ns)
+                    uid = task_uid
+                    task_uid += 1
+                    
+                    # Get task details
+                    task_name = row.get("Task_Name", row.get("Component", f"Task {uid}"))
+                    # Safely get hours with null checking
+                    planned_hours = row.get("Planned_Hours")
+                    if pd.isna(planned_hours) or planned_hours is None:
+                        planned_hours = row.get("Hours", 8)
+                    if pd.isna(planned_hours) or planned_hours is None:
+                        planned_hours = 8
+                    hours = float(planned_hours)
+                    duration_days = max(1, int(np.ceil(hours / hours_per_day)))
+                    
+                    # Calculate dates
+                    task_start = current_date
+                    task_end = add_business_days(task_start, duration_days)
+                    
+                    # Add task elements
+                    ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
+                    ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
+                    ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
+                    ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
+                    ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
+                    ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliv_uid}.{uid - deliv_uid}"
+                    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = "2"
+                    ET.SubElement(task, "{%s}Priority" % ns).text = "500"
+                    ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
+                    ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
+                    ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{int(hours * 60)}M"
+                    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
+                    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
+                    ET.SubElement(task, "{%s}Summary" % ns).text = "0"
+                    ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"
+                    
+                    # Add cost if available
+                    price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
+                    if price_usd is not None and pd.notna(price_usd):
+                        try:
+                            price_value = float(price_usd)
+                            ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
+                            ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
+                        except (ValueError, TypeError):
+                            pass  # Skip if price cannot be converted to float
+                    
+                    # Track deliverable finish date
+                    if task_end > deliverable_finish:
+                        deliverable_finish = task_end
+                    
+                    # Update current date for next task
+                    current_date = task_end
+                    
+                    task_map[uid] = task
+                    
+                except Exception as e:
+                    logging.error(f"Error processing task at index {idx}: {e}")
+                    # Skip this task but continue processing
+                    task_uid -= 1  # Decrement to maintain correct count
             
             # Update deliverable summary with calculated duration
             duration_hours = calculate_business_hours(deliverable_start, deliverable_finish)
@@ -249,7 +279,13 @@ def convert_excel_to_mspdi(
             task_uid += 1
             
             task_name = row.get("Task_Name", f"Task {uid}")
-            hours = float(row.get("Planned_Hours", row.get("Hours", 8)))
+            # Safely get hours with null checking
+            planned_hours = row.get("Planned_Hours")
+            if pd.isna(planned_hours) or planned_hours is None:
+                planned_hours = row.get("Hours", 8)
+            if pd.isna(planned_hours) or planned_hours is None:
+                planned_hours = 8
+            hours = float(planned_hours)
             duration_days = max(1, int(np.ceil(hours / hours_per_day)))
             
             task_start = current_date
@@ -280,13 +316,21 @@ def convert_excel_to_mspdi(
     # Create resource assignments
     if "Role" in df.columns:
         for idx, row in df.iterrows():
-            if pd.notna(row.get("Role")):
-                role = str(row["Role"])
+            # Safely get the Role value
+            role_value = row.get("Role") if hasattr(row, 'get') else row["Role"] if "Role" in row.index else None
+            if role_value is not None and pd.notna(role_value):
+                role = str(role_value)
                 if role in resource_map:
                     # Find the corresponding task
                     task_idx = idx + 1  # Adjust for 0-based project task
                     if "Deliverable" in df.columns:
-                        task_idx += len(df["Deliverable"].unique())  # Account for deliverable summary tasks
+                        try:
+                            # Safely get unique deliverables count
+                            deliverable_series = df["Deliverable"] if isinstance(df["Deliverable"], pd.Series) else pd.Series(df["Deliverable"])
+                            unique_deliverables = deliverable_series.dropna().unique()
+                            task_idx += len(unique_deliverables)  # Account for deliverable summary tasks
+                        except Exception:
+                            pass  # If there's an error, just skip the adjustment
                     
                     # Create assignment
                     assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
@@ -295,7 +339,13 @@ def convert_excel_to_mspdi(
                     ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(resource_map[role])
                     ET.SubElement(assign, "{%s}Units" % ns).text = "1"
                     
-                    hours = float(row.get("Planned_Hours", row.get("Hours", 8)))
+                    # Safely get hours with null checking
+                    planned_hours = row.get("Planned_Hours")
+                    if pd.isna(planned_hours) or planned_hours is None:
+                        planned_hours = row.get("Hours", 8)
+                    if pd.isna(planned_hours) or planned_hours is None:
+                        planned_hours = 8
+                    hours = float(planned_hours)
                     ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
                     
                     assignment_uid += 1
@@ -306,18 +356,48 @@ def convert_excel_to_mspdi(
     tree.write(output_xml, encoding="utf-8", xml_declaration=True)
     
     # Return statistics
+    # Calculate deliverable count safely
+    deliverable_count = 0
+    if "Deliverable" in df.columns:
+        try:
+            deliverable_series = df["Deliverable"] if isinstance(df["Deliverable"], pd.Series) else pd.Series(df["Deliverable"])
+            deliverable_count = len(deliverable_series.dropna().unique())
+        except Exception:
+            deliverable_count = 0
+    
+    # Calculate total hours safely
+    total_hours = 0.0
+    if "Planned_Hours" in df.columns:
+        try:
+            total_hours = float(df["Planned_Hours"].dropna().sum())
+        except (ValueError, TypeError):
+            total_hours = 0.0
+    elif "Hours" in df.columns:
+        try:
+            total_hours = float(df["Hours"].dropna().sum())
+        except (ValueError, TypeError):
+            total_hours = 0.0
+    
+    # Calculate total cost safely
+    total_cost = 0.0
+    if "Price_USD" in df.columns:
+        try:
+            total_cost = float(df["Price_USD"].dropna().sum())
+        except (ValueError, TypeError):
+            total_cost = 0.0
+    
     stats = {
         "task_count": task_uid - 1,
         "resource_count": len(resource_map),
         "assignment_count": assignment_uid - 1,
         "project_start": project_start.isoformat(),
         "project_end": current_date.isoformat() if current_date else project_start.isoformat(),
-        "deliverable_count": len(df["Deliverable"].unique()) if "Deliverable" in df.columns else 0,
-        "total_hours": float(df["Planned_Hours"].sum() if "Planned_Hours" in df.columns else df.get("Hours", pd.Series([0])).sum()),
-        "total_cost": float(df["Price_USD"].sum()) if "Price_USD" in df.columns else 0
+        "deliverable_count": deliverable_count,
+        "total_hours": total_hours,
+        "total_cost": total_cost
     }
     
-    print(f"[MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources")
+    logging.info(f"[MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources")
     
     return stats
 
