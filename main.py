@@ -5538,6 +5538,31 @@ def api_export_xml(payload: ExportXMLPayload):
     output_xml = f"{base}.xml"
     
     try:
+        # ISSUE 3 FIX: Add validation before processing
+        if df.empty:
+            raise HTTPException(400, "Cannot export empty scenario. Please build scenario first.")
+        
+        # Ensure required columns exist
+        required_columns = ["Task Name", "WBS ID"]
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise HTTPException(400, f"Missing required columns: {', '.join(missing_columns)}")
+        
+        # Clean data: Handle NaN values
+        df = df.fillna({
+            "Hours": 0,
+            "Rate_USD": 0,
+            "Price_USD": 0,
+            "Role": "Unassigned",
+            "Seniority": "Unspecified"
+        })
+        
+        # Ensure numeric columns are proper types
+        numeric_columns = ["Hours", "Rate_USD", "Price_USD"]
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
         # Write to temporary Excel file
         with pd.ExcelWriter(temp_xlsx, engine="openpyxl") as xw:
             df.to_excel(xw, sheet_name=payload.sheet_name, index=False)
@@ -5555,7 +5580,7 @@ def api_export_xml(payload: ExportXMLPayload):
             fixed_start_iso=project_start_iso,
             hours_per_day=payload.hours_per_day,
             merge_identical_children=False,
-            project_name=payload.project_name,
+            project_name=payload.project_name or project_name,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate")
@@ -5565,6 +5590,10 @@ def api_export_xml(payload: ExportXMLPayload):
         final_xml = output_xml
         if PARALLELIZE_IDENTICAL_NAMES:
             final_xml = post_process_xml(output_xml)
+
+        # Verify the file exists before returning
+        if not os.path.exists(final_xml):
+            raise HTTPException(500, "Failed to generate XML file")
 
         return FileResponse(
             final_xml,

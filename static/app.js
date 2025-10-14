@@ -328,6 +328,7 @@ async function autoDetectRetainers() {
   }
 }
 
+// Ensure retainer functions are globally accessible (ISSUE 2 FIX)
 window.toggleRetainerType = toggleRetainerType;
 window.updateRetainerMonths = updateRetainerMonths;
 window.suggestRetainerConfig = suggestRetainerConfig;
@@ -4047,7 +4048,13 @@ async function applyAllSelectedFromAI() {
 // ISSUE 1 FIX: New function to populate ALL L2 tasks
 async function populateAllL2Tasks() {
   const taskList = document.getElementById('s2-task-list');
-  if (!taskList) return;
+  if (!taskList) {
+    console.error('[L2 TASKS] s2-task-list element not found');
+    return;
+  }
+  
+  // Make sure the element is visible
+  taskList.style.display = 'block';
   
   // Collect all L2 tasks from selectionStore
   const allTasksByDeliverable = new Map();
@@ -4069,11 +4076,12 @@ async function populateAllL2Tasks() {
   // Update header to show total count
   const headerElement = document.getElementById('s2-tasks-active-component');
   if (headerElement) {
-    headerElement.textContent = `All L2 Tasks (${totalTaskCount} selected)`;
+    headerElement.textContent = `${totalTaskCount} L2 Tasks`;
   }
   
   if (allTasksByDeliverable.size === 0) {
     taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L2 tasks selected yet. Apply smart selection to populate tasks.</p>';
+    console.log('[L2 TASKS] No tasks to display');
     return;
   }
   
@@ -4143,6 +4151,7 @@ async function populateAllL2Tasks() {
   `;
   
   taskList.innerHTML = searchAndButtons + tasksHtml;
+  console.log(`[L2 TASKS] Rendered ${totalTaskCount} tasks across ${allTasksByDeliverable.size} deliverables`);
   
   // Add event listeners to checkboxes
   taskList.querySelectorAll('.task-checkbox').forEach(cb => {
