@@ -5969,7 +5969,8 @@ window.renderL3Panel = renderL3Panel;
 // Update summary panel with current selection counts
 function updateStep2Summary() {
   const delivCount = window.step2PickerState?.selected?.size || 0;
-  document.getElementById('s2-summary-deliverables').textContent = delivCount;
+  const delivEl = document.getElementById('s2-summary-deliverables');
+  if (delivEl) delivEl.textContent = delivCount;
   
   // Count total components selected across all deliverables
   let compCount = 0;
@@ -5987,7 +5988,8 @@ function updateStep2Summary() {
       compCount += Object.keys(rawSel).length;
     }
   });
-  document.getElementById('s2-summary-components').textContent = compCount;
+  const compEl = document.getElementById('s2-summary-components');
+  if (compEl) compEl.textContent = compCount;
   
   // Count L3 subtasks
   let l3Count = 0;
@@ -5997,16 +5999,19 @@ function updateStep2Summary() {
       else if (Array.isArray(l3Set)) l3Count += l3Set.length;
     });
   });
-  document.getElementById('s2-summary-l3').textContent = l3Count;
+  const l3El = document.getElementById('s2-summary-l3');
+  if (l3El) l3El.textContent = l3Count;
   
   // Update status message
   const statusEl = document.getElementById('s2-summary-status');
-  if (delivCount === 0) {
-    statusEl.textContent = 'No deliverables selected';
-    statusEl.style.color = 'var(--muted)';
-  } else {
-    statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
-    statusEl.style.color = 'var(--accent)';
+  if (statusEl) {
+    if (delivCount === 0) {
+      statusEl.textContent = 'No deliverables selected';
+      statusEl.style.color = 'var(--muted)';
+    } else {
+      statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
+      statusEl.style.color = 'var(--accent)';
+    }
   }
 }
 
