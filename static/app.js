@@ -4739,15 +4739,22 @@ async function renderTasksPanel(componentKey) {
   }
   
   const tasksHtml = Array.from(availableTasks).map(task => {
-    const isAiRecommended = window.lastAIPlan && isTaskAIRecommended(delivCode, compName, task);
-    const isChecked = selectedTasks.has(task);
+    // FIX: Extract task name if it's an object
+    let taskName = task;
+    if (typeof task === 'object' && task) {
+      taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || String(task);
+    }
+    if (!taskName || taskName === '[object Object]') return ''; // Skip invalid entries
+    
+    const isAiRecommended = window.lastAIPlan && isTaskAIRecommended(delivCode, compName, taskName);
+    const isChecked = selectedTasks.has(taskName);
     const taskColor = isAiRecommended ? '#10b981' : '#6b7280';
     
     return `
       <label style="display: flex; align-items: start; gap: 8px; padding: 8px; border-radius: 4px; cursor: pointer; hover:background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05);">
         <input type="checkbox" 
                class="task-checkbox" 
-               data-task="${task}" 
+               data-task="${taskName}" 
                data-component="${componentKey}"
                ${isChecked ? 'checked' : ''}
                style="margin-top: 2px; cursor: pointer;">
@@ -6417,14 +6424,22 @@ async function renderL3Panel() {
   const allL3 = [];
   
   if (l3Set && l3Set.size > 0) {
-    l3Set.forEach(l3Name => {
-      allL3.push({
-        delivCode: activeDeliv,
-        delivLabel: labelFor(activeDeliv),
-        compName: activeComp,
-        l3Name,
-        key
-      });
+    l3Set.forEach(l3Item => {
+      // FIX: Extract task name if it's an object
+      let l3Name = l3Item;
+      if (typeof l3Item === 'object' && l3Item) {
+        l3Name = l3Item.Task_Label || l3Item.task_label || l3Item.name || l3Item.title || l3Item.label || '';
+      }
+      // Only add valid string names
+      if (l3Name && typeof l3Name === 'string' && l3Name !== '[object Object]') {
+        allL3.push({
+          delivCode: activeDeliv,
+          delivLabel: labelFor(activeDeliv),
+          compName: activeComp,
+          l3Name,
+          key
+        });
+      }
     });
   }
   
