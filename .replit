@@ -97,4 +97,4 @@ externalPort = 8099
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "2", "--loop", "uvloop", "--http", "httptools"]
+run = ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "1", "--loop", "uvloop"]
