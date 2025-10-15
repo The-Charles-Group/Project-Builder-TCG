@@ -1700,6 +1700,126 @@
     // Make it globally accessible
     window.rebuildScenario = rebuildScenario;
 
+    // Function to update pricing display with scenario data
+    function updatePricingDisplay(scenario) {
+      console.log('[PRICING] Updating display with scenario:', scenario);
+      
+      if (!scenario || !scenario.items) {
+        console.error('[PRICING] No scenario items to display');
+        return;
+      }
+      
+      // Clear existing table
+      const tbody = document.getElementById('pricing-tbody');
+      if (!tbody) {
+        console.error('[PRICING] pricing-tbody element not found');
+        return;
+      }
+      tbody.innerHTML = '';
+      
+      // Counters for summary
+      let oneTimeCount = 0, oneTimeHours = 0, oneTimeCost = 0;
+      let retainerCount = 0, retainerMonthlyHours = 0, retainerMonthlyCost = 0;
+      
+      // Process each deliverable
+      scenario.items.forEach((item, idx) => {
+        const isRetainer = item.is_retainer || item.retainer;
+        
+        // Main deliverable row
+        const delivRow = document.createElement('tr');
+        delivRow.style.cssText = 'border-bottom: 1px solid var(--border);';
+        delivRow.innerHTML = `
+          <td style="padding: 10px; font-weight: 500; color: var(--text);">
+            ${item.deliverable || item.deliverable_name || 'Unknown'}
+          </td>
+          <td style="padding: 10px; text-align: center; color: var(--muted);">
+            ${isRetainer ? '🔄 Retainer' : '📦 One-Time'}
+          </td>
+          <td style="padding: 10px; text-align: center; color: var(--text);">
+            ${Math.round(item.total_hours || 0)}
+          </td>
+          <td style="padding: 10px; text-align: center; color: var(--text);">
+            $${Math.round(item.effective_rate || item.blended_rate || scenario.blended_rate || 0)}
+          </td>
+          <td style="padding: 10px; text-align: right; color: var(--accent); font-weight: 500;">
+            $${(item.price || 0).toLocaleString()}
+          </td>
+          <td style="padding: 10px; color: var(--muted); font-size: 0.9em;">
+            ${item.department || '-'}
+          </td>
+        `;
+        tbody.appendChild(delivRow);
+        
+        // Add components if any
+        if (item.components && item.components.length > 0) {
+          item.components.forEach(comp => {
+            const compRow = document.createElement('tr');
+            compRow.style.cssText = 'background: rgba(0,0,0,0.2);';
+            compRow.innerHTML = `
+              <td style="padding: 8px 8px 8px 32px; color: var(--muted); font-size: 0.9em;">
+                └─ ${comp.name || comp.component || 'Component'}
+              </td>
+              <td style="padding: 8px; text-align: center;">-</td>
+              <td style="padding: 8px; text-align: center; color: var(--muted);">
+                ${Math.round(comp.hours || 0)}
+              </td>
+              <td style="padding: 8px; text-align: center;">-</td>
+              <td style="padding: 8px; text-align: right;">-</td>
+              <td style="padding: 8px;">-</td>
+            `;
+            tbody.appendChild(compRow);
+          });
+        }
+        
+        // Update summary counters
+        if (isRetainer) {
+          retainerCount++;
+          retainerMonthlyHours += item.monthly_hours || 0;
+          retainerMonthlyCost += item.monthly_price || 0;
+        } else {
+          oneTimeCount++;
+          oneTimeHours += item.total_hours || 0;
+          oneTimeCost += item.price || 0;
+        }
+      });
+      
+      // Update One-Time summary
+      document.getElementById('one-time-count').textContent = oneTimeCount;
+      document.getElementById('one-time-hours').textContent = Math.round(oneTimeHours);
+      document.getElementById('one-time-cost').textContent = `$${oneTimeCost.toLocaleString()}`;
+      
+      // Update Retainer summary
+      document.getElementById('retainer-count').textContent = retainerCount;
+      document.getElementById('retainer-monthly-hours').textContent = Math.round(retainerMonthlyHours);
+      document.getElementById('retainer-monthly-cost').textContent = `$${retainerMonthlyCost.toLocaleString()}`;
+      const annualRetainerCost = retainerMonthlyCost * 12;
+      document.getElementById('retainer-annual-cost').textContent = `$${annualRetainerCost.toLocaleString()}`;
+      
+      // Calculate and display grand total
+      const grandTotal = oneTimeCost + annualRetainerCost;
+      const grandTotalEl = document.getElementById('grand-total-amount');
+      if (grandTotalEl) {
+        grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
+      }
+      
+      // Update grand total display with duration
+      const grandTotalDisplay = document.getElementById('grand-total-display');
+      if (grandTotalDisplay) {
+        grandTotalDisplay.innerHTML = `
+          <div style="font-size: 2em; font-weight: bold; color: var(--accent); margin-bottom: 8px;">
+            $${grandTotal.toLocaleString()}
+          </div>
+          <div style="color: var(--muted); font-size: 0.9em;">
+            One-time + 12 months retainer
+          </div>
+        `;
+      }
+      
+      console.log('[PRICING] Display updated successfully');
+    }
+    
+    // Make it globally accessible
+    window.updatePricingDisplay = updatePricingDisplay;
 
     // Legacy functions removed - replaced by Stage 2 workflow
 
