@@ -1631,7 +1631,15 @@
         window.SCENARIOS = scenarios;
         console.log('[BUILD] Set window.SCENARIOS:', window.SCENARIOS);
         
-        // FIX #2: Call updateAIButtonStates to update button states (THIS WAS MISSING!)
+        // FIX #2: Update pricing display with the scenario data
+        if (typeof updatePricingDisplay === 'function' && scenarios.A) {
+          updatePricingDisplay(scenarios.A);
+          console.log('[BUILD] Updated pricing display with scenario A');
+        } else {
+          console.warn('[BUILD] updatePricingDisplay function not found or no scenario A');
+        }
+        
+        // FIX #3: Call updateAIButtonStates to update button states (THIS WAS MISSING!)
         if (typeof updateAIButtonStates === 'function') {
           updateAIButtonStates();
           console.log('[BUILD] Called updateAIButtonStates()');
