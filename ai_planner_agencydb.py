@@ -723,6 +723,28 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
             # Wait before polling again
             await asyncio.sleep(1.0)
 
+def is_universal_deliverable(title: str) -> bool:
+    """Check if a deliverable is universal (required for all projects)"""
+    if not title:
+        return False
+    title_lower = title.lower()
+    universal_patterns = [
+        'project kickoff',
+        'kickoff meeting',
+        'status meeting',
+        'weekly status',
+        'project management',
+        'project planning',
+        'stakeholder meeting',
+        'review meeting',
+        'weekly check-in',
+        'project setup',
+        'team alignment',
+        'project close',
+        'final presentation'
+    ]
+    return any(pattern in title_lower for pattern in universal_patterns)
+
 async def _process_single_chunk_async(block: List[Dict[str, Any]], chunk_num: int, total_chunks: int, summary: Dict[str, Any], 
                                       request_text: str, schema: dict, job_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Process a single chunk asynchronously for parallel processing"""
@@ -762,7 +784,19 @@ For TASKS, set select=true ONLY if specifically needed."""},
         r = await asyncio.to_thread(chat_json_schema, messages, schema, max_completion_tokens=8192)
         if r and r.get("items"):
             print(f"[LLM Re-score] Chunk {chunk_num}/{total_chunks} succeeded with {len(r.get('items', []))} items")
-            return r.get("items", [])
+            # Boost universal deliverables to ensure they score high
+            items = r.get("items", [])
+            for item in items:
+                for c in block:
+                    if c["id"] == item.get("id") and c["level"] == "deliverable":
+                        if is_universal_deliverable(c.get("title", "")):
+                            # Universal deliverables should score 90-100%
+                            item["relevance"] = max(item.get("relevance", 0), 92)
+                            item["confidence"] = max(item.get("confidence", 0), 0.95)
+                            item["select"] = True
+                            item["why"] = "Universal deliverable - required for all projects"
+                            print(f"[UNIVERSAL BOOST] {c['title']} boosted to 92% relevance")
+            return items
         else:
             raise Exception("Empty response from GPT-5")
     except Exception as e:
@@ -770,28 +804,45 @@ For TASKS, set select=true ONLY if specifically needed."""},
         # Fallback scoring for this chunk
         out = []
         for c in block:
-            base_confidence = 0.55
-            embedding_bonus = c.get("recall", 0.5) * 0.4
-            fallback_confidence = min(0.95, base_confidence + embedding_bonus)
+            # Check if this is a universal deliverable
+            is_universal = c["level"] == "deliverable" and is_universal_deliverable(c.get("title", ""))
             
-            media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
-                             'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
-                             'marketing', 'performance', 'programmatic', 'audience', 'content'}
-            title_words = set(tokenize(c.get("title", "").lower()))
-            keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
+            if is_universal:
+                # Universal deliverables get high scores automatically
+                base_confidence = 0.95
+                fallback_confidence = 0.95
+                relevance_score = 95
+                select_item = True
+                why_text = "Universal deliverable - required for all projects"
+            else:
+                base_confidence = 0.55
+                embedding_bonus = c.get("recall", 0.5) * 0.4
+                fallback_confidence = min(0.95, base_confidence + embedding_bonus)
+                relevance_score = int(fallback_confidence * 100)
+                select_item = True if c["level"] == "deliverable" else fallback_confidence > 0.40
+                why_text = f"Embedding match (score: {c.get('recall', 0.5):.2f}, boosted for media keywords)"
             
-            if title_words & media_keywords or keyword_set & media_keywords:
-                fallback_confidence = min(0.95, fallback_confidence * 1.3)
+            # Apply media keyword boost only for non-universal items
+            if not is_universal:
+                media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
+                                 'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
+                                 'marketing', 'performance', 'programmatic', 'audience', 'content'}
+                title_words = set(tokenize(c.get("title", "").lower()))
+                keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
+                
+                if title_words & media_keywords or keyword_set & media_keywords:
+                    fallback_confidence = min(0.95, fallback_confidence * 1.3)
+                    relevance_score = min(100, fallback_confidence * 100)
             
             out.append({
                 "id": c["id"],
                 "dept": c["dept"],
                 "level": c["level"],
-                "relevance": min(100, fallback_confidence * 100),
+                "relevance": relevance_score,
                 "confidence": fallback_confidence,
-                "why": f"Embedding match (score: {c.get('recall', 0.5):.2f}, boosted for media keywords)",
-                "risks": "GPT-5 error - using boosted embedding fallback",
-                "select": True if c["level"] == "deliverable" else fallback_confidence > 0.40
+                "why": why_text,
+                "risks": "GPT-5 fallback" if not is_universal else "",
+                "select": select_item
             })
         return out
 
@@ -993,8 +1044,8 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
         W = {"emb": 0.40, "lex": 0.25, "recall": 0.25, "llm": 0.0, "hist": 0.10}
     
     hist_prior = 0.65
-    # FIXED: DRAMATICALLY lowered thresholds for comprehensive RFPs - optimized for 100+ deliverables
-    gates = {"high": 0.15, "balanced": 0.08, "recall": 0.05}  # VERY low gates for 100+ deliverables
+    # FIXED: Balanced thresholds to filter out low-relevance items while keeping good ones
+    gates = {"high": 0.35, "balanced": 0.30, "recall": 0.25}  # Reasonable gates to filter noise
     
     # FIXED: Expanded media agency keywords for better matching
     media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital', 
@@ -1008,8 +1059,17 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
         llm_val = (l["relevance"] / 100.0) if l else 0.0
         llm_select = l.get("select", True) if l else True  # Default to True if no LLM score
         
+        # Check if this is a universal deliverable
+        is_universal = c.get("level") == "deliverable" and is_universal_deliverable(c.get("title", ""))
+        
         # Calculate raw fusion score
-        raw = W["emb"] * c.get("embScore", 0.5) + W["lex"] * c.get("lexScore", 0.5) + W["recall"] * c.get("recall", 0.5) + W["llm"] * llm_val + W["hist"] * hist_prior
+        if is_universal:
+            # Universal deliverables get maximum score
+            raw = 0.95
+            llm_val = 0.95
+            llm_select = True
+        else:
+            raw = W["emb"] * c.get("embScore", 0.5) + W["lex"] * c.get("lexScore", 0.5) + W["recall"] * c.get("recall", 0.5) + W["llm"] * llm_val + W["hist"] * hist_prior
         
         # FIXED: Apply more aggressive media keyword boost
         boost_factor = 1.0
@@ -1039,7 +1099,8 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
         if c["level"] == "task" and llm_scores and not llm_select:
             pass_gate = False
         else:
-            pass_gate = calibrated >= gates.get(strictness, gates["balanced"])
+            # Universal deliverables always pass
+            pass_gate = is_universal or calibrated >= gates.get(strictness, gates["balanced"])
         
         # Log pass/fail decisions for debugging
         if c["level"] == "deliverable":
