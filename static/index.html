@@ -1632,6 +1632,7 @@
             <th>Hours</th>
             <th>Rate (USD)</th>
             <th>Price (USD)</th>
+            <th>Cadence</th>
             <th>Tasks</th>
             <th style="width: 80px;">Actions</th>
           </tr></thead>
@@ -1647,6 +1648,16 @@
           deliverableName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${it.retainer_months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
         }
         
+        // Determine cadence based on retainer months
+        let cadenceValue = 'One-Time';
+        if (it.retainer_months) {
+          if (it.retainer_months === 1) cadenceValue = 'Monthly';
+          else if (it.retainer_months === 3) cadenceValue = 'Quarterly';
+          else if (it.retainer_months === 6) cadenceValue = 'Semi-Annual';
+          else if (it.retainer_months === 12) cadenceValue = 'Annual';
+          else cadenceValue = `Monthly (${it.retainer_months}mo)`;
+        }
+        
         html += `<tr data-row="${idx}" data-deliverable="${it.deliverable_code || it.deliverable}">
           <td>${deliverableName}</td>
           <td class="editable-hours" data-field="hours" data-original="${it.total_hours}">
@@ -1658,6 +1669,18 @@
             <input type="number" class="edit-input" style="display:none;width:100px;padding:4px;" min="0" max="999999" step="0.01" value="${rate}">
           </td>
           <td class="calculated-price">${window.fmtUSD0(it.price)}</td>
+          <td class="editable-cadence">
+            <select class="cadence-select" data-deliverable="${it.deliverable_code || it.deliverable}" 
+                    style="background: var(--card); color: var(--text); border: 1px solid var(--border); 
+                           border-radius: 4px; padding: 4px 8px; font-size: 0.9em; cursor: pointer;"
+                    onchange="updateCadence('${targetId}', ${idx}, this.value)">
+              <option value="One-Time" ${cadenceValue === 'One-Time' ? 'selected' : ''}>One-Time</option>
+              <option value="Monthly" ${cadenceValue === 'Monthly' ? 'selected' : ''}>Monthly</option>
+              <option value="Quarterly" ${cadenceValue === 'Quarterly' ? 'selected' : ''}>Quarterly</option>
+              <option value="Semi-Annual" ${cadenceValue === 'Semi-Annual' ? 'selected' : ''}>Semi-Annual</option>
+              <option value="Annual" ${cadenceValue === 'Annual' ? 'selected' : ''}>Annual</option>
+            </select>
+          </td>
           <td style="font-size:0.85em;color:var(--muted);">${tasks}</td>
           <td class="actions">
             <button onclick="editPricingRow('${targetId}', ${idx})" class="edit-btn" style="background:#3b82f6;color:white;border:none;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:0.85em;">
@@ -1677,6 +1700,83 @@
         </table>
       `;
       document.getElementById(targetId).innerHTML = html;
+    }
+    
+    // Function to handle cadence changes
+    function updateCadence(targetId, rowIndex, newCadence) {
+      const scenario = window[`currentScenario_${targetId}`];
+      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
+      
+      const item = scenario.items[rowIndex];
+      const deliverableCode = item.deliverable_code || item.deliverable;
+      
+      // Update retainer_months based on cadence selection
+      let months = 0;
+      if (newCadence === 'Monthly') months = 1;
+      else if (newCadence === 'Quarterly') months = 3;
+      else if (newCadence === 'Semi-Annual') months = 6;
+      else if (newCadence === 'Annual') months = 12;
+      
+      // Update the item's retainer_months
+      item.retainer_months = months;
+      
+      // Update pricingData if available
+      if (window.pricingData) {
+        if (months > 0) {
+          window.pricingData.deliverableTypes.set(deliverableCode, 'RETAINER');
+          window.pricingData.retainers.set(deliverableCode, months);
+        } else {
+          window.pricingData.deliverableTypes.set(deliverableCode, 'PROJECT');
+          window.pricingData.retainers.delete(deliverableCode);
+        }
+      }
+      
+      // Recalculate pricing if needed
+      const monthlyPrice = months > 0 ? Math.round(item.price / months) : 0;
+      
+      // Update display
+      const row = document.querySelector(`#${targetId}-table tr[data-row="${rowIndex}"]`);
+      const deliverableCell = row.querySelector('td:first-child');
+      
+      // Update deliverable name display
+      let baseName = item.deliverable;
+      if (months > 0) {
+        baseName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
+      }
+      deliverableCell.innerHTML = baseName;
+      
+      // Update totals display if needed
+      updateScenarioTotals(targetId);
+      
+      console.log(`Updated ${deliverableCode} cadence to ${newCadence} (${months} months)`);
+    }
+    
+    // Helper function to update scenario totals display
+    function updateScenarioTotals(targetId) {
+      const scenario = window[`currentScenario_${targetId}`];
+      if (!scenario) return;
+      
+      const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 0);
+      const hasRetainers = retainerItems.length > 0;
+      const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
+      const oneTimeTotal = scenario.totals.price - retainerTotal;
+      
+      const totalsDiv = document.getElementById(`${targetId}-totals`);
+      if (totalsDiv) {
+        let html = `Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
+        
+        if (hasRetainers) {
+          html += `
+            <div style="margin-top: 8px; padding: 8px; background: var(--card); border-radius: 4px; border-left: 3px solid var(--accent2); font-size: 12px;">
+              <strong style="color: var(--accent2);">💼 Breakdown:</strong>
+              ${oneTimeTotal > 0 ? ` One-time: ${window.fmtUSD0(oneTimeTotal)} •` : ''}
+              Retainers: ${window.fmtUSD0(retainerTotal)} (${retainerItems.length} deliverable${retainerItems.length > 1 ? 's' : ''})
+            </div>
+          `;
+        }
+        
+        totalsDiv.innerHTML = html;
+      }
     }
     
     // ISSUE 4: Functions for editing pricing table
