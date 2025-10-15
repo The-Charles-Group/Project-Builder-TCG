@@ -6968,16 +6968,20 @@ async def api_optimize_pricing(request: dict):
         Optimized scenario with adjusted pricing
     """
     try:
-        # Extract parameters
-        target_budget = request.get("target_budget", None)
+        # Extract parameters - handle both field names for backward compatibility
+        target_budget = request.get("target_budget") or request.get("client_budget")
         scenario = request.get("scenario", {})
         company_size = request.get("company_size", "mid_market")
         urgency = request.get("urgency", "standard")
         industry_multiplier = request.get("industry_multiplier", 1.0)
         maintain_quality_tiers = request.get("maintain_quality_tiers", True)
         
+        # If scenario has 'items' instead of 'wbs', convert it
+        if "items" in scenario and "wbs" not in scenario:
+            scenario["wbs"] = scenario["items"]
+        
         if not target_budget:
-            raise HTTPException(status_code=400, detail="target_budget is required")
+            raise HTTPException(status_code=400, detail="target_budget or client_budget is required")
         
         if not scenario or "wbs" not in scenario:
             raise HTTPException(status_code=400, detail="Valid scenario with WBS is required")

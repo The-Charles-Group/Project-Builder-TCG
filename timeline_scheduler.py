@@ -349,7 +349,11 @@ class TimelineScheduler:
             return 5  # Default 5 days slack for independent tasks
         
         # Calculate slack based on earliest dependent task
-        min_dependent_start = min(t.earliest_start for t in dependent_tasks if t.earliest_start)
+        earliest_starts = [t.earliest_start for t in dependent_tasks if t.earliest_start]
+        if not earliest_starts:
+            return 5  # Default slack if no valid dependent starts
+        
+        min_dependent_start = min(earliest_starts)
         if min_dependent_start and task.end_date:
             slack_days = (min_dependent_start - task.end_date).days
             return max(0, slack_days)
@@ -432,9 +436,11 @@ class TimelineScheduler:
                 if all(pred in processed for pred in predecessors.get(task.id, [])):
                     # Calculate earliest start based on predecessor finish times
                     if predecessors[task.id]:
-                        max_pred_finish = max(
-                            earliest_finish[pred] for pred in predecessors[task.id]
-                        )
+                        pred_finishes = [earliest_finish[pred] for pred in predecessors[task.id] if pred in earliest_finish]
+                        if pred_finishes:
+                            max_pred_finish = max(pred_finishes)
+                        else:
+                            max_pred_finish = task.start_date
                         earliest_start[task.id] = max(task.start_date, max_pred_finish)
                         earliest_finish[task.id] = earliest_start[task.id] + timedelta(days=task.duration_days)
                     else:
@@ -444,6 +450,11 @@ class TimelineScheduler:
                     processed.add(task.id)
         
         # Backward pass - calculate latest start/finish times
+        # Check if we have any tasks to process
+        if not earliest_finish:
+            print("[TIMELINE] Warning: No tasks with finish times found, returning empty critical path")
+            return []
+        
         project_end = max(earliest_finish.values())
         latest_start = {}
         latest_finish = {}
@@ -464,9 +475,11 @@ class TimelineScheduler:
                 # Check if all successors are processed
                 if all(succ in processed for succ in successors.get(task.id, [])):
                     if successors[task.id]:
-                        min_succ_start = min(
-                            latest_start[succ] for succ in successors[task.id]
-                        )
+                        succ_starts = [latest_start[succ] for succ in successors[task.id] if succ in latest_start]
+                        if succ_starts:
+                            min_succ_start = min(succ_starts)
+                        else:
+                            min_succ_start = project_end
                         latest_finish[task.id] = min_succ_start
                         latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
                     else:
@@ -665,8 +678,11 @@ class TimelineScheduler:
             critical_in_phase = [t for t in phase_tasks if t.is_critical]
             if critical_in_phase:
                 milestone_date = max(t.end_date for t in critical_in_phase)
-            else:
+            elif phase_tasks:
                 milestone_date = max(t.end_date for t in phase_tasks)
+            else:
+                # Skip milestone if no tasks in phase
+                continue
             
             milestone = WorkstreamTask(
                 id=f"milestone_{phase_config.name.lower().replace(' ', '_')}",
@@ -770,6 +786,16 @@ class TimelineScheduler:
             gantt_tasks.append(gantt_task)
         
         # Calculate project metrics
+        if not tasks:
+            print("[TIMELINE] Warning: No tasks provided for timeline optimization")
+            return {
+                "timeline": [],
+                "milestones": [],
+                "critical_path": [],
+                "duration_days": 0,
+                "resource_utilization": {}
+            }
+        
         project_start = min(t.start_date for t in tasks)
         project_end = max(t.end_date for t in tasks)
         total_days = (project_end - project_start).days
