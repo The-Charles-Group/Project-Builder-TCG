@@ -1943,30 +1943,29 @@ async def _quick_relevance_check_async(img_bytes: bytes, page_num: int, img_inde
             else:
                 img_base64 = base64.b64encode(img_bytes).decode('utf-8')
             
-            # Quick relevance check with minimal tokens
+            # Quick relevance check with minimal tokens using Responses API
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: openai_client.chat.completions.create(
+                lambda: openai_client.responses.create(
                     model="gpt-5",  # Use GPT-5 directly for image analysis
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "Does this contain charts, diagrams, wireframes, mockups, or project requirements? Answer YES or NO only."
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{img_base64}"}
-                            }
-                        ]
-                    }],
-                    max_completion_tokens=10  # Minimal token usage
+                    input=[
+                        {
+                            "type": "input_text",
+                            "text": "Does this contain charts, diagrams, wireframes, mockups, or project requirements? Answer YES or NO only."
+                        },
+                        {
+                            "type": "input_image",
+                            "image": {"url": f"data:image/png;base64,{img_base64}"}
+                        }
+                    ],
+                    max_output_tokens=10,  # Minimal token usage
+                    reasoning={"effort": "low"}
                 )
             )
             
-            answer = response.choices[0].message.content.strip().upper()
+            # Extract text from Responses API format
+            answer = response.output_text.strip().upper() if hasattr(response, 'output_text') else ""
             is_relevant = "YES" in answer
             
             if job_id in JOB_STORE:
@@ -2018,34 +2017,31 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
                     img_base64 = base64.b64encode(img_bytes).decode('utf-8')
                     image_format = "jpeg"
                 
-                # Analyze image with OpenAI Vision (synchronous call wrapped in executor)
+                # Analyze image with OpenAI Vision using Responses API
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(
                     None,
-                    lambda: openai_client.chat.completions.create(
+                    lambda: openai_client.responses.create(
                         model="gpt-5",  # Use GPT-5 directly for image analysis
-                        messages=[
+                        input=[
                             {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": "Analyze this image from an RFP document. Describe what it shows: charts, diagrams, mockups, screenshots, or other visual content. Focus on business requirements and deliverables it implies."
-                                    },
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:image/{image_format};base64,{img_base64}"
-                                        }
-                                    }
-                                ]
+                                "type": "input_text",
+                                "text": "Analyze this image from an RFP document. Describe what it shows: charts, diagrams, mockups, screenshots, or other visual content. Focus on business requirements and deliverables it implies."
+                            },
+                            {
+                                "type": "input_image",
+                                "image": {
+                                    "url": f"data:image/{image_format};base64,{img_base64}"
+                                }
                             }
                         ],
-                        max_completion_tokens=500
+                        max_output_tokens=500,
+                        reasoning={"effort": "medium"}
                     )
                 )
                 
-                description = response.choices[0].message.content
+                # Extract text from Responses API format
+                description = response.output_text if hasattr(response, 'output_text') else str(response)
                 img_end = datetime.datetime.now().timestamp()
                 
                 # Update job timing
