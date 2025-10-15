@@ -4575,7 +4575,11 @@ async function applyAllSelectedFromAI() {
               selectionStore.l3ByComponent.set(key, new Set());
             }
             const existingTasks = selectionStore.l3ByComponent.get(key);
-            tasks.forEach(task => existingTasks.add(task));
+            // FIX: Extract task name string from object if it's an object
+            tasks.forEach(task => {
+              const taskName = typeof task === 'string' ? task : (task.Task_Label || task.name || task.title || task);
+              existingTasks.add(taskName);
+            });
           }
           
           console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(l3Data));
