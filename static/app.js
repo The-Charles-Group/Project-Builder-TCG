@@ -1363,7 +1363,7 @@ function updateCustomRate(deliverableCode, rate) {
   updatePricingCalculations();
 }
 
-// Analyze PROJECT vs RETAINER with AI - FIXED VERSION
+// Analyze PROJECT vs RETAINER with AI - ENHANCED VERSION
 async function analyzeProjectRetainer() {
   // Try multiple sources for RFP text
   let rfpText = '';
@@ -1428,13 +1428,28 @@ async function analyzeProjectRetainer() {
     const result = await response.json();
     
     if (result.suggestions) {
-      // Apply suggestions to pricing data
+      // Apply suggestions to BOTH pricing data AND scenario
       Object.entries(result.suggestions).forEach(([code, suggestion]) => {
+        // Update pricingData for future calculations
         pricingData.deliverableTypes.set(code, suggestion.type);
         
+        // Update the actual scenario items
+        const scenarioItem = SCENARIOS.A.items.find(i => i.deliverable_code === code);
+        if (scenarioItem) {
+          // Set retainer_months based on type
+          if (suggestion.type === 'RETAINER') {
+            // Default to 12 months for retainers unless already set
+            scenarioItem.retainer_months = scenarioItem.retainer_months || 12;
+            pricingData.retainers.set(code, scenarioItem.retainer_months);
+          } else {
+            // PROJECT type - clear retainer months
+            scenarioItem.retainer_months = 0;
+            pricingData.retainers.delete(code);
+          }
+        }
+        
         // Also apply to components (inherit from parent)
-        const scenario = SCENARIOS.A || SCENARIOS[0];
-        const item = scenario.items.find(i => i.deliverable_code === code);
+        const item = SCENARIOS.A.items.find(i => i.deliverable_code === code);
         if (item && item.components) {
           item.components.forEach(comp => {
             const compKey = `${code}::${comp.name}`;
@@ -1445,17 +1460,41 @@ async function analyzeProjectRetainer() {
         }
       });
       
-      // Refresh the pricing table
-      updatePricingCalculations();
+      // Re-render the scenario table to show updated types and cadence
+      if (window.renderScenario) {
+        window.renderScenario('scenarioA', SCENARIOS.A);
+      }
       
-      // Show summary of suggestions
+      // Update pricing calculations if the function exists
+      if (typeof updatePricingCalculations === 'function') {
+        updatePricingCalculations();
+      }
+      
+      // Show summary of suggestions with reasoning
       const projectCount = Object.values(result.suggestions).filter(s => s.type === 'PROJECT').length;
       const retainerCount = Object.values(result.suggestions).filter(s => s.type === 'RETAINER').length;
       
-      alert(`✨ AI Analysis Complete!\n\n` +
-            `📦 ${projectCount} deliverables marked as PROJECT (one-time)\n` +
-            `🔄 ${retainerCount} deliverables marked as RETAINER (monthly)\n\n` +
-            `Analysis Method: ${result.method === 'ai' ? 'GPT-4 Analysis' : 'Smart Heuristics'}`);
+      let summaryMessage = `✨ AI Analysis Complete!\n\n` +
+                          `📦 ${projectCount} deliverables marked as PROJECT (one-time)\n` +
+                          `🔄 ${retainerCount} deliverables marked as RETAINER (recurring)\n\n`;
+      
+      // Add method info
+      if (result.method === 'gpt5') {
+        summaryMessage += `🧠 Analysis by: GPT-5 Intelligence\n`;
+      } else if (result.method === 'ai') {
+        summaryMessage += `🤖 Analysis by: AI Assistant\n`;
+      } else {
+        summaryMessage += `⚡ Analysis by: Smart Heuristics\n`;
+      }
+      
+      // Add confidence if available
+      if (result.confidence) {
+        summaryMessage += `📊 Confidence: ${(result.confidence * 100).toFixed(0)}%\n`;
+      }
+      
+      alert(summaryMessage);
+      
+      console.log('AI Suggestions applied:', result);
     }
   } catch (error) {
     console.error('Error analyzing project/retainer types:', error);
