@@ -1757,63 +1757,195 @@ async function exportPricingDetails() {
   }
 }
 
-// AI Optimize All Pricing Function
+// AI Optimize All Pricing Function - ENHANCED VERSION
 async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
   if (!btn) return;
   
+  // Check for scenario
+  if (!SCENARIOS || !SCENARIOS.A) {
+    alert('Please build a scenario first before optimizing pricing.');
+    return;
+  }
+  
   // Show loading state
   btn.disabled = true;
-  btn.textContent = 'Optimizing...';
+  btn.textContent = '🔄 Optimizing...';
   
   try {
     // Get current scenario data
-    const scenario = SCENARIOS?.A || SCENARIOS?.[0];
-    if (!scenario || !scenario.items) {
-      alert('Please build a scenario first');
+    const scenario = SCENARIOS.A;
+    if (!scenario || !scenario.items || scenario.items.length === 0) {
+      alert('No scenario items to optimize. Please build a scenario first.');
       return;
     }
     
     // Get client budget and project details
     const clientBudget = Number(document.getElementById('clientBudget')?.value || 0);
-    const projectName = document.getElementById('projectName')?.value || '';
-    const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
+    const projectName = document.getElementById('projectName')?.value || 'Project';
     
-    // Call AI optimization endpoint
-    const response = await fetch('/api/pricing/optimize-all', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scenario_data: scenario,
-        client_budget: clientBudget,
-        project_name: projectName,
-        rfp_context: rfpText,
-        optimization_goals: ['budget_fit', 'resource_balance', 'timeline_efficiency']
-      })
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    // Get RFP text for context
+    let rfpText = '';
+    const rfpTextarea = document.getElementById('rfpText');
+    if (rfpTextarea) rfpText = rfpTextarea.value;
+    if (!rfpText) rfpText = sessionStorage.getItem('apb.rfp_text') || '';
+    if (!rfpText && window.APB && window.APB.step2) {
+      rfpText = window.APB.step2.rfpText || '';
     }
     
-    const result = await response.json();
-    
-    // Show results in a modal or apply directly
-    if (result.optimized_hours) {
-      showOptimizationResults(result);
+    // Try to call AI optimization endpoint first
+    try {
+      const response = await fetch('/api/ai/optimize_pricing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scenario: scenario,
+          client_budget: clientBudget,
+          project_name: projectName,
+          rfp_context: rfpText,
+          deliverables: scenario.items.map(item => ({
+            code: item.deliverable_code,
+            name: item.deliverable,
+            hours: item.total_hours,
+            price: item.price,
+            is_retainer: item.retainer_months > 0
+          }))
+        })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        
+        // Apply optimizations to scenario
+        if (result.optimized_items) {
+          result.optimized_items.forEach((opt, idx) => {
+            if (scenario.items[idx]) {
+              scenario.items[idx].total_hours = opt.hours;
+              scenario.items[idx].price = opt.price;
+              scenario.items[idx].effective_rate = opt.hours > 0 ? opt.price / opt.hours : 195;
+            }
+          });
+          
+          // Update totals
+          scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
+          scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
+          
+          // Re-render scenario
+          if (window.renderScenario) {
+            window.renderScenario('scenarioA', scenario);
+          }
+          
+          // Show success message
+          showOptimizationSuccess(result, clientBudget);
+        }
+        
+        return; // Exit if AI optimization succeeded
+      }
+    } catch (apiError) {
+      console.log('AI optimization not available, using smart fallback');
     }
+    
+    // Fallback: Smart budget-based optimization
+    performSmartOptimization(scenario, clientBudget);
     
   } catch (error) {
     console.error('Error optimizing pricing:', error);
-    alert('Error optimizing pricing. Using fallback optimization.');
-    
-    // Fallback: Simple budget-based optimization
-    optimizePricingFallback();
+    alert('Error occurred during optimization. Please try again.');
   } finally {
     // Reset button state
     btn.disabled = false;
     btn.textContent = 'Optimize All Pricing';
   }
+}
+
+// Smart optimization fallback
+function performSmartOptimization(scenario, clientBudget) {
+  if (!clientBudget || clientBudget <= 0) {
+    alert('Please enter a client budget to optimize pricing.');
+    return;
+  }
+  
+  const currentTotal = scenario.totals.price;
+  const scaleFactor = clientBudget / currentTotal;
+  
+  // Apply scaling to all items
+  scenario.items.forEach(item => {
+    // Scale hours and price proportionally
+    const originalHours = item.total_hours;
+    const originalPrice = item.price;
+    
+    item.total_hours = Math.round(originalHours * scaleFactor);
+    item.price = Math.round(originalPrice * scaleFactor);
+    
+    // Maintain effective rate
+    if (item.total_hours > 0) {
+      item.effective_rate = item.price / item.total_hours;
+    }
+  });
+  
+  // Update totals
+  scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
+  scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
+  
+  // Re-render scenario
+  if (window.renderScenario) {
+    window.renderScenario('scenarioA', scenario);
+  }
+  
+  // Show results
+  let message = '✅ Pricing Optimized!\n\n';
+  if (scaleFactor < 1) {
+    const reduction = ((1 - scaleFactor) * 100).toFixed(1);
+    message += `📉 Reduced all deliverables by ${reduction}% to fit within budget\n`;
+    message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
+  } else if (scaleFactor > 1) {
+    const increase = ((scaleFactor - 1) * 100).toFixed(1);
+    message += `📈 Increased all deliverables by ${increase}% to maximize budget utilization\n`;
+    message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
+  } else {
+    message += `✨ Pricing is already optimized for the budget`;
+  }
+  
+  alert(message);
+}
+
+// Show optimization success message
+function showOptimizationSuccess(result, clientBudget) {
+  let message = '🎯 AI Pricing Optimization Complete!\n\n';
+  
+  if (result.method === 'gpt5') {
+    message += '🧠 Powered by GPT-5 Intelligence\n';
+  }
+  
+  if (result.summary) {
+    message += `📊 ${result.summary}\n`;
+  }
+  
+  if (result.total_hours && result.total_price) {
+    message += `\n💼 Optimized Totals:\n`;
+    message += `• Hours: ${result.total_hours}\n`;
+    message += `• Price: $${result.total_price.toLocaleString()}\n`;
+  }
+  
+  if (clientBudget && result.total_price) {
+    const variance = ((result.total_price - clientBudget) / clientBudget * 100).toFixed(1);
+    if (Math.abs(variance) < 5) {
+      message += `✅ Within 5% of budget target\n`;
+    } else if (variance < 0) {
+      message += `📉 ${Math.abs(variance)}% under budget\n`;
+    } else {
+      message += `📈 ${variance}% over budget\n`;
+    }
+  }
+  
+  if (result.adjustments && result.adjustments.length > 0) {
+    message += `\n🔧 Key Adjustments:\n`;
+    result.adjustments.slice(0, 3).forEach(adj => {
+      message += `• ${adj}\n`;
+    });
+  }
+  
+  alert(message);
 }
 
 // Show optimization results modal
