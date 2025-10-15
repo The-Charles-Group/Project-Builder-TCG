@@ -277,17 +277,19 @@
     <section class="card" id="step3" style="display:none;">
       <h2>Step 3 — Pricing Configuration</h2>
       
-      <!-- AI Pricing Assistant Panel -->
-      <div class="ai-pricing-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+      <!-- Build Scenario Panel - MOVED TO TOP -->
+      <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <h3 style="margin: 0; color: var(--accent); font-size: 1.1em;">🤖 AI Pricing Assistant</h3>
-          <button id="btn-ai-optimize-pricing" class="btn-primary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
-            Optimize All Pricing
+          <div>
+            <h3 style="margin: 0 0 8px 0; color: var(--accent2); font-size: 1.1em;">🚀 Build Your Scenario First</h3>
+            <p style="color: var(--muted); font-size: 0.85em; margin: 0;">
+              Create your initial pricing scenario based on selected deliverables. This is required before using AI optimization features.
+            </p>
+          </div>
+          <button id="btnBuild" class="btn-primary" style="background: var(--accent2); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1.1em;">
+            Build Scenario
           </button>
         </div>
-        <p style="color: var(--muted); font-size: 0.85em; margin-top: 8px; margin-bottom: 0;">
-          Edit hours inline, use AI to redistribute work, and configure retainer services with monthly schedules.
-        </p>
       </div>
       
       <!-- Project Configuration Grid -->
@@ -336,17 +338,6 @@
         </div>
       </div>
 
-      <!-- AI Suggest Type & Update Pricing Buttons -->
-      <div style="margin-bottom: 16px; display: flex; justify-content: space-between;">
-        <button id="btn-update-pricing" onclick="updatePricing()" 
-                style="background: #10b981; color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-          💾 Update Pricing
-        </button>
-        <button id="btn-ai-suggest-type" onclick="analyzeProjectRetainer()" 
-                style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-          🤖 AI Suggest Type
-        </button>
-      </div>
 
       <!-- Pricing Details Table -->
       <div class="pricing-table-container" style="margin-bottom: 20px;">
@@ -433,16 +424,34 @@
         <small style="color: var(--muted);" id="grand-total-breakdown">One-time + 12 months retainer</small>
       </div>
 
-      <div class="inline">
-        <button id="btnBuild">Build Scenario</button>
-        <button id="btn-export-pricing" class="btn-secondary">Export Pricing Details</button>
-      </div>
-
       <div class="scenarios">
         <div class="scenario">
           <h3>Project Scenario</h3>
           <div id="scenarioA">(No data)</div>
         </div>
+      </div>
+
+      <!-- AI Pricing Assistant Panel - MOVED AFTER SCENARIO TABLE -->
+      <div class="ai-pricing-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-top: 20px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; color: var(--accent); font-size: 1.1em;">🤖 AI Pricing Assistant</h3>
+          <div style="display: flex; gap: 12px;">
+            <button id="btn-ai-suggest-type" onclick="analyzeProjectRetainer()" 
+                    style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+              🤖 AI Suggest Type
+            </button>
+            <button id="btn-ai-optimize-pricing" class="btn-primary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
+              Optimize All Pricing
+            </button>
+          </div>
+        </div>
+        <p style="color: var(--muted); font-size: 0.85em; margin-top: 8px; margin-bottom: 0;">
+          After building your scenario, use AI to suggest deliverable types (Project vs Retainer) and optimize pricing based on budget constraints.
+        </p>
+      </div>
+
+      <div class="inline">
+        <button id="btn-export-pricing" class="btn-secondary">Export Pricing Details</button>
       </div>
     </section>
 
