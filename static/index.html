@@ -1631,7 +1631,21 @@
         window.SCENARIOS = scenarios;
         console.log('[BUILD] Set window.SCENARIOS:', window.SCENARIOS);
         
-        // FIX #2: Update pricing display with the scenario data
+        // FIX #2: Save scenarios to localStorage for persistence between steps
+        try {
+          const sessionId = window.APB?.sessionId || 
+                          localStorage.getItem('current_session_id') || 
+                          'default_session';
+          const storageKey = `scenarios_${sessionId}`;
+          localStorage.setItem(storageKey, JSON.stringify(scenarios));
+          // Also save without session ID as fallback
+          localStorage.setItem('latest_scenarios', JSON.stringify(scenarios));
+          console.log('[BUILD] Saved scenarios to localStorage with key:', storageKey);
+        } catch (err) {
+          console.error('[BUILD] Failed to save scenarios to localStorage:', err);
+        }
+        
+        // FIX #3: Update pricing display with the scenario data
         if (typeof updatePricingDisplay === 'function' && scenarios.A) {
           updatePricingDisplay(scenarios.A);
           console.log('[BUILD] Updated pricing display with scenario A');
