@@ -5621,7 +5621,7 @@ window.resetL3ForComponent = async function(delivCode, compName) {
 }
 
 // Component clicked - load L3 panel
-async function onComponentClicked(componentName) {
+window.onComponentClicked = async function onComponentClicked(componentName) {
   const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
   if (!code) return;
   
@@ -6111,8 +6111,12 @@ async function renderComponentsPanel() {
       // Re-render components to show active state
       renderComponentsPanel();
       
-      // Update L2 tasks panel
-      if (window.renderL3Panel) await renderL3Panel();
+      // Update L2 tasks panel - use onComponentClicked to fetch and display L3 tasks
+      if (window.onComponentClicked) {
+        await onComponentClicked(compName);
+      } else if (window.renderL3Panel) {
+        await renderL3Panel();
+      }
     });
   });
   
@@ -6141,7 +6145,12 @@ async function renderComponentsPanel() {
         S2.activeDeliverableCode = delivCode;
         S2.activeComponentName = compName;
         renderComponentsPanel(); // Re-render to show active state
-        if (window.renderL3Panel) renderL3Panel(); // Update L2 tasks
+        // Update L2 tasks - use onComponentClicked to fetch and display L3 tasks
+        if (window.onComponentClicked) {
+          onComponentClicked(compName);
+        } else if (window.renderL3Panel) {
+          renderL3Panel(); // Fallback to old method
+        }
       } else {
         S2.selectedComponentsByCode[delivCode].delete(compName);
       }
