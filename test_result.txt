@@ -1,2 +1,0 @@
-Test result: 52 deliverables returned (minimum 15 required)
-Status: PASS
