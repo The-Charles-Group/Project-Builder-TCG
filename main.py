@@ -8873,5 +8873,84 @@ def api_xml_export_flexible(payload: XMLExportPayload):
         if os.path.exists(temp_xlsx):
             os.remove(temp_xlsx)
 
+# ---------- AI Agent API Endpoints ----------
+from ai_agent import (
+    AgentChatRequest,
+    AgentExecuteRequest,
+    AgentResponse,
+    chat_with_agent,
+    execute_command
+)
+
+@app.post("/api/agent/chat")
+async def agent_chat(request: AgentChatRequest) -> AgentResponse:
+    """
+    Chat with the AI agent using natural language.
+    The agent will understand your intent and generate UI actions.
+    """
+    try:
+        # Get current app context if needed
+        context = request.context or {}
+        
+        # Add current state info to context
+        if not context.get("has_rfp"):
+            context["has_rfp"] = bool(RFP_TEXT_CACHE)
+        
+        # Process the chat message
+        response = await chat_with_agent(
+            message=request.message,
+            context=context,
+            session_id=request.session_id
+        )
+        
+        return response
+        
+    except Exception as e:
+        print(f"[Agent Chat] Error: {e}")
+        return AgentResponse(
+            success=False,
+            message=f"Sorry, I encountered an error: {str(e)}",
+            error=str(e)
+        )
+
+@app.post("/api/agent/execute")
+async def agent_execute(request: AgentExecuteRequest) -> AgentResponse:
+    """
+    Execute a specific command with parameters.
+    Used when the UI wants to directly trigger agent actions.
+    """
+    try:
+        response = await execute_command(
+            command_type=request.command,
+            parameters=request.parameters
+        )
+        
+        return response
+        
+    except Exception as e:
+        print(f"[Agent Execute] Error: {e}")
+        return AgentResponse(
+            success=False,
+            message=f"Failed to execute command: {str(e)}",
+            error=str(e)
+        )
+
+@app.get("/api/agent/status")
+async def agent_status():
+    """Check if the AI agent is available and working"""
+    try:
+        from ai_agent import OPENAI_AVAILABLE, GPT5_AVAILABLE
+        
+        return {
+            "available": OPENAI_AVAILABLE,
+            "gpt5_available": GPT5_AVAILABLE,
+            "message": "AI Agent is ready to help!" if OPENAI_AVAILABLE else "AI Agent is offline"
+        }
+    except Exception as e:
+        return {
+            "available": False,
+            "message": f"Agent status check failed: {str(e)}"
+        }
+
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload
