@@ -8330,5 +8330,207 @@ def list_shipped_projects():
         "total_count": len(shipped_list)
     }
 
+# ---------- NEW Flexible XML Export Endpoint ----------
+class XMLExportPayload(BaseModel):
+    """Flexible XML export payload that accepts scenario data in various formats"""
+    scenario: Optional[Dict[str, Any]] = None
+    selected_deliverables: Optional[List[str]] = None  # For building scenario from deliverable codes
+    project_name: Optional[str] = None
+    pricing_mode: str = "Flat_Blended"
+    rate_band: str = "Standard_US"
+    blended_rate: Optional[float] = None
+    start_date_mode: str = "next_monday"
+    fixed_start_iso: Optional[str] = None
+    hours_per_day: float = 8.0
+    sheet_name: str = "Scenario"
+    add_dependencies: bool = True
+    add_milestones: bool = True
+    add_custom_fields: bool = True
+
+@app.post("/api/xml")
+def api_xml_export_flexible(payload: XMLExportPayload):
+    """
+    Flexible XML export endpoint that can:
+    1. Accept a pre-built scenario with items
+    2. Accept a scenario without items and build them
+    3. Accept just deliverable codes and build the entire scenario
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    # Determine project name
+    project_name = (payload.project_name 
+                   or _upload_title_default() 
+                   or f"Project {datetime.date.today().isoformat()}")
+    
+    # Build or prepare scenario
+    if payload.scenario and payload.scenario.get("items"):
+        # Case 1: Pre-built scenario with items - use as is
+        scenario = _inflate_components_if_missing(payload.scenario)
+    elif payload.scenario:
+        # Case 2: Scenario without items - build items from selected deliverables
+        scenario = payload.scenario.copy()
+        if payload.selected_deliverables:
+            # Build items from deliverable codes
+            items = []
+            for dcode in payload.selected_deliverables:
+                # Get deliverable info from database
+                if DB.deliverables is not None:
+                    deliv_matches = DB.deliverables[
+                        DB.deliverables["Deliverable_Code"].astype(str) == str(dcode)
+                    ]
+                    if not deliv_matches.empty:
+                        deliv_row = deliv_matches.iloc[0]
+                        # Get all task groups for this deliverable
+                        task_groups = DB.task_groups_for_deliverable(str(dcode))
+                        
+                        # Create item
+                        item = {
+                            "deliverable_code": str(dcode),
+                            "deliverable": str(deliv_row.get("Deliverable", "")),
+                            "included_task_groups": task_groups,
+                            "hours": 100,  # Default hours
+                            "price": 15000,  # Default price
+                            "complexity": "Advanced",
+                            "tier": "T2_MediumVolume"
+                        }
+                        items.append(item)
+            
+            scenario["items"] = items
+        
+        # Inflate components for all items
+        scenario = _inflate_components_if_missing(scenario)
+    elif payload.selected_deliverables:
+        # Case 3: Just deliverable codes - build entire scenario
+        items = []
+        for dcode in payload.selected_deliverables:
+            # Get deliverable info from database
+            if DB.deliverables is not None:
+                deliv_matches = DB.deliverables[
+                    DB.deliverables["Deliverable_Code"].astype(str) == str(dcode)
+                ]
+                if not deliv_matches.empty:
+                    deliv_row = deliv_matches.iloc[0]
+                    # Get all task groups for this deliverable
+                    task_groups = DB.task_groups_for_deliverable(str(dcode))
+                    
+                    # Create item with reasonable defaults
+                    item = {
+                        "deliverable_code": str(dcode),
+                        "deliverable": str(deliv_row.get("Deliverable", "")),
+                        "included_task_groups": task_groups,
+                        "hours": 100,  # Default hours
+                        "price": 15000,  # Default price
+                        "complexity": "Advanced",
+                        "tier": "T2_MediumVolume"
+                    }
+                    items.append(item)
+        
+        scenario = {
+            "items": items,
+            "pricing_mode": payload.pricing_mode,
+            "rate_band": payload.rate_band,
+            "blended_rate": payload.blended_rate or 195.0,
+            "project_start": payload.fixed_start_iso
+        }
+        
+        # Inflate components
+        scenario = _inflate_components_if_missing(scenario)
+    else:
+        # No valid input provided - create a sample scenario
+        sample_deliverables = ["web_launch", "deck_strategy", "email_campaign"]
+        items = []
+        
+        for dcode in sample_deliverables:
+            if DB.deliverables is not None:
+                deliv_matches = DB.deliverables[
+                    DB.deliverables["Deliverable_Code"].astype(str) == str(dcode)
+                ]
+                if not deliv_matches.empty:
+                    deliv_row = deliv_matches.iloc[0]
+                    task_groups = DB.task_groups_for_deliverable(str(dcode))
+                    item = {
+                        "deliverable_code": str(dcode),
+                        "deliverable": str(deliv_row.get("Deliverable", "")),
+                        "included_task_groups": task_groups,
+                        "hours": 120,
+                        "price": 18000,
+                        "complexity": "Advanced",
+                        "tier": "T2_MediumVolume"
+                    }
+                    items.append(item)
+        
+        scenario = {
+            "items": items,
+            "pricing_mode": payload.pricing_mode,
+            "rate_band": payload.rate_band,
+            "blended_rate": payload.blended_rate or 195.0,
+            "project_start": payload.fixed_start_iso,
+            "project_name": project_name
+        }
+        
+        scenario = _inflate_components_if_missing(scenario)
+    
+    # Update scenario with payload settings
+    scenario["pricing_mode"] = payload.pricing_mode
+    scenario["rate_band"] = payload.rate_band
+    if payload.blended_rate:
+        scenario["blended_rate"] = payload.blended_rate
+    elif not scenario.get("blended_rate"):
+        scenario["blended_rate"] = 195.0
+    
+    # Build WBS DataFrame
+    df = build_wbs_dataframe_from_scenario(scenario, project_name)
+    df = _ensure_v3_ae_columns(df)
+    
+    # Create temporary Excel file for MSPDI conversion
+    base = _export_basename(project_name, payload.sheet_name)
+    temp_xlsx = f"{base}_temp.xlsx"
+    output_xml = f"{base}.xml"
+    
+    try:
+        # Write to temporary Excel file
+        with pd.ExcelWriter(temp_xlsx, engine="openpyxl") as xw:
+            df.to_excel(xw, sheet_name=payload.sheet_name, index=False)
+            _apply_number_formats(xw.sheets[payload.sheet_name], df)
+        
+        # Convert to MSPDI XML with all features
+        project_start_iso = payload.fixed_start_iso or scenario.get("project_start")
+        
+        stats = convert_excel_to_mspdi(
+            input_xlsx=temp_xlsx,
+            output_xml=output_xml,
+            sheet_name=payload.sheet_name,
+            start_date_mode=payload.start_date_mode,
+            fixed_start_iso=project_start_iso,
+            hours_per_day=payload.hours_per_day,
+            merge_identical_children=False,
+            project_name=project_name,
+            pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
+            rate_band=scenario.get("rate_band", "Standard_US"),
+            blended_rate=scenario.get("blended_rate"),
+            add_deliverable_milestones=payload.add_milestones
+        )
+        
+        # Post-process XML if parallelization is enabled
+        final_xml = output_xml
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml = post_process_xml(output_xml)
+        
+        return FileResponse(
+            final_xml,
+            filename=os.path.basename(final_xml),
+            media_type="application/xml",
+            headers={
+                "X-Export-Stats": json.dumps(stats),
+                "Content-Disposition": f'attachment; filename="{os.path.basename(final_xml)}"'
+            }
+        )
+    
+    finally:
+        # Clean up temporary Excel file
+        if os.path.exists(temp_xlsx):
+            os.remove(temp_xlsx)
+
 # ---------- Run locally in Replit ----------
 # In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 5000 --reload

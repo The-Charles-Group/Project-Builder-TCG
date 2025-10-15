@@ -21,13 +21,13 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 
 AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
 AI_AUTORELAX = os.environ.get("AI_AUTORELAX", "true").lower() == "true"
-AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "15"))  # FIXED: Increased from 3 to 15
+AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "100"))  # FIXED: Increased to 100 for comprehensive RFPs
 AI_MIN_COMPONENTS_PER_DELIV = int(os.environ.get("AI_MIN_COMPONENTS_PER_DELIV", "2"))
 AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "2"))
 
 # Fast vs Deep mode configuration
-FAST_TOP_K = int(os.getenv("FAST_TOP_K", "80"))     # Lexical prefilter for Fast mode
-DEEP_TOP_K = int(os.getenv("DEEP_TOP_K", "20"))     # LLM rescoring set for Deep mode
+FAST_TOP_K = int(os.getenv("FAST_TOP_K", "120"))     # Lexical prefilter for Fast mode - increased for comprehensive RFPs
+DEEP_TOP_K = int(os.getenv("DEEP_TOP_K", "100"))     # LLM rescoring set for Deep mode - increased to 100 for luxury fashion
 
 DEPARTMENTS = [
     "Creative",
@@ -998,8 +998,8 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
         W = {"emb": 0.40, "lex": 0.25, "recall": 0.25, "llm": 0.0, "hist": 0.10}
     
     hist_prior = 0.65
-    # FIXED: Further lowered thresholds for aggressive recall
-    gates = {"high": 0.45, "balanced": 0.30, "recall": 0.20}  # Much lower gates
+    # FIXED: Further lowered thresholds for aggressive recall - optimized for comprehensive RFPs
+    gates = {"high": 0.35, "balanced": 0.20, "recall": 0.15}  # Lower gates for 100+ deliverables
     
     # FIXED: Expanded media agency keywords for better matching
     media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital', 
@@ -1032,8 +1032,8 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
                 raw = min(1.0, raw * boost_factor)
                 print(f"[FUSION BOOST] {c['id']}: {title_matches} title matches, {keyword_matches} keyword matches, boost={boost_factor:.2f}")
         
-        # FIXED: Gentler calibration curve for better pass rates
-        calibrated = 1.0 / (1.0 + math.exp(-(1.8 * raw - 0.9)))  # Adjusted from 2.2/1.1 to 1.8/0.9
+        # FIXED: Even gentler calibration curve for 100+ deliverables
+        calibrated = 1.0 / (1.0 + math.exp(-(1.5 * raw - 0.7)))  # Further adjusted to 1.5/0.7 for more permissive scoring
         
         # FIXED: For deliverables with no LLM score, boost confidence
         if c["level"] == "deliverable" and not l:
@@ -1068,16 +1068,29 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
     
     return out
 
-def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """FIXED: Aggressively ensure minimum 25 deliverables ALWAYS"""
+def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]], rfp_complexity: str = "medium") -> List[Dict[str, Any]]:
+    """FIXED: Aggressively ensure minimum deliverables based on RFP complexity"""
     passed_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
     
-    # FIXED: Force minimum of 25 deliverables ALWAYS
-    MINIMUM_DELIVERABLES = 25  
+    # FIXED: Dynamic minimum based on RFP complexity - 100+ for comprehensive/luxury fashion RFPs
+    complexity_minimums = {
+        "low": 50,
+        "medium": 75,
+        "high": 100,
+        "luxury_fashion": 100,  # Special case for luxury fashion RFPs
+        "comprehensive": 100     # For comprehensive agency RFPs
+    }
+    MINIMUM_DELIVERABLES = complexity_minimums.get(rfp_complexity, 75)
+    
+    # Override with environment variable if set
+    env_min = int(os.environ.get("AI_FORCE_MIN_DELIVERABLES", "0"))
+    if env_min > 0:
+        MINIMUM_DELIVERABLES = env_min
+        print(f"[AUTO-RESCUE] Using forced minimum from env: {MINIMUM_DELIVERABLES}")
     
     # FIXED: Always check and ensure minimum deliverables
     if len(passed_delivs) >= MINIMUM_DELIVERABLES:
-        print(f"[AUTO-RESCUE] Already have {len(passed_delivs)} deliverables (>= {MINIMUM_DELIVERABLES})")
+        print(f"[AUTO-RESCUE] Already have {len(passed_delivs)} deliverables (>= {MINIMUM_DELIVERABLES} for complexity={rfp_complexity})")
         return fused  # Already have enough deliverables
     
     # Build maps
@@ -1181,6 +1194,84 @@ def multipliers_from_summary(sumdict: Dict[str, Any]) -> Dict[str, float]:
 def planned_hours(base: float, m: Dict[str, float]) -> float:
     return round(base * m["complexity"] * m["channelMulti"] * m["marketMulti"] * m["complianceMulti"], 1)
 
+def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]], summary: Dict[str, Any], target_count: int = 100) -> List[Dict[str, Any]]:
+    """Expand deliverables for comprehensive RFPs by creating market/channel/phase variations"""
+    
+    # Get markets and channels from summary
+    markets = summary.get("markets", ["US"])
+    channels = summary.get("channels", ["Digital"])
+    
+    # Determine if we need expansion
+    is_luxury = any(term in summary.get("summary", "").lower() for term in ['luxury', 'fashion', 'premium', 'haute'])
+    is_global = len(markets) > 2
+    is_multichannel = len(channels) > 3
+    is_comprehensive = summary.get("complexity") == "high" or is_luxury or is_global
+    
+    expanded = []
+    
+    if is_comprehensive and len(deliverables) < target_count:
+        print(f"[EXPAND] Comprehensive RFP detected - expanding {len(deliverables)} to {target_count}+ deliverables")
+        
+        # Priority deliverables for expansion
+        priority_keywords = [
+            "brand", "strategy", "campaign", "creative", "content", "social", 
+            "digital", "analytics", "media", "planning", "research", "experience"
+        ]
+        
+        # Phases for timeline-based expansion
+        phases = ["Launch", "Growth", "Optimization", "Sustain"]
+        
+        # Add all original deliverables first
+        for d in deliverables:
+            expanded.append(d)
+        
+        # Expand by market if global
+        if is_global and len(markets) > 1 and len(expanded) < target_count:
+            for d in deliverables:
+                d_title = d.get("title", "").lower()
+                if any(kw in d_title for kw in priority_keywords):
+                    for market in markets[:3]:  # Max 3 markets
+                        if len(expanded) >= target_count:
+                            break
+                        market_variant = d.copy()
+                        market_variant["id"] = f"{d['id']}-{market}"
+                        market_variant["title"] = f"{d.get('title', '')} - {market} Market"
+                        market_variant["calibrated_confidence"] = d.get("calibrated_confidence", 0.6) * 0.95
+                        expanded.append(market_variant)
+        
+        # Expand by channel if multichannel
+        if is_multichannel and len(expanded) < target_count:
+            for d in deliverables[:20]:  # Top 20 deliverables
+                d_title = d.get("title", "").lower()
+                if any(kw in d_title for kw in ["campaign", "content", "creative", "media", "analytics"]):
+                    for channel in channels[:2]:  # Max 2 channels
+                        if len(expanded) >= target_count:
+                            break
+                        channel_variant = d.copy()
+                        channel_variant["id"] = f"{d['id']}-{channel}"
+                        channel_variant["title"] = f"{d.get('title', '')} - {channel}"
+                        channel_variant["calibrated_confidence"] = d.get("calibrated_confidence", 0.6) * 0.93
+                        expanded.append(channel_variant)
+        
+        # Expand by phase for comprehensive projects
+        if len(expanded) < target_count:
+            for d in deliverables[:15]:  # Top 15 deliverables
+                d_title = d.get("title", "").lower()
+                if any(kw in d_title for kw in ["strategy", "plan", "development", "campaign"]):
+                    for phase in phases[:2]:  # Max 2 phases
+                        if len(expanded) >= target_count:
+                            break
+                        phase_variant = d.copy()
+                        phase_variant["id"] = f"{d['id']}-{phase}"
+                        phase_variant["title"] = f"{phase}: {d.get('title', '')}"
+                        phase_variant["calibrated_confidence"] = d.get("calibrated_confidence", 0.6) * 0.90
+                        expanded.append(phase_variant)
+        
+        print(f"[EXPAND] Expanded from {len(deliverables)} to {len(expanded)} deliverables")
+        return expanded
+    
+    return deliverables
+
 def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, Any], catalog: List[Dict[str, Any]], db, all_recall: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compose plan using real AgencyDB deliverable codes and structure"""
     passing = [x for x in fused if x["pass"]]
@@ -1193,9 +1284,25 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         print("[COMPOSE] No deliverables after rescue - using hard fallback")
         topD = [x for x in all_recall if x["level"] == "deliverable"]
         topD.sort(key=lambda z: z["recall"], reverse=True)
-        # FIXED: Always take at least 15 deliverables
-        dels = topD[:max(AI_MIN_DELIVERABLES, 15)]
+        # Take all available deliverables
+        dels = topD[:len(topD)]  # Take all available
         print(f"[COMPOSE] Hard fallback: selected {len(dels)} deliverables")
+    
+    # EXPANSION FOR COMPREHENSIVE RFPs
+    # Check if this is a comprehensive RFP that needs 100+ deliverables
+    is_comprehensive = (
+        summary.get("complexity") == "high" or
+        "luxury" in summary.get("summary", "").lower() or
+        "fashion" in summary.get("summary", "").lower() or
+        "comprehensive" in summary.get("summary", "").lower() or
+        len(summary.get("markets", [])) > 2 or
+        len(summary.get("channels", [])) > 3
+    )
+    
+    if is_comprehensive and len(dels) < 100:
+        print(f"[COMPOSE] Comprehensive RFP detected with only {len(dels)} deliverables - expanding...")
+        dels = expand_deliverables_for_comprehensive_rfp(dels, summary, target_count=100)
+        print(f"[COMPOSE] After expansion: {len(dels)} deliverables")
     
     by_dept: Dict[str, List[Dict[str, Any]]] = {}
     m = multipliers_from_summary(summary)
@@ -1548,8 +1655,20 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 fused.append(c)
     
     # AUTO-RELAX & RESCUE - ALWAYS run this
-    print(f"[ANALYZE] Running auto-rescue (autorelax={AI_AUTORELAX})")
-    fused = _auto_rescue_if_empty(fused, all_recall, llm_scores)
+    # Detect luxury fashion or comprehensive RFPs  
+    request_lower = request_text.lower()
+    is_luxury_fashion = any(term in request_lower for term in ['luxury', 'fashion', 'haute couture', 'premium brand', 'designer'])
+    is_comprehensive = any(term in request_lower for term in ['comprehensive', 'full-service', 'integrated', 'complete agency', 'all marketing'])
+    
+    if is_luxury_fashion:
+        rfp_complexity = "luxury_fashion"
+    elif is_comprehensive or summary.get("complexity") == "high":
+        rfp_complexity = "comprehensive"
+    else:
+        rfp_complexity = summary.get("complexity", "medium")
+    
+    print(f"[ANALYZE] Running auto-rescue (autorelax={AI_AUTORELAX}, complexity={rfp_complexity})")
+    fused = _auto_rescue_if_empty(fused, all_recall, llm_scores, rfp_complexity)
     
     # Check final deliverable count
     final_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]

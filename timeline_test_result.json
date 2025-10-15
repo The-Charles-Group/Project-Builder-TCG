@@ -1,0 +1,207 @@
+{
+  "tasks": [
+    {
+      "id": "task_DEL-0001",
+      "name": "Content Plan",
+      "start": "2025-11-03",
+      "end": "2025-11-21",
+      "progress": 0,
+      "dependencies": "",
+      "custom_class": "workstream-content",
+      "deliverable_code": "DEL-0001",
+      "workstream": "Content",
+      "phase": "Development",
+      "hours": 80,
+      "is_milestone": false,
+      "critical_path": false,
+      "slack_days": 58,
+      "parallel_tasks": [],
+      "is_retainer": false
+    },
+    {
+      "id": "task_DEL-0002",
+      "name": "Meetings",
+      "start": "2025-11-03",
+      "end": "2025-12-06",
+      "progress": 0,
+      "dependencies": "",
+      "custom_class": "workstream-content",
+      "deliverable_code": "DEL-0002",
+      "workstream": "Content",
+      "phase": "Development",
+      "hours": 120,
+      "is_milestone": false,
+      "critical_path": false,
+      "slack_days": 50,
+      "parallel_tasks": [],
+      "is_retainer": false
+    },
+    {
+      "id": "task_DEL-0003",
+      "name": "Post-Production",
+      "start": "2025-11-24",
+      "end": "2025-12-18",
+      "progress": 0,
+      "dependencies": "",
+      "custom_class": "workstream-content",
+      "deliverable_code": "DEL-0003",
+      "workstream": "Content",
+      "phase": "Production",
+      "hours": 60,
+      "is_milestone": false,
+      "critical_path": false,
+      "slack_days": 41,
+      "parallel_tasks": [],
+      "is_retainer": false
+    },
+    {
+      "id": "task_DEL-0004",
+      "name": "Pre-Production",
+      "start": "2025-11-24",
+      "end": "2026-01-21",
+      "progress": 0,
+      "dependencies": "",
+      "custom_class": "workstream-content",
+      "deliverable_code": "DEL-0004",
+      "workstream": "Content",
+      "phase": "Production",
+      "hours": 200,
+      "is_milestone": false,
+      "critical_path": false,
+      "slack_days": 14,
+      "parallel_tasks": [],
+      "is_retainer": false
+    },
+    {
+      "id": "task_DEL-0005",
+      "name": "Production",
+      "start": "2025-11-24",
+      "end": "2026-02-17",
+      "progress": 0,
+      "dependencies": "",
+      "custom_class": "workstream-content",
+      "deliverable_code": "DEL-0005",
+      "workstream": "Content",
+      "phase": "Production",
+      "hours": 150,
+      "is_milestone": false,
+      "critical_path": false,
+      "slack_days": 24,
+      "parallel_tasks": [],
+      "is_retainer": false
+    },
+    {
+      "id": "milestone_development",
+      "name": "\ud83c\udfaf Creative Approval",
+      "start": "2025-12-06",
+      "end": "2025-12-06",
+      "progress": 0,
+      "dependencies": "",
+      "custom_class": "workstream-project-management",
+      "deliverable_code": "milestone_development",
+      "workstream": "Project Management",
+      "phase": "Development",
+      "hours": 0,
+      "is_milestone": true,
+      "critical_path": true,
+      "slack_days": 0,
+      "parallel_tasks": [],
+      "is_retainer": false
+    },
+    {
+      "id": "milestone_production",
+      "name": "\ud83c\udfaf Pre-Launch Review",
+      "start": "2026-02-17",
+      "end": "2026-02-17",
+      "progress": 0,
+      "dependencies": "",
+      "custom_class": "workstream-project-management",
+      "deliverable_code": "milestone_production",
+      "workstream": "Project Management",
+      "phase": "Production",
+      "hours": 0,
+      "is_milestone": true,
+      "critical_path": true,
+      "slack_days": 0,
+      "parallel_tasks": [],
+      "is_retainer": false
+    }
+  ],
+  "reasoning": {
+    "overall_strategy": "Timeline optimized for balanced delivery with 1 parallel workstreams",
+    "critical_path_explanation": "2 tasks on critical path driving 106-day timeline",
+    "phase_breakdown": {
+      "Discovery & Strategy": {
+        "tasks": 0,
+        "workstreams": []
+      },
+      "Development": {
+        "tasks": 2,
+        "workstreams": [
+          "Content"
+        ]
+      },
+      "Production": {
+        "tasks": 3,
+        "workstreams": [
+          "Content"
+        ]
+      },
+      "Launch & Optimization": {
+        "tasks": 0,
+        "workstreams": []
+      },
+      "Ongoing Management": {
+        "tasks": 0,
+        "workstreams": []
+      }
+    },
+    "workstream_allocation": {
+      "Content": 5
+    },
+    "parallel_opportunities": [],
+    "dependency_insights": [],
+    "optimization_notes": [
+      "Applied balanced optimization strategy",
+      "Identified 0 parallel work opportunities",
+      "Added 2 project milestones",
+      "Average task slack: 26.7 days"
+    ],
+    "risk_factors": [
+      "Resource overallocation: Editor, Content Writer",
+      "Significant phase overlaps: Development and Production, Production and Launch & Optimization"
+    ],
+    "ai_strategic_rationale": "Timeline optimized for balanced delivery",
+    "risk_mitigation": [
+      "Regular review checkpoints",
+      "Buffer time included"
+    ],
+    "acceleration_opportunities": [
+      "Parallel workstreams identified"
+    ],
+    "resource_optimization": "Resources leveled across departments",
+    "client_touchpoints": [
+      "Weekly updates",
+      "Phase gate reviews"
+    ],
+    "confidence_level": 75
+  },
+  "metadata": {
+    "total_duration_days": 106,
+    "project_start": "2025-11-03",
+    "project_end": "2026-02-17",
+    "total_tasks": 7,
+    "critical_tasks": 2,
+    "milestones": 2,
+    "workstreams": [
+      "Content"
+    ],
+    "phases": [
+      "Development",
+      "Production"
+    ],
+    "optimization_mode": "balanced"
+  },
+  "success": true,
+  "message": "Generated timeline with 7 tasks using intelligent scheduler"
+}

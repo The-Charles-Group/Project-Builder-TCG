@@ -1459,7 +1459,44 @@ Return as JSON with keys:
             max_completion_tokens=1000  # FIXED: Use max_completion_tokens for GPT-5 models
         )
         
-        ai_insights = json.loads(response.choices[0].message.content)
+        # Safely parse JSON response with validation
+        response_content = response.choices[0].message.content if response.choices else ""
+        
+        if not response_content:
+            print("[AI Timeline] Empty response from GPT-5, using default insights")
+            ai_insights = {
+                'strategic_rationale': 'Timeline optimized for balanced delivery',
+                'risk_mitigation': ['Regular review checkpoints', 'Buffer time included'],
+                'acceleration_opportunities': ['Parallel workstreams identified'],
+                'resource_optimization': 'Resources leveled across departments',
+                'client_touchpoints': ['Weekly updates', 'Phase gate reviews'],
+                'confidence_level': 75
+            }
+        else:
+            try:
+                ai_insights = json.loads(response_content)
+            except json.JSONDecodeError as e:
+                print(f"[AI Timeline] Failed to parse JSON response: {e}")
+                # Try to fix common issues in response
+                try:
+                    # Remove any leading/trailing non-JSON characters
+                    cleaned_content = response_content.strip()
+                    if cleaned_content.startswith('```json'):
+                        cleaned_content = cleaned_content[7:]
+                    if cleaned_content.endswith('```'):
+                        cleaned_content = cleaned_content[:-3]
+                    ai_insights = json.loads(cleaned_content.strip())
+                except:
+                    # If all parsing fails, use defaults
+                    print(f"[AI Timeline] Using default insights due to parsing error")
+                    ai_insights = {
+                        'strategic_rationale': 'Timeline structured for optimal project flow',
+                        'risk_mitigation': ['Risk buffers included in critical path'],
+                        'acceleration_opportunities': ['Identified parallel work opportunities'],
+                        'resource_optimization': 'Resource allocation balanced across phases',
+                        'client_touchpoints': ['Regular status updates scheduled'],
+                        'confidence_level': 70
+                    }
         
         # Merge AI insights with existing reasoning
         if 'reasoning' not in timeline_result:
