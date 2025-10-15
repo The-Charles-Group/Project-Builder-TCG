@@ -1633,14 +1633,20 @@
         
         // FIX #2: Save scenarios to localStorage for persistence between steps
         try {
+          // Ensure session ID is preserved
           const sessionId = window.APB?.sessionId || 
                           localStorage.getItem('current_session_id') || 
                           'default_session';
+          
+          // Save session ID for consistency
+          localStorage.setItem('current_session_id', sessionId);
+          
           const storageKey = `scenarios_${sessionId}`;
           localStorage.setItem(storageKey, JSON.stringify(scenarios));
           // Also save without session ID as fallback
           localStorage.setItem('latest_scenarios', JSON.stringify(scenarios));
           console.log('[BUILD] Saved scenarios to localStorage with key:', storageKey);
+          console.log('[BUILD] Session ID preserved:', sessionId);
         } catch (err) {
           console.error('[BUILD] Failed to save scenarios to localStorage:', err);
         }
