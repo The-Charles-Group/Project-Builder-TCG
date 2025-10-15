@@ -90,14 +90,20 @@ class AIAssistant {
                     <div class="ai-chat-input">
                         <textarea 
                             id="ai-chat-input" 
-                            placeholder="Type your command here..."
+                            placeholder="Type your command or drag & drop files here..."
                             rows="2"
                             maxlength="500"
                         ></textarea>
-                        <button id="ai-send-btn" class="ai-send-btn" disabled>
-                            <span class="send-icon">➤</span>
-                            <span class="loading-icon" style="display: none;">⏳</span>
-                        </button>
+                        <div class="ai-input-controls">
+                            <input type="file" id="ai-file-input" accept=".pdf,.docx,.txt,.xlsx" style="display:none;">
+                            <button id="ai-file-btn" class="ai-file-btn" title="Upload Document">
+                                <span>📎</span>
+                            </button>
+                            <button id="ai-send-btn" class="ai-send-btn" disabled>
+                                <span class="send-icon">➤</span>
+                                <span class="loading-icon" style="display: none;">⏳</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -441,11 +447,34 @@ class AIAssistant {
             
             .ai-chat-input {
                 display: flex;
+                flex-direction: column;
                 gap: 8px;
                 padding: 12px;
                 background: rgba(0, 0, 0, 0.2);
                 border-top: 1px solid rgba(139, 92, 246, 0.2);
                 border-radius: 0 0 12px 12px;
+            }
+            
+            .ai-input-controls {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+            }
+            
+            .ai-file-btn {
+                background: rgba(139, 92, 246, 0.2);
+                color: #8b5cf6;
+                border: 1px solid rgba(139, 92, 246, 0.4);
+                padding: 8px;
+                border-radius: 6px;
+                cursor: pointer;
+                transition: all 0.2s;
+                font-size: 18px;
+            }
+            
+            .ai-file-btn:hover {
+                background: rgba(139, 92, 246, 0.3);
+                transform: scale(1.05);
             }
             
             #ai-chat-input {
@@ -588,6 +617,43 @@ class AIAssistant {
                 document.getElementById('ai-send-btn').disabled = false;
             }
         });
+        
+        // File upload button
+        document.getElementById('ai-file-btn').addEventListener('click', () => {
+            document.getElementById('ai-file-input').click();
+        });
+        
+        // File input change
+        document.getElementById('ai-file-input').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                this.handleFileUpload(file);
+            }
+        });
+        
+        // Drag and drop support for files
+        const chatInput = document.getElementById('ai-chat-input');
+        chatInput.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            chatInput.style.background = 'rgba(139, 92, 246, 0.1)';
+            chatInput.placeholder = '📥 Drop file here...';
+        });
+        
+        chatInput.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            chatInput.style.background = '';
+            chatInput.placeholder = 'Type your command or drag & drop files here...';
+        });
+        
+        chatInput.addEventListener('drop', (e) => {
+            e.preventDefault();
+            chatInput.style.background = '';
+            chatInput.placeholder = 'Type your command or drag & drop files here...';
+            const file = e.dataTransfer.files[0];
+            if (file) {
+                this.handleFileUpload(file);
+            }
+        });
     }
     
     async checkAgentStatus() {
@@ -644,6 +710,61 @@ class AIAssistant {
             sidebar.classList.add('minimized');
         } else {
             sidebar.classList.remove('minimized');
+        }
+    }
+    
+    async handleFileUpload(file) {
+        // Show file info in chat
+        this.addMessage(`📎 Uploaded file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`, 'user');
+        
+        // Check file type
+        const fileExt = file.name.split('.').pop().toLowerCase();
+        
+        if (['pdf', 'docx', 'txt'].includes(fileExt)) {
+            // This is likely an RFP document
+            this.addMessage(`🔍 Analyzing document "${file.name}" as RFP...`, 'assistant');
+            
+            // Upload the file to Step 1
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                // First upload the file
+                const uploadResponse = await fetch('/api/upload_rfp', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (uploadResponse.ok) {
+                    const result = await uploadResponse.json();
+                    this.addMessage(`✅ RFP uploaded successfully! Extracted ${result.text_length || 0} characters.`, 'assistant');
+                    
+                    // Store the text for Step 1
+                    if (result.text) {
+                        document.getElementById('rfpText').value = result.text;
+                        sessionStorage.setItem('rfp_text', result.text);
+                    }
+                    
+                    // Auto-trigger deep analysis
+                    this.addMessage('🧠 Starting deep AI analysis with GPT-5...', 'assistant');
+                    setTimeout(() => {
+                        // Click the analyze button in deep mode
+                        const deepModeBtn = document.querySelector('[data-mode="deep"]');
+                        if (deepModeBtn) deepModeBtn.click();
+                    }, 500);
+                } else {
+                    this.addMessage(`❌ Failed to upload file. Please try again.`, 'assistant');
+                }
+            } catch (error) {
+                console.error('[CHARLES] File upload error:', error);
+                this.addMessage(`❌ Error uploading file: ${error.message}`, 'assistant');
+            }
+        } else if (fileExt === 'xlsx') {
+            // Excel file - likely configuration
+            this.addMessage(`📊 Processing Excel configuration file "${file.name}"...`, 'assistant');
+            this.addMessage('⚠️ Excel configuration upload not yet implemented.', 'assistant');
+        } else {
+            this.addMessage(`⚠️ Unsupported file type: .${fileExt}. Please upload PDF, DOCX, TXT, or XLSX files.`, 'assistant');
         }
     }
     
