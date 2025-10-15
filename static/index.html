@@ -46,6 +46,28 @@
         <input type="hidden" id="analysis-mode" value="fast">
       </div>
       
+      <!-- Industry Template Selector -->
+      <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(217, 70, 239, 0.1), rgba(139, 92, 246, 0.1)); border: 1px solid rgba(217, 70, 239, 0.2); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #d946ef; font-size: 1.1em;">🏢 Industry Template</h3>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <select id="industry-selector" style="flex: 1; padding: 10px; background: #1a1a1a; color: white; border: 1px solid #4a5568; border-radius: 6px; font-size: 0.95em;">
+            <option value="">Select Industry (Optional)</option>
+            <option value="luxury_fashion">Luxury & Fashion</option>
+            <option value="beauty" disabled>Beauty & Cosmetics (Coming Soon)</option>
+            <option value="real_estate" disabled>Real Estate (Coming Soon)</option>
+            <option value="retail" disabled>Retail (Coming Soon)</option>
+            <option value="lifestyle" disabled>Lifestyle (Coming Soon)</option>
+            <option value="tech" disabled>Technology (Coming Soon)</option>
+          </select>
+          <button id="btn-apply-template" class="btn-sm" style="background: #d946ef; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; display: none;">
+            Apply Template
+          </button>
+        </div>
+        <div id="industry-info" style="margin-top: 8px; font-size: 0.85em; color: var(--muted); display: none;">
+          <div id="industry-description"></div>
+        </div>
+      </div>
+      
       <!-- Paste option -->
       <label for="rfpText">RFP Content</label>
       <textarea id="rfpText" placeholder="Paste the RFP, agency brief, or request here..."></textarea>
@@ -1447,6 +1469,9 @@
     async function buildScenariosAB() {
       // Make this function globally accessible
       window.buildScenariosAB = buildScenariosAB;
+      
+      console.log('[BUILD] Starting buildScenariosAB()...');
+      
       // Check all possible sources of selected deliverables
       const selectedFromAppState = appState.selectedCodes || [];
       const selectedFromGlobal = window.selectedCodes || [];
@@ -1454,7 +1479,13 @@
         Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
       const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
       
-      console.log("buildScenariosAB validation:", { selectedFromAppState, selectedFromGlobal, selectedFromScenarios, allSelected });
+      console.log("[BUILD] Validation:", { 
+        selectedFromAppState, 
+        selectedFromGlobal, 
+        selectedFromScenarios, 
+        allSelected,
+        count: allSelected.length 
+      });
       
       if (allSelected.length === 0) {
         alert('No deliverables selected. Please complete Step 2 first.');
@@ -1490,33 +1521,96 @@
         retainers: retainers  // Include retainer data from new toggle system
       };
 
-      const resp = await fetch('/api/build', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload)
-      });
+      console.log('[BUILD] Sending payload to /api/build:', payload);
 
-      const json = await resp.json();
-      const scenarios = json.scenarios || {};
-      
-      // Store scenarios globally for timeline and export
-      window.appState = window.appState || {};
-      appState.scenarios = scenarios;      // canonical
-      window.latestScenarios = scenarios;  // legacy alias (works with older code)
-      
-      renderScenario('scenarioA', scenarios.A);
-      
-      // Display budget information if provided
-      displayBudgetInfo(scenarios);
-      
-      // Call once after /api/build succeeds:
-      // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
-      const step5 = document.getElementById('step5');
-      if (step5) step5.style.display = 'block';
-      
-      // Only show Step 4 if the timeline elements are ready
-      const step4 = document.getElementById('step4');
-      if (step4) showStep4('A');
+      try {
+        const resp = await fetch('/api/build', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        if (!resp.ok) {
+          const errorText = await resp.text().catch(() => resp.statusText);
+          console.error('[BUILD] API Error:', resp.status, errorText);
+          alert(`Build failed (${resp.status}): ${errorText}`);
+          return;
+        }
+
+        const json = await resp.json();
+        console.log('[BUILD] API Response:', json);
+        
+        const scenarios = json.scenarios || {};
+        
+        // Validate scenario structure
+        if (!scenarios || !scenarios.A) {
+          console.error('[BUILD] Invalid scenario structure:', json);
+          alert('Invalid build response: missing scenario A');
+          return;
+        }
+        
+        // Validate scenario A has required fields
+        if (!scenarios.A.items || !Array.isArray(scenarios.A.items)) {
+          console.error('[BUILD] Scenario A missing items:', scenarios.A);
+          alert('Invalid scenario A: missing items array');
+          return;
+        }
+        
+        console.log('[BUILD] Successfully built scenarios:', {
+          scenarioA_items: scenarios.A.items.length,
+          scenarioA_total: scenarios.A.totals
+        });
+        
+        // CRITICAL FIX: Store scenarios globally for timeline and export
+        window.appState = window.appState || {};
+        appState.scenarios = scenarios;      // canonical
+        window.latestScenarios = scenarios;  // legacy alias (works with older code)
+        
+        // FIX #1: Set window.SCENARIOS (THIS WAS MISSING!)
+        window.SCENARIOS = scenarios;
+        console.log('[BUILD] Set window.SCENARIOS:', window.SCENARIOS);
+        
+        // FIX #2: Call updateAIButtonStates to update button states (THIS WAS MISSING!)
+        if (typeof updateAIButtonStates === 'function') {
+          updateAIButtonStates();
+          console.log('[BUILD] Called updateAIButtonStates()');
+        } else {
+          console.warn('[BUILD] updateAIButtonStates function not found');
+        }
+        
+        // Render scenario A
+        if (typeof renderScenario === 'function') {
+          renderScenario('scenarioA', scenarios.A);
+          console.log('[BUILD] Rendered scenario A');
+        } else {
+          console.warn('[BUILD] renderScenario function not found');
+        }
+        
+        // Display budget information if provided
+        if (typeof displayBudgetInfo === 'function') {
+          displayBudgetInfo(scenarios);
+        }
+        
+        // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
+        const step5 = document.getElementById('step5');
+        if (step5) {
+          step5.style.display = 'block';
+          console.log('[BUILD] Showed Step 5');
+        }
+        
+        // Only show Step 4 if the timeline elements are ready
+        const step4 = document.getElementById('step4');
+        if (step4 && typeof showStep4 === 'function') {
+          showStep4('A');
+          console.log('[BUILD] Showed Step 4 with scenario A');
+        }
+        
+        console.log('[BUILD] Build process completed successfully!');
+        
+      } catch (error) {
+        console.error('[BUILD] Unexpected error:', error);
+        alert(`Build failed: ${error.message}`);
+      }
     }
     
     // Legacy function name for backward compatibility

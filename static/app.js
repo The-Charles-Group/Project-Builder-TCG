@@ -118,6 +118,105 @@ const SessionManager = {
 
 window.SessionManager = SessionManager;
 
+// ================================================================================
+// Industry Template System
+// ================================================================================
+let selectedIndustry = null;
+let industryDeliverables = [];
+
+// Initialize industry selector
+document.addEventListener('DOMContentLoaded', function() {
+  const selector = document.getElementById('industry-selector');
+  if (selector) {
+    selector.addEventListener('change', handleIndustrySelection);
+  }
+});
+
+async function handleIndustrySelection() {
+  const selector = document.getElementById('industry-selector');
+  const applyBtn = document.getElementById('btn-apply-template');
+  const infoDiv = document.getElementById('industry-info');
+  const descDiv = document.getElementById('industry-description');
+  
+  selectedIndustry = selector.value;
+  
+  if (!selectedIndustry) {
+    applyBtn.style.display = 'none';
+    infoDiv.style.display = 'none';
+    industryDeliverables = [];
+    return;
+  }
+  
+  // Show apply button
+  applyBtn.style.display = 'block';
+  
+  // Show industry-specific information
+  infoDiv.style.display = 'block';
+  
+  if (selectedIndustry === 'luxury_fashion') {
+    descDiv.innerHTML = `
+      <strong>Luxury & Fashion Template:</strong><br>
+      • Seasonal campaign planning (SS/FW collections)<br>
+      • Fashion week activations & runway shows<br>
+      • Influencer partnerships & celebrity ambassadors<br>
+      • Heritage storytelling & craftsmanship content<br>
+      • Exclusive events & VIP experiences<br>
+      • Editorial shoots & lookbook production<br>
+      <span style="color: #d946ef;">✨ Includes 1.5x-2x luxury pricing multipliers</span>
+    `;
+  }
+  
+  // Fetch industry-specific deliverables when button clicked
+  applyBtn.onclick = async () => {
+    await applyIndustryTemplate();
+  };
+}
+
+async function applyIndustryTemplate() {
+  if (!selectedIndustry) return;
+  
+  const applyBtn = document.getElementById('btn-apply-template');
+  applyBtn.disabled = true;
+  applyBtn.textContent = 'Applying...';
+  
+  try {
+    // Get RFP text if available
+    const rfpText = document.getElementById('rfpText').value || '';
+    
+    // Fetch industry-specific suggestions
+    const response = await fetch('/api/industry/suggest-deliverables', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        industry: selectedIndustry,
+        rfp_text: rfpText
+      })
+    });
+    
+    if (!response.ok) throw new Error('Failed to fetch industry deliverables');
+    
+    const data = await response.json();
+    industryDeliverables = data.deliverables || [];
+    
+    // Show a notification
+    if (industryDeliverables.length > 0) {
+      alert(`✅ Applied ${data.industry} template!\n\n${industryDeliverables.length} fashion-specific deliverables loaded.\n\nClick "Analyze with AI" to incorporate these into your project.`);
+      
+      // Store for use during analysis
+      sessionStorage.setItem('industry_template', selectedIndustry);
+      sessionStorage.setItem('industry_deliverables', JSON.stringify(industryDeliverables));
+    } else {
+      alert('No specific deliverables found for this industry template.');
+    }
+  } catch (err) {
+    console.error('Error applying industry template:', err);
+    alert('Failed to apply industry template. Please try again.');
+  } finally {
+    applyBtn.disabled = false;
+    applyBtn.textContent = 'Apply Template';
+  }
+}
+
 // Clear All Data with Confirmation Dialog
 async function clearAllDataWithConfirmation() {
   const confirmed = confirm(

@@ -124,7 +124,42 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[STARTUP][WARN] Could not preload Fast2 analyzer: {e}")
     
-    # 4) Start background job cleanup task
+    # 4) Test GPT-5 availability
+    app.state.gpt5_available = False
+    print("[STARTUP] Testing GPT-5 availability...")
+    try:
+        from gpt5_helpers import gpt5_text
+        from openai import OpenAI
+        
+        # Check if we have API key
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if api_key:
+            try:
+                client = OpenAI(api_key=api_key)
+                # Test with minimal token usage, retry disabled for quick test
+                test_result = gpt5_text(
+                    client,
+                    messages=[{"role": "user", "content": "Reply with: OK"}],
+                    tier="mini",  # Use cheapest tier for test
+                    max_output_tokens=100,  # Increased to avoid incomplete responses
+                    use_retry=False  # Don't retry for startup test
+                )
+                if test_result and "OK" in test_result.upper():
+                    app.state.gpt5_available = True
+                    print("[STARTUP] ✅ GPT-5 is available and responding correctly")
+                else:
+                    print(f"[STARTUP] ⚠️ GPT-5 responded but with unexpected content: {test_result[:50]}")
+            except Exception as e:
+                print(f"[STARTUP] ⚠️ GPT-5 test failed: {str(e)[:200]}")
+                print("[STARTUP] ℹ️ System will use embedding-based fallback until GPT-5 becomes available")
+        else:
+            print("[STARTUP] ⚠️ No OpenAI API key found - GPT-5 features disabled")
+            print("[STARTUP] ℹ️ Add OPENAI_API_KEY to environment to enable GPT-5 intelligence")
+    except ImportError as e:
+        print(f"[STARTUP] ⚠️ Could not import GPT-5 helpers: {e}")
+        print("[STARTUP] ℹ️ System will operate in embedding-only mode")
+    
+    # 5) Start background job cleanup task
     async def periodic_cleanup():
         while True:
             await asyncio.sleep(300)  # Every 5 minutes
@@ -133,7 +168,12 @@ async def lifespan(app: FastAPI):
     app.state._cleanup_task = asyncio.create_task(periodic_cleanup())
     print("[STARTUP] Background job cleanup task started")
     
-    print("[STARTUP] ✅ Agency Project Builder ready!")
+    # Final status summary
+    if app.state.gpt5_available:
+        print("[STARTUP] ✅ Agency Project Builder ready with full GPT-5 intelligence!")
+    else:
+        print("[STARTUP] ✅ Agency Project Builder ready (using embedding fallback mode)")
+        print("[STARTUP] ℹ️ To enable GPT-5: ensure OPENAI_API_KEY is set and API is accessible")
     
     yield  # App runs here
     
@@ -168,6 +208,13 @@ except ImportError as e:
 
 # ---------- AI Planner Integration (AgencyDB) ----------
 from ai_planner_agencydb import mount_routes_agencydb
+
+# ---------- Industry Template System Import ----------
+from luxury_fashion_template import (
+    get_industry_template,
+    get_available_industries,
+    LuxuryFashionTemplate
+)
 
 # ---------- Job Tracking System for Async Image Processing ----------
 class JobStatus(str, Enum):
@@ -4146,11 +4193,65 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 # Get deliverable details from database
                 db_row = DB.deliverables[DB.deliverables['Deliverable_Code'] == code]
                 if not db_row.empty:
+                    # Helper to normalize department names
+                    def normalize_department(dept_str):
+                        """Normalize department names to match frontend expectations"""
+                        if not dept_str or str(dept_str).strip() == 'nan':
+                            return 'Strategy'
+                        
+                        dept_lower = str(dept_str).strip().lower()
+                        
+                        # Map to standard departments
+                        if 'creative' in dept_lower:
+                            return 'Creative'
+                        elif 'paid' in dept_lower or 'media' in dept_lower:
+                            return 'Paid Media'
+                        elif 'tech' in dept_lower or 'dev' in dept_lower:
+                            return 'Technology'
+                        elif 'content' in dept_lower:
+                            return 'Content'
+                        elif 'integrated' in dept_lower or 'marketing management' in dept_lower:
+                            return 'Integrated Marketing Management'
+                        elif 'project' in dept_lower and 'management' in dept_lower:
+                            return 'Project Management'
+                        elif 'quality' in dept_lower or 'qa' in dept_lower:
+                            return 'Quality Assurance'
+                        elif 'account' in dept_lower:
+                            return 'Account Management'
+                        elif 'strategy' in dept_lower or 'strategic' in dept_lower:
+                            return 'Strategy'
+                        else:
+                            # Return original if no match, but capitalize properly
+                            return ' '.join(word.capitalize() for word in str(dept_str).strip().split())
+                    
+                    # Get department from database - check different possible column names
+                    department = 'Strategy'  # Default
+                    for col_name in ['Service_Department', 'Service Department', 'Department']:
+                        if col_name in db_row.columns and not db_row[col_name].empty:
+                            dept_value = str(db_row[col_name].iloc[0]).strip()
+                            if dept_value and dept_value != 'nan':
+                                department = normalize_department(dept_value)
+                                break
+                    
+                    # Also try to get department from all_rows if not in deliverables
+                    if department == 'Strategy' and DB.all_rows is not None:
+                        dept_rows = DB.all_rows[DB.all_rows['Deliverable_Code'] == code]
+                        if not dept_rows.empty:
+                            for col_name in ['Service_Department', 'Service Department', 'Department']:
+                                if col_name in dept_rows.columns:
+                                    dept_values = dept_rows[col_name].dropna()
+                                    if not dept_values.empty:
+                                        # Get the most common department for this deliverable
+                                        dept_value = str(dept_values.value_counts().idxmax()).strip()
+                                        if dept_value and dept_value != 'nan':
+                                            department = normalize_department(dept_value)
+                                            break
+                    
                     # Enrich with database data
                     enriched = {
                         'deliverable_code': code,
                         'deliverable_name': db_row['Deliverable'].iloc[0] if 'Deliverable' in db_row.columns else deliv.get('name', ''),
-                        'department': db_row['Department'].iloc[0] if 'Department' in db_row.columns else deliv.get('department', 'Strategy'),
+                        'department': department,
                         'total_hours': deliv.get('hours', 0) or deliv.get('total_hours', 0),
                         'components': deliv.get('components', []),
                         'is_retainer': deliv.get('is_retainer', False),
@@ -5045,6 +5146,131 @@ async def api_retainer_distribution(payload: RetainerDistributionPayload):
             {"success": False, "error": str(e)},
             status_code=500
         )
+
+# ========== Industry Template API Endpoints ==========
+@app.get("/api/industry/templates")
+def get_industry_templates():
+    """Return list of available industry templates with metadata"""
+    return {
+        "templates": get_available_industries(),
+        "default": None  # No default, let user choose
+    }
+
+@app.post("/api/industry/suggest-deliverables")
+def suggest_industry_deliverables(request: dict):
+    """Suggest deliverables based on selected industry and RFP keywords"""
+    industry = request.get('industry', '')
+    rfp_text = request.get('rfp_text', '')
+    
+    if not industry:
+        return {"deliverables": [], "message": "No industry selected"}
+    
+    template = get_industry_template(industry)
+    if not template:
+        return {"deliverables": [], "message": f"Template not available for {industry}"}
+    
+    # Extract keywords from RFP
+    keywords = []
+    if rfp_text:
+        import re
+        # Extract meaningful words (3+ chars)
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', rfp_text.lower())
+        
+        # Industry-specific keywords based on selected industry
+        if industry == "luxury_fashion":
+            industry_keywords = ["fashion", "luxury", "collection", "runway", "show", "campaign", 
+                              "lookbook", "editorial", "influencer", "heritage", "event", "gala",
+                              "spring", "summer", "fall", "winter", "season", "week", "paris",
+                              "milan", "london", "new york", "celebrity", "ambassador", "boutique",
+                              "flagship", "exclusive", "premium", "haute", "couture", "ready-to-wear"]
+        elif industry == "beauty":
+            industry_keywords = ["beauty", "cosmetic", "skincare", "makeup", "launch", "product",
+                              "tutorial", "influencer", "clinical", "ingredient", "sustainable",
+                              "sephora", "ulta", "sample", "event", "campaign", "seeding",
+                              "collection", "holiday", "seasonal", "education", "masterclass",
+                              "mua", "artist", "clean", "natural", "organic", "vegan", "cruelty-free",
+                              "packaging", "refill", "efficacy", "dermatologist", "before", "after",
+                              "innovation", "technology", "botanical", "formula", "retail", "ecommerce",
+                              "virtual", "consultation", "photography", "social", "instagram", "tiktok"]
+        else:
+            # Generic keywords for other industries
+            industry_keywords = ["campaign", "launch", "marketing", "digital", "content", "social",
+                              "event", "production", "strategy", "brand", "creative", "video"]
+        
+        keywords = [w for w in words if w in industry_keywords]
+    
+    # Get suggested deliverables from template
+    suggested = template.get_suggested_deliverables(keywords)
+    
+    return {
+        "industry": industry,
+        "deliverables": suggested,
+        "keywords_found": keywords,
+        "total_suggested": len(suggested)
+    }
+
+@app.post("/api/industry/calculate-timeline")
+def calculate_industry_timeline(request: dict):
+    """Calculate industry-specific timeline with milestones"""
+    industry = request.get('industry', '')
+    deliverable_codes = request.get('deliverable_codes', [])
+    start_date_str = request.get('start_date', datetime.datetime.now().isoformat())
+    
+    if not industry:
+        return {"error": "No industry selected"}
+    
+    template = get_industry_template(industry)
+    if not template:
+        return {"error": f"Template not available for {industry}"}
+    
+    # Parse start date
+    try:
+        start_date = datetime.datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
+    except:
+        start_date = datetime.datetime.now()
+    
+    # Calculate timeline - handle real estate specific parameters
+    if industry == "real_estate":
+        project_phase = request.get('project_phase', 'sales_launch')
+        timeline = template.calculate_timeline(deliverable_codes, start_date, project_phase)
+    else:
+        timeline = template.calculate_timeline(deliverable_codes, start_date)
+    
+    return {
+        "industry": industry,
+        "timeline": timeline,
+        "start_date": start_date.isoformat(),
+        "deliverable_count": len(deliverable_codes)
+    }
+
+@app.post("/api/industry/calculate-pricing")
+def calculate_industry_pricing(request: dict):
+    """Calculate industry-specific pricing with luxury adjustments"""
+    industry = request.get('industry', '')
+    deliverable_codes = request.get('deliverable_codes', [])
+    base_rate = request.get('base_rate', 150)
+    
+    if not industry:
+        return {"error": "No industry selected"}
+    
+    template = get_industry_template(industry)
+    if not template:
+        return {"error": f"Template not available for {industry}"}
+    
+    # Calculate pricing - handle real estate specific parameters
+    if industry == "real_estate":
+        property_type = request.get('property_type', None)
+        num_phases = request.get('num_phases', 1)
+        pricing = template.calculate_pricing(deliverable_codes, base_rate, property_type, num_phases)
+    else:
+        pricing = template.calculate_pricing(deliverable_codes, base_rate)
+    
+    return {
+        "industry": industry,
+        "pricing": pricing,
+        "base_rate": base_rate,
+        "deliverable_count": len(deliverable_codes)
+    }
 
 @app.post("/api/ai/analyze_project_retainer")
 async def analyze_project_retainer(request: dict):

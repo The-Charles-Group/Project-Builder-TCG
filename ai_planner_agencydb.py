@@ -213,10 +213,14 @@ else:
 # The embedding_cache module handles caching automatically
 
 def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 8192) -> dict:
-    """Use GPT-5 helper for JSON responses with schema - FIXED: Raises exceptions for empty results"""
+    """
+    Use GPT-5 helper for JSON responses with schema - with retry logic.
+    Only raises exceptions after all retries fail.
+    """
     if not OPENAI_API_KEY:
-        # FIXED: Raise exception instead of returning empty results
-        raise Exception("[GPT-5] No API key available - cannot process request")
+        error_msg = "[GPT-5] No API key available - cannot process request"
+        print(error_msg)
+        raise Exception(error_msg)
     
     try:
         # Use the helper from gpt5_helpers - it handles model selection and enforcement
@@ -227,28 +231,38 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 8192)
             {"role": "user", "content": prompt}
         ]
         
-        # gpt5_json_schema needs a client, messages, json_schema
+        print(f"[GPT-5] Calling GPT-5 ({tier} tier) with retry logic enabled...")
+        
+        # gpt5_json_schema now includes retry logic by default
         result = gpt5_json_schema(
             client=oai,  # Use the global OpenAI client
             messages=messages,
             json_schema=schema,
             tier=tier,
-            max_output_tokens=max_output_tokens
+            max_output_tokens=max_output_tokens,
+            use_retry=True  # Enable retry logic with exponential backoff
         )
         
-        # FIXED: Check if result has sufficient items
+        # Check if result has sufficient items
         if "items" in schema.get("properties", {}):
             items = result.get("items", [])
             if len(items) < AI_MIN_DELIVERABLES:
+                # This is a content validation issue, not a connection issue
                 print(f"[GPT-5 INSUFFICIENT] Got only {len(items)} items, less than minimum {AI_MIN_DELIVERABLES}")
-                raise Exception(f"GPT-5 returned insufficient items: {len(items)} < {AI_MIN_DELIVERABLES}")
+                print(f"[GPT-5 INSUFFICIENT] Will attempt to supplement with embedding-based suggestions")
+                # Don't raise exception here - return partial results to allow supplementation
+                return result
         
+        print(f"[GPT-5 SUCCESS] Received valid response with {len(result.get('items', []))} items")
         return result
     
     except Exception as e:
-        print(f"[GPT-5 API Error] OpenAI call failed or returned insufficient results: {e}")
-        # FIXED: Raise exception to trigger rescue function
-        raise Exception(f"GPT-5 failed: {str(e)}")
+        # All retries have been exhausted at this point
+        error_msg = f"GPT-5 failed after all retry attempts: {str(e)}"
+        print(f"[GPT-5 FINAL ERROR] {error_msg}")
+        print(f"[GPT-5 FALLBACK] System will now use embedding-based analysis as fallback")
+        # Raise exception to trigger embedding fallback
+        raise Exception(error_msg)
 
 def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 8192) -> dict:
     """Use simplified GPT-5 helper for JSON schema responses"""
@@ -921,6 +935,9 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
 def _generate_embedding_fallback_scores(candidates: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Generate pure embedding-based fallback scores when GPT-5 is completely unavailable"""
     print(f"[EMBEDDING FALLBACK] Generating scores for {len(candidates)} candidates using pure embeddings")
+    print(f"[USER NOTICE] ⚠️ GPT-5 is currently unavailable after multiple retry attempts.")
+    print(f"[USER NOTICE] 📊 Using advanced embedding-based analysis as backup to provide recommendations.")
+    print(f"[USER NOTICE] ℹ️ Results may be less contextually aware but still based on semantic similarity.")
     
     out = []
     media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
@@ -954,11 +971,12 @@ def _generate_embedding_fallback_scores(candidates: List[Dict[str, Any]], summar
             "level": c["level"],
             "relevance": min(100, fallback_confidence * 100),
             "confidence": fallback_confidence,
-            "why": f"Pure embedding match (score: {embedding_score:.2f}){' with media boost' if boost_applied else ''}",
-            "risks": "GPT-5 unavailable - pure embedding fallback",
+            "why": f"Semantic similarity match (score: {embedding_score:.2f}){' with domain-specific boost' if boost_applied else ''}",
+            "risks": "⚠️ Using embedding-based fallback (GPT-5 unavailable after retries)",
             "select": True if c["level"] == "deliverable" else fallback_confidence > 0.35  # Very low threshold for tasks
         })
     
+    print(f"[EMBEDDING FALLBACK] Completed fallback scoring for {len(out)} candidates")
     return out
 
 # [Continued in next message due to length...]

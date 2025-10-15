@@ -38,7 +38,8 @@ import os
 import re
 import types
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
+import time
 
 try:
     # If the OpenAI SDK is not installed, we keep graceful behavior.
@@ -85,6 +86,83 @@ _TIER_TO_EFFORT = {
     "accurate": "high",
 }
 
+# Retry configuration
+MAX_RETRIES = int(os.environ.get("GPT5_MAX_RETRIES", "3"))  # Number of retries
+BASE_DELAY = float(os.environ.get("GPT5_BASE_DELAY", "1.0"))  # Base delay in seconds
+MAX_DELAY = float(os.environ.get("GPT5_MAX_DELAY", "4.0"))  # Max delay in seconds
+
+# ---------------------------------------------------------------------------
+# Retry Logic with Exponential Backoff
+# ---------------------------------------------------------------------------
+
+def retry_with_exponential_backoff(
+    func: Callable,
+    max_retries: int = MAX_RETRIES,
+    base_delay: float = BASE_DELAY,
+    max_delay: float = MAX_DELAY,
+    log_prefix: str = "GPT-5",
+    raise_on_failure: bool = True
+) -> Any:
+    """
+    Retry a function with exponential backoff.
+    
+    Args:
+        func: Function to retry (should be callable with no arguments)
+        max_retries: Maximum number of retries (default 3)
+        base_delay: Initial delay in seconds (default 1.0)
+        max_delay: Maximum delay in seconds (default 4.0)
+        log_prefix: Prefix for log messages
+        raise_on_failure: Whether to raise the last exception or return None
+    
+    Returns:
+        The function result if successful, None if all retries failed and raise_on_failure=False
+    
+    Raises:
+        The last exception encountered if raise_on_failure=True
+    """
+    last_exception = None
+    delay = base_delay
+    
+    for attempt in range(max_retries + 1):  # +1 for initial attempt
+        try:
+            if attempt > 0:
+                print(f"[{log_prefix} Retry] Attempt {attempt}/{max_retries} after {delay:.1f}s delay...")
+                time.sleep(delay)
+            
+            result = func()
+            
+            if attempt > 0:
+                print(f"[{log_prefix} Success] Recovered after {attempt} retry(ies)")
+            
+            return result
+            
+        except Exception as e:
+            last_exception = e
+            error_msg = str(e)
+            
+            # Check for specific error types
+            if "rate_limit" in error_msg.lower() or "429" in str(e):
+                print(f"[{log_prefix} Rate Limit] Hit rate limit on attempt {attempt + 1}/{max_retries + 1}")
+                # Use longer delay for rate limits
+                delay = min(delay * 2, max_delay * 2)
+            elif "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                print(f"[{log_prefix} Timeout] Request timed out on attempt {attempt + 1}/{max_retries + 1}")
+                delay = min(delay * 1.5, max_delay)
+            else:
+                print(f"[{log_prefix} Error] Attempt {attempt + 1}/{max_retries + 1} failed: {error_msg[:200]}")
+                delay = min(delay * 2, max_delay)
+            
+            if attempt == max_retries:
+                print(f"[{log_prefix} FAILED] All {max_retries + 1} attempts exhausted. Last error: {error_msg[:500]}")
+                if raise_on_failure:
+                    raise last_exception
+                return None
+    
+    # Should never reach here, but just in case
+    if raise_on_failure and last_exception:
+        raise last_exception
+    return None
+
 # Synonyms → canonical mapping (keeps your legacy ids working)
 def _normalize_model_id(model: str) -> str:
     if not isinstance(model, str):
@@ -121,24 +199,145 @@ def _messages_to_prompt(messages: List[Dict[str, str]]) -> str:
 
 def _extract_output_text(resp: Any) -> str:
     """Best-effort extraction of text from a Responses API object."""
-    # OpenAI Python SDK typically exposes `output_text`.
+    
+    # If response is a dict, handle it directly
+    if isinstance(resp, dict):
+        # PRIORITY 1: Check output field first - this is where the actual response is
+        # (The 'text' field appears to contain request format parameters, not the response)
+        if "output" in resp and isinstance(resp["output"], list) and resp["output"]:
+            # Look for the actual text output (not the reasoning block)
+            for item in resp["output"]:
+                if isinstance(item, dict):
+                    # Skip reasoning blocks, look for message/text blocks
+                    if item.get("type") == "reasoning":
+                        continue
+                    
+                    # Check for message blocks (GPT-5 response format)
+                    if "content" in item and item["content"]:
+                        content = item["content"]
+                        
+                        # If content is a list, extract text from it
+                        if isinstance(content, list) and content:
+                            for content_item in content:
+                                if isinstance(content_item, dict):
+                                    # Look for text field in content item
+                                    if "text" in content_item:
+                                        text = content_item["text"]
+                                        if text and str(text).strip():
+                                            return str(text)
+                                    # Look for value field (alternative format)
+                                    if "value" in content_item:
+                                        value = content_item["value"]
+                                        if value and str(value).strip():
+                                            return str(value)
+                                elif isinstance(content_item, str):
+                                    if content_item.strip():
+                                        return content_item
+                        # If content is a string, return it directly
+                        elif isinstance(content, str):
+                            return content
+                    
+                    # Check for text type items
+                    if item.get("type") == "text" and item.get("content"):
+                        return str(item["content"])
+        
+        # Check for nested choices structure (Chat Completions format)
+        if "choices" in resp and isinstance(resp["choices"], list) and resp["choices"]:
+            choice = resp["choices"][0]
+            if isinstance(choice, dict) and "message" in choice:
+                msg = choice["message"]
+                if isinstance(msg, dict) and "content" in msg:
+                    return str(msg["content"])
+        
+        # Check for incomplete response
+        if "incomplete_details" in resp:
+            # Still try to return any partial text we might have
+            if "text" in resp and resp["text"]:
+                return str(resp["text"])
+        
+        # If we can't find meaningful content, return empty string to trigger retry
+        return ""
+    
+    # Check if response has model_dump method (Pydantic v2)
+    if hasattr(resp, "model_dump"):
+        try:
+            resp_dict = resp.model_dump()
+            return _extract_output_text(resp_dict)  # Recursive call with dict
+        except Exception as e:
+            pass  # Fall through to other extraction methods
+    
+    # Check if response has to_dict method
+    if hasattr(resp, "to_dict"):
+        print("[DEBUG GPT-5] Response has to_dict method")
+        try:
+            resp_dict = resp.to_dict()
+            print(f"[DEBUG GPT-5] to_dict result: {json.dumps(resp_dict, default=str)[:500]}")
+            return _extract_output_text(resp_dict)  # Recursive call with dict
+        except Exception as e:
+            print(f"[DEBUG GPT-5] to_dict failed: {e}")
+    
+    # First check for direct output_text attribute (new SDK versions)
     txt = getattr(resp, "output_text", None)
     if isinstance(txt, str) and txt.strip():
+        print(f"[DEBUG GPT-5] Found output_text attribute: {txt[:200]}")
         return txt
-    # Fallbacks for object-like responses
-    out = getattr(resp, "output", None)
-    if isinstance(out, list) and out:
-        # Common nested shapes: output[0].content[0].text
-        try:
-            content = out[0].content  # type: ignore[attr-defined]
-            if isinstance(content, list) and content:
-                text_obj = content[0]
-                t = getattr(text_obj, "text", None)
-                if isinstance(t, str) and t.strip():
-                    return t
-        except Exception:
-            pass
-    # Last resort: str()
+    else:
+        print(f"[DEBUG GPT-5] output_text attribute: {txt}")
+    
+    # Check for text attribute directly
+    txt = getattr(resp, "text", None)
+    if isinstance(txt, str) and txt.strip():
+        print(f"[DEBUG GPT-5] Found text attribute: {txt[:200]}")
+        return txt
+    else:
+        print(f"[DEBUG GPT-5] text attribute: {txt}")
+    
+    # Check for content attribute (GPT-5 Responses API format)
+    content = getattr(resp, "content", None)
+    if isinstance(content, str) and content.strip():
+        print(f"[DEBUG GPT-5] Found content attribute: {content[:200]}")
+        return content
+    else:
+        print(f"[DEBUG GPT-5] content attribute: {content}")
+    
+    # Check for output attribute (GPT-5 Responses API format)
+    output = getattr(resp, "output", None)
+    print(f"[DEBUG GPT-5] output attribute type: {type(output)}, value: {output}")
+    
+    # If output is a string, return it
+    if isinstance(output, str) and output.strip():
+        print(f"[DEBUG GPT-5] Returning output as string: {output[:200]}")
+        return output
+    
+    # If output is a list, iterate through it
+    if isinstance(output, list) and output:
+        print(f"[DEBUG GPT-5] Output is list with {len(output)} items")
+        for i, item in enumerate(output):
+            print(f"[DEBUG GPT-5] Item {i} type: {type(item)}")
+            # Check if item has direct content
+            if hasattr(item, "content"):
+                content = getattr(item, "content", None)
+                if isinstance(content, str) and content.strip():
+                    print(f"[DEBUG GPT-5] Found content in output[{i}]: {content[:200]}")
+                    return content
+                # Check for nested content list structure
+                if isinstance(content, list):
+                    for j, content_item in enumerate(content):
+                        # Try to get text from content item
+                        if hasattr(content_item, "text"):
+                            t = getattr(content_item, "text", None)
+                            if isinstance(t, str) and t.strip():
+                                print(f"[DEBUG GPT-5] Found text in output[{i}].content[{j}]: {t[:200]}")
+                                return t
+    
+    # If we still don't have text, check for incomplete status and return empty
+    status = getattr(resp, "status", None)
+    if status == "incomplete":
+        print(f"[DEBUG GPT-5] Response has incomplete status")
+        return ""
+    
+    # Last resort: return the string representation (but this is likely an error)
+    print(f"[DEBUG GPT-5] Last resort - returning str(resp): {str(resp)[:500]}")
     return str(resp)
 
 
@@ -342,10 +541,12 @@ def gpt5_json_schema(
     json_schema: Dict[str, Any],
     tier: str = "thinking",
     max_output_tokens: int = 2200,
+    use_retry: bool = True,
 ) -> Dict[str, Any]:
     """
-    Strict JSON helper for GPT‑5 using the Responses API. Returns a Python dict.
+    Strict JSON helper for GPT‑5 using the Responses API with retry logic. Returns a Python dict.
     • `tier` in {"mini","thinking","pro"} selects compute depth & model.
+    • `use_retry` enables exponential backoff retry logic (default True)
     """
     # Resolve model from tier (supports UI values like fast/balanced/accurate).
     model = _TIER_TO_MODEL.get(tier, "gpt-5")
@@ -354,19 +555,41 @@ def gpt5_json_schema(
 
     # Inject strict JSON schema instruction as a system message.
     messages2 = _inject_json_schema_instruction(messages, json_schema)
-
-    resp = client.responses.create(
-        model=model,
-        input=messages2,
-        reasoning={"effort": _TIER_TO_EFFORT.get(tier, "medium")},
-        # We rely on prompt-based strictness for maximum SDK compatibility.
-        max_output_tokens=int(max_output_tokens),
-    )
-    txt = _extract_output_text(resp)
-    try:
-        return json.loads(txt)
-    except Exception as e:
-        raise RuntimeError(f"[GPT‑5 JSON] Expected strict JSON, but failed to parse: {e}\nText: {txt[:400]}")
+    
+    def make_request():
+        resp = client.responses.create(
+            model=model,
+            input=messages2,
+            reasoning={"effort": _TIER_TO_EFFORT.get(tier, "medium")},
+            # We rely on prompt-based strictness for maximum SDK compatibility.
+            max_output_tokens=int(max_output_tokens),
+        )
+        txt = _extract_output_text(resp)
+        
+        # Try to parse the JSON
+        try:
+            parsed_result = json.loads(txt)
+        except json.JSONDecodeError as e:
+            # Log detailed parsing error for debugging
+            print(f"[GPT-5 JSON Parse Error] Failed to parse response as JSON: {e}")
+            print(f"[GPT-5 JSON Parse Error] Response text (first 400 chars): {txt[:400]}")
+            raise RuntimeError(f"[GPT‑5 JSON] Expected strict JSON, but failed to parse: {e}\nText: {txt[:400]}")
+        
+        # Validate result has content (not empty)
+        if not parsed_result:
+            raise RuntimeError(f"[GPT-5 JSON] Received empty JSON response")
+        
+        return parsed_result
+    
+    # Use retry logic if enabled
+    if use_retry:
+        return retry_with_exponential_backoff(
+            make_request,
+            log_prefix=f"GPT-5 JSON ({tier})",
+            raise_on_failure=True
+        )
+    else:
+        return make_request()
 
 
 def gpt5_text(
@@ -374,18 +597,39 @@ def gpt5_text(
     messages: List[Dict[str, str]],
     tier: str = "thinking",
     max_output_tokens: int = 1500,
+    use_retry: bool = True,
 ) -> str:
     """
-    Simple text helper for GPT‑5 (Responses API). Returns plain text.
+    Simple text helper for GPT‑5 (Responses API) with retry logic. Returns plain text.
+    • `tier` in {"mini","thinking","pro"} selects compute depth & model.
+    • `use_retry` enables exponential backoff retry logic (default True)
     """
     model = _TIER_TO_MODEL.get(tier, "gpt-5")
-    resp = client.responses.create(
-        model=model,
-        input=messages,
-        reasoning={"effort": _TIER_TO_EFFORT.get(tier, "medium")},
-        max_output_tokens=int(max_output_tokens),
-    )
-    return _extract_output_text(resp)
+    
+    def make_request():
+        resp = client.responses.create(
+            model=model,
+            input=messages,
+            reasoning={"effort": _TIER_TO_EFFORT.get(tier, "medium")},
+            max_output_tokens=int(max_output_tokens),
+        )
+        text_result = _extract_output_text(resp)
+        
+        # Validate result has content
+        if not text_result or not text_result.strip():
+            raise RuntimeError(f"[GPT-5 Text] Received empty text response")
+        
+        return text_result
+    
+    # Use retry logic if enabled
+    if use_retry:
+        return retry_with_exponential_backoff(
+            make_request,
+            log_prefix=f"GPT-5 Text ({tier})",
+            raise_on_failure=True
+        )
+    else:
+        return make_request()
 
 
 # Optional: tiny self-test if run directly

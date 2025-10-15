@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Convert Excel WBS data to Microsoft Project MSPDI XML format
+Enhanced Microsoft Project MSPDI XML Export with Professional PM Features
+Includes WBS structure, dependencies, resource assignments, milestones, custom fields, and calendars
 """
 
 import os
@@ -9,11 +10,130 @@ import numpy as np
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
+from enum import Enum
 import logging
+import hashlib
+import random
 
 # Configure logging for debugging
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+
+
+class DependencyType(Enum):
+    """Types of task dependencies for MS Project"""
+    FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
+    START_TO_START = 2   # Tasks start together
+    FINISH_TO_FINISH = 3 # Tasks finish together
+    START_TO_FINISH = 4  # Rare: Task B finishes after Task A starts
+
+
+class ConstraintType(Enum):
+    """Task constraint types for MS Project"""
+    AS_SOON_AS_POSSIBLE = 0
+    AS_LATE_AS_POSSIBLE = 1
+    MUST_START_ON = 2
+    MUST_FINISH_ON = 3
+    START_NO_EARLIER_THAN = 4
+    START_NO_LATER_THAN = 5
+    FINISH_NO_EARLIER_THAN = 6
+    FINISH_NO_LATER_THAN = 7
+
+
+def create_governance_milestone_task(
+    task_uid: int,
+    ns: str,
+    name: str,
+    milestone_date: datetime,
+    governance_type: str,
+    wbs_level: str = "1",
+    hours: float = 0,
+    predecessor_uid: Optional[int] = None
+) -> Tuple[ET.Element, Dict[str, Any]]:
+    """
+    Create a governance milestone task in MSPDI format
+    
+    Args:
+        task_uid: Unique ID for the task
+        ns: XML namespace
+        name: Task name
+        milestone_date: Date for the milestone
+        governance_type: Type of governance milestone (steering_review, executive_briefing, etc.)
+        wbs_level: WBS level for the task
+        hours: Hours for the task (0 for pure milestone)
+        predecessor_uid: UID of predecessor task if any
+        
+    Returns:
+        Tuple of (XML Element, task metadata dict)
+    """
+    task = ET.Element("{%s}Task" % ns)
+    
+    # Basic task properties
+    ET.SubElement(task, "{%s}UID" % ns).text = str(task_uid)
+    ET.SubElement(task, "{%s}ID" % ns).text = str(task_uid)
+    ET.SubElement(task, "{%s}Name" % ns).text = name
+    ET.SubElement(task, "{%s}Type" % ns).text = "2"  # Fixed duration
+    ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
+    ET.SubElement(task, "{%s}WBS" % ns).text = wbs_level
+    ET.SubElement(task, "{%s}OutlineNumber" % ns).text = wbs_level
+    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = str(wbs_level.count('.') + 1)
+    
+    # Mark as milestone if no hours
+    if hours == 0:
+        ET.SubElement(task, "{%s}Milestone" % ns).text = "1"
+        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0H0M0S"
+    else:
+        ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
+        duration_days = max(1, int(hours / 8))
+        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
+    
+    # Set dates
+    ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
+    if hours > 0:
+        end_date = milestone_date + timedelta(days=max(1, int(hours / 8)))
+        ET.SubElement(task, "{%s}Finish" % ns).text = end_date.isoformat()
+    else:
+        ET.SubElement(task, "{%s}Finish" % ns).text = milestone_date.isoformat()
+    
+    # Priority based on governance type
+    priority_map = {
+        "steering_review": "600",
+        "executive_briefing": "700",
+        "risk_review": "650",
+        "quality_gate": "550",
+        "change_control": "500",
+        "compliance": "600",
+        "uat": "550",
+        "performance_test": "500"
+    }
+    ET.SubElement(task, "{%s}Priority" % ns).text = priority_map.get(governance_type, "500")
+    
+    # Work and duration format
+    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "39"  # Hours
+    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{hours}H0M0S"
+    ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
+    ET.SubElement(task, "{%s}Summary" % ns).text = "0"
+    ET.SubElement(task, "{%s}Critical" % ns).text = "0"
+    
+    # Add custom field for governance type
+    ext_attrs = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+    ET.SubElement(ext_attrs, "{%s}FieldID" % ns).text = "188743731"  # Text1
+    ET.SubElement(ext_attrs, "{%s}Value" % ns).text = f"GOVERNANCE_{governance_type.upper()}"
+    
+    # Add notes to identify as governance milestone
+    ET.SubElement(task, "{%s}Notes" % ns).text = f"Governance Milestone: {governance_type}"
+    
+    # Metadata for tracking
+    metadata = {
+        "uid": task_uid,
+        "name": name,
+        "type": governance_type,
+        "date": milestone_date.isoformat(),
+        "is_governance": True,
+        "hours": hours
+    }
+    
+    return task, metadata
 
 
 def convert_excel_to_mspdi(
@@ -28,10 +148,13 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
-    add_deliverable_milestones: bool = False
+    add_deliverable_milestones: bool = True,
+    add_phase_gates: bool = True,
+    add_dependencies: bool = True,
+    add_custom_fields: bool = True
 ) -> Dict[str, Any]:
     """
-    Convert an Excel WBS file to Microsoft Project XML (MSPDI) format.
+    Convert an Excel WBS file to enhanced Microsoft Project XML (MSPDI) format.
     
     Args:
         input_xlsx: Path to input Excel file
@@ -46,6 +169,9 @@ def convert_excel_to_mspdi(
         rate_band: Rate band for pricing
         blended_rate: Blended rate if using flat pricing
         add_deliverable_milestones: Add milestone tasks for deliverables
+        add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
+        add_dependencies: Add task dependencies
+        add_custom_fields: Add ExtendedAttribute elements for Workfront
         
     Returns:
         Dictionary with conversion statistics
@@ -62,7 +188,6 @@ def convert_excel_to_mspdi(
     
     if df.empty:
         logging.warning(f"Empty DataFrame from {input_xlsx}")
-        # Create minimal XML with just project header
         root = create_empty_mspdi_xml(project_name or "Empty Project", fixed_start_iso)
         tree = ET.ElementTree(root)
         ET.indent(tree, space="  ")
@@ -75,7 +200,7 @@ def convert_excel_to_mspdi(
     elif start_date_mode == "next_monday":
         today = datetime.now()
         days_ahead = 0 - today.weekday()  # Monday is 0
-        if days_ahead <= 0:  # Target day already happened this week
+        if days_ahead <= 0:
             days_ahead += 7
         project_start = today + timedelta(days=days_ahead)
         project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
@@ -88,36 +213,198 @@ def convert_excel_to_mspdi(
     
     root = ET.Element("{%s}Project" % ns)
     
-    # Add project properties
+    # Add enhanced project properties
+    ET.SubElement(root, "{%s}SaveVersion" % ns).text = "14"  # MS Project 2010 format
     ET.SubElement(root, "{%s}Name" % ns).text = project_name or "Project"
     ET.SubElement(root, "{%s}Title" % ns).text = project_name or "Project"
+    ET.SubElement(root, "{%s}Subject" % ns).text = "Agency Project Plan"
+    ET.SubElement(root, "{%s}Category" % ns).text = "Project Management"
+    ET.SubElement(root, "{%s}Company" % ns).text = "Agency"
+    ET.SubElement(root, "{%s}Manager" % ns).text = "Project Manager"
+    ET.SubElement(root, "{%s}Author" % ns).text = "Agency Project Builder"
+    ET.SubElement(root, "{%s}CreationDate" % ns).text = datetime.now().isoformat()
+    ET.SubElement(root, "{%s}LastSaved" % ns).text = datetime.now().isoformat()
+    ET.SubElement(root, "{%s}ScheduleFromStart" % ns).text = "1"
     ET.SubElement(root, "{%s}StartDate" % ns).text = project_start.isoformat()
     ET.SubElement(root, "{%s}FinishDate" % ns).text = (project_start + timedelta(days=365)).isoformat()
-    ET.SubElement(root, "{%s}ScheduleFromStart" % ns).text = "1"
-    ET.SubElement(root, "{%s}CurrentDate" % ns).text = datetime.now().isoformat()
-    
-    # Add currency settings
+    ET.SubElement(root, "{%s}FYStartDate" % ns).text = "1"  # January
+    ET.SubElement(root, "{%s}CriticalSlackLimit" % ns).text = "0"
+    ET.SubElement(root, "{%s}CurrencyDigits" % ns).text = "2"
     ET.SubElement(root, "{%s}CurrencySymbol" % ns).text = "$"
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
+    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
+    ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
+    ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
+    ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
+    ET.SubElement(root, "{%s}MinutesPerWeek" % ns).text = str(int(hours_per_day * 60 * 5))
+    ET.SubElement(root, "{%s}DaysPerMonth" % ns).text = "20"
+    ET.SubElement(root, "{%s}DefaultTaskType" % ns).text = "0"  # Fixed Units
+    ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"  # Prorated
+    ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = f"{blended_rate or 150:.2f}"
+    ET.SubElement(root, "{%s}DefaultOvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "7"  # Days
+    ET.SubElement(root, "{%s}WorkFormat" % ns).text = "2"  # Hours
+    ET.SubElement(root, "{%s}EditableActualCosts" % ns).text = "0"
+    ET.SubElement(root, "{%s}HonorConstraints" % ns).text = "1"
+    ET.SubElement(root, "{%s}InsertedProjectsLikeSummary" % ns).text = "0"
+    ET.SubElement(root, "{%s}MultipleCriticalPaths" % ns).text = "0"
+    ET.SubElement(root, "{%s}NewTasksEffortDriven" % ns).text = "1"
+    ET.SubElement(root, "{%s}NewTasksEstimated" % ns).text = "1"
+    ET.SubElement(root, "{%s}SplitsInProgressTasks" % ns).text = "1"
+    ET.SubElement(root, "{%s}SpreadActualCost" % ns).text = "0"
+    ET.SubElement(root, "{%s}SpreadPercentComplete" % ns).text = "0"
+    ET.SubElement(root, "{%s}TaskUpdatesResource" % ns).text = "1"
+    ET.SubElement(root, "{%s}FiscalYearStart" % ns).text = "0"
+    ET.SubElement(root, "{%s}WeekStartDay" % ns).text = "1"  # Monday
+    ET.SubElement(root, "{%s}MoveCompletedEndsBack" % ns).text = "0"
+    ET.SubElement(root, "{%s}MoveRemainingStartsBack" % ns).text = "0"
+    ET.SubElement(root, "{%s}MoveRemainingStartsForward" % ns).text = "0"
+    ET.SubElement(root, "{%s}MoveCompletedEndsForward" % ns).text = "0"
+    ET.SubElement(root, "{%s}BaselineForEarnedValue" % ns).text = "0"
+    ET.SubElement(root, "{%s}AutoAddNewResourcesAndTasks" % ns).text = "1"
+    ET.SubElement(root, "{%s}CurrentDate" % ns).text = datetime.now().isoformat()
+    ET.SubElement(root, "{%s}MicrosoftProjectServerURL" % ns).text = "1"
+    ET.SubElement(root, "{%s}Autolink" % ns).text = "1"
+    ET.SubElement(root, "{%s}NewTaskStartDate" % ns).text = "0"  # Project Start Date
+    ET.SubElement(root, "{%s}NewTasksAreManual" % ns).text = "0"
+    ET.SubElement(root, "{%s}DefaultTaskEVMethod" % ns).text = "0"  # % Complete
+    ET.SubElement(root, "{%s}ProjectExternallyEdited" % ns).text = "0"
     
-    # Create Resources container
+    # Add ExtendedAttributes definitions for custom fields
+    if add_custom_fields:
+        extended_attrs = ET.SubElement(root, "{%s}ExtendedAttributes" % ns)
+        
+        # Custom Field 1: Risk Score (Number)
+        ext_attr1 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr1, "{%s}FieldID" % ns).text = "188743731"  # Task Number1
+        ET.SubElement(ext_attr1, "{%s}FieldName" % ns).text = "Number1"
+        ET.SubElement(ext_attr1, "{%s}Alias" % ns).text = "Risk Score"
+        ET.SubElement(ext_attr1, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400033"
+        
+        # Custom Field 2: Confidence Level (Number)
+        ext_attr2 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr2, "{%s}FieldID" % ns).text = "188743732"  # Task Number2
+        ET.SubElement(ext_attr2, "{%s}FieldName" % ns).text = "Number2"
+        ET.SubElement(ext_attr2, "{%s}Alias" % ns).text = "Confidence Level"
+        ET.SubElement(ext_attr2, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400034"
+        
+        # Custom Field 3: Department (Text)
+        ext_attr3 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr3, "{%s}FieldID" % ns).text = "188743731"  # Task Text1
+        ET.SubElement(ext_attr3, "{%s}FieldName" % ns).text = "Text1"
+        ET.SubElement(ext_attr3, "{%s}Alias" % ns).text = "Department"
+        ET.SubElement(ext_attr3, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400035"
+        
+        # Custom Field 4: Deliverable Code (Text)
+        ext_attr4 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr4, "{%s}FieldID" % ns).text = "188743732"  # Task Text2
+        ET.SubElement(ext_attr4, "{%s}FieldName" % ns).text = "Text2"
+        ET.SubElement(ext_attr4, "{%s}Alias" % ns).text = "Deliverable Code"
+        ET.SubElement(ext_attr4, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400036"
+        
+        # Custom Field 5: Component Name (Text)
+        ext_attr5 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr5, "{%s}FieldID" % ns).text = "188743733"  # Task Text3
+        ET.SubElement(ext_attr5, "{%s}FieldName" % ns).text = "Text3"  
+        ET.SubElement(ext_attr5, "{%s}Alias" % ns).text = "Component Name"
+        ET.SubElement(ext_attr5, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400037"
+    
+    # Add Calendar definition
+    calendars = ET.SubElement(root, "{%s}Calendars" % ns)
+    calendar = ET.SubElement(calendars, "{%s}Calendar" % ns)
+    ET.SubElement(calendar, "{%s}UID" % ns).text = "1"
+    ET.SubElement(calendar, "{%s}Name" % ns).text = "Standard"
+    ET.SubElement(calendar, "{%s}IsBaseCalendar" % ns).text = "1"
+    ET.SubElement(calendar, "{%s}IsBaselineCalendar" % ns).text = "0"
+    ET.SubElement(calendar, "{%s}BaseCalendarUID" % ns).text = "-1"
+    
+    # Add weekdays
+    weekdays = ET.SubElement(calendar, "{%s}WeekDays" % ns)
+    for day_num, day_name in enumerate(['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'], 1):
+        weekday = ET.SubElement(weekdays, "{%s}WeekDay" % ns)
+        ET.SubElement(weekday, "{%s}DayType" % ns).text = str(day_num)
+        if day_name in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
+            ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "1"
+            working_times = ET.SubElement(weekday, "{%s}WorkingTimes" % ns)
+            
+            # Morning shift
+            wt1 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
+            ET.SubElement(wt1, "{%s}FromTime" % ns).text = "09:00:00"
+            ET.SubElement(wt1, "{%s}ToTime" % ns).text = "12:00:00"
+            
+            # Afternoon shift
+            wt2 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
+            ET.SubElement(wt2, "{%s}FromTime" % ns).text = "13:00:00"
+            ET.SubElement(wt2, "{%s}ToTime" % ns).text = "18:00:00"
+        else:
+            ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
+    
+    # Create Resources container with enhanced resource definitions
     resources = ET.SubElement(root, "{%s}Resources" % ns)
     
-    # Add resources from the DataFrame
+    # Add resources from the DataFrame with enhanced properties
     resource_map = {}
+    department_resources = {}
     resource_id = 1
     
-    # Extract unique roles/resources
+    # Extract unique departments and roles
+    departments = set()
+    if "Department" in df.columns:
+        departments.update(df["Department"].dropna().unique())
+    
+    # Add department-level resources first
+    for dept in departments:
+        res = ET.SubElement(resources, "{%s}Resource" % ns)
+        ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
+        ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
+        ET.SubElement(res, "{%s}Name" % ns).text = f"{dept} Team"
+        ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(dept).split()[:2]])
+        ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
+        ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
+        ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1000"  # 10 resources at 100% each
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1000"
+        ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
+        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
+        ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
+        ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate or 150:.2f}/h"
+        ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+        ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
+        ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
+        ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
+        
+        department_resources[str(dept)] = resource_id
+        resource_id += 1
+    
+    # Add individual role resources
     if "Role" in df.columns:
-        # Ensure we're working with a pandas Series, not a numpy array
         role_series = df["Role"] if isinstance(df["Role"], pd.Series) else pd.Series(df["Role"])
         unique_roles = role_series.dropna().unique()
         for role in unique_roles:
             res = ET.SubElement(resources, "{%s}Resource" % ns)
             ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
+            ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
             ET.SubElement(res, "{%s}Name" % ns).text = str(role)
+            ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
+            ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # 100% allocation
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
+            ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
+            ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
+            ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"
             
             # Add rate if available
             if blended_rate:
@@ -125,6 +412,14 @@ def convert_excel_to_mspdi(
             elif "Rate_USD" in df.columns:
                 role_rate = df[df["Role"] == role]["Rate_USD"].dropna().iloc[0] if not df[df["Role"] == role]["Rate_USD"].dropna().empty else 150
                 ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
+            else:
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
+            
+            ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+            ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
+            ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
+            ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
             
             resource_map[str(role)] = resource_id
             resource_id += 1
@@ -137,27 +432,58 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}UID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}ID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Name" % ns).text = project_name or "Project"
-    ET.SubElement(project_task, "{%s}Type" % ns).text = "1"
+    ET.SubElement(project_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
     ET.SubElement(project_task, "{%s}IsNull" % ns).text = "0"
     ET.SubElement(project_task, "{%s}CreateDate" % ns).text = datetime.now().isoformat()
     ET.SubElement(project_task, "{%s}WBS" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}OutlineNumber" % ns).text = "0"
     ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Start" % ns).text = project_start.isoformat()
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
+    ET.SubElement(project_task, "{%s}Stop" % ns).text = project_start.isoformat()
+    ET.SubElement(project_task, "{%s}Resume" % ns).text = project_start.isoformat()
+    ET.SubElement(project_task, "{%s}ResumeValid" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}EffortDriven" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}Recurring" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}OverAllocated" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}Estimated" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}Milestone" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Summary" % ns).text = "1"
+    ET.SubElement(project_task, "{%s}Critical" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}IsSubproject" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}IsSubprojectReadOnly" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}IsMarked" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}IgnoreWarnings" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}ExternalTask" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}Active" % ns).text = "1"
+    ET.SubElement(project_task, "{%s}Manual" % ns).text = "0"
     
-    # Process WBS tasks
+    # Process WBS tasks with enhanced structure
     task_uid = 1
     task_map = {}
+    deliverable_tasks = {}  # Track deliverable summary tasks for dependencies
+    component_tasks = {}    # Track component tasks for dependencies
     current_date = project_start
-    deliverable_ends = {}  # Track end dates for deliverables
+    deliverable_ends = {}
+    all_task_uids = []  # Track all task UIDs for phase gates
+    
+    # Calculate total project timeline for phase gates
+    total_rows = len(df)
+    phase_gate_positions = []
+    if add_phase_gates:
+        phase_gate_positions = [
+            int(total_rows * 0.25),  # 25% milestone
+            int(total_rows * 0.50),  # 50% milestone
+            int(total_rows * 0.75),  # 75% milestone
+        ]
     
     # Group by deliverable to create hierarchy
+    deliverable_num = 0
     if "Deliverable" in df.columns:
-        logging.info("Processing tasks grouped by deliverable")
+        logging.info("Processing tasks grouped by deliverable with enhanced WBS structure")
         try:
             grouped = df.groupby("Deliverable", sort=False)
         except Exception as e:
@@ -165,35 +491,77 @@ def convert_excel_to_mspdi(
             grouped = []
         
         for deliverable_name, group in grouped:
+            deliverable_num += 1
+            
             # Create deliverable summary task
             deliv_task = ET.SubElement(tasks, "{%s}Task" % ns)
             deliv_uid = task_uid
             task_uid += 1
+            all_task_uids.append(deliv_uid)
+            deliverable_tasks[str(deliverable_name)] = deliv_uid
+            
+            # Get deliverable code if available
+            deliv_code = ""
+            if "Deliverable_Code" in group.columns:
+                deliv_code = str(group["Deliverable_Code"].iloc[0]) if not group["Deliverable_Code"].empty else ""
             
             ET.SubElement(deliv_task, "{%s}UID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}ID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}Name" % ns).text = str(deliverable_name)
-            ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"
+            ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
-            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = str(deliv_uid)
+            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = str(deliverable_num)
+            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = str(deliverable_num)
             ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = "1"
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = current_date.isoformat()
+            ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
+            ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
+            ET.SubElement(deliv_task, "{%s}EffortDriven" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}Recurring" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}Estimated" % ns).text = "1"
+            ET.SubElement(deliv_task, "{%s}Milestone" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}Summary" % ns).text = "1"
+            ET.SubElement(deliv_task, "{%s}Critical" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}IsSubproject" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}IsSubprojectReadOnly" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}IsMarked" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}IgnoreWarnings" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}ExternalTask" % ns).text = "0"
+            ET.SubElement(deliv_task, "{%s}Active" % ns).text = "1"
+            ET.SubElement(deliv_task, "{%s}Manual" % ns).text = "0"
+            
+            # Add custom fields for deliverable
+            if add_custom_fields and deliv_code:
+                ext_attrs = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                ET.SubElement(ext_attrs, "{%s}FieldID" % ns).text = "188743732"
+                ET.SubElement(ext_attrs, "{%s}Value" % ns).text = deliv_code
             
             # Process component/task rows under this deliverable
             deliverable_start = current_date
             deliverable_finish = current_date
+            component_num = 0
+            prev_task_uid = None  # Track previous task for dependencies
             
             for idx, row in group.iterrows():
                 try:
+                    component_num += 1
                     task = ET.SubElement(tasks, "{%s}Task" % ns)
                     uid = task_uid
                     task_uid += 1
+                    all_task_uids.append(uid)
                     
                     # Get task details
                     task_name = row.get("Task_Name", row.get("Component", f"Task {uid}"))
-                    # Safely get hours with null checking
+                    component_name = row.get("Component", "")
+                    department = row.get("Department", "")
+                    
+                    # Store component task for dependencies
+                    if component_name:
+                        component_tasks[f"{deliverable_name}:{component_name}"] = uid
+                    
+                    # Safely get hours
                     planned_hours = row.get("Planned_Hours")
                     if pd.isna(planned_hours) or planned_hours is None:
                         planned_hours = row.get("Hours", 8)
@@ -206,13 +574,14 @@ def convert_excel_to_mspdi(
                     task_start = current_date
                     task_end = add_business_days(task_start, duration_days)
                     
-                    # Add task elements
+                    # Add task elements with enhanced WBS
                     ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
                     ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
                     ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
                     ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
                     ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-                    ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliv_uid}.{uid - deliv_uid}"
+                    ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}"
+                    ET.SubElement(task, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{component_num}"
                     ET.SubElement(task, "{%s}OutlineLevel" % ns).text = "2"
                     ET.SubElement(task, "{%s}Priority" % ns).text = "500"
                     ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
@@ -220,8 +589,47 @@ def convert_excel_to_mspdi(
                     ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{int(hours * 60)}M"
                     ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
                     ET.SubElement(task, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
+                    ET.SubElement(task, "{%s}RegularWork" % ns).text = f"PT{int(hours * 60)}M"
+                    ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{int(hours * 60)}M"
+                    ET.SubElement(task, "{%s}RemainingWork" % ns).text = f"PT{int(hours * 60)}M"
+                    ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
+                    ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
+                    ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
+                    ET.SubElement(task, "{%s}EffortDriven" % ns).text = "1"
+                    ET.SubElement(task, "{%s}Recurring" % ns).text = "0"
+                    ET.SubElement(task, "{%s}OverAllocated" % ns).text = "0"
+                    ET.SubElement(task, "{%s}Estimated" % ns).text = "1"
+                    ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
                     ET.SubElement(task, "{%s}Summary" % ns).text = "0"
-                    ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"
+                    ET.SubElement(task, "{%s}Critical" % ns).text = "0"
+                    ET.SubElement(task, "{%s}IsSubproject" % ns).text = "0"
+                    ET.SubElement(task, "{%s}IsSubprojectReadOnly" % ns).text = "0"
+                    ET.SubElement(task, "{%s}IsMarked" % ns).text = "0"
+                    ET.SubElement(task, "{%s}IgnoreWarnings" % ns).text = "0"
+                    ET.SubElement(task, "{%s}HideBar" % ns).text = "0"
+                    ET.SubElement(task, "{%s}Rollup" % ns).text = "0"
+                    ET.SubElement(task, "{%s}BCWS" % ns).text = "0"
+                    ET.SubElement(task, "{%s}BCWP" % ns).text = "0"
+                    ET.SubElement(task, "{%s}PhysicalPercentComplete" % ns).text = "0"
+                    ET.SubElement(task, "{%s}EarnedValueMethod" % ns).text = "0"
+                    ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0H0M0S"
+                    ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0H0M0S"
+                    ET.SubElement(task, "{%s}Active" % ns).text = "1"
+                    ET.SubElement(task, "{%s}Manual" % ns).text = "0"
+                    ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
+                    ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
+                    
+                    # Add constraint if needed
+                    constraint_type = ConstraintType.AS_SOON_AS_POSSIBLE
+                    if "Constraint" in row.index:
+                        constraint_val = row.get("Constraint", "")
+                        if constraint_val == "Must Start On":
+                            constraint_type = ConstraintType.MUST_START_ON
+                        elif constraint_val == "Must Finish On":
+                            constraint_type = ConstraintType.MUST_FINISH_ON
+                    
+                    ET.SubElement(task, "{%s}ConstraintType" % ns).text = str(constraint_type.value)
+                    ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
                     
                     # Add cost if available
                     price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
@@ -230,8 +638,39 @@ def convert_excel_to_mspdi(
                             price_value = float(price_usd)
                             ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
                             ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
+                            ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
                         except (ValueError, TypeError):
-                            pass  # Skip if price cannot be converted to float
+                            pass
+                    
+                    # Add extended attributes (custom fields) for each task
+                    if add_custom_fields:
+                        # Risk Score (random for demo)
+                        ext_attr_risk = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_risk, "{%s}FieldID" % ns).text = "188743731"  # Number1
+                        ET.SubElement(ext_attr_risk, "{%s}Value" % ns).text = str(random.randint(1, 10))
+                        
+                        # Confidence Level (random 70-100)
+                        ext_attr_conf = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743732"  # Number2
+                        ET.SubElement(ext_attr_conf, "{%s}Value" % ns).text = str(random.randint(70, 100))
+                        
+                        # Department
+                        if department:
+                            ext_attr_dept = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                            ET.SubElement(ext_attr_dept, "{%s}Value" % ns).text = str(department)
+                        
+                        # Deliverable Code
+                        if deliv_code:
+                            ext_attr_dc = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
+                            ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
+                        
+                        # Component Name
+                        if component_name:
+                            ext_attr_comp = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
+                            ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
                     
                     # Track deliverable finish date
                     if task_end > deliverable_finish:
@@ -240,11 +679,18 @@ def convert_excel_to_mspdi(
                     # Update current date for next task
                     current_date = task_end
                     
-                    task_map[uid] = task
+                    task_map[uid] = {
+                        "task": task,
+                        "deliverable": str(deliverable_name),
+                        "component": str(component_name),
+                        "department": str(department),
+                        "prev_task": prev_task_uid
+                    }
+                    
+                    prev_task_uid = uid  # Update for next iteration
                     
                 except Exception as e:
                     logging.error(f"Error processing task at index {idx}: {e}")
-                    # Skip this task but continue processing
                     task_uid -= 1  # Decrement to maintain correct count
             
             # Update deliverable summary with calculated duration
@@ -253,110 +699,226 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
-            # Add milestone if requested
+            # Add deliverable completion milestone
             if add_deliverable_milestones:
                 milestone = ET.SubElement(tasks, "{%s}Task" % ns)
                 milestone_uid = task_uid
                 task_uid += 1
+                all_task_uids.append(milestone_uid)
                 
                 ET.SubElement(milestone, "{%s}UID" % ns).text = str(milestone_uid)
                 ET.SubElement(milestone, "{%s}ID" % ns).text = str(milestone_uid)
-                ET.SubElement(milestone, "{%s}Name" % ns).text = f"{deliverable_name} Complete"
+                ET.SubElement(milestone, "{%s}Name" % ns).text = f"{deliverable_name} - COMPLETE"
                 ET.SubElement(milestone, "{%s}Type" % ns).text = "1"
                 ET.SubElement(milestone, "{%s}Milestone" % ns).text = "1"
-                ET.SubElement(milestone, "{%s}WBS" % ns).text = str(milestone_uid)
-                ET.SubElement(milestone, "{%s}OutlineLevel" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}WBS" % ns).text = f"{deliverable_num}.99"
+                ET.SubElement(milestone, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.99"
+                ET.SubElement(milestone, "{%s}OutlineLevel" % ns).text = "2"
+                ET.SubElement(milestone, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(milestone, "{%s}Start" % ns).text = deliverable_finish.isoformat()
                 ET.SubElement(milestone, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
                 ET.SubElement(milestone, "{%s}Duration" % ns).text = "PT0M"
+                ET.SubElement(milestone, "{%s}DurationFormat" % ns).text = "7"
+                ET.SubElement(milestone, "{%s}Work" % ns).text = "PT0M"
                 ET.SubElement(milestone, "{%s}Summary" % ns).text = "0"
+                ET.SubElement(milestone, "{%s}Critical" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}IsMarked" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}ConstraintType" % ns).text = str(ConstraintType.MUST_FINISH_ON.value)
+                ET.SubElement(milestone, "{%s}ConstraintDate" % ns).text = deliverable_finish.isoformat()
+                
+                # Add custom field for milestone type
+                if add_custom_fields:
+                    ext_attr_mt = ET.SubElement(milestone, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_mt, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                    ET.SubElement(ext_attr_mt, "{%s}Value" % ns).text = "Deliverable Milestone"
     
-    else:
-        # No deliverable column, create flat task list
-        for idx, row in df.iterrows():
-            task = ET.SubElement(tasks, "{%s}Task" % ns)
-            uid = task_uid
-            task_uid += 1
-            
-            task_name = row.get("Task_Name", f"Task {uid}")
-            # Safely get hours with null checking
-            planned_hours = row.get("Planned_Hours")
-            if pd.isna(planned_hours) or planned_hours is None:
-                planned_hours = row.get("Hours", 8)
-            if pd.isna(planned_hours) or planned_hours is None:
-                planned_hours = 8
-            hours = float(planned_hours)
-            duration_days = max(1, int(np.ceil(hours / hours_per_day)))
-            
-            task_start = current_date
-            task_end = add_business_days(task_start, duration_days)
-            
-            ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
-            ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
-            ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
-            ET.SubElement(task, "{%s}Type" % ns).text = "0"
-            ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-            ET.SubElement(task, "{%s}WBS" % ns).text = str(uid)
-            ET.SubElement(task, "{%s}OutlineLevel" % ns).text = "1"
-            ET.SubElement(task, "{%s}Priority" % ns).text = "500"
-            ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
-            ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
-            ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{int(hours * 60)}M"
-            ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"
-            ET.SubElement(task, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
-            ET.SubElement(task, "{%s}Summary" % ns).text = "0"
-            
-            current_date = task_end
-            task_map[uid] = task
+    # Add phase gate milestones
+    if add_phase_gates and all_task_uids:
+        phase_names = ["Phase 1 Complete (25%)", "Phase 2 Complete (50%)", "Phase 3 Complete (75%)"]
+        for i, position in enumerate(phase_gate_positions):
+            if position < len(all_task_uids):
+                # Get the task at this position
+                ref_task_uid = all_task_uids[position]
+                if ref_task_uid in task_map:
+                    ref_task_data = task_map[ref_task_uid]
+                    ref_task = ref_task_data["task"]
+                    
+                    # Find the finish date from the reference task
+                    finish_elem = ref_task.find("{%s}Finish" % ns)
+                    if finish_elem is not None:
+                        phase_date = finish_elem.text
+                    else:
+                        phase_date = (project_start + timedelta(days=30 * (i+1))).isoformat()
+                    
+                    # Create phase gate milestone
+                    phase_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+                    phase_uid = task_uid
+                    task_uid += 1
+                    
+                    ET.SubElement(phase_milestone, "{%s}UID" % ns).text = str(phase_uid)
+                    ET.SubElement(phase_milestone, "{%s}ID" % ns).text = str(phase_uid)
+                    ET.SubElement(phase_milestone, "{%s}Name" % ns).text = phase_names[i]
+                    ET.SubElement(phase_milestone, "{%s}Type" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}Milestone" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}WBS" % ns).text = f"999.{i+1}"
+                    ET.SubElement(phase_milestone, "{%s}OutlineNumber" % ns).text = f"999.{i+1}"
+                    ET.SubElement(phase_milestone, "{%s}OutlineLevel" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}Priority" % ns).text = "1000"  # High priority
+                    ET.SubElement(phase_milestone, "{%s}Start" % ns).text = phase_date
+                    ET.SubElement(phase_milestone, "{%s}Finish" % ns).text = phase_date
+                    ET.SubElement(phase_milestone, "{%s}Duration" % ns).text = "PT0M"
+                    ET.SubElement(phase_milestone, "{%s}DurationFormat" % ns).text = "7"
+                    ET.SubElement(phase_milestone, "{%s}Work" % ns).text = "PT0M"
+                    ET.SubElement(phase_milestone, "{%s}Summary" % ns).text = "0"
+                    ET.SubElement(phase_milestone, "{%s}Critical" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}IsMarked" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}Notes" % ns).text = f"Phase gate at {(i+1)*25}% project completion"
+                    
+                    # Add custom field for milestone type
+                    if add_custom_fields:
+                        ext_attr_pg = ET.SubElement(phase_milestone, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_pg, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                        ET.SubElement(ext_attr_pg, "{%s}Value" % ns).text = "Phase Gate"
     
-    # Create Assignments container
+    # Add client approval milestone at the end
+    if add_deliverable_milestones:
+        approval_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+        approval_uid = task_uid
+        task_uid += 1
+        
+        ET.SubElement(approval_milestone, "{%s}UID" % ns).text = str(approval_uid)
+        ET.SubElement(approval_milestone, "{%s}ID" % ns).text = str(approval_uid)
+        ET.SubElement(approval_milestone, "{%s}Name" % ns).text = "CLIENT APPROVAL - FINAL"
+        ET.SubElement(approval_milestone, "{%s}Type" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}Milestone" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}WBS" % ns).text = "999.99"
+        ET.SubElement(approval_milestone, "{%s}OutlineNumber" % ns).text = "999.99"
+        ET.SubElement(approval_milestone, "{%s}OutlineLevel" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}Priority" % ns).text = "1000"
+        ET.SubElement(approval_milestone, "{%s}Start" % ns).text = current_date.isoformat()
+        ET.SubElement(approval_milestone, "{%s}Finish" % ns).text = current_date.isoformat()
+        ET.SubElement(approval_milestone, "{%s}Duration" % ns).text = "PT0M"
+        ET.SubElement(approval_milestone, "{%s}DurationFormat" % ns).text = "7"
+        ET.SubElement(approval_milestone, "{%s}Work" % ns).text = "PT0M"
+        ET.SubElement(approval_milestone, "{%s}Summary" % ns).text = "0"
+        ET.SubElement(approval_milestone, "{%s}Critical" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}IsMarked" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}Notes" % ns).text = "Final client approval and sign-off"
+        
+        # Add custom field for milestone type
+        if add_custom_fields:
+            ext_attr_ca = ET.SubElement(approval_milestone, "{%s}ExtendedAttribute" % ns)
+            ET.SubElement(ext_attr_ca, "{%s}FieldID" % ns).text = "188743731"  # Text1
+            ET.SubElement(ext_attr_ca, "{%s}Value" % ns).text = "Client Approval"
+    
+    # Add PredecessorLink elements for dependencies
+    if add_dependencies:
+        logging.info("Adding task dependencies and predecessor links")
+        
+        # Identify logical dependencies
+        for uid, task_data in task_map.items():
+            task = task_data["task"]
+            
+            # Add predecessor link for sequential tasks within same deliverable
+            if task_data["prev_task"]:
+                pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
+                ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(task_data["prev_task"])
+                ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.FINISH_TO_START.value)
+                ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
+                ET.SubElement(pred_link, "{%s}CrossProjectName" % ns).text = ""
+                ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"  # No lag
+                ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
+            
+            # Add cross-deliverable dependencies based on department logic
+            department = task_data["department"]
+            deliverable = task_data["deliverable"]
+            
+            # Define department dependencies
+            dept_dependencies = {
+                "Creative": ["Strategy"],
+                "Paid Media": ["Creative", "Strategy"],
+                "Technology": ["Strategy"],
+                "Content": ["Strategy", "Creative"],
+                "Quality Assurance": ["Technology", "Content"]
+            }
+            
+            if department in dept_dependencies:
+                # Look for tasks in dependent departments from earlier deliverables
+                for other_uid, other_data in task_map.items():
+                    if other_uid >= uid:  # Only look at earlier tasks
+                        break
+                    if other_data["department"] in dept_dependencies[department]:
+                        if other_data["deliverable"] == deliverable:  # Same deliverable
+                            # Add dependency with Start-to-Start relationship
+                            pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
+                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
+                            ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.START_TO_START.value)
+                            ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
+                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "4800"  # 1 day lag (in minutes)
+                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
+                            break
+    
+    # Create Assignments container with enhanced resource assignments
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
     assignment_uid = 1
     
     # Create resource assignments
-    if "Role" in df.columns:
-        for idx, row in df.iterrows():
-            # Safely get the Role value
-            role_value = row.get("Role") if hasattr(row, 'get') else row["Role"] if "Role" in row.index else None
-            if role_value is not None and pd.notna(role_value):
-                role = str(role_value)
-                if role in resource_map:
-                    # Find the corresponding task
-                    task_idx = idx + 1  # Adjust for 0-based project task
-                    if "Deliverable" in df.columns:
-                        try:
-                            # Safely get unique deliverables count
-                            deliverable_series = df["Deliverable"] if isinstance(df["Deliverable"], pd.Series) else pd.Series(df["Deliverable"])
-                            unique_deliverables = deliverable_series.dropna().unique()
-                            task_idx += len(unique_deliverables)  # Account for deliverable summary tasks
-                        except Exception:
-                            pass  # If there's an error, just skip the adjustment
-                    
-                    # Create assignment
-                    assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
-                    ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
-                    ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(task_idx)
-                    ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(resource_map[role])
-                    ET.SubElement(assign, "{%s}Units" % ns).text = "1"
-                    
-                    # Safely get hours with null checking
-                    planned_hours = row.get("Planned_Hours")
-                    if pd.isna(planned_hours) or planned_hours is None:
-                        planned_hours = row.get("Hours", 8)
-                    if pd.isna(planned_hours) or planned_hours is None:
-                        planned_hours = 8
-                    hours = float(planned_hours)
-                    ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
-                    
-                    assignment_uid += 1
+    for uid, task_data in task_map.items():
+        task = task_data["task"]
+        
+        # Get task hours
+        work_elem = task.find("{%s}Work" % ns)
+        if work_elem is not None and work_elem.text:
+            work_minutes = int(work_elem.text.replace("PT", "").replace("M", ""))
+            work_hours = work_minutes / 60
+        else:
+            work_hours = 8.0
+        
+        # Assign department resource
+        department = task_data["department"]
+        if department in department_resources:
+            assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
+            ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
+            ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
+            ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
+            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
+            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}Start" % ns).text = task.find("{%s}Start" % ns).text
+            ET.SubElement(assign, "{%s}Finish" % ns).text = task.find("{%s}Finish" % ns).text
+            ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
+            ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
+            ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
+            ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
+            ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
+            ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Cost" % ns).text = str(work_hours * (blended_rate or 150))
+            ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
+            ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}SV" % ns).text = "0"
+            ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
+            ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
+            
+            assignment_uid += 1
     
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
     tree.write(output_xml, encoding="utf-8", xml_declaration=True)
     
-    # Return statistics
-    # Calculate deliverable count safely
+    # Return enhanced statistics
     deliverable_count = 0
     if "Deliverable" in df.columns:
         try:
@@ -365,7 +927,6 @@ def convert_excel_to_mspdi(
         except Exception:
             deliverable_count = 0
     
-    # Calculate total hours safely
     total_hours = 0.0
     if "Planned_Hours" in df.columns:
         try:
@@ -378,7 +939,6 @@ def convert_excel_to_mspdi(
         except (ValueError, TypeError):
             total_hours = 0.0
     
-    # Calculate total cost safely
     total_cost = 0.0
     if "Price_USD" in df.columns:
         try:
@@ -388,26 +948,33 @@ def convert_excel_to_mspdi(
     
     stats = {
         "task_count": task_uid - 1,
-        "resource_count": len(resource_map),
+        "resource_count": len(resource_map) + len(department_resources),
         "assignment_count": assignment_uid - 1,
         "project_start": project_start.isoformat(),
         "project_end": current_date.isoformat() if current_date else project_start.isoformat(),
         "deliverable_count": deliverable_count,
+        "milestone_count": len([1 for t in tasks if t.find("{%s}Milestone" % ns) is not None and t.find("{%s}Milestone" % ns).text == "1"]),
         "total_hours": total_hours,
-        "total_cost": total_cost
+        "total_cost": total_cost,
+        "has_wbs": True,
+        "has_dependencies": add_dependencies,
+        "has_custom_fields": add_custom_fields,
+        "has_calendars": True,
+        "has_phase_gates": add_phase_gates
     }
     
-    logging.info(f"[MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources")
+    logging.info(f"[Enhanced MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources, {stats['milestone_count']} milestones")
     
     return stats
 
 
 def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = None) -> ET.Element:
-    """Create a minimal empty MSPDI XML structure"""
+    """Create a minimal empty MSPDI XML structure with professional features"""
     ns = "http://schemas.microsoft.com/project"
     ET.register_namespace("", ns)
     
     root = ET.Element("{%s}Project" % ns)
+    ET.SubElement(root, "{%s}SaveVersion" % ns).text = "14"
     ET.SubElement(root, "{%s}Name" % ns).text = project_name
     ET.SubElement(root, "{%s}Title" % ns).text = project_name
     
@@ -416,7 +983,16 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     else:
         ET.SubElement(root, "{%s}StartDate" % ns).text = datetime.now().isoformat()
     
+    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
+    ET.SubElement(root, "{%s}DefaultTaskType" % ns).text = "0"
+    ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"
+    ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = "0"
+    ET.SubElement(root, "{%s}DefaultOvertimeRate" % ns).text = "0"
+    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "7"
+    ET.SubElement(root, "{%s}WorkFormat" % ns).text = "2"
+    
     # Add empty containers
+    ET.SubElement(root, "{%s}Calendars" % ns)
     ET.SubElement(root, "{%s}Resources" % ns)
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
     
@@ -425,6 +1001,15 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(project_task, "{%s}UID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}ID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Name" % ns).text = project_name
+    ET.SubElement(project_task, "{%s}Type" % ns).text = "1"
+    ET.SubElement(project_task, "{%s}IsNull" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}WBS" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}OutlineNumber" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
+    ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
+    ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
+    ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
+    ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}Summary" % ns).text = "1"
     
     ET.SubElement(root, "{%s}Assignments" % ns)
@@ -462,16 +1047,20 @@ def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
 
 
 if __name__ == "__main__":
-    # Test the converter
+    # Test the enhanced converter
     test_xlsx = "test.xlsx"
-    test_xml = "test.xml"
+    test_xml = "test_enhanced.xml"
     
     if os.path.exists(test_xlsx):
         stats = convert_excel_to_mspdi(
             input_xlsx=test_xlsx,
             output_xml=test_xml,
-            project_name="Test Project"
+            project_name="Enhanced Test Project",
+            add_deliverable_milestones=True,
+            add_phase_gates=True,
+            add_dependencies=True,
+            add_custom_fields=True
         )
-        print(f"Conversion complete: {stats}")
+        print(f"Enhanced conversion complete: {stats}")
     else:
         print(f"Test file {test_xlsx} not found")
