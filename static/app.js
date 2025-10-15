@@ -280,6 +280,87 @@ async function clearAllDataWithConfirmation() {
 window.clearAllDataWithConfirmation = clearAllDataWithConfirmation;
 
 // ISSUE 3: Retainer Options Functions
+
+// ISSUE FIX 3: Add global retainer suggestions function
+async function askAIForRetainerSuggestions() {
+  const codes = Array.from(selectionStore.deliverables);
+  
+  if (codes.length === 0) {
+    alert('Please select deliverables first');
+    return;
+  }
+  
+  const rfpText = APB.step2?.rfpText || 
+                 sessionStorage.getItem('rfpContent') || 
+                 sessionStorage.getItem('apb.rfp_text') ||
+                 document.getElementById('rfpText')?.value || '';
+  
+  if (!rfpText) {
+    alert('Please provide RFP text before using AI suggestions');
+    return;
+  }
+  
+  // Show loading on button
+  const btn = event?.target;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+  }
+  
+  try {
+    const res = await fetch('/api/pricing/retainer_suggest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deliverable_codes: codes,
+        rfp_text: rfpText
+      })
+    });
+    
+    if (res.ok) {
+      const data = await res.json();
+      const suggestions = data.suggestions || [];
+      
+      // Apply suggestions to pricingData
+      let retainerCount = 0;
+      suggestions.forEach(suggestion => {
+        if (suggestion.type === 'RETAINER') {
+          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'RETAINER');
+          pricingData.retainers.set(suggestion.deliverable_code, suggestion.recommended_months || 12);
+          retainerCount++;
+        } else {
+          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'PROJECT');
+          pricingData.retainers.delete(suggestion.deliverable_code);
+        }
+      });
+      
+      // Update UI to show retainer indicators
+      if (window.renderDeliverablesPanel) {
+        renderDeliverablesPanel();
+      }
+      
+      // Show success message
+      if (retainerCount > 0) {
+        alert(`✅ AI Retainer Analysis Complete!\n\n${retainerCount} deliverables suggested as retainers.\n\nRetainer items will be marked in the deliverables list.`);
+      } else {
+        alert('✅ Analysis complete. All items are best suited as one-time projects.');
+      }
+    }
+  } catch (error) {
+    console.error('Failed to get retainer suggestions:', error);
+    alert('Failed to get AI suggestions. Please try again.');
+  } finally {
+    // Reset button
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🤖 AI Retainer Analysis';
+    }
+  }
+}
+
+// Export the function globally
+window.askAIForRetainerSuggestions = askAIForRetainerSuggestions;
+
 function toggleRetainerType(code, isRetainer) {
   if (isRetainer) {
     pricingData.deliverableTypes.set(code, 'RETAINER');
@@ -2198,21 +2279,30 @@ async function generateAITimeline() {
     // Get RFP text for context
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
     
-    // Prepare deliverables with components and hours from current scenario
-    const deliverables = selectedCodes.map(code => {
-      const scenario = SCENARIOS?.A;
-      const item = scenario?.items?.find(i => i.deliverable_code === code);
-      
+    // ISSUE FIX 4: Ensure timeline gets proper scenario items with actual count
+    const scenario = SCENARIOS?.A;
+    if (!scenario || !scenario.items || scenario.items.length === 0) {
+      alert('Please build a scenario first. The timeline needs scenario items to work properly.');
+      btn.disabled = false;
+      btn.textContent = '🤖 Generate AI Timeline';
+      loading.style.display = 'none';
+      return;
+    }
+    
+    // Use actual scenario items for timeline generation
+    const deliverables = scenario.items.map(item => {
       return {
-        deliverable_code: code,
-        name: labelFor(code),
-        department: item?.department || 'Strategy',
-        hours: item?.total_hours || 0,
-        components: item?.components || [],
-        is_retainer: pricingData.retainers.has(code),
-        retainer_months: pricingData.retainers.get(code) || 0
+        deliverable_code: item.deliverable_code,
+        name: item.deliverable || labelFor(item.deliverable_code),
+        department: item.department || 'Strategy',
+        hours: item.total_hours || 0,
+        components: item.components || [],
+        is_retainer: pricingData.retainers.has(item.deliverable_code),
+        retainer_months: pricingData.retainers.get(item.deliverable_code) || 0
       };
     });
+    
+    console.log(`[TIMELINE] Generating timeline for ${deliverables.length} deliverables from Scenario A`);
     
     // Call NEW SSE-enabled timeline endpoint
     const response = await fetch('/api/ai/generate_timeline', {
@@ -3193,10 +3283,17 @@ async function buildFromCurrentSelection() {
     }
   });
 
+  // ISSUE FIX 1: Include both snake_case and camelCase formats for compatibility
   const payload = {
+    // Snake_case versions
     selected_deliverable_codes: codes,
     selected_components_map: selectedComponentsPayload,
     selected_l3_map: l3Payload,
+    // CamelCase versions for compatibility
+    selectedDeliverableCodes: codes,
+    selectedComponentsMap: selectedComponentsPayload,
+    selectedL3Map: l3Payload,
+    // Pricing and configuration
     pricing_mode: window.getPricingModeFromUI?.() || 'Flat_Blended',
     blended_rate: window.getBlendedRateFromUI?.() || 195,
     rate_band: window.getRateBandFromUI?.() || 'Standard_US',
@@ -6201,6 +6298,45 @@ async function renderComponentsPanel() {
 }
 
 
+// ISSUE FIX 5: Add hydrateL3For function to fetch L3 tasks for a specific component
+async function hydrateL3For(delivCode, compName) {
+  const key = `${delivCode}::${compName}`;
+  
+  // Skip if already hydrated
+  if (selectionStore.l3ByComponent.has(key)) {
+    return;
+  }
+  
+  try {
+    // Fetch L3 tasks for this specific component
+    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(delivCode)}&component_name=${encodeURIComponent(compName)}`);
+    
+    if (!res.ok) {
+      console.warn(`Failed to fetch L3 for ${key}`);
+      return;
+    }
+    
+    const data = await res.json();
+    const l3Items = data.items || [];
+    
+    // Store L3 tasks in selectionStore
+    if (l3Items.length > 0) {
+      const l3Set = new Set(l3Items.map(item => item.name || item));
+      selectionStore.l3ByComponent.set(key, l3Set);
+      
+      // Also update S2 selectedL3ByKey for compatibility
+      if (S2.selectedL3ByKey) {
+        S2.selectedL3ByKey[key] = l3Set;
+      }
+    }
+  } catch (err) {
+    console.error(`Error hydrating L3 for ${key}:`, err);
+  }
+}
+
+// Export the function globally
+window.hydrateL3For = hydrateL3For;
+
 // Render L2 Tasks panel - shows tasks for the active component
 async function renderL3Panel() {
   const listEl = document.getElementById('s2-l3-list');
@@ -6349,6 +6485,24 @@ document.addEventListener('DOMContentLoaded', function() {
         S2.selectedComponentsByCode[delivCode].add(compName);
         cb.checked = true;
       });
+      
+      // ISSUE FIX 5: Ensure L3 tasks are fetched and displayed after Smart Apply
+      // Hydrate L3 tasks for all selected components
+      const hydratePromises = [];
+      for (const [delivCode, compSet] of Object.entries(S2.selectedComponentsByCode)) {
+        if (compSet instanceof Set && compSet.size > 0) {
+          for (const compName of compSet) {
+            if (window.hydrateL3For) {
+              hydratePromises.push(hydrateL3For(delivCode, compName));
+            }
+          }
+        }
+      }
+      
+      // Wait for all L3 hydrations to complete
+      if (hydratePromises.length > 0) {
+        await Promise.all(hydratePromises);
+      }
       
       if (window.updateStep2Summary) updateStep2Summary();
       if (window.renderL3Panel) renderL3Panel();
@@ -7419,21 +7573,46 @@ S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
 // ========== XML Export Functions ==========
 async function exportXMLScenario(letter) {
+  // ISSUE FIX 2: Include edited scenario in XML export to preserve manual edits
+  // Get the actual edited scenario to preserve manual changes
+  const scenario = SCENARIOS?.[letter];
+  if (!scenario) {
+    alert('Please build a scenario first before exporting');
+    return;
+  }
+  
   // Check if anchors should be included
   const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
   
   // Build endpoint with query parameter
   const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
   
+  // Get project name and pricing mode
+  const projectName = document.getElementById('projectName')?.value || 
+                     document.getElementById('projectNameInput')?.value || 
+                     'Project Export';
+  const pricingMode = document.getElementById('pricingMode')?.value || 'Flat_Blended';
+  
   try {
-    const response = await fetch(endpoint);
+    // Send scenario data in the body to ensure edited values are preserved
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_name: projectName,
+        pricing_mode: pricingMode,
+        scenario: scenario,  // Include the full edited scenario
+        add_anchors: addAnchors
+      })
+    });
+    
     if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
     
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Project_Scenario_${letter}.xml`;
+    a.download = `${projectName}_Scenario_${letter}.xml`;
     a.click();
     window.URL.revokeObjectURL(url);
   } catch (err) {
