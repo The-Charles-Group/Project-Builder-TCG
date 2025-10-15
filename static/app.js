@@ -2843,9 +2843,14 @@ async function hydrateL3For(delivCode, componentName) {
     const l3 = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
     const key = `${delivCode}::${componentName}`;
     // FIX: Extract task names from objects if needed
-    const taskNames = l3.map(task => 
-      typeof task === 'string' ? task : (task.Task_Label || task.name || task.title || task)
-    );
+    const taskNames = l3.map(task => {
+      if (typeof task === 'string') return task;
+      if (task && typeof task === 'object') {
+        const name = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
+        if (name && typeof name === 'string') return name;
+      }
+      return null; // Filter out invalid entries
+    }).filter(name => name && name !== '[object Object]'); // Remove nulls and object strings
     selectionStore.l3ByComponent.set(key, new Set(taskNames));
   } catch (error) {
     console.error(`Failed to hydrate L3 for ${delivCode}::${componentName}:`, error);
@@ -3273,12 +3278,21 @@ async function buildFromCurrentSelection() {
 
   // Include L3 subtasks from APB.step2.selectedL3ByKey
   // Format: { deliverableCode: { component: [l3tasks...] } }
+  // FIX: Ensure we only send strings, not objects
   const l3Payload = {};
   Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
     const [code, component] = key.split('::');
     if (codes.includes(code) && l3Set && l3Set.size > 0) {
       if (!l3Payload[code]) l3Payload[code] = {};
-      l3Payload[code][component] = Array.from(l3Set);
+      // Convert Set to Array and ensure all items are strings
+      l3Payload[code][component] = Array.from(l3Set).map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
+          if (name && typeof name === 'string') return name;
+        }
+        return null;
+      }).filter(name => name && name !== '[object Object]' && name !== '');
     }
   });
 
@@ -4581,8 +4595,22 @@ async function applyAllSelectedFromAI() {
             const existingTasks = selectionStore.l3ByComponent.get(key);
             // FIX: Extract task name string from object if it's an object
             tasks.forEach(task => {
-              const taskName = typeof task === 'string' ? task : (task.Task_Label || task.name || task.title || task);
-              existingTasks.add(taskName);
+              // Ensure we always get a string value, not an object
+              let taskName;
+              if (typeof task === 'string') {
+                taskName = task;
+              } else if (task && typeof task === 'object') {
+                // Extract string from object - check all possible property names
+                taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
+                // If still no valid string, try converting to string
+                if (!taskName && task.toString && task.toString() !== '[object Object]') {
+                  taskName = task.toString();
+                }
+              }
+              // Only add if we have a valid string
+              if (taskName && typeof taskName === 'string' && taskName !== '[object Object]') {
+                existingTasks.add(taskName);
+              }
             });
           }
           
@@ -6334,9 +6362,16 @@ async function hydrateL3For(delivCode, compName) {
     const data = await res.json();
     const l3Items = data.items || [];
     
-    // Store L3 tasks in selectionStore
+    // Store L3 tasks in selectionStore - ensure strings only
     if (l3Items.length > 0) {
-      const l3Set = new Set(l3Items.map(item => item.name || item));
+      const l3Set = new Set(l3Items.map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const name = item.name || item.Task_Label || item.task_label || item.title || item.label || '';
+          if (name && typeof name === 'string') return name;
+        }
+        return null;
+      }).filter(name => name && name !== '[object Object]'));
       selectionStore.l3ByComponent.set(key, l3Set);
       
       // Also update S2 selectedL3ByKey for compatibility
