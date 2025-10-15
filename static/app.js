@@ -2287,11 +2287,43 @@ async function generateAITimeline() {
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
     
     // ISSUE FIX 4: Ensure timeline gets proper scenario items with actual count
+    // First check if SCENARIOS exists in memory, if not, try to load from localStorage
+    let SCENARIOS = window.SCENARIOS;
+    
+    if (!SCENARIOS) {
+      console.log('[TIMELINE] No SCENARIOS in memory, checking localStorage...');
+      
+      // Try to load from localStorage with session ID
+      const sessionId = window.APB?.sessionId || 
+                       localStorage.getItem('current_session_id') || 
+                       'default_session';
+      const storageKey = `scenarios_${sessionId}`;
+      
+      try {
+        const savedScenarios = localStorage.getItem(storageKey);
+        if (savedScenarios) {
+          SCENARIOS = JSON.parse(savedScenarios);
+          window.SCENARIOS = SCENARIOS; // Restore to memory
+          console.log('[TIMELINE] Loaded scenarios from localStorage with key:', storageKey);
+        } else {
+          // Try fallback key
+          const fallbackScenarios = localStorage.getItem('latest_scenarios');
+          if (fallbackScenarios) {
+            SCENARIOS = JSON.parse(fallbackScenarios);
+            window.SCENARIOS = SCENARIOS; // Restore to memory
+            console.log('[TIMELINE] Loaded scenarios from localStorage fallback');
+          }
+        }
+      } catch (err) {
+        console.error('[TIMELINE] Failed to load scenarios from localStorage:', err);
+      }
+    }
+    
     const scenario = SCENARIOS?.A;
     
     // Enhanced error diagnostics
     if (!SCENARIOS) {
-      console.error('[TIMELINE] No SCENARIOS object found');
+      console.error('[TIMELINE] No SCENARIOS object found in memory or localStorage');
       alert('Error: No scenarios found. Please click "Build Scenario" in Step 3 first.');
       btn.disabled = false;
       btn.textContent = '🤖 Generate AI Timeline';
