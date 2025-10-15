@@ -4502,12 +4502,15 @@ async function applyAllSelectedFromAI() {
   
   // Set the active deliverable and component for UI (first selected)
   if (firstDelivCode) {
+    // Set in both APB.step2 and S2 to ensure consistency
     APB.step2.activeDeliverableCode = firstDelivCode;
+    S2.activeDeliverableCode = firstDelivCode;
     
     const components = selectionStore.componentsByDeliv.get(firstDelivCode);
     if (components && components.size > 0) {
       firstCompName = firstCompName || Array.from(components)[0];
       APB.step2.activeComponentName = firstCompName;
+      S2.activeComponentName = firstCompName;
     }
   }
   
@@ -4515,14 +4518,20 @@ async function applyAllSelectedFromAI() {
   if (window.renderDeliverablesPanel) renderDeliverablesPanel();
   if (window.renderComponentsPanel) {
     if (firstDelivCode) {
-      await refreshComponentsPanel();
+      await renderComponentsPanel();
     }
   }
   
-  // ISSUE 1 FIX: Render L3/Tasks panel with the active component
-  if (window.renderTasksPanel && firstCompName && firstDelivCode) {
-    const componentKey = `${firstDelivCode}::${firstCompName}`;
-    await renderTasksPanel(componentKey);
+  // FIX: Render L3 panel to display the first component's L2 tasks
+  if (firstDelivCode && firstCompName) {
+    // Use renderL3Panel which displays L2 tasks in the third column
+    if (window.renderL3Panel) {
+      await renderL3Panel();
+    } else if (window.renderTasksPanel) {
+      // Fallback to renderTasksPanel if available
+      const componentKey = `${firstDelivCode}::${firstCompName}`;
+      await renderTasksPanel(componentKey);
+    }
   }
   
   // Update summary and counts
