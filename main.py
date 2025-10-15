@@ -5390,6 +5390,126 @@ def api_get_scenarios():
         "scenarios": _current_scenarios() if callable(globals().get("_current_scenarios")) else (_CURRENT_SCENARIOS or {})
     }
 
+@app.post("/api/scenarios")
+def api_post_scenarios(payload: dict):
+    """
+    Build scenarios from deliverable codes.
+    This endpoint accepts multiple field name formats for maximum compatibility.
+    It's a compatibility wrapper for the existing build logic.
+    """
+    try:
+        # Extract codes from the payload - check all possible field names
+        codes = None
+        
+        # Check for various field name formats (camelCase, snake_case, variations)
+        code_field_names = [
+            "codes",                      # Original expected
+            "selected_codes",             # Snake case
+            "selectedCodes",              # CamelCase from frontend
+            "deliverable_codes",          # Alternative snake case
+            "deliverableCodes",          # Alternative camelCase
+            "selected_deliverable_codes", # Full snake case
+            "selectedDeliverableCodes",   # Full camelCase
+            "deliverables",              # Simple form
+            "selectedDeliverables"       # CamelCase simple form
+        ]
+        
+        for field_name in code_field_names:
+            if field_name in payload and payload[field_name]:
+                codes = payload[field_name]
+                print(f"[/api/scenarios] Found codes in field: {field_name}")
+                break
+        
+        if not codes:
+            # Log what we actually received for debugging
+            print(f"[/api/scenarios] ERROR: No codes found. Received fields: {list(payload.keys())}")
+            raise HTTPException(
+                status_code=422, 
+                detail=f"Missing deliverable codes. Expected one of: {', '.join(code_field_names)}. Received: {list(payload.keys())}"
+            )
+        
+        # Handle scenario letter field (both camelCase and snake_case)
+        scenario_letter = payload.get("scenario_letter") or payload.get("scenarioLetter")
+        
+        # Handle scenario_a field (both camelCase and snake_case)
+        scenario_a = payload.get("scenario_a") or payload.get("scenarioA") or {
+            "mode": "template", 
+            "complexity": "Advanced", 
+            "tier": "T2_MediumVolume"
+        }
+        
+        # Handle other field name variations
+        pricing_mode = payload.get("pricing_mode") or payload.get("pricingMode") or "Flat_Blended"
+        blended_rate = payload.get("blended_rate") or payload.get("blendedRate")
+        rate_band = payload.get("rate_band") or payload.get("rateBand") or "Standard_US"
+        use_slack = payload.get("use_slack") if "use_slack" in payload else payload.get("useSlack", True)
+        slack_after_internal = payload.get("slack_after_internal") or payload.get("slackAfterInternal") or 1
+        slack_after_client = payload.get("slack_after_client") or payload.get("slackAfterClient") or 2
+        slack_global_pct = payload.get("slack_global_pct") or payload.get("slackGlobalPct") or 0.05
+        project_start = payload.get("project_start") or payload.get("projectStart")
+        client_budget_usd = payload.get("client_budget_usd") or payload.get("clientBudgetUsd") or payload.get("clientBudget")
+        
+        # Handle complex map fields
+        selected_components_map = (
+            payload.get("selected_components_map") or 
+            payload.get("selectedComponentsMap") or 
+            payload.get("componentsMap")
+        )
+        
+        selected_l3_map = (
+            payload.get("selected_l3_map") or 
+            payload.get("selectedL3Map") or 
+            payload.get("l3Map")
+        )
+        
+        # Log what we're building with
+        print(f"[/api/scenarios] Building with {len(codes)} codes, pricing_mode={pricing_mode}, rate_band={rate_band}")
+        
+        # Prepare the build payload with proper field names
+        build_payload = BuildPayload(
+            selected_deliverable_codes=codes,
+            scenario_a=scenario_a,
+            pricing_mode=pricing_mode,
+            blended_rate=blended_rate,
+            rate_band=rate_band,
+            use_slack=use_slack,
+            slack_after_internal=slack_after_internal,
+            slack_after_client=slack_after_client,
+            slack_global_pct=slack_global_pct,
+            project_start=project_start,
+            client_budget_usd=client_budget_usd,
+            retainers=payload.get("retainers", []),
+            selected_components_map=selected_components_map,
+            selected_l3_map=selected_l3_map
+        )
+        
+        # Call the existing build logic
+        result = api_build(build_payload)
+        
+        # Store scenarios in window.SCENARIOS format
+        if isinstance(result, dict) and "scenarios" in result:
+            window_scenarios = result["scenarios"]
+            # Update the global scenarios store
+            _CURRENT_SCENARIOS.update(window_scenarios)
+            
+            # Return in the expected format
+            return {
+                "ok": True,
+                "scenarios": window_scenarios,
+                "totals": result.get("totals", {}),
+                "metadata": result.get("metadata", {})
+            }
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in /api/scenarios: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to build scenarios: {str(e)}")
+
 @app.post("/api/build_scenario_c")
 def api_build_scenario_c_deprecated(payload: dict):
     if not DB.loaded:

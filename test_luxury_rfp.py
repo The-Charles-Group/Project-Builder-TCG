@@ -108,7 +108,7 @@ def test_luxury_rfp():
                 elapsed += poll_interval
                 
                 # Check job status
-                status_url = f"http://localhost:5000/api/ai/status/{job_id}"
+                status_url = f"http://localhost:5000/api/ai/jobs/{job_id}"
                 status_response = requests.get(status_url)
                 
                 if status_response.status_code == 200:

@@ -3514,7 +3514,7 @@ function updateAIProgress(status) {
 
 async function pollAIAnalysis(jobId) {
   try {
-    const res = await fetch(`/api/ai/status/${jobId}`);
+    const res = await fetch(`/api/ai/jobs/${jobId}`);
     if (!res.ok) return;
     
     const status = await res.json();
@@ -3747,9 +3747,15 @@ async function onRunReconcile() {
       showAIProgressBar();
       updateAIProgress({ progress: 0, current_stage: 'Starting AI analysis...', elapsed_seconds: 0, eta_seconds: null });
       
-      // Use SSE for real-time progress updates
-      const eventSource = new EventSource(`/api/stream/${jobInfo.job_id}`);
+      // Start polling for job status (SSE not implemented for AI jobs yet)
+      // Poll the correct endpoint for job status
+      aiAnalysisInterval = setInterval(() => pollAIAnalysis(jobInfo.job_id), 2000);
+      pollAIAnalysis(jobInfo.job_id);
       
+      // Old SSE code commented out for now
+      // const eventSource = new EventSource(`/api/stream/${jobInfo.job_id}`);
+      
+      /* SSE event handler disabled for now - using polling instead
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -3820,6 +3826,9 @@ async function onRunReconcile() {
         }
       };
       
+      */
+      // SSE error handler also disabled
+      /*
       eventSource.onerror = (error) => {
         console.error('SSE connection error:', error);
         eventSource.close();
@@ -3833,6 +3842,7 @@ async function onRunReconcile() {
       
       // Store event source for cleanup
       window.aiAnalysisEventSource = eventSource;
+      */
       
       // PATCH: Auto-fill project name from last upload
       try {
