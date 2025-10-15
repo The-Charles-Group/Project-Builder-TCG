@@ -4489,6 +4489,29 @@ async def api_suggest_by_file(files: List[UploadFile] = File(...), background_ta
         "processing_images": len(background_jobs) > 0
     }
 
+def extract_base_deliverable_code(code: str) -> str:
+    """
+    Extract the base deliverable code from an expanded code.
+    Examples:
+        'DEL-0027-Google_Ads' -> 'DEL-0027'
+        'DEL-0036-North_America' -> 'DEL-0036'
+        'DEL-0042-Strategy-Q1' -> 'DEL-0042'
+        'DEL-0015-Creative-Launch' -> 'DEL-0015'
+        'DEL-0001' -> 'DEL-0001' (unchanged)
+    """
+    if not code:
+        return code
+    
+    # Pattern matches: DEL-NNNN where N is a digit
+    # Everything after the 4 digits is considered the expansion suffix
+    import re
+    match = re.match(r'^(DEL-\d+)', str(code))
+    if match:
+        return match.group(1)
+    
+    # Fallback: If it doesn't match the expected pattern, return as-is
+    return str(code)
+
 def _safe_retainer_map(retainers) -> dict:
     out = {}
     for r in (retainers or []):
@@ -4526,12 +4549,15 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
                               use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
                               project_start: Optional[str], scenario_letter: str,
                               retainer_months: int = 0, selected_components: Optional[Union[List[str], Dict[str, Optional[float]]]] = None) -> Dict[str, Any]:
+    # Extract base code for database lookups (handles expanded codes like 'DEL-0027-Google_Ads')
+    base_code = extract_base_deliverable_code(deliv_code)
+    
     # Which task groups to include?
     if spec["mode"] == "bundle":
         included = DB.included_task_groups(category, spec["bundle"])
     else:
         # Template mode: include all task_groups that exist in data for this deliverable (collapsed to unique)
-        sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliv_code)]
+        sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(base_code)]
         included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
 
     complexity, tier = spec["complexity"], spec["tier"]
@@ -4553,7 +4579,7 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         
         for comp, custom_hours in component_dict.items():
             try:
-                fr = DB.hours_by_role_for_component(deliv_code, comp, included, scen_col)
+                fr = DB.hours_by_role_for_component(base_code, comp, included, scen_col)
                 if fr is not None and not fr.empty:
                     # Apply custom hours if provided
                     if custom_hours is not None:
@@ -4569,7 +4595,7 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
             except Exception:
                 # Fallback: get data for this component directly from all_rows
                 sub = DB.all_rows[
-                    (DB.all_rows["Deliverable_Code"].astype(str)==str(deliv_code)) &
+                    (DB.all_rows["Deliverable_Code"].astype(str)==str(base_code)) &
                     (DB.all_rows["Component"].astype(str)==str(comp)) &
                     (DB.all_rows["task_group"].isin(included))
                 ]
@@ -4596,9 +4622,9 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
         # fall back to the deliverable-level hours to avoid a zeroed deliverable.
         if hrs_by_role.empty or float(hrs_by_role["Hours"].sum()) <= 0.0:
             print(f"DEBUG {deliv_code}: component selection totals 0h -> fallback to deliverable defaults")
-            hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
+            hrs_by_role = DB.hours_by_role_for_deliverable(base_code, included, scen_col)
     else:
-        hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
+        hrs_by_role = DB.hours_by_role_for_deliverable(base_code, included, scen_col)
     
     # ---- after total_hours is computed - RETAINER-AWARE PRICING ----
     total_hours_raw = float(hrs_by_role["Hours"].sum()) if not hrs_by_role.empty else 0.0
@@ -4623,18 +4649,18 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
 
     # Schedule
     schedule = DB.build_schedule(
-        deliv_code, included, complexity, tier,
+        base_code, included, complexity, tier,
         use_slack, slack_i, slack_c, slack_pct, project_start,
         scenario_letter=scenario_letter
     )
 
     # Expose components for UI
-    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliv_code)]
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(base_code)]
     comp_names = sorted(set(sub["Component"].astype(str))) if not sub.empty else []
     comp_names = [c for c in comp_names if c and c != "nan"]
     
     try:
-        comp_hours = DB.hours_by_component(deliv_code, included, scen_col)
+        comp_hours = DB.hours_by_component(base_code, included, scen_col)
     except Exception:
         # Fallback: calculate from raw data
         comp_hours = {}
@@ -4883,18 +4909,32 @@ def api_build(payload: BuildPayload):
     if True:  # Keep indentation consistent
         per_deliv = []
         for code in payload.selected_deliverable_codes:
-            row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
+            # Extract base code from expanded codes (e.g., 'DEL-0027-Google_Ads' -> 'DEL-0027')
+            base_code = extract_base_deliverable_code(code)
+            expanded_suffix = code[len(base_code):] if len(code) > len(base_code) else ""  # Preserve the suffix for context
+            
+            row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(base_code)]
             if row.empty: 
-                print(f"DEBUG Build: No deliverable found for code '{code}'")
+                print(f"DEBUG Build: No deliverable found for code '{code}' (base: '{base_code}')")
                 continue
             
             deliverable_name = str(row["Deliverable"].iloc[0])
             cat = str(row["Category"].iloc[0])
-            print(f"DEBUG Build: Code '{code}' -> Name '{deliverable_name}' (Category: {cat})")
+            
+            # If this is an expanded deliverable, append context to the name
+            if expanded_suffix:
+                # Clean up suffix: remove leading dash, replace underscores with spaces
+                suffix_clean = expanded_suffix.lstrip('-').replace('_', ' ')
+                deliverable_name = f"{deliverable_name} - {suffix_clean}"
+                print(f"DEBUG Build: Expanded code '{code}' -> Base '{base_code}' -> Name '{deliverable_name}' (Category: {cat})")
+            else:
+                print(f"DEBUG Build: Code '{code}' -> Name '{deliverable_name}' (Category: {cat})")
             
             spec_resolved = _resolve_scenario(spec_in, cat)
-            months = int(ret_map.get(code, 0))
-            selected_components_dict = comp_map.get(str(code), {})
+            # Use original code for retainer and component map lookups (might be expanded)
+            # If not found, also try with base code as fallback
+            months = int(ret_map.get(code, ret_map.get(base_code, 0)))
+            selected_components_dict = comp_map.get(str(code), comp_map.get(str(base_code), {}))
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 pricing_mode, blended_rate, rate_band,
