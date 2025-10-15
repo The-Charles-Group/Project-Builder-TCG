@@ -1465,6 +1465,67 @@
       }
     }
     
+    // Helper functions to read Step 3 form values
+    function getPricingModeFromUI() {
+      return document.getElementById('pricingMode')?.value || 'Flat_Blended';
+    }
+    
+    function getBlendedRateFromUI() {
+      const value = document.getElementById('blendedRate')?.value;
+      return value ? parseFloat(value) : 195;
+    }
+    
+    function getRateBandFromUI() {
+      return document.getElementById('rateBand')?.value || 'Nearshore_Value';
+    }
+    
+    function getClientBudgetFromUI() {
+      const value = document.getElementById('clientBudget')?.value;
+      return value ? parseFloat(value) : null;
+    }
+    
+    function getComplexityFromUI() {
+      return document.getElementById('complexity')?.value || 'Advanced';
+    }
+    
+    function getVolumeTierFromUI() {
+      return document.getElementById('volumeTier')?.value || 'T2_MediumVolume';
+    }
+    
+    function getProjectStartFromUI() {
+      const value = document.getElementById('projectStart')?.value;
+      return value || new Date().toISOString().split('T')[0];
+    }
+    
+    function getUseSlackFromUI() {
+      // Check if slack checkbox exists and is checked
+      const slackCheckbox = document.getElementById('useSlack') || document.querySelector('input[type="checkbox"][name="slack"]');
+      return slackCheckbox ? slackCheckbox.checked : true;
+    }
+    
+    function getSlackInternalFromUI() {
+      const value = document.getElementById('slackInternal')?.value;
+      return value ? parseFloat(value) : 7;
+    }
+    
+    function getSlackClientFromUI() {
+      const value = document.getElementById('slackClient')?.value;
+      return value ? parseFloat(value) : 14;
+    }
+    
+    function getSlackPctFromUI() {
+      const value = document.getElementById('slackPct')?.value;
+      return value ? parseFloat(value) : 10;
+    }
+    
+    function getScenarioSpecAFromUI() {
+      return {
+        mode: 'custom',
+        complexity: getComplexityFromUI(),
+        tier: getVolumeTierFromUI()
+      };
+    }
+    
     // Step 3 — make the Build button work (as specified)
     async function buildScenariosAB() {
       // Make this function globally accessible
@@ -1615,6 +1676,29 @@
     
     // Legacy function name for backward compatibility
     const buildScenariosLegacy = buildScenariosAB;
+    
+    // Function to rebuild scenario with updated pricing parameters
+    async function rebuildScenario() {
+      console.log('[REBUILD] Starting scenario rebuild with updated parameters...');
+      
+      // Simply call the main build function which now reads all parameters correctly
+      await buildScenariosAB();
+      
+      // Update the pricing table if it exists
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      // Update the pricing summary
+      if (typeof updatePricingSummary === 'function') {
+        updatePricingSummary();
+      }
+      
+      console.log('[REBUILD] Scenario rebuild complete');
+    }
+    
+    // Make it globally accessible
+    window.rebuildScenario = rebuildScenario;
 
 
     // Legacy functions removed - replaced by Stage 2 workflow
