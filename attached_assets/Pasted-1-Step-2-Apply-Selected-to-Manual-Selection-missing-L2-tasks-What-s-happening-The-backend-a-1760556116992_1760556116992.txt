@@ -1,0 +1,174 @@
+1) Step 2 — “Apply Selected to Manual Selection” + missing L2 tasks
+
+What’s happening
+
+The backend already exposes deterministic Step‑2 endpoints:
+
+/api/step2/components → components for selected deliverables.
+
+/api/step2/l3 and /api/step2/l3/bulk → tasks grouped by component. (These still use the L3 name in the API.)
+
+The UI currently fills the L2 pane only after you click a component (it’s calling the single‑component route like /api/l3_for lazily), so after “Apply Selected…” you see Deliverables + Components but no tasks, until you click each component one‑by‑one.
+
+Why you need two clicks
+
+“Apply Selected to Manual Selection” appears to update deliverables first, then components in a second state pass; the L2 fetch is tied to the “component click” event rather than to the “components became selected” event. There’s no bulk fetch on commit, hence the second click.
+
+Fix (no schema changes required)
+
+On one click of “Apply Selected to Manual Selection”:
+
+POST /api/step2/components with all selected deliverable codes → update the Components column.
+
+For each deliverable, immediately POST one /api/step2/l3/bulk with the list of its selected components; store the returned { component → [tasks] } into your selection map so the L2 pane populates without per‑component clicks.
+
+Use the “General” safeguard already in the backend bulk endpoint (maps “General/generic” correctly) so you don’t lose tasks for blank components.
+
+Optional quality‑of‑life alias (to end L2/L3 confusion)
+
+Add API aliases that mirror the same implementations:
+
+/api/step2/l2 → return the same payload as /api/step2/l3
+
+/api/step2/l2/bulk → same as /api/step2/l3/bulk
+
+This keeps your UI’s “L2” wording while reusing the existing logic (backend still canonicalizes on “l3”).
+
+2) Single “Ask AI for Retainer Suggestions” button (not one per deliverable)
+
+What’s already in the backend
+
+Batch retainer suggestion endpoint: /api/pricing/retainer_suggest accepts a list of deliverable_codes (+ optional RFP text) and returns recommended retainers and months. Wire one global button to this, not 20 small buttons.
+
+There’s also a rule/heuristic fallback that classifies project vs retainer if AI isn’t available.
+
+UI wiring
+
+On click, send all currently selected deliverable codes; pre‑populate the “Monthly Retainer Services” box in Step 3 with what comes back. The build endpoint accepts a retainers array already.
+
+3) Step 3 — Build / Re‑build Scenario shows nothing
+
+Root cause
+
+The new scenario builder (POST /api/scenarios) is flexible about field names, but it must receive the list of deliverable codes; if it doesn’t, it returns a 422 and you end up with a scenario that has 0 items (which later makes Timeline show “Processing: 0 of 0 deliverables”).
+
+Correct call (example payload)
+
+{
+  "selectedDeliverableCodes": ["deck_strategy","production", "..."],
+  "pricingMode": "Flat_Blended",
+  "rateBand": "Nearshore_Value",
+  "blendedRate": 195,
+  "scenarioLetter": "A",
+  "projectStart": "2025-10-20",
+  "retainers": [{"deliverable_code":"production","months":6}],
+  "selectedComponentsMap": {
+    "deck_strategy": {"Brand Approach for Campaign Period": "__ALL__"}
+  },
+  "selectedL3Map": {
+    "deck_strategy": {"Brand Approach for Campaign Period": ["Approach Outline","Client Review & Revisions"]}
+  }
+}
+
+
+The endpoint accepts camelCase or snake_case for all of the above; it also persists scenarios in memory for later steps.
+
+Why the Step‑3 tables are empty
+
+If selectedDeliverableCodes is missing/empty, the builder can’t produce items, so One‑Time Deliverables and Monthly Retainer Services will be zeroed out. Pass the retainers array (from §2) and the table will populate on the first build.
+
+4) Step 4 — Timeline stuck at 5% / “0 of 0 deliverables”
+
+What the endpoint expects
+
+The AI timeline route (POST /api/ai/generate_timeline) expects deliverables with metadata. If Step 3 produced no items, Step 4 has nothing to schedule, so it legitimately shows “0 of 0.”
+
+Fix
+
+Ensure Step 3 returns a scenario with non‑empty items, then call timeline with those deliverables. The route streams SSE progress and returns a proper schedule once items are present.
+
+5) Exports (XML) — 500 errors + “edited hours/pricing must reflect in XML”
+
+Why you’re seeing 500
+
+The flexible XML exporter (POST /api/xml) supports three modes:
+(1) a full scenario with items (best);
+(2) a scenario shell + selected_deliverables (it builds items for you);
+(3) only selected_deliverables (it builds everything).
+If you call it with neither a scenario nor valid deliverable codes, the pipeline later fails when it can’t build rows for MSPDI, surfacing as a 500. Always send the built scenario or the codes.
+
+Making edited hours/rates show up in the XML
+
+Send the edited scenario (the very one driving your Step‑3 table) in payload.scenario. The exporter consumes scenario items and writes:
+
+Work/Duration from the computed schedule (planned hours rolled to minutes).
+
+StandardRate per role from pricing_mode, rate_band, or blended_rate.
+This ensures your manual hours/rate changes are reflected in the XML the moment you export.
+
+Sanity call (example)
+
+{
+  "project_name": "FINAL Uncommon School",
+  "pricing_mode": "Flat_Blended",
+  "rate_band": "Nearshore_Value",
+  "blended_rate": 195,
+  "scenario": { "...": "...", "items": [ /* edited items from Step 3 */ ] }
+}
+
+
+That path bypasses defaults and prevents the “export failed” dialog you’re seeing.
+
+6) Rename “L3” → “L2” safely (without breaking anything)
+
+Keep the backend canonical as is (it returns l3), but add the two alias routes suggested in §1 so the UI can request /api/step2/l2//bulk and render “L2 Tasks” while the server continues to compute with the existing task field names. This removes a class of regressions tied to the wording change and matches Bradley’s note that the widget label should say L2.
+
+7) Step‑by‑step: what Replit should ship
+
+Click‑once population in Step 2
+
+After Smart Select → one handler calls /api/step2/components then /api/step2/l3/bulk per deliverable; commit a single state update with deliverables, components, and tasks.
+
+Global “Ask AI for Retainer Suggestions”
+
+Wire one button to POST /api/pricing/retainer_suggest with all selected codes, then feed the response into the Step‑3 retainer box and into the retainers field when building scenarios.
+
+Build / Re‑build Scenario
+
+Always include selectedDeliverableCodes (or one of the accepted synonyms) and pass selectedComponentsMap/selectedL3Map if you want pricing to reflect the chosen scope.
+
+Timeline
+
+Send the scenario’s items to /api/ai/generate_timeline. If you still see “0 of 0,” print the scenario you’re sending—there will be no items.
+
+Exports
+
+Export with the edited scenario in payload.scenario. This guarantees your table edits are what the XML contains.
+
+8) Quick payload crib sheet (copy/paste)
+
+Step‑2 components
+POST /api/step2/components → {"deliverables":["deck_strategy","production"]}
+
+Step‑2 tasks in bulk (use for L2 panel)
+POST /api/step2/l3/bulk → {"deliverable":"deck_strategy","components":["Brand Approach for Campaign Period","General"]}
+
+Retainers (one global button)
+POST /api/pricing/retainer_suggest → {"deliverable_codes":[...] ,"rfp_text": "..."}
+
+Build Scenario
+POST /api/scenarios → (payload example in §3)
+
+Timeline
+POST /api/ai/generate_timeline with the built scenario’s items.
+
+XML Export
+POST /api/xml with the edited scenario.
+
+Why this addresses the odd behaviors you’re seeing
+
+The L2 pane not populating is a UI orchestration issue, not a missing backend; the bulk tasks endpoint has been there and even handles “General” correctly. Use it at commit time, not on click.
+
+Empty Step‑3 tables and a stuck Step‑4 timeline are both downstream effects of building a scenario with no deliverable codes—the builder explicitly logs/returns that condition.
+
+XML 500s happen when you export without a scenario/codes; the flexible exporter is built to take your edited scenario and emit Work/Duration/StandardRate that match your pricing table.
