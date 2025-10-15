@@ -383,12 +383,19 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
 
 def _normalize_dept(s: str) -> str:
     x = (s or "").lower()
-    if "paid" in x or "media" in x: return "Paid Media"
-    if "integrated" in x or "imm" in x: return "Integrated Marketing Management"
-    if "strategy" in x or "strat" in x: return "Strategy"
-    if "creative" in x: return "Creative"
-    if "content" in x: return "Content"
-    if any(k in x for k in ["tech", "dev", "web", "technology"]): return "Technology"
+    # FIXED: Better department categorization
+    if any(k in x for k in ["paid", "media", "analytics", "sem", "seo", "ppc", "display", "social ads"]): 
+        return "Paid Media"
+    if "integrated" in x or "imm" in x: 
+        return "Integrated Marketing Management"
+    if "strategy" in x or "strat" in x or "research" in x or "insights" in x: 
+        return "Strategy"
+    if any(k in x for k in ["creative", "design", "art", "visual"]): 
+        return "Creative"
+    if any(k in x for k in ["content", "copy", "editorial", "writing"]): 
+        return "Content"
+    if any(k in x for k in ["tech", "dev", "web", "technology", "engineering", "code", "software"]): 
+        return "Technology"
     return "Strategy"
 
 def _extract_keywords(text: str) -> List[str]:
