@@ -4440,28 +4440,23 @@ async function applyAllSelectedFromAI() {
     }
   }
   
-  // ISSUE 1 FIX: Auto-select first deliverable and fetch L2 tasks
-  if (firstDelivCode) {
-    // Set the active deliverable
-    APB.step2.activeDeliverableCode = firstDelivCode;
-    
-    // Get components for bulk L2 fetch
-    const components = selectionStore.componentsByDeliv.get(firstDelivCode);
+  // FIX: Fetch L2 tasks for ALL selected deliverables (not just the first one)
+  const allSelectedDelivs = Array.from(selectionStore.deliverables);
+  
+  for (const delivCode of allSelectedDelivs) {
+    // Get components for this deliverable
+    const components = selectionStore.componentsByDeliv.get(delivCode);
     
     if (components && components.size > 0) {
       const componentArray = Array.from(components);
       
-      // Set the first component as active
-      firstCompName = firstCompName || componentArray[0];
-      APB.step2.activeComponentName = firstCompName;
-      
       try {
-        // Fetch L2 tasks in bulk for all selected components
+        // Fetch L2 tasks in bulk for all selected components of this deliverable
         const res = await fetch('/api/step2/l3/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            deliverable: firstDelivCode,
+            deliverable: delivCode,
             components: componentArray
           })
         });
@@ -4471,7 +4466,7 @@ async function applyAllSelectedFromAI() {
           
           // Store L2 tasks for each component
           for (const [compName, tasks] of Object.entries(l3Data)) {
-            const key = `${firstDelivCode}::${compName}`;
+            const key = `${delivCode}::${compName}`;
             if (!selectionStore.l3ByComponent.has(key)) {
               selectionStore.l3ByComponent.set(key, new Set());
             }
@@ -4479,11 +4474,40 @@ async function applyAllSelectedFromAI() {
             tasks.forEach(task => existingTasks.add(task));
           }
           
-          console.log(`Fetched L2 tasks for ${firstDelivCode} components:`, Object.keys(l3Data));
+          console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(l3Data));
         }
       } catch (error) {
-        console.error('Failed to fetch L2 tasks after smart selection:', error);
+        console.error(`Failed to fetch L2 tasks for ${delivCode}:`, error);
       }
+    } else {
+      // Edge case: deliverable has no components, use "general" fallback
+      try {
+        const generalTasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=general`);
+        if (generalTasks && generalTasks.length > 0) {
+          // Store as "general" component
+          const key = `${delivCode}::general`;
+          selectionStore.l3ByComponent.set(key, new Set(generalTasks));
+          
+          // Also update the component map to have "general"
+          selectionStore.componentsByDeliv.set(delivCode, new Set(['general']));
+          S2.selectedComponentsByCode[delivCode] = new Set(['general']);
+          
+          console.log(`Fetched L2 tasks for ${delivCode} (general fallback):`, generalTasks.length);
+        }
+      } catch (error) {
+        console.warn(`No components or general tasks found for ${delivCode}:`, error);
+      }
+    }
+  }
+  
+  // Set the active deliverable and component for UI (first selected)
+  if (firstDelivCode) {
+    APB.step2.activeDeliverableCode = firstDelivCode;
+    
+    const components = selectionStore.componentsByDeliv.get(firstDelivCode);
+    if (components && components.size > 0) {
+      firstCompName = firstCompName || Array.from(components)[0];
+      APB.step2.activeComponentName = firstCompName;
     }
   }
   
