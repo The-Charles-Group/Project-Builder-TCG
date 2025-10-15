@@ -3581,12 +3581,17 @@ def api_options():
     rate_bands = dedupe_list(DB.rate_bands["Band_Name"].head(3).tolist()) if DB.rate_bands is not None else []
     pricing_modes = dedupe_list(["Flat_Blended","Per_Resource"])  # Deduplicate
     
-    # Include Service Department and Sort_Order for grouping/ordering
+    # FIXED: Only return unique deliverables (L0 items)
+    # Group by Deliverable_Code to get unique deliverables
     deliv_cols = ["Deliverable_Code", "Deliverable", "Category"]
     if "Service Department" in DB.deliverables.columns:
         deliv_cols.append("Service Department")
     
     deliverables_df = DB.deliverables[deliv_cols].copy()
+    
+    # Remove duplicates - keep only unique deliverable codes
+    deliverables_df = deliverables_df.drop_duplicates(subset=['Deliverable_Code'], keep='first')
+    
     # Add sort order (use DataFrame index if no explicit sort column exists)
     deliverables_df["Sort_Order"] = deliverables_df.index
     deliverables = deliverables_df.to_dict(orient="records")
