@@ -3596,7 +3596,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 200
 }
 
 // Handle Fast/Deep mode selection
-function setAnalysisMode(mode) {
+window.setAnalysisMode = function(mode) {
   const fastBtn = document.getElementById('mode-fast');
   const deepBtn = document.getElementById('mode-deep');
   const modeInput = document.getElementById('analysis-mode');
