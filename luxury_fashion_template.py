@@ -526,6 +526,277 @@ def get_fashion_deliverables() -> List[FashionDeliverable]:
             ],
             base_hours=120,
             luxury_multiplier=1.4
+        ),
+        
+        # ========== ADDITIONAL DELIVERABLES FOR 40+ TOTAL ==========
+        FashionDeliverable(
+            code="LF-BRAND-001",
+            name="Brand Positioning Strategy",
+            category="Brand Strategy",
+            components=[
+                "Market positioning analysis",
+                "Competitive landscape audit",
+                "Brand archetype definition",
+                "Value proposition development",
+                "Brand manifesto creation"
+            ],
+            base_hours=140,
+            luxury_multiplier=1.7
+        ),
+        FashionDeliverable(
+            code="LF-BRAND-002",
+            name="Visual Identity Refresh",
+            category="Brand Design",
+            components=[
+                "Logo evolution",
+                "Typography system",
+                "Color palette refinement",
+                "Brand guidelines update",
+                "Asset library creation"
+            ],
+            base_hours=180,
+            luxury_multiplier=1.8
+        ),
+        FashionDeliverable(
+            code="LF-RETAIL-001",
+            name="Flagship Store Launch",
+            category="Retail Marketing",
+            components=[
+                "Store opening event planning",
+                "VIP preview coordination",
+                "Local market activation",
+                "Window display concept",
+                "In-store experience design"
+            ],
+            base_hours=280,
+            luxury_multiplier=2.0,
+            requires_venue=True
+        ),
+        FashionDeliverable(
+            code="LF-RETAIL-002",
+            name="Personal Shopping Program",
+            category="Customer Experience",
+            components=[
+                "Personal shopper training",
+                "Appointment booking system",
+                "Client profile management",
+                "Exclusive perks design",
+                "Performance metrics setup"
+            ],
+            base_hours=160,
+            luxury_multiplier=1.6
+        ),
+        FashionDeliverable(
+            code="LF-RETAIL-003",
+            name="Boutique Network Strategy",
+            category="Retail Strategy",
+            components=[
+                "Location scouting and analysis",
+                "Store concept development",
+                "Merchandising strategy",
+                "Staff training program",
+                "Launch rollout plan"
+            ],
+            base_hours=200,
+            luxury_multiplier=1.7
+        ),
+        FashionDeliverable(
+            code="LF-PR-001",
+            name="Global Press Campaign",
+            category="Public Relations",
+            components=[
+                "Press kit development",
+                "Media list building",
+                "Press release writing",
+                "Editor relationship management",
+                "Coverage tracking and reporting"
+            ],
+            base_hours=140,
+            luxury_multiplier=1.5
+        ),
+        FashionDeliverable(
+            code="LF-PR-002",
+            name="Crisis Communications Plan",
+            category="Public Relations",
+            components=[
+                "Risk assessment",
+                "Response protocols",
+                "Spokesperson training",
+                "Media statement templates",
+                "Monitoring system setup"
+            ],
+            base_hours=120,
+            luxury_multiplier=1.6
+        ),
+        FashionDeliverable(
+            code="LF-PARTNER-001",
+            name="Designer Collaboration",
+            category="Partnerships",
+            components=[
+                "Designer vetting and selection",
+                "Collaboration terms negotiation",
+                "Collection co-creation",
+                "Launch strategy development",
+                "Revenue sharing framework"
+            ],
+            base_hours=300,
+            luxury_multiplier=2.2
+        ),
+        FashionDeliverable(
+            code="LF-PARTNER-002",
+            name="Artist Residency Program",
+            category="Creative Partnerships",
+            components=[
+                "Artist curation",
+                "Residency structure design",
+                "Studio space coordination",
+                "Exhibition planning",
+                "Documentation and archiving"
+            ],
+            base_hours=240,
+            luxury_multiplier=1.9
+        ),
+        FashionDeliverable(
+            code="LF-PARTNER-003",
+            name="Hotel & Resort Partnership",
+            category="Lifestyle Partnerships",
+            components=[
+                "Partner identification",
+                "Co-branding opportunities",
+                "Pop-up boutique setup",
+                "Guest experience design",
+                "Joint marketing campaigns"
+            ],
+            base_hours=180,
+            luxury_multiplier=1.7
+        ),
+        FashionDeliverable(
+            code="LF-TECH-001",
+            name="AR/VR Fashion Experience",
+            category="Digital Innovation",
+            components=[
+                "Virtual showroom development",
+                "AR try-on technology",
+                "3D garment rendering",
+                "User experience design",
+                "Platform integration"
+            ],
+            base_hours=280,
+            luxury_multiplier=1.9
+        ),
+        FashionDeliverable(
+            code="LF-TECH-002",
+            name="Blockchain Authentication",
+            category="Technology",
+            components=[
+                "Digital certificate system",
+                "Smart contract development",
+                "Authentication app design",
+                "Customer onboarding",
+                "Fraud prevention protocols"
+            ],
+            base_hours=220,
+            luxury_multiplier=1.8
+        ),
+        FashionDeliverable(
+            code="LF-TECH-003",
+            name="AI Personalization Engine",
+            category="Technology",
+            components=[
+                "Customer data analysis",
+                "Machine learning model",
+                "Recommendation system",
+                "Integration with e-commerce",
+                "Performance optimization"
+            ],
+            base_hours=260,
+            luxury_multiplier=1.7
+        ),
+        FashionDeliverable(
+            code="LF-CONTENT-004",
+            name="Podcast Series Production",
+            category="Content Marketing",
+            components=[
+                "Podcast concept and format",
+                "Guest curation and booking",
+                "Recording and production",
+                "Distribution strategy",
+                "Sponsorship integration"
+            ],
+            base_hours=180,
+            luxury_multiplier=1.5
+        ),
+        FashionDeliverable(
+            code="LF-CONTENT-005",
+            name="Coffee Table Book",
+            category="Publishing",
+            components=[
+                "Editorial concept",
+                "Photography curation",
+                "Text and interviews",
+                "Design and layout",
+                "Printing and distribution"
+            ],
+            base_hours=400,
+            luxury_multiplier=2.3,
+            requires_talent=True
+        ),
+        FashionDeliverable(
+            code="LF-EDU-001",
+            name="Fashion Masterclass Series",
+            category="Education",
+            components=[
+                "Curriculum development",
+                "Expert instructor recruitment",
+                "Video production",
+                "Learning platform setup",
+                "Certificate program design"
+            ],
+            base_hours=240,
+            luxury_multiplier=1.8
+        ),
+        FashionDeliverable(
+            code="LF-EDU-002",
+            name="Styling Workshop Program",
+            category="Customer Engagement",
+            components=[
+                "Workshop format design",
+                "Stylist training materials",
+                "Venue coordination",
+                "Registration management",
+                "Follow-up engagement"
+            ],
+            base_hours=140,
+            luxury_multiplier=1.5,
+            requires_venue=True
+        ),
+        FashionDeliverable(
+            code="LF-MEMBER-001",
+            name="VIP Membership Program",
+            category="Loyalty",
+            components=[
+                "Tier structure design",
+                "Benefits package creation",
+                "Exclusive experiences",
+                "Member communications",
+                "Program management system"
+            ],
+            base_hours=200,
+            luxury_multiplier=1.7
+        ),
+        FashionDeliverable(
+            code="LF-MEMBER-002",
+            name="Collectors Circle Initiative",
+            category="Customer Loyalty",
+            components=[
+                "Collector identification",
+                "Exclusive previews",
+                "Archive access program",
+                "Authentication services",
+                "Concierge support"
+            ],
+            base_hours=180,
+            luxury_multiplier=1.8
         )
     ]
 
@@ -859,6 +1130,7 @@ from tech_template import TechnologyTemplate
 
 INDUSTRY_TEMPLATES = {
     "luxury_fashion": LuxuryFashionTemplate(),
+    "luxury": LuxuryFashionTemplate(),  # Alias for luxury_fashion
     "beauty": BeautyTemplate(),  # Now active with full implementation
     "real_estate": RealEstateTemplate(),  # Now active with full implementation
     "retail": RetailTemplate(),  # Now active with full implementation

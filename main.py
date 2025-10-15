@@ -5207,6 +5207,7 @@ def suggest_industry_deliverables(request: dict):
     """Suggest deliverables based on selected industry and RFP keywords"""
     industry = request.get('industry', '')
     rfp_text = request.get('rfp_text', '')
+    keywords = request.get('keywords', '')  # Support both rfp_text and keywords parameters
     
     if not industry:
         return {"deliverables": [], "message": "No industry selected"}
@@ -5215,15 +5216,23 @@ def suggest_industry_deliverables(request: dict):
     if not template:
         return {"deliverables": [], "message": f"Template not available for {industry}"}
     
-    # Extract keywords from RFP
-    keywords = []
+    # Extract keywords from RFP or use provided keywords
+    extracted_keywords = []
+    
+    # Combine both rfp_text and keywords if provided
+    combined_text = ""
     if rfp_text:
+        combined_text += " " + rfp_text
+    if keywords:
+        combined_text += " " + keywords
+    
+    if combined_text:
         import re
         # Extract meaningful words (3+ chars)
-        words = re.findall(r'\b[a-zA-Z]{3,}\b', rfp_text.lower())
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', combined_text.lower())
         
-        # Industry-specific keywords based on selected industry
-        if industry == "luxury_fashion":
+        # Industry-specific keywords based on selected industry (also check for luxury alias)
+        if industry in ["luxury_fashion", "luxury"]:
             industry_keywords = ["fashion", "luxury", "collection", "runway", "show", "campaign", 
                               "lookbook", "editorial", "influencer", "heritage", "event", "gala",
                               "spring", "summer", "fall", "winter", "season", "week", "paris",
@@ -5243,10 +5252,15 @@ def suggest_industry_deliverables(request: dict):
             industry_keywords = ["campaign", "launch", "marketing", "digital", "content", "social",
                               "event", "production", "strategy", "brand", "creative", "video"]
         
-        keywords = [w for w in words if w in industry_keywords]
+        # Find matching keywords and also pass the full word list for partial matches
+        extracted_keywords = [w for w in words if w in industry_keywords]
+        
+        # Also pass full words for template to perform its own matching
+        if not extracted_keywords:
+            extracted_keywords = words[:20]  # Pass first 20 words if no industry keywords found
     
     # Get suggested deliverables from template
-    suggested = template.get_suggested_deliverables(keywords)
+    suggested = template.get_suggested_deliverables(extracted_keywords)
     
     return {
         "industry": industry,
