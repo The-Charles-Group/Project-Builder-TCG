@@ -285,7 +285,8 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
     prompt = "\n\n".join(prompt_parts)
     
     # Use the GPT-5 helper - sitecustomize will enforce GPT-5 automatically
-    return gpt5_json_response(prompt, schema, max_completion_tokens)
+    # FIXED: Use max_output_tokens parameter name to match gpt5_json_response signature
+    return gpt5_json_response(prompt, schema, max_output_tokens=max_completion_tokens)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # AgencyDB Catalog Builder

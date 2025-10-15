@@ -274,7 +274,7 @@ Return as JSON with keys:
             ],
             response_format={"type": "json_object"},
             temperature=0.4,
-            max_tokens=1000
+            max_completion_tokens=1000  # FIXED: Use max_completion_tokens for GPT-5 models
         )
         
         ai_insights = json.loads(response.choices[0].message.content)
@@ -421,7 +421,7 @@ Return a JSON object with this structure:
             ],
             response_format={"type": "json_object"},
             temperature=0.3,  # Lower temperature for more consistent scheduling
-            max_tokens=2000
+            max_completion_tokens=2000  # FIXED: Use max_completion_tokens for GPT-5 models
         )
         
         content = response.choices[0].message.content if response.choices and response.choices[0].message else None
