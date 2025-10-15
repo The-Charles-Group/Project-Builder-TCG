@@ -2175,8 +2175,56 @@ function updateTimelineMetadata(metadata) {
   }
 }
 
+// Function to manage AI button states based on scenario existence
+function updateAIButtonStates() {
+  const hasScenario = !!(window.SCENARIOS && window.SCENARIOS.A);
+  
+  // AI Suggest Type button
+  const btnAISuggest = document.getElementById('btn-ai-suggest-type');
+  if (btnAISuggest) {
+    btnAISuggest.disabled = !hasScenario;
+    if (!hasScenario) {
+      btnAISuggest.title = 'Build a scenario first before using AI suggestions';
+      btnAISuggest.style.opacity = '0.5';
+      btnAISuggest.style.cursor = 'not-allowed';
+    } else {
+      btnAISuggest.title = 'Analyze deliverable types using AI';
+      btnAISuggest.style.opacity = '1';
+      btnAISuggest.style.cursor = 'pointer';
+    }
+  }
+  
+  // Optimize Pricing button
+  const btnOptimize = document.getElementById('btn-ai-optimize-pricing');
+  if (btnOptimize) {
+    btnOptimize.disabled = !hasScenario;
+    if (!hasScenario) {
+      btnOptimize.title = 'Build a scenario first before optimizing pricing';
+      btnOptimize.style.opacity = '0.5';
+      btnOptimize.style.cursor = 'not-allowed';
+    } else {
+      btnOptimize.title = 'Optimize pricing using AI';
+      btnOptimize.style.opacity = '1';
+      btnOptimize.style.cursor = 'pointer';
+    }
+  }
+  
+  // Update AI panel visibility
+  const aiPanel = document.querySelector('.ai-pricing-panel');
+  if (aiPanel) {
+    if (!hasScenario) {
+      aiPanel.style.display = 'none';
+    } else {
+      aiPanel.style.display = 'block';
+    }
+  }
+}
+
 // Initialize Gantt event handlers when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
+  // Initialize button states
+  updateAIButtonStates();
+  
   // Generate AI Timeline button
   const btnGenerate = document.getElementById('btn-generate-timeline');
   if (btnGenerate) {
@@ -2769,6 +2817,9 @@ async function buildFromCurrentSelection() {
   window.appState.scenarios = scenarios;
   window.latestScenarios = scenarios;
   window.SCENARIOS = scenarios;
+
+  // Update AI button states now that scenario exists
+  updateAIButtonStates();
 
   // Show Step 3 and scroll
   const step3 = document.querySelector("#step3");
