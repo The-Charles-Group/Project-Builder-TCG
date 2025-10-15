@@ -3710,8 +3710,8 @@ async function onRunReconcile() {
     };
     const tier = tierMap[analysisMode] || 'thinking';
     
-    // Get selected mode (Fast or Deep) - default to Deep
-    const selectedMode = window.selectedAnalysisMode || 'deep';
+    // Get selected mode (Fast or Deep) - use analysisMode variable
+    const selectedMode = analysisMode || 'deep';
     
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
