@@ -2288,13 +2288,49 @@ async function generateAITimeline() {
     
     // ISSUE FIX 4: Ensure timeline gets proper scenario items with actual count
     const scenario = SCENARIOS?.A;
-    if (!scenario || !scenario.items || scenario.items.length === 0) {
-      alert('Please build a scenario first. The timeline needs scenario items to work properly.');
+    
+    // Enhanced error diagnostics
+    if (!SCENARIOS) {
+      console.error('[TIMELINE] No SCENARIOS object found');
+      alert('Error: No scenarios found. Please click "Build Scenario" in Step 3 first.');
       btn.disabled = false;
       btn.textContent = '🤖 Generate AI Timeline';
       loading.style.display = 'none';
       return;
     }
+    
+    if (!scenario) {
+      console.error('[TIMELINE] SCENARIOS exists but no A scenario:', SCENARIOS);
+      alert('Error: Scenario A not found. Please rebuild your scenario in Step 3.');
+      btn.disabled = false;
+      btn.textContent = '🤖 Generate AI Timeline';
+      loading.style.display = 'none';
+      return;
+    }
+    
+    if (!scenario.items) {
+      console.error('[TIMELINE] Scenario A exists but has no items:', scenario);
+      alert('Error: Scenario has no deliverables list. Please rebuild in Step 3.');
+      btn.disabled = false;
+      btn.textContent = '🤖 Generate AI Timeline';
+      loading.style.display = 'none';
+      return;
+    }
+    
+    if (scenario.items.length === 0) {
+      console.error('[TIMELINE] Scenario has empty items array:', scenario);
+      alert('Error: No deliverables in scenario. Please select deliverables in Step 2 and rebuild.');
+      btn.disabled = false;
+      btn.textContent = '🤖 Generate AI Timeline';
+      loading.style.display = 'none';
+      return;
+    }
+    
+    console.log('[TIMELINE] Scenario validation passed:', {
+      scenarioExists: true,
+      itemsCount: scenario.items.length,
+      sampleItem: scenario.items[0]
+    });
     
     // Use actual scenario items for timeline generation
     const deliverables = scenario.items.map(item => {
