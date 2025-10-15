@@ -1,0 +1,46 @@
+hey agent, can you check this to fix the smart apply issue?
+
+The fix (2 small changes)
+
+After Smart Apply, load L2 and set an active component.
+In the handler that runs after Apply Smart Selection and then Apply Selected to Manual Selection:
+
+For each selected deliverable, collect the selected components.
+
+Call POST /api/step2/l3/bulk once per deliverable with { deliverable: <code>, components: [ ... ] }. Store the result into your local l2ByComponent[deliverableCode].
+
+Set the UI’s activeDeliverable and activeComponent to the first selected item so the right‑hand widget has context to render immediately.
+
+If no components were returned for a deliverable, remember the API returns a fallback ["general"]; select that and fetch its L2 via /api/step2/l3.
+
+Map naming (L3→L2) only in the UI.
+Keep using the server’s l3_by_component and /step2/l3* endpoints; display them under the “L2 Tasks” label. This avoids breaking any downstream code and keeps Step‑3 scenario build compatible with selected_l3_map if you pass it.
+
+Suggested implementation notes for the Replit agent
+
+State to keep:
+
+selectedDeliverables: string[]
+
+selectedComponentsMap: Record<DeliverableCode, string[]>
+
+l2ByComponent: Record<DeliverableCode, Record<ComponentName, string[]>>
+
+activeDeliverable, activeComponent
+
+After smart‑apply:
+
+Update selectedDeliverables and selectedComponentsMap.
+
+For each deliverable with N components, call /api/step2/l3/bulk once and merge into l2ByComponent[deliverable].
+
+Set activeDeliverable to the first deliverable and activeComponent to its first component.
+
+Render the right panel from l2ByComponent[activeDeliverable][activeComponent].
+(Optional: show a badge like “Showing L2 for: Content Pillars (34)” and a dropdown to switch component.)
+
+Edge cases to handle:
+
+If a deliverable has no explicit components, use ["general"] and fetch /api/step2/l3 for component: "general".
+
+If the AI suggested components differ in casing from DB, normalize component names to the DB values before calling.
