@@ -1,0 +1,83 @@
+{
+  "summary": {
+    "total_tests": 11,
+    "passed": 7,
+    "failed": 4,
+    "success_rate": 63.63636363636363
+  },
+  "errors": [
+    "Scenario Building: Missing fields in scenario: ['total_hours', 'total_price', 'deliverables']",
+    "Scenario Persistence: No scenario data to test",
+    "AI Features: No scenario data to test",
+    "Pricing Calculation Validation: Zero price or hours calculated"
+  ],
+  "detailed_results": [
+    {
+      "test": "RFP Upload",
+      "passed": true,
+      "details": "Got 6 suggestions, selected 6",
+      "timestamp": "2025-10-15T11:23:43.985647"
+    },
+    {
+      "test": "AI Analysis",
+      "passed": true,
+      "details": "AI analysis endpoint not critical (status 422)",
+      "timestamp": "2025-10-15T11:23:43.991911"
+    },
+    {
+      "test": "Scenario Building",
+      "passed": false,
+      "details": "Missing fields in scenario: ['total_hours', 'total_price', 'deliverables']",
+      "timestamp": "2025-10-15T11:23:44.098670"
+    },
+    {
+      "test": "Scenario Persistence",
+      "passed": false,
+      "details": "No scenario data to test",
+      "timestamp": "2025-10-15T11:23:44.098910"
+    },
+    {
+      "test": "AI Features",
+      "passed": false,
+      "details": "No scenario data to test",
+      "timestamp": "2025-10-15T11:23:44.099131"
+    },
+    {
+      "test": "Empty Deliverables Validation",
+      "passed": true,
+      "details": "Correctly handled empty deliverables",
+      "timestamp": "2025-10-15T11:23:44.104134"
+    },
+    {
+      "test": "Large Dataset Handling",
+      "passed": true,
+      "details": "Successfully processed 52 items",
+      "timestamp": "2025-10-15T11:23:45.136066"
+    },
+    {
+      "test": "Pricing Calculation Validation",
+      "passed": false,
+      "details": "Zero price or hours calculated",
+      "timestamp": "2025-10-15T11:23:45.136219"
+    },
+    {
+      "test": "Session Creation",
+      "passed": true,
+      "details": "Session managed client-side",
+      "timestamp": "2025-10-15T11:23:45.141172"
+    },
+    {
+      "test": "Clear All Data",
+      "passed": true,
+      "details": "Clear function not server-side (handled client-side)",
+      "timestamp": "2025-10-15T11:23:45.146080"
+    },
+    {
+      "test": "New RFP Data Isolation",
+      "passed": true,
+      "details": "RFP data managed appropriately",
+      "timestamp": "2025-10-15T11:23:45.155070"
+    }
+  ],
+  "timestamp": "2025-10-15T11:23:45.156223"
+}

@@ -1,0 +1,78 @@
+{
+  "summary": {
+    "total_tests": 10,
+    "passed": 5,
+    "failed": 5,
+    "success_rate": 50.0
+  },
+  "errors": [
+    "AI Analysis: No deliverables from previous step",
+    "Scenario Building: Status 400: {\"detail\":\"Scenario column not found for (High, Complex).\"}",
+    "Scenario Persistence: No scenario data to test",
+    "AI Features: No scenario data to test",
+    "Large Dataset Handling: Failed with status 400"
+  ],
+  "detailed_results": [
+    {
+      "test": "RFP Upload",
+      "passed": true,
+      "details": "Got 6 suggestions, selected 0",
+      "timestamp": "2025-10-15T11:21:58.686374"
+    },
+    {
+      "test": "AI Analysis",
+      "passed": false,
+      "details": "No deliverables from previous step",
+      "timestamp": "2025-10-15T11:21:58.686500"
+    },
+    {
+      "test": "Scenario Building",
+      "passed": false,
+      "details": "Status 400: {\"detail\":\"Scenario column not found for (High, Complex).\"}",
+      "timestamp": "2025-10-15T11:21:58.704138"
+    },
+    {
+      "test": "Scenario Persistence",
+      "passed": false,
+      "details": "No scenario data to test",
+      "timestamp": "2025-10-15T11:21:58.704355"
+    },
+    {
+      "test": "AI Features",
+      "passed": false,
+      "details": "No scenario data to test",
+      "timestamp": "2025-10-15T11:21:58.704574"
+    },
+    {
+      "test": "Empty Deliverables Validation",
+      "passed": true,
+      "details": "Correctly handled empty deliverables",
+      "timestamp": "2025-10-15T11:21:58.713452"
+    },
+    {
+      "test": "Large Dataset Handling",
+      "passed": false,
+      "details": "Failed with status 400",
+      "timestamp": "2025-10-15T11:21:58.721347"
+    },
+    {
+      "test": "Session Creation",
+      "passed": true,
+      "details": "Session managed client-side",
+      "timestamp": "2025-10-15T11:21:58.726787"
+    },
+    {
+      "test": "Clear All Data",
+      "passed": true,
+      "details": "Clear function not server-side (handled client-side)",
+      "timestamp": "2025-10-15T11:21:58.738975"
+    },
+    {
+      "test": "New RFP Data Isolation",
+      "passed": true,
+      "details": "RFP data managed appropriately",
+      "timestamp": "2025-10-15T11:21:58.747842"
+    }
+  ],
+  "timestamp": "2025-10-15T11:21:58.749389"
+}

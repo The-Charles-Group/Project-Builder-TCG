@@ -25,3 +25,17 @@ uvicorn[standard]
 httptools
 uvloop
 aiohttp
+aiofiles
+pypdf
+pytest
+pytest-asyncio
+python-docx
+reportlab
+psutil
+colorama
+httpx
+psutil
+colorama
+httpx
+python-docx
+reportlab

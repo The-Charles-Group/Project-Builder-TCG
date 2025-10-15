@@ -5,7 +5,7 @@ integrations = ["python_openai:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["gitFull", "glibcLocales", "libiconv", "libuv", "libxcrypt", "playwright-driver", "unzip"]
+packages = ["freetype", "gitFull", "glibcLocales", "libiconv", "libuv", "libxcrypt", "playwright-driver", "unzip"]
 
 [workflows]
 runButton = "Project"

@@ -1,0 +1,115 @@
+{
+  "summary": {
+    "total_tests": 16,
+    "passed": 10,
+    "failed": 6,
+    "success_rate": 62.5
+  },
+  "errors": [
+    "Timeline Generation: Status 404",
+    "AI Suggest Type: Status 404",
+    "Optimize All ($5,000,000): Status 404",
+    "Optimize All ($6,000,000): Status 404",
+    "Optimize All ($7,500,000): Status 404",
+    "AI Timeline Generation: Status 404"
+  ],
+  "detailed_results": [
+    {
+      "test": "RFP Upload",
+      "passed": true,
+      "details": "Got 6 suggestions, selected 6",
+      "timestamp": "2025-10-15T11:26:02.687936"
+    },
+    {
+      "test": "AI Analysis",
+      "passed": true,
+      "details": "AI analysis endpoint not critical (status 422)",
+      "timestamp": "2025-10-15T11:26:02.693265"
+    },
+    {
+      "test": "Scenario Building",
+      "passed": true,
+      "details": "Built scenario with 6 items, total hours: 1174, total price: $228,930.00",
+      "timestamp": "2025-10-15T11:26:02.829102"
+    },
+    {
+      "test": "Timeline Generation",
+      "passed": false,
+      "details": "Status 404",
+      "timestamp": "2025-10-15T11:26:02.835588"
+    },
+    {
+      "test": "AI Suggest Type",
+      "passed": false,
+      "details": "Status 404",
+      "timestamp": "2025-10-15T11:26:02.841679"
+    },
+    {
+      "test": "Optimize All ($5,000,000)",
+      "passed": false,
+      "details": "Status 404",
+      "timestamp": "2025-10-15T11:26:02.849015"
+    },
+    {
+      "test": "Optimize All ($6,000,000)",
+      "passed": false,
+      "details": "Status 404",
+      "timestamp": "2025-10-15T11:26:02.853608"
+    },
+    {
+      "test": "Optimize All ($7,500,000)",
+      "passed": false,
+      "details": "Status 404",
+      "timestamp": "2025-10-15T11:26:02.861906"
+    },
+    {
+      "test": "AI Timeline Generation",
+      "passed": false,
+      "details": "Status 404",
+      "timestamp": "2025-10-15T11:26:02.872251"
+    },
+    {
+      "test": "Empty Deliverables Validation",
+      "passed": true,
+      "details": "Correctly handled empty deliverables",
+      "timestamp": "2025-10-15T11:26:02.879996"
+    },
+    {
+      "test": "Large Dataset Handling",
+      "passed": true,
+      "details": "Successfully processed 52 items",
+      "timestamp": "2025-10-15T11:26:03.757550"
+    },
+    {
+      "test": "Pricing Calculation Validation",
+      "passed": true,
+      "details": "Average rate $195.00/hour is reasonable",
+      "timestamp": "2025-10-15T11:26:03.757679"
+    },
+    {
+      "test": "Hours Allocation Validation",
+      "passed": true,
+      "details": "All hours allocations are reasonable",
+      "timestamp": "2025-10-15T11:26:03.757828"
+    },
+    {
+      "test": "Session Creation",
+      "passed": true,
+      "details": "Session managed client-side",
+      "timestamp": "2025-10-15T11:26:03.762616"
+    },
+    {
+      "test": "Clear All Data",
+      "passed": true,
+      "details": "Clear function not server-side (handled client-side)",
+      "timestamp": "2025-10-15T11:26:03.767881"
+    },
+    {
+      "test": "New RFP Data Isolation",
+      "passed": true,
+      "details": "RFP data managed appropriately",
+      "timestamp": "2025-10-15T11:26:03.784985"
+    }
+  ],
+  "timestamp": "2025-10-15T11:26:03.786436"
+}

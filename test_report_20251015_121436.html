@@ -1,0 +1,142 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Agency Project Builder - Test Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .header { background: #2c3e50; color: white; padding: 20px; border-radius: 5px; }
+        .summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0; }
+        .stat-card { background: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-card h3 { margin: 0; font-size: 14px; color: #666; }
+        .stat-card .value { font-size: 36px; font-weight: bold; margin: 10px 0; }
+        .passed { color: #27ae60; }
+        .failed { color: #e74c3c; }
+        .warning { color: #f39c12; }
+        .test-module { background: white; margin: 20px 0; padding: 20px; border-radius: 5px; }
+        .test-module h2 { border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .error { background: #ffe5e5; padding: 10px; border-left: 4px solid #e74c3c; margin: 10px 0; }
+        .recommendation { background: #fff3cd; padding: 10px; border-left: 4px solid #f39c12; margin: 10px 0; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f8f9fa; }
+        .progress-bar { background: #e0e0e0; height: 20px; border-radius: 10px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #27ae60, #3498db); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Agency Project Builder - Comprehensive Test Report</h1>
+        <p>Generated: 2025-10-15 12:14:36</p>
+        <p>Total Runtime: 10.25s</p>
+    </div>
+    
+    <div class="summary">
+        <div class="stat-card">
+            <h3>Total Tests</h3>
+            <div class="value">28</div>
+        </div>
+        <div class="stat-card">
+            <h3>Passed</h3>
+            <div class="value passed">3</div>
+        </div>
+        <div class="stat-card">
+            <h3>Failed</h3>
+            <div class="value failed">4</div>
+        </div>
+        <div class="stat-card">
+            <h3>Success Rate</h3>
+            <div class="value">10.7%</div>
+        </div>
+    </div>
+    
+    <div class="progress-bar">
+        <div class="progress-fill" style="width: 10.7%"></div>
+    </div>
+    
+    
+    <div class="test-module">
+        <h2>GPT-5 RFP Analysis</h2>
+        <p>Tests document processing, AI intelligence, and error handling</p>
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>Tests Run</td><td>6</td></tr>
+            <tr><td>Passed</td><td class="passed">1</td></tr>
+            <tr><td>Failed</td><td class="failed">3</td></tr>
+            <tr><td>Duration</td><td>0.70s</td></tr>
+            <tr><td>Memory Used</td><td>0.0MB</td></tr>
+        </table>
+    </div>
+
+    <div class="test-module">
+        <h2>Industry Templates</h2>
+        <p>Tests all 6 industry templates and their deliverables</p>
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>Tests Run</td><td>1</td></tr>
+            <tr><td>Passed</td><td class="passed">1</td></tr>
+            <tr><td>Failed</td><td class="failed">0</td></tr>
+            <tr><td>Duration</td><td>0.77s</td></tr>
+            <tr><td>Memory Used</td><td>0.0MB</td></tr>
+        </table>
+    </div>
+
+    <div class="test-module">
+        <h2>Scenario Workflow</h2>
+        <p>Tests scenario building, AI features, and pricing</p>
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>Tests Run</td><td>1</td></tr>
+            <tr><td>Passed</td><td class="passed">1</td></tr>
+            <tr><td>Failed</td><td class="failed">0</td></tr>
+            <tr><td>Duration</td><td>2.68s</td></tr>
+            <tr><td>Memory Used</td><td>0.0MB</td></tr>
+        </table>
+    </div>
+
+    <div class="test-module">
+        <h2>Timeline & CPM</h2>
+        <p>Tests timeline generation, critical path, and resource leveling</p>
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>Tests Run</td><td>19</td></tr>
+            <tr><td>Passed</td><td class="passed">0</td></tr>
+            <tr><td>Failed</td><td class="failed">0</td></tr>
+            <tr><td>Duration</td><td>1.53s</td></tr>
+            <tr><td>Memory Used</td><td>0.2MB</td></tr>
+        </table>
+    </div>
+
+    <div class="test-module">
+        <h2>XML Workfront Export</h2>
+        <p>Tests XML export and Workfront compatibility</p>
+        <table>
+            <tr><th>Metric</th><th>Value</th></tr>
+            <tr><td>Tests Run</td><td>1</td></tr>
+            <tr><td>Passed</td><td class="passed">0</td></tr>
+            <tr><td>Failed</td><td class="failed">1</td></tr>
+            <tr><td>Duration</td><td>2.40s</td></tr>
+            <tr><td>Memory Used</td><td>0.0MB</td></tr>
+        </table>
+    </div>
+
+    
+    <h2>Errors Found</h2><div class="error">2025-10-15 12:14:33,880 - __main__ - INFO - Starting Comprehensive Timeline and CPM Test Suite
+2025-10-15 12:14:33,881 - __main__ - INFO - ================================================================================
+test_large_project_timeline (__main__.TestTimelineGeneration.test_large_project_timeline)
+Test timeline generation for a large project ... 2025-10-15 12:14:33,882 - TestTimelineGeneration - INFO - ================================================================================
+20</div><div class="error">test_compatibility_report (__main__.TestXMLWorkfrontExport.test_compatibility_report)
+Generate Workfront compatibility report ... [INFO] Reading Excel file: test_outputs/test_wbs.xlsx, sheet: Scenario A
+[INFO] Successfully loaded 9 rows from Excel
+[INFO] Processing tasks grouped by deliverable with enhanced WBS structure
+[INFO] Adding task dependencies and predecessor links
+[INFO] [Enhanced MSPDI] Created test_outputs/test_output.xml: 29 tasks, 14 resources, 11 milestones
+ok
+test_custom_fields_d</div>
+    
+    <h2>Recommendations</h2><div class="recommendation">⚠️ CRITICAL: Success rate below 50%. Major issues detected that need immediate attention.</div><div class="recommendation">Fix errors in Timeline & CPM: 2025-10-15 12:14:33,880 - __main__ - INFO - Starting Comprehensive Timeline and CPM Test Suite
+2025-</div><div class="recommendation">Fix errors in XML Workfront Export: test_compatibility_report (__main__.TestXMLWorkfrontExport.test_compatibility_report)
+Generate Workf</div><div class="recommendation">Fix 4 failing tests before deployment</div>
+    
+</body>
+</html>

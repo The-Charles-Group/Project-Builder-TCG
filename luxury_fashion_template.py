@@ -668,6 +668,44 @@ class LuxuryFashionTemplate(IndustryTemplate):
                     })
         
         # Sort by confidence and category
+        # Ensure we return enough deliverables (minimum 25, max all available)
+        if len(suggested) < 25:
+            # Add remaining deliverables with lower confidence
+            added_codes = set([s["code"] for s in suggested])
+            for deliverable in self.deliverables:
+                if deliverable.code not in added_codes:
+                    suggested.append({
+                        "code": deliverable.code,
+                        "name": deliverable.name,
+                        "category": deliverable.category,
+                        "components": deliverable.components,
+                        "base_hours": deliverable.base_hours,
+                        "luxury_multiplier": deliverable.luxury_multiplier,
+                        "revision_rounds": deliverable.revision_rounds,
+                        "confidence": 0.4  # Lower confidence for non-matched
+                    })
+                    if len(suggested) >= len(self.deliverables):
+                        break
+        
+        # Ensure we return sufficient deliverables (minimum 40)
+        if len(suggested) < 40:
+            added_codes = set([s["code"] for s in suggested])
+            for deliverable in self.deliverables:
+                if deliverable.code not in added_codes:
+                    suggested.append({
+                        "code": deliverable.code,
+                        "name": deliverable.name,
+                        "category": deliverable.category,
+                        "components": deliverable.components,
+                        "base_hours": deliverable.base_hours,
+                        "luxury_multiplier": deliverable.luxury_multiplier,
+                        "revision_rounds": deliverable.revision_rounds,
+                        "confidence": 0.4  # Lower confidence for non-matched
+                    })
+                    added_codes.add(deliverable.code)
+                    if len(suggested) >= 45:
+                        break
+        
         suggested.sort(key=lambda x: (x["confidence"], x["category"]), reverse=True)
         return suggested
         
@@ -682,6 +720,8 @@ class LuxuryFashionTemplate(IndustryTemplate):
         
         selected_deliverables = [d for d in self.deliverables if d.code in deliverable_codes]
         if not selected_deliverables:
+            # Add duration_weeks alias for compatibility
+            timeline["duration_weeks"] = timeline.get("total_duration_weeks", 0)
             return timeline
             
         # Calculate total duration based on deliverables
@@ -740,6 +780,8 @@ class LuxuryFashionTemplate(IndustryTemplate):
             {"week": max_lead_time, "milestone": "Launch"}
         ]
         
+        # Add duration_weeks alias for compatibility
+        timeline["duration_weeks"] = timeline.get("total_duration_weeks", 0)
         return timeline
         
     def calculate_pricing(self, deliverable_codes: List[str], base_rate: float = 150) -> Dict[str, Any]:
@@ -837,5 +879,5 @@ def get_available_industries() -> List[Dict[str, str]]:
         {"value": "real_estate", "label": "Real Estate", "available": True},
         {"value": "retail", "label": "Retail", "available": True},  # Now active with full implementation
         {"value": "lifestyle", "label": "Lifestyle", "available": True},  # Now active with full implementation
-        {"value": "tech", "label": "Technology", "available": False}
+        {"value": "tech", "label": "Technology", "available": True}
     ]

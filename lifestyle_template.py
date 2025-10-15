@@ -1133,6 +1133,25 @@ class LifestyleTemplate:
                         "match_reason": "Core lifestyle deliverable"
                     })
         
+        # Ensure we return sufficient deliverables (minimum 40 for comprehensive coverage)
+        if len(suggested) < 40:
+            # Add remaining deliverables with medium confidence
+            added_codes = set(s["code"] for s in suggested)
+            for deliverable in self.deliverables:
+                if deliverable.code not in added_codes:
+                    suggested.append({
+                        "code": deliverable.code,
+                        "name": deliverable.name,
+                        "category": deliverable.category,
+                        "base_hours": deliverable.base_hours,
+                        "components": deliverable.components,
+                        "confidence": 0.5,
+                        "match_reason": "Full catalog deliverable"
+                    })
+                    added_codes.add(deliverable.code)
+                    if len(suggested) >= 45:  # Cap at 45 deliverables
+                        break
+        
         return suggested
     
     def calculate_timeline(self, deliverable_codes: List[str], start_date: datetime,

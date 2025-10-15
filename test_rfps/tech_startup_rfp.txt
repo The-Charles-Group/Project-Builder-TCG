@@ -1,0 +1,110 @@
+REQUEST FOR PROPOSAL
+
+TECH STARTUP - SERIES B LAUNCH CAMPAIGN
+
+COMPANY BACKGROUND:
+We are a fast-growing B2B SaaS platform specializing in AI-powered supply chain optimization. After closing our $45M Series B funding round, we need a comprehensive go-to-market strategy and execution partner to accelerate our growth from 500 to 5,000 enterprise customers.
+
+PROJECT SCOPE:
+
+1. PRODUCT LAUNCH & POSITIONING
+- New product feature releases quarterly
+- Competitive differentiation strategy
+- Technical documentation and white papers
+- API documentation and developer portal
+- Product demo videos and tutorials
+- Interactive product tours
+- Case study development with Fortune 500 clients
+- ROI calculators and business value tools
+
+2. DEMAND GENERATION
+- Account-based marketing campaigns
+- LinkedIn advertising and sponsored content
+- Google Ads and programmatic display
+- Content syndication programs
+- Webinar series with industry experts
+- Virtual conference and trade show strategy
+- Lead scoring and nurturing workflows
+- Marketing automation implementation
+
+3. CONTENT MARKETING
+- Thought leadership articles and research reports
+- SEO-optimized blog content (3x weekly)
+- Podcast series on supply chain innovation
+- Industry benchmark studies
+- Executive ghostwriting program
+- Technical guides and best practices
+- Newsletter and email campaigns
+- Social media content strategy
+
+4. SALES ENABLEMENT
+- Sales deck creation and updates
+- Battle cards against competitors
+- Objection handling guides
+- Proposal templates and pricing tools
+- Sales training materials
+- Customer success stories
+- Partner enablement kits
+- Channel marketing programs
+
+5. DEVELOPER ECOSYSTEM
+- Developer documentation site
+- GitHub presence and open-source strategy
+- API reference and SDKs
+- Code samples and tutorials
+- Developer community forum
+- Hackathon sponsorships
+- Technical blog and content
+- Developer relations program
+
+6. ANALYST RELATIONS
+- Gartner Magic Quadrant positioning
+- Forrester Wave participation
+- IDC MarketScape inclusion
+- Analyst briefing programs
+- Industry report placements
+- Speaking opportunities at analyst events
+- Customer reference programs
+- Market validation studies
+
+TECHNICAL REQUIREMENTS:
+- Integration with Salesforce, HubSpot, and Marketo
+- Multi-cloud deployment strategies
+- Security and compliance documentation
+- GDPR and SOC 2 compliance materials
+- Technical architecture diagrams
+- Performance benchmarking reports
+- Disaster recovery documentation
+- Implementation playbooks
+
+DELIVERABLES:
+- Go-to-market strategy document
+- Quarterly marketing plans
+- Content calendar and production schedule
+- Lead generation targets and forecasts
+- Marketing technology stack recommendations
+- Budget allocation across channels
+- Performance dashboards and reporting
+- Competitive intelligence reports
+- Customer journey mapping
+- Attribution modeling framework
+
+TARGET METRICS:
+- 10,000 MQLs per quarter
+- 500 SQLs per month
+- 50 enterprise deals per quarter
+- $25M ARR by end of year
+- 300% increase in web traffic
+- 40% improvement in conversion rates
+
+BUDGET: $3-5 million annually
+TIMELINE: 12-month initial engagement
+INDUSTRIES: Manufacturing, Retail, Logistics, Healthcare
+
+AGENCY REQUIREMENTS:
+- B2B SaaS marketing expertise
+- Technical content creation capabilities
+- Enterprise sales experience
+- Marketing automation proficiency
+- Data analytics and attribution expertise
+- Global reach for international expansion

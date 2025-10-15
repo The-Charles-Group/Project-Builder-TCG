@@ -212,7 +212,7 @@ else:
 # Note: embed_many is imported from embedding_cache at the top of the file
 # The embedding_cache module handles caching automatically
 
-def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 8192) -> dict:
+def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 16384) -> dict:
     """
     Use GPT-5 helper for JSON responses with schema - with retry logic.
     Only raises exceptions after all retries fail.
@@ -617,7 +617,7 @@ Think about the complete project lifecycle, dependencies, and what will actually
     
     try:
         # Use sitecustomize's helper for proper GPT-5 JSON response
-        result = await agpt5_json_schema(client, messages, schema, tier=tier, max_output_tokens=8192)
+        result = await agpt5_json_schema(client, messages, schema, tier=tier, max_output_tokens=16384)
         return result
     except Exception as e:
         print(f"[Batch Analysis Error] {e} - Using fallback scoring")

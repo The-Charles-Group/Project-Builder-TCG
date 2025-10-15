@@ -1,0 +1,79 @@
+{
+  "summary": {
+    "total_tests": 10,
+    "passed": 4,
+    "failed": 6,
+    "success_rate": 40.0
+  },
+  "errors": [
+    "RFP Upload: Status code: 404",
+    "RFP Analysis: No RFP uploaded",
+    "Scenario Building: Status 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"selected_deliverable_codes\"],\"msg\":\"Field required\",\"input\":{\"selected_codes\":[\"DEL-0001\",\"DEL-0008\",\"DEL-0025\",\"DEL-0043\"],\"selected_components_map\":{},\"pr",
+    "Scenario Persistence: No scenario data to test",
+    "AI Features: No scenario data to test",
+    "Large Dataset Handling: Failed with status 422"
+  ],
+  "detailed_results": [
+    {
+      "test": "RFP Upload",
+      "passed": false,
+      "details": "Status code: 404",
+      "timestamp": "2025-10-15T11:17:56.738971"
+    },
+    {
+      "test": "RFP Analysis",
+      "passed": false,
+      "details": "No RFP uploaded",
+      "timestamp": "2025-10-15T11:17:56.739138"
+    },
+    {
+      "test": "Scenario Building",
+      "passed": false,
+      "details": "Status 422: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"selected_deliverable_codes\"],\"msg\":\"Field required\",\"input\":{\"selected_codes\":[\"DEL-0001\",\"DEL-0008\",\"DEL-0025\",\"DEL-0043\"],\"selected_components_map\":{},\"pr",
+      "timestamp": "2025-10-15T11:17:56.755322"
+    },
+    {
+      "test": "Scenario Persistence",
+      "passed": false,
+      "details": "No scenario data to test",
+      "timestamp": "2025-10-15T11:17:56.755535"
+    },
+    {
+      "test": "AI Features",
+      "passed": false,
+      "details": "No scenario data to test",
+      "timestamp": "2025-10-15T11:17:56.755719"
+    },
+    {
+      "test": "Empty Deliverables Validation",
+      "passed": true,
+      "details": "Correctly rejected with status 422",
+      "timestamp": "2025-10-15T11:17:56.760951"
+    },
+    {
+      "test": "Large Dataset Handling",
+      "passed": false,
+      "details": "Failed with status 422",
+      "timestamp": "2025-10-15T11:17:56.767116"
+    },
+    {
+      "test": "Session Creation",
+      "passed": true,
+      "details": "Session managed client-side",
+      "timestamp": "2025-10-15T11:17:56.771965"
+    },
+    {
+      "test": "Clear All Data",
+      "passed": true,
+      "details": "Clear function not server-side (handled client-side)",
+      "timestamp": "2025-10-15T11:17:56.780503"
+    },
+    {
+      "test": "New RFP Data Isolation",
+      "passed": true,
+      "details": "RFP data managed appropriately",
+      "timestamp": "2025-10-15T11:17:56.792632"
+    }
+  ],
+  "timestamp": "2025-10-15T11:17:56.793614"
+}

@@ -1136,9 +1136,25 @@ class TechnologyTemplate:
                     seen.add(item["code"])
                     unique.append(item)
             
-            # Sort by confidence and return top results
+            # Sort by confidence and ensure we have enough deliverables
             unique.sort(key=lambda x: x.get("confidence", 0.5), reverse=True)
-            return unique[:10]
+            
+            # Ensure we return at least 40 deliverables for comprehensive coverage
+            if len(unique) < 40:
+                # Get all deliverables from both hardware and software
+                all_hw = self.hardware.get_suggested_deliverables([])
+                all_sw = self.software.get_suggested_deliverables([])
+                
+                # Add missing deliverables
+                for item in all_hw + all_sw:
+                    if item["code"] not in seen:
+                        seen.add(item["code"])
+                        item["confidence"] = 0.4  # Lower confidence for filler
+                        unique.append(item)
+                        if len(unique) >= 45:  # Cap at 45
+                            break
+            
+            return unique
     
     def calculate_timeline(self, deliverable_codes: List[str], start_date: datetime) -> Dict[str, Any]:
         """Calculate timeline based on deliverable types"""

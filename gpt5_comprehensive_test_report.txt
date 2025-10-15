@@ -1,0 +1,122 @@
+================================================================================
+GPT-5 RFP ANALYSIS COMPREHENSIVE TEST REPORT
+================================================================================
+
+Test Date: 2025-10-15 11:35:05
+Duration: 2.46 seconds
+
+📊 SUMMARY:
+   Total Tests: 11
+   ✅ Passed: 3
+   ❌ Failed: 7
+   ⏭️  Skipped: 1
+   Success Rate: 27.3%
+
+================================================================================
+DETAILED RESULTS BY CATEGORY
+================================================================================
+
+📁 DocumentTypes
+----------------------------------------
+
+❌ DocumentTypes:TXT Upload
+   • deliverables_count: 7
+   • using_gpt5: False
+   • has_confidence_scores: False
+   • processing_time: 0
+   ❗ Error: Only 7 deliverables (expected 50+)
+
+❌ DocumentTypes:DOCX Upload
+   • deliverables_count: 7
+   • using_gpt5: False
+   • has_confidence_scores: False
+   • processing_time: 0
+   ❗ Error: Only 7 deliverables (expected 50+)
+
+❌ DocumentTypes:PDF Upload
+   • deliverables_count: 7
+   • using_gpt5: False
+   • has_confidence_scores: False
+   • processing_time: 0
+   ❗ Error: Only 7 deliverables (expected 50+)
+
+📁 GPT5Intelligence
+----------------------------------------
+
+❌ GPT5Intelligence:Feature Detection
+   • using_gpt5: False
+   • has_confidence_scores: True
+   • avg_confidence: 3.000
+   • confidence_range_valid: False
+   • has_rationales: False
+   • has_multipliers: False
+   • total_items: 7
+   ❗ Error: Missing GPT-5 intelligence features
+
+✅ GPT5Intelligence:Confidence Distribution
+   • high_confidence: 7
+   • medium_confidence: 0
+   • low_confidence: 0
+   • total: 7
+
+📁 AutoRescue
+----------------------------------------
+
+❌ AutoRescue:Minimal Content
+   • deliverables_count: 1
+   • rescue_triggered: False
+   ❗ Error: Rescue logic not triggered for minimal content
+
+✅ AutoRescue:Complex Content
+   • deliverables_count: 7
+   • using_gpt5: False
+   • rescue_needed: False
+
+✅ AutoRescue:Gate Threshold
+   • deliverables_count: 4
+   • complexity: medium
+
+📁 SessionIsolation
+----------------------------------------
+
+❌ SessionIsolation:Data Separation
+   • unique_job_ids: True
+   • rfp_a_deliverables: 2
+   • rfp_b_deliverables: 0
+   • no_contamination_a_to_b: True
+   • no_contamination_b_to_a: True
+   • reasonable_counts: False
+   ❗ Error: Session data contamination detected
+
+⏭️ SessionIsolation:Concurrent Sessions
+   ❗ Error: Could not test concurrent sessions
+
+📁 APIFormat
+----------------------------------------
+
+❌ APIFormat:Job Creation
+   ❗ Error: Status code: 404
+
+================================================================================
+CRITICAL ISSUES FOUND
+================================================================================
+• DocumentTypes:TXT Upload: Only 7 deliverables (expected 50+)
+• DocumentTypes:DOCX Upload: Only 7 deliverables (expected 50+)
+• DocumentTypes:PDF Upload: Only 7 deliverables (expected 50+)
+• GPT5Intelligence:Feature Detection: Missing GPT-5 intelligence features
+• AutoRescue:Minimal Content: Rescue logic not triggered for minimal content
+• SessionIsolation:Data Separation: Session data contamination detected
+• APIFormat:Job Creation: Status code: 404
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+⚠️  Address failing tests before production deployment:
+   • Check document parsing and upload handlers
+   • Check document parsing and upload handlers
+   • Check document parsing and upload handlers
+   • Review session management and isolation logic
+
+================================================================================
+END OF REPORT
+================================================================================

@@ -1,0 +1,70 @@
+{
+  "test_run_id": "test_scenario_pricing_20251015_115808",
+  "start_time": "2025-10-15T11:58:08.558850",
+  "categories": {
+    "build_scenario": {
+      "passed": 1,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "Scenario Creation",
+          "error": "Scenario A not found in response",
+          "traceback": "Traceback (most recent call last):\n  File \"/home/runner/workspace/test_scenario_pricing.py\", line 115, in test_scenario_creation\n    assert \"scenario_a\" in scenario, \"Scenario A not found in response\"\n           ^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Scenario A not found in response\n"
+        },
+        {
+          "test": "AI Buttons Enable After Build",
+          "error": "'scenario_a'"
+        }
+      ]
+    },
+    "pricing_config": {
+      "passed": 1,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "Tier Selection",
+          "error": "Medium rate should produce higher price than Low"
+        },
+        {
+          "test": "Complexity Selection",
+          "error": "Medium should have more hours than Low"
+        }
+      ]
+    },
+    "ai_pricing": {
+      "passed": 2,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "AI Optimize Pricing",
+          "error": "'scenario_a'"
+        },
+        {
+          "test": "Pricing Bounds Respect",
+          "error": "'scenario_a'"
+        }
+      ]
+    },
+    "industry_templates": {
+      "passed": 2,
+      "failed": 0,
+      "issues": []
+    },
+    "department_org": {
+      "passed": 2,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "Department Grouping",
+          "error": "Should have multiple departments"
+        },
+        {
+          "test": "Select All/Deselect All",
+          "error": "Failed to build with all deliverables"
+        }
+      ]
+    }
+  },
+  "detailed_results": [],
+  "summary": {}
+}

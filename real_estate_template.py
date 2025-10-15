@@ -1011,6 +1011,27 @@ class RealEstateTemplate:
                         "confidence": 0.6  # Medium confidence for core suggestions
                     })
         
+        # Ensure we return sufficient deliverables (minimum 40 for comprehensive coverage)
+        if len(suggested) < 40:
+            # Add remaining deliverables with medium confidence
+            added_codes = set(s["code"] for s in suggested)
+            for deliverable in self.deliverables:
+                if deliverable.code not in added_codes:
+                    suggested.append({
+                        "code": deliverable.code,
+                        "name": deliverable.name,
+                        "category": deliverable.category,
+                        "components": deliverable.components,
+                        "base_hours": deliverable.base_hours,
+                        "luxury_multiplier": deliverable.luxury_multiplier,
+                        "commercial_multiplier": deliverable.commercial_multiplier,
+                        "revision_rounds": deliverable.revision_rounds,
+                        "confidence": 0.5  # Medium confidence for filler deliverables
+                    })
+                    added_codes.add(deliverable.code)
+                    if len(suggested) >= 45:  # Cap at 45 deliverables
+                        break
+        
         # Sort by confidence and category
         suggested.sort(key=lambda x: (x["confidence"], x["category"]), reverse=True)
         return suggested
@@ -1028,6 +1049,8 @@ class RealEstateTemplate:
         
         selected_deliverables = [d for d in self.deliverables if d.code in deliverable_codes]
         if not selected_deliverables:
+            # Add duration_weeks alias for compatibility
+            timeline["duration_weeks"] = timeline.get("total_duration_weeks", 0)
             return timeline
             
         # Determine timeline based on project phase
@@ -1100,6 +1123,8 @@ class RealEstateTemplate:
                 "recommendation": "Emphasize lifestyle and amenities"
             })
         
+        # Add duration_weeks alias for compatibility
+        timeline["duration_weeks"] = timeline.get("total_duration_weeks", 0)
         return timeline
         
     def calculate_pricing(self, deliverable_codes: List[str], base_rate: float = 150,

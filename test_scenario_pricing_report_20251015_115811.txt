@@ -1,0 +1,94 @@
+================================================================================
+SCENARIO BUILDING AND PRICING TEST REPORT
+================================================================================
+
+Test Run ID: test_scenario_pricing_20251015_115808
+Start Time: 2025-10-15T11:58:08.558850
+End Time: 2025-10-15T11:58:11.683692
+
+EXECUTIVE SUMMARY
+----------------------------------------
+Total Tests Run: 16
+Tests Passed: 8 (50.0%)
+Tests Failed: 8
+
+TEST CATEGORY BREAKDOWN
+----------------------------------------
+
+❌ Build Scenario Button:
+   - Passed: 1/3 (33.3%)
+   - Failed: 2/3
+   - Issues Found:
+     • Scenario Creation: Scenario A not found in response
+     • AI Buttons Enable After Build: 'scenario_a'
+
+❌ Pricing Configuration:
+   - Passed: 1/3 (33.3%)
+   - Failed: 2/3
+   - Issues Found:
+     • Tier Selection: Medium rate should produce higher price than Low
+     • Complexity Selection: Medium should have more hours than Low
+
+❌ AI Pricing Features:
+   - Passed: 2/4 (50.0%)
+   - Failed: 2/4
+   - Issues Found:
+     • AI Optimize Pricing: 'scenario_a'
+     • Pricing Bounds Respect: 'scenario_a'
+
+✅ Industry Templates:
+   - Passed: 2/2 (100.0%)
+   - Failed: 0/2
+
+❌ Department Organization:
+   - Passed: 2/4 (50.0%)
+   - Failed: 2/4
+   - Issues Found:
+     • Department Grouping: Should have multiple departments
+     • Select All/Deselect All: Failed to build with all deliverables
+
+CRITICAL ISSUES FOUND
+----------------------------------------
+
+1. [Build Scenario Button] Scenario Creation
+   Error: Scenario A not found in response
+
+2. [Build Scenario Button] AI Buttons Enable After Build
+   Error: 'scenario_a'
+
+3. [Pricing Configuration] Tier Selection
+   Error: Medium rate should produce higher price than Low
+
+4. [Pricing Configuration] Complexity Selection
+   Error: Medium should have more hours than Low
+
+5. [AI Pricing Features] AI Optimize Pricing
+   Error: 'scenario_a'
+
+6. [AI Pricing Features] Pricing Bounds Respect
+   Error: 'scenario_a'
+
+7. [Department Organization] Department Grouping
+   Error: Should have multiple departments
+
+8. [Department Organization] Select All/Deselect All
+   Error: Failed to build with all deliverables
+
+RECOMMENDATIONS
+----------------------------------------
+⚠️ Build Scenario Issues:
+   - Review scenario creation logic
+   - Check deliverable selection persistence
+⚠️ Pricing Configuration Issues:
+   - Verify pricing calculation formulas
+   - Check tier and complexity multipliers
+⚠️ AI Pricing Issues:
+   - Review AI optimization algorithms
+   - Check budget constraint handling
+⚠️ Department Organization Issues:
+   - Review department grouping logic
+   - Check department metadata consistency
+
+================================================================================
+END OF REPORT
+================================================================================

@@ -1,0 +1,70 @@
+{
+  "test_run_id": "test_scenario_pricing_20251015_115415",
+  "start_time": "2025-10-15T11:54:15.372661",
+  "categories": {
+    "build_scenario": {
+      "passed": 1,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "Scenario Creation",
+          "error": "Failed to get suggestions: 404",
+          "traceback": "Traceback (most recent call last):\n  File \"/home/runner/workspace/test_scenario_pricing.py\", line 85, in test_scenario_creation\n    assert response.status_code == 200, f\"Failed to get suggestions: {response.status_code}\"\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: Failed to get suggestions: 404\n"
+        },
+        {
+          "test": "AI Buttons Enable After Build",
+          "error": "'scenario_a'"
+        }
+      ]
+    },
+    "pricing_config": {
+      "passed": 1,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "Tier Selection",
+          "error": "Tier 2 should be more expensive than Tier 1"
+        },
+        {
+          "test": "Complexity Selection",
+          "error": "Medium should have more hours than Low"
+        }
+      ]
+    },
+    "ai_pricing": {
+      "passed": 2,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "AI Optimize Pricing",
+          "error": "'scenario_a'"
+        },
+        {
+          "test": "Pricing Bounds Respect",
+          "error": "'scenario_a'"
+        }
+      ]
+    },
+    "industry_templates": {
+      "passed": 2,
+      "failed": 0,
+      "issues": []
+    },
+    "department_org": {
+      "passed": 2,
+      "failed": 2,
+      "issues": [
+        {
+          "test": "Department Grouping",
+          "error": "Should have multiple departments"
+        },
+        {
+          "test": "Select All/Deselect All",
+          "error": "Failed to build with all deliverables"
+        }
+      ]
+    }
+  },
+  "detailed_results": [],
+  "summary": {}
+}

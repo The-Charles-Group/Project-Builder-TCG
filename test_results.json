@@ -1,0 +1,577 @@
+{
+  "templates_endpoint": {
+    "status": "success",
+    "templates_found": 6,
+    "templates": [
+      {
+        "value": "luxury_fashion",
+        "label": "Luxury & Fashion",
+        "available": true
+      },
+      {
+        "value": "beauty",
+        "label": "Beauty & Cosmetics",
+        "available": true
+      },
+      {
+        "value": "real_estate",
+        "label": "Real Estate",
+        "available": true
+      },
+      {
+        "value": "retail",
+        "label": "Retail",
+        "available": true
+      },
+      {
+        "value": "lifestyle",
+        "label": "Lifestyle",
+        "available": true
+      },
+      {
+        "value": "tech",
+        "label": "Technology",
+        "available": true
+      }
+    ]
+  },
+  "suggest_deliverables": {
+    "luxury_fashion": {
+      "with_keywords": {
+        "status": "success",
+        "count": 26,
+        "keywords_found": [
+          "fashion",
+          "show",
+          "paris",
+          "fashion",
+          "week",
+          "spring",
+          "summer",
+          "collection",
+          "lookbook",
+          "editorial",
+          "campaign",
+          "influencer",
+          "celebrity",
+          "ambassador",
+          "flagship",
+          "heritage",
+          "haute",
+          "couture"
+        ],
+        "sample_deliverables": [
+          {
+            "code": "LF-CONT-001",
+            "name": "Campaign Video Production",
+            "category": "Video Production",
+            "components": [
+              "Creative concept and script",
+              "Director and crew booking",
+              "Location and permits",
+              "Talent casting",
+              "Production management",
+              "Post-production and color grading",
+              "Multiple format exports",
+              "Subtitles and localization"
+            ],
+            "base_hours": 320,
+            "luxury_multiplier": 2.0,
+            "revision_rounds": 3,
+            "confidence": 0.9
+          },
+          {
+            "code": "LF-HER-003",
+            "name": "Anniversary Collection Campaign",
+            "category": "Special Projects",
+            "components": [
+              "Anniversary theme development",
+              "Limited edition product strategy",
+              "Commemorative content creation",
+              "VIP celebration event",
+              "Collector's edition packaging",
+              "PR and media strategy"
+            ],
+            "base_hours": 320,
+            "luxury_multiplier": 2.2,
+            "revision_rounds": 3,
+            "confidence": 0.9
+          },
+          {
+            "code": "LF-INF-001",
+            "name": "Influencer Partnership Strategy",
+            "category": "Influencer Marketing",
+            "components": [
+              "Influencer identification and vetting",
+              "Partnership tier structure",
+              "Contract negotiation framework",
+              "Content guidelines and brief",
+              "Performance metrics definition",
+              "Compliance and disclosure protocols"
+            ],
+            "base_hours": 80,
+            "luxury_multiplier": 1.5,
+            "revision_rounds": 3,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "without_keywords": {
+        "status": "success",
+        "count": 26
+      }
+    },
+    "beauty": {
+      "with_keywords": {
+        "status": "success",
+        "count": 34,
+        "keywords_found": [
+          "product",
+          "launch",
+          "skincare",
+          "makeup",
+          "collection",
+          "tutorial",
+          "clinical",
+          "dermatologist",
+          "sephora",
+          "ulta",
+          "clean",
+          "beauty",
+          "sustainable",
+          "packaging",
+          "influencer",
+          "seeding",
+          "masterclass"
+        ],
+        "sample_deliverables": [
+          {
+            "code": "BT-LAUNCH-001",
+            "name": "Hero Product Launch Campaign",
+            "category": "Product Launch",
+            "components": [
+              "Product positioning and messaging",
+              "Launch narrative development",
+              "Visual identity and key art",
+              "Campaign architecture across channels",
+              "Launch timeline and rollout strategy",
+              "Retail partner coordination",
+              "PR and media strategy"
+            ],
+            "base_hours": 160,
+            "complexity_multiplier": 1.5,
+            "revision_rounds": 2,
+            "confidence": 0.9
+          },
+          {
+            "code": "BT-LAUNCH-002",
+            "name": "Product Collection Launch",
+            "category": "Product Launch",
+            "components": [
+              "Collection theme and storytelling",
+              "Individual product narratives",
+              "Collection packaging strategy",
+              "Cross-sell and bundle strategy",
+              "Tiered launch approach",
+              "Influencer seeding strategy",
+              "Retail merchandising plan"
+            ],
+            "base_hours": 200,
+            "complexity_multiplier": 1.6,
+            "revision_rounds": 2,
+            "confidence": 0.9
+          },
+          {
+            "code": "BT-EDU-001",
+            "name": "Video Tutorial Series",
+            "category": "Educational Content",
+            "components": [
+              "Tutorial concept development",
+              "Step-by-step script writing",
+              "MUA or expert booking",
+              "Video production setup",
+              "Multiple technique demonstrations",
+              "Post-production and editing",
+              "Platform optimization (YouTube, TikTok, IG)",
+              "Shoppable video integration"
+            ],
+            "base_hours": 180,
+            "complexity_multiplier": 1.5,
+            "revision_rounds": 2,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "without_keywords": {
+        "status": "success",
+        "count": 4
+      }
+    },
+    "real_estate": {
+      "with_keywords": {
+        "status": "success",
+        "count": 41,
+        "keywords_found": [
+          "launch",
+          "event"
+        ],
+        "sample_deliverables": [
+          {
+            "code": "RE-LAUNCH-001",
+            "name": "Residential Property Launch Campaign",
+            "category": "Launch Campaigns",
+            "components": [
+              "Market positioning strategy",
+              "Brand identity and naming",
+              "Marketing collateral suite",
+              "Digital presence setup",
+              "Sales center design",
+              "Launch event planning",
+              "Broker outreach program",
+              "Initial advertising campaign"
+            ],
+            "base_hours": 280,
+            "luxury_multiplier": 1.8,
+            "commercial_multiplier": 1.0,
+            "revision_rounds": 2,
+            "confidence": 0.9
+          },
+          {
+            "code": "RE-LAUNCH-002",
+            "name": "Commercial Property Launch Campaign",
+            "category": "Launch Campaigns",
+            "components": [
+              "Market analysis and positioning",
+              "Tenant mix strategy",
+              "Broker presentation materials",
+              "Property website and portal listings",
+              "Marketing suite design",
+              "Leasing collateral package",
+              "Industry networking events",
+              "Trade publication advertising"
+            ],
+            "base_hours": 240,
+            "luxury_multiplier": 1.0,
+            "commercial_multiplier": 1.3,
+            "revision_rounds": 2,
+            "confidence": 0.9
+          },
+          {
+            "code": "RE-LAUNCH-003",
+            "name": "Mixed-Use Development Campaign",
+            "category": "Launch Campaigns",
+            "components": [
+              "Integrated positioning strategy",
+              "Multi-audience messaging",
+              "Retail tenant recruitment materials",
+              "Residential sales materials",
+              "Office leasing package",
+              "Community activation plan",
+              "Placemaking initiatives",
+              "Cross-promotional campaigns"
+            ],
+            "base_hours": 360,
+            "luxury_multiplier": 1.5,
+            "commercial_multiplier": 1.3,
+            "revision_rounds": 2,
+            "confidence": 0.9
+          }
+        ]
+      },
+      "without_keywords": {
+        "status": "success",
+        "count": 41
+      }
+    },
+    "retail": {
+      "with_keywords": {
+        "status": "success",
+        "count": 33,
+        "keywords_found": [
+          "campaign"
+        ],
+        "sample_deliverables": [
+          {
+            "code": "RT-OMNI-001",
+            "name": "Omnichannel Campaign Strategy",
+            "category": "Campaign Strategy",
+            "base_hours": 120,
+            "components": [
+              "Customer journey mapping across channels",
+              "Channel integration strategy",
+              "Unified messaging framework",
+              "Cross-channel promotion calendar",
+              "Attribution model development",
+              "Budget allocation by channel",
+              "Performance KPI framework"
+            ],
+            "match_reason": "Core retail deliverable"
+          },
+          {
+            "code": "RT-LOYAL-001",
+            "name": "Loyalty Program Launch",
+            "category": "Customer Retention",
+            "base_hours": 240,
+            "components": [
+              "Program structure design",
+              "Tier and benefits framework",
+              "Points earning rules",
+              "Redemption catalog setup",
+              "Technology platform selection",
+              "Staff training program",
+              "Launch campaign development",
+              "Member acquisition strategy"
+            ],
+            "match_reason": "Core retail deliverable"
+          },
+          {
+            "code": "RT-ECOM-001",
+            "name": "Conversion Rate Optimization",
+            "category": "E-Commerce",
+            "base_hours": 140,
+            "components": [
+              "Conversion funnel analysis",
+              "A/B testing framework",
+              "Cart abandonment recovery",
+              "Checkout optimization",
+              "Product page enhancement",
+              "Search functionality improvement",
+              "Performance tracking setup"
+            ],
+            "match_reason": "Core retail deliverable"
+          }
+        ]
+      },
+      "without_keywords": {
+        "status": "success",
+        "count": 33
+      }
+    },
+    "lifestyle": {
+      "with_keywords": {
+        "status": "success",
+        "count": 37,
+        "keywords_found": [
+          "brand",
+          "event"
+        ],
+        "sample_deliverables": [
+          {
+            "code": "LS-EXP-001",
+            "name": "Immersive Brand Experience",
+            "category": "Experiential Marketing",
+            "base_hours": 240,
+            "components": [
+              "Experience concept development",
+              "Multi-sensory design planning",
+              "Interactive technology integration",
+              "Visitor journey mapping",
+              "Staff training and scripting",
+              "Data capture strategy",
+              "Social sharing moments design",
+              "Post-experience follow-up"
+            ],
+            "match_reason": "Core lifestyle deliverable"
+          },
+          {
+            "code": "LS-COMM-001",
+            "name": "Brand Community Platform",
+            "category": "Community Development",
+            "base_hours": 180,
+            "components": [
+              "Community platform selection",
+              "Membership structure design",
+              "Content strategy development",
+              "Moderation guidelines creation",
+              "Ambassador program setup",
+              "Engagement tactics planning",
+              "Rewards and recognition system",
+              "Community growth strategy"
+            ],
+            "match_reason": "Core lifestyle deliverable"
+          },
+          {
+            "code": "LS-CONT-001",
+            "name": "Editorial Content Calendar",
+            "category": "Content Marketing",
+            "base_hours": 120,
+            "components": [
+              "Annual content strategy",
+              "Monthly theme development",
+              "Content pillar definition",
+              "Editorial calendar creation",
+              "Writer and contributor network",
+              "Photography planning",
+              "Distribution strategy",
+              "Performance metrics setup"
+            ],
+            "match_reason": "Core lifestyle deliverable"
+          }
+        ]
+      },
+      "without_keywords": {
+        "status": "success",
+        "count": 37
+      }
+    },
+    "technology": {
+      "with_keywords": {
+        "status": "success",
+        "count": 6,
+        "keywords_found": [
+          "launch"
+        ],
+        "sample_deliverables": [
+          {
+            "code": "HW-LAUNCH-001",
+            "name": "Product Announcement Campaign",
+            "category": "Product Launch",
+            "components": [
+              "Keynote presentation design",
+              "Press event planning and execution",
+              "Product messaging framework",
+              "Executive spokesperson training",
+              "Press kit development",
+              "Media embargo management",
+              "Launch day war room coordination",
+              "Social media countdown campaign"
+            ],
+            "base_hours": 280,
+            "confidence": 0.6
+          },
+          {
+            "code": "HW-TRADE-001",
+            "name": "Trade Show Booth Design (CES/Computex)",
+            "category": "Event Marketing",
+            "components": [
+              "Booth concept and design",
+              "Interactive demo stations",
+              "Product display systems",
+              "AV system integration",
+              "Staff training materials",
+              "Lead capture system setup",
+              "Giveaway and swag design",
+              "Post-show follow-up campaign"
+            ],
+            "base_hours": 320,
+            "confidence": 0.6
+          },
+          {
+            "code": "HW-B2B-001",
+            "name": "Enterprise Sales Enablement Kit",
+            "category": "Sales Enablement",
+            "components": [
+              "Sales presentation decks",
+              "ROI calculation tools",
+              "Proof of concept frameworks",
+              "RFP response templates",
+              "Customer reference stories",
+              "Vertical market positioning",
+              "Objection handling guides",
+              "Pricing and discount matrices"
+            ],
+            "base_hours": 220,
+            "confidence": 0.6
+          }
+        ]
+      },
+      "without_keywords": {
+        "status": "success",
+        "count": 6
+      }
+    }
+  },
+  "calculate_timeline": {
+    "luxury_fashion": {
+      "status": "success",
+      "duration_weeks": 12,
+      "phase_count": 5
+    },
+    "beauty": {
+      "status": "success",
+      "duration_weeks": 6,
+      "phase_count": 5
+    },
+    "real_estate": {
+      "status": "success",
+      "duration_weeks": 8,
+      "phase_count": 5
+    },
+    "retail": {
+      "status": "success",
+      "duration_weeks": null,
+      "phase_count": 5
+    },
+    "lifestyle": {
+      "status": "success",
+      "duration_weeks": null,
+      "phase_count": 5
+    },
+    "technology": {
+      "status": "success",
+      "duration_weeks": null,
+      "phase_count": 5
+    }
+  },
+  "calculate_pricing": {
+    "luxury_fashion": {
+      "status": "error",
+      "error": "'list' object has no attribute 'keys'"
+    },
+    "beauty": {
+      "status": "error",
+      "error": "'list' object has no attribute 'keys'"
+    },
+    "real_estate": {
+      "status": "error",
+      "error": "'list' object has no attribute 'keys'"
+    },
+    "retail": {
+      "rate_150": {
+        "status": "success",
+        "total": 0,
+        "has_adjustments": false
+      },
+      "rate_250": {
+        "status": "success",
+        "total": 0,
+        "has_adjustments": false
+      }
+    },
+    "lifestyle": {
+      "rate_150": {
+        "status": "success",
+        "total": 0,
+        "has_adjustments": false
+      },
+      "rate_250": {
+        "status": "success",
+        "total": 0,
+        "has_adjustments": false
+      }
+    },
+    "technology": {
+      "status": "error",
+      "error": "'list' object has no attribute 'keys'"
+    }
+  },
+  "edge_cases": {
+    "mixed_keywords": "passed",
+    "invalid_industry": "passed",
+    "empty_industry": "passed",
+    "large_text": "passed",
+    "special_chars": "passed"
+  },
+  "errors": [
+    "Missing template: technology",
+    "luxury_fashion: Low deliverable count (26)",
+    "luxury_fashion pricing error: 'list' object has no attribute 'keys'",
+    "beauty: Low deliverable count (34)",
+    "beauty pricing error: 'list' object has no attribute 'keys'",
+    "real_estate pricing error: 'list' object has no attribute 'keys'",
+    "retail: Low deliverable count (33)",
+    "lifestyle: Low deliverable count (37)",
+    "technology: Low deliverable count (6)",
+    "technology pricing error: 'list' object has no attribute 'keys'"
+  ]
+}
