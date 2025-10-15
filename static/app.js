@@ -2842,7 +2842,11 @@ async function hydrateL3For(delivCode, componentName) {
   try {
     const l3 = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
     const key = `${delivCode}::${componentName}`;
-    selectionStore.l3ByComponent.set(key, new Set(l3));
+    // FIX: Extract task names from objects if needed
+    const taskNames = l3.map(task => 
+      typeof task === 'string' ? task : (task.Task_Label || task.name || task.title || task)
+    );
+    selectionStore.l3ByComponent.set(key, new Set(taskNames));
   } catch (error) {
     console.error(`Failed to hydrate L3 for ${delivCode}::${componentName}:`, error);
   }
