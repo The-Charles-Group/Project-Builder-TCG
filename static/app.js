@@ -2215,8 +2215,17 @@ async function generateAITimeline() {
           // Update reasoning panel
           updateReasoningPanel(result.reasoning);
           
+          // Auto-show the reasoning panel when timeline is generated
+          const panel = document.getElementById('ai-reasoning-panel');
+          if (panel) {
+            panel.style.display = 'block';
+          }
+          
           // Update metadata
           updateTimelineMetadata(result.metadata);
+          
+          // Update resource risk table
+          updateResourceRiskTable(currentTimelineTasks, result.reasoning);
           
           // Initialize Gantt chart with AI-generated timeline
           initializeGanttChart(currentTimelineTasks).then(() => {
@@ -2346,6 +2355,115 @@ function updateTimelineMetadata(metadata) {
   }
 }
 
+// Update Resource Risk Management table
+function updateResourceRiskTable(tasks, reasoning) {
+  const tbody = document.getElementById('resource-risk-tbody');
+  const section = document.getElementById('resource-risk-section');
+  const summaryText = document.getElementById('risk-summary-text');
+  
+  if (!tbody || !section) return;
+  
+  // Analyze resource conflicts
+  const resourceRisks = analyzeResourceRisks(tasks);
+  
+  if (resourceRisks.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--muted);">No resource conflicts or risks detected</td></tr>';
+    summaryText.textContent = 'No resource conflicts detected';
+    section.style.display = 'none';
+    return;
+  }
+  
+  // Show the section
+  section.style.display = 'block';
+  
+  // Populate the table
+  let totalIdleCost = 0;
+  let highRiskCount = 0;
+  
+  const rows = resourceRisks.map(risk => {
+    totalIdleCost += risk.idleCost;
+    if (risk.riskLevel === 'High') highRiskCount++;
+    
+    const riskBadge = risk.riskLevel === 'High' 
+      ? '<span style="background:#ef4444; color:white; padding:2px 8px; border-radius:4px;">High</span>'
+      : risk.riskLevel === 'Medium'
+      ? '<span style="background:#f59e0b; color:white; padding:2px 8px; border-radius:4px;">Medium</span>'
+      : '<span style="background:#10b981; color:white; padding:2px 8px; border-radius:4px;">Low</span>';
+    
+    return `<tr>
+      <td style="padding:12px; border-bottom:1px solid var(--border);">${risk.resource}</td>
+      <td style="padding:12px; border-bottom:1px solid var(--border);">${risk.waitingPeriod} days</td>
+      <td style="padding:12px; text-align:right; border-bottom:1px solid var(--border);">$${risk.idleCost.toLocaleString()}</td>
+      <td style="padding:12px; text-align:center; border-bottom:1px solid var(--border);">${riskBadge}</td>
+      <td style="padding:12px; border-bottom:1px solid var(--border); font-size:0.9em; color:var(--muted);">${risk.recommendation}</td>
+    </tr>`;
+  }).join('');
+  
+  tbody.innerHTML = rows;
+  
+  // Update summary
+  if (highRiskCount > 0) {
+    summaryText.innerHTML = `<span style="color:#ef4444;">⚠️ ${highRiskCount} high-risk resource conflicts detected. Total potential idle cost: $${totalIdleCost.toLocaleString()}</span>`;
+  } else {
+    summaryText.textContent = `${resourceRisks.length} resource risks identified. Total potential idle cost: $${totalIdleCost.toLocaleString()}`;
+  }
+}
+
+// Analyze tasks for resource risks and conflicts
+function analyzeResourceRisks(tasks) {
+  if (!tasks || tasks.length === 0) return [];
+  
+  const risks = [];
+  const resourceSchedule = {};
+  
+  // Build resource schedule
+  tasks.forEach(task => {
+    const resource = task.department || 'General';
+    if (!resourceSchedule[resource]) {
+      resourceSchedule[resource] = [];
+    }
+    resourceSchedule[resource].push({
+      taskId: task.id,
+      taskName: task.name,
+      start: new Date(task.start),
+      end: new Date(task.end)
+    });
+  });
+  
+  // Analyze each resource for conflicts and idle time
+  Object.entries(resourceSchedule).forEach(([resource, schedule]) => {
+    if (schedule.length < 2) return;
+    
+    // Sort by start date
+    schedule.sort((a, b) => a.start - b.start);
+    
+    // Look for gaps and overlaps
+    for (let i = 0; i < schedule.length - 1; i++) {
+      const current = schedule[i];
+      const next = schedule[i + 1];
+      
+      const gapDays = Math.floor((next.start - current.end) / (1000 * 60 * 60 * 24));
+      
+      if (gapDays > 3) { // More than 3 days gap
+        const idleCost = gapDays * 800; // Assume $800/day cost
+        const riskLevel = gapDays > 10 ? 'High' : gapDays > 5 ? 'Medium' : 'Low';
+        
+        risks.push({
+          resource: resource,
+          waitingPeriod: gapDays,
+          idleCost: idleCost,
+          riskLevel: riskLevel,
+          recommendation: gapDays > 10 
+            ? 'Consider reassigning tasks or adjusting timeline to reduce idle time'
+            : 'Minor gap - may be acceptable for resource availability'
+        });
+      }
+    }
+  });
+  
+  return risks;
+}
+
 // Function to manage AI button states based on scenario existence
 function updateAIButtonStates() {
   const hasScenario = !!(window.SCENARIOS && window.SCENARIOS.A);
@@ -2427,9 +2545,47 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnSave = document.getElementById('btn-save-timeline');
   if (btnSave) {
     btnSave.addEventListener('click', async () => {
-      // TODO: Implement save functionality to persist timeline changes
-      console.log('Saving timeline changes:', currentTimelineTasks);
-      alert('Timeline changes saved (in browser state)');
+      // Save timeline changes to backend
+      if (!currentTimelineTasks || currentTimelineTasks.length === 0) {
+        alert('No timeline data to save');
+        return;
+      }
+      
+      try {
+        const response = await fetch('/api/timeline/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tasks: currentTimelineTasks,
+            reasoning: timelineReasoning,
+            metadata: {
+              saved_at: new Date().toISOString(),
+              project_name: document.getElementById('projectName')?.value || 'Project'
+            }
+          })
+        });
+        
+        if (response.ok) {
+          alert('✅ Timeline changes saved successfully');
+          btnSave.style.display = 'none';
+          
+          // Mark timeline as synced
+          localStorage.setItem('timeline_synced', 'true');
+          localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
+        } else {
+          // Fallback to local storage
+          localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
+          localStorage.setItem('timeline_reasoning', JSON.stringify(timelineReasoning));
+          alert('Timeline saved locally (will sync when server is available)');
+        }
+      } catch (error) {
+        console.error('Error saving timeline:', error);
+        // Save to local storage as fallback
+        localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
+        localStorage.setItem('timeline_reasoning', JSON.stringify(timelineReasoning));
+        alert('Timeline saved locally');
+      }
+      
       btnSave.style.display = 'none';
     });
   }

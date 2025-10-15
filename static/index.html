@@ -782,6 +782,37 @@
           font-size: 0.75em;
         }
       </style>
+      
+      <!-- Resource Risk Management Table -->
+      <div id="resource-risk-section" style="margin-top: 30px; padding: 20px; background: var(--card); border-radius: 8px; display: none;">
+        <h3 style="color: var(--text); margin-bottom: 16px;">⚠️ Resource Risk Management</h3>
+        <div id="resource-risk-summary" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+          <div style="font-size: 0.9em; color: var(--text);">
+            <strong>Risk Summary:</strong> <span id="risk-summary-text">No resource conflicts detected</span>
+          </div>
+        </div>
+        
+        <table id="resource-risk-table" style="width: 100%; border-collapse: separate; border-spacing: 0;">
+          <thead>
+            <tr style="background: var(--bg); border-bottom: 2px solid var(--border);">
+              <th style="padding: 12px; text-align: left;">Resource/Vendor</th>
+              <th style="padding: 12px; text-align: left;">Waiting Period</th>
+              <th style="padding: 12px; text-align: right;">Idle Time Cost</th>
+              <th style="padding: 12px; text-align: center;">Risk Level</th>
+              <th style="padding: 12px; text-align: left;">Recommendation</th>
+            </tr>
+          </thead>
+          <tbody id="resource-risk-tbody">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
+        
+        <div style="margin-top: 16px; padding: 12px; background: rgba(139, 92, 246, 0.05); border-radius: 6px;">
+          <div style="font-size: 0.85em; color: var(--muted);">
+            <strong>💡 Tip:</strong> Red arrows (🔴→) in the Gantt chart indicate resources at risk due to waiting periods. Consider redistributing work to minimize idle time costs.
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Step 5: Export -->
