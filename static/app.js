@@ -300,6 +300,13 @@ async function askAIForRetainerSuggestions() {
     return;
   }
   
+  // Build deliverables array with proper format
+  const deliverables = codes.map(code => ({
+    code: code,
+    name: labelFor(code), // Get the label/name
+    type: "DELIVERABLE"
+  }));
+  
   // Show loading on button
   const btn = event?.target;
   if (btn) {
@@ -312,7 +319,7 @@ async function askAIForRetainerSuggestions() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        deliverable_codes: codes,
+        deliverables: deliverables,  // Correct format
         rfp_text: rfpText
       })
     });
