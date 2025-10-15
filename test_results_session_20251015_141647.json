@@ -1,0 +1,28 @@
+{
+  "timestamp": "2025-10-15T14:16:47.756258",
+  "all_passed": false,
+  "tests": [
+    {
+      "test": "unique_session_ids",
+      "all_unique": true,
+      "total_generated": 10,
+      "unique_count": 10
+    },
+    {
+      "test": "embedding_cache_isolation",
+      "isolation_verified": false,
+      "contamination_found": false,
+      "contamination_details": [],
+      "session1_cleared": true,
+      "session1_works_after": false,
+      "session2_unaffected": false
+    },
+    {
+      "test": "rfp_text_cache_isolation",
+      "cache_cleared": true,
+      "had_cache_before": true,
+      "has_cache_after": false,
+      "clear_success": true
+    }
+  ]
+}

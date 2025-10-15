@@ -1,0 +1,155 @@
+{
+  "timestamp": "2025-10-15T14:36:02.077421",
+  "total_tests": 11,
+  "passed_tests": 4,
+  "failed_tests": 7,
+  "pass_rate": 36.36363636363637,
+  "production_ready": false,
+  "risk_level": "HIGH",
+  "test_results": [
+    {
+      "name": "RFP Upload & Extraction",
+      "passed": false,
+      "duration": 0.0,
+      "details": {},
+      "errors": [
+        "No suggestions returned from RFP"
+      ],
+      "warnings": []
+    },
+    {
+      "name": "Industry Template (Luxury)",
+      "passed": true,
+      "duration": 0.0,
+      "details": {
+        "total_deliverables": 26,
+        "luxury_specific": 8
+      },
+      "errors": [],
+      "warnings": []
+    },
+    {
+      "name": "AI-Enhanced Analysis",
+      "passed": false,
+      "duration": 0.0,
+      "details": {
+        "available_deliverables": 52,
+        "ai_suggestions": 0,
+        "template_suggestions": 26
+      },
+      "errors": [],
+      "warnings": [
+        "Only 0 unique deliverables identified"
+      ]
+    },
+    {
+      "name": "Scenario Building",
+      "passed": false,
+      "duration": 0.0,
+      "details": {},
+      "errors": [
+        "Build failed: 422",
+        "Details: {\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"selected_deliverable_codes\"],\"msg\":\"Field required\",\"input\":{\"project_name\":\"Luxury Fashion Global Campaign 2025\",\"selected\":[{\"code\":\"DEL-0001\",\"name\":\"Con"
+      ],
+      "warnings": []
+    },
+    {
+      "name": "Timeline Generation (CPM)",
+      "passed": false,
+      "duration": 0.0,
+      "details": {},
+      "errors": [],
+      "warnings": [
+        "No scenario data available for timeline"
+      ]
+    },
+    {
+      "name": "Resource Risk Analysis",
+      "passed": false,
+      "duration": 0.0,
+      "details": {},
+      "errors": [],
+      "warnings": [
+        "No scenario data for risk analysis"
+      ]
+    },
+    {
+      "name": "XML Export (Workfront)",
+      "passed": false,
+      "duration": 0.0,
+      "details": {},
+      "errors": [],
+      "warnings": [
+        "No scenario data for export"
+      ]
+    },
+    {
+      "name": "Performance Metrics",
+      "passed": true,
+      "duration": 0.0,
+      "details": {
+        "/api/options_time": "0.007s",
+        "/api/load_time": "0.003s",
+        "/api/db/status_time": "0.003s",
+        "memory_mb": "87.1",
+        "cpu_percent": "0.0",
+        "avg_response_time": "0.004s"
+      },
+      "errors": [],
+      "warnings": []
+    },
+    {
+      "name": "Security Testing",
+      "passed": true,
+      "duration": 0.0,
+      "details": {
+        "security_issues": 0,
+        "sql_injection_tests": 3,
+        "xss_tests": 3,
+        "validation_tests": 3
+      },
+      "errors": [],
+      "warnings": []
+    },
+    {
+      "name": "Load Testing",
+      "passed": false,
+      "duration": 0.0,
+      "details": {
+        "concurrent_users": 5,
+        "total_requests": 15,
+        "total_errors": 5,
+        "error_rate": "33.3%",
+        "avg_response_time": "0.022s",
+        "max_response_time": "0.049s"
+      },
+      "errors": [],
+      "warnings": [
+        "High error rate: 33.3%"
+      ]
+    },
+    {
+      "name": "Error Recovery",
+      "passed": true,
+      "duration": 0.0,
+      "details": {
+        "recovery_tests": [
+          "\u2705 Malformed JSON handled correctly",
+          "\u2705 Missing fields handled correctly",
+          "\u26a0\ufe0f Oversized payload accepted",
+          "\u2705 API responsive after errors"
+        ],
+        "passed": "3/4"
+      },
+      "errors": [],
+      "warnings": []
+    }
+  ],
+  "security_issues": [],
+  "load_test": {
+    "concurrent_users": 5,
+    "total_requests": 15,
+    "error_rate": 33.33333333333333,
+    "avg_response_time": 0.02161269187927246
+  }
+}

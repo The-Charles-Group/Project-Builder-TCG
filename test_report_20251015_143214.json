@@ -1,0 +1,209 @@
+{
+  "test_suite": "Agency Project Builder - Comprehensive E2E",
+  "execution_date": "2025-10-15T14:32:14.641418",
+  "total_duration": "0.07 seconds",
+  "summary": {
+    "total_tests": 10,
+    "passed": 0,
+    "failed": 10,
+    "pass_rate": "0.0%"
+  },
+  "features_tested": [
+    "RFP Document Upload and Extraction",
+    "Industry Template System (Luxury/Fashion)",
+    "GPT-5 Deep Analysis (100+ Deliverables)",
+    "Scenario Building and Persistence",
+    "AI Type Suggestion (Project/Retainer)",
+    "AI Pricing Optimization",
+    "AI Timeline Generation with CPM",
+    "Resource Risk Management",
+    "Workfront XML Export",
+    "Session Cleanup and Data Isolation"
+  ],
+  "test_details": [
+    {
+      "name": "RFP Upload",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Upload failed with status 404"
+      ]
+    },
+    {
+      "name": "Industry Template Selection",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Insufficient template deliverables: 26"
+      ]
+    },
+    {
+      "name": "GPT-5 Analysis (100+ Deliverables)",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Analysis failed: 404",
+        "Error details: {\"detail\":\"Not Found\"}"
+      ]
+    },
+    {
+      "name": "Build Scenario A",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Scenario build failed: 422"
+      ]
+    },
+    {
+      "name": "AI Suggest Type",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Type suggestion failed: 404"
+      ]
+    },
+    {
+      "name": "Optimize Pricing ($2M Budget)",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "No scenario data available"
+      ]
+    },
+    {
+      "name": "Generate AI Timeline",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Timeline generation failed: 404"
+      ]
+    },
+    {
+      "name": "Resource Risk Management",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "No scenario data available"
+      ]
+    },
+    {
+      "name": "XML Export (Workfront)",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Export failed: 422"
+      ]
+    },
+    {
+      "name": "Session Cleanup & Data Isolation",
+      "status": "FAILED",
+      "duration": "N/A",
+      "memory_delta": "N/A",
+      "details": {},
+      "errors": [
+        "Session clear failed: 422",
+        "New upload failed: 404"
+      ]
+    }
+  ],
+  "performance_metrics": {
+    "average_test_duration": "0.00s",
+    "total_memory_usage": "0.0 MB",
+    "performance_issues": []
+  },
+  "critical_issues": [
+    {
+      "test": "RFP Upload",
+      "error": "Upload failed with status 404"
+    },
+    {
+      "test": "Industry Template Selection",
+      "error": "Insufficient template deliverables: 26"
+    },
+    {
+      "test": "GPT-5 Analysis (100+ Deliverables)",
+      "error": "Analysis failed: 404"
+    },
+    {
+      "test": "GPT-5 Analysis (100+ Deliverables)",
+      "error": "Error details: {\"detail\":\"Not Found\"}"
+    },
+    {
+      "test": "Build Scenario A",
+      "error": "Scenario build failed: 422"
+    },
+    {
+      "test": "AI Suggest Type",
+      "error": "Type suggestion failed: 404"
+    },
+    {
+      "test": "Optimize Pricing ($2M Budget)",
+      "error": "No scenario data available"
+    },
+    {
+      "test": "Generate AI Timeline",
+      "error": "Timeline generation failed: 404"
+    },
+    {
+      "test": "Resource Risk Management",
+      "error": "No scenario data available"
+    },
+    {
+      "test": "XML Export (Workfront)",
+      "error": "Export failed: 422"
+    },
+    {
+      "test": "Session Cleanup & Data Isolation",
+      "error": "Session clear failed: 422"
+    },
+    {
+      "test": "Session Cleanup & Data Isolation",
+      "error": "New upload failed: 404"
+    }
+  ],
+  "production_readiness": {
+    "readiness_level": "NOT READY",
+    "recommendation": "Significant issues must be resolved before deployment",
+    "risk_level": "HIGH",
+    "pass_rate": "0.0%",
+    "blocking_issues": 2,
+    "performance_concerns": 0,
+    "strengths": [
+      "Comprehensive RFP processing capability",
+      "Industry-specific template system",
+      "Multi-scenario planning",
+      "Enterprise-grade export formats",
+      "Session isolation for data security"
+    ],
+    "areas_for_improvement": [
+      "Upload failed with status 404",
+      "Insufficient template deliverables: 26",
+      "Analysis failed: 404"
+    ],
+    "deployment_checklist": {
+      "core_functionality": false,
+      "performance_acceptable": true,
+      "data_integrity": true,
+      "export_compatibility": true,
+      "ai_features_operational": false
+    }
+  }
+}

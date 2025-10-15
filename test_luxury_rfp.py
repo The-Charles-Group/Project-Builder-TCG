@@ -99,7 +99,7 @@ def test_luxury_rfp():
             
             # Poll for results
             import time
-            max_wait = 120  # 2 minutes
+            max_wait = 300  # 5 minutes (since job takes ~260s)
             poll_interval = 2
             elapsed = 0
             

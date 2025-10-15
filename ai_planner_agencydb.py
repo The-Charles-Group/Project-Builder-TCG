@@ -22,8 +22,8 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
 AI_AUTORELAX = os.environ.get("AI_AUTORELAX", "true").lower() == "true"
 AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "100"))  # FIXED: Increased to 100 for comprehensive RFPs
-AI_MIN_COMPONENTS_PER_DELIV = int(os.environ.get("AI_MIN_COMPONENTS_PER_DELIV", "2"))
-AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "2"))
+AI_MIN_COMPONENTS_PER_DELIV = int(os.environ.get("AI_MIN_COMPONENTS_PER_DELIV", "3"))  # Increased for richer expansion
+AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "3"))  # Increased for more detail
 
 # Fast vs Deep mode configuration
 FAST_TOP_K = int(os.getenv("FAST_TOP_K", "120"))     # Lexical prefilter for Fast mode - increased for comprehensive RFPs
@@ -1195,82 +1195,627 @@ def planned_hours(base: float, m: Dict[str, float]) -> float:
     return round(base * m["complexity"] * m["channelMulti"] * m["marketMulti"] * m["complianceMulti"], 1)
 
 def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]], summary: Dict[str, Any], target_count: int = 100) -> List[Dict[str, Any]]:
-    """Expand deliverables for comprehensive RFPs by creating market/channel/phase variations"""
+    """Expand deliverables for comprehensive RFPs by creating smart variations based on department and type"""
     
-    # Get markets and channels from summary
+    # Get context from summary
     markets = summary.get("markets", ["US"])
     channels = summary.get("channels", ["Digital"])
+    timeline_weeks = summary.get("timeline_weeks", 12)
+    request_text = summary.get("summary", "").lower()
     
-    # Determine if we need expansion
-    is_luxury = any(term in summary.get("summary", "").lower() for term in ['luxury', 'fashion', 'premium', 'haute'])
-    is_global = len(markets) > 2
-    is_multichannel = len(channels) > 3
-    is_comprehensive = summary.get("complexity") == "high" or is_luxury or is_global
+    # Enhanced detection of comprehensive RFP characteristics
+    is_luxury = any(term in request_text for term in ['luxury', 'fashion', 'premium', 'haute', 'high-end', 'exclusive', 'couture', 'designer'])
+    is_fashion = any(term in request_text for term in ['fashion', 'apparel', 'collection', 'seasonal', 'runway', 'style'])
+    is_retail = any(term in request_text for term in ['retail', 'store', 'e-commerce', 'shop', 'boutique'])
+    is_global = len(markets) > 1 or any(m.lower() in ['global', 'international', 'worldwide'] for m in markets) or 'global' in request_text
+    is_multichannel = len(channels) > 2
+    is_annual = timeline_weeks >= 40  # 10+ months indicates annual engagement
+    is_multiyear = timeline_weeks >= 80 or 'multi-year' in request_text or 'annual' in request_text
+    is_multiproduct = any(term in request_text for term in ['portfolio', 'multiple products', 'product line', 'collection', 'range'])
+    is_comprehensive = summary.get("complexity") == "high" or is_luxury or is_global or is_annual or len(deliverables) < 70
     
+    # Force expansion for luxury/comprehensive RFPs
+    if not is_comprehensive and len(deliverables) >= target_count:
+        return deliverables
+        
+    print(f"[EXPAND] Comprehensive/Luxury RFP detected - expanding {len(deliverables)} to {target_count}+ deliverables")
+    print(f"[EXPAND] Context: luxury={is_luxury}, fashion={is_fashion}, global={is_global}, multichannel={is_multichannel}, annual={is_annual}, multiyear={is_multiyear}")
+    
+    # Enhanced phases (4 phases for comprehensive coverage)
+    phases = ["Discovery", "Launch", "Growth", "Optimization"]
+    
+    # Enhanced regions - now includes Latin America and more
+    if is_global:
+        regions = ["North America", "Europe", "Asia-Pacific", "Latin America", "Middle East", "Africa"][:5]
+    else:
+        regions = markets[:3] if markets else ["US"]
+    
+    # Quarters and seasons for annual/fashion engagements
+    quarters = ["Q1", "Q2", "Q3", "Q4"] if is_annual else []
+    seasons = ["Spring", "Summer", "Fall", "Winter"] if is_fashion or is_retail else []
+    
+    # Fashion collections for luxury/fashion
+    collections = ["Spring/Summer", "Fall/Winter", "Resort", "Pre-Fall"] if is_fashion or is_luxury else []
+    
+    # Audience segments for targeted marketing
+    audience_segments = ["Gen Z", "Millennials", "Gen X", "Boomers", "Affluent", "Mass Market"] if is_comprehensive else []
+    
+    # Products for multi-product launches
+    products = []
+    if is_multiproduct:
+        if is_fashion:
+            products = ["Menswear", "Womenswear", "Accessories", "Footwear", "Bags"][:4]
+        else:
+            products = ["Product A", "Product B", "Product C", "Hero Product"][:3]
+    
+    # Enhanced channels - more specific and aggressive
+    all_channels = ["Instagram", "Facebook", "TikTok", "YouTube", "LinkedIn", "Twitter", 
+                    "Email", "SMS", "Web", "Mobile App", "Print", "TV", "Radio", "OOH", 
+                    "Events", "Influencer", "Podcast", "Streaming"]
+    
+    if is_multichannel:
+        # Aggressively expand channels
+        expanded_channels = []
+        for ch in channels[:8]:
+            ch_lower = ch.lower()
+            if 'digital' in ch_lower:
+                expanded_channels.extend(["Web", "Mobile App", "Email", "SMS"])
+            elif 'social' in ch_lower:
+                expanded_channels.extend(["Instagram", "Facebook", "TikTok", "YouTube", "LinkedIn"])
+            elif 'traditional' in ch_lower:
+                expanded_channels.extend(["Print", "TV", "Radio", "OOH"])
+            elif 'influencer' in ch_lower:
+                expanded_channels.extend(["Instagram Influencers", "TikTok Creators", "YouTube Partners"])
+            else:
+                expanded_channels.append(ch)
+        channels_to_use = list(set(expanded_channels))[:8]  # Unique channels, max 8 for aggressive expansion
+    else:
+        channels_to_use = channels[:4]
+    
+    # Platform variations for technology
+    platforms = ["Web", "iOS", "Android", "Salesforce", "Adobe", "Shopify", "AWS", "Azure"][:5]
+    
+    # Annual/year variations for multi-year engagements
+    years = []
+    if is_multiyear:
+        years = ["Year 1", "Year 2", "Year 3"][:3]
+    
+    # Track unique IDs to prevent duplicates
+    seen_ids = set()
     expanded = []
     
-    if is_comprehensive and len(deliverables) < target_count:
-        print(f"[EXPAND] Comprehensive RFP detected - expanding {len(deliverables)} to {target_count}+ deliverables")
-        
-        # Priority deliverables for expansion
-        priority_keywords = [
-            "brand", "strategy", "campaign", "creative", "content", "social", 
-            "digital", "analytics", "media", "planning", "research", "experience"
-        ]
-        
-        # Phases for timeline-based expansion
-        phases = ["Launch", "Growth", "Optimization", "Sustain"]
-        
-        # Add all original deliverables first
-        for d in deliverables:
+    # Add all original deliverables first
+    for d in deliverables:
+        if d["id"] not in seen_ids:
             expanded.append(d)
-        
-        # Expand by market if global
-        if is_global and len(markets) > 1 and len(expanded) < target_count:
-            for d in deliverables:
-                d_title = d.get("title", "").lower()
-                if any(kw in d_title for kw in priority_keywords):
-                    for market in markets[:3]:  # Max 3 markets
-                        if len(expanded) >= target_count:
-                            break
-                        market_variant = d.copy()
-                        market_variant["id"] = f"{d['id']}-{market}"
-                        market_variant["title"] = f"{d.get('title', '')} - {market} Market"
-                        market_variant["calibrated_confidence"] = d.get("calibrated_confidence", 0.6) * 0.95
-                        expanded.append(market_variant)
-        
-        # Expand by channel if multichannel
-        if is_multichannel and len(expanded) < target_count:
-            for d in deliverables[:20]:  # Top 20 deliverables
-                d_title = d.get("title", "").lower()
-                if any(kw in d_title for kw in ["campaign", "content", "creative", "media", "analytics"]):
-                    for channel in channels[:2]:  # Max 2 channels
-                        if len(expanded) >= target_count:
-                            break
-                        channel_variant = d.copy()
-                        channel_variant["id"] = f"{d['id']}-{channel}"
-                        channel_variant["title"] = f"{d.get('title', '')} - {channel}"
-                        channel_variant["calibrated_confidence"] = d.get("calibrated_confidence", 0.6) * 0.93
-                        expanded.append(channel_variant)
-        
-        # Expand by phase for comprehensive projects
-        if len(expanded) < target_count:
-            for d in deliverables[:15]:  # Top 15 deliverables
-                d_title = d.get("title", "").lower()
-                if any(kw in d_title for kw in ["strategy", "plan", "development", "campaign"]):
-                    for phase in phases[:2]:  # Max 2 phases
-                        if len(expanded) >= target_count:
-                            break
-                        phase_variant = d.copy()
-                        phase_variant["id"] = f"{d['id']}-{phase}"
-                        phase_variant["title"] = f"{phase}: {d.get('title', '')}"
-                        phase_variant["calibrated_confidence"] = d.get("calibrated_confidence", 0.6) * 0.90
-                        expanded.append(phase_variant)
-        
-        print(f"[EXPAND] Expanded from {len(deliverables)} to {len(expanded)} deliverables")
-        return expanded
+            seen_ids.add(d["id"])
     
-    return deliverables
+    # Sort deliverables by confidence/relevance for prioritization
+    deliverables_sorted = sorted(deliverables, key=lambda x: x.get("calibrated_confidence", 0.5), reverse=True)
+    
+    # SMART EXPANSION RULES based on department
+    expansion_count = 0
+    max_expansions_per_deliverable = 12  # Increased limit for more aggressive expansion
+    
+    for d in deliverables_sorted:
+        if len(expanded) >= target_count * 1.5:  # Increased to 150% to ensure we hit target
+            break
+            
+        d_dept = d.get("dept", "Strategy")
+        d_title = d.get("title", "").lower()
+        base_confidence = d.get("calibrated_confidence", 0.6)
+        expansions_for_this = 0
+        
+        # Strategy deliverables → Regional variations + Phases + Audience Segments
+        if d_dept == "Strategy":
+            # Regional variations if global (now more aggressive)
+            if is_global:
+                for region in regions[:4]:  # Increased from 3 to 4 regions
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-{region.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} - {region}"
+                        variant["calibrated_confidence"] = base_confidence * 0.95
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Phase variations for ALL strategy deliverables
+            for phase in phases:  # All 4 phases for strategy
+                if expansions_for_this >= max_expansions_per_deliverable:
+                    break
+                variant_id = f"{d['id']}-{phase}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{phase} Phase: {d.get('title', '')}"
+                    variant["calibrated_confidence"] = base_confidence * 0.93
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansions_for_this += 1
+                    expansion_count += 1
+            
+            # Add audience segment variations for targeted strategies
+            if audience_segments and ('audience' in d_title or 'persona' in d_title or 'target' in d_title or 'segment' in d_title):
+                for segment in audience_segments[:3]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-{segment.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} - {segment}"
+                        variant["calibrated_confidence"] = base_confidence * 0.92
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Add quarterly strategy reviews for annual engagements
+            if is_annual and quarters:
+                for quarter in quarters[:4]:  # All quarters for annual
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Strategy-{quarter}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{quarter} Strategic Review: {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.91
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Multi-year variations for long-term engagements
+            if is_multiyear and years:
+                for year in years[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-{year.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{year} {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.90
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+        
+        # Creative deliverables → Channel-specific versions + Phases + Collections
+        elif d_dept == "Creative":
+            # Channel-specific versions (more aggressive)
+            for channel in channels_to_use[:6]:  # Increased from 4 to 6
+                if expansions_for_this >= max_expansions_per_deliverable:
+                    break
+                variant_id = f"{d['id']}-{channel.replace(' ', '_')}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{d.get('title', '')} - {channel}"
+                    variant["calibrated_confidence"] = base_confidence * 0.94
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansions_for_this += 1
+                    expansion_count += 1
+            
+            # Collection-specific variations for fashion/luxury
+            if (is_fashion or is_luxury) and collections:
+                for collection in collections[:3]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-{collection.replace('/', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{collection} Collection: {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.93
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Seasonal variations for fashion/retail creative
+            if (is_fashion or is_retail) and seasons:
+                for season in seasons[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-{season}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{season} {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.92
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Add phase variations for creative campaigns
+            if 'campaign' in d_title or 'concept' in d_title or True:  # Apply to all creative
+                for phase in phases[:3]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Creative-{phase}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{phase}: {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.91
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Audience segment variations for creative targeting
+            if audience_segments and ('campaign' in d_title or 'creative' in d_title):
+                for segment in audience_segments[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Creative-{segment.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} for {segment}"
+                        variant["calibrated_confidence"] = base_confidence * 0.90
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+        
+        # Content deliverables → Quarterly/Monthly variations + Channels + Products
+        elif d_dept == "Content":
+            # Quarterly variations for annual engagements (more aggressive)
+            if is_annual and quarters:
+                for quarter in quarters:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-{quarter}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{quarter} {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.93
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Channel variations for content (more aggressive)
+            for channel in channels_to_use[:5]:  # Increased from 3 to 5
+                if expansions_for_this >= max_expansions_per_deliverable:
+                    break
+                variant_id = f"{d['id']}-Content-{channel.replace(' ', '_')}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{d.get('title', '')} for {channel}"
+                    variant["calibrated_confidence"] = base_confidence * 0.92
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansions_for_this += 1
+                    expansion_count += 1
+            
+            # Product-specific content for multi-product launches
+            if products and is_multiproduct:
+                for product in products[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-{product.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} - {product}"
+                        variant["calibrated_confidence"] = base_confidence * 0.91
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Seasonal content for fashion/retail
+            if (is_fashion or is_retail) and seasons:
+                for season in seasons[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Content-{season}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{season} {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.90
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Audience-specific content
+            if audience_segments and ('content' in d_title or 'story' in d_title or 'editorial' in d_title):
+                for segment in audience_segments[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Content-{segment.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} for {segment}"
+                        variant["calibrated_confidence"] = base_confidence * 0.89
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+        
+        # Technology deliverables → Platform-specific versions
+        elif d_dept == "Technology":
+            # Platform-specific variations
+            for platform in platforms[:3]:
+                if expansions_for_this >= max_expansions_per_deliverable:
+                    break
+                variant_id = f"{d['id']}-{platform}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{d.get('title', '')} - {platform} Platform"
+                    variant["calibrated_confidence"] = base_confidence * 0.91
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansions_for_this += 1
+                    expansion_count += 1
+            
+            # Phase variations for tech development
+            for phase in ["Development", "Testing", "Deployment"]:
+                if expansions_for_this >= max_expansions_per_deliverable:
+                    break
+                variant_id = f"{d['id']}-Tech-{phase}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{phase}: {d.get('title', '')}"
+                    variant["calibrated_confidence"] = base_confidence * 0.90
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansions_for_this += 1
+                    expansion_count += 1
+        
+        # Paid Media deliverables → Channel + Region combinations + Audience segments
+        elif d_dept == "Paid Media":
+            # Channel-specific media buying (more aggressive)
+            media_channels = ["Google Ads", "Facebook Ads", "Instagram Ads", "LinkedIn", 
+                            "Programmatic", "YouTube", "TikTok Ads", "Amazon Ads", "Spotify Ads"]
+            for channel in media_channels[:5]:  # Increased from 3 to 5
+                if expansions_for_this >= max_expansions_per_deliverable:
+                    break
+                variant_id = f"{d['id']}-{channel.replace(' ', '_')}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{d.get('title', '')} - {channel}"
+                    variant["calibrated_confidence"] = base_confidence * 0.94
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansions_for_this += 1
+                    expansion_count += 1
+            
+            # Regional media variations if global (more aggressive)
+            if is_global:
+                for region in regions[:4]:  # Increased from 2 to 4
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Media-{region.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} - {region}"
+                        variant["calibrated_confidence"] = base_confidence * 0.92
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Audience segment targeting for paid media
+            if audience_segments:
+                for segment in audience_segments[:3]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Media-{segment.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} targeting {segment}"
+                        variant["calibrated_confidence"] = base_confidence * 0.91
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Product-specific media campaigns
+            if products and is_multiproduct:
+                for product in products[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Media-{product.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} for {product}"
+                        variant["calibrated_confidence"] = base_confidence * 0.90
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Quarterly media plans for annual
+            if is_annual and quarters:
+                for quarter in quarters[:4]:  # All quarters for annual
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Media-{quarter}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{quarter} {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.89
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+            
+            # Seasonal campaigns for fashion/retail
+            if (is_fashion or is_retail) and seasons:
+                for season in seasons[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-Media-{season}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{season} Media {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.88
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+        
+        # Integrated Marketing Management → All phases for coordination
+        elif d_dept == "Integrated Marketing Management":
+            # All 4 phases for IMM deliverables
+            for phase in phases:
+                if expansions_for_this >= max_expansions_per_deliverable:
+                    break
+                variant_id = f"{d['id']}-IMM-{phase}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{phase}: {d.get('title', '')}"
+                    variant["calibrated_confidence"] = base_confidence * 0.93
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansions_for_this += 1
+                    expansion_count += 1
+            
+            # Add quarterly reviews for annual
+            if is_annual and quarters:
+                for quarter in quarters[:2]:
+                    if expansions_for_this >= max_expansions_per_deliverable:
+                        break
+                    variant_id = f"{d['id']}-IMM-{quarter}-Review"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{quarter} Review: {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.90
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansions_for_this += 1
+                        expansion_count += 1
+    
+    # Additional aggressive expansion if still below target
+    if len(expanded) < target_count:
+        remaining_needed = target_count - len(expanded)
+        print(f"[EXPAND] Still need {remaining_needed} more deliverables, adding aggressive variations")
+        
+        # Add cross-department variations for top deliverables
+        for d in deliverables_sorted[:40]:  # Increased from 20 to 40 for more aggressive expansion
+            if len(expanded) >= target_count * 1.2:  # Go up to 120 deliverables to ensure we hit 100+
+                break
+                
+            base_confidence = d.get("calibrated_confidence", 0.6)
+            d_title = d.get("title", "").lower()
+            
+            # Add lifecycle variations
+            lifecycle = ["Planning", "Execution", "Optimization", "Reporting", "Analysis", "Review"]
+            for stage in lifecycle[:4]:
+                variant_id = f"{d['id']}-{stage}"
+                if variant_id not in seen_ids:
+                    variant = d.copy()
+                    variant["id"] = variant_id
+                    variant["title"] = f"{stage}: {d.get('title', '')}"
+                    variant["calibrated_confidence"] = base_confidence * 0.88
+                    expanded.append(variant)
+                    seen_ids.add(variant_id)
+                    expansion_count += 1
+                    if len(expanded) >= target_count * 1.2:
+                        break
+            
+            # Add format variations for deliverables that make sense
+            if any(term in d_title for term in ['report', 'analysis', 'audit', 'assessment']):
+                formats = ["Executive Summary", "Detailed Report", "Dashboard View", "Presentation"]
+                for format_type in formats[:2]:
+                    variant_id = f"{d['id']}-{format_type.replace(' ', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{d.get('title', '')} - {format_type}"
+                        variant["calibrated_confidence"] = base_confidence * 0.87
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansion_count += 1
+                        if len(expanded) >= target_count * 1.2:
+                            break
+            
+            # Add stakeholder variations for strategy/planning deliverables
+            if any(term in d_title for term in ['strategy', 'plan', 'roadmap', 'framework']):
+                stakeholders = ["Executive", "Board", "Investor", "Partner"]
+                for stakeholder in stakeholders[:2]:
+                    variant_id = f"{d['id']}-{stakeholder}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{stakeholder} {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.86
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansion_count += 1
+                        if len(expanded) >= target_count * 1.2:
+                            break
+            
+            # Add testing/validation variations for campaigns and creative
+            if any(term in d_title for term in ['campaign', 'creative', 'content', 'ad']):
+                testing_types = ["A/B Test", "Pilot", "Beta", "Full Launch"]
+                for test_type in testing_types[:2]:
+                    variant_id = f"{d['id']}-{test_type.replace(' ', '_').replace('/', '_')}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{test_type}: {d.get('title', '')}"
+                        variant["calibrated_confidence"] = base_confidence * 0.85
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansion_count += 1
+                        if len(expanded) >= target_count * 1.2:
+                            break
+    
+    # Final catch-all expansion if STILL below target (rare but possible)
+    if len(expanded) < target_count:
+        print(f"[EXPAND] Final push: need {target_count - len(expanded)} more")
+        # Add department-phase combinations for all departments
+        for dept in DEPARTMENTS:
+            if len(expanded) >= target_count:
+                break
+            dept_delivs = [d for d in deliverables_sorted if d.get("dept") == dept][:5]
+            for d in dept_delivs:
+                for phase in ["Kickoff", "Mid-point", "Final"]:
+                    variant_id = f"{d['id']}-{dept}-{phase}"
+                    if variant_id not in seen_ids:
+                        variant = d.copy()
+                        variant["id"] = variant_id
+                        variant["title"] = f"{phase} {d.get('title', '')}"
+                        variant["calibrated_confidence"] = d.get("calibrated_confidence", 0.6) * 0.84
+                        expanded.append(variant)
+                        seen_ids.add(variant_id)
+                        expansion_count += 1
+                        if len(expanded) >= target_count:
+                            break
+    
+    print(f"[EXPAND] Expansion complete: {len(deliverables)} → {len(expanded)} deliverables")
+    print(f"[EXPAND] Added {expansion_count} smart variations based on department rules")
+    print(f"[EXPAND] Total unique deliverables: {len(seen_ids)}")
+    
+    return expanded
 
 def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, Any], catalog: List[Dict[str, Any]], db, all_recall: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compose plan using real AgencyDB deliverable codes and structure"""
