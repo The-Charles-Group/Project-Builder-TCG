@@ -2517,7 +2517,8 @@ function analyzeResourceRisks(tasks) {
   
   // Build resource schedule
   tasks.forEach(task => {
-    const resource = task.department || 'General';
+    // Use proper department name, defaulting to 'Strategy' if not specified
+    const resource = task.department || task.custom_class?.replace('dept-', '').replace(/-/g, ' ') || 'Strategy';
     if (!resourceSchedule[resource]) {
       resourceSchedule[resource] = [];
     }

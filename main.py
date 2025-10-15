@@ -6784,6 +6784,167 @@ async def suggest_retainer_configuration(request: RetainerSuggestionRequest):
         
         return {"suggestions": suggestions}
 
+@app.post("/api/ai/optimize_pricing")
+async def api_optimize_pricing(request: dict):
+    """
+    Optimize pricing based on budget constraints and other factors.
+    
+    Args:
+        request: Dict containing:
+            - target_budget: Target budget in dollars
+            - scenario: Current scenario with WBS items
+            - company_size: "startup" | "mid_market" | "enterprise" (optional)
+            - urgency: "rush" | "standard" | "flexible" (optional)
+            - industry_multiplier: float (optional, e.g., 1.5 for luxury)
+            - maintain_quality_tiers: bool (optional, default True)
+            
+    Returns:
+        Optimized scenario with adjusted pricing
+    """
+    try:
+        # Extract parameters
+        target_budget = request.get("target_budget", None)
+        scenario = request.get("scenario", {})
+        company_size = request.get("company_size", "mid_market")
+        urgency = request.get("urgency", "standard")
+        industry_multiplier = request.get("industry_multiplier", 1.0)
+        maintain_quality_tiers = request.get("maintain_quality_tiers", True)
+        
+        if not target_budget:
+            raise HTTPException(status_code=400, detail="target_budget is required")
+        
+        if not scenario or "wbs" not in scenario:
+            raise HTTPException(status_code=400, detail="Valid scenario with WBS is required")
+        
+        # Calculate current total price
+        current_total = sum(float(item.get("Price", 0)) for item in scenario.get("wbs", []))
+        
+        if current_total == 0:
+            raise HTTPException(status_code=400, detail="Current scenario has no pricing")
+        
+        # Calculate optimization ratio
+        base_ratio = target_budget / current_total
+        
+        # Apply company size adjustments
+        size_multipliers = {
+            "startup": 0.85,     # 15% discount for startups
+            "mid_market": 1.0,   # Standard pricing
+            "enterprise": 1.25   # 25% premium for enterprise
+        }
+        size_mult = size_multipliers.get(company_size, 1.0)
+        
+        # Apply urgency adjustments
+        urgency_multipliers = {
+            "rush": 1.3,         # 30% premium for rush jobs
+            "standard": 1.0,     # Standard timing
+            "flexible": 0.9      # 10% discount for flexible timing
+        }
+        urgency_mult = urgency_multipliers.get(urgency, 1.0)
+        
+        # Combine all multipliers
+        final_ratio = base_ratio * size_mult * urgency_mult * industry_multiplier
+        
+        # Define minimum rates based on seniority
+        min_rates = {
+            "Junior": 75,
+            "Mid": 125,
+            "Senior": 175,
+            "Director": 250,
+            "VP": 350,
+            "EVP": 450
+        }
+        
+        # Check if budget is too low for minimum viable delivery
+        min_viable_price = 0
+        for item in scenario.get("wbs", []):
+            if item.get("Hours"):
+                hours = float(item.get("Hours", 0))
+                seniority = item.get("Seniority", "Mid")
+                min_rate = min_rates.get(seniority, 125)
+                min_viable_price += hours * min_rate * 0.5  # 50% of min rate as absolute floor
+        
+        if target_budget < min_viable_price:
+            return JSONResponse(
+                status_code=400, 
+                content={
+                    "error": "Budget too low for minimum viable delivery",
+                    "minimum_viable": min_viable_price,
+                    "requested": target_budget,
+                    "recommendation": "Consider reducing scope or increasing budget"
+                }
+            )
+        
+        # Optimize pricing for each WBS item
+        optimized_wbs = []
+        total_optimized = 0
+        
+        for item in scenario.get("wbs", []):
+            optimized_item = item.copy()
+            
+            if item.get("Price") and float(item.get("Price", 0)) > 0:
+                hours = float(item.get("Hours", 0))
+                if hours > 0:
+                    # Calculate current rate
+                    current_price = float(item.get("Price", 0))
+                    current_rate = current_price / hours
+                    
+                    # Apply optimization
+                    new_rate = current_rate * final_ratio
+                    
+                    # Apply quality tier constraints if requested
+                    if maintain_quality_tiers:
+                        seniority = item.get("Seniority", "Mid")
+                        min_rate_for_tier = min_rates.get(seniority, 125)
+                        max_rate_for_tier = min_rate_for_tier * 3  # Max 3x min rate
+                        
+                        # Enforce bounds
+                        new_rate = max(min_rate_for_tier, min(new_rate, max_rate_for_tier))
+                    else:
+                        # Still enforce absolute minimums
+                        new_rate = max(50, new_rate)  # Absolute floor of $50/hr
+                    
+                    # Handle unlimited budget scenarios (cap at reasonable maximum)
+                    if target_budget > 10000000:  # $10M+
+                        new_rate = min(new_rate, 1000)  # Cap at $1000/hr
+                    
+                    optimized_item["Rate"] = round(new_rate, 2)
+                    optimized_item["Price"] = round(hours * new_rate, 2)
+                    total_optimized += optimized_item["Price"]
+            
+            optimized_wbs.append(optimized_item)
+        
+        # Final adjustment to match target exactly (distribute any remaining difference)
+        if total_optimized > 0 and abs(total_optimized - target_budget) > 1:
+            adjustment_ratio = target_budget / total_optimized
+            for item in optimized_wbs:
+                if item.get("Price") and float(item.get("Price", 0)) > 0:
+                    item["Price"] = round(float(item["Price"]) * adjustment_ratio, 2)
+                    if item.get("Hours") and float(item.get("Hours", 0)) > 0:
+                        item["Rate"] = round(item["Price"] / float(item["Hours"]), 2)
+        
+        # Create optimized scenario
+        optimized_scenario = scenario.copy()
+        optimized_scenario["wbs"] = optimized_wbs
+        optimized_scenario["total_price"] = sum(float(item.get("Price", 0)) for item in optimized_wbs)
+        optimized_scenario["optimization_details"] = {
+            "original_total": current_total,
+            "target_budget": target_budget,
+            "achieved_total": optimized_scenario["total_price"],
+            "company_size": company_size,
+            "urgency": urgency,
+            "industry_multiplier": industry_multiplier,
+            "optimization_ratio": final_ratio,
+            "quality_tiers_maintained": maintain_quality_tiers
+        }
+        
+        return optimized_scenario
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[PRICING] Error in pricing optimization: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Pricing optimization failed: {str(e)}")
+
 @app.post("/api/reconcile", response_model=ReconcileResult)
 def api_reconcile(p: ReconcilePayload):
     if not DB.loaded:

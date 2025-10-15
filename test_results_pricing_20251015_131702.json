@@ -1,0 +1,31 @@
+{
+  "passed": 0,
+  "failed": 6,
+  "errors": [
+    {
+      "test": "Budget Target Optimization",
+      "error": "Failed to get deliverable suggestions"
+    },
+    {
+      "test": "Company Size Pricing",
+      "error": "Failed to get deliverable suggestions"
+    },
+    {
+      "test": "Urgency Factor Pricing",
+      "error": "Failed to get deliverable suggestions"
+    },
+    {
+      "test": "Industry Multiplier Pricing",
+      "error": "Failed to get deliverable suggestions"
+    },
+    {
+      "test": "Edge Cases",
+      "error": "Failed to get deliverable suggestions"
+    },
+    {
+      "test": "Combined Factor Pricing",
+      "error": "Failed to get deliverable suggestions"
+    }
+  ],
+  "tests": []
+}
