@@ -8901,11 +8901,12 @@ async def agent_chat(request: AgentChatRequest) -> AgentResponse:
         if not context.get("has_rfp"):
             context["has_rfp"] = bool(RFP_TEXT_CACHE)
         
-        # Process the chat message
+        # Process the chat message with GPT-5 tier
         response = await chat_with_agent(
             message=request.message,
             context=context,
-            session_id=request.session_id
+            session_id=request.session_id,
+            gpt5_tier=request.gpt5_tier if hasattr(request, 'gpt5_tier') else "auto"
         )
         
         return response

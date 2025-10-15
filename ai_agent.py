@@ -72,6 +72,7 @@ class AgentChatRequest(BaseModel):
     message: str
     context: Optional[Dict[str, Any]] = None
     session_id: Optional[str] = None
+    gpt5_tier: Optional[str] = "auto"  # auto, mini, thinking-mini, thinking, pro
 
 class AgentExecuteRequest(BaseModel):
     """Request model for agent execute endpoint"""
@@ -91,8 +92,12 @@ class AgentResponse(BaseModel):
 # Agent conversation history (in-memory for now)
 AGENT_CONVERSATIONS = {}
 
-async def parse_user_intent(message: str, context: Optional[Dict] = None) -> ParsedCommand:
-    """Parse user intent from natural language using GPT-5"""
+async def parse_user_intent(message: str, context: Optional[Dict] = None, gpt5_tier: str = "auto") -> ParsedCommand:
+    """Parse user intent from natural language using GPT-5 with tier selection
+    
+    CHARLES AGENT: ProBuFo (Progressive Business Forecasting Oracle)
+    The preeminent executive project manager AI assistant
+    """
     
     if not OPENAI_AVAILABLE:
         return ParsedCommand(
@@ -100,7 +105,7 @@ async def parse_user_intent(message: str, context: Optional[Dict] = None) -> Par
             parameters={},
             confidence=0.0,
             raw_text=message,
-            explanation="AI service not available"
+            explanation="CHARLES AGENT requires OpenAI API access"
         )
     
     # Build context-aware prompt
@@ -158,14 +163,24 @@ For EXTEND_TIMELINE, parameters should include:
     
     try:
         if GPT5_AVAILABLE and sync_client:
-            # Use GPT-5 mini for fast intent parsing
+            # Map user-selected tier to GPT-5 models
+            tier_mapping = {
+                "auto": "mini",  # Fast parsing by default
+                "mini": "mini",
+                "thinking-mini": "thinking-mini",
+                "thinking": "thinking", 
+                "pro": "pro"
+            }
+            selected_tier = tier_mapping.get(gpt5_tier, "mini")
+            
+            # Use selected GPT-5 tier for intent parsing
             response = gpt5_text(
                 sync_client,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                tier="mini",
+                tier=selected_tier,
                 max_output_tokens=500,
                 response_format={"type": "json_object"}
             )
@@ -451,11 +466,11 @@ def generate_ui_actions(command: ParsedCommand) -> List[UIAction]:
     
     return actions
 
-async def chat_with_agent(message: str, context: Optional[Dict] = None, session_id: Optional[str] = None) -> AgentResponse:
-    """Process a chat message and return agent response"""
+async def chat_with_agent(message: str, context: Optional[Dict] = None, session_id: Optional[str] = None, gpt5_tier: str = "auto") -> AgentResponse:
+    """Process a chat message and return agent response using CHARLES AGENT: ProBuFo"""
     
-    # Parse user intent
-    command = await parse_user_intent(message, context)
+    # Parse user intent with GPT-5 tier
+    command = await parse_user_intent(message, context, gpt5_tier)
     
     # Generate UI actions
     actions = generate_ui_actions(command)

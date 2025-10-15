@@ -35,8 +35,9 @@ class AIAssistant {
             <div class="ai-assistant-sidebar ${this.isMinimized ? 'minimized' : ''}">
                 <div class="ai-assistant-header">
                     <div class="ai-assistant-title">
-                        <span class="ai-icon">🤖</span>
-                        <span>AI Assistant</span>
+                        <span class="ai-icon charles-sphere">🔮</span>
+                        <span style="font-weight:700;">CHARLES AGENT</span>
+                        <span style="font-size:10px;opacity:0.8;">ProBuFo</span>
                         <span class="ai-status-indicator" id="ai-status-indicator">●</span>
                     </div>
                     <div class="ai-assistant-controls">
@@ -50,10 +51,21 @@ class AIAssistant {
                 </div>
                 
                 <div class="ai-assistant-body">
+                    <div class="ai-gpt5-selector">
+                        <label style="color:#8b5cf6;font-size:12px;font-weight:600;">GPT-5 Intelligence Level</label>
+                        <select id="gpt5-tier-selector" style="width:100%;padding:8px;background:#1a1a2e;color:white;border:1px solid #8b5cf6;border-radius:6px;margin-top:4px;">
+                            <option value="auto">🚀 Auto (Fast & Smart)</option>
+                            <option value="mini">⚡ GPT-5 Mini (Fastest)</option>
+                            <option value="thinking-mini">🧠 Thinking Mini (Balanced)</option>
+                            <option value="thinking">💭 Thinking (Deep Analysis)</option>
+                            <option value="pro">👑 Pro (Maximum Intelligence)</option>
+                        </select>
+                    </div>
                     <div class="ai-chat-messages" id="ai-chat-messages">
                         <div class="ai-welcome-message">
-                            <h4>👋 Hello! I'm your AI Assistant</h4>
-                            <p>I can help you control the Agency Project Builder with natural language commands.</p>
+                            <h4>🔮 Welcome to CHARLES AGENT: ProBuFo</h4>
+                            <p style="font-style:italic;color:#8b5cf6;">Progressive Business Forecasting Oracle</p>
+                            <p>Your pre-eminent executive project manager AI assistant for Agency Project Builder.</p>
                             <div class="ai-suggestions">
                                 <p><strong>Try commands like:</strong></p>
                                 <ul>
@@ -90,9 +102,9 @@ class AIAssistant {
                 </div>
             </div>
             
-            <button class="ai-assistant-toggle" id="ai-assistant-toggle" title="Open AI Assistant">
-                <span class="toggle-icon">🤖</span>
-                <span class="toggle-text">AI Assistant</span>
+            <button class="ai-assistant-toggle" id="ai-assistant-toggle" title="Open CHARLES AGENT">
+                <span class="toggle-icon charles-sphere">🔮</span>
+                <span class="toggle-text">CHARLES</span>
                 <span class="notification-badge" id="ai-notification-badge" style="display: none;">!</span>
             </button>
         `;
@@ -170,6 +182,26 @@ class AIAssistant {
             
             .ai-icon {
                 font-size: 20px;
+            }
+            
+            .charles-sphere {
+                display: inline-block;
+                animation: rotateSphere 8s infinite linear;
+                filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.8));
+            }
+            
+            @keyframes rotateSphere {
+                0% { transform: rotateY(0deg) rotateX(0deg); }
+                25% { transform: rotateY(90deg) rotateX(15deg); }
+                50% { transform: rotateY(180deg) rotateX(0deg); }
+                75% { transform: rotateY(270deg) rotateX(-15deg); }
+                100% { transform: rotateY(360deg) rotateX(0deg); }
+            }
+            
+            .ai-gpt5-selector {
+                padding: 12px 16px;
+                border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+                background: rgba(139, 92, 246, 0.05);
             }
             
             .ai-status-indicator {
@@ -636,14 +668,19 @@ class AIAssistant {
             // Get current app context
             const context = this.getCurrentContext();
             
-            // Send message to AI agent
+            // Get selected GPT-5 tier
+            const gpt5TierSelector = document.getElementById('gpt5-tier-selector');
+            const gpt5Tier = gpt5TierSelector ? gpt5TierSelector.value : 'auto';
+            
+            // Send message to AI agent with GPT-5 tier
             const response = await fetch('/api/agent/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     message: message,
                     context: context,
-                    session_id: this.sessionId
+                    session_id: this.sessionId,
+                    gpt5_tier: gpt5Tier
                 })
             });
             
