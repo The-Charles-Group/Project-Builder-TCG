@@ -606,6 +606,10 @@ from app_perf import fast_router, stream_router
 app.include_router(fast_router)  # Fast2 TF-IDF endpoint
 app.include_router(stream_router)  # SSE streaming endpoint
 
+# Mount Scenario API (unified pricing table persistence)
+from backend.scenario_api import router as scenario_router
+app.include_router(scenario_router, prefix="/api/scenario", tags=["scenario"])
+
 # Import AI Timeline Manager
 from ai_timeline_manager import suggest_timeline_from_selection, generate_ai_timeline
 
