@@ -164,13 +164,13 @@ For EXTEND_TIMELINE, parameters should include:
     try:
         if GPT5_AVAILABLE and sync_client:
             # Map user-selected tier to GPT-5 models
-            # For now, map all to "mini" as it's most reliable
+            # Properly map to different tiers for real tier differentiation
             tier_mapping = {
                 "auto": "mini",  # Fast parsing by default
                 "mini": "mini",
-                "thinking-mini": "mini",  # Map to actual model
-                "thinking": "mini",  # Use mini for now
-                "pro": "mini"  # Use mini for now until pro is fixed
+                "thinking-mini": "mini",  # Keep as mini
+                "thinking": "thinking",  # Use actual thinking tier
+                "pro": "pro"  # Use actual pro tier
             }
             selected_tier = tier_mapping.get(gpt5_tier, "mini")
             
