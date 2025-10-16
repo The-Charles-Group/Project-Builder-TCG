@@ -12,6 +12,9 @@ class AIAssistant {
         this.currentActions = [];
         this.actionQueue = [];
         this.executionDelay = 500; // ms between actions
+        this.stagedFiles = []; // Multi-file staging area
+        this.currentTypingIndicators = new Set(); // Track all active typing indicators
+        this.apiTimeout = 10000; // 10 seconds timeout for API calls
         
         this.init();
     }
@@ -61,6 +64,16 @@ class AIAssistant {
                             <option value="pro">👑 Pro (Maximum Intelligence)</option>
                         </select>
                     </div>
+                    
+                    <!-- File Staging Area -->
+                    <div class="ai-file-staging" id="ai-file-staging" style="display: none;">
+                        <div class="ai-staging-header">
+                            <span>📁 Files Ready to Send</span>
+                            <button class="ai-clear-files" id="ai-clear-files" title="Clear All">×</button>
+                        </div>
+                        <div class="ai-staged-files" id="ai-staged-files"></div>
+                    </div>
+                    
                     <div class="ai-chat-messages" id="ai-chat-messages">
                         <div class="ai-welcome-message">
                             <h4>🔮 Welcome to CHARLES AGENT: ProBuFo</h4>
@@ -95,8 +108,8 @@ class AIAssistant {
                             maxlength="500"
                         ></textarea>
                         <div class="ai-input-controls">
-                            <input type="file" id="ai-file-input" accept=".pdf,.docx,.txt,.xlsx" style="display:none;">
-                            <button id="ai-file-btn" class="ai-file-btn" title="Upload Document">
+                            <input type="file" id="ai-file-input" accept=".pdf,.docx,.txt,.xlsx" multiple style="display:none;">
+                            <button id="ai-file-btn" class="ai-file-btn" title="Upload Documents">
                                 <span>📎</span>
                             </button>
                             <button id="ai-send-btn" class="ai-send-btn" disabled>
@@ -208,6 +221,76 @@ class AIAssistant {
                 padding: 12px 16px;
                 border-bottom: 1px solid rgba(139, 92, 246, 0.2);
                 background: rgba(139, 92, 246, 0.05);
+            }
+            
+            .ai-file-staging {
+                padding: 12px 16px;
+                background: rgba(16, 185, 129, 0.1);
+                border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+                max-height: 120px;
+                overflow-y: auto;
+            }
+            
+            .ai-staging-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                color: #10b981;
+                font-size: 13px;
+                font-weight: 600;
+                margin-bottom: 8px;
+            }
+            
+            .ai-clear-files {
+                background: rgba(239, 68, 68, 0.2);
+                color: #ef4444;
+                border: none;
+                width: 24px;
+                height: 24px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 16px;
+                transition: all 0.2s;
+            }
+            
+            .ai-clear-files:hover {
+                background: rgba(239, 68, 68, 0.3);
+                transform: scale(1.1);
+            }
+            
+            .ai-staged-files {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+            }
+            
+            .ai-staged-file {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 6px 8px;
+                background: rgba(0, 0, 0, 0.2);
+                border-radius: 4px;
+                color: rgba(255, 255, 255, 0.9);
+                font-size: 12px;
+            }
+            
+            .ai-file-info {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                flex: 1;
+            }
+            
+            .ai-file-remove {
+                color: #ef4444;
+                cursor: pointer;
+                padding: 2px 6px;
+                transition: transform 0.2s;
+            }
+            
+            .ai-file-remove:hover {
+                transform: scale(1.2);
             }
             
             .ai-status-indicator {
@@ -603,10 +686,9 @@ class AIAssistant {
             }
         });
         
-        // Enable/disable send button based on input
+        // Enable/disable send button based on input or staged files
         document.getElementById('ai-chat-input').addEventListener('input', (e) => {
-            const sendBtn = document.getElementById('ai-send-btn');
-            sendBtn.disabled = !e.target.value.trim() || this.isProcessing;
+            this.updateSendButton();
         });
         
         // Click on suggestions
@@ -614,7 +696,7 @@ class AIAssistant {
             if (e.target.closest('.ai-suggestions li')) {
                 const command = e.target.textContent.replace(/^[^\s]+\s/, '').replace(/[""]/g, '');
                 document.getElementById('ai-chat-input').value = command;
-                document.getElementById('ai-send-btn').disabled = false;
+                this.updateSendButton();
             }
         });
         
@@ -623,12 +705,19 @@ class AIAssistant {
             document.getElementById('ai-file-input').click();
         });
         
-        // File input change
+        // File input change - support multiple files
         document.getElementById('ai-file-input').addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                this.handleFileUpload(file);
+            const files = Array.from(e.target.files);
+            if (files.length > 0) {
+                this.stageFiles(files);
             }
+            // Reset file input to allow same files to be selected again
+            e.target.value = '';
+        });
+        
+        // Clear staged files button
+        document.getElementById('ai-clear-files').addEventListener('click', () => {
+            this.clearStagedFiles();
         });
         
         // Drag and drop support for files
@@ -636,7 +725,7 @@ class AIAssistant {
         chatInput.addEventListener('dragover', (e) => {
             e.preventDefault();
             chatInput.style.background = 'rgba(139, 92, 246, 0.1)';
-            chatInput.placeholder = '📥 Drop file here...';
+            chatInput.placeholder = '📥 Drop files here...';
         });
         
         chatInput.addEventListener('dragleave', (e) => {
@@ -649,11 +738,96 @@ class AIAssistant {
             e.preventDefault();
             chatInput.style.background = '';
             chatInput.placeholder = 'Type your command or drag & drop files here...';
-            const file = e.dataTransfer.files[0];
-            if (file) {
-                this.handleFileUpload(file);
+            const files = Array.from(e.dataTransfer.files);
+            if (files.length > 0) {
+                this.stageFiles(files);
             }
         });
+    }
+    
+    stageFiles(files) {
+        // Add files to staging area
+        files.forEach(file => {
+            // Check if file already staged
+            if (!this.stagedFiles.find(f => f.name === file.name)) {
+                this.stagedFiles.push(file);
+            }
+        });
+        
+        this.updateFileStaging();
+        this.updateSendButton();
+    }
+    
+    updateFileStaging() {
+        const stagingArea = document.getElementById('ai-file-staging');
+        const stagedFilesList = document.getElementById('ai-staged-files');
+        
+        if (this.stagedFiles.length === 0) {
+            stagingArea.style.display = 'none';
+            stagedFilesList.innerHTML = '';
+            return;
+        }
+        
+        stagingArea.style.display = 'block';
+        stagedFilesList.innerHTML = '';
+        
+        this.stagedFiles.forEach((file, index) => {
+            const fileDiv = document.createElement('div');
+            fileDiv.className = 'ai-staged-file';
+            
+            const fileIcon = this.getFileIcon(file.name);
+            const fileSize = (file.size / 1024).toFixed(1) + ' KB';
+            
+            fileDiv.innerHTML = `
+                <div class="ai-file-info">
+                    <span>${fileIcon}</span>
+                    <span>${file.name}</span>
+                    <span style="color: #666; font-size: 11px;">(${fileSize})</span>
+                </div>
+                <span class="ai-file-remove" data-index="${index}">×</span>
+            `;
+            
+            // Add click handler for remove button
+            fileDiv.querySelector('.ai-file-remove').addEventListener('click', (e) => {
+                this.removestagedFile(parseInt(e.target.dataset.index));
+            });
+            
+            stagedFilesList.appendChild(fileDiv);
+        });
+    }
+    
+    removestagedFile(index) {
+        this.stagedFiles.splice(index, 1);
+        this.updateFileStaging();
+        this.updateSendButton();
+    }
+    
+    clearStagedFiles() {
+        this.stagedFiles = [];
+        this.updateFileStaging();
+        this.updateSendButton();
+    }
+    
+    getFileIcon(filename) {
+        const ext = filename.split('.').pop().toLowerCase();
+        const icons = {
+            'pdf': '📄',
+            'docx': '📝',
+            'doc': '📝',
+            'txt': '📃',
+            'xlsx': '📊',
+            'xls': '📊'
+        };
+        return icons[ext] || '📎';
+    }
+    
+    updateSendButton() {
+        const sendBtn = document.getElementById('ai-send-btn');
+        const input = document.getElementById('ai-chat-input');
+        
+        // Enable if there's text or staged files, and not processing
+        const hasContent = input.value.trim() || this.stagedFiles.length > 0;
+        sendBtn.disabled = !hasContent || this.isProcessing;
     }
     
     async checkAgentStatus() {
@@ -713,9 +887,30 @@ class AIAssistant {
         }
     }
     
-    async handleFileUpload(file) {
+    async handleFileUpload(files) {
+        // Handle single file for backward compatibility
+        if (!Array.isArray(files)) {
+            files = [files];
+        }
+        
+        // Process staged files if any
+        if (this.stagedFiles.length > 0) {
+            for (const file of this.stagedFiles) {
+                await this.processFile(file);
+            }
+            this.clearStagedFiles();
+        }
+        // Or process directly passed files
+        else {
+            for (const file of files) {
+                await this.processFile(file);
+            }
+        }
+    }
+    
+    async processFile(file) {
         // Show file info in chat
-        this.addMessage(`📎 Uploaded file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`, 'user');
+        this.addMessage(`📎 Processing: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`, 'user');
         
         // Check file type
         const fileExt = file.name.split('.').pop().toLowerCase();
@@ -724,48 +919,64 @@ class AIAssistant {
             // This is likely an RFP document
             this.addMessage(`🔍 Analyzing document "${file.name}" as RFP...`, 'assistant');
             
+            // Create typing indicator with unique ID
+            const typingId = this.addTypingIndicator();
+            
             // Upload the file to Step 1
             const formData = new FormData();
             formData.append('file', file);
             
             try {
-                // First upload the file with analysis trigger
-                const uploadResponse = await fetch('/api/upload_rfp', {
-                    method: 'POST',
-                    body: formData
-                });
+                // Create timeout wrapper
+                const uploadWithTimeout = this.withTimeout(
+                    fetch('/api/upload_rfp', {
+                        method: 'POST',
+                        body: formData
+                    }),
+                    this.apiTimeout
+                );
+                
+                const uploadResponse = await uploadWithTimeout;
                 
                 if (uploadResponse.ok) {
                     const result = await uploadResponse.json();
+                    
+                    // Remove typing indicator
+                    this.removeTypingIndicator(typingId);
+                    
                     this.addMessage(`✅ RFP uploaded successfully! Extracted ${result.text_length || 0} characters.`, 'assistant');
                     
                     // Store the text for Step 1
                     if (result.text) {
-                        document.getElementById('rfpText').value = result.text;
+                        const rfpTextEl = document.getElementById('rfpText');
+                        if (rfpTextEl) {
+                            rfpTextEl.value = result.text;
+                        }
                         sessionStorage.setItem('rfp_text', result.text);
                     }
                     
-                    // Check if analysis was started
+                    // Auto-trigger analysis if not already started
                     if (result.job_id && result.analysis_started) {
                         this.addMessage(`🧠 AI analysis started (Job ID: ${result.job_id}). Tracking progress...`, 'assistant');
-                        
-                        // Poll for job progress
-                        this.trackAnalysisJob(result.job_id);
+                        await this.trackAnalysisJob(result.job_id);
                     } else {
-                        // Fallback to manual trigger if no job started
-                        this.addMessage('🧠 Starting deep AI analysis with GPT-5...', 'assistant');
-                        setTimeout(() => {
-                            // Click the analyze button in deep mode
-                            const deepModeBtn = document.querySelector('[data-mode="deep"]');
-                            if (deepModeBtn) deepModeBtn.click();
-                        }, 500);
+                        // Manually trigger deep analysis
+                        await this.triggerAnalysis('deep');
                     }
                 } else {
-                    this.addMessage(`❌ Failed to upload file. Please try again.`, 'assistant');
+                    this.removeTypingIndicator(typingId);
+                    this.addMessage(`❌ Failed to upload file. Server returned: ${uploadResponse.status}`, 'assistant');
                 }
             } catch (error) {
-                console.error('[CHARLES] File upload error:', error);
-                this.addMessage(`❌ Error uploading file: ${error.message}`, 'assistant');
+                // Always remove typing indicator on error
+                this.removeTypingIndicator(typingId);
+                
+                if (error.name === 'TimeoutError') {
+                    this.addMessage(`⏱️ Upload timed out. The file may be too large or the server is slow.`, 'assistant');
+                } else {
+                    console.error('[CHARLES] File upload error:', error);
+                    this.addMessage(`❌ Error uploading file: ${error.message}`, 'assistant');
+                }
             }
         } else if (fileExt === 'xlsx') {
             // Excel file - likely configuration
@@ -776,9 +987,63 @@ class AIAssistant {
         }
     }
     
+    async triggerAnalysis(mode = 'deep') {
+        this.addMessage(`🧠 Starting ${mode} AI analysis with GPT-5...`, 'assistant');
+        
+        const typingId = this.addTypingIndicator();
+        
+        try {
+            // Find and click the analyze button
+            const analyzeBtn = document.querySelector(`[data-mode="${mode}"]`);
+            if (analyzeBtn) {
+                analyzeBtn.click();
+                
+                // Wait a moment for the analysis to start
+                await this.delay(1000);
+                
+                // Check if a job was started by looking for job tracking
+                const jobIdMatch = document.body.textContent.match(/Job ID: ([\w-]+)/);
+                if (jobIdMatch) {
+                    const jobId = jobIdMatch[1];
+                    this.removeTypingIndicator(typingId);
+                    await this.trackAnalysisJob(jobId);
+                } else {
+                    // Just wait and hope for the best
+                    await this.delay(3000);
+                    this.removeTypingIndicator(typingId);
+                    this.addMessage('✅ Analysis triggered. Check Step 2 for results.', 'assistant');
+                }
+            } else {
+                this.removeTypingIndicator(typingId);
+                this.addMessage('❌ Could not find analyze button. Please trigger analysis manually.', 'assistant');
+            }
+        } catch (error) {
+            this.removeTypingIndicator(typingId);
+            this.addMessage(`❌ Failed to trigger analysis: ${error.message}`, 'assistant');
+        }
+    }
+    
     async sendMessage() {
         const input = document.getElementById('ai-chat-input');
         const message = input.value.trim();
+        
+        // Check if we have staged files to process
+        if (this.stagedFiles.length > 0) {
+            // Add message if any
+            if (message) {
+                this.addMessage(message, 'user');
+            } else {
+                this.addMessage('📁 Submitting staged files...', 'user');
+            }
+            
+            // Clear input
+            input.value = '';
+            this.updateSendButton();
+            
+            // Process staged files
+            await this.handleFileUpload(this.stagedFiles);
+            return;
+        }
         
         if (!message || this.isProcessing) return;
         
@@ -787,11 +1052,17 @@ class AIAssistant {
         
         // Clear input and disable send button
         input.value = '';
-        document.getElementById('ai-send-btn').disabled = true;
+        this.updateSendButton();
+        
+        // Check for direct submission commands
+        if (this.isSubmissionCommand(message)) {
+            await this.executeSubmission();
+            return;
+        }
         
         // Show processing state
         this.setProcessing(true);
-        this.addTypingIndicator();
+        const typingId = this.addTypingIndicator();
         
         try {
             // Get current app context
@@ -801,8 +1072,8 @@ class AIAssistant {
             const gpt5TierSelector = document.getElementById('gpt5-tier-selector');
             const gpt5Tier = gpt5TierSelector ? gpt5TierSelector.value : 'auto';
             
-            // Send message to AI agent with GPT-5 tier
-            const response = await fetch('/api/agent/chat', {
+            // Send message to AI agent with GPT-5 tier and timeout
+            const responsePromise = fetch('/api/agent/chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -813,10 +1084,11 @@ class AIAssistant {
                 })
             });
             
+            const response = await this.withTimeout(responsePromise, this.apiTimeout);
             const result = await response.json();
             
             // Remove typing indicator
-            this.removeTypingIndicator();
+            this.removeTypingIndicator(typingId);
             
             // Add AI response
             this.addMessage(result.message, 'assistant');
@@ -828,11 +1100,36 @@ class AIAssistant {
             
         } catch (error) {
             console.error('[AI Assistant] Error:', error);
-            this.removeTypingIndicator();
-            this.addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+            this.removeTypingIndicator(typingId);
+            
+            if (error.name === 'TimeoutError') {
+                this.addMessage('⏱️ Request timed out. Please try again with a simpler command.', 'assistant');
+            } else {
+                this.addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+            }
         } finally {
             this.setProcessing(false);
         }
+    }
+    
+    isSubmissionCommand(message) {
+        const lowerMessage = message.toLowerCase();
+        const submitKeywords = ['submit', 'upload', 'analyze', 'process', 'send it', 'go ahead', 'do it'];
+        return submitKeywords.some(keyword => lowerMessage.includes(keyword));
+    }
+    
+    async executeSubmission() {
+        // Check if we have RFP text
+        const rfpTextEl = document.getElementById('rfpText');
+        if (!rfpTextEl || !rfpTextEl.value) {
+            this.addMessage('⚠️ No RFP document found. Please upload a document first.', 'assistant');
+            return;
+        }
+        
+        this.addMessage('🚀 Submitting document for analysis...', 'assistant');
+        
+        // Trigger analysis
+        await this.triggerAnalysis('deep');
     }
     
     getCurrentContext() {
@@ -905,9 +1202,12 @@ class AIAssistant {
     addTypingIndicator() {
         const messagesContainer = document.getElementById('ai-chat-messages');
         
+        // Generate unique ID for this typing indicator
+        const typingId = 'typing-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        
         const typingDiv = document.createElement('div');
         typingDiv.className = 'ai-message assistant';
-        typingDiv.id = 'ai-typing-indicator';
+        typingDiv.id = typingId;
         
         const avatar = document.createElement('div');
         avatar.className = 'ai-message-avatar';
@@ -922,28 +1222,45 @@ class AIAssistant {
         
         messagesContainer.appendChild(typingDiv);
         
+        // Track this indicator
+        this.currentTypingIndicators.add(typingId);
+        
         // Scroll to bottom
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        
+        return typingId;
     }
     
-    removeTypingIndicator() {
-        const indicator = document.getElementById('ai-typing-indicator');
-        if (indicator) {
-            indicator.remove();
+    removeTypingIndicator(typingId) {
+        if (!typingId) {
+            // Remove all typing indicators if no ID specified
+            this.currentTypingIndicators.forEach(id => {
+                const indicator = document.getElementById(id);
+                if (indicator) {
+                    indicator.remove();
+                }
+            });
+            this.currentTypingIndicators.clear();
+        } else {
+            // Remove specific typing indicator
+            const indicator = document.getElementById(typingId);
+            if (indicator) {
+                indicator.remove();
+                this.currentTypingIndicators.delete(typingId);
+            }
         }
     }
     
     setProcessing(isProcessing) {
         this.isProcessing = isProcessing;
         const sendBtn = document.getElementById('ai-send-btn');
-        const input = document.getElementById('ai-chat-input');
         
         if (isProcessing) {
             sendBtn.disabled = true;
             sendBtn.querySelector('.send-icon').style.display = 'none';
             sendBtn.querySelector('.loading-icon').style.display = 'block';
         } else {
-            sendBtn.disabled = !input.value.trim();
+            this.updateSendButton();
             sendBtn.querySelector('.send-icon').style.display = 'block';
             sendBtn.querySelector('.loading-icon').style.display = 'none';
         }
@@ -1222,69 +1539,94 @@ class AIAssistant {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
     
+    // Helper function to add timeout to promises
+    withTimeout(promise, timeout) {
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => 
+                setTimeout(() => {
+                    const error = new Error(`Operation timed out after ${timeout}ms`);
+                    error.name = 'TimeoutError';
+                    reject(error);
+                }, timeout)
+            )
+        ]);
+    }
+    
     async trackAnalysisJob(jobId) {
         let pollInterval;
         let pollCount = 0;
         const maxPolls = 60; // Max 60 polls (2 minutes at 2-second intervals)
         
+        const typingId = this.addTypingIndicator();
+        
+        const cleanup = () => {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+            this.removeTypingIndicator(typingId);
+        };
+        
         pollInterval = setInterval(async () => {
             try {
-                const response = await fetch(`/api/agencydb/status/${jobId}`);
+                pollCount++;
+                
+                // Check if we've exceeded max polls
+                if (pollCount > maxPolls) {
+                    cleanup();
+                    this.addMessage('⏱️ Analysis is taking longer than expected. It may still be processing in the background.', 'assistant');
+                    return;
+                }
+                
+                const response = await this.withTimeout(
+                    fetch(`/api/agencydb/status/${jobId}`),
+                    5000 // 5 second timeout for status checks
+                );
+                
                 if (response.ok) {
                     const status = await response.json();
                     
                     if (status.status === 'completed') {
-                        clearInterval(pollInterval);
-                        this.addMessage('✅ Analysis complete! Loading results...', 'assistant');
+                        cleanup();
+                        this.addMessage('✅ Analysis complete! Results loaded in Step 2.', 'assistant');
                         
-                        // Trigger UI update to show results
-                        if (status.data && status.data.deliverables) {
-                            // Store deliverables in session storage
-                            sessionStorage.setItem('analyzed_deliverables', JSON.stringify(status.data.deliverables));
-                            
-                            // Navigate to Step 2 if needed
-                            const step2Tab = document.querySelector('[data-tab="2"]');
-                            if (step2Tab) {
-                                step2Tab.click();
-                                this.addMessage(`📊 Found ${status.data.deliverables.length} potential deliverables. Please review in Step 2.`, 'assistant');
-                            }
+                        // Trigger any UI updates
+                        if (typeof window.loadScenarioData === 'function' && status.result) {
+                            window.loadScenarioData(status.result);
                         }
                     } else if (status.status === 'failed') {
-                        clearInterval(pollInterval);
+                        cleanup();
                         this.addMessage(`❌ Analysis failed: ${status.error || 'Unknown error'}`, 'assistant');
-                    } else if (status.status === 'processing') {
-                        // Show progress if available
-                        if (status.progress) {
-                            this.addMessage(`⏳ Processing... ${status.progress}%`, 'assistant', true); // true = update last message
-                        }
-                    }
-                    
-                    pollCount++;
-                    if (pollCount >= maxPolls) {
-                        clearInterval(pollInterval);
-                        this.addMessage('⚠️ Analysis is taking longer than expected. Please check back later.', 'assistant');
+                    } else if (status.progress) {
+                        // Update progress message
+                        console.log(`[CHARLES] Job ${jobId} progress: ${status.progress}%`);
                     }
                 } else {
-                    clearInterval(pollInterval);
-                    this.addMessage('⚠️ Unable to track analysis progress.', 'assistant');
+                    // Non-OK response
+                    cleanup();
+                    this.addMessage('⚠️ Could not check analysis status. It may still be running.', 'assistant');
                 }
             } catch (error) {
-                clearInterval(pollInterval);
-                console.error('[CHARLES] Job tracking error:', error);
-                this.addMessage('⚠️ Error tracking analysis progress.', 'assistant');
+                cleanup();
+                
+                if (error.name === 'TimeoutError') {
+                    this.addMessage('⏱️ Status check timed out. Analysis may still be running in the background.', 'assistant');
+                } else {
+                    console.error('[CHARLES] Job tracking error:', error);
+                    this.addMessage('⚠️ Lost connection to analysis job. Check Step 2 for results.', 'assistant');
+                }
             }
         }, 2000); // Poll every 2 seconds
     }
 }
 
-// Initialize AI Assistant when DOM is ready
+// Initialize the AI Assistant when DOM is ready
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
         window.aiAssistant = new AIAssistant();
     });
 } else {
+    // DOM is already ready
     window.aiAssistant = new AIAssistant();
 }
-
-// Export for use in other modules
-window.AIAssistant = AIAssistant;
