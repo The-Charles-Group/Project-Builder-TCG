@@ -203,6 +203,7 @@ def enforce_no_patches():
     Call this at startup to scan for patches and raise errors.
     """
     import sys
+    import os
     detector = PatchDetector()
     
     # Scan main application files
