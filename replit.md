@@ -4,7 +4,12 @@
 This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.6** (October 16, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
 ## Recent Changes
-- **October 16, 2025**: Security dependency updates applied successfully
+- **October 16, 2025**: Critical bug fix and security updates
+  - **CRITICAL FIX**: Resolved infinite polling loop that froze browsers during analysis
+    - Fixed undefined `logError` function causing error handling failure
+    - Converted polling to instance-based cleanup preventing multiple concurrent loops
+    - Added page visibility/unload event handlers to stop polling when user navigates away
+    - Added detailed logging for debugging polling lifecycle
   - Updated `jinja2` to v3.1.6 (fixes CVE-2025-27516 sandbox breakout vulnerability)
   - Updated `python-multipart` to v0.0.20 (fixes CVE-2024-24762 ReDoS & CVE-2024-53981 logging DoS vulnerabilities)
   - All functionality verified working correctly after updates

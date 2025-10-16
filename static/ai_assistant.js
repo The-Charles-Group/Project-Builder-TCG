@@ -611,25 +611,33 @@ class AIAssistant {
             this.saveState();
         }
         
-        let pollInterval;
+        // Cleanup any existing polling interval to prevent multiple loops
+        if (this.currentPollInterval) {
+            console.log('[CHARLES] Cleaning up existing poll interval before starting new one');
+            clearInterval(this.currentPollInterval);
+            this.currentPollInterval = null;
+        }
+        
         let pollCount = 0;
         const maxPolls = 120; // 4 minutes at 2-second intervals
         
         this.updateProgress(0, 'Analysis started...', 'Initializing GPT-5 deep analysis');
         
         const cleanup = () => {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-                pollInterval = null;
+            if (this.currentPollInterval) {
+                console.log('[CHARLES] Cleanup called - stopping poll interval');
+                clearInterval(this.currentPollInterval);
+                this.currentPollInterval = null;
             }
             this.agentState.jobId = null;
         };
         
-        pollInterval = setInterval(async () => {
+        this.currentPollInterval = setInterval(async () => {
             try {
                 pollCount++;
                 
                 if (pollCount > maxPolls) {
+                    console.log('[CHARLES] Max polls reached, cleaning up');
                     cleanup();
                     this.updateProgress(100, 'Checking for results...', 'Attempting to load completed analysis');
                     
@@ -705,6 +713,7 @@ class AIAssistant {
                     }
                     
                     if (status.status === 'completed') {
+                        console.log('[CHARLES] Analysis completed, cleaning up poll interval');
                         cleanup();
                         this.updateProgress(100, '✅ Analysis Complete!', 'Loading deliverables into app...');
                         
@@ -740,6 +749,7 @@ class AIAssistant {
                         
                         this.saveState();
                     } else if (status.status === 'failed') {
+                        console.log('[CHARLES] Analysis failed, cleaning up poll interval');
                         cleanup();
                         this.updateProgress(100, '❌ Analysis Failed', status.error || 'Unknown error');
                         this.handleError(new Error(status.error || 'Analysis failed'), 'analysis', { jobId });
@@ -747,9 +757,12 @@ class AIAssistant {
                 }
             } catch (error) {
                 console.error('[CHARLES] Job tracking error:', error);
+                // Don't cleanup on transient errors, keep trying
                 this.handleError(error, 'job_tracking', { jobId });
             }
         }, 2000);
+        
+        console.log('[CHARLES] Poll interval started for job:', jobId);
     }
     
     // ====================
@@ -2071,7 +2084,7 @@ class AIAssistant {
         };
         
         // Log error
-        this.logError(context, errorInfo);
+        console.error(`[CHARLES ERROR] ${context}:`, errorInfo);
         
         // Add to recovery queue
         this.errorRecoveryQueue.push(errorInfo);
@@ -4104,6 +4117,23 @@ class AIAssistant {
         
         // Initialize resize handle
         this.initializeResize();
+        
+        // Cleanup on page visibility change or unload to prevent runaway polling
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && this.currentPollInterval) {
+                console.log('[CHARLES] Page hidden, cleaning up poll interval');
+                clearInterval(this.currentPollInterval);
+                this.currentPollInterval = null;
+            }
+        });
+        
+        window.addEventListener('beforeunload', () => {
+            if (this.currentPollInterval) {
+                console.log('[CHARLES] Page unloading, cleaning up poll interval');
+                clearInterval(this.currentPollInterval);
+                this.currentPollInterval = null;
+            }
+        });
         
         // Send button
         const sendBtn = document.getElementById('ai-send-btn');
