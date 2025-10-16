@@ -362,6 +362,97 @@ from ai_planner_agencydb import (
 # ---------- AI Agent Integration (CHARLES) ----------
 from ai_agent import chat_with_agent, parse_user_intent, CommandType
 
+# ---------- Job Status Endpoint for CHARLES Agent ----------
+@app.get("/api/agencydb/status/{job_id}")
+async def get_agencydb_job_status(job_id: str):
+    """
+    Get status of AI analysis job - endpoint for CHARLES Agent compatibility
+    Returns job status from AI_JOB_STORE with the expected format
+    """
+    # Check if job exists in AI_JOB_STORE
+    if job_id not in AI_JOB_STORE:
+        # Also check sitecustomize job store if available
+        try:
+            from sitecustomize import _JOBS
+            if job_id in _JOBS:
+                job = _JOBS[job_id]
+                progress = 0.0
+                if job.total_batches:
+                    progress = 100.0 * (job.finished_batches / job.total_batches)
+                
+                # Map sitecustomize job status to expected format
+                status_map = {
+                    "queued": "pending",
+                    "running": "processing", 
+                    "done": "completed",
+                    "error": "failed",
+                    "canceled": "failed",
+                    "timeout": "failed"
+                }
+                
+                response = {
+                    "job_id": job.id,
+                    "status": status_map.get(job.status, job.status),
+                    "progress": round(progress, 2),
+                    "message": job.message or f"Job {job.status}"
+                }
+                
+                if job.status == "done" and job.result:
+                    response["data"] = job.result
+                
+                if job.status in ("error", "timeout") and job.error:
+                    response["error"] = job.error
+                
+                return response
+        except ImportError:
+            pass
+        
+        # Job not found in any store
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    
+    # Get job from AI_JOB_STORE
+    job = AI_JOB_STORE[job_id]
+    
+    # Calculate progress percentage
+    progress = 0
+    if job.total_chunks > 0:
+        progress = int((job.processed_chunks / job.total_chunks) * 100)
+    elif job.status == AIJobStatus.COMPLETED:
+        progress = 100
+    
+    # Map internal status to expected format
+    status_map = {
+        AIJobStatus.PENDING: "pending",
+        AIJobStatus.RUNNING: "processing",
+        AIJobStatus.COMPLETED: "completed", 
+        AIJobStatus.FAILED: "failed"
+    }
+    
+    response = {
+        "job_id": job.job_id,
+        "status": status_map[job.status],
+        "progress": progress,
+        "current_stage": job.current_stage,
+        "message": job.current_stage
+    }
+    
+    # Add deliverables data if job is completed
+    if job.status == AIJobStatus.COMPLETED and job.result:
+        response["data"] = job.result
+        # Also include deliverable count for UI display
+        delivs_count = 0
+        if isinstance(job.result, dict):
+            for dept, delivs in job.result.items():
+                if isinstance(delivs, list):
+                    delivs_count += len(delivs)
+        response["deliverables_count"] = delivs_count
+    
+    # Add error if job failed
+    if job.status == AIJobStatus.FAILED and job.error:
+        response["error"] = job.error
+    
+    return response
+
 # ---------- Industry Template System Import ----------
 from luxury_fashion_template import (
     get_industry_template,
