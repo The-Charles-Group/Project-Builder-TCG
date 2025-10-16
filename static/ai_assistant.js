@@ -729,7 +729,7 @@ class AIAssistant {
             formData.append('file', file);
             
             try {
-                // First upload the file
+                // First upload the file with analysis trigger
                 const uploadResponse = await fetch('/api/upload_rfp', {
                     method: 'POST',
                     body: formData
@@ -745,13 +745,21 @@ class AIAssistant {
                         sessionStorage.setItem('rfp_text', result.text);
                     }
                     
-                    // Auto-trigger deep analysis
-                    this.addMessage('🧠 Starting deep AI analysis with GPT-5...', 'assistant');
-                    setTimeout(() => {
-                        // Click the analyze button in deep mode
-                        const deepModeBtn = document.querySelector('[data-mode="deep"]');
-                        if (deepModeBtn) deepModeBtn.click();
-                    }, 500);
+                    // Check if analysis was started
+                    if (result.job_id && result.analysis_started) {
+                        this.addMessage(`🧠 AI analysis started (Job ID: ${result.job_id}). Tracking progress...`, 'assistant');
+                        
+                        // Poll for job progress
+                        this.trackAnalysisJob(result.job_id);
+                    } else {
+                        // Fallback to manual trigger if no job started
+                        this.addMessage('🧠 Starting deep AI analysis with GPT-5...', 'assistant');
+                        setTimeout(() => {
+                            // Click the analyze button in deep mode
+                            const deepModeBtn = document.querySelector('[data-mode="deep"]');
+                            if (deepModeBtn) deepModeBtn.click();
+                        }, 500);
+                    }
                 } else {
                     this.addMessage(`❌ Failed to upload file. Please try again.`, 'assistant');
                 }
@@ -1212,6 +1220,60 @@ class AIAssistant {
     
     delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    
+    async trackAnalysisJob(jobId) {
+        let pollInterval;
+        let pollCount = 0;
+        const maxPolls = 60; // Max 60 polls (2 minutes at 2-second intervals)
+        
+        pollInterval = setInterval(async () => {
+            try {
+                const response = await fetch(`/api/agencydb/status/${jobId}`);
+                if (response.ok) {
+                    const status = await response.json();
+                    
+                    if (status.status === 'completed') {
+                        clearInterval(pollInterval);
+                        this.addMessage('✅ Analysis complete! Loading results...', 'assistant');
+                        
+                        // Trigger UI update to show results
+                        if (status.data && status.data.deliverables) {
+                            // Store deliverables in session storage
+                            sessionStorage.setItem('analyzed_deliverables', JSON.stringify(status.data.deliverables));
+                            
+                            // Navigate to Step 2 if needed
+                            const step2Tab = document.querySelector('[data-tab="2"]');
+                            if (step2Tab) {
+                                step2Tab.click();
+                                this.addMessage(`📊 Found ${status.data.deliverables.length} potential deliverables. Please review in Step 2.`, 'assistant');
+                            }
+                        }
+                    } else if (status.status === 'failed') {
+                        clearInterval(pollInterval);
+                        this.addMessage(`❌ Analysis failed: ${status.error || 'Unknown error'}`, 'assistant');
+                    } else if (status.status === 'processing') {
+                        // Show progress if available
+                        if (status.progress) {
+                            this.addMessage(`⏳ Processing... ${status.progress}%`, 'assistant', true); // true = update last message
+                        }
+                    }
+                    
+                    pollCount++;
+                    if (pollCount >= maxPolls) {
+                        clearInterval(pollInterval);
+                        this.addMessage('⚠️ Analysis is taking longer than expected. Please check back later.', 'assistant');
+                    }
+                } else {
+                    clearInterval(pollInterval);
+                    this.addMessage('⚠️ Unable to track analysis progress.', 'assistant');
+                }
+            } catch (error) {
+                clearInterval(pollInterval);
+                console.error('[CHARLES] Job tracking error:', error);
+                this.addMessage('⚠️ Error tracking analysis progress.', 'assistant');
+            }
+        }, 2000); // Poll every 2 seconds
     }
 }
 

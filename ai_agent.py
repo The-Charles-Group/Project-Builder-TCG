@@ -108,15 +108,38 @@ async def parse_user_intent(message: str, context: Optional[Dict] = None, gpt5_t
             explanation="CHARLES AGENT requires OpenAI API access"
         )
     
-    # Build context-aware prompt
-    system_prompt = """You are an AI agent for the Agency Project Builder app. Parse the user's intent and extract command parameters.
+    # Build tier-aware context prompt
+    tier_descriptions = {
+        "auto": "Provide efficient, balanced responses optimized for speed and accuracy.",
+        "mini": "Provide quick, concise responses focusing on the essential command.",
+        "thinking-mini": "Include brief reasoning steps and validation of parameters.",
+        "thinking": "Provide detailed reasoning about the user's intent and thorough parameter validation.",
+        "pro": "Deliver comprehensive analysis with multiple alternatives, detailed reasoning, and proactive suggestions."
+    }
+    
+    tier_desc = tier_descriptions.get(gpt5_tier, tier_descriptions["auto"])
+    
+    # Adjust response complexity based on tier
+    response_format = ""
+    if gpt5_tier in ["thinking", "pro"]:
+        response_format = """
+    "reasoning": "Step-by-step reasoning for the interpretation","""
+    if gpt5_tier == "pro":
+        response_format += """
+    "alternatives": ["other possible interpretations"],
+    "suggestions": ["proactive recommendations for better results"],"""
+    
+    system_prompt = f"""You are CHARLES AGENT (ProBuFo - Progressive Business Forecasting Oracle), the preeminent executive project manager AI assistant for the Agency Project Builder app.
+
+Intelligence Level: {gpt5_tier.upper()}
+Approach: {tier_desc}
 
 Available commands:
 1. UPLOAD_RFP: Upload or paste RFP content
 2. ANALYZE_RFP: Analyze RFP with AI (fast/deep mode)
 3. SELECT_DELIVERABLES: Select/deselect specific deliverables
 4. MODIFY_PRICING: Change pricing for deliverables (hours, rates, or total price)
-5. SET_RETAINER: Set monthly retainer pricing
+5. SET_RETAINER: Set monthly retainer pricing with duration
 6. SET_BUDGET: Set total project budget
 7. ADD_MARKUP: Add percentage markup to deliverables
 8. OPTIMIZE_TIMELINE: Optimize project timeline
@@ -125,16 +148,18 @@ Available commands:
 11. CLEAR_DATA: Clear all data and start fresh
 12. REMOVE_DELIVERABLES: Remove specific deliverables
 13. EXTEND_TIMELINE: Extend timeline by days/weeks
+14. REFRESH_VIEW: Refresh current view
+15. SHOW_RESOURCES: Display resource allocation
 
 Parse the user message and return a JSON object with:
-{
+{{
     "command_type": "COMMAND_TYPE",
-    "parameters": {
+    "parameters": {{
         // relevant parameters based on command
-    },
+    }},
     "confidence": 0.0-1.0,
-    "explanation": "Brief explanation of what will be done"
-}
+    "explanation": "{'Concise' if gpt5_tier == 'mini' else 'Detailed'} explanation of what will be done",{response_format}
+}}
 
 For MODIFY_PRICING, parameters should include:
 - "target": deliverable name or code
@@ -146,7 +171,7 @@ For MODIFY_PRICING, parameters should include:
 For SET_RETAINER, parameters should include:
 - "deliverable": deliverable name or code
 - "monthly_amount": monthly price
-- "months": number of months
+- "months": number of months (1-36)
 
 For ADD_MARKUP, parameters should include:
 - "percentage": markup percentage
@@ -155,6 +180,9 @@ For ADD_MARKUP, parameters should include:
 For EXTEND_TIMELINE, parameters should include:
 - "duration": number of days/weeks
 - "unit": "days" or "weeks"
+
+{'IMPORTANT: Provide comprehensive analysis with multiple perspectives and proactive suggestions to maximize value.' if gpt5_tier == 'pro' else ''}
+{'NOTE: Focus on speed and essential information only.' if gpt5_tier == 'mini' else ''}
 """
 
     user_prompt = f"User message: {message}"

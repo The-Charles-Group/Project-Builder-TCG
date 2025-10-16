@@ -388,8 +388,12 @@ function toggleRetainerType(code, isRetainer) {
 
 function updateRetainerMonths(code, months) {
   const monthsNum = parseInt(months) || 12;
-  const clampedMonths = Math.min(Math.max(monthsNum, 1), 24);
-  pricingData.retainers.set(code, clampedMonths);
+  const clampedMonths = Math.min(Math.max(monthsNum, 1), 36); // Allow up to 36 months
+  pricingData.retainerMonths.set(code, clampedMonths);
+  
+  // Update the pricing display immediately
+  updatePricingTable();
+  updatePricingSummary();
   
   console.log(`[RETAINER] ${code} set to ${clampedMonths} months`);
 }
@@ -663,6 +667,7 @@ let pricingData = {
   deliverableTypes: new Map(), // Maps deliverable_code -> 'PROJECT' or 'RETAINER'
   customHours: new Map(),      // Maps deliverable_code -> custom hours
   customRates: new Map(),       // Maps deliverable_code -> custom rate
+  retainerMonths: new Map(),   // Maps deliverable_code -> number of months for retainers
   originalScenario: null,       // Store original scenario for comparison
   rebuildVersion: 0,            // Track rebuild versions
   resourceBreakdown: new Map()  // Maps deliverable_code -> resource allocation
@@ -1147,6 +1152,11 @@ function updatePricingTable() {
     const resources = pricingData.resourceBreakdown.get(item.deliverable_code) || 
                      extractResourceAllocation(item);
     
+    // Get retainer months for this item (default to 12)
+    const retainerMonths = pricingData.retainerMonths?.get?.(item.deliverable_code) || 12;
+    const monthlyPrice = customHours * customRate;
+    const totalPrice = isRetainer ? monthlyPrice * retainerMonths : monthlyPrice;
+    
     // Main deliverable row with expand button - FULLY EDITABLE
     html += `
       <tr style="border-bottom: 2px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.02);" data-deliverable="${item.deliverable_code}">
@@ -1164,6 +1174,14 @@ function updatePricingTable() {
             <option value="PROJECT" ${!isRetainer ? 'selected' : ''}>PROJECT</option>
             <option value="RETAINER" ${isRetainer ? 'selected' : ''}>RETAINER</option>
           </select>
+        </td>
+        <td style="padding: 8px; text-align: center;">
+          ${isRetainer ? 
+            `<input type="number" value="${retainerMonths}" 
+                    min="1" max="36" step="1"
+                    onchange="updateRetainerMonths('${item.deliverable_code}', this.value)"
+                    style="width: 60px; padding: 6px; border: 1px solid var(--accent2); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-weight: 500;" />` : 
+            '<span style="color: var(--muted);">-</span>'}
         </td>
         <td style="padding: 8px; text-align: center;">
           <input type="number" value="${customHours}" 
@@ -1186,8 +1204,9 @@ function updatePricingTable() {
         <td style="padding: 8px; text-align: right; font-weight: 600;">
           <div id="cost-${item.deliverable_code}" style="color: ${isRetainer ? 'var(--accent2)' : 'var(--accent)'};">
             ${isRetainer ? 
-              `<div>$${cost.toLocaleString()}/mo</div><small style="color: var(--muted);">($${(cost * 12).toLocaleString()}/yr)</small>` : 
-              `$${cost.toLocaleString()}`}
+              `<div style="font-size: 0.9em; color: var(--muted);">$${monthlyPrice.toLocaleString()}/mo</div>
+               <div style="font-size: 1.1em;">$${totalPrice.toLocaleString()} total</div>` : 
+              `$${totalPrice.toLocaleString()}`}
           </div>
         </td>
         <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
@@ -1207,6 +1226,11 @@ function updatePricingTable() {
         const compCost = compCustomHours * compCustomRate;
         const compResources = extractComponentResources(comp);
         
+        // Get retainer months for component (default to parent's months or 12)
+        const compRetainerMonths = pricingData.retainerMonths?.get?.(compKey) || retainerMonths || 12;
+        const compMonthlyPrice = compCustomHours * compCustomRate;
+        const compTotalPrice = compIsRetainer ? compMonthlyPrice * compRetainerMonths : compMonthlyPrice;
+        
         html += `
           <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); display: none; background: rgba(255,255,255,0.01);" 
               class="component-row-${item.deliverable_code}">
@@ -1223,6 +1247,14 @@ function updatePricingTable() {
                 <option value="PROJECT" ${!compIsRetainer ? 'selected' : ''}>PROJECT</option>
                 <option value="RETAINER" ${compIsRetainer ? 'selected' : ''}>RETAINER</option>
               </select>
+            </td>
+            <td style="padding: 8px; text-align: center;">
+              ${compIsRetainer ? 
+                `<input type="number" value="${compRetainerMonths}" 
+                        min="1" max="36" step="1"
+                        onchange="updateRetainerMonths('${compKey}', this.value)"
+                        style="width: 50px; padding: 4px; border: 1px solid var(--accent2); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />` : 
+                '<span style="color: var(--muted); font-size: 0.9em;">-</span>'}
             </td>
             <td style="padding: 8px; text-align: center;">
               <input type="number" value="${compCustomHours}" 
@@ -1245,8 +1277,9 @@ function updatePricingTable() {
             <td style="padding: 8px; text-align: right; font-size: 0.9em;">
               <div id="cost-${compKey.replace(/[::]/g, '_')}" style="color: ${compIsRetainer ? 'var(--accent2)' : 'var(--accent)'};">
                 ${compIsRetainer ? 
-                  `<div>$${compCost.toLocaleString()}/mo</div><small style="color: var(--muted); font-size: 0.8em;">($${(compCost * 12).toLocaleString()}/yr)</small>` : 
-                  `$${compCost.toLocaleString()}`}
+                  `<div style="font-size: 0.85em; color: var(--muted);">$${compMonthlyPrice.toLocaleString()}/mo</div>
+                   <div>$${compTotalPrice.toLocaleString()} total</div>` : 
+                  `$${compTotalPrice.toLocaleString()}`}
               </div>
             </td>
             <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
@@ -1266,6 +1299,9 @@ function updatePricingTable() {
                   class="task-row-${item.deliverable_code} task-row-comp-${item.deliverable_code}-${comp.name.replace(/\s+/g, '_')}">
                 <td style="padding: 6px 8px 6px 72px; color: var(--muted); font-size: 0.8em;">
                   ⤷ ${task.name}
+                </td>
+                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
+                  -
                 </td>
                 <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
                   -
@@ -1433,7 +1469,25 @@ function updatePricingSummary() {
 function extractResourceAllocation(item) {
   const resources = {};
   
-  // Try to get from existing data structure
+  // First, try to get from hours_by_role (from backend API)
+  if (item.hours_by_role && Array.isArray(item.hours_by_role)) {
+    item.hours_by_role.forEach(roleData => {
+      // Backend uses Resource_Title as the role field
+      const role = roleData.Resource_Title || roleData.role || 'General';
+      const seniority = roleData.Seniority || roleData.seniority || '';
+      const hours = parseFloat(roleData.Hours || roleData.hours || 0);
+      if (hours > 0) {
+        // Format as "Role (Seniority)" if seniority exists
+        const roleKey = seniority ? `${role} (${seniority})` : role;
+        resources[roleKey] = (resources[roleKey] || 0) + hours;
+      }
+    });
+    if (Object.keys(resources).length > 0) {
+      return resources;
+    }
+  }
+  
+  // Try to get from existing resources data structure
   if (item.resources) {
     return item.resources;
   }
@@ -1441,7 +1495,7 @@ function extractResourceAllocation(item) {
   // Try to parse from tasks if available
   if (item.tasks && Array.isArray(item.tasks)) {
     item.tasks.forEach(task => {
-      const role = task.role || 'General';
+      const role = task.role || task.Resource_Title || 'General';
       const hours = task.hours || 0;
       if (hours > 0) {
         resources[role] = (resources[role] || 0) + hours;
@@ -1459,12 +1513,33 @@ function extractResourceAllocation(item) {
 
 // Helper function to extract component resources
 function extractComponentResources(comp) {
+  const resources = {};
+  
+  // First, try to get from hours_by_role (from backend API)
+  if (comp.hours_by_role && Array.isArray(comp.hours_by_role)) {
+    comp.hours_by_role.forEach(roleData => {
+      // Backend uses Resource_Title as the role field
+      const role = roleData.Resource_Title || roleData.role || 'General';
+      const seniority = roleData.Seniority || roleData.seniority || '';
+      const hours = parseFloat(roleData.Hours || roleData.hours || 0);
+      if (hours > 0) {
+        // Format as "Role (Seniority)" if seniority exists
+        const roleKey = seniority ? `${role} (${seniority})` : role;
+        resources[roleKey] = (resources[roleKey] || 0) + hours;
+      }
+    });
+    if (Object.keys(resources).length > 0) {
+      return resources;
+    }
+  }
+  
+  // Try to get from existing resources data
   if (comp.resources) return comp.resources;
   
-  const resources = {};
+  // Try to parse from tasks if available
   if (comp.tasks && Array.isArray(comp.tasks)) {
     comp.tasks.forEach(task => {
-      const role = task.role || 'General';
+      const role = task.role || task.Resource_Title || 'General';
       const hours = task.hours || 0;
       if (hours > 0) {
         resources[role] = (resources[role] || 0) + hours;
@@ -1472,6 +1547,7 @@ function extractComponentResources(comp) {
     });
   }
   
+  // Fallback to basic allocation
   if (Object.keys(resources).length === 0 && comp.hours > 0) {
     resources['Team'] = comp.hours;
   }
@@ -1533,7 +1609,16 @@ function toggleComponentExpand(deliverableCode, componentName) {
 // Update deliverable type (PROJECT/RETAINER)
 function updateDeliverableType(deliverableCode, type) {
   pricingData.deliverableTypes.set(deliverableCode, type);
-  updatePricingCalculations();
+  
+  // If switching to retainer, set default months
+  if (type === 'RETAINER') {
+    if (!pricingData.retainerMonths.has(deliverableCode)) {
+      pricingData.retainerMonths.set(deliverableCode, 12); // Default 12 months
+    }
+  }
+  
+  updatePricingTable();
+  updatePricingSummary();
 }
 
 // Update custom hours

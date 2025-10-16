@@ -264,8 +264,13 @@ async def agent_status_endpoint():
     }
 
 @app.post("/api/upload_rfp")
-async def upload_rfp_endpoint(file: UploadFile = File(...)):
-    """Upload RFP document (PDF, DOCX, TXT) for processing"""
+async def upload_rfp_endpoint(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    analyze: bool = True,  # Whether to automatically trigger analysis
+    mode: str = "deep"     # Analysis mode: "fast" or "deep"
+):
+    """Upload RFP document (PDF, DOCX, TXT) for processing and optionally trigger analysis"""
     try:
         # Check file type
         file_ext = file.filename.split('.')[-1].lower()
@@ -295,13 +300,50 @@ async def upload_rfp_endpoint(file: UploadFile = File(...)):
         RFP_TEXT_CACHE_FILE = text.strip()
         RFP_TEXT_CACHE = text.strip()
         
-        return {
+        # Prepare response
+        response = {
             "success": True,
             "filename": file.filename,
             "text": text.strip(),
             "text_length": len(text.strip()),
             "message": f"Successfully uploaded and extracted text from {file.filename}"
         }
+        
+        # Optionally trigger analysis
+        if analyze and text.strip():
+            # Generate job ID for tracking
+            job_id = f"upload_{int(time.time())}_{file.filename[:20].replace(' ', '_')}"
+            
+            # Initialize job tracking
+            JOB_STORE[job_id] = AnalysisJob(
+                job_id=job_id,
+                status=JobStatus.PENDING,
+                mode=mode,
+                session_id=f"upload_{int(time.time())}"
+            )
+            
+            # Load database if needed
+            if not DB.loaded:
+                DB.load()
+            
+            # Start background analysis
+            background_tasks.add_task(
+                _run_analysis_background,
+                job_id,
+                text.strip(),
+                DB,
+                "normal",  # strictness
+                "auto",    # tier
+                mode,
+                None,      # client will be created
+                f"upload_{int(time.time())}"  # session_id
+            )
+            
+            response["job_id"] = job_id
+            response["analysis_started"] = True
+            response["message"] += f" Analysis started with job ID: {job_id}"
+        
+        return response
         
     except Exception as e:
         print(f"[UPLOAD] Error processing file: {str(e)}")
