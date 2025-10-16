@@ -1121,10 +1121,19 @@ function updatePricingCalculations() {
   updatePricingSummary();
 }
 
-// Update pricing table with current scenario data - FULLY ENHANCED VERSION
+// Enhanced pricing data store with cadence support
+const pricingDataEnhanced = {
+  ...pricingData,
+  cadenceTypes: new Map(),      // deliverable_code -> 'ONE_TIME' | 'MONTHLY' | 'QUARTERLY' | 'SEMI_ANNUAL'
+  periodsCount: new Map(),      // deliverable_code -> number of periods
+  editMode: new Map(),          // deliverable_code -> boolean (editing state)
+  componentTasks: new Map(),    // deliverable_code -> array of tasks
+};
+
+// UNIFIED PRICING TABLE - Comprehensive implementation
 function updatePricingTable() {
-  const tbody = document.getElementById('pricing-tbody');
-  if (!tbody || !SCENARIOS) return;
+  const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
+  if (!container || !SCENARIOS) return;
   
   const scenario = SCENARIOS.A || SCENARIOS[0];
   if (!scenario || !scenario.items) return;
@@ -1134,226 +1143,353 @@ function updatePricingTable() {
     pricingData.originalScenario = JSON.parse(JSON.stringify(scenario));
   }
   
-  let html = '';
-  let oneTimeTotal = 0;
-  let retainerMonthlyTotal = 0;
+  // Create comprehensive table HTML structure
+  let tableHTML = `
+    <div class="unified-pricing-table" style="margin: 20px 0;">
+      <h3 style="color: var(--accent); margin-bottom: 16px; font-size: 1.3em;">
+        📊 Unified Pricing Details
+      </h3>
+      
+      <table id="pricing-details-table" style="width: 100%; border-collapse: separate; border-spacing: 0; background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+        <thead style="background: linear-gradient(135deg, rgba(106,163,255,0.1), rgba(139,92,246,0.1));">
+          <tr>
+            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2);">
+              Deliverable/Component
+            </th>
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 140px;">
+              Type/Cadence
+            </th>
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
+              # Periods
+            </th>
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 90px;">
+              Hours
+            </th>
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
+              Rate (USD)
+            </th>
+            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 120px;">
+              Price/Period
+            </th>
+            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 130px;">
+              Total Price
+            </th>
+            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 150px;">
+              Resources/Roles
+            </th>
+            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 150px;">
+              Tasks
+            </th>
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
+              Actions
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
   
-  scenario.items.forEach(item => {
-    // Determine type (PROJECT or RETAINER)
-    const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
-    const isRetainer = (delivType === 'RETAINER');
+  let grandTotal = 0;
+  let rowIndex = 0;
+  
+  scenario.items.forEach((item, itemIndex) => {
+    // Get cadence and periods
+    const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
+                       (pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER' ? 'MONTHLY' : 'ONE_TIME');
+    const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
+                   (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
+    const isEditing = pricingDataEnhanced.editMode.get(item.deliverable_code) || false;
     
     // Get custom values or defaults
     const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
     const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
-    const cost = customHours * customRate;
+    const pricePerPeriod = customHours * customRate;
+    const totalPrice = pricePerPeriod * periods;
     
-    // Get resource breakdown if available
+    // Get resource breakdown
     const resources = pricingData.resourceBreakdown.get(item.deliverable_code) || 
                      extractResourceAllocation(item);
     
-    // Get retainer months for this item (default to 12)
-    const retainerMonths = pricingData.retainerMonths?.get?.(item.deliverable_code) || 12;
-    const monthlyPrice = customHours * customRate;
-    const totalPrice = isRetainer ? monthlyPrice * retainerMonths : monthlyPrice;
+    // Get tasks list
+    const tasks = extractDeliverableTasks(item);
     
-    // Main deliverable row with expand button - FULLY EDITABLE
-    html += `
-      <tr style="border-bottom: 2px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.02);" data-deliverable="${item.deliverable_code}">
-        <td style="padding: 12px; font-weight: 600;">
+    // Update grand total
+    grandTotal += totalPrice;
+    
+    // Determine row background (alternating + highlight for recurring)
+    const isRecurring = cadenceType !== 'ONE_TIME';
+    const rowBg = isRecurring ? 
+      'background: linear-gradient(90deg, rgba(139,92,246,0.05), rgba(139,92,246,0.02));' : 
+      (rowIndex % 2 === 0 ? 'background: rgba(255,255,255,0.01);' : 'background: transparent;');
+    
+    // Main deliverable row
+    tableHTML += `
+      <tr data-deliverable="${item.deliverable_code}" data-row-type="deliverable" 
+          style="${rowBg} border-bottom: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;">
+        <td style="padding: 12px; font-weight: 700; color: var(--text);">
           <button onclick="toggleDeliverableExpand('${item.deliverable_code}')" 
-                  style="background: transparent; border: none; color: var(--text); cursor: pointer; padding: 0 8px 0 0; font-size: 1.1em;"
-                  title="Click to expand/collapse components">
-            <span id="expand-${item.deliverable_code}">▶</span>
+                  style="background: transparent; border: none; color: var(--accent); cursor: pointer; padding: 0 8px 0 0; font-size: 0.9em; transition: transform 0.2s;"
+                  title="Expand/collapse components">
+            <span id="expand-${item.deliverable_code}" style="display: inline-block; transition: transform 0.2s;">▶</span>
           </button>
-          ${item.deliverable}
+          <span style="color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
+            ${item.deliverable}
+          </span>
         </td>
         <td style="padding: 8px; text-align: center;">
-          <select onchange="updateDeliverableType('${item.deliverable_code}', this.value)" 
-                  style="padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); cursor: pointer;">
-            <option value="PROJECT" ${!isRetainer ? 'selected' : ''}>PROJECT</option>
-            <option value="RETAINER" ${isRetainer ? 'selected' : ''}>RETAINER</option>
-          </select>
+          ${isEditing ? 
+            `<select id="cadence-${item.deliverable_code}" 
+                    onchange="updateCadenceType('${item.deliverable_code}', this.value)"
+                    style="padding: 6px 10px; border: 1px solid rgba(139,92,246,0.5); border-radius: 6px; 
+                           background: rgba(139,92,246,0.1); color: var(--text); cursor: pointer; 
+                           font-size: 0.85em; width: 100%;">
+              <option value="ONE_TIME" ${cadenceType === 'ONE_TIME' ? 'selected' : ''}>One-Time</option>
+              <option value="MONTHLY" ${cadenceType === 'MONTHLY' ? 'selected' : ''}>Monthly</option>
+              <option value="QUARTERLY" ${cadenceType === 'QUARTERLY' ? 'selected' : ''}>Quarterly</option>
+              <option value="SEMI_ANNUAL" ${cadenceType === 'SEMI_ANNUAL' ? 'selected' : ''}>Semi-Annual</option>
+            </select>` :
+            `<span class="cadence-badge" style="padding: 4px 12px; border-radius: 20px; font-size: 0.85em; font-weight: 500;
+                   background: ${cadenceType === 'ONE_TIME' ? 'rgba(106,163,255,0.1)' : 'rgba(139,92,246,0.1)'};
+                   color: ${cadenceType === 'ONE_TIME' ? 'var(--accent)' : 'var(--accent2)'};">
+              ${cadenceType.replace('_', '-')}
+            </span>`}
         </td>
         <td style="padding: 8px; text-align: center;">
-          ${isRetainer ? 
-            `<input type="number" value="${retainerMonths}" 
-                    min="1" max="36" step="1"
-                    onchange="updateRetainerMonths('${item.deliverable_code}', this.value)"
-                    style="width: 60px; padding: 6px; border: 1px solid var(--accent2); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-weight: 500;" />` : 
+          ${cadenceType !== 'ONE_TIME' ? 
+            (isEditing ?
+              `<input type="number" id="periods-${item.deliverable_code}" value="${periods}" 
+                      min="1" max="36" step="1"
+                      onchange="updatePeriods('${item.deliverable_code}', this.value)"
+                      style="width: 70px; padding: 6px; border: 1px solid rgba(139,92,246,0.3); 
+                             border-radius: 4px; background: rgba(139,92,246,0.05); 
+                             color: var(--text); text-align: center; font-weight: 500;" />` :
+              `<span style="font-weight: 500; color: var(--accent2);">${periods}</span>`) :
             '<span style="color: var(--muted);">-</span>'}
         </td>
         <td style="padding: 8px; text-align: center;">
-          <input type="number" value="${customHours}" 
-                 min="0" step="0.5"
-                 onchange="updateCustomHours('${item.deliverable_code}', this.value)"
-                 oninput="updatePricingCalculations()"
-                 style="width: 80px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-weight: 500;" />
-          ${isRetainer ? '<small style="color: var(--accent2); display: block; margin-top: 2px;">/month</small>' : ''}
+          ${isEditing ?
+            `<input type="number" id="hours-${item.deliverable_code}" value="${customHours}" 
+                    min="0" step="0.5"
+                    onchange="updateCustomHours('${item.deliverable_code}', this.value)"
+                    style="width: 80px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
+                           border-radius: 4px; background: rgba(106,163,255,0.05); 
+                           color: var(--text); text-align: center; font-weight: 500;" />` :
+            `<span style="font-weight: 500;">${customHours}</span>`}
         </td>
         <td style="padding: 8px; text-align: center;">
-          <div style="display: flex; align-items: center; gap: 2px;">
-            <span style="color: var(--muted);">$</span>
-            <input type="number" value="${customRate}" 
-                   min="0" step="5"
-                   onchange="updateCustomRate('${item.deliverable_code}', this.value)"
-                   oninput="updatePricingCalculations()"
-                   style="width: 70px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-weight: 500;" />
-          </div>
+          ${isEditing ?
+            `<div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
+              <span style="color: var(--muted);">$</span>
+              <input type="number" id="rate-${item.deliverable_code}" value="${customRate}" 
+                     min="0" step="5"
+                     onchange="updateCustomRate('${item.deliverable_code}', this.value)"
+                     style="width: 70px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
+                            border-radius: 4px; background: rgba(106,163,255,0.05); 
+                            color: var(--text); text-align: center; font-weight: 500;" />
+            </div>` :
+            `<span style="font-weight: 500;">$${customRate}</span>`}
         </td>
-        <td style="padding: 8px; text-align: right; font-weight: 600;">
-          <div id="cost-${item.deliverable_code}" style="color: ${isRetainer ? 'var(--accent2)' : 'var(--accent)'};">
-            ${isRetainer ? 
-              `<div style="font-size: 0.9em; color: var(--muted);">$${monthlyPrice.toLocaleString()}/mo</div>
-               <div style="font-size: 1.1em;">$${totalPrice.toLocaleString()} total</div>` : 
-              `$${totalPrice.toLocaleString()}`}
-          </div>
+        <td style="padding: 8px; text-align: right; font-weight: 600; color: var(--accent);">
+          $${pricePerPeriod.toLocaleString()}
+        </td>
+        <td style="padding: 8px; text-align: right; font-weight: 700; font-size: 1.05em; 
+                   color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
+          $${totalPrice.toLocaleString()}
         </td>
         <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
           ${formatResourceDisplay(resources)}
         </td>
+        <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
+          ${formatTasksList(tasks)}
+        </td>
+        <td style="padding: 8px; text-align: center;">
+          ${isEditing ?
+            `<div style="display: flex; gap: 4px; justify-content: center;">
+              <button onclick="saveRowEdit('${item.deliverable_code}')"
+                      style="padding: 4px 12px; background: var(--accent2); border: none; 
+                             border-radius: 4px; color: #08121e; cursor: pointer; 
+                             font-size: 0.8em; font-weight: 600;">
+                Save
+              </button>
+              <button onclick="cancelRowEdit('${item.deliverable_code}')"
+                      style="padding: 4px 12px; background: transparent; 
+                             border: 1px solid var(--border); border-radius: 4px; 
+                             color: var(--text); cursor: pointer; font-size: 0.8em;">
+                Cancel
+              </button>
+            </div>` :
+            `<button onclick="enableRowEdit('${item.deliverable_code}')"
+                    style="padding: 6px 16px; background: transparent; 
+                           border: 1px solid var(--accent); border-radius: 6px; 
+                           color: var(--accent); cursor: pointer; font-size: 0.85em; 
+                           font-weight: 500; transition: all 0.2s;">
+              Edit
+            </button>`}
+        </td>
       </tr>
     `;
     
-    // Component rows (initially hidden) - FULLY EDITABLE
+    rowIndex++;
+    
+    // Component rows (initially hidden)
     if (item.components && item.components.length > 0) {
       item.components.forEach(comp => {
         const compKey = `${item.deliverable_code}::${comp.name}`;
-        const compType = pricingData.deliverableTypes.get(compKey) || delivType; // Inherit parent type
-        const compIsRetainer = (compType === 'RETAINER');
-        const compCustomHours = pricingData.customHours.get(compKey) || comp.hours || 0;
-        const compCustomRate = pricingData.customRates.get(compKey) || comp.rate || customRate;
-        const compCost = compCustomHours * compCustomRate;
+        const compCadence = pricingDataEnhanced.cadenceTypes.get(compKey) || cadenceType;
+        const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || periods;
+        const compIsEditing = pricingDataEnhanced.editMode.get(compKey) || false;
+        const compHours = pricingData.customHours.get(compKey) || comp.hours || 0;
+        const compRate = pricingData.customRates.get(compKey) || comp.rate || customRate;
+        const compPricePerPeriod = compHours * compRate;
+        const compTotalPrice = compPricePerPeriod * compPeriods;
         const compResources = extractComponentResources(comp);
+        const compTasks = comp.tasks || [];
         
-        // Get retainer months for component (default to parent's months or 12)
-        const compRetainerMonths = pricingData.retainerMonths?.get?.(compKey) || retainerMonths || 12;
-        const compMonthlyPrice = compCustomHours * compCustomRate;
-        const compTotalPrice = compIsRetainer ? compMonthlyPrice * compRetainerMonths : compMonthlyPrice;
+        grandTotal += compTotalPrice;
         
-        html += `
-          <tr style="border-bottom: 1px solid rgba(255,255,255,0.05); display: none; background: rgba(255,255,255,0.01);" 
-              class="component-row-${item.deliverable_code}">
-            <td style="padding: 10px 8px 10px 48px; color: var(--text); font-size: 0.9em;">
-              <button onclick="toggleComponentExpand('${item.deliverable_code}', '${comp.name}')" 
-                      style="background: transparent; border: none; color: var(--muted); cursor: pointer; padding: 0 6px 0 0;">
-                <span id="expand-comp-${item.deliverable_code}-${comp.name.replace(/\s+/g, '_')}">▶</span>
-              </button>
+        const compRowBg = compCadence !== 'ONE_TIME' ? 
+          'background: linear-gradient(90deg, rgba(139,92,246,0.03), rgba(139,92,246,0.01));' :
+          'background: rgba(255,255,255,0.005);';
+        
+        tableHTML += `
+          <tr data-component="${compKey}" data-parent="${item.deliverable_code}" 
+              class="component-row-${item.deliverable_code}"
+              style="${compRowBg} display: none; border-bottom: 1px solid rgba(255,255,255,0.05);">
+            <td style="padding: 10px 12px 10px 48px; color: var(--text); font-size: 0.9em;">
               ↳ ${comp.name}
             </td>
             <td style="padding: 8px; text-align: center;">
-              <select onchange="updateDeliverableType('${compKey}', this.value)" 
-                      style="padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); font-size: 0.9em; cursor: pointer;">
-                <option value="PROJECT" ${!compIsRetainer ? 'selected' : ''}>PROJECT</option>
-                <option value="RETAINER" ${compIsRetainer ? 'selected' : ''}>RETAINER</option>
-              </select>
+              ${compIsEditing ?
+                `<select onchange="updateCadenceType('${compKey}', this.value)"
+                        style="padding: 4px 8px; border: 1px solid rgba(139,92,246,0.4); 
+                               border-radius: 4px; background: rgba(139,92,246,0.08); 
+                               color: var(--text); font-size: 0.8em; width: 100%;">
+                  <option value="ONE_TIME" ${compCadence === 'ONE_TIME' ? 'selected' : ''}>One-Time</option>
+                  <option value="MONTHLY" ${compCadence === 'MONTHLY' ? 'selected' : ''}>Monthly</option>
+                  <option value="QUARTERLY" ${compCadence === 'QUARTERLY' ? 'selected' : ''}>Quarterly</option>
+                  <option value="SEMI_ANNUAL" ${compCadence === 'SEMI_ANNUAL' ? 'selected' : ''}>Semi-Annual</option>
+                </select>` :
+                `<span style="font-size: 0.8em; padding: 2px 8px; border-radius: 12px;
+                       background: ${compCadence === 'ONE_TIME' ? 'rgba(106,163,255,0.08)' : 'rgba(139,92,246,0.08)'};">
+                  ${compCadence.replace('_', '-')}
+                </span>`}
             </td>
             <td style="padding: 8px; text-align: center;">
-              ${compIsRetainer ? 
-                `<input type="number" value="${compRetainerMonths}" 
-                        min="1" max="36" step="1"
-                        onchange="updateRetainerMonths('${compKey}', this.value)"
-                        style="width: 50px; padding: 4px; border: 1px solid var(--accent2); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />` : 
-                '<span style="color: var(--muted); font-size: 0.9em;">-</span>'}
+              ${compCadence !== 'ONE_TIME' ?
+                (compIsEditing ?
+                  `<input type="number" value="${compPeriods}" min="1" max="36"
+                          onchange="updatePeriods('${compKey}', this.value)"
+                          style="width: 60px; padding: 4px; border: 1px solid rgba(139,92,246,0.3); 
+                                 border-radius: 4px; font-size: 0.85em;" />` :
+                  `<span style="font-size: 0.85em;">${compPeriods}</span>`) :
+                '<span style="color: var(--muted); font-size: 0.85em;">-</span>'}
             </td>
             <td style="padding: 8px; text-align: center;">
-              <input type="number" value="${compCustomHours}" 
-                     min="0" step="0.5"
-                     onchange="updateCustomHours('${compKey}', this.value)"
-                     oninput="updatePricingCalculations()"
-                     style="width: 70px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
-              ${compIsRetainer ? '<small style="color: var(--accent2); display: block; font-size: 0.75em; margin-top: 2px;">/mo</small>' : ''}
+              ${compIsEditing ?
+                `<input type="number" value="${compHours}" min="0" step="0.5"
+                        onchange="updateCustomHours('${compKey}', this.value)"
+                        style="width: 70px; padding: 4px; border: 1px solid rgba(106,163,255,0.3); 
+                               border-radius: 4px; font-size: 0.85em;" />` :
+                `<span style="font-size: 0.85em;">${compHours}</span>`}
             </td>
             <td style="padding: 8px; text-align: center;">
-              <div style="display: flex; align-items: center; gap: 2px;">
-                <span style="color: var(--muted); font-size: 0.9em;">$</span>
-                <input type="number" value="${compCustomRate}" 
-                       min="0" step="5"
-                       onchange="updateCustomRate('${compKey}', this.value)"
-                       oninput="updatePricingCalculations()"
-                       style="width: 60px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text); text-align: center; font-size: 0.9em;" />
-              </div>
+              ${compIsEditing ?
+                `<div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
+                  <span style="color: var(--muted); font-size: 0.85em;">$</span>
+                  <input type="number" value="${compRate}" min="0" step="5"
+                         onchange="updateCustomRate('${compKey}', this.value)"
+                         style="width: 60px; padding: 4px; border: 1px solid rgba(106,163,255,0.3); 
+                                border-radius: 4px; font-size: 0.85em;" />
+                </div>` :
+                `<span style="font-size: 0.85em;">$${compRate}</span>`}
             </td>
-            <td style="padding: 8px; text-align: right; font-size: 0.9em;">
-              <div id="cost-${compKey.replace(/[::]/g, '_')}" style="color: ${compIsRetainer ? 'var(--accent2)' : 'var(--accent)'};">
-                ${compIsRetainer ? 
-                  `<div style="font-size: 0.85em; color: var(--muted);">$${compMonthlyPrice.toLocaleString()}/mo</div>
-                   <div>$${compTotalPrice.toLocaleString()} total</div>` : 
-                  `$${compTotalPrice.toLocaleString()}`}
-              </div>
+            <td style="padding: 8px; text-align: right; font-size: 0.9em; color: var(--accent);">
+              $${compPricePerPeriod.toLocaleString()}
+            </td>
+            <td style="padding: 8px; text-align: right; font-weight: 600; font-size: 0.95em;
+                       color: ${compCadence !== 'ONE_TIME' ? 'var(--accent2)' : 'var(--accent)'};">
+              $${compTotalPrice.toLocaleString()}
             </td>
             <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
               ${formatResourceDisplay(compResources)}
             </td>
+            <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
+              ${formatTasksList(compTasks)}
+            </td>
+            <td style="padding: 8px; text-align: center;">
+              ${compIsEditing ?
+                `<div style="display: flex; gap: 2px; justify-content: center;">
+                  <button onclick="saveRowEdit('${compKey}')"
+                          style="padding: 2px 8px; background: var(--accent2); border: none; 
+                                 border-radius: 3px; color: #08121e; font-size: 0.75em;">
+                    ✓
+                  </button>
+                  <button onclick="cancelRowEdit('${compKey}')"
+                          style="padding: 2px 8px; background: transparent; 
+                                 border: 1px solid var(--border); border-radius: 3px; 
+                                 color: var(--text); font-size: 0.75em;">
+                    ✗
+                  </button>
+                </div>` :
+                `<button onclick="enableRowEdit('${compKey}')"
+                        style="padding: 4px 12px; background: transparent; 
+                               border: 1px solid rgba(106,163,255,0.5); border-radius: 4px; 
+                               color: var(--accent); font-size: 0.8em;">
+                  Edit
+                </button>`}
+            </td>
           </tr>
         `;
-        
-        // Show L3 tasks if available (read-only)
-        if (comp.tasks && comp.tasks.length > 0) {
-          comp.tasks.forEach(task => {
-            const taskHours = task.hours || 0;
-            const taskCost = taskHours * compCustomRate;
-            
-            html += `
-              <tr style="border-bottom: 1px solid rgba(255,255,255,0.03); display: none;" 
-                  class="task-row-${item.deliverable_code} task-row-comp-${item.deliverable_code}-${comp.name.replace(/\s+/g, '_')}">
-                <td style="padding: 6px 8px 6px 72px; color: var(--muted); font-size: 0.8em;">
-                  ⤷ ${task.name}
-                </td>
-                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
-                  -
-                </td>
-                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
-                  -
-                </td>
-                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
-                  ${taskHours}h
-                </td>
-                <td style="padding: 6px; text-align: center; color: var(--muted); font-size: 0.8em;">
-                  -
-                </td>
-                <td style="padding: 6px; text-align: right; font-size: 0.8em; color: var(--muted);">
-                  $${taskCost.toLocaleString()}
-                </td>
-                <td style="padding: 6px; font-size: 0.7em; color: var(--muted);">
-                  ${task.role || 'Team'}
-                </td>
-              </tr>
-            `;
-          });
-        }
-      });
-    }
-    
-    // Calculate totals
-    if (isRetainer) {
-      retainerMonthlyTotal += cost;
-    } else {
-      oneTimeTotal += cost;
-    }
-    
-    // Also add component costs to totals
-    if (item.components && item.components.length > 0) {
-      item.components.forEach(comp => {
-        const compKey = `${item.deliverable_code}::${comp.name}`;
-        const compType = pricingData.deliverableTypes.get(compKey) || delivType;
-        const compIsRetainer = (compType === 'RETAINER');
-        const compHours = pricingData.customHours.get(compKey) || comp.hours || 0;
-        const compRate = pricingData.customRates.get(compKey) || comp.rate || customRate;
-        const compCost = compHours * compRate;
-        
-        if (compIsRetainer) {
-          retainerMonthlyTotal += compCost;
-        } else {
-          oneTimeTotal += compCost;
-        }
       });
     }
   });
   
-  tbody.innerHTML = html;
+  tableHTML += `
+        </tbody>
+      </table>
+      
+      <!-- Unified Grand Total Section -->
+      <div class="grand-total-section" style="margin-top: 24px; padding: 20px; 
+                background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(106,163,255,0.1)); 
+                border-radius: 12px; border: 2px solid rgba(139,92,246,0.3);">
+        <h4 style="margin: 0 0 12px 0; color: var(--accent); font-size: 1.2em;">
+          💰 Grand Total
+        </h4>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <div style="font-size: 0.9em; color: var(--muted); margin-bottom: 4px;">
+              Total Investment
+            </div>
+            <div style="font-size: 2.5em; font-weight: 700; 
+                        background: linear-gradient(135deg, var(--accent), var(--accent2)); 
+                        -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+              $${grandTotal.toLocaleString()}
+            </div>
+          </div>
+          <div style="text-align: right;">
+            <button onclick="optimizeAllPricing()" 
+                    style="padding: 10px 20px; background: var(--accent2); border: none; 
+                           border-radius: 8px; color: #08121e; font-weight: 600; 
+                           cursor: pointer; margin-bottom: 8px;">
+              🤖 AI Optimize Pricing
+            </button>
+            <div style="font-size: 0.85em; color: var(--muted);">
+              Optimize based on budget & scope
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
   
-  // Update summary automatically
+  // Replace the container content
+  if (container.id === 'pricing-tbody') {
+    // Replace entire table structure
+    container.parentElement.parentElement.outerHTML = tableHTML;
+  } else {
+    container.innerHTML = tableHTML;
+  }
+  
+  // Update any other summary sections that might exist
   updatePricingSummary();
 }
 
@@ -1991,6 +2127,121 @@ function showScenarioComparison(original, rebuilt) {
   document.body.appendChild(modal);
 }
 
+// Helper function to extract deliverable tasks
+function extractDeliverableTasks(item) {
+  const tasks = [];
+  
+  // Extract from components
+  if (item.components && Array.isArray(item.components)) {
+    item.components.forEach(comp => {
+      if (comp.tasks && Array.isArray(comp.tasks)) {
+        comp.tasks.forEach(task => {
+          if (task.name && !tasks.includes(task.name)) {
+            tasks.push(task.name);
+          }
+        });
+      }
+    });
+  }
+  
+  // Extract from included_task_groups
+  if (item.included_task_groups && Array.isArray(item.included_task_groups)) {
+    item.included_task_groups.forEach(tg => {
+      if (!tasks.includes(tg)) {
+        tasks.push(tg);
+      }
+    });
+  }
+  
+  return tasks.slice(0, 5); // Limit to 5 for display
+}
+
+// Helper function to format tasks list
+function formatTasksList(tasks) {
+  if (!tasks || tasks.length === 0) {
+    return '<span style="color: var(--muted); font-style: italic;">No tasks</span>';
+  }
+  
+  return tasks.map(task => 
+    `<div style="padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+      • ${task}
+    </div>`
+  ).join('');
+}
+
+// Functions for inline editing
+function enableRowEdit(code) {
+  pricingDataEnhanced.editMode.set(code, true);
+  updatePricingTable();
+}
+
+function cancelRowEdit(code) {
+  pricingDataEnhanced.editMode.set(code, false);
+  updatePricingTable();
+}
+
+function saveRowEdit(code) {
+  // Get the edited values
+  const hoursInput = document.getElementById(`hours-${code}`);
+  const rateInput = document.getElementById(`rate-${code}`);
+  const cadenceSelect = document.getElementById(`cadence-${code}`);
+  const periodsInput = document.getElementById(`periods-${code}`);
+  
+  if (hoursInput) {
+    const hours = parseFloat(hoursInput.value) || 0;
+    pricingData.customHours.set(code, hours);
+  }
+  
+  if (rateInput) {
+    const rate = parseFloat(rateInput.value) || 195;
+    pricingData.customRates.set(code, rate);
+  }
+  
+  if (cadenceSelect) {
+    const cadence = cadenceSelect.value;
+    pricingDataEnhanced.cadenceTypes.set(code, cadence);
+  }
+  
+  if (periodsInput) {
+    const periods = parseInt(periodsInput.value) || 1;
+    pricingDataEnhanced.periodsCount.set(code, periods);
+  }
+  
+  // Exit edit mode
+  pricingDataEnhanced.editMode.set(code, false);
+  
+  // Update the table
+  updatePricingTable();
+}
+
+function updateCadenceType(code, cadence) {
+  pricingDataEnhanced.cadenceTypes.set(code, cadence);
+  
+  // Set default periods based on cadence
+  if (cadence === 'MONTHLY') {
+    pricingDataEnhanced.periodsCount.set(code, 12);
+  } else if (cadence === 'QUARTERLY') {
+    pricingDataEnhanced.periodsCount.set(code, 4);
+  } else if (cadence === 'SEMI_ANNUAL') {
+    pricingDataEnhanced.periodsCount.set(code, 2);
+  } else {
+    pricingDataEnhanced.periodsCount.set(code, 1);
+  }
+  
+  // If in edit mode, update the display
+  if (pricingDataEnhanced.editMode.get(code)) {
+    const periodsInput = document.getElementById(`periods-${code}`);
+    if (periodsInput) {
+      periodsInput.value = pricingDataEnhanced.periodsCount.get(code);
+    }
+  }
+}
+
+function updatePeriods(code, periods) {
+  const periodsNum = parseInt(periods) || 1;
+  pricingDataEnhanced.periodsCount.set(code, Math.max(1, Math.min(36, periodsNum)));
+}
+
 // Export pricing details
 async function exportPricingDetails() {
   // Implementation for exporting pricing details to Excel/CSV
@@ -2313,6 +2564,13 @@ window.updateCustomHours = updateCustomHours;
 window.updateCustomRate = updateCustomRate;
 window.analyzeProjectRetainer = analyzeProjectRetainer;
 window.rebuildScenario = rebuildScenario;
+window.enableRowEdit = enableRowEdit;
+window.cancelRowEdit = cancelRowEdit;
+window.saveRowEdit = saveRowEdit;
+window.updateCadenceType = updateCadenceType;
+window.updatePeriods = updatePeriods;
+window.extractDeliverableTasks = extractDeliverableTasks;
+window.formatTasksList = formatTasksList;
 
 async function generateAITimeline() {
   const btn = document.getElementById('btn-generate-timeline');
