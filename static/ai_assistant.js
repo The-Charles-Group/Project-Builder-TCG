@@ -733,6 +733,186 @@ class AIAssistant {
         }, duration);
     }
     
+    showClickAnimation(element) {
+        if (!element) return;
+        
+        // Create ripple effect at element center
+        const rect = element.getBoundingClientRect();
+        const ripple = document.createElement('div');
+        ripple.className = 'charles-click-ripple';
+        ripple.style.cssText = `
+            position: fixed;
+            left: ${rect.left + rect.width/2}px;
+            top: ${rect.top + rect.height/2}px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(102, 126, 234, 0.8) 0%, transparent 70%);
+            transform: translate(-50%, -50%) scale(0);
+            animation: charles-ripple 0.6s ease-out;
+            pointer-events: none;
+            z-index: 999999;
+        `;
+        
+        document.body.appendChild(ripple);
+        
+        // Add animation keyframes if not already present
+        if (!document.querySelector('#charles-ripple-style')) {
+            const style = document.createElement('style');
+            style.id = 'charles-ripple-style';
+            style.textContent = `
+                @keyframes charles-ripple {
+                    to {
+                        transform: translate(-50%, -50%) scale(4);
+                        opacity: 0;
+                    }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Clean up after animation
+        setTimeout(() => ripple.remove(), 600);
+        
+        // Also flash the element
+        this.flashElement(element, 300);
+    }
+    
+    async monitorMainAppProgress(taskMonitor) {
+        const parentWindow = window.parent || window;
+        const parentDoc = parentWindow.document;
+        
+        let checkCount = 0;
+        const maxChecks = 300; // 2.5 minutes
+        
+        return new Promise((resolve) => {
+            const progressChecker = setInterval(async () => {
+                checkCount++;
+                
+                // Look for progress bar
+                const progressBar = parentDoc.querySelector('#ai-progress-bar, .progress-bar');
+                const progressContainer = parentDoc.querySelector('#ai-progress-container, .progress-container');
+                const step2 = parentDoc.querySelector('#step2');
+                const deliverablesList = parentDoc.querySelectorAll('#s2-deliv-list .deliverable-item, [data-deliverable-code]');
+                
+                // Check if progress is showing
+                if ((progressBar && progressBar.style.width !== '0%') || 
+                    (progressContainer && progressContainer.style.display !== 'none')) {
+                    
+                    if (taskMonitor && checkCount === 1) {
+                        this.addMessage('📊 Progress bar detected - analysis running...', 'assistant');
+                    }
+                }
+                
+                // Check if analysis complete (Step 2 visible with deliverables)
+                if (step2 && step2.style.display !== 'none' && deliverablesList.length > 0) {
+                    clearInterval(progressChecker);
+                    
+                    if (taskMonitor) {
+                        taskMonitor.updateTask(2, 'completed');
+                        taskMonitor.updateTask(3, 'in_progress');
+                    }
+                    
+                    this.addMessage(`✅ Analysis complete! Found ${deliverablesList.length} deliverables.`, 'assistant');
+                    
+                    // Auto-navigate through workflow
+                    await this.delay(1000);
+                    
+                    if (taskMonitor) {
+                        taskMonitor.updateTask(3, 'completed');
+                        taskMonitor.updateTask(4, 'in_progress');
+                    }
+                    
+                    // Select deliverables
+                    await this.selectDeliverablesInMainApp(20);
+                    
+                    // Calculate pricing
+                    await this.calculatePricingInMainApp();
+                    
+                    if (taskMonitor) {
+                        taskMonitor.updateTask(4, 'completed');
+                        taskMonitor.close();
+                    }
+                    
+                    this.addMessage('📊 I\'ve selected deliverables and calculated pricing. What would you like to adjust?', 'assistant');
+                    resolve(true);
+                }
+                
+                // Timeout check
+                if (checkCount >= maxChecks) {
+                    clearInterval(progressChecker);
+                    
+                    if (taskMonitor) {
+                        taskMonitor.updateTask(2, 'completed');
+                    }
+                    
+                    this.addMessage('⏱️ Analysis timed out. Checking for results...', 'assistant');
+                    await this.attemptResultRecovery();
+                    resolve(false);
+                }
+            }, 500);
+        });
+    }
+    
+    async selectDeliverablesInMainApp(count = 20) {
+        const parentWindow = window.parent || window;
+        const parentDoc = parentWindow.document;
+        
+        this.addMessage(`🎯 Selecting top ${count} deliverables...`, 'assistant');
+        
+        // Find deliverable checkboxes in main app
+        const checkboxes = parentDoc.querySelectorAll('#s2-deliv-list input[type="checkbox"], [data-deliverable-code] input[type="checkbox"]');
+        
+        let selected = 0;
+        for (const checkbox of checkboxes) {
+            if (selected >= count) break;
+            if (!checkbox.checked) {
+                // Visual effect before clicking
+                const parent = checkbox.closest('.deliverable-item, [data-deliverable-code]');
+                if (parent) this.flashElement(parent);
+                
+                checkbox.checked = true;
+                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                selected++;
+                await this.delay(50); // Small delay for visual effect
+            }
+        }
+        
+        this.addMessage(`✅ Selected ${selected} deliverables`, 'assistant');
+        return selected;
+    }
+    
+    async calculatePricingInMainApp() {
+        const parentWindow = window.parent || window;
+        const parentDoc = parentWindow.document;
+        
+        this.addMessage('💰 Moving to pricing calculation...', 'assistant');
+        
+        // Find and click Step 3 tab
+        const step3Tab = parentDoc.querySelector('[onclick*="showStep(3)"], [data-step="3"], #tab-step3');
+        if (step3Tab) {
+            this.showClickAnimation(step3Tab);
+            step3Tab.click();
+            await this.delay(1000);
+        }
+        
+        // Look for calculate button
+        const calculateBtn = parentDoc.querySelector('#calculate-btn, button[onclick*="calculate"]');
+        if (calculateBtn) {
+            this.showClickAnimation(calculateBtn);
+            calculateBtn.click();
+            await this.delay(1500);
+            
+            // Check for results
+            const totalCost = parentDoc.querySelector('#scenario-a-total, .scenario-total, .total-cost');
+            if (totalCost) {
+                this.addMessage(`✅ Total cost calculated: ${totalCost.textContent}`, 'assistant');
+            }
+        }
+        
+        return true;
+    }
+    
     showSuccessMessage(message, duration = 3000) {
         this.showFlashMessage(message, 'success', duration);
     }
@@ -1554,6 +1734,7 @@ class AIAssistant {
         container.id = 'ai-assistant-container';
         container.className = 'ai-assistant-container';
         container.innerHTML = `
+            <div class="ai-assistant-resize-handle" title="Drag to resize"></div>
             <div class="ai-assistant-sidebar ${this.isMinimized ? 'minimized' : ''}">
                 <div class="ai-assistant-header">
                     <div class="ai-assistant-title">
@@ -2754,6 +2935,9 @@ class AIAssistant {
         const minimizeBtn = document.getElementById('ai-btn-minimize');
         minimizeBtn?.addEventListener('click', () => this.minimize());
         
+        // Initialize resize handle
+        this.initializeResize();
+        
         // Send button
         const sendBtn = document.getElementById('ai-send-btn');
         sendBtn?.addEventListener('click', () => this.sendMessage());
@@ -2892,20 +3076,108 @@ class AIAssistant {
             // Create task monitor
             const taskMonitor = this.createTaskMonitor();
             taskMonitor.addTask('Upload document', 'in_progress');
-            taskMonitor.addTask('Extract text content', 'pending');
-            taskMonitor.addTask('Start AI analysis', 'pending');
-            taskMonitor.addTask('Track analysis progress', 'pending');
+            taskMonitor.addTask('Click Analyze with AI button', 'pending');
+            taskMonitor.addTask('Wait for AI analysis', 'pending');
             taskMonitor.addTask('Load deliverables', 'pending');
+            taskMonitor.addTask('Select and calculate pricing', 'pending');
             
-            this.addMessage(`📄 Uploading "${file.name}" to main application...`, 'assistant');
-            
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('mode', this.agentState.analysisMode || 'deep');
-            formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
+            this.addMessage(`📄 Setting "${file.name}" in main application...`, 'assistant');
             
             try {
-                // Upload to the CORRECT endpoint
+                // Access parent window (main app)
+                const parentWindow = window.parent || window;
+                const parentDoc = parentWindow.document;
+                
+                // Find the main app's file input and analyze button
+                const mainFileInput = parentDoc.querySelector('#rfpFile');
+                const analyzeBtn = parentDoc.querySelector('#btnAnalyze');
+                
+                if (!mainFileInput || !analyzeBtn) {
+                    // Fallback to API if UI elements not found
+                    this.addMessage('⚠️ Could not find UI elements, using direct upload...', 'assistant');
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('mode', this.agentState.analysisMode || 'deep');
+                    formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
+                    
+                    const response = await this.retryWithBackoff(
+                        () => fetch('/api/upload_rfp', {
+                            method: 'POST',
+                            body: formData
+                        }),
+                        3,
+                        2000
+                    );
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        taskMonitor.updateTask(0, 'completed');
+                        
+                        if (result.job_id) {
+                            this.agentState.jobId = result.job_id;
+                            this.saveState();
+                            this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
+                            await this.trackAnalysisJob(result.job_id, taskMonitor);
+                        }
+                    }
+                    return;
+                }
+                
+                // Visual upload process - set file in main app's input
+                this.addMessage('🎯 Setting file in main app file input...', 'assistant');
+                
+                // Create a DataTransfer object to programmatically set files
+                const dt = new DataTransfer();
+                dt.items.add(file);
+                mainFileInput.files = dt.files;
+                
+                // Trigger change event to update UI
+                mainFileInput.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                // Visual feedback - highlight the file input
+                this.flashElement(mainFileInput);
+                
+                // Update the file list display if it exists
+                const fileListDisplay = parentDoc.querySelector('#selected-files-list');
+                if (fileListDisplay) {
+                    fileListDisplay.textContent = `Selected: ${file.name}`;
+                    this.flashElement(fileListDisplay);
+                }
+                
+                taskMonitor.updateTask(0, 'completed');
+                this.addMessage('✅ File loaded into main app', 'assistant');
+                
+                // Wait a moment for UI to update
+                await this.delay(800);
+                
+                // Click the analyze button with visual effect
+                taskMonitor.updateTask(1, 'in_progress');
+                this.addMessage('🖱️ Clicking "Analyze with AI" button...', 'assistant');
+                
+                // Add visual click effect
+                this.showClickAnimation(analyzeBtn);
+                await this.delay(300);
+                
+                // Actually click the button
+                analyzeBtn.click();
+                taskMonitor.updateTask(1, 'completed');
+                
+                this.addMessage('✅ Analysis started! Watch the progress bar...', 'assistant');
+                
+                // Monitor for the progress bar
+                taskMonitor.updateTask(2, 'in_progress');
+                await this.monitorMainAppProgress(taskMonitor);
+                
+            } catch (error) {
+                console.error('[CHARLES] Error in visual upload:', error);
+                this.handleError(error, 'visual_upload');
+                
+                // Fallback to old method
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('mode', this.agentState.analysisMode || 'deep');
+                formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
+                
                 const response = await this.retryWithBackoff(
                     () => fetch('/api/upload_rfp', {
                         method: 'POST',
@@ -3051,6 +3323,96 @@ class AIAssistant {
         const sidebar = document.querySelector('.ai-assistant-sidebar');
         if (sidebar) {
             sidebar.classList.toggle('minimized', this.isMinimized);
+        }
+    }
+    
+    initializeResize() {
+        const container = document.getElementById('ai-assistant-container');
+        const resizeHandle = document.querySelector('.ai-assistant-resize-handle');
+        
+        if (!resizeHandle || !container) return;
+        
+        // Style the resize handle
+        resizeHandle.style.cssText = `
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 5px;
+            cursor: ew-resize;
+            background: transparent;
+            z-index: 10;
+        `;
+        
+        // Add hover effect
+        resizeHandle.addEventListener('mouseenter', () => {
+            resizeHandle.style.background = 'linear-gradient(90deg, #667eea, #764ba2)';
+        });
+        
+        resizeHandle.addEventListener('mouseleave', () => {
+            if (!this.isResizing) {
+                resizeHandle.style.background = 'transparent';
+            }
+        });
+        
+        let startX = 0;
+        let startWidth = 0;
+        this.isResizing = false;
+        
+        const startResize = (e) => {
+            e.preventDefault();
+            this.isResizing = true;
+            startX = e.clientX;
+            startWidth = container.offsetWidth;
+            
+            // Add resizing class for visual feedback
+            container.classList.add('resizing');
+            resizeHandle.style.background = 'linear-gradient(90deg, #667eea, #764ba2)';
+            
+            // Prevent text selection during resize
+            document.body.style.userSelect = 'none';
+            document.body.style.cursor = 'ew-resize';
+            
+            document.addEventListener('mousemove', doResize);
+            document.addEventListener('mouseup', stopResize);
+        };
+        
+        const doResize = (e) => {
+            if (!this.isResizing) return;
+            
+            // Calculate new width (resize from left edge)
+            const diff = startX - e.clientX;
+            let newWidth = startWidth + diff;
+            
+            // Apply min/max constraints
+            newWidth = Math.max(350, Math.min(600, newWidth));
+            
+            // Apply new width
+            container.style.width = `${newWidth}px`;
+            
+            // Save the width preference
+            localStorage.setItem('charles_width', newWidth);
+        };
+        
+        const stopResize = () => {
+            this.isResizing = false;
+            container.classList.remove('resizing');
+            resizeHandle.style.background = 'transparent';
+            
+            // Reset cursor
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+            
+            document.removeEventListener('mousemove', doResize);
+            document.removeEventListener('mouseup', stopResize);
+        };
+        
+        resizeHandle.addEventListener('mousedown', startResize);
+        
+        // Restore saved width
+        const savedWidth = localStorage.getItem('charles_width');
+        if (savedWidth) {
+            container.style.width = `${savedWidth}px`;
         }
     }
     
