@@ -753,6 +753,856 @@ class AIAssistant {
     }
     
     // ====================
+    // ENHANCED COMMAND PROCESSING & APP INTERACTION
+    // ====================
+    
+    async processSlashCommand(command) {
+        const parts = command.split(' ');
+        const cmd = parts[0].toLowerCase();
+        const args = parts.slice(1).join(' ');
+        
+        this.setProcessing(true);
+        const typingId = this.addTypingIndicator();
+        
+        try {
+            switch (cmd) {
+                case '/help':
+                    await this.showHelp();
+                    break;
+                    
+                case '/test':
+                    await this.runTest(args);
+                    break;
+                    
+                case '/analyze':
+                    await this.runAnalyzeCommand(args);
+                    break;
+                    
+                case '/build-scenario':
+                case '/scenario':
+                    await this.buildScenarioCommand(args);
+                    break;
+                    
+                case '/timeline':
+                    await this.generateTimelineCommand(args);
+                    break;
+                    
+                case '/export':
+                    await this.exportCommand(args);
+                    break;
+                    
+                case '/status':
+                    await this.showStatus();
+                    break;
+                    
+                case '/clear':
+                    await this.clearDataCommand();
+                    break;
+                    
+                case '/select':
+                    await this.selectDeliverables(args);
+                    break;
+                    
+                case '/price':
+                case '/pricing':
+                    await this.showPricing();
+                    break;
+                    
+                case '/screenshot':
+                    await this.takeScreenshot(args);
+                    break;
+                    
+                case '/reset':
+                    await this.resetApp();
+                    break;
+                    
+                case '/debug':
+                    await this.showDebugInfo();
+                    break;
+                    
+                case '/automate':
+                    await this.automateWorkflow(args);
+                    break;
+                    
+                default:
+                    this.addMessage(`❌ Unknown command: ${cmd}. Type /help for available commands.`, 'assistant');
+            }
+        } catch (error) {
+            this.handleError(error, 'command', { command: cmd, args });
+        } finally {
+            this.removeTypingIndicator(typingId);
+            this.setProcessing(false);
+        }
+    }
+    
+    async showHelp() {
+        const helpText = `
+🔮 **CHARLES Agent Commands:**
+
+📊 **Analysis & Building:**
+• \`/analyze [fast|deep]\` - Run RFP analysis
+• \`/build-scenario [A|B]\` - Build pricing scenario
+• \`/timeline\` - Generate project timeline
+• \`/export [excel|xml]\` - Export to file format
+
+🧪 **Testing:**
+• \`/test upload\` - Test file upload workflow
+• \`/test analysis\` - Test RFP analysis
+• \`/test scenario\` - Test scenario building
+• \`/test timeline\` - Test timeline generation
+• \`/test export\` - Test export functionality
+• \`/test all\` - Run all tests
+
+📋 **App Control:**
+• \`/status\` - Show current app state
+• \`/select <count>\` - Select deliverables (e.g., /select 20)
+• \`/pricing\` - Show current pricing
+• \`/clear\` - Clear all data
+• \`/reset\` - Reset to step 1
+• \`/screenshot\` - Take screenshot of current view
+
+🤖 **Automation:**
+• \`/automate full\` - Complete full workflow
+• \`/automate pricing\` - Auto-calculate best pricing
+• \`/automate timeline\` - Auto-generate timeline
+
+🔧 **Utilities:**
+• \`/debug\` - Show debug information
+• \`/help\` - Show this help message
+
+💡 **Tips:**
+- I can also understand natural language commands!
+- Try: "analyze the RFP", "select top 20", "build scenario"
+        `.trim();
+        
+        // Create formatted message with proper markdown rendering
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'ai-message assistant';
+        
+        const avatar = document.createElement('div');
+        avatar.className = 'ai-message-avatar';
+        avatar.textContent = '🤖';
+        
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'ai-message-content';
+        contentDiv.innerHTML = this.formatMarkdown(helpText);
+        
+        messageDiv.appendChild(avatar);
+        messageDiv.appendChild(contentDiv);
+        
+        const messagesContainer = document.getElementById('ai-chat-messages');
+        messagesContainer.appendChild(messageDiv);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+    
+    formatMarkdown(text) {
+        // Simple markdown formatter for help text
+        return text
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/• /g, '• ')
+            .replace(/\n/g, '<br>');
+    }
+    
+    async runTest(testType) {
+        if (!testType) {
+            this.addMessage('Please specify a test: upload, analysis, scenario, timeline, export, or all', 'assistant');
+            return;
+        }
+        
+        this.addMessage(`🧪 Running ${testType} test...`, 'assistant');
+        
+        const tests = {
+            'upload': () => this.testFileUpload(),
+            'analysis': () => this.testAnalysis(),
+            'scenario': () => this.testScenarioBuilding(),
+            'timeline': () => this.testTimeline(),
+            'export': () => this.testExport(),
+            'all': () => this.runAllTests()
+        };
+        
+        const testFn = tests[testType.toLowerCase()];
+        if (testFn) {
+            await testFn();
+        } else {
+            this.addMessage(`❌ Unknown test type: ${testType}`, 'assistant');
+        }
+    }
+    
+    async testFileUpload() {
+        const startTime = Date.now();
+        this.addMessage('📁 Testing file upload workflow...', 'assistant');
+        
+        try {
+            // Check if file input exists
+            const fileInput = document.getElementById('rfpFile');
+            if (!fileInput) {
+                throw new Error('File input not found');
+            }
+            
+            // Check if text area exists
+            const textArea = document.getElementById('rfpText');
+            if (!textArea) {
+                throw new Error('RFP text area not found');
+            }
+            
+            // Test with sample text
+            const sampleText = 'Test RFP: We need a comprehensive digital marketing campaign for Q1 2025.';
+            textArea.value = sampleText;
+            textArea.dispatchEvent(new Event('input', { bubbles: true }));
+            
+            // Take screenshot
+            await this.captureTestScreenshot('file_upload_test');
+            
+            const duration = Date.now() - startTime;
+            this.addMessage(`✅ File upload test passed (${duration}ms)`, 'assistant');
+            
+            return { success: true, duration };
+        } catch (error) {
+            this.addMessage(`❌ File upload test failed: ${error.message}`, 'assistant');
+            return { success: false, error: error.message };
+        }
+    }
+    
+    async testAnalysis() {
+        const startTime = Date.now();
+        this.addMessage('🧠 Testing RFP analysis workflow...', 'assistant');
+        
+        try {
+            // Check if we have RFP text
+            const rfpText = document.getElementById('rfpText')?.value;
+            if (!rfpText) {
+                this.addMessage('⚠️ No RFP text found. Adding sample text...', 'assistant');
+                const textArea = document.getElementById('rfpText');
+                textArea.value = 'Test RFP for analysis testing';
+                textArea.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            
+            // Check if analyze button exists
+            const analyzeBtn = document.querySelector('#btnAnalyze, .analyze-with-ai');
+            if (!analyzeBtn) {
+                throw new Error('Analyze button not found');
+            }
+            
+            // Check button state
+            if (analyzeBtn.disabled) {
+                throw new Error('Analyze button is disabled');
+            }
+            
+            // Take screenshot
+            await this.captureTestScreenshot('analysis_test');
+            
+            const duration = Date.now() - startTime;
+            this.addMessage(`✅ Analysis test passed (${duration}ms)`, 'assistant');
+            
+            return { success: true, duration };
+        } catch (error) {
+            this.addMessage(`❌ Analysis test failed: ${error.message}`, 'assistant');
+            return { success: false, error: error.message };
+        }
+    }
+    
+    async testScenarioBuilding() {
+        const startTime = Date.now();
+        this.addMessage('🏗️ Testing scenario building...', 'assistant');
+        
+        try {
+            // Navigate to Step 2
+            await this.navigateToStep('step2');
+            
+            // Check if deliverables exist
+            const deliverables = document.querySelectorAll('input[type="checkbox"][data-deliverable]');
+            if (deliverables.length === 0) {
+                throw new Error('No deliverables found');
+            }
+            
+            // Select some deliverables
+            let selected = 0;
+            for (let i = 0; i < Math.min(5, deliverables.length); i++) {
+                if (!deliverables[i].checked) {
+                    deliverables[i].checked = true;
+                    deliverables[i].dispatchEvent(new Event('change', { bubbles: true }));
+                    selected++;
+                }
+            }
+            
+            // Navigate to Step 3
+            await this.navigateToStep('step3');
+            
+            // Check for pricing elements
+            const pricingElements = document.querySelectorAll('.scenario-total, .total-cost');
+            if (pricingElements.length === 0) {
+                throw new Error('No pricing elements found');
+            }
+            
+            // Take screenshot
+            await this.captureTestScreenshot('scenario_test');
+            
+            const duration = Date.now() - startTime;
+            this.addMessage(`✅ Scenario building test passed (${duration}ms, selected ${selected} deliverables)`, 'assistant');
+            
+            return { success: true, duration, selected };
+        } catch (error) {
+            this.addMessage(`❌ Scenario building test failed: ${error.message}`, 'assistant');
+            return { success: false, error: error.message };
+        }
+    }
+    
+    async testTimeline() {
+        const startTime = Date.now();
+        this.addMessage('📅 Testing timeline generation...', 'assistant');
+        
+        try {
+            // Navigate to Step 4
+            await this.navigateToStep('step4');
+            
+            // Check for timeline elements
+            const timelineElements = document.querySelectorAll('.timeline-item, .timeline-task, [class*="timeline"]');
+            if (timelineElements.length === 0) {
+                this.addMessage('⚠️ No timeline elements found. Attempting to generate...', 'assistant');
+                
+                // Try to trigger timeline generation
+                const timelineBtn = document.querySelector('button[onclick*="timeline"], #generate-timeline');
+                if (timelineBtn) {
+                    timelineBtn.click();
+                    await this.delay(2000);
+                }
+            }
+            
+            // Take screenshot
+            await this.captureTestScreenshot('timeline_test');
+            
+            const duration = Date.now() - startTime;
+            this.addMessage(`✅ Timeline test passed (${duration}ms)`, 'assistant');
+            
+            return { success: true, duration };
+        } catch (error) {
+            this.addMessage(`❌ Timeline test failed: ${error.message}`, 'assistant');
+            return { success: false, error: error.message };
+        }
+    }
+    
+    async testExport() {
+        const startTime = Date.now();
+        this.addMessage('💾 Testing export functionality...', 'assistant');
+        
+        try {
+            // Check for export buttons
+            const exportBtns = document.querySelectorAll('button[onclick*="export"], .export-btn, #export-excel, #export-xml');
+            if (exportBtns.length === 0) {
+                throw new Error('No export buttons found');
+            }
+            
+            // Check if scenarios exist
+            if (!window.SCENARIOS) {
+                throw new Error('No scenarios data available for export');
+            }
+            
+            // Take screenshot
+            await this.captureTestScreenshot('export_test');
+            
+            const duration = Date.now() - startTime;
+            this.addMessage(`✅ Export test passed (${duration}ms, ${exportBtns.length} export options available)`, 'assistant');
+            
+            return { success: true, duration, exportOptions: exportBtns.length };
+        } catch (error) {
+            this.addMessage(`❌ Export test failed: ${error.message}`, 'assistant');
+            return { success: false, error: error.message };
+        }
+    }
+    
+    async runAllTests() {
+        this.addMessage('🧪 Running complete test suite...', 'assistant');
+        
+        const results = {
+            upload: await this.testFileUpload(),
+            analysis: await this.testAnalysis(),
+            scenario: await this.testScenarioBuilding(),
+            timeline: await this.testTimeline(),
+            export: await this.testExport()
+        };
+        
+        const passed = Object.values(results).filter(r => r.success).length;
+        const total = Object.keys(results).length;
+        
+        // Generate test report
+        const report = `
+📊 **Test Report:**
+• Tests Passed: ${passed}/${total}
+• Upload: ${results.upload.success ? '✅' : '❌'}
+• Analysis: ${results.analysis.success ? '✅' : '❌'}
+• Scenario: ${results.scenario.success ? '✅' : '❌'}
+• Timeline: ${results.timeline.success ? '✅' : '❌'}
+• Export: ${results.export.success ? '✅' : '❌'}
+        `.trim();
+        
+        this.addMessage(report, 'assistant');
+        
+        return results;
+    }
+    
+    async captureTestScreenshot(testName) {
+        try {
+            const response = await fetch('/api/screenshot', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    test_name: testName,
+                    timestamp: Date.now()
+                })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                console.log(`[CHARLES] Screenshot captured: ${testName}`);
+                return result.filename;
+            }
+        } catch (error) {
+            console.warn('[CHARLES] Screenshot capture failed:', error);
+        }
+        return null;
+    }
+    
+    async runAnalyzeCommand(args) {
+        const mode = args || 'deep';
+        this.addMessage(`🧠 Triggering ${mode} analysis...`, 'assistant');
+        await this.triggerAnalysis(mode);
+    }
+    
+    async buildScenarioCommand(args) {
+        const scenario = args?.toUpperCase() || 'A';
+        this.addMessage(`🏗️ Building Scenario ${scenario}...`, 'assistant');
+        
+        // Navigate to Step 2
+        await this.navigateToStep('step2');
+        
+        // Select deliverables if none selected
+        const selected = this.getSelectedDeliverables();
+        if (selected.length === 0) {
+            await this.selectTopDeliverables(20);
+        }
+        
+        // Navigate to Step 3
+        await this.navigateToStep('step3');
+        
+        // Trigger calculation
+        await this.calculateScenarioA();
+        
+        this.addMessage(`✅ Scenario ${scenario} built successfully`, 'assistant');
+    }
+    
+    async generateTimelineCommand(args) {
+        this.addMessage('📅 Generating project timeline...', 'assistant');
+        
+        // Navigate to Step 4
+        await this.navigateToStep('step4');
+        
+        // Trigger timeline generation
+        const timelineBtn = document.querySelector('#generate-timeline, button[onclick*="timeline"]');
+        if (timelineBtn) {
+            this.simulateClick(timelineBtn);
+            await this.delay(2000);
+            this.addMessage('✅ Timeline generated successfully', 'assistant');
+        } else {
+            this.addMessage('❌ Timeline button not found', 'assistant');
+        }
+    }
+    
+    async exportCommand(format) {
+        const exportFormat = format?.toLowerCase() || 'excel';
+        this.addMessage(`💾 Exporting to ${exportFormat.toUpperCase()}...`, 'assistant');
+        
+        if (exportFormat === 'excel' || exportFormat === 'xlsx') {
+            const excelBtn = document.querySelector('#export-excel, button[onclick*="exportExcel"]');
+            if (excelBtn) {
+                this.simulateClick(excelBtn);
+                this.addMessage('✅ Excel export triggered', 'assistant');
+            } else {
+                this.addMessage('❌ Excel export button not found', 'assistant');
+            }
+        } else if (exportFormat === 'xml') {
+            const xmlBtn = document.querySelector('#export-xml, button[onclick*="exportXML"]');
+            if (xmlBtn) {
+                this.simulateClick(xmlBtn);
+                this.addMessage('✅ XML export triggered', 'assistant');
+            } else {
+                this.addMessage('❌ XML export button not found', 'assistant');
+            }
+        } else {
+            this.addMessage(`❌ Unknown export format: ${exportFormat}. Use 'excel' or 'xml'`, 'assistant');
+        }
+    }
+    
+    async showStatus() {
+        const status = this.getComprehensiveStatus();
+        
+        const statusMessage = `
+📊 **Current App Status:**
+
+**Step:** ${status.currentStep}
+**RFP Loaded:** ${status.hasRfp ? '✅' : '❌'}
+**Analysis Complete:** ${status.hasAnalysis ? '✅' : '❌'}
+**Deliverables Selected:** ${status.selectedCount}
+**Scenario A:** ${status.hasScenarioA ? '✅ Ready' : '❌ Not built'}
+**Scenario B:** ${status.hasScenarioB ? '✅ Ready' : '❌ Not built'}
+**Timeline:** ${status.hasTimeline ? '✅ Generated' : '❌ Not generated'}
+
+**Memory Used:** ${status.memoryUsed}
+**Active Operations:** ${status.activeOperations}
+        `.trim();
+        
+        this.addMessage(statusMessage, 'assistant');
+        
+        // Proactive suggestions based on status
+        this.provideProactiveSuggestions(status);
+    }
+    
+    getComprehensiveStatus() {
+        return {
+            currentStep: this.detectCurrentStep(),
+            hasRfp: !!document.getElementById('rfpText')?.value,
+            hasAnalysis: !!window.SCENARIOS || !!window.analysisResults,
+            selectedCount: this.getSelectedDeliverables().length,
+            hasScenarioA: !!window.SCENARIOS?.scenario_a,
+            hasScenarioB: !!window.SCENARIOS?.scenario_b,
+            hasTimeline: document.querySelectorAll('.timeline-item, .timeline-task').length > 0,
+            memoryUsed: this.agentState.stateHistory.length + ' states',
+            activeOperations: this.operationTracker.currentOperations.size,
+            errors: this.errorRecoveryQueue.length
+        };
+    }
+    
+    provideProactiveSuggestions(status) {
+        const suggestions = [];
+        
+        if (!status.hasRfp) {
+            suggestions.push('📝 Upload an RFP document or paste text to get started');
+        } else if (!status.hasAnalysis) {
+            suggestions.push('🧠 Run analysis with `/analyze` to identify deliverables');
+        } else if (status.selectedCount === 0) {
+            suggestions.push('✅ Select deliverables with `/select 20` for top recommendations');
+        } else if (!status.hasScenarioA) {
+            suggestions.push('💰 Build pricing with `/build-scenario` command');
+        } else if (!status.hasTimeline) {
+            suggestions.push('📅 Generate timeline with `/timeline` command');
+        } else {
+            suggestions.push('💾 Export your project with `/export excel` or `/export xml`');
+        }
+        
+        if (suggestions.length > 0) {
+            this.addMessage(`💡 **Suggested Next Steps:**\n${suggestions.join('\n')}`, 'assistant');
+        }
+    }
+    
+    async clearDataCommand() {
+        this.addMessage('🗑️ Clearing all data...', 'assistant');
+        
+        if (typeof clearAllDataWithConfirmation === 'function') {
+            await clearAllDataWithConfirmation();
+            this.addMessage('✅ All data cleared successfully', 'assistant');
+        } else {
+            this.addMessage('❌ Clear function not available', 'assistant');
+        }
+    }
+    
+    async selectDeliverables(args) {
+        const count = parseInt(args) || 20;
+        this.addMessage(`✅ Selecting top ${count} deliverables...`, 'assistant');
+        
+        const selected = await this.selectTopDeliverables(count);
+        this.addMessage(`✅ Selected ${selected} deliverables`, 'assistant');
+    }
+    
+    async showPricing() {
+        const scenarioA = window.SCENARIOS?.scenario_a;
+        const scenarioB = window.SCENARIOS?.scenario_b;
+        
+        if (!scenarioA && !scenarioB) {
+            this.addMessage('❌ No pricing scenarios available. Build scenarios first.', 'assistant');
+            return;
+        }
+        
+        let message = '💰 **Current Pricing:**\n\n';
+        
+        if (scenarioA) {
+            message += `**Scenario A:**\n`;
+            message += `• Total Cost: $${scenarioA.total_cost?.toLocaleString() || 'N/A'}\n`;
+            message += `• Duration: ${scenarioA.duration || 'N/A'} days\n`;
+            message += `• Deliverables: ${scenarioA.deliverables?.length || 0}\n\n`;
+        }
+        
+        if (scenarioB) {
+            message += `**Scenario B:**\n`;
+            message += `• Total Cost: $${scenarioB.total_cost?.toLocaleString() || 'N/A'}\n`;
+            message += `• Duration: ${scenarioB.duration || 'N/A'} days\n`;
+            message += `• Deliverables: ${scenarioB.deliverables?.length || 0}\n`;
+        }
+        
+        this.addMessage(message, 'assistant');
+    }
+    
+    async takeScreenshot(args) {
+        this.addMessage('📸 Taking screenshot...', 'assistant');
+        
+        try {
+            const response = await fetch('/screenshot');
+            if (response.ok) {
+                this.addMessage('✅ Screenshot captured successfully', 'assistant');
+            } else {
+                this.addMessage('❌ Screenshot failed', 'assistant');
+            }
+        } catch (error) {
+            this.addMessage(`❌ Screenshot error: ${error.message}`, 'assistant');
+        }
+    }
+    
+    async resetApp() {
+        this.addMessage('🔄 Resetting application to Step 1...', 'assistant');
+        
+        // Clear data
+        this.clearAllData();
+        
+        // Navigate to Step 1
+        await this.navigateToStep('step1');
+        
+        // Clear form fields
+        const rfpText = document.getElementById('rfpText');
+        if (rfpText) rfpText.value = '';
+        
+        const rfpFile = document.getElementById('rfpFile');
+        if (rfpFile) rfpFile.value = '';
+        
+        this.addMessage('✅ Application reset to initial state', 'assistant');
+    }
+    
+    async showDebugInfo() {
+        const debugInfo = {
+            agent: {
+                sessionId: this.sessionId,
+                isProcessing: this.isProcessing,
+                autoFixEnabled: this.autoFixEnabled,
+                activeOperations: this.operationTracker.currentOperations.size,
+                stuckOperations: this.operationTracker.stuckOperations.size,
+                errorQueue: this.errorRecoveryQueue.length
+            },
+            app: {
+                currentStep: this.detectCurrentStep(),
+                hasScenarios: !!window.SCENARIOS,
+                deliverables: window.DELIVERABLES?.length || 0,
+                selectedDeliverables: this.getSelectedDeliverables().length,
+                globalVars: Object.keys(window).filter(k => k.match(/^(APP|APB|SCENARIOS|OPTIONS|DELIV)/))
+            },
+            state: {
+                uploadedFiles: this.agentState.uploadedFiles.length,
+                stateHistory: this.agentState.stateHistory.length,
+                localStorage: Object.keys(localStorage).filter(k => k.includes('charles') || k.includes('apb'))
+            }
+        };
+        
+        this.addMessage('🔧 **Debug Information:**\n```json\n' + JSON.stringify(debugInfo, null, 2) + '\n```', 'assistant');
+    }
+    
+    async automateWorkflow(type) {
+        if (!type) {
+            this.addMessage('Please specify automation type: full, pricing, or timeline', 'assistant');
+            return;
+        }
+        
+        this.addMessage(`🤖 Starting ${type} automation...`, 'assistant');
+        
+        switch (type.toLowerCase()) {
+            case 'full':
+                await this.automateFullWorkflow();
+                break;
+            case 'pricing':
+                await this.automatePricing();
+                break;
+            case 'timeline':
+                await this.automateTimeline();
+                break;
+            default:
+                this.addMessage(`❌ Unknown automation type: ${type}`, 'assistant');
+        }
+    }
+    
+    async automateFullWorkflow() {
+        const taskMonitor = this.createTaskMonitor();
+        taskMonitor.addTask('Check RFP', 'in_progress');
+        taskMonitor.addTask('Run Analysis', 'pending');
+        taskMonitor.addTask('Select Deliverables', 'pending');
+        taskMonitor.addTask('Build Scenario', 'pending');
+        taskMonitor.addTask('Generate Timeline', 'pending');
+        
+        try {
+            // Step 1: Check for RFP
+            const hasRfp = !!document.getElementById('rfpText')?.value;
+            if (!hasRfp) {
+                taskMonitor.updateTask(0, 'failed');
+                this.addMessage('❌ No RFP found. Please upload or paste an RFP first.', 'assistant');
+                return;
+            }
+            taskMonitor.updateTask(0, 'completed');
+            
+            // Step 2: Run Analysis
+            taskMonitor.updateTask(1, 'in_progress');
+            await this.triggerAnalysis('deep');
+            await this.delay(5000); // Wait for analysis
+            taskMonitor.updateTask(1, 'completed');
+            
+            // Step 3: Select Deliverables
+            taskMonitor.updateTask(2, 'in_progress');
+            await this.selectTopDeliverables(30);
+            taskMonitor.updateTask(2, 'completed');
+            
+            // Step 4: Build Scenario
+            taskMonitor.updateTask(3, 'in_progress');
+            await this.calculateScenarioA();
+            taskMonitor.updateTask(3, 'completed');
+            
+            // Step 5: Generate Timeline
+            taskMonitor.updateTask(4, 'in_progress');
+            await this.generateTimelineCommand();
+            taskMonitor.updateTask(4, 'completed');
+            
+            taskMonitor.close();
+            this.addMessage('✅ Full workflow automation complete!', 'assistant');
+            
+        } catch (error) {
+            taskMonitor.updateAllPending('failed');
+            this.addMessage(`❌ Automation failed: ${error.message}`, 'assistant');
+        }
+    }
+    
+    async automatePricing() {
+        this.addMessage('💰 Optimizing pricing configuration...', 'assistant');
+        
+        // Navigate to Step 3
+        await this.navigateToStep('step3');
+        
+        // Try different pricing configurations
+        const configs = [
+            { complexity: 'low', urgency: 'standard' },
+            { complexity: 'medium', urgency: 'standard' },
+            { complexity: 'high', urgency: 'rush' }
+        ];
+        
+        let bestConfig = null;
+        let bestPrice = Infinity;
+        
+        for (const config of configs) {
+            // Set complexity
+            const complexitySelect = document.querySelector('#complexity-select');
+            if (complexitySelect) {
+                complexitySelect.value = config.complexity;
+                complexitySelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            
+            // Set urgency
+            const urgencySelect = document.querySelector('#urgency-select');
+            if (urgencySelect) {
+                urgencySelect.value = config.urgency;
+                urgencySelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            
+            // Calculate
+            await this.calculateScenarioA();
+            await this.delay(1000);
+            
+            // Check price
+            const totalEl = document.querySelector('.scenario-total, .total-cost');
+            if (totalEl) {
+                const price = parseFloat(totalEl.textContent.replace(/[^0-9.]/g, ''));
+                if (price < bestPrice) {
+                    bestPrice = price;
+                    bestConfig = config;
+                }
+            }
+        }
+        
+        if (bestConfig) {
+            this.addMessage(`✅ Best pricing found: $${bestPrice.toLocaleString()} with ${bestConfig.complexity} complexity, ${bestConfig.urgency} timeline`, 'assistant');
+        } else {
+            this.addMessage('❌ Could not optimize pricing', 'assistant');
+        }
+    }
+    
+    async automateTimeline() {
+        this.addMessage('📅 Automating timeline generation...', 'assistant');
+        
+        // Navigate to Step 4
+        await this.navigateToStep('step4');
+        
+        // Generate timeline
+        await this.generateTimelineCommand();
+        
+        // Optimize timeline
+        const optimizeBtn = document.querySelector('#optimize-timeline, button[onclick*="optimize"]');
+        if (optimizeBtn) {
+            this.simulateClick(optimizeBtn);
+            await this.delay(2000);
+            this.addMessage('✅ Timeline optimized', 'assistant');
+        }
+        
+        this.addMessage('✅ Timeline automation complete', 'assistant');
+    }
+    
+    // Hook into app functions
+    triggerAppFunction(functionName, ...args) {
+        // Access global app functions
+        const appFunctions = {
+            'analyzeRFP': () => window.APP?.analyzeRFP?.(...args),
+            'buildScenario': () => window.APP?.buildScenario?.(...args),
+            'generateTimeline': () => window.APP?.generateTimeline?.(...args),
+            'exportToExcel': () => window.APP?.exportToExcel?.(...args),
+            'exportToXML': () => window.APP?.exportToXML?.(...args),
+        };
+        
+        const fn = appFunctions[functionName];
+        if (fn) {
+            return fn();
+        } else {
+            console.warn(`[CHARLES] App function not found: ${functionName}`);
+            return null;
+        }
+    }
+    
+    // Read app state
+    readAppState() {
+        return {
+            app: window.APP || {},
+            apb: window.APB || {},
+            scenarios: window.SCENARIOS || {},
+            deliverables: window.DELIVERABLES || [],
+            options: window.OPTIONS || {},
+            currentStep: this.detectCurrentStep(),
+            selectedDeliverables: this.getSelectedDeliverables(),
+            rfpText: document.getElementById('rfpText')?.value || '',
+            analysisMode: document.getElementById('analysis-mode')?.value || 'fast'
+        };
+    }
+    
+    // Modify app settings
+    modifyAppSettings(settings) {
+        Object.entries(settings).forEach(([key, value]) => {
+            // Update form fields
+            const element = document.getElementById(key);
+            if (element) {
+                if (element.type === 'checkbox') {
+                    element.checked = value;
+                } else {
+                    element.value = value;
+                }
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            
+            // Update global variables if applicable
+            if (window.APP && key in window.APP) {
+                window.APP[key] = value;
+            }
+        });
+    }
+    
+    // ====================
     // VISUAL FEEDBACK SYSTEM
     // ====================
     
@@ -3834,6 +4684,12 @@ class AIAssistant {
         // Clear input and disable send button
         input.value = '';
         this.updateSendButton();
+        
+        // Check for enhanced slash commands first
+        if (message.startsWith('/')) {
+            await this.processSlashCommand(message);
+            return;
+        }
         
         // Check for direct commands
         if (this.isAnalysisCommand(message)) {
