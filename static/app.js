@@ -1996,84 +1996,183 @@ async function rebuildScenario() {
     return;
   }
   
-  // Store current version
-  if (!pricingData.originalScenario) {
-    pricingData.originalScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
+  const btn = document.getElementById('btn-rebuild-scenario') || 
+            document.querySelector('button[onclick*="rebuildScenario"]');
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '🔄 Rebuilding...';
   }
   
-  // Increment rebuild version
-  pricingData.rebuildVersion++;
-  
-  // Create rebuilt scenario with custom values
-  const rebuiltScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
-  
-  rebuiltScenario.items.forEach(item => {
-    const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
-    const customHours = pricingData.customHours.get(item.deliverable_code);
-    const customRate = pricingData.customRates.get(item.deliverable_code);
-    
-    if (customHours !== undefined) item.hours = customHours;
-    if (customRate !== undefined) item.blended_rate = customRate;
-    
-    // Update price calculation
-    item.price = item.hours * (item.blended_rate || 195);
-    
-    // Mark as retainer if applicable
-    item.is_retainer = (delivType === 'RETAINER');
-    
-    // Update components
-    if (item.components) {
-      item.components.forEach(comp => {
-        const compKey = `${item.deliverable_code}_${comp.name}`;
-        const compHours = pricingData.customHours.get(compKey);
-        const compRate = pricingData.customRates.get(compKey);
-        
-        if (compHours !== undefined) comp.hours = compHours;
-        if (compRate !== undefined) comp.rate = compRate;
-        
-        comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
-      });
+  try {
+    // Store current version if not already stored
+    if (!pricingData.originalScenario) {
+      pricingData.originalScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
     }
-  });
-  
-  // Show comparison modal
-  showScenarioComparison(pricingData.originalScenario, rebuiltScenario);
-  
-  // Update current scenario
-  SCENARIOS.A = rebuiltScenario;
-  updatePricingCalculations();
+    
+    // Increment rebuild version
+    if (!pricingData.rebuildVersion) pricingData.rebuildVersion = 0;
+    pricingData.rebuildVersion++;
+    
+    // Create rebuilt scenario with custom values
+    const rebuiltScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
+    
+    rebuiltScenario.items.forEach(item => {
+      // Get cadence and periods for this deliverable
+      const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
+                         (pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER' ? 'MONTHLY' : 'ONE_TIME');
+      const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
+                     (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
+      
+      // Get custom values or keep originals
+      const customHours = pricingData.customHours.get(item.deliverable_code);
+      const customRate = pricingData.customRates.get(item.deliverable_code);
+      
+      if (customHours !== undefined) item.hours = customHours;
+      if (customRate !== undefined) item.blended_rate = customRate;
+      
+      // Update price calculation (price per period)
+      item.price = (item.hours || 0) * (item.blended_rate || 195);
+      
+      // Mark as retainer if not one-time
+      item.is_retainer = (cadenceType !== 'ONE_TIME');
+      if (item.is_retainer) {
+        item.retainer_months = periods;
+      }
+      
+      // Update components
+      if (item.components) {
+        item.components.forEach(comp => {
+          const compKey = `${item.deliverable_code}::${comp.name}`; // Fixed to use :: separator
+          const compCadence = pricingDataEnhanced.cadenceTypes.get(compKey) || cadenceType;
+          const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || periods;
+          const compHours = pricingData.customHours.get(compKey);
+          const compRate = pricingData.customRates.get(compKey);
+          
+          if (compHours !== undefined) comp.hours = compHours;
+          if (compRate !== undefined) comp.rate = compRate;
+          
+          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
+          comp.is_retainer = (compCadence !== 'ONE_TIME');
+          if (comp.is_retainer) {
+            comp.retainer_months = compPeriods;
+          }
+        });
+      }
+    });
+    
+    // Show comparison modal
+    showScenarioComparison(pricingData.originalScenario, rebuiltScenario);
+    
+    // Update current scenario
+    SCENARIOS.A = rebuiltScenario;
+    updatePricingCalculations();
+    
+    console.log('Scenario rebuilt successfully', rebuiltScenario);
+    
+  } catch (error) {
+    console.error('Error rebuilding scenario:', error);
+    alert('Error rebuilding scenario. Please try again.');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🔨 Re-build Scenario';
+    }
+  }
 }
 
 // Show scenario comparison modal
 function showScenarioComparison(original, rebuilt) {
   // Calculate totals for each version
-  let originalTotal = 0;
-  let rebuiltTotal = 0;
-  let originalRetainerMonthly = 0;
-  let rebuiltRetainerMonthly = 0;
+  let originalGrandTotal = 0;
+  let rebuiltGrandTotal = 0;
+  let originalBreakdown = {
+    oneTime: 0,
+    monthly: 0,
+    quarterly: 0,
+    semiAnnual: 0
+  };
+  let rebuiltBreakdown = {
+    oneTime: 0,
+    monthly: 0,
+    quarterly: 0,
+    semiAnnual: 0
+  };
   
+  // Calculate original totals
   original.items.forEach(item => {
-    const isRetainer = pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER';
-    if (isRetainer) {
-      originalRetainerMonthly += item.price || (item.hours * (item.blended_rate || 195));
-    } else {
-      originalTotal += item.price || (item.hours * (item.blended_rate || 195));
+    const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
+                       (pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER' ? 'MONTHLY' : 'ONE_TIME');
+    const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
+                   (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
+    const price = item.price || (item.hours * (item.blended_rate || 195));
+    const totalPrice = price * periods;
+    
+    originalGrandTotal += totalPrice;
+    
+    if (cadenceType === 'ONE_TIME') originalBreakdown.oneTime += totalPrice;
+    else if (cadenceType === 'MONTHLY') originalBreakdown.monthly += price;
+    else if (cadenceType === 'QUARTERLY') originalBreakdown.quarterly += price;
+    else if (cadenceType === 'SEMI_ANNUAL') originalBreakdown.semiAnnual += price;
+    
+    // Add components
+    if (item.components) {
+      item.components.forEach(comp => {
+        const compKey = `${item.deliverable_code}::${comp.name}`;
+        const compCadence = pricingDataEnhanced.cadenceTypes.get(compKey) || cadenceType;
+        const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || periods;
+        const compPrice = comp.price || (comp.hours * (comp.rate || item.blended_rate || 195));
+        const compTotalPrice = compPrice * compPeriods;
+        
+        originalGrandTotal += compTotalPrice;
+        
+        if (compCadence === 'ONE_TIME') originalBreakdown.oneTime += compTotalPrice;
+        else if (compCadence === 'MONTHLY') originalBreakdown.monthly += compPrice;
+        else if (compCadence === 'QUARTERLY') originalBreakdown.quarterly += compPrice;
+        else if (compCadence === 'SEMI_ANNUAL') originalBreakdown.semiAnnual += compPrice;
+      });
     }
   });
   
+  // Calculate rebuilt totals
   rebuilt.items.forEach(item => {
-    const isRetainer = item.is_retainer;
-    if (isRetainer) {
-      rebuiltRetainerMonthly += item.price;
-    } else {
-      rebuiltTotal += item.price;
+    const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
+                       (item.is_retainer ? 'MONTHLY' : 'ONE_TIME');
+    const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
+                   item.retainer_months || 
+                   (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
+    const price = item.price;
+    const totalPrice = price * periods;
+    
+    rebuiltGrandTotal += totalPrice;
+    
+    if (cadenceType === 'ONE_TIME') rebuiltBreakdown.oneTime += totalPrice;
+    else if (cadenceType === 'MONTHLY') rebuiltBreakdown.monthly += price;
+    else if (cadenceType === 'QUARTERLY') rebuiltBreakdown.quarterly += price;
+    else if (cadenceType === 'SEMI_ANNUAL') rebuiltBreakdown.semiAnnual += price;
+    
+    // Add components
+    if (item.components) {
+      item.components.forEach(comp => {
+        const compKey = `${item.deliverable_code}::${comp.name}`;
+        const compCadence = pricingDataEnhanced.cadenceTypes.get(compKey) || cadenceType;
+        const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || 
+                          comp.retainer_months || periods;
+        const compPrice = comp.price;
+        const compTotalPrice = compPrice * compPeriods;
+        
+        rebuiltGrandTotal += compTotalPrice;
+        
+        if (compCadence === 'ONE_TIME') rebuiltBreakdown.oneTime += compTotalPrice;
+        else if (compCadence === 'MONTHLY') rebuiltBreakdown.monthly += compPrice;
+        else if (compCadence === 'QUARTERLY') rebuiltBreakdown.quarterly += compPrice;
+        else if (compCadence === 'SEMI_ANNUAL') rebuiltBreakdown.semiAnnual += compPrice;
+      });
     }
   });
   
-  const originalGrandTotal = originalTotal + (originalRetainerMonthly * 12);
-  const rebuiltGrandTotal = rebuiltTotal + (rebuiltRetainerMonthly * 12);
   const difference = rebuiltGrandTotal - originalGrandTotal;
-  const percentChange = ((difference / originalGrandTotal) * 100).toFixed(1);
+  const percentChange = originalGrandTotal > 0 ? ((difference / originalGrandTotal) * 100).toFixed(1) : '0.0';
   
   // Create comparison modal
   const modal = document.createElement('div');
@@ -2085,15 +2184,17 @@ function showScenarioComparison(original, rebuilt) {
   
   modal.innerHTML = `
     <div style="background: var(--card); border: 1px solid var(--accent); border-radius: 12px; 
-                padding: 24px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+                padding: 24px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto;">
       <h3 style="margin: 0 0 20px; color: var(--accent);">📊 Scenario Comparison</h3>
       
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
         <div style="padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px;">
           <h4 style="margin: 0 0 12px; color: var(--muted);">Version 1 (Original)</h4>
           <div style="font-size: 0.9em;">
-            <div>One-Time: <strong>$${originalTotal.toLocaleString()}</strong></div>
-            <div>Monthly Retainer: <strong>$${originalRetainerMonthly.toLocaleString()}</strong></div>
+            ${originalBreakdown.oneTime > 0 ? `<div>One-Time: <strong>$${originalBreakdown.oneTime.toLocaleString()}</strong></div>` : ''}
+            ${originalBreakdown.monthly > 0 ? `<div>Monthly (×12): <strong>$${(originalBreakdown.monthly * 12).toLocaleString()}</strong></div>` : ''}
+            ${originalBreakdown.quarterly > 0 ? `<div>Quarterly (×4): <strong>$${(originalBreakdown.quarterly * 4).toLocaleString()}</strong></div>` : ''}
+            ${originalBreakdown.semiAnnual > 0 ? `<div>Semi-Annual (×2): <strong>$${(originalBreakdown.semiAnnual * 2).toLocaleString()}</strong></div>` : ''}
             <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
               <strong>Total: $${originalGrandTotal.toLocaleString()}</strong>
             </div>
@@ -2101,10 +2202,12 @@ function showScenarioComparison(original, rebuilt) {
         </div>
         
         <div style="padding: 16px; background: rgba(139, 92, 246, 0.1); border-radius: 8px;">
-          <h4 style="margin: 0 0 12px; color: var(--accent);">Version ${pricingData.rebuildVersion} (Rebuilt)</h4>
+          <h4 style="margin: 0 0 12px; color: var(--accent);">Version ${pricingData.rebuildVersion || 2} (Rebuilt)</h4>
           <div style="font-size: 0.9em;">
-            <div>One-Time: <strong>$${rebuiltTotal.toLocaleString()}</strong></div>
-            <div>Monthly Retainer: <strong>$${rebuiltRetainerMonthly.toLocaleString()}</strong></div>
+            ${rebuiltBreakdown.oneTime > 0 ? `<div>One-Time: <strong>$${rebuiltBreakdown.oneTime.toLocaleString()}</strong></div>` : ''}
+            ${rebuiltBreakdown.monthly > 0 ? `<div>Monthly (×12): <strong>$${(rebuiltBreakdown.monthly * 12).toLocaleString()}</strong></div>` : ''}
+            ${rebuiltBreakdown.quarterly > 0 ? `<div>Quarterly (×4): <strong>$${(rebuiltBreakdown.quarterly * 4).toLocaleString()}</strong></div>` : ''}
+            ${rebuiltBreakdown.semiAnnual > 0 ? `<div>Semi-Annual (×2): <strong>$${(rebuiltBreakdown.semiAnnual * 2).toLocaleString()}</strong></div>` : ''}
             <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
               <strong>Total: $${rebuiltGrandTotal.toLocaleString()}</strong>
             </div>
@@ -2206,11 +2309,57 @@ function saveRowEdit(code) {
   if (cadenceSelect) {
     const cadence = cadenceSelect.value;
     pricingDataEnhanced.cadenceTypes.set(code, cadence);
+    
+    // Update deliverable type based on cadence
+    if (cadence === 'ONE_TIME') {
+      pricingData.deliverableTypes.set(code, 'PROJECT');
+    } else {
+      pricingData.deliverableTypes.set(code, 'RETAINER');
+    }
   }
   
   if (periodsInput) {
     const periods = parseInt(periodsInput.value) || 1;
     pricingDataEnhanced.periodsCount.set(code, periods);
+    
+    // Store retainer months if it's a retainer
+    if (pricingData.deliverableTypes.get(code) === 'RETAINER') {
+      pricingData.retainers.set(code, periods);
+    }
+  }
+  
+  // Update scenario items with new values
+  if (SCENARIOS && SCENARIOS.A) {
+    SCENARIOS.A.items.forEach(item => {
+      if (item.deliverable_code === code) {
+        const hours = pricingData.customHours.get(code);
+        const rate = pricingData.customRates.get(code);
+        if (hours !== undefined) item.hours = hours;
+        if (rate !== undefined) item.blended_rate = rate;
+        item.price = (item.hours || 0) * (item.blended_rate || 195);
+        
+        // Update retainer status
+        const cadence = pricingDataEnhanced.cadenceTypes.get(code);
+        item.is_retainer = (cadence !== 'ONE_TIME');
+        if (item.is_retainer) {
+          item.retainer_months = pricingDataEnhanced.periodsCount.get(code) || 12;
+        }
+      }
+      
+      // Update components
+      if (item.components) {
+        item.components.forEach(comp => {
+          const compKey = `${item.deliverable_code}::${comp.name}`;
+          if (compKey === code) {
+            const compHours = pricingData.customHours.get(compKey);
+            const compRate = pricingData.customRates.get(compKey);
+            if (compHours !== undefined) comp.hours = compHours;
+            if (compRate !== undefined) comp.rate = compRate;
+            comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
+          }
+        });
+      }
+    });
   }
   
   // Exit edit mode
@@ -2218,6 +2367,30 @@ function saveRowEdit(code) {
   
   // Update the table
   updatePricingTable();
+}
+
+// Toggle expand/collapse for deliverable components
+function toggleDeliverableExpand(deliverableCode) {
+  const expandIcon = document.getElementById(`expand-${deliverableCode}`);
+  const componentRows = document.querySelectorAll(`.component-row-${deliverableCode}`);
+  
+  if (expandIcon && componentRows.length > 0) {
+    const isExpanded = expandIcon.style.transform === 'rotate(90deg)';
+    
+    if (isExpanded) {
+      // Collapse
+      expandIcon.style.transform = 'rotate(0deg)';
+      componentRows.forEach(row => {
+        row.style.display = 'none';
+      });
+    } else {
+      // Expand
+      expandIcon.style.transform = 'rotate(90deg)';
+      componentRows.forEach(row => {
+        row.style.display = 'table-row';
+      });
+    }
+  }
 }
 
 function updateCadenceType(code, cadence) {
