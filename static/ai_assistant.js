@@ -340,7 +340,198 @@ class AIAssistant {
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
     
-    async trackAnalysisJob(jobId, isResume = false) {
+    createTaskMonitor() {
+        const monitor = {
+            container: null,
+            tasks: [],
+            
+            init() {
+                // Create or find container
+                let container = document.getElementById('charles-task-monitor');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = 'charles-task-monitor';
+                    container.className = 'charles-task-monitor';
+                    container.innerHTML = `
+                        <div class="task-monitor-header">
+                            <span>📋 Current Tasks</span>
+                            <span class="task-monitor-close" onclick="this.parentElement.parentElement.style.display='none'">×</span>
+                        </div>
+                        <div class="task-monitor-list"></div>
+                    `;
+                    
+                    // Add styles if not already present
+                    if (!document.getElementById('task-monitor-styles')) {
+                        const styles = document.createElement('style');
+                        styles.id = 'task-monitor-styles';
+                        styles.textContent = `
+                            .charles-task-monitor {
+                                position: fixed;
+                                top: 20px;
+                                right: 460px;
+                                width: 300px;
+                                background: rgba(30, 30, 40, 0.98);
+                                border: 1px solid rgba(100, 100, 255, 0.3);
+                                border-radius: 12px;
+                                padding: 15px;
+                                z-index: 9998;
+                                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+                                backdrop-filter: blur(10px);
+                            }
+                            
+                            .task-monitor-header {
+                                display: flex;
+                                justify-content: space-between;
+                                align-items: center;
+                                margin-bottom: 15px;
+                                color: #fff;
+                                font-weight: 600;
+                            }
+                            
+                            .task-monitor-close {
+                                cursor: pointer;
+                                opacity: 0.6;
+                                transition: opacity 0.2s;
+                            }
+                            
+                            .task-monitor-close:hover {
+                                opacity: 1;
+                            }
+                            
+                            .task-monitor-list {
+                                display: flex;
+                                flex-direction: column;
+                                gap: 8px;
+                            }
+                            
+                            .task-monitor-item {
+                                display: flex;
+                                align-items: center;
+                                gap: 10px;
+                                padding: 8px;
+                                background: rgba(255, 255, 255, 0.05);
+                                border-radius: 8px;
+                                color: #fff;
+                                font-size: 13px;
+                            }
+                            
+                            .task-monitor-item.in-progress {
+                                background: rgba(100, 100, 255, 0.1);
+                                border: 1px solid rgba(100, 100, 255, 0.3);
+                            }
+                            
+                            .task-monitor-item.completed {
+                                opacity: 0.7;
+                            }
+                            
+                            .task-monitor-item.failed {
+                                background: rgba(255, 50, 50, 0.1);
+                                border: 1px solid rgba(255, 50, 50, 0.3);
+                            }
+                            
+                            .task-status {
+                                width: 20px;
+                                height: 20px;
+                                display: flex;
+                                align-items: center;
+                                justify-content: center;
+                            }
+                            
+                            .task-status.pending::before {
+                                content: '⏳';
+                            }
+                            
+                            .task-status.in-progress::before {
+                                content: '🔄';
+                                animation: spin 2s linear infinite;
+                            }
+                            
+                            .task-status.completed::before {
+                                content: '✅';
+                            }
+                            
+                            .task-status.failed::before {
+                                content: '❌';
+                            }
+                            
+                            @keyframes spin {
+                                from { transform: rotate(0deg); }
+                                to { transform: rotate(360deg); }
+                            }
+                            
+                            .task-name {
+                                flex: 1;
+                            }
+                            
+                            .task-progress {
+                                font-size: 11px;
+                                color: rgba(255, 255, 255, 0.6);
+                            }
+                        `;
+                        document.head.appendChild(styles);
+                    }
+                    
+                    document.body.appendChild(container);
+                }
+                
+                this.container = container;
+                container.style.display = 'block';
+                return this;
+            },
+            
+            addTask(name, status = 'pending', progress = null) {
+                this.tasks.push({ name, status, progress });
+                this.render();
+                return this;
+            },
+            
+            updateTask(index, status, progress = null) {
+                if (this.tasks[index]) {
+                    this.tasks[index].status = status;
+                    if (progress !== null) {
+                        this.tasks[index].progress = progress;
+                    }
+                    this.render();
+                }
+                return this;
+            },
+            
+            updateAllPending(status) {
+                this.tasks.forEach(task => {
+                    if (task.status === 'pending') {
+                        task.status = status;
+                    }
+                });
+                this.render();
+                return this;
+            },
+            
+            render() {
+                if (!this.container) return;
+                
+                const list = this.container.querySelector('.task-monitor-list');
+                list.innerHTML = this.tasks.map((task, index) => `
+                    <div class="task-monitor-item ${task.status}">
+                        <div class="task-status ${task.status}"></div>
+                        <div class="task-name">${index + 1}. ${task.name}</div>
+                        ${task.progress ? `<div class="task-progress">${task.progress}%</div>` : ''}
+                    </div>
+                `).join('');
+            },
+            
+            close() {
+                if (this.container) {
+                    setTimeout(() => {
+                        this.container.style.display = 'none';
+                    }, 5000);
+                }
+            }
+        };
+        
+        return monitor.init();
+    }
+    
+    async trackAnalysisJob(jobId, taskMonitor = null, isResume = false) {
         if (!isResume) {
             this.agentState.jobId = jobId;
             this.saveState();
@@ -394,10 +585,26 @@ class AIAssistant {
                     
                     this.updateProgress(progress, stage, details);
                     
+                    // Update task monitor if provided
+                    if (taskMonitor) {
+                        if (progress >= 30 && taskMonitor.tasks[3].status === 'in_progress') {
+                            taskMonitor.updateTask(3, 'in_progress', progress);
+                        }
+                        
+                        if (progress === 100 && status.status === 'completed') {
+                            taskMonitor.updateTask(3, 'completed');
+                            taskMonitor.updateTask(4, 'completed');
+                        }
+                    }
+                    
                     if (status.status === 'completed') {
                         cleanup();
                         this.updateProgress(100, '✅ Analysis Complete!', 'Results loaded successfully');
                         this.addMessage(`✅ Analysis complete! Found ${status.deliverables_count || 0} relevant deliverables.`, 'assistant');
+                        
+                        if (taskMonitor) {
+                            taskMonitor.close();
+                        }
                         
                         // Trigger UI updates
                         if (typeof window.loadScenarioData === 'function' && status.result) {
@@ -2501,14 +2708,25 @@ class AIAssistant {
         const fileExt = file.name.split('.').pop().toLowerCase();
         
         if (['pdf', 'docx', 'txt'].includes(fileExt)) {
-            this.addMessage(`📄 Uploading "${file.name}"...`, 'assistant');
+            // Create task monitor
+            const taskMonitor = this.createTaskMonitor();
+            taskMonitor.addTask('Upload document', 'in_progress');
+            taskMonitor.addTask('Extract text content', 'pending');
+            taskMonitor.addTask('Start AI analysis', 'pending');
+            taskMonitor.addTask('Track analysis progress', 'pending');
+            taskMonitor.addTask('Load deliverables', 'pending');
+            
+            this.addMessage(`📄 Uploading "${file.name}" to main application...`, 'assistant');
             
             const formData = new FormData();
             formData.append('file', file);
+            formData.append('mode', this.agentState.analysisMode || 'deep');
+            formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
             
             try {
+                // Upload to the CORRECT endpoint
                 const response = await this.retryWithBackoff(
-                    () => fetch('/api/upload', {
+                    () => fetch('/api/upload_rfp', {
                         method: 'POST',
                         body: formData
                     }),
@@ -2518,36 +2736,50 @@ class AIAssistant {
                 
                 if (response.ok) {
                     const result = await response.json();
+                    taskMonitor.updateTask(0, 'completed');
+                    taskMonitor.updateTask(1, 'completed');
                     
-                    // Update RFP text area if it exists
-                    const rfpTextEl = document.getElementById('rfpText');
-                    if (rfpTextEl && result.text) {
-                        rfpTextEl.value = result.text;
-                        // Trigger change event
-                        rfpTextEl.dispatchEvent(new Event('input', { bubbles: true }));
-                        rfpTextEl.dispatchEvent(new Event('change', { bubbles: true }));
+                    // Store the job ID for tracking
+                    if (result.job_id) {
+                        this.agentState.jobId = result.job_id;
+                        this.saveState();
+                        
+                        taskMonitor.updateTask(2, 'in_progress');
+                        this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
+                        this.addMessage(`🔍 Starting AI analysis...`, 'assistant');
+                        
+                        // Start tracking the analysis job
+                        taskMonitor.updateTask(3, 'in_progress');
+                        await this.trackAnalysisJob(result.job_id, taskMonitor);
+                    } else {
+                        // Fallback for older API responses
+                        const rfpTextEl = document.getElementById('rfpText');
+                        if (rfpTextEl && result.text) {
+                            rfpTextEl.value = result.text;
+                            rfpTextEl.dispatchEvent(new Event('input', { bubbles: true }));
+                            rfpTextEl.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                        
+                        taskMonitor.updateTask(2, 'completed');
+                        this.addMessage(`✅ Document processed. Text extracted: ${result.text_length || 0} chars`, 'assistant');
                     }
                     
                     // Store in agent state
                     this.agentState.uploadedFiles.push({
                         name: file.name,
                         timestamp: Date.now(),
-                        text: result.text
+                        text: result.text,
+                        job_id: result.job_id
                     });
                     
                     this.saveState();
+                    this.showSuccessMessage(`File "${file.name}" submitted for analysis!`);
                     
-                    this.showSuccessMessage(`File "${file.name}" uploaded successfully!`);
-                    this.addMessage(`✅ Document uploaded successfully. ${result.text ? `Extracted ${result.text.split(' ').length} words.` : ''}`, 'assistant');
-                    
-                    // Auto-trigger analysis if this is the first file
-                    if (this.agentState.uploadedFiles.length === 1) {
-                        this.addMessage('🎯 Ready to analyze! Say "analyze" or "deep mode" to begin.', 'assistant');
-                    }
                 } else {
                     throw new Error(`Upload failed: ${response.statusText}`);
                 }
             } catch (error) {
+                taskMonitor.updateAllPending('failed');
                 this.handleError(error, 'file_upload', { file });
             }
         } else if (fileExt === 'xlsx') {
