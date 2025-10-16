@@ -1,7 +1,14 @@
 # Agency Project Builder - Production Ready
 
 ## Overview
-This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.6** (October 15, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
+This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.6** (October 16, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
+
+## Recent Changes
+- **October 16, 2025**: Security dependency updates applied successfully
+  - Updated `jinja2` to latest secure version (currently v3.1.4, not directly used by application)
+  - Updated `python-multipart` to latest secure version (v0.0.9, used internally by FastAPI for file uploads)
+  - All functionality verified working correctly after updates
+  - Comprehensive tests passed: home page, API endpoints, file uploads, static files
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
