@@ -35,14 +35,6 @@ class AIAssistant {
         this.maxRetries = 3;
         this.errorPatterns = [];
         
-        // Telemetry & Logging
-        this.agentTelemetry = [];
-        this.commandStats = {
-            success: {},
-            failure: {},
-            total: {}
-        };
-        
         // Visual Feedback
         this.activeHighlights = new Set();
         this.progressIndicators = new Map();
@@ -100,9 +92,6 @@ class AIAssistant {
         
         // Save to localStorage
         localStorage.setItem('charles_agent_state', JSON.stringify(this.agentState));
-        
-        // Log telemetry
-        this.logAction('state_saved', { timestamp: currentState.timestamp });
         
         console.log('[CHARLES] State saved:', currentState);
         return currentState;
@@ -167,12 +156,10 @@ class AIAssistant {
             }
             
             this.addMessage('✅ Previous state restored successfully', 'assistant');
-            this.logAction('state_restored', { timestamp: latestState.timestamp });
             
             return true;
         } catch (error) {
             console.error('[CHARLES] Failed to restore state:', error);
-            this.logError('state_restore_failed', error);
             return false;
         }
     }
@@ -1428,8 +1415,6 @@ class AIAssistant {
         // Visual feedback
         this.flashElement(targetStep, 1000, '#10b981');
         
-        this.logAction('navigate', { to: stepId });
-        
         return true;
     }
     
@@ -1451,135 +1436,9 @@ class AIAssistant {
             }
         });
         
-        this.logAction('select_checkboxes', { 
-            total: codes.length,
-            success: results.success.length,
-            failed: results.failed.length,
-            checked
-        });
-        
         return results;
     }
     
-    // ====================
-    // TELEMETRY & LOGGING
-    // ====================
-    
-    logAction(action, data = {}) {
-        const entry = {
-            timestamp: Date.now(),
-            action,
-            data,
-            success: true
-        };
-        
-        this.agentTelemetry.push(entry);
-        
-        // Update stats
-        this.commandStats.total[action] = (this.commandStats.total[action] || 0) + 1;
-        this.commandStats.success[action] = (this.commandStats.success[action] || 0) + 1;
-        
-        // Keep only last 100 entries
-        if (this.agentTelemetry.length > 100) {
-            this.agentTelemetry.shift();
-        }
-        
-        console.log(`[CHARLES-TELEMETRY] ${action}:`, data);
-    }
-    
-    logError(action, error) {
-        const entry = {
-            timestamp: Date.now(),
-            action,
-            error: error.message || error,
-            success: false
-        };
-        
-        this.agentTelemetry.push(entry);
-        
-        // Update stats
-        this.commandStats.total[action] = (this.commandStats.total[action] || 0) + 1;
-        this.commandStats.failure[action] = (this.commandStats.failure[action] || 0) + 1;
-        
-        console.error(`[CHARLES-ERROR] ${action}:`, error);
-    }
-    
-    displayTelemetry() {
-        const telemetryDiv = document.getElementById('charles-telemetry') || this.createTelemetryPanel();
-        
-        const stats = Object.keys(this.commandStats.total).map(action => {
-            const total = this.commandStats.total[action] || 0;
-            const success = this.commandStats.success[action] || 0;
-            const failure = this.commandStats.failure[action] || 0;
-            const rate = total > 0 ? ((success / total) * 100).toFixed(1) : 0;
-            
-            return `
-                <tr>
-                    <td>${action}</td>
-                    <td>${total}</td>
-                    <td>${success}</td>
-                    <td>${failure}</td>
-                    <td>${rate}%</td>
-                </tr>
-            `;
-        }).join('');
-        
-        const recentActions = this.agentTelemetry.slice(-10).reverse().map(entry => {
-            const time = new Date(entry.timestamp).toLocaleTimeString();
-            const icon = entry.success ? '✅' : '❌';
-            return `
-                <div class="telemetry-entry ${entry.success ? 'success' : 'error'}">
-                    ${icon} [${time}] ${entry.action}
-                    ${entry.data ? `<span class="telemetry-data">${JSON.stringify(entry.data)}</span>` : ''}
-                </div>
-            `;
-        }).join('');
-        
-        telemetryDiv.innerHTML = `
-            <div class="telemetry-header">
-                <h4>📊 Agent Telemetry</h4>
-                <button onclick="this.parentElement.parentElement.classList.toggle('expanded')">
-                    ${telemetryDiv.classList.contains('expanded') ? 'Collapse' : 'Expand'}
-                </button>
-            </div>
-            <div class="telemetry-content">
-                <div class="telemetry-stats">
-                    <h5>Command Statistics</h5>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Action</th>
-                                <th>Total</th>
-                                <th>Success</th>
-                                <th>Failed</th>
-                                <th>Rate</th>
-                            </tr>
-                        </thead>
-                        <tbody>${stats}</tbody>
-                    </table>
-                </div>
-                <div class="telemetry-recent">
-                    <h5>Recent Actions</h5>
-                    ${recentActions}
-                </div>
-            </div>
-        `;
-        
-        return telemetryDiv;
-    }
-    
-    createTelemetryPanel() {
-        const panel = document.createElement('div');
-        panel.id = 'charles-telemetry';
-        panel.className = 'charles-telemetry-panel';
-        
-        const chatBody = document.querySelector('.ai-assistant-body');
-        if (chatBody) {
-            chatBody.appendChild(panel);
-        }
-        
-        return panel;
-    }
     
     // ====================
     // BATCH FILE PROCESSING
@@ -1752,9 +1611,6 @@ class AIAssistant {
                         <span class="ai-status-indicator" id="ai-status-indicator">●</span>
                     </div>
                     <div class="ai-assistant-controls">
-                        <button class="ai-btn-telemetry" id="ai-btn-telemetry" title="Show Telemetry" onclick="window.aiAssistant.displayTelemetry()">
-                            📊
-                        </button>
                         <button class="ai-btn-minimize" id="ai-btn-minimize" title="Minimize">
                             <span>_</span>
                         </button>
@@ -1804,7 +1660,6 @@ class AIAssistant {
                                     <li>📊 Real-time progress tracking</li>
                                     <li>🎯 Enhanced UI manipulation</li>
                                     <li>📁 Batch file processing</li>
-                                    <li>📈 Telemetry & analytics</li>
                                 </ul>
                             </div>
                             <div class="ai-suggestions">
@@ -1881,7 +1736,6 @@ class AIAssistant {
             ${this.getBaseStyles()}
             ${this.getProgressStyles()}
             ${this.getVisualFeedbackStyles()}
-            ${this.getTelemetryStyles()}
             ${this.getBatchProcessingStyles()}
             ${this.getEnhancedAnimations()}
         `;
@@ -1972,26 +1826,6 @@ class AIAssistant {
             .charles-auto-fix-btn.active {
                 background: rgba(251, 191, 36, 0.3);
                 border-color: #fbbf24;
-            }
-            
-            .ai-btn-telemetry {
-                width: 28px;
-                height: 28px;
-                border: none;
-                background: rgba(139, 92, 246, 0.1);
-                color: #8b5cf6;
-                border-radius: 6px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                transition: all 0.2s;
-                font-size: 14px;
-            }
-            
-            .ai-btn-telemetry:hover {
-                background: rgba(139, 92, 246, 0.2);
-                transform: scale(1.1);
             }
         `;
     }
@@ -2259,108 +2093,6 @@ class AIAssistant {
         `;
     }
     
-    getTelemetryStyles() {
-        return `
-            .charles-telemetry-panel {
-                background: rgba(59, 130, 246, 0.05);
-                border: 1px solid rgba(59, 130, 246, 0.2);
-                border-radius: 8px;
-                margin: 12px;
-                max-height: 200px;
-                overflow: hidden;
-                transition: max-height 0.3s ease;
-            }
-            
-            .charles-telemetry-panel.expanded {
-                max-height: 400px;
-            }
-            
-            .telemetry-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 12px;
-                background: rgba(59, 130, 246, 0.1);
-                border-bottom: 1px solid rgba(59, 130, 246, 0.2);
-            }
-            
-            .telemetry-header h4 {
-                margin: 0;
-                color: white;
-                font-size: 14px;
-            }
-            
-            .telemetry-header button {
-                background: rgba(255, 255, 255, 0.1);
-                color: white;
-                border: none;
-                padding: 4px 8px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 12px;
-            }
-            
-            .telemetry-content {
-                padding: 12px;
-                overflow-y: auto;
-                max-height: 340px;
-            }
-            
-            .telemetry-stats table {
-                width: 100%;
-                font-size: 11px;
-                color: rgba(255, 255, 255, 0.9);
-                border-collapse: collapse;
-            }
-            
-            .telemetry-stats th {
-                text-align: left;
-                padding: 4px;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-                color: #60a5fa;
-            }
-            
-            .telemetry-stats td {
-                padding: 4px;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            }
-            
-            .telemetry-recent {
-                margin-top: 12px;
-            }
-            
-            .telemetry-recent h5 {
-                margin: 0 0 8px 0;
-                color: #60a5fa;
-                font-size: 12px;
-            }
-            
-            .telemetry-entry {
-                padding: 4px 8px;
-                margin: 2px 0;
-                background: rgba(0, 0, 0, 0.2);
-                border-radius: 4px;
-                font-size: 11px;
-                color: rgba(255, 255, 255, 0.8);
-            }
-            
-            .telemetry-entry.success {
-                border-left: 2px solid #10b981;
-            }
-            
-            .telemetry-entry.error {
-                border-left: 2px solid #ef4444;
-            }
-            
-            .telemetry-data {
-                display: inline-block;
-                margin-left: 8px;
-                color: rgba(255, 255, 255, 0.5);
-                font-family: monospace;
-                font-size: 10px;
-            }
-        `;
-    }
     
     getBatchProcessingStyles() {
         return `
