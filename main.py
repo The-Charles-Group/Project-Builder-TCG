@@ -2051,37 +2051,27 @@ async def _quick_relevance_check_async(img_bytes: bytes, page_num: int, img_inde
             else:
                 img_base64 = base64.b64encode(img_bytes).decode('utf-8')
             
-            # Quick relevance check with minimal tokens using Responses API with timeout
-            loop = asyncio.get_event_loop()
-            try:
-                response = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: openai_client.responses.create(
-                            model="gpt-5",  # Use GPT-5 directly for image analysis
-                            input=[
-                                {
-                                    "type": "input_text",
-                                    "text": "Does this contain charts, diagrams, wireframes, mockups, or project requirements? Answer YES or NO only."
-                                },
-                                {
-                                    "type": "input_image",
-                                    "image": {"url": f"data:image/png;base64,{img_base64}"}
-                                }
-                            ],
-                            max_output_tokens=10,  # Minimal token usage
-                            reasoning={"effort": "low"}
-                        )
-                    ),
-                    timeout=15.0  # 15-second timeout for quick checks
-                )
-            except asyncio.TimeoutError:
-                print(f"[JOB {job_id}] Quick check timeout for image {img_index} on page {page_num}")
-                # Assume relevant on timeout to be safe
-                if job_id in JOB_STORE:
-                    JOB_STORE[job_id].processed_images += 1
-                    JOB_STORE[job_id].relevant_images += 1
-                return (True, "timeout_assume_relevant")
+            # Quick relevance check with minimal tokens using Responses API
+            # Use async client for proper async operation
+            if not async_openai_client:
+                # Fallback if async client not available
+                return (True, "no_client")
+            
+            response = await async_openai_client.responses.create(
+                model="gpt-5",  # Use GPT-5 directly for image analysis
+                input=[
+                    {
+                        "type": "input_text",
+                        "text": "Does this contain charts, diagrams, wireframes, mockups, or project requirements? Answer YES or NO only."
+                    },
+                    {
+                        "type": "input_image",
+                        "image": {"url": f"data:image/png;base64,{img_base64}"}
+                    }
+                ],
+                max_output_tokens=10,  # Minimal token usage
+                reasoning={"effort": "low"}
+            )
             
             # Extract text from Responses API format
             answer = response.output_text.strip().upper() if hasattr(response, 'output_text') else ""
@@ -2136,36 +2126,29 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
                     img_base64 = base64.b64encode(img_bytes).decode('utf-8')
                     image_format = "jpeg"
                 
-                # Analyze image with OpenAI Vision using Responses API with timeout
-                loop = asyncio.get_event_loop()
-                try:
-                    # Add 30-second timeout for OpenAI API call
-                    response = await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda: openai_client.responses.create(
-                                model="gpt-5",  # Use GPT-5 directly for image analysis
-                                input=[
-                                    {
-                                        "type": "input_text",
-                                        "text": "Analyze this image from an RFP document. Describe what it shows: charts, diagrams, mockups, screenshots, or other visual content. Focus on business requirements and deliverables it implies."
-                                    },
-                                    {
-                                        "type": "input_image",
-                                        "image": {
-                                            "url": f"data:image/{image_format};base64,{img_base64}"
-                                        }
-                                    }
-                                ],
-                                max_output_tokens=500,
-                                reasoning={"effort": "medium"}
-                            )
-                        ),
-                        timeout=30.0  # 30-second timeout
-                    )
-                except asyncio.TimeoutError:
-                    print(f"[JOB {job_id}] Image analysis timeout for image {img_index} on page {page_num}")
-                    raise Exception("OpenAI API timeout after 30 seconds")
+                # Analyze image with OpenAI Vision using Responses API
+                # Use async client for proper async operation
+                if not async_openai_client:
+                    # Fallback if async client not available
+                    raise Exception("Async OpenAI client not available")
+                
+                response = await async_openai_client.responses.create(
+                    model="gpt-5",  # Use GPT-5 directly for image analysis
+                    input=[
+                        {
+                            "type": "input_text",
+                            "text": "Analyze this image from an RFP document. Describe what it shows: charts, diagrams, mockups, screenshots, or other visual content. Focus on business requirements and deliverables it implies."
+                        },
+                        {
+                            "type": "input_image",
+                            "image": {
+                                "url": f"data:image/{image_format};base64,{img_base64}"
+                            }
+                        }
+                    ],
+                    max_output_tokens=500,
+                    reasoning={"effort": "medium"}
+                )
                 
                 # Extract text from Responses API format
                 description = response.output_text if hasattr(response, 'output_text') else str(response)
@@ -3240,18 +3223,24 @@ def create_retainer_summary(scenario: dict) -> pd.DataFrame:
 
 # ---------- OpenAI Integration Functions (Stage 2) ----------
 
-# Initialize OpenAI client now that we can import it
+# Initialize OpenAI clients (both sync and async)
 try:
     api_key = os.environ.get("OPENAI_API_KEY")
     if api_key:
+        # Initialize synchronous client
         openai_client = OpenAI(api_key=api_key)
-        print(f"OpenAI client initialized successfully")
+        # Initialize asynchronous client for async operations
+        from openai import AsyncOpenAI
+        async_openai_client = AsyncOpenAI(api_key=api_key)
+        print(f"OpenAI clients initialized successfully (sync and async)")
     else:
         print("No OPENAI_API_KEY found in environment")
         openai_client = None
+        async_openai_client = None
 except Exception as e:
-    print(f"Failed to initialize OpenAI client: {e}")
+    print(f"Failed to initialize OpenAI clients: {e}")
     openai_client = None  # Optional OpenAI integration
+    async_openai_client = None
 
 # --- Reconciliation Helper Functions ---
 def _norm_tokens(s: str) -> set[str]:
