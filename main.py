@@ -315,23 +315,24 @@ async def upload_rfp_endpoint(
             job_id = f"upload_{int(time.time())}_{file.filename[:20].replace(' ', '_')}"
             
             # Initialize job tracking
-            JOB_STORE[job_id] = AnalysisJob(
+            AI_JOB_STORE[job_id] = AIAnalysisJob(
                 job_id=job_id,
-                status=JobStatus.PENDING,
-                mode=mode,
-                session_id=f"upload_{int(time.time())}"
+                status=AIJobStatus.PENDING,
+                total_chunks=0,
+                processed_chunks=0,
+                current_stage="Starting analysis..."
             )
             
             # Load database if needed
-            if not DB.loaded:
-                DB.load()
+            if not app.state.db.loaded:
+                app.state.db.load()
             
             # Start background analysis
             background_tasks.add_task(
                 _run_analysis_background,
                 job_id,
                 text.strip(),
-                DB,
+                app.state.db,
                 "normal",  # strictness
                 "auto",    # tier
                 mode,
@@ -350,7 +351,13 @@ async def upload_rfp_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------- AI Planner Integration (AgencyDB) ----------
-from ai_planner_agencydb import mount_routes_agencydb
+from ai_planner_agencydb import (
+    mount_routes_agencydb,
+    AIAnalysisJob,
+    AIJobStatus,
+    AI_JOB_STORE,
+    _run_analysis_background
+)
 
 # ---------- AI Agent Integration (CHARLES) ----------
 from ai_agent import chat_with_agent, parse_user_intent, CommandType
