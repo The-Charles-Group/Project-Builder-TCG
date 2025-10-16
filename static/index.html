@@ -9,7 +9,7 @@
   <!-- Frappe Gantt Library -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
   <!-- AI Assistant -->
-  <script src="/static/ai_assistant.js" defer></script>
+  <script src="/static/ai_assistant.js"></script>
 </head>
 <body>
   <header>
@@ -3087,6 +3087,72 @@
           weightsContainer.style.display = 'none';
         });
       }
+    });
+  </script>
+  <!-- Initialize CHARLES after everything is loaded -->
+  <script>
+    // Force CHARLES initialization
+    window.addEventListener('load', function() {
+      console.log('[CHARLES] Window load event - attempting initialization...');
+      
+      // Check if AIAssistant class exists
+      if (typeof AIAssistant !== 'undefined') {
+        console.log('[CHARLES] AIAssistant class found');
+        
+        // Check if already initialized
+        if (!window.aiAssistant) {
+          console.log('[CHARLES] Creating new AIAssistant instance...');
+          try {
+            window.aiAssistant = new AIAssistant();
+            console.log('[CHARLES] Successfully created AIAssistant instance');
+          } catch (error) {
+            console.error('[CHARLES] Failed to create AIAssistant:', error);
+          }
+        } else {
+          console.log('[CHARLES] AIAssistant already initialized');
+        }
+      } else {
+        console.error('[CHARLES] AIAssistant class not found - script may not have loaded');
+      }
+      
+      // Verify toggle button exists
+      setTimeout(function() {
+        const toggle = document.getElementById('ai-assistant-toggle');
+        const container = document.getElementById('ai-assistant-container');
+        
+        if (toggle) {
+          console.log('[CHARLES] Toggle button found!');
+        } else if (container) {
+          console.log('[CHARLES] Container found but no toggle button');
+        } else {
+          console.error('[CHARLES] Neither toggle button nor container found');
+          
+          // Create emergency button
+          const emergencyBtn = document.createElement('button');
+          emergencyBtn.style.cssText = `
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            z-index: 99999;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          `;
+          emergencyBtn.innerHTML = '🔮 CHARLES (Emergency)';
+          emergencyBtn.onclick = function() {
+            alert('CHARLES initialization failed. Check console for errors.');
+          };
+          document.body.appendChild(emergencyBtn);
+          console.log('[CHARLES] Created emergency button');
+        }
+      }, 500);
     });
   </script>
 </body>

@@ -3232,68 +3232,70 @@ class AIAssistant {
                 console.error('[CHARLES] Error in visual upload:', error);
                 this.handleError(error, 'visual_upload');
                 
-                // Fallback to old method
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('mode', this.agentState.analysisMode || 'deep');
-                formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
-                
-                const response = await this.retryWithBackoff(
-                    () => fetch('/api/upload_rfp', {
-                        method: 'POST',
-                        body: formData
-                    }),
-                    3,
-                    2000
-                );
-                
-                if (response.ok) {
-                    const result = await response.json();
-                    taskMonitor.updateTask(0, 'completed');
-                    taskMonitor.updateTask(1, 'completed');
+                // Fallback to old method - wrap in its own try-catch
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('mode', this.agentState.analysisMode || 'deep');
+                    formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
                     
-                    // Store the job ID for tracking
-                    if (result.job_id) {
-                        this.agentState.jobId = result.job_id;
-                        this.saveState();
+                    const response = await this.retryWithBackoff(
+                        () => fetch('/api/upload_rfp', {
+                            method: 'POST',
+                            body: formData
+                        }),
+                        3,
+                        2000
+                    );
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        taskMonitor.updateTask(0, 'completed');
+                        taskMonitor.updateTask(1, 'completed');
                         
-                        taskMonitor.updateTask(2, 'in_progress');
-                        this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
-                        this.addMessage(`🔍 Starting AI analysis...`, 'assistant');
-                        
-                        // Start tracking the analysis job
-                        taskMonitor.updateTask(3, 'in_progress');
-                        await this.trackAnalysisJob(result.job_id, taskMonitor);
-                    } else {
-                        // Fallback for older API responses
-                        const rfpTextEl = document.getElementById('rfpText');
-                        if (rfpTextEl && result.text) {
-                            rfpTextEl.value = result.text;
-                            rfpTextEl.dispatchEvent(new Event('input', { bubbles: true }));
-                            rfpTextEl.dispatchEvent(new Event('change', { bubbles: true }));
+                        // Store the job ID for tracking
+                        if (result.job_id) {
+                            this.agentState.jobId = result.job_id;
+                            this.saveState();
+                            
+                            taskMonitor.updateTask(2, 'in_progress');
+                            this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
+                            this.addMessage(`🔍 Starting AI analysis...`, 'assistant');
+                            
+                            // Start tracking the analysis job
+                            taskMonitor.updateTask(3, 'in_progress');
+                            await this.trackAnalysisJob(result.job_id, taskMonitor);
+                        } else {
+                            // Fallback for older API responses
+                            const rfpTextEl = document.getElementById('rfpText');
+                            if (rfpTextEl && result.text) {
+                                rfpTextEl.value = result.text;
+                                rfpTextEl.dispatchEvent(new Event('input', { bubbles: true }));
+                                rfpTextEl.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                            
+                            taskMonitor.updateTask(2, 'completed');
+                            this.addMessage(`✅ Document processed. Text extracted: ${result.text_length || 0} chars`, 'assistant');
                         }
                         
-                        taskMonitor.updateTask(2, 'completed');
-                        this.addMessage(`✅ Document processed. Text extracted: ${result.text_length || 0} chars`, 'assistant');
+                        // Store in agent state
+                        this.agentState.uploadedFiles.push({
+                            name: file.name,
+                            timestamp: Date.now(),
+                            text: result.text,
+                            job_id: result.job_id
+                        });
+                        
+                        this.saveState();
+                        this.showSuccessMessage(`File "${file.name}" submitted for analysis!`);
+                        
+                    } else {
+                        throw new Error(`Upload failed: ${response.statusText}`);
                     }
-                    
-                    // Store in agent state
-                    this.agentState.uploadedFiles.push({
-                        name: file.name,
-                        timestamp: Date.now(),
-                        text: result.text,
-                        job_id: result.job_id
-                    });
-                    
-                    this.saveState();
-                    this.showSuccessMessage(`File "${file.name}" submitted for analysis!`);
-                    
-                } else {
-                    throw new Error(`Upload failed: ${response.statusText}`);
+                } catch (fallbackError) {
+                    taskMonitor.updateAllPending('failed');
+                    this.handleError(fallbackError, 'file_upload', { file });
                 }
-            } catch (error) {
-                taskMonitor.updateAllPending('failed');
-                this.handleError(error, 'file_upload', { file });
             }
         } else if (fileExt === 'xlsx') {
             this.addMessage(`📊 Processing Excel configuration file "${file.name}"...`, 'assistant');
@@ -3960,52 +3962,54 @@ class AIAssistant {
     }
 }
 
-// Initialize AI Assistant when DOM is ready
-document.addEventListener('DOMContentLoaded', function() {
+// Initialize AI Assistant with improved loading mechanism
+function initializeCharles() {
     try {
         console.log('[CHARLES] Starting initialization...');
         window.aiAssistant = new AIAssistant();
         console.log('[CHARLES] Agent v3.0 initialized with full autonomy, self-healing, and state preservation.');
         
         // Force toggle button to be visible if it exists
-        const toggleBtn = document.getElementById('ai-assistant-toggle');
-        if (toggleBtn) {
-            console.log('[CHARLES] Toggle button found, ensuring visibility...');
-            toggleBtn.style.display = 'flex';
-            toggleBtn.style.visibility = 'visible';
-            toggleBtn.style.opacity = '1';
-        } else {
-            console.error('[CHARLES] Toggle button not found! Attempting to recreate...');
-            // Fallback: Create a simple toggle button if the main one failed
-            const fallbackBtn = document.createElement('button');
-            fallbackBtn.id = 'ai-assistant-toggle-fallback';
-            fallbackBtn.style.cssText = `
-                position: fixed;
-                right: 20px;
-                bottom: 20px;
-                z-index: 99999;
-                padding: 12px 20px;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                border: none;
-                border-radius: 12px;
-                cursor: pointer;
-                font-size: 14px;
-                font-weight: 600;
-                box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            `;
-            fallbackBtn.innerHTML = '🔮 CHARLES';
-            fallbackBtn.onclick = () => {
-                if (window.aiAssistant) {
-                    window.aiAssistant.toggle();
-                }
-            };
-            document.body.appendChild(fallbackBtn);
-            console.log('[CHARLES] Created fallback toggle button');
-        }
+        setTimeout(() => {
+            const toggleBtn = document.getElementById('ai-assistant-toggle');
+            if (toggleBtn) {
+                console.log('[CHARLES] Toggle button found, ensuring visibility...');
+                toggleBtn.style.display = 'flex';
+                toggleBtn.style.visibility = 'visible';
+                toggleBtn.style.opacity = '1';
+            } else {
+                console.error('[CHARLES] Toggle button not found! Attempting to recreate...');
+                // Fallback: Create a simple toggle button if the main one failed
+                const fallbackBtn = document.createElement('button');
+                fallbackBtn.id = 'ai-assistant-toggle-fallback';
+                fallbackBtn.style.cssText = `
+                    position: fixed;
+                    right: 20px;
+                    bottom: 20px;
+                    z-index: 99999;
+                    padding: 12px 20px;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    border: none;
+                    border-radius: 12px;
+                    cursor: pointer;
+                    font-size: 14px;
+                    font-weight: 600;
+                    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                `;
+                fallbackBtn.innerHTML = '🔮 CHARLES';
+                fallbackBtn.onclick = () => {
+                    if (window.aiAssistant) {
+                        window.aiAssistant.toggle();
+                    }
+                };
+                document.body.appendChild(fallbackBtn);
+                console.log('[CHARLES] Created fallback toggle button');
+            }
+        }, 100);
     } catch (error) {
         console.error('[CHARLES] CRITICAL ERROR during initialization:', error);
         console.error('[CHARLES] Stack trace:', error.stack);
@@ -4031,7 +4035,16 @@ document.addEventListener('DOMContentLoaded', function() {
         };
         document.body.appendChild(emergencyBtn);
     }
-});
+}
+
+// Initialize based on document state
+if (document.readyState === 'loading') {
+    console.log('[CHARLES] Document still loading, waiting for DOMContentLoaded...');
+    document.addEventListener('DOMContentLoaded', initializeCharles);
+} else {
+    console.log('[CHARLES] Document ready, initializing immediately...');
+    initializeCharles();
+}
 
 // Export for global access
 window.AIAssistant = AIAssistant;
