@@ -557,8 +557,41 @@ class AIAssistant {
                 
                 if (pollCount > maxPolls) {
                     cleanup();
-                    this.updateProgress(100, 'Analysis timed out', 'Processing may continue in background');
-                    this.addMessage('⏱️ Analysis is taking longer than expected. It may still be processing in the background.', 'assistant');
+                    this.updateProgress(100, 'Checking for results...', 'Attempting to load completed analysis');
+                    
+                    // Try to fetch results one more time in case they're ready
+                    try {
+                        const finalCheck = await fetch(`/api/agencydb/status/${jobId}`);
+                        if (finalCheck.ok) {
+                            const finalStatus = await finalCheck.json();
+                            if (finalStatus.status === 'completed' && finalStatus.data) {
+                                // Analysis actually completed! Load the results
+                                this.addMessage(`✅ Analysis complete! Found ${finalStatus.data.deliverables?.length || 0} deliverables. Loading results...`, 'assistant');
+                                
+                                // Load deliverables into the app
+                                await this.loadAnalysisResults(finalStatus.data);
+                                
+                                // Navigate to Step 2
+                                await this.navigateToStep('step2');
+                                
+                                // Auto-select top deliverables
+                                await this.selectTopDeliverables(20);
+                                
+                                // Calculate pricing
+                                await this.calculateScenarioA();
+                                
+                                this.addMessage('📊 I\'ve loaded your deliverables and calculated initial pricing. What would you like to adjust?', 'assistant');
+                                return;
+                            }
+                        }
+                    } catch (e) {
+                        console.log('[CHARLES] Final check failed:', e);
+                    }
+                    
+                    this.addMessage('⏱️ Analysis timed out. Let me check for results...', 'assistant');
+                    
+                    // Try alternative approach to get results
+                    await this.attemptResultRecovery(jobId);
                     return;
                 }
                 
@@ -599,23 +632,39 @@ class AIAssistant {
                     
                     if (status.status === 'completed') {
                         cleanup();
-                        this.updateProgress(100, '✅ Analysis Complete!', 'Results loaded successfully');
-                        this.addMessage(`✅ Analysis complete! Found ${status.deliverables_count || 0} relevant deliverables.`, 'assistant');
+                        this.updateProgress(100, '✅ Analysis Complete!', 'Loading deliverables into app...');
                         
                         if (taskMonitor) {
-                            taskMonitor.close();
+                            taskMonitor.updateTask(3, 'completed');
+                            taskMonitor.updateTask(4, 'in_progress');
                         }
                         
-                        // Trigger UI updates
-                        if (typeof window.loadScenarioData === 'function' && status.result) {
-                            window.loadScenarioData(status.result);
+                        const deliverableCount = status.data?.deliverables?.length || status.deliverables_count || 0;
+                        this.addMessage(`✅ Analysis complete! Found ${deliverableCount} deliverables. Loading into app...`, 'assistant');
+                        
+                        // Load the analysis results into the app
+                        if (status.data) {
+                            await this.loadAnalysisResults(status.data);
+                            
+                            // Navigate to Step 2
+                            await this.navigateToStep('step2');
+                            
+                            // Auto-select top deliverables
+                            await this.selectTopDeliverables(20);
+                            
+                            // Calculate pricing
+                            await this.calculateScenarioA();
+                            
+                            // Ask user for input
+                            this.addMessage('📊 I\'ve loaded your deliverables and calculated initial pricing. What would you like to adjust?', 'assistant');
+                            
+                            if (taskMonitor) {
+                                taskMonitor.updateTask(4, 'completed');
+                                taskMonitor.close();
+                            }
                         }
                         
-                        // Auto-navigate to Step 2
-                        setTimeout(() => {
-                            this.navigateToStep('step2');
-                            this.saveState();
-                        }, 1000);
+                        this.saveState();
                     } else if (status.status === 'failed') {
                         cleanup();
                         this.updateProgress(100, '❌ Analysis Failed', status.error || 'Unknown error');
@@ -1032,6 +1081,138 @@ class AIAssistant {
         // Trigger events
         input.dispatchEvent(new Event('change', { bubbles: true }));
         input.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+    
+    async loadAnalysisResults(data) {
+        this.addMessage('📥 Loading deliverables into the application...', 'assistant');
+        
+        // Call the global function to load data
+        if (typeof window.loadScenarioData === 'function') {
+            window.loadScenarioData(data);
+            await this.delay(1000);
+            this.addMessage(`✅ Loaded ${data.deliverables?.length || 0} deliverables`, 'assistant');
+        } else {
+            // Fallback - directly manipulate the UI
+            const deliverables = data.deliverables || [];
+            
+            // Store in window for app to use
+            window.analysisResults = data;
+            window.availableDeliverables = deliverables;
+            
+            // Trigger any event listeners
+            window.dispatchEvent(new CustomEvent('analysisComplete', { detail: data }));
+        }
+        
+        return true;
+    }
+    
+    async selectTopDeliverables(count = 20) {
+        this.addMessage(`🎯 Selecting top ${count} recommended deliverables...`, 'assistant');
+        
+        // Find all deliverable checkboxes
+        const checkboxes = document.querySelectorAll('input[type="checkbox"][data-deliverable-id], input[type="checkbox"][id^="check-"]');
+        let selected = 0;
+        
+        // Select the first N checkboxes
+        for (const checkbox of checkboxes) {
+            if (selected >= count) break;
+            if (!checkbox.checked) {
+                checkbox.checked = true;
+                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                this.flashElement(checkbox.closest('.deliverable-item, .component-item'));
+                selected++;
+                await this.delay(50); // Small delay for visual effect
+            }
+        }
+        
+        // Also try the select all button if available
+        if (selected === 0) {
+            const selectAllBtn = document.querySelector('#select-all-btn, button[onclick*="selectAll"]');
+            if (selectAllBtn) {
+                this.simulateClick(selectAllBtn);
+                this.addMessage('✅ Selected all recommended deliverables', 'assistant');
+            }
+        } else {
+            this.addMessage(`✅ Selected ${selected} deliverables`, 'assistant');
+        }
+        
+        return selected;
+    }
+    
+    async calculateScenarioA() {
+        this.addMessage('💰 Calculating pricing for Scenario A...', 'assistant');
+        
+        // Find and click the calculate button
+        const calculateBtn = document.querySelector('#calculate-btn, button[onclick*="calculate"], button:contains("Calculate")');
+        if (calculateBtn) {
+            this.simulateClick(calculateBtn);
+            this.flashElement(calculateBtn);
+            await this.delay(1500);
+            
+            // Check if results appeared
+            const totalCost = document.querySelector('#scenario-a-total, .scenario-total, .total-cost');
+            if (totalCost) {
+                const cost = totalCost.textContent;
+                this.addMessage(`✅ Calculated total cost: ${cost}`, 'assistant');
+            }
+        }
+        
+        // Navigate to Step 3 for timeline
+        setTimeout(() => {
+            this.navigateToStep('step3');
+        }, 1000);
+        
+        return true;
+    }
+    
+    async attemptResultRecovery(jobId) {
+        this.addMessage('🔄 Attempting to recover analysis results...', 'assistant');
+        
+        try {
+            // Try different endpoints to get results
+            const endpoints = [
+                `/api/agencydb/status/${jobId}`,
+                `/api/agencydb/result/${jobId}`,
+                `/api/jobs/${jobId}`,
+                `/api/analysis/${jobId}`
+            ];
+            
+            for (const endpoint of endpoints) {
+                try {
+                    const response = await fetch(endpoint);
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.deliverables || data.data?.deliverables || data.result?.deliverables) {
+                            const results = data.data || data.result || data;
+                            this.addMessage(`✅ Found results! Loading ${results.deliverables?.length || 0} deliverables...`, 'assistant');
+                            
+                            await this.loadAnalysisResults(results);
+                            await this.navigateToStep('step2');
+                            await this.selectTopDeliverables(20);
+                            await this.calculateScenarioA();
+                            
+                            return true;
+                        }
+                    }
+                } catch (e) {
+                    console.log(`[CHARLES] Recovery attempt failed for ${endpoint}:`, e);
+                }
+            }
+            
+            // If all else fails, try to trigger a new analysis
+            this.addMessage('❌ Could not recover results. Starting fresh analysis...', 'assistant');
+            
+            // Click the analyze button
+            const analyzeBtn = document.querySelector('#analyze-btn, button[onclick*="analyze"], .analyze-with-ai');
+            if (analyzeBtn) {
+                this.simulateClick(analyzeBtn);
+            }
+            
+        } catch (error) {
+            this.handleError(error, 'recovery', { jobId });
+        }
+        
+        return false;
     }
     
     navigateToStep(stepId) {
