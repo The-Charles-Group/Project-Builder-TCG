@@ -5209,68 +5209,7 @@ class RetainerDistributionPayload(BaseModel):
     ramp_up: bool = True
     seasonality: Optional[List[float]] = None
 
-@app.post("/api/pricing/redistribute-hours")
-async def api_redistribute_hours(payload: RedistributeHoursPayload):
-    """
-    Redistribute hours among components using AI or rule-based logic.
-    
-    Example request:
-    {
-        "deliverable_name": "Brand Strategy",
-        "deliverable_code": "deck_strategy",
-        "new_total_hours": 150,
-        "components": [
-            {"name": "Market Research", "hours": 40},
-            {"name": "Competitor Analysis", "hours": 30},
-            {"name": "Strategy Development", "hours": 50}
-        ],
-        "use_ai": true
-    }
-    """
-    try:
-        from ai_pricing_optimizer import redistribute_hours
-        result = await redistribute_hours(
-            deliverable_name=payload.deliverable_name,
-            deliverable_code=payload.deliverable_code,
-            new_total_hours=payload.new_total_hours,
-            components=payload.components,
-            complexity=payload.complexity,
-            tier=payload.tier,
-            use_ai=payload.use_ai,
-            context=payload.context
-        )
-        
-        # Convert dataclass result to dict for JSON response
-        return {
-            "success": True,
-            "result": {
-                "deliverable_name": result.deliverable_name,
-                "total_hours": result.total_hours,
-                "original_total": result.original_total,
-                "components": [
-                    {
-                        "name": c.name,
-                        "current_hours": c.current_hours,
-                        "suggested_hours": c.suggested_hours,
-                        "change": c.change,
-                        "percentage_of_total": c.percentage_of_total,
-                        "reasoning": c.reasoning,
-                        "complexity_factor": c.complexity_factor,
-                        "confidence": c.confidence
-                    }
-                    for c in result.components
-                ],
-                "reasoning": result.reasoning,
-                "confidence": result.confidence,
-                "methodology": result.methodology
-            }
-        }
-    except Exception as e:
-        print(f"[Pricing API] Error redistributing hours: {e}")
-        return JSONResponse(
-            {"success": False, "error": str(e)},
-            status_code=500
-        )
+# Removed duplicate endpoint - see the other /api/pricing/redistribute-hours endpoint below
 
 @app.post("/api/pricing/analyze-retainer")
 async def api_analyze_retainer(payload: RetainerAnalysisPayload):
@@ -5890,29 +5829,52 @@ def api_auto_build(payload: AutoBuildPayload):
     return {"suggested": suggestions, "scenarios": scenarios}
 
 @app.post("/api/export")
-def api_export(payload: ExportPayload):
+def api_export(payload: Union[ExportPayload, dict]):
     """
     Export a Workfront file (CSV or XLSX) from a single scenario payload.
     The 'Project_Name' column is set to payload.project_name if provided.
     The download filename is derived from project/scenario.
+    
+    Accepts both formats:
+    - {"scenario": {...}, "file_format": "xlsx", "project_name": "Project"}
+    - {"scenarios": {"A": {...}}, "file_format": "xlsx", "project_name": "Project"}
     """
     if not DB.loaded:
         DB.load()
 
-    project_name = (payload.project_name
-                    or _upload_title_default()
-                    or f"Proposal {datetime.date.today().isoformat()}")
+    # Handle both dict and model formats
+    if isinstance(payload, dict):
+        # Extract scenario from either 'scenario' or 'scenarios.A'
+        scenario = payload.get("scenario")
+        if not scenario and "scenarios" in payload:
+            # Get the first scenario (usually 'A')
+            scenarios_dict = payload.get("scenarios", {})
+            if scenarios_dict and isinstance(scenarios_dict, dict):
+                first_key = next(iter(scenarios_dict.keys()), None)
+                if first_key:
+                    scenario = scenarios_dict[first_key]
+        
+        project_name = payload.get("project_name")
+        file_format = payload.get("file_format", "csv")
+        scenario_label = payload.get("scenario_label")
+    else:
+        scenario = payload.scenario
+        project_name = payload.project_name
+        file_format = payload.file_format or "csv"
+        scenario_label = payload.scenario_label
+
+    project_name = project_name or _upload_title_default() or f"Proposal {datetime.date.today().isoformat()}"
 
     # Inflate components if missing (defensive fallback)
-    scenario = _inflate_components_if_missing(payload.scenario or {})
+    scenario = _inflate_components_if_missing(scenario or {})
     
     df = build_wbs_dataframe_from_scenario(scenario, project_name)
     # <<< force A–E to the left and guarantee presence
     df = _ensure_v3_ae_columns(df)
 
-    base = _export_basename(project_name, payload.scenario_label)  # always adds EST timestamp
+    base = _export_basename(project_name, scenario_label)  # always adds EST timestamp
 
-    fmt = (payload.file_format or "csv").lower()
+    fmt = (file_format or "csv").lower()
     if fmt == "csv":
         out_path = f"{base}.csv"
         df.to_csv(out_path, index=False)
@@ -6057,8 +6019,21 @@ def _assert_has_items(scen: dict, label: str):
     if not scen or not scen.get("items"):
         raise HTTPException(400, f"No build context for {label}. Run Build once in Step 3.")
 
+@app.post("/api/export/xml")
+def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
+    """
+    Export a single scenario as Microsoft Project XML (MSPDI) format.
+    POST endpoint for XML export with flexible payload handling.
+    
+    Accepts formats:
+    - {"scenario": {...}, "project_name": "Project"}
+    - {"scenarios": {"A": {...}}, "project_name": "Project"}
+    """
+    # Delegate to the existing export_xml function
+    return api_export_xml(payload)
+
 @app.post("/api/export_xml")
-def api_export_xml(payload: ExportXMLPayload):
+def api_export_xml(payload: Union[ExportXMLPayload, dict]):
     """
     Export a single scenario as Microsoft Project XML (MSPDI) format.
     Uses the convert_excel_to_mspdi function with multi-resource merge capability.
@@ -6066,44 +6041,68 @@ def api_export_xml(payload: ExportXMLPayload):
     if not DB.loaded:
         DB.load()
 
-    project_name = (payload.project_name
-                    or _upload_title_default()
-                    or f"Proposal {datetime.date.today().isoformat()}")
+    # Handle both dict and model formats
+    if isinstance(payload, dict):
+        # Extract scenario from either 'scenario' or 'scenarios.A'
+        scenario = payload.get("scenario")
+        if not scenario and "scenarios" in payload:
+            scenarios_dict = payload.get("scenarios", {})
+            if scenarios_dict and isinstance(scenarios_dict, dict):
+                first_key = next(iter(scenarios_dict.keys()), None)
+                if first_key:
+                    scenario = scenarios_dict[first_key]
+        
+        project_name = payload.get("project_name")
+        scenario_label = payload.get("scenario_label")
+        sheet_name = payload.get("sheet_name", "WBS Export")
+        start_date_mode = payload.get("start_date_mode", "today")
+        fixed_start_iso = payload.get("fixed_start_iso")
+        hours_per_day = payload.get("hours_per_day", 8.0)
+    else:
+        scenario = payload.scenario
+        project_name = payload.project_name
+        scenario_label = payload.scenario_label
+        sheet_name = payload.sheet_name
+        start_date_mode = payload.start_date_mode
+        fixed_start_iso = payload.fixed_start_iso
+        hours_per_day = payload.hours_per_day
+
+    project_name = project_name or _upload_title_default() or f"Proposal {datetime.date.today().isoformat()}"
 
     # Guard: ensure scenario has items
-    _assert_has_items(payload.scenario or {}, "XML export")
+    _assert_has_items(scenario or {}, "XML export")
     
     # Inflate components if missing (defensive fallback)
-    scenario = _inflate_components_if_missing(payload.scenario or {})
+    scenario = _inflate_components_if_missing(scenario or {})
     
     # Build WBS DataFrame
     df = build_wbs_dataframe_from_scenario(scenario, project_name)
     df = _ensure_v3_ae_columns(df)
 
     # Create temporary Excel file for MSPDI conversion
-    base = _export_basename(project_name, payload.scenario_label or "Scenario")
+    base = _export_basename(project_name, scenario_label or "Scenario")
     temp_xlsx = f"{base}_temp.xlsx"
     output_xml = f"{base}.xml"
     
     try:
         # Write to temporary Excel file
         with pd.ExcelWriter(temp_xlsx, engine="openpyxl") as xw:
-            df.to_excel(xw, sheet_name=payload.sheet_name, index=False)
-            _apply_number_formats(xw.sheets[payload.sheet_name], df)
+            df.to_excel(xw, sheet_name=sheet_name, index=False)
+            _apply_number_formats(xw.sheets[sheet_name], df)
 
         # Convert to MSPDI XML
         # Use fixed_start_iso from payload, or fall back to project_start from scenario
-        project_start_iso = payload.fixed_start_iso or scenario.get("project_start")
+        project_start_iso = fixed_start_iso or scenario.get("project_start")
         
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
-            sheet_name=payload.sheet_name,
-            start_date_mode=payload.start_date_mode,
+            sheet_name=sheet_name,
+            start_date_mode=start_date_mode,
             fixed_start_iso=project_start_iso,
-            hours_per_day=payload.hours_per_day,
+            hours_per_day=hours_per_day,
             merge_identical_children=False,
-            project_name=payload.project_name,
+            project_name=project_name,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate")
@@ -6990,22 +6989,66 @@ class RetainerSuggestionRequest(BaseModel):
     deliverable_codes: List[str]
     rfp_text: str
     
-@app.post("/api/pricing/redistribute-hours", response_model=HourRedistributionResponse)
-async def redistribute_hours(request: HourRedistributionRequest):
+@app.post("/api/pricing/redistribute-hours")
+async def redistribute_hours(request: Union[HourRedistributionRequest, dict]):
     """
     AI-powered hour redistribution endpoint.
     Takes a deliverable with new total hours and redistributes among components.
+    
+    Accepts simple format:
+    {"deliverable_code": "DEL-0029", "total_hours": 100}
+    
+    Or complex format:
+    {"deliverable_code": "DEL-0029", "deliverable_name": "Name", "new_total_hours": 100, "components": [...]}
     """
+    # Ensure DB is loaded
+    if not DB.loaded:
+        DB.load()
+        
     try:
-        from ai_pricing_optimizer import redistribute_hours
+        from ai_pricing_optimizer import redistribute_hours as ai_redistribute
+        
+        # Handle both dict and model formats
+        if isinstance(request, dict):
+            deliverable_code = request.get("deliverable_code", "")
+            total_hours = request.get("total_hours") or request.get("new_total_hours", 100)
+            deliverable_name = request.get("deliverable_name", "")
+            components = request.get("components", [])
+            rfp_text = request.get("rfp_text", "")
+        else:
+            deliverable_code = request.deliverable_code
+            total_hours = request.new_total_hours
+            deliverable_name = request.deliverable_name
+            components = [{"name": c.name, "hours": c.current_hours} for c in request.components]
+            rfp_text = request.rfp_text
+        
+        # If no deliverable name provided, try to get it from DB
+        if not deliverable_name and deliverable_code:
+            if hasattr(DB, 'deliverables') and DB.deliverables is not None:
+                deliv_row = DB.deliverables[DB.deliverables["Deliverable_Code"] == deliverable_code]
+                if not deliv_row.empty:
+                    deliverable_name = deliv_row["Deliverable"].iloc[0]
+        
+        # If still no name, use code as name
+        if not deliverable_name:
+            deliverable_name = deliverable_code or "Deliverable"
+        
+        # If no components provided, create default ones
+        if not components:
+            components = [
+                {"name": "Research & Discovery", "hours": total_hours * 0.2},
+                {"name": "Planning & Strategy", "hours": total_hours * 0.15},
+                {"name": "Development & Execution", "hours": total_hours * 0.45},
+                {"name": "Review & Optimization", "hours": total_hours * 0.2}
+            ]
         
         # Call AI redistribution
-        result = await redistribute_hours(
-            deliverable_name=request.deliverable_name,
-            deliverable_code=request.deliverable_code,
-            new_total_hours=request.new_total_hours,
-            components=[{"name": c.name, "hours": c.current_hours} for c in request.components],
-            context=request.rfp_text
+        result = await ai_redistribute(
+            deliverable_name=deliverable_name,
+            deliverable_code=deliverable_code,
+            new_total_hours=total_hours,
+            components=components,
+            context=rfp_text
         )
         
         # Map the result from PricingOptimizer to the response model
@@ -7056,13 +7099,21 @@ async def suggest_retainer_configuration(request: RetainerSuggestionRequest):
     AI-powered retainer suggestion endpoint.
     Analyzes deliverables and suggests which should be retainers.
     """
+    # Ensure DB is loaded
+    if not DB.loaded:
+        DB.load()
+    
     try:
         from ai_pricing_optimizer import PricingOptimizer
         optimizer = PricingOptimizer()
         
         suggestions = []
         for code in request.deliverable_codes:
-            # Get deliverable name from DB
+            # Get deliverable name from DB - check if deliverables exists
+            if not hasattr(DB, 'deliverables') or DB.deliverables is None:
+                print(f"[PRICING] DB.deliverables not available for code {code}")
+                continue
+                
             deliv_row = DB.deliverables[DB.deliverables["Deliverable_Code"] == code]
             if deliv_row.empty:
                 continue
@@ -7089,20 +7140,22 @@ async def suggest_retainer_configuration(request: RetainerSuggestionRequest):
                             "maintenance", "support", "monitoring", "reporting"]
         suggestions = []
         
-        for code in request.deliverable_codes:
-            deliv_row = DB.deliverables[DB.deliverables["Deliverable_Code"] == code]
-            if deliv_row.empty:
-                continue
+        # Ensure DB is available for fallback
+        if hasattr(DB, 'deliverables') and DB.deliverables is not None:
+            for code in request.deliverable_codes:
+                deliv_row = DB.deliverables[DB.deliverables["Deliverable_Code"] == code]
+                if deliv_row.empty:
+                    continue
+                    
+                deliv_name = str(deliv_row["Deliverable"].iloc[0]).lower()
                 
-            deliv_name = str(deliv_row["Deliverable"].iloc[0]).lower()
-            
-            if any(keyword in deliv_name for keyword in retainer_keywords):
-                suggestions.append({
-                    "deliverable_code": code,
-                    "deliverable_name": deliv_row["Deliverable"].iloc[0],
-                    "suggested_months": 12,
-                    "reasoning": "Ongoing service based on name pattern (fallback mode)"
-                })
+                if any(keyword in deliv_name for keyword in retainer_keywords):
+                    suggestions.append({
+                        "deliverable_code": code,
+                        "deliverable_name": deliv_row["Deliverable"].iloc[0],
+                        "suggested_months": 12,
+                        "reasoning": "Ongoing service based on name pattern (fallback mode)"
+                    })
         
         return {"suggestions": suggestions}
 

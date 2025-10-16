@@ -529,6 +529,133 @@ def calculate_retainer_distribution(
     
     return distribution
 
+class PricingOptimizer:
+    """AI-powered pricing optimization for agency deliverables"""
+    
+    def __init__(self):
+        self.client = client  # Use the global OpenAI client
+        self.available = OPENAI_AVAILABLE
+    
+    async def should_be_retainer(
+        self, 
+        deliverable_name: str, 
+        rfp_text: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Determine if a deliverable should be a retainer based on AI analysis
+        
+        Args:
+            deliverable_name: Name of the deliverable
+            rfp_text: Optional RFP text for context
+            
+        Returns:
+            Dictionary with is_retainer, suggested_months, and reasoning
+        """
+        
+        # If no AI available, fall back to rule-based
+        if not self.available or not self.client:
+            return self._rule_based_retainer_check(deliverable_name)
+        
+        try:
+            # Build prompt for GPT
+            system_prompt = """You are an expert project manager determining if deliverables should be retainer-based or project-based.
+            
+            Retainers are best for:
+            - Ongoing, recurring work (management, maintenance, monitoring)
+            - Regular monthly activities (social media, SEO, reporting)
+            - Long-term engagements with consistent effort
+            
+            Projects are best for:
+            - One-time deliverables (audits, launches, setups)
+            - Fixed-scope work with clear endpoints
+            - Discovery/research phases
+            
+            Analyze the deliverable name and context, then respond with JSON."""
+            
+            user_prompt = f"""Deliverable: {deliverable_name}
+            
+            {f'RFP Context: {rfp_text[:1000]}' if rfp_text else ''}
+            
+            Should this be a retainer or project? If retainer, suggest duration in months (typically 6, 12, or 24).
+            
+            Respond with JSON:
+            {{
+                "is_retainer": boolean,
+                "suggested_months": number (0 if project, 6/12/24 if retainer),
+                "reasoning": "explanation",
+                "confidence": 0.0-1.0
+            }}"""
+            
+            # Model will be auto-enforced by sitecustomize.py
+            response = await self.client.chat.completions.create(
+                model="gpt-5-mini",  # sitecustomize.py will enforce GPT-5
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            
+            return {
+                "is_retainer": result.get("is_retainer", False),
+                "suggested_months": result.get("suggested_months", 12) if result.get("is_retainer") else 0,
+                "reasoning": result.get("reasoning", "AI analysis"),
+                "confidence": result.get("confidence", 0.8)
+            }
+            
+        except Exception as e:
+            print(f"[PricingOptimizer] AI analysis failed: {e}")
+            return self._rule_based_retainer_check(deliverable_name)
+    
+    def _rule_based_retainer_check(self, deliverable_name: str) -> Dict[str, Any]:
+        """Fallback rule-based retainer detection"""
+        name_lower = deliverable_name.lower()
+        
+        # Keywords strongly suggesting retainer
+        retainer_keywords = [
+            'management', 'maintenance', 'monitoring', 'optimization',
+            'ongoing', 'monthly', 'reporting', 'social media', 'seo', 'ppc',
+            'content creation', 'community', 'support', 'analytics'
+        ]
+        
+        # Keywords strongly suggesting project
+        project_keywords = [
+            'development', 'launch', 'setup', 'migration', 'redesign',
+            'implementation', 'integration', 'audit', 'strategy', 'research',
+            'discovery', 'assessment', 'blueprint', 'roadmap'
+        ]
+        
+        retainer_score = sum(1 for k in retainer_keywords if k in name_lower)
+        project_score = sum(1 for k in project_keywords if k in name_lower)
+        
+        is_retainer = retainer_score > project_score
+        
+        if is_retainer:
+            # Determine suggested months based on type
+            if 'annual' in name_lower or 'yearly' in name_lower:
+                months = 12
+            elif 'quarter' in name_lower:
+                months = 3
+            elif 'half-year' in name_lower or 'semi-annual' in name_lower:
+                months = 6
+            else:
+                months = 12  # Default to annual
+            
+            reasoning = f"Ongoing service indicated by: {', '.join([k for k in retainer_keywords if k in name_lower])}"
+        else:
+            months = 0
+            reasoning = f"One-time project indicated by: {', '.join([k for k in project_keywords if k in name_lower]) if project_score > 0 else 'default classification'}"
+        
+        return {
+            "is_retainer": is_retainer,
+            "suggested_months": months,
+            "reasoning": reasoning,
+            "confidence": min(0.6 + abs(retainer_score - project_score) * 0.1, 0.9)
+        }
+
 def analyze_retainer_vs_project(
     deliverable_name: str,
     total_hours: float,
