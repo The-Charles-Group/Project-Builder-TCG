@@ -21,7 +21,7 @@ EMBEDDING_MODEL = "text-embedding-3-large"
 
 AI_STRICTNESS_DEFAULT = os.environ.get("AI_STRICTNESS_DEFAULT", "balanced")
 AI_AUTORELAX = os.environ.get("AI_AUTORELAX", "true").lower() == "true"
-AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "100"))  # FIXED: Increased to 100 for comprehensive RFPs
+AI_MIN_DELIVERABLES = int(os.environ.get("AI_MIN_DELIVERABLES", "20"))  # Reasonable default for normal RFPs
 AI_MIN_COMPONENTS_PER_DELIV = int(os.environ.get("AI_MIN_COMPONENTS_PER_DELIV", "3"))  # Increased for richer expansion
 AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "3"))  # Increased for more detail
 
