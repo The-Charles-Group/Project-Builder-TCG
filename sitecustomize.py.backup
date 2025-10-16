@@ -92,18 +92,13 @@ except Exception as _e:  # pragma: no cover
 # ---------------------------------------------------------------------------
 
 # Allowed GPT‑5 models (plus legacy aliases that normalize to canonical ids).
-# Map fictional GPT-5 models to real OpenAI models
-_ALLOWED_MODELS = {"gpt-5", "gpt-5-pro", "gpt-5-mini", "gpt-5-thinking", "gpt-5-thinking-mini",
-                  "gpt-4", "gpt-4-turbo-preview", "gpt-3.5-turbo", "gpt-4-0613", "gpt-4o", "gpt-4o-mini"}
-_CANONICAL = {"gpt-5": "gpt-4-turbo-preview", "gpt-5-pro": "gpt-4", "gpt-5-mini": "gpt-3.5-turbo",
-              "gpt-5-thinking": "gpt-4-turbo-preview", "gpt-5-thinking-mini": "gpt-3.5-turbo",
-              "gpt-4": "gpt-4", "gpt-4-turbo-preview": "gpt-4-turbo-preview", 
-              "gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4-0613": "gpt-4-0613",
-              "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"}
+_ALLOWED_MODELS = {"gpt-5", "gpt-5-pro", "gpt-5-mini", "gpt-5-thinking", "gpt-5-thinking-mini"}
+_CANONICAL = {"gpt-5": "gpt-5", "gpt-5-pro": "gpt-5-pro", "gpt-5-mini": "gpt-5-mini",
+              "gpt-5-thinking": "gpt-5", "gpt-5-thinking-mini": "gpt-5-mini"}
 
-# Tier → model + effort (map to real models)
-_TIER_TO_MODEL = {"mini": "gpt-3.5-turbo", "thinking": "gpt-4-turbo-preview", "pro": "gpt-4",
-                  "fast": "gpt-3.5-turbo", "balanced": "gpt-4-turbo-preview", "accurate": "gpt-4"}
+# Tier → model + effort
+_TIER_TO_MODEL = {"mini": "gpt-5-mini", "thinking": "gpt-5", "pro": "gpt-5-pro",
+                  "fast": "gpt-5-mini", "balanced": "gpt-5", "accurate": "gpt-5-pro"}
 _TIER_TO_EFFORT = {"mini": "low", "thinking": "medium", "pro": "high",
                    "fast": "low", "balanced": "medium", "accurate": "high"}
 
@@ -139,33 +134,9 @@ def _coerce_max_tokens(kwargs: Dict[str, Any]) -> Optional[int]:
 
 
 def _extract_output_text(resp: Any) -> str:
-    """Extract text from either chat completions or responses API format."""
-    
-    # First try chat completions format (what we're now using)
-    if hasattr(resp, "choices") and resp.choices:
-        try:
-            msg = resp.choices[0].message
-            if hasattr(msg, "content") and msg.content:
-                return str(msg.content)
-        except (AttributeError, IndexError):
-            pass
-    
-    # Try dict format (for parsed JSON responses)
-    if isinstance(resp, dict):
-        if "choices" in resp and resp["choices"]:
-            try:
-                choice = resp["choices"][0]
-                if "message" in choice and "content" in choice["message"]:
-                    return str(choice["message"]["content"])
-            except (KeyError, IndexError):
-                pass
-    
-    # Legacy: try output_text attribute (old responses format)
     txt = getattr(resp, "output_text", None)
     if isinstance(txt, str) and txt.strip():
         return txt
-    
-    # Legacy: try output attribute (old responses format)
     out = getattr(resp, "output", None)
     if isinstance(out, list) and out:
         try:
@@ -176,8 +147,6 @@ def _extract_output_text(resp: Any) -> str:
                     return t
         except Exception:
             pass
-    
-    # Fallback to string representation
     return str(resp)
 
 
@@ -220,47 +189,10 @@ class _GuardedOpenAI(_OpenAI):  # type: ignore[misc]
         def create(self, **kwargs: Any):
             model = _normalize_model(kwargs.get("model"))
             kwargs["model"] = model
-            
-            # Map "responses" API parameters to chat completions format
-            input_data = kwargs.get("input", [])
-            messages = []
-            
-            # Convert input to messages format
-            if isinstance(input_data, list):
-                for item in input_data:
-                    if isinstance(item, dict):
-                        # Handle both message format and flat format
-                        if "role" in item and "content" in item:
-                            messages.append(item)
-                        elif "type" in item and item["type"] == "input_text":
-                            messages.append({"role": "user", "content": item.get("text", "")})
-                        else:
-                            # Default to user message
-                            messages.append({"role": "user", "content": str(item)})
-                    else:
-                        messages.append({"role": "user", "content": str(item)})
-            elif isinstance(input_data, str):
-                messages = [{"role": "user", "content": input_data}]
-            
-            # Prepare chat completions parameters
-            chat_kwargs = {
-                "model": model,
-                "messages": messages
-            }
-            
-            # Handle max tokens
             mot = _coerce_max_tokens(kwargs)
-            if mot is not None: 
-                chat_kwargs["max_tokens"] = int(mot)
-            elif "max_output_tokens" in kwargs:
-                chat_kwargs["max_tokens"] = int(kwargs["max_output_tokens"])
-            
-            # Handle response format
-            if "response_format" in kwargs:
-                chat_kwargs["response_format"] = kwargs["response_format"]
-            
-            # Use chat completions API instead of non-existent responses API
-            return self._outer._raw.chat.completions.create(**chat_kwargs)
+            if mot is not None: kwargs["max_output_tokens"] = int(mot)
+            kwargs["reasoning"] = {"effort": _effort_for(model, kwargs)}
+            return self._outer._raw.responses.create(**kwargs)
 
     @property
     def responses(self) -> "._ResponsesProxy":
@@ -315,47 +247,10 @@ class _GuardedAsyncOpenAI(_AsyncOpenAI):  # type: ignore[misc]
         async def create(self, **kwargs: Any):
             model = _normalize_model(kwargs.get("model"))
             kwargs["model"] = model
-            
-            # Map "responses" API parameters to chat completions format
-            input_data = kwargs.get("input", [])
-            messages = []
-            
-            # Convert input to messages format
-            if isinstance(input_data, list):
-                for item in input_data:
-                    if isinstance(item, dict):
-                        # Handle both message format and flat format
-                        if "role" in item and "content" in item:
-                            messages.append(item)
-                        elif "type" in item and item["type"] == "input_text":
-                            messages.append({"role": "user", "content": item.get("text", "")})
-                        else:
-                            # Default to user message
-                            messages.append({"role": "user", "content": str(item)})
-                    else:
-                        messages.append({"role": "user", "content": str(item)})
-            elif isinstance(input_data, str):
-                messages = [{"role": "user", "content": input_data}]
-            
-            # Prepare chat completions parameters
-            chat_kwargs = {
-                "model": model,
-                "messages": messages
-            }
-            
-            # Handle max tokens
             mot = _coerce_max_tokens(kwargs)
-            if mot is not None: 
-                chat_kwargs["max_tokens"] = int(mot)
-            elif "max_output_tokens" in kwargs:
-                chat_kwargs["max_tokens"] = int(kwargs["max_output_tokens"])
-            
-            # Handle response format
-            if "response_format" in kwargs:
-                chat_kwargs["response_format"] = kwargs["response_format"]
-            
-            # Use chat completions API instead of non-existent responses API
-            return await self._outer._raw.chat.completions.create(**chat_kwargs)
+            if mot is not None: kwargs["max_output_tokens"] = int(mot)
+            kwargs["reasoning"] = {"effort": _effort_for(model, kwargs)}
+            return await self._outer._raw.responses.create(**kwargs)
 
     @property
     def responses(self) -> "._ResponsesProxy":

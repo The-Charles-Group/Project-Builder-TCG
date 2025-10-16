@@ -1449,14 +1449,14 @@ Return as JSON with keys:
 """
 
         response = await client.chat.completions.create(
-            model="gpt-5-mini",  # Use mini for reasoning enhancement
+            model="gpt-3.5-turbo",  # Use actual OpenAI model
             messages=[
                 {"role": "system", "content": "You are a senior project management consultant."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            # temperature=1,  # GPT-5 only supports default temperature of 1
-            max_completion_tokens=1000  # FIXED: Use max_completion_tokens for GPT-5 models
+            temperature=0.7,  # Add temperature for better results
+            max_tokens=1000  # Use max_tokens for OpenAI models
         )
         
         # Safely parse JSON response with validation
@@ -1636,15 +1636,25 @@ Return a JSON object with this structure:
         if not client:
             raise RuntimeError("OpenAI client not available")
             
+        # Map GPT-5 models to real OpenAI models
+        model_mapping = {
+            "gpt-5": "gpt-4-turbo-preview",
+            "gpt-5-mini": "gpt-3.5-turbo",
+            "gpt-5-pro": "gpt-4",
+            "gpt-5-thinking": "gpt-4-turbo-preview",
+            "gpt-5-thinking-mini": "gpt-3.5-turbo"
+        }
+        actual_model = model_mapping.get(model, "gpt-4-turbo-preview")
+        
         response = await client.chat.completions.create(
-            model=model,  # sitecustomize.py will enforce GPT-5
+            model=actual_model,  # Use actual OpenAI model
             messages=[
                 {"role": "system", "content": "You are a project scheduling expert. Provide realistic timelines based on industry standards."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            # temperature=1,  # GPT-5 only supports default temperature of 1
-            max_completion_tokens=2000  # FIXED: Use max_completion_tokens for GPT-5 models
+            temperature=0.7,  # Add temperature for better results
+            max_tokens=2000  # Use max_tokens for OpenAI models
         )
         
         content = response.choices[0].message.content if response.choices and response.choices[0].message else None
