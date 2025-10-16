@@ -789,18 +789,26 @@ class AIAssistant {
             const progressChecker = setInterval(async () => {
                 checkCount++;
                 
-                // Look for progress bar
-                const progressBar = parentDoc.querySelector('#ai-progress-bar, .progress-bar');
-                const progressContainer = parentDoc.querySelector('#ai-progress-container, .progress-container');
+                // Look for progress bar - check multiple possible selectors
+                const progressBar = parentDoc.querySelector('#ai-progress-bar, .progress-bar, [id*="progress-bar"]');
+                const progressContainer = parentDoc.querySelector('#ai-progress-container, .ai-progress-modal, .progress-container, [id*="progress"]');
                 const step2 = parentDoc.querySelector('#step2');
                 const deliverablesList = parentDoc.querySelectorAll('#s2-deliv-list .deliverable-item, [data-deliverable-code]');
                 
-                // Check if progress is showing
-                if ((progressBar && progressBar.style.width !== '0%') || 
-                    (progressContainer && progressContainer.style.display !== 'none')) {
-                    
+                // Check if progress modal/bar is showing
+                const progressModal = parentDoc.querySelector('#ai-progress-bar');
+                const progressFill = parentDoc.querySelector('#ai-progress-fill');
+                const progressPercent = parentDoc.querySelector('#ai-progress-percent');
+                
+                if (progressModal && progressModal.style.display !== 'none') {
                     if (taskMonitor && checkCount === 1) {
                         this.addMessage('📊 Progress bar detected - analysis running...', 'assistant');
+                    }
+                    
+                    // Report progress percentage if available
+                    if (progressPercent && checkCount % 20 === 0) {
+                        const percent = progressPercent.textContent;
+                        this.addMessage(`⏳ Analysis progress: ${percent}`, 'assistant');
                     }
                 }
                 
@@ -3123,29 +3131,66 @@ class AIAssistant {
                     return;
                 }
                 
-                // Visual upload process - set file in main app's input
-                this.addMessage('🎯 Setting file in main app file input...', 'assistant');
+                // Alternative approach: First extract text from file, then put it in textarea
+                this.addMessage('📄 Extracting text from PDF...', 'assistant');
                 
-                // Create a DataTransfer object to programmatically set files
-                const dt = new DataTransfer();
-                dt.items.add(file);
-                mainFileInput.files = dt.files;
+                // Upload file to extract text
+                const formData = new FormData();
+                formData.append('files', file);
+                formData.append('analyze_images', 'true');
                 
-                // Trigger change event to update UI
-                mainFileInput.dispatchEvent(new Event('change', { bubbles: true }));
+                const extractResponse = await fetch('/api/summarize_by_file', {
+                    method: 'POST',
+                    body: formData
+                });
                 
-                // Visual feedback - highlight the file input
-                this.flashElement(mainFileInput);
+                if (!extractResponse.ok) {
+                    throw new Error('Failed to extract text from file');
+                }
+                
+                const summary = await extractResponse.json();
+                const extractedText = summary.summary_text || '';
+                
+                if (!extractedText) {
+                    this.addMessage('⚠️ No text extracted from file. Trying visual upload...', 'assistant');
+                    
+                    // Fallback: Try to set file directly (may not work across contexts)
+                    const dt = new DataTransfer();
+                    dt.items.add(file);
+                    mainFileInput.files = dt.files;
+                    mainFileInput.dispatchEvent(new Event('change', { bubbles: true }));
+                } else {
+                    taskMonitor.updateTask(0, 'completed');
+                    this.addMessage(`✅ Extracted ${extractedText.length} characters from PDF`, 'assistant');
+                    
+                    // Put extracted text into the textarea instead
+                    const rfpTextArea = parentDoc.querySelector('#rfpText');
+                    if (rfpTextArea) {
+                        // Visual effect on textarea
+                        this.flashElement(rfpTextArea);
+                        
+                        // Set the text
+                        rfpTextArea.value = extractedText;
+                        rfpTextArea.dispatchEvent(new Event('input', { bubbles: true }));
+                        rfpTextArea.dispatchEvent(new Event('change', { bubbles: true }));
+                        
+                        this.addMessage('📝 Text loaded into RFP content field', 'assistant');
+                        
+                        // Clear any file input to avoid confusion
+                        if (mainFileInput.files.length === 0) {
+                            // Good - no file conflict
+                        } else {
+                            mainFileInput.value = '';
+                        }
+                    }
+                }
                 
                 // Update the file list display if it exists
                 const fileListDisplay = parentDoc.querySelector('#selected-files-list');
                 if (fileListDisplay) {
-                    fileListDisplay.textContent = `Selected: ${file.name}`;
+                    fileListDisplay.textContent = `Processing: ${file.name}`;
                     this.flashElement(fileListDisplay);
                 }
-                
-                taskMonitor.updateTask(0, 'completed');
-                this.addMessage('✅ File loaded into main app', 'assistant');
                 
                 // Wait a moment for UI to update
                 await this.delay(800);
