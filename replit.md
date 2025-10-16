@@ -4,7 +4,17 @@
 This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.6** (October 16, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
 ## Recent Changes
-- **October 16, 2025**: Critical bug fix and security updates
+- **October 16, 2025**: Unified Pricing Table + Critical bug fixes
+  - **NEW FEATURE**: Unified Editable Pricing Table (Step 3)
+    - Replaced TWO separate tables with ONE expandable table merging deliverables and components
+    - Real-time synchronization between Gantt timeline and pricing via event bridge
+    - Inline editing: cadence (One-Time/Monthly/Quarterly), months, hours, rate, resources/tasks
+    - Smart cadence propagation: parent deliverable values cascade to child components
+    - Dual persistence: localStorage (instant) + server storage (durable) with pub/sub state management
+    - Components start collapsed (▸), expand on click (▾) to show detailed breakdown
+    - Per-row Save buttons + unified "Re-build Scenario" action
+    - Backend API: `/api/scenario/save` (POST) and `/api/scenario/active` (GET)
+    - 6 new files: scenario_api.py, scenario-store.js, pricing-one-table.js, gantt-bridge.js, pricing-one-table.css, pricing-one-table.html
   - **CRITICAL FIX**: Resolved infinite polling loop that froze browsers during analysis
     - Fixed undefined `logError` function causing error handling failure
     - Converted polling to instance-based cleanup preventing multiple concurrent loops
