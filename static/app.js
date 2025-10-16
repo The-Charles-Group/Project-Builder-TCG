@@ -2912,14 +2912,30 @@ async function generateAITimeline(retryAttempt = 0) {
     return;
   }
   
+  const deliverableCount = selectedCodes.length;
+  
+  // Dynamic timeout calculation: base 180 seconds + 5 seconds per deliverable
+  const BASE_TIMEOUT_MS = 180000; // 180 seconds (3 minutes)
+  const PER_DELIVERABLE_MS = 5000; // 5 seconds per deliverable
+  const TIMEOUT_MS = BASE_TIMEOUT_MS + (deliverableCount * PER_DELIVERABLE_MS);
+  
+  // Calculate estimated time
+  const estimatedSeconds = Math.ceil(TIMEOUT_MS / 1000);
+  const estimatedMinutes = Math.ceil(estimatedSeconds / 60);
+  
   // Show loading state with progress UI
   btn.disabled = true;
-  btn.textContent = retryAttempt > 0 ? 'Retrying...' : 'Starting...';
+  btn.textContent = retryAttempt > 0 ? `Retrying... (Attempt ${retryAttempt + 1}/3)` : 'Starting...';
   
-  // Create comprehensive progress UI with error display area
+  // Create comprehensive progress UI with error display area and estimated time
   const progressHTML = `
     <div id="timeline-progress-container" style="padding: 20px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; margin-bottom: 20px;">
       <h3 style="margin: 0 0 12px 0; color: #6366f1;">🚀 Generating AI Timeline</h3>
+      ${deliverableCount > 10 ? `<div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); padding: 10px; border-radius: 4px; margin-bottom: 12px;">
+        <p style="margin: 0; color: #2563eb; font-size: 0.9em;">
+          ℹ️ You have selected ${deliverableCount} deliverables. This may take ${estimatedMinutes > 1 ? `${estimatedMinutes} minutes` : 'about a minute'} to generate a comprehensive timeline.
+        </p>
+      </div>` : ''}
       <div id="timeline-progress-content">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <strong id="timeline-progress-stage" style="color: #6366f1;">Initializing...</strong>
@@ -2930,7 +2946,7 @@ async function generateAITimeline(retryAttempt = 0) {
         </div>
         <div style="display: flex; justify-content: space-between; margin-top: 8px;">
           <small id="timeline-progress-message" style="color: var(--muted);">Preparing timeline generation...</small>
-          <small id="timeline-progress-eta" style="color: var(--muted);"></small>
+          <small id="timeline-progress-eta" style="color: var(--muted);">Estimated: ${estimatedMinutes > 1 ? `${estimatedMinutes} minutes` : '< 1 minute'}</small>
         </div>
         <div id="timeline-progress-details" style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.05); border-radius: 6px; display: none;">
           <div style="font-size: 0.85em; color: var(--muted);">
@@ -2946,7 +2962,7 @@ async function generateAITimeline(retryAttempt = 0) {
               <h4 id="timeline-error-title" style="margin: 0 0 8px 0; color: #dc2626;">Timeline Generation Failed</h4>
               <p id="timeline-error-message" style="margin: 0 0 12px 0; color: #7f1d1d;">Something went wrong while generating the timeline.</p>
               <div style="display: flex; gap: 10px;">
-                <button id="btn-retry-timeline" onclick="generateAITimeline(1)" style="padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                <button id="btn-retry-timeline" onclick="generateAITimeline(${retryAttempt + 1})" style="padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
                   🔄 Try Again
                 </button>
                 <button id="btn-cancel-timeline" onclick="cancelTimelineGeneration()" style="padding: 8px 16px; background: #6b7280; color: white; border: none; border-radius: 4px; cursor: pointer;">
@@ -2968,9 +2984,6 @@ async function generateAITimeline(retryAttempt = 0) {
   let timeoutId = null;
   let hasTimedOut = false;
   
-  // Set a 60-second timeout
-  const TIMEOUT_MS = 60000; // 60 seconds
-  
   // Helper function to show error in the UI
   const showTimelineError = (title, message, canRetry = true) => {
     const errorContainer = document.getElementById('timeline-error-container');
@@ -2988,10 +3001,14 @@ async function generateAITimeline(retryAttempt = 0) {
         progressContent.style.display = 'none';
       }
       
-      // Update retry button visibility
+      // Update retry button visibility and attempts left
       const retryBtn = document.getElementById('btn-retry-timeline');
       if (retryBtn) {
-        retryBtn.style.display = canRetry ? 'inline-block' : 'none';
+        const attemptsLeft = 3 - retryAttempt;
+        retryBtn.style.display = (canRetry && attemptsLeft > 0) ? 'inline-block' : 'none';
+        if (canRetry && attemptsLeft > 0) {
+          retryBtn.textContent = `🔄 Try Again (${attemptsLeft} attempts left)`;
+        }
       }
     }
     
@@ -3012,24 +3029,26 @@ async function generateAITimeline(retryAttempt = 0) {
     }
   };
   
-  // Set timeout
+  // Set timeout with dynamic calculation
+  console.log(`[TIMELINE] Setting timeout: ${TIMEOUT_MS}ms (${Math.round(TIMEOUT_MS/1000)}s) for ${deliverableCount} deliverables`);
   timeoutId = setTimeout(() => {
     hasTimedOut = true;
     cleanup();
     
-    const deliverableCount = selectedCodes.length;
-    let timeoutMessage = 'The timeline generation is taking longer than expected.';
+    let timeoutMessage = `The timeline generation timed out after ${Math.round(TIMEOUT_MS/60000)} minutes.`;
     
     if (deliverableCount > 20) {
-      timeoutMessage = `You have ${deliverableCount} deliverables selected. Try selecting fewer deliverables (10-15) for faster generation.`;
+      timeoutMessage = `You have ${deliverableCount} deliverables selected, which requires extensive processing. For better performance, consider selecting 10-15 deliverables at a time.`;
+    } else if (deliverableCount > 10) {
+      timeoutMessage = `Processing ${deliverableCount} deliverables takes time. The server might be under heavy load. Please try again or select fewer items.`;
     } else {
-      timeoutMessage = 'The server is taking too long to respond. This might be due to high load. Please try again in a moment.';
+      timeoutMessage = 'The server is taking too long to respond. This might be due to high load or network issues. Please try again in a moment.';
     }
     
     showTimelineError(
       'Request Timeout',
       timeoutMessage,
-      true
+      retryAttempt < 2 // Allow retry only if we haven't exceeded 3 attempts
     );
   }, TIMEOUT_MS);
   
@@ -3136,6 +3155,13 @@ async function generateAITimeline(retryAttempt = 0) {
     
     console.log(`[TIMELINE] Generating timeline for ${deliverables.length} deliverables from Scenario A`);
     
+    // Exponential backoff delay for retries
+    if (retryAttempt > 0) {
+      const delayMs = Math.min(1000 * Math.pow(2, retryAttempt - 1), 8000); // 1s, 2s, 4s, max 8s
+      console.log(`[TIMELINE] Retry attempt ${retryAttempt + 1}/3 with ${delayMs}ms delay`);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    
     // Call NEW SSE-enabled timeline endpoint with better error handling
     let response;
     try {
@@ -3147,16 +3173,26 @@ async function generateAITimeline(retryAttempt = 0) {
           rfp_text: rfpText,
           project_start: projectStart,
           optimization_mode: optimizationMode,
-          use_intelligent_scheduler: true
+          use_intelligent_scheduler: true,
+          timeout_ms: TIMEOUT_MS, // Send timeout to backend for coordination
+          retry_attempt: retryAttempt
         })
       });
     } catch (fetchError) {
       // Network error - couldn't reach the server
       cleanup();
+      
+      // Auto-retry for network errors with exponential backoff
+      if (retryAttempt < 2) {
+        console.log('[TIMELINE] Network error, auto-retrying...');
+        setTimeout(() => generateAITimeline(retryAttempt + 1), 1000 * Math.pow(2, retryAttempt));
+        return;
+      }
+      
       showTimelineError(
         'Connection Failed',
-        'Unable to connect to the server. Please check your internet connection and try again.',
-        true
+        `Unable to connect to the server after ${retryAttempt + 1} attempts. Please check your internet connection and try again.`,
+        false // No more retries after 3 attempts
       );
       return;
     }
@@ -3167,20 +3203,33 @@ async function generateAITimeline(retryAttempt = 0) {
       // Handle specific HTTP errors with user-friendly messages
       let errorTitle = 'Timeline Generation Failed';
       let errorMessage = 'Something went wrong. Please try again.';
+      let shouldRetry = true;
       
       if (response.status === 400) {
+        // User error - don't auto-retry
         errorMessage = 'Invalid request. Please ensure you have selected valid deliverables and try again.';
+        shouldRetry = false;
       } else if (response.status === 404) {
         errorMessage = 'The timeline generation service is currently unavailable. Please try again later.';
       } else if (response.status === 429) {
-        errorMessage = 'Too many requests. Please wait a moment before trying again.';
+        errorMessage = `Too many requests. ${retryAttempt < 2 ? 'Retrying automatically...' : 'Please wait a moment before trying again.'}`;
+        // Auto-retry for rate limiting
+        if (retryAttempt < 2) {
+          setTimeout(() => generateAITimeline(retryAttempt + 1), 2000 * Math.pow(2, retryAttempt));
+          return;
+        }
       } else if (response.status === 500 || response.status === 502 || response.status === 503) {
-        errorMessage = 'The server is experiencing issues. Please try again in a few moments.';
+        errorMessage = `The server is experiencing issues. ${retryAttempt < 2 ? 'Retrying automatically...' : 'Please try again in a few moments.'}`;
+        // Auto-retry for server errors
+        if (retryAttempt < 2) {
+          setTimeout(() => generateAITimeline(retryAttempt + 1), 1000 * Math.pow(2, retryAttempt));
+          return;
+        }
       } else if (response.status === 504) {
         errorMessage = 'The request took too long. Try selecting fewer deliverables.';
       }
       
-      showTimelineError(errorTitle, errorMessage, true);
+      showTimelineError(errorTitle, errorMessage, shouldRetry && retryAttempt < 2);
       return;
     }
     

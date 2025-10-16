@@ -98,28 +98,40 @@ def create_sse_job(job_id: str, total_items: int = 0) -> StreamJob:
 
 async def sse_event_generator(job_id: str, check_main_store: bool = True):
     """
-    Generate SSE events for a job
+    Generate SSE events for a job with improved heartbeat mechanism
     check_main_store: If True, also check the main AI_JOB_STORE for updates
     """
     # Send initial event immediately to fix 0% issue
     yield f"data: {json.dumps({'status': 'connected', 'job_id': job_id})}\n\n"
     
     last_update = None
+    last_heartbeat_time = time.time()
     no_change_count = 0
-    max_no_change = 300  # Stop after 5 minutes of no changes
+    max_no_change = 600  # Stop after 10 minutes of no changes (increased from 5)
+    heartbeat_interval = 5  # Send heartbeat every 5 seconds
     
     while no_change_count < max_no_change:
         try:
+            current_time = time.time()
+            should_send_heartbeat = (current_time - last_heartbeat_time) >= heartbeat_interval
+            
             # Check SSE job store first
             if job_id in SSE_JOB_STORE:
                 job = SSE_JOB_STORE[job_id]
                 event = job.to_sse_event()
                 
-                # Send update if changed or every 5 iterations (heartbeat)
-                if event != last_update or no_change_count % 5 == 0:
+                # Send update if changed, or send heartbeat if needed
+                if event != last_update:
                     yield event
                     last_update = event
+                    last_heartbeat_time = current_time
                     no_change_count = 0
+                elif should_send_heartbeat:
+                    # Send explicit heartbeat to keep connection alive
+                    heartbeat_event = f"data: {json.dumps({'type': 'heartbeat', 'job_id': job_id, 'status': job.status.value, 'progress': job.progress, 'timestamp': current_time})}\n\n"
+                    yield heartbeat_event
+                    last_heartbeat_time = current_time
+                    # Don't reset no_change_count for heartbeats
                 else:
                     no_change_count += 1
                 
@@ -172,10 +184,17 @@ async def sse_event_generator(job_id: str, check_main_store: bool = True):
                         
                         event = f"data: {json.dumps(event_data)}\n\n"
                         
-                        if event != last_update or no_change_count % 5 == 0:
+                        # Send update if changed, or send heartbeat if needed
+                        if event != last_update:
                             yield event
                             last_update = event
+                            last_heartbeat_time = current_time
                             no_change_count = 0
+                        elif should_send_heartbeat:
+                            # Send heartbeat for AI job
+                            heartbeat_event = f"data: {json.dumps({'type': 'heartbeat', 'job_id': job_id, 'status': event_data['status'], 'progress': event_data['progress'], 'timestamp': current_time})}\n\n"
+                            yield heartbeat_event
+                            last_heartbeat_time = current_time
                         else:
                             no_change_count += 1
                         
@@ -184,13 +203,25 @@ async def sse_event_generator(job_id: str, check_main_store: bool = True):
                             yield event
                             break
                     else:
-                        # Job not found in either store
+                        # Job not found in either store - send heartbeat if needed
+                        if should_send_heartbeat:
+                            heartbeat_event = f"data: {json.dumps({'type': 'heartbeat', 'job_id': job_id, 'status': 'searching', 'timestamp': current_time})}\n\n"
+                            yield heartbeat_event
+                            last_heartbeat_time = current_time
                         no_change_count += 1
                 except ImportError:
-                    # AI planner not available
+                    # AI planner not available - send heartbeat if needed
+                    if should_send_heartbeat:
+                        heartbeat_event = f"data: {json.dumps({'type': 'heartbeat', 'job_id': job_id, 'status': 'waiting', 'timestamp': current_time})}\n\n"
+                        yield heartbeat_event
+                        last_heartbeat_time = current_time
                     no_change_count += 1
             else:
-                # Job not found
+                # Job not found - send heartbeat if needed
+                if should_send_heartbeat:
+                    heartbeat_event = f"data: {json.dumps({'type': 'heartbeat', 'job_id': job_id, 'status': 'waiting', 'timestamp': current_time})}\n\n"
+                    yield heartbeat_event
+                    last_heartbeat_time = current_time
                 no_change_count += 1
             
             # Wait before next check
