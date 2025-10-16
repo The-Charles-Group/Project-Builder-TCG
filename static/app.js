@@ -6007,7 +6007,7 @@ function renderDeliverablesPanel() {
   
   // Render Selected group
   if (selected.length > 0) {
-    html += '<div style="font-weight:600;padding:8px;color:var(--accent);background:rgba(139,92,246,0.05);border-bottom:1px solid rgba(255,255,255,0.1);">Selected</div>';
+    html += '<div style="font-weight:600;padding:8px;color:#ffffff;background:rgba(139,92,246,0.15);border-bottom:1px solid rgba(255,255,255,0.1);">Selected</div>';
     selected.forEach(d => {
       const code = String(d.Deliverable_Code);
       const isActive = APB.step2.activeDeliverableCode === code;
@@ -8065,7 +8065,7 @@ function s2RenderRight(filter) {
       return (a.Deliverable || '').localeCompare(b.Deliverable || '');
     });
     
-    const deptHeader = `<div style="font-weight:600; padding:8px 8px 4px; color:var(--accent); border-top:1px solid rgba(255,255,255,0.1); margin-top:4px; background:rgba(139,92,246,0.05);">${dept}</div>`;
+    const deptHeader = `<div style="font-weight:600; padding:8px 8px 4px; color:#ffffff; border-top:1px solid rgba(255,255,255,0.1); margin-top:4px; background:rgba(139,92,246,0.15);">${dept}</div>`;
     const deptRows = deptItems.map(d => `
       <label class="row" data-deliv-row="1" data-search="${(d.Deliverable + ' ' + (d.Category || '') + ' ' + (d['Service Department'] || '')).toLowerCase()}" 
              style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
