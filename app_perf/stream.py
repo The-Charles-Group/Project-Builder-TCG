@@ -107,8 +107,8 @@ async def sse_event_generator(job_id: str, check_main_store: bool = True):
     last_update = None
     last_heartbeat_time = time.time()
     no_change_count = 0
-    max_no_change = 600  # Stop after 10 minutes of no changes (increased from 5)
-    heartbeat_interval = 5  # Send heartbeat every 5 seconds
+    max_no_change = 1200  # Stop after 20 minutes of no changes (increased for large projects)
+    heartbeat_interval = 2  # Send heartbeat every 2 seconds for better connection monitoring
     
     while no_change_count < max_no_change:
         try:
@@ -234,7 +234,7 @@ async def sse_event_generator(job_id: str, check_main_store: bool = True):
     
     # Send timeout event if we stopped due to no changes
     if no_change_count >= max_no_change:
-        yield f"data: {json.dumps({'status': 'timeout', 'message': 'No updates for 5 minutes', 'job_id': job_id})}\n\n"
+        yield f"data: {json.dumps({'status': 'timeout', 'message': 'No updates for 20 minutes', 'job_id': job_id})}\n\n"
 
 async def cleanup_sse_job(job_id: str, delay: int = 60):
     """Clean up SSE job after a delay"""

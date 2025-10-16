@@ -1,0 +1,232 @@
+{
+  "deliverables": [
+    {
+      "deliverable_code": "DEL-0001",
+      "deliverable": "Test Deliverable 1",
+      "department": "Strategy",
+      "hours": 22,
+      "price": 3100,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0002",
+      "deliverable": "Test Deliverable 2",
+      "department": "Strategy",
+      "hours": 24,
+      "price": 3200,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0003",
+      "deliverable": "Test Deliverable 3",
+      "department": "Strategy",
+      "hours": 26,
+      "price": 3300,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0004",
+      "deliverable": "Test Deliverable 4",
+      "department": "Strategy",
+      "hours": 28,
+      "price": 3400,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0005",
+      "deliverable": "Test Deliverable 5",
+      "department": "Strategy",
+      "hours": 30,
+      "price": 3500,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0006",
+      "deliverable": "Test Deliverable 6",
+      "department": "Strategy",
+      "hours": 32,
+      "price": 3600,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0007",
+      "deliverable": "Test Deliverable 7",
+      "department": "Strategy",
+      "hours": 34,
+      "price": 3700,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0008",
+      "deliverable": "Test Deliverable 8",
+      "department": "Strategy",
+      "hours": 36,
+      "price": 3800,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0009",
+      "deliverable": "Test Deliverable 9",
+      "department": "Strategy",
+      "hours": 38,
+      "price": 3900,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0010",
+      "deliverable": "Test Deliverable 10",
+      "department": "Strategy",
+      "hours": 40,
+      "price": 4000,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0011",
+      "deliverable": "Test Deliverable 11",
+      "department": "Strategy",
+      "hours": 42,
+      "price": 4100,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0012",
+      "deliverable": "Test Deliverable 12",
+      "department": "Strategy",
+      "hours": 44,
+      "price": 4200,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0013",
+      "deliverable": "Test Deliverable 13",
+      "department": "Strategy",
+      "hours": 46,
+      "price": 4300,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0014",
+      "deliverable": "Test Deliverable 14",
+      "department": "Strategy",
+      "hours": 48,
+      "price": 4400,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0015",
+      "deliverable": "Test Deliverable 15",
+      "department": "Strategy",
+      "hours": 50,
+      "price": 4500,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0016",
+      "deliverable": "Test Deliverable 16",
+      "department": "Strategy",
+      "hours": 52,
+      "price": 4600,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0017",
+      "deliverable": "Test Deliverable 17",
+      "department": "Strategy",
+      "hours": 54,
+      "price": 4700,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0018",
+      "deliverable": "Test Deliverable 18",
+      "department": "Strategy",
+      "hours": 56,
+      "price": 4800,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0019",
+      "deliverable": "Test Deliverable 19",
+      "department": "Strategy",
+      "hours": 58,
+      "price": 4900,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0020",
+      "deliverable": "Test Deliverable 20",
+      "department": "Strategy",
+      "hours": 60,
+      "price": 5000,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0021",
+      "deliverable": "Test Deliverable 21",
+      "department": "Strategy",
+      "hours": 62,
+      "price": 5100,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0022",
+      "deliverable": "Test Deliverable 22",
+      "department": "Strategy",
+      "hours": 64,
+      "price": 5200,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0023",
+      "deliverable": "Test Deliverable 23",
+      "department": "Strategy",
+      "hours": 66,
+      "price": 5300,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0024",
+      "deliverable": "Test Deliverable 24",
+      "department": "Strategy",
+      "hours": 68,
+      "price": 5400,
+      "components": []
+    }
+,
+    {
+      "deliverable_code": "DEL-0025",
+      "deliverable": "Test Deliverable 25",
+      "department": "Strategy",
+      "hours": 70,
+      "price": 5500,
+      "components": []
+    }
+  ],
+  "rfp_text": "Test RFP for large deliverable set testing",
+  "project_start": "2025-01-01",
+  "optimization_mode": "balanced",
+  "use_intelligent_scheduler": false
+}

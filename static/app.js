@@ -2914,28 +2914,38 @@ async function generateAITimeline(retryAttempt = 0) {
   
   const deliverableCount = selectedCodes.length;
   
-  // Dynamic timeout calculation: base 180 seconds + 5 seconds per deliverable
-  const BASE_TIMEOUT_MS = 180000; // 180 seconds (3 minutes)
-  const PER_DELIVERABLE_MS = 5000; // 5 seconds per deliverable
-  const TIMEOUT_MS = BASE_TIMEOUT_MS + (deliverableCount * PER_DELIVERABLE_MS);
+  // Connection health tracking
+  let lastHeartbeatTime = Date.now();
+  let lastDataTime = Date.now();
+  const HEARTBEAT_TIMEOUT_MS = 30000; // 30 seconds without any data = real issue
+  const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds if SSE fails
   
-  // Calculate estimated time
-  const estimatedSeconds = Math.ceil(TIMEOUT_MS / 1000);
-  const estimatedMinutes = Math.ceil(estimatedSeconds / 60);
+  // Polling fallback state
+  let isPolling = false;
+  let pollingIntervalId = null;
   
   // Show loading state with progress UI
   btn.disabled = true;
   btn.textContent = retryAttempt > 0 ? `Retrying... (Attempt ${retryAttempt + 1}/3)` : 'Starting...';
   
-  // Create comprehensive progress UI with error display area and estimated time
+  // Create comprehensive progress UI with error display area
   const progressHTML = `
     <div id="timeline-progress-container" style="padding: 20px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; margin-bottom: 20px;">
       <h3 style="margin: 0 0 12px 0; color: #6366f1;">🚀 Generating AI Timeline</h3>
-      ${deliverableCount > 10 ? `<div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); padding: 10px; border-radius: 4px; margin-bottom: 12px;">
+      ${deliverableCount > 20 ? `<div style="background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.2); padding: 10px; border-radius: 4px; margin-bottom: 12px;">
+        <p style="margin: 0; color: #16a34a; font-size: 0.9em;">
+          📋 Large project detected (${deliverableCount} deliverables). This may take several minutes. You can continue working while we generate your timeline.
+        </p>
+      </div>` : deliverableCount > 10 ? `<div style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); padding: 10px; border-radius: 4px; margin-bottom: 12px;">
         <p style="margin: 0; color: #2563eb; font-size: 0.9em;">
-          ℹ️ You have selected ${deliverableCount} deliverables. This may take ${estimatedMinutes > 1 ? `${estimatedMinutes} minutes` : 'about a minute'} to generate a comprehensive timeline.
+          ℹ️ Processing ${deliverableCount} deliverables. We're optimizing your timeline with AI.
         </p>
       </div>` : ''}
+      <div id="timeline-connection-status" style="display: none; background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.2); padding: 8px; border-radius: 4px; margin-bottom: 12px;">
+        <p style="margin: 0; color: #ea580c; font-size: 0.85em;">
+          🔄 Connection switched to polling mode. Timeline generation continues...
+        </p>
+      </div>
       <div id="timeline-progress-content">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <strong id="timeline-progress-stage" style="color: #6366f1;">Initializing...</strong>
@@ -2946,7 +2956,7 @@ async function generateAITimeline(retryAttempt = 0) {
         </div>
         <div style="display: flex; justify-content: space-between; margin-top: 8px;">
           <small id="timeline-progress-message" style="color: var(--muted);">Preparing timeline generation...</small>
-          <small id="timeline-progress-eta" style="color: var(--muted);">Estimated: ${estimatedMinutes > 1 ? `${estimatedMinutes} minutes` : '< 1 minute'}</small>
+          <small id="timeline-progress-deliverables" style="color: var(--muted); display: none;"></small>
         </div>
         <div id="timeline-progress-details" style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.05); border-radius: 6px; display: none;">
           <div style="font-size: 0.85em; color: var(--muted);">
@@ -2981,8 +2991,8 @@ async function generateAITimeline(retryAttempt = 0) {
   container.style.display = 'none';
   
   let eventSource = null;
-  let timeoutId = null;
-  let hasTimedOut = false;
+  let jobId = null;
+  let heartbeatCheckInterval = null;
   
   // Helper function to show error in the UI
   const showTimelineError = (title, message, canRetry = true) => {
@@ -3023,34 +3033,195 @@ async function generateAITimeline(retryAttempt = 0) {
       eventSource.close();
       eventSource = null;
     }
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
+    if (heartbeatCheckInterval) {
+      clearInterval(heartbeatCheckInterval);
+      heartbeatCheckInterval = null;
+    }
+    if (pollingIntervalId) {
+      clearInterval(pollingIntervalId);
+      pollingIntervalId = null;
     }
   };
   
-  // Set timeout with dynamic calculation
-  console.log(`[TIMELINE] Setting timeout: ${TIMEOUT_MS}ms (${Math.round(TIMEOUT_MS/1000)}s) for ${deliverableCount} deliverables`);
-  timeoutId = setTimeout(() => {
-    hasTimedOut = true;
-    cleanup();
+  // Start heartbeat monitoring
+  const startHeartbeatMonitor = () => {
+    heartbeatCheckInterval = setInterval(() => {
+      const timeSinceLastData = Date.now() - lastDataTime;
+      
+      if (timeSinceLastData > HEARTBEAT_TIMEOUT_MS && !isPolling) {
+        console.log('[TIMELINE] No data for 30s, switching to polling fallback');
+        
+        // Switch to polling mode
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        
+        // Show polling mode message
+        const connectionStatus = document.getElementById('timeline-connection-status');
+        if (connectionStatus) {
+          connectionStatus.style.display = 'block';
+        }
+        
+        // Start polling
+        startPollingFallback();
+      }
+    }, 5000); // Check every 5 seconds
+  };
+  
+  // Polling fallback function
+  const startPollingFallback = async () => {
+    isPolling = true;
     
-    let timeoutMessage = `The timeline generation timed out after ${Math.round(TIMEOUT_MS/60000)} minutes.`;
+    const pollJobStatus = async () => {
+      if (!jobId) return;
+      
+      try {
+        const response = await fetch(`/api/ai/jobs/${jobId}`);
+        if (!response.ok) throw new Error('Failed to get job status');
+        
+        const data = await response.json();
+        
+        // Update UI with polling data
+        updateProgressUI(data);
+        
+        // Check if job is complete
+        if (data.status === 'completed' && data.result) {
+          cleanup();
+          handleTimelineCompletion(data.result);
+        } else if (data.status === 'failed') {
+          cleanup();
+          handleTimelineError(data.error || 'Timeline generation failed');
+        }
+      } catch (error) {
+        console.error('[TIMELINE] Polling error:', error);
+        // Continue polling despite errors
+      }
+    };
     
-    if (deliverableCount > 20) {
-      timeoutMessage = `You have ${deliverableCount} deliverables selected, which requires extensive processing. For better performance, consider selecting 10-15 deliverables at a time.`;
-    } else if (deliverableCount > 10) {
-      timeoutMessage = `Processing ${deliverableCount} deliverables takes time. The server might be under heavy load. Please try again or select fewer items.`;
-    } else {
-      timeoutMessage = 'The server is taking too long to respond. This might be due to high load or network issues. Please try again in a moment.';
+    // Start polling immediately
+    await pollJobStatus();
+    
+    // Continue polling at intervals
+    pollingIntervalId = setInterval(pollJobStatus, POLLING_INTERVAL_MS);
+  };
+  
+  // Helper function to update progress UI
+  const updateProgressUI = (data) => {
+    const progressBar = document.getElementById('timeline-progress-bar');
+    const progressPercentage = document.getElementById('timeline-progress-percentage');
+    const progressStage = document.getElementById('timeline-progress-stage');
+    const progressMessage = document.getElementById('timeline-progress-message');
+    const progressDeliverables = document.getElementById('timeline-progress-deliverables');
+    const progressDetails = document.getElementById('timeline-progress-details');
+    const progressItems = document.getElementById('timeline-progress-items');
+    
+    if (progressBar && data.progress !== undefined) {
+      progressBar.style.width = `${data.progress}%`;
     }
     
-    showTimelineError(
-      'Request Timeout',
-      timeoutMessage,
-      retryAttempt < 2 // Allow retry only if we haven't exceeded 3 attempts
-    );
-  }, TIMEOUT_MS);
+    if (progressPercentage) {
+      progressPercentage.textContent = `${Math.round(data.progress || 0)}%`;
+    }
+    
+    // Map stage names to user-friendly messages
+    const stageMessages = {
+      'initialization': '⚙️ Initializing timeline generation...',
+      'analyzing_deliverables': '📊 Analyzing deliverables...',
+      'creating_dependencies': '🔗 Creating dependencies and workstreams...',
+      'optimizing_schedule': '⚡ Optimizing schedule with AI...',
+      'ai_reasoning': '🧠 Enhancing with AI reasoning...',
+      'generating_timeline': '📅 Generating timeline...',
+      'finalizing': '✨ Finalizing timeline...',
+      'completed': '✅ Timeline generation complete!'
+    };
+    
+    if (progressStage && data.current_stage) {
+      progressStage.textContent = stageMessages[data.current_stage] || data.current_stage;
+    }
+    
+    if (progressMessage && data.message) {
+      progressMessage.textContent = data.message;
+    }
+    
+    // Show deliverable progress for large sets
+    if (data.processed_items !== undefined && data.total_items !== undefined) {
+      if (progressDeliverables) {
+        progressDeliverables.style.display = 'inline';
+        progressDeliverables.textContent = `Processing deliverable ${data.processed_items} of ${data.total_items}`;
+      }
+      
+      if (progressDetails && progressItems && data.total_items > 10) {
+        progressDetails.style.display = 'block';
+        const percentage = Math.round((data.processed_items / data.total_items) * 100);
+        progressItems.textContent = `📊 Progress: ${data.processed_items}/${data.total_items} deliverables (${percentage}%)`;
+      }
+    }
+  };
+  
+  // Helper function to handle timeline completion
+  const handleTimelineCompletion = (result) => {
+    currentTimelineTasks = result.tasks || [];
+    timelineReasoning = result.reasoning || {};
+    
+    // Update reasoning panel
+    updateReasoningPanel(result.reasoning);
+    
+    // Auto-show the reasoning panel when timeline is generated
+    const panel = document.getElementById('ai-reasoning-panel');
+    if (panel) {
+      panel.style.display = 'block';
+    }
+    
+    // Update metadata
+    updateTimelineMetadata(result.metadata);
+    
+    // Update resource risk table
+    updateResourceRiskTable(currentTimelineTasks, result.reasoning);
+    
+    // Initialize Gantt chart with AI-generated timeline
+    initializeGanttChart(currentTimelineTasks).then(() => {
+      // Show the container
+      container.style.display = '';
+      
+      // Show metadata
+      const metadataDiv = document.getElementById('timeline-metadata');
+      if (metadataDiv) metadataDiv.style.display = '';
+      
+      // Hide loading
+      loading.style.display = 'none';
+      btn.disabled = false;
+      btn.textContent = '🤖 Generate AI Timeline';
+    }).catch(chartError => {
+      console.error('Failed to initialize Gantt chart:', chartError);
+      showTimelineError(
+        'Display Error',
+        'Timeline generated successfully but could not be displayed. Please refresh the page and try again.',
+        true
+      );
+    });
+  };
+  
+  // Helper function to handle timeline errors
+  const handleTimelineError = (error) => {
+    let errorMessage = 'Timeline generation failed. Please try again.';
+    
+    if (error) {
+      const errorLower = error.toLowerCase();
+      
+      if (errorLower.includes('timeout')) {
+        errorMessage = 'The request took too long. Please try with fewer deliverables.';
+      } else if (errorLower.includes('memory') || errorLower.includes('resource')) {
+        errorMessage = 'Too many deliverables selected. Please reduce your selection and try again.';
+      } else if (errorLower.includes('invalid') || errorLower.includes('missing')) {
+        errorMessage = 'Some selected deliverables have invalid data. Please review your selection.';
+      } else if (errorLower.includes('api') || errorLower.includes('gpt') || errorLower.includes('openai')) {
+        errorMessage = 'The AI service is temporarily unavailable. Please try again in a moment.';
+      }
+    }
+    
+    showTimelineError('Timeline Generation Failed', errorMessage, true);
+  };
   
   try {
     // Get optimization mode
@@ -3174,7 +3345,6 @@ async function generateAITimeline(retryAttempt = 0) {
           project_start: projectStart,
           optimization_mode: optimizationMode,
           use_intelligent_scheduler: true,
-          timeout_ms: TIMEOUT_MS, // Send timeout to backend for coordination
           retry_attempt: retryAttempt
         })
       });
@@ -3256,140 +3426,42 @@ async function generateAITimeline(retryAttempt = 0) {
       return;
     }
     
+    // Store job ID for potential polling fallback
+    jobId = jobData.job_id;
+    
     // Connect to SSE stream for progress updates
     eventSource = new EventSource(`/api/stream/${jobData.job_id}`);
+    
+    // Start heartbeat monitoring
+    startHeartbeatMonitor();
     
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         
-        // Update progress UI based on SSE data
-        const progressBar = document.getElementById('timeline-progress-bar');
-        const progressPercentage = document.getElementById('timeline-progress-percentage');
-        const progressStage = document.getElementById('timeline-progress-stage');
-        const progressMessage = document.getElementById('timeline-progress-message');
-        const progressETA = document.getElementById('timeline-progress-eta');
-        const progressDetails = document.getElementById('timeline-progress-details');
-        const progressItems = document.getElementById('timeline-progress-items');
+        // Update last data time for heartbeat tracking
+        lastDataTime = Date.now();
         
-        if (progressBar && data.progress !== undefined) {
-          progressBar.style.width = `${data.progress}%`;
+        // Handle heartbeat messages
+        if (data.type === 'heartbeat') {
+          lastHeartbeatTime = Date.now();
+          console.log('[TIMELINE] Heartbeat received:', new Date(data.timestamp * 1000).toLocaleTimeString());
+          return; // Don't process heartbeat as regular update
         }
         
-        if (progressPercentage) {
-          progressPercentage.textContent = `${Math.round(data.progress || 0)}%`;
-        }
-        
-        // Map stage names to user-friendly messages
-        const stageMessages = {
-          'initialization': '⚙️ Initializing timeline generation...',
-          'analyzing_deliverables': '📊 Analyzing deliverables...',
-          'creating_dependencies': '🔗 Creating dependencies and workstreams...',
-          'optimizing_schedule': '⚡ Optimizing schedule with AI...',
-          'ai_reasoning': '🧠 Enhancing with AI reasoning...',
-          'generating_timeline': '📅 Generating timeline...',
-          'finalizing': '✨ Finalizing timeline...',
-          'completed': '✅ Timeline generation complete!'
-        };
-        
-        if (progressStage && data.current_stage) {
-          progressStage.textContent = stageMessages[data.current_stage] || data.current_stage;
-        }
-        
-        if (progressMessage && data.message) {
-          progressMessage.textContent = data.message;
-        }
-        
-        // Show ETA if available
-        if (progressETA && data.eta_seconds !== undefined) {
-          if (data.eta_seconds > 0) {
-            const minutes = Math.floor(data.eta_seconds / 60);
-            const seconds = Math.round(data.eta_seconds % 60);
-            progressETA.textContent = minutes > 0 
-              ? `ETA: ${minutes}m ${seconds}s`
-              : `ETA: ${seconds}s`;
-          } else {
-            progressETA.textContent = 'Almost done...';
-          }
-        }
-        
-        // Show item processing details if available
-        if (data.processed_items !== undefined && data.total_items !== undefined) {
-          if (progressDetails && progressItems) {
-            progressDetails.style.display = 'block';
-            progressItems.textContent = `Processing: ${data.processed_items} of ${data.total_items} deliverables`;
-          }
-        }
+        // Update progress UI using the helper function
+        updateProgressUI(data);
         
         // Handle completion
         if (data.status === 'completed' && data.result) {
-          cleanup(); // Clear timeout and close event source
-          
-          // Process the result
-          const result = data.result;
-          currentTimelineTasks = result.tasks || [];
-          timelineReasoning = result.reasoning || {};
-          
-          // Update reasoning panel
-          updateReasoningPanel(result.reasoning);
-          
-          // Auto-show the reasoning panel when timeline is generated
-          const panel = document.getElementById('ai-reasoning-panel');
-          if (panel) {
-            panel.style.display = 'block';
-          }
-          
-          // Update metadata
-          updateTimelineMetadata(result.metadata);
-          
-          // Update resource risk table
-          updateResourceRiskTable(currentTimelineTasks, result.reasoning);
-          
-          // Initialize Gantt chart with AI-generated timeline
-          initializeGanttChart(currentTimelineTasks).then(() => {
-            // Show the container
-            container.style.display = '';
-            
-            // Show metadata
-            const metadataDiv = document.getElementById('timeline-metadata');
-            if (metadataDiv) metadataDiv.style.display = '';
-            
-            // Hide loading
-            loading.style.display = 'none';
-            btn.disabled = false;
-            btn.textContent = '🤖 Generate AI Timeline';
-          }).catch(chartError => {
-            console.error('Failed to initialize Gantt chart:', chartError);
-            showTimelineError(
-              'Display Error',
-              'Timeline generated successfully but could not be displayed. Please refresh the page and try again.',
-              true
-            );
-          });
+          cleanup();
+          handleTimelineCompletion(data.result);
         }
         
-        // Handle errors with user-friendly messages
+        // Handle errors
         if (data.status === 'failed') {
           cleanup();
-          
-          // Parse error message to provide better feedback
-          let errorMessage = 'Timeline generation failed. Please try again.';
-          
-          if (data.error) {
-            const errorLower = data.error.toLowerCase();
-            
-            if (errorLower.includes('timeout')) {
-              errorMessage = 'The request took too long. Please try with fewer deliverables.';
-            } else if (errorLower.includes('memory') || errorLower.includes('resource')) {
-              errorMessage = 'Too many deliverables selected. Please reduce your selection and try again.';
-            } else if (errorLower.includes('invalid') || errorLower.includes('missing')) {
-              errorMessage = 'Some selected deliverables have invalid data. Please review your selection.';
-            } else if (errorLower.includes('api') || errorLower.includes('gpt') || errorLower.includes('openai')) {
-              errorMessage = 'The AI service is temporarily unavailable. Please try again in a moment.';
-            }
-          }
-          
-          showTimelineError('Timeline Generation Failed', errorMessage, true);
+          handleTimelineError(data.error);
         }
         
       } catch (parseError) {
@@ -3398,25 +3470,26 @@ async function generateAITimeline(retryAttempt = 0) {
     };
     
     eventSource.onerror = (error) => {
-      // Don't show error if already timed out or completed
-      if (hasTimedOut) return;
-      
       console.error('SSE connection error:', error);
-      cleanup();
       
-      // Show user-friendly error based on retry attempt
-      if (retryAttempt < 2) {
-        showTimelineError(
-          'Connection Lost',
-          'Lost connection to the timeline generator. The server may be busy. Please try again.',
-          true
-        );
-      } else {
-        showTimelineError(
-          'Service Unavailable',
-          'Unable to maintain connection to the timeline service. Please refresh the page and try again.',
-          true
-        );
+      // Try polling fallback instead of immediately showing error
+      if (!isPolling) {
+        console.log('[TIMELINE] SSE connection failed, switching to polling fallback');
+        
+        // Show polling mode message
+        const connectionStatus = document.getElementById('timeline-connection-status');
+        if (connectionStatus) {
+          connectionStatus.style.display = 'block';
+        }
+        
+        // Close the SSE connection
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        
+        // Start polling
+        startPollingFallback();
       }
     };
     

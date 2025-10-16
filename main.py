@@ -4320,18 +4320,45 @@ async def generate_timeline(request: TimelineGenerationRequest):
             enriched_deliverables = []
             total_deliverables = len(request.deliverables)
             
+            # Log for large projects
+            if total_deliverables > 20:
+                print(f"[Timeline] Processing large project with {total_deliverables} deliverables")
+            
             for i, deliv in enumerate(request.deliverables):
                 code = deliv.get('deliverable_code', '')
                 
-                # Update progress for deliverable enrichment
+                # Update progress more frequently for large sets
+                # For large sets (>10), update every deliverable
+                # For very large sets (>20), also show batch progress
                 progress = 10 + (i / total_deliverables) * 20  # 10-30% for enrichment
-                update_sse_job(job_id,
-                              status=StreamJobStatus.PROCESSING,
-                              progress=progress,
-                              message=f"Processing deliverable {i+1} of {total_deliverables}...",
-                              current_stage="analyzing_deliverables",
-                              processed_items=i+1,
-                              total_items=total_deliverables)
+                
+                # Determine update frequency based on size
+                should_update = True
+                if total_deliverables <= 10:
+                    should_update = True  # Always update for small sets
+                elif total_deliverables <= 20:
+                    should_update = i % 2 == 0 or i == total_deliverables - 1  # Every 2nd for medium
+                else:
+                    should_update = i % 5 == 0 or i == total_deliverables - 1  # Every 5th for large
+                
+                if should_update:
+                    # Create descriptive message based on project size
+                    if total_deliverables > 50:
+                        batch_num = (i // 10) + 1
+                        total_batches = (total_deliverables // 10) + 1
+                        message = f"Processing batch {batch_num}/{total_batches} - Deliverable {i+1} of {total_deliverables}..."
+                    elif total_deliverables > 20:
+                        message = f"Analyzing deliverable {i+1} of {total_deliverables} ({code})..."
+                    else:
+                        message = f"Processing deliverable {i+1} of {total_deliverables}..."
+                    
+                    update_sse_job(job_id,
+                                  status=StreamJobStatus.PROCESSING,
+                                  progress=progress,
+                                  message=message,
+                                  current_stage="analyzing_deliverables",
+                                  processed_items=i+1,
+                                  total_items=total_deliverables)
                 
                 # Get deliverable details from database
                 db_row = DB.deliverables[DB.deliverables['Deliverable_Code'] == code]
