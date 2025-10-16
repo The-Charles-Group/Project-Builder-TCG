@@ -5,10 +5,11 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 
 ## Recent Changes
 - **October 16, 2025**: Security dependency updates applied successfully
-  - Updated `jinja2` to latest secure version (currently v3.1.4, not directly used by application)
-  - Updated `python-multipart` to latest secure version (v0.0.9, used internally by FastAPI for file uploads)
+  - Updated `jinja2` to v3.1.6 (fixes CVE-2025-27516 sandbox breakout vulnerability)
+  - Updated `python-multipart` to v0.0.20 (fixes CVE-2024-24762 ReDoS & CVE-2024-53981 logging DoS vulnerabilities)
   - All functionality verified working correctly after updates
-  - Comprehensive tests passed: home page, API endpoints, file uploads, static files
+  - Comprehensive tests passed: health endpoint, API, file uploads, static files, home page
+  - Security scanner verification: No known vulnerabilities detected
 
 ## User Preferences
 Preferred communication style: Simple, everyday language.
