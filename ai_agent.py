@@ -164,12 +164,13 @@ For EXTEND_TIMELINE, parameters should include:
     try:
         if GPT5_AVAILABLE and sync_client:
             # Map user-selected tier to GPT-5 models
+            # For now, map all to "mini" as it's most reliable
             tier_mapping = {
                 "auto": "mini",  # Fast parsing by default
                 "mini": "mini",
                 "thinking-mini": "mini",  # Map to actual model
-                "thinking": "thinking", 
-                "pro": "pro"
+                "thinking": "mini",  # Use mini for now
+                "pro": "mini"  # Use mini for now until pro is fixed
             }
             selected_tier = tier_mapping.get(gpt5_tier, "mini")
             
@@ -227,8 +228,20 @@ For EXTEND_TIMELINE, parameters should include:
                 # Log the parsed command for debugging
                 print(f"[CHARLES] Parsed command: {parsed.get('command_type', 'UNKNOWN')} with confidence: {parsed.get('confidence', 0)}")
                 
+                # Handle case variations in command type
+                cmd_type = parsed.get("command_type", "UNKNOWN").upper()
+                try:
+                    # Try to match with enum values
+                    command_type = CommandType[cmd_type]
+                except (KeyError, ValueError):
+                    # Try lowercase version
+                    try:
+                        command_type = CommandType(cmd_type.lower())
+                    except (KeyError, ValueError):
+                        command_type = CommandType.UNKNOWN
+                
                 return ParsedCommand(
-                    command_type=CommandType(parsed.get("command_type", "UNKNOWN")),
+                    command_type=command_type,
                     parameters=parsed.get("parameters", {}),
                     confidence=float(parsed.get("confidence", 0.5)),
                     raw_text=message,
