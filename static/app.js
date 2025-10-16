@@ -2873,7 +2873,12 @@ window.updatePeriods = updatePeriods;
 window.extractDeliverableTasks = extractDeliverableTasks;
 window.formatTasksList = formatTasksList;
 
-async function generateAITimeline() {
+// Export timeline error handling functions
+window.generateAITimeline = generateAITimeline;
+window.showUserFriendlyError = showUserFriendlyError;
+window.cancelTimelineGeneration = cancelTimelineGeneration;
+
+async function generateAITimeline(retryAttempt = 0) {
   const btn = document.getElementById('btn-generate-timeline');
   const loading = document.getElementById('timeline-loading');
   const container = document.getElementById('gantt-container');
@@ -2883,32 +2888,53 @@ async function generateAITimeline() {
   // Get selected deliverables from Step 2
   const selectedCodes = readSelectedCodesFromUI();
   if (selectedCodes.length === 0) {
-    alert('Please select deliverables in Step 2 first');
+    showUserFriendlyError('No deliverables selected', 'Please select at least one deliverable in Step 2 before generating a timeline.');
     return;
   }
   
   // Show loading state with progress UI
   btn.disabled = true;
-  btn.textContent = 'Starting...';
+  btn.textContent = retryAttempt > 0 ? 'Retrying...' : 'Starting...';
   
-  // Create comprehensive progress UI
+  // Create comprehensive progress UI with error display area
   const progressHTML = `
     <div id="timeline-progress-container" style="padding: 20px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; margin-bottom: 20px;">
       <h3 style="margin: 0 0 12px 0; color: #6366f1;">🚀 Generating AI Timeline</h3>
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-        <strong id="timeline-progress-stage" style="color: #6366f1;">Initializing...</strong>
-        <span id="timeline-progress-percentage" style="font-weight: 600; color: #6366f1;">0%</span>
+      <div id="timeline-progress-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <strong id="timeline-progress-stage" style="color: #6366f1;">Initializing...</strong>
+          <span id="timeline-progress-percentage" style="font-weight: 600; color: #6366f1;">0%</span>
+        </div>
+        <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; overflow: hidden;">
+          <div id="timeline-progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.3s ease;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+          <small id="timeline-progress-message" style="color: var(--muted);">Preparing timeline generation...</small>
+          <small id="timeline-progress-eta" style="color: var(--muted);"></small>
+        </div>
+        <div id="timeline-progress-details" style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.05); border-radius: 6px; display: none;">
+          <div style="font-size: 0.85em; color: var(--muted);">
+            <span id="timeline-progress-items"></span>
+          </div>
+        </div>
       </div>
-      <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.1); border-radius: 4px; overflow: hidden;">
-        <div id="timeline-progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.3s ease;"></div>
-      </div>
-      <div style="display: flex; justify-content: space-between; margin-top: 8px;">
-        <small id="timeline-progress-message" style="color: var(--muted);">Preparing timeline generation...</small>
-        <small id="timeline-progress-eta" style="color: var(--muted);"></small>
-      </div>
-      <div id="timeline-progress-details" style="margin-top: 12px; padding: 12px; background: rgba(0,0,0,0.05); border-radius: 6px; display: none;">
-        <div style="font-size: 0.85em; color: var(--muted);">
-          <span id="timeline-progress-items"></span>
+      <div id="timeline-error-container" style="display: none; margin-top: 16px;">
+        <div style="background: #fee2e2; border: 1px solid #fecaca; border-radius: 6px; padding: 16px;">
+          <div style="display: flex; align-items: start; gap: 12px;">
+            <span style="color: #dc2626; font-size: 1.5em;">⚠️</span>
+            <div style="flex: 1;">
+              <h4 id="timeline-error-title" style="margin: 0 0 8px 0; color: #dc2626;">Timeline Generation Failed</h4>
+              <p id="timeline-error-message" style="margin: 0 0 12px 0; color: #7f1d1d;">Something went wrong while generating the timeline.</p>
+              <div style="display: flex; gap: 10px;">
+                <button id="btn-retry-timeline" onclick="generateAITimeline(1)" style="padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                  🔄 Try Again
+                </button>
+                <button id="btn-cancel-timeline" onclick="cancelTimelineGeneration()" style="padding: 8px 16px; background: #6b7280; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -2919,6 +2945,73 @@ async function generateAITimeline() {
   container.style.display = 'none';
   
   let eventSource = null;
+  let timeoutId = null;
+  let hasTimedOut = false;
+  
+  // Set a 60-second timeout
+  const TIMEOUT_MS = 60000; // 60 seconds
+  
+  // Helper function to show error in the UI
+  const showTimelineError = (title, message, canRetry = true) => {
+    const errorContainer = document.getElementById('timeline-error-container');
+    const errorTitle = document.getElementById('timeline-error-title');
+    const errorMessage = document.getElementById('timeline-error-message');
+    const progressContent = document.getElementById('timeline-progress-content');
+    
+    if (errorContainer && errorTitle && errorMessage) {
+      errorTitle.textContent = title;
+      errorMessage.textContent = message;
+      errorContainer.style.display = 'block';
+      
+      // Hide progress UI when showing error
+      if (progressContent) {
+        progressContent.style.display = 'none';
+      }
+      
+      // Update retry button visibility
+      const retryBtn = document.getElementById('btn-retry-timeline');
+      if (retryBtn) {
+        retryBtn.style.display = canRetry ? 'inline-block' : 'none';
+      }
+    }
+    
+    // Re-enable main button
+    btn.disabled = false;
+    btn.textContent = '🤖 Generate AI Timeline';
+  };
+  
+  // Clean up function
+  const cleanup = () => {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  
+  // Set timeout
+  timeoutId = setTimeout(() => {
+    hasTimedOut = true;
+    cleanup();
+    
+    const deliverableCount = selectedCodes.length;
+    let timeoutMessage = 'The timeline generation is taking longer than expected.';
+    
+    if (deliverableCount > 20) {
+      timeoutMessage = `You have ${deliverableCount} deliverables selected. Try selecting fewer deliverables (10-15) for faster generation.`;
+    } else {
+      timeoutMessage = 'The server is taking too long to respond. This might be due to high load. Please try again in a moment.';
+    }
+    
+    showTimelineError(
+      'Request Timeout',
+      timeoutMessage,
+      true
+    );
+  }, TIMEOUT_MS);
   
   try {
     // Get optimization mode
@@ -3023,27 +3116,75 @@ async function generateAITimeline() {
     
     console.log(`[TIMELINE] Generating timeline for ${deliverables.length} deliverables from Scenario A`);
     
-    // Call NEW SSE-enabled timeline endpoint
-    const response = await fetch('/api/ai/generate_timeline', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        deliverables: deliverables,
-        rfp_text: rfpText,
-        project_start: projectStart,
-        optimization_mode: optimizationMode,
-        use_intelligent_scheduler: true
-      })
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Server error: ${response.status}`);
+    // Call NEW SSE-enabled timeline endpoint with better error handling
+    let response;
+    try {
+      response = await fetch('/api/ai/generate_timeline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          deliverables: deliverables,
+          rfp_text: rfpText,
+          project_start: projectStart,
+          optimization_mode: optimizationMode,
+          use_intelligent_scheduler: true
+        })
+      });
+    } catch (fetchError) {
+      // Network error - couldn't reach the server
+      cleanup();
+      showTimelineError(
+        'Connection Failed',
+        'Unable to connect to the server. Please check your internet connection and try again.',
+        true
+      );
+      return;
     }
     
-    const jobData = await response.json();
+    if (!response.ok) {
+      cleanup();
+      
+      // Handle specific HTTP errors with user-friendly messages
+      let errorTitle = 'Timeline Generation Failed';
+      let errorMessage = 'Something went wrong. Please try again.';
+      
+      if (response.status === 400) {
+        errorMessage = 'Invalid request. Please ensure you have selected valid deliverables and try again.';
+      } else if (response.status === 404) {
+        errorMessage = 'The timeline generation service is currently unavailable. Please try again later.';
+      } else if (response.status === 429) {
+        errorMessage = 'Too many requests. Please wait a moment before trying again.';
+      } else if (response.status === 500 || response.status === 502 || response.status === 503) {
+        errorMessage = 'The server is experiencing issues. Please try again in a few moments.';
+      } else if (response.status === 504) {
+        errorMessage = 'The request took too long. Try selecting fewer deliverables.';
+      }
+      
+      showTimelineError(errorTitle, errorMessage, true);
+      return;
+    }
+    
+    let jobData;
+    try {
+      jobData = await response.json();
+    } catch (parseError) {
+      cleanup();
+      showTimelineError(
+        'Invalid Response',
+        'Received an invalid response from the server. Please try again.',
+        true
+      );
+      return;
+    }
     
     if (!jobData.job_id) {
-      throw new Error('No job ID returned from server');
+      cleanup();
+      showTimelineError(
+        'Generation Failed',
+        'Could not start timeline generation. Please try again.',
+        true
+      );
+      return;
     }
     
     // Connect to SSE stream for progress updates
@@ -3113,7 +3254,7 @@ async function generateAITimeline() {
         
         // Handle completion
         if (data.status === 'completed' && data.result) {
-          eventSource.close();
+          cleanup(); // Clear timeout and close event source
           
           // Process the result
           const result = data.result;
@@ -3148,13 +3289,38 @@ async function generateAITimeline() {
             loading.style.display = 'none';
             btn.disabled = false;
             btn.textContent = '🤖 Generate AI Timeline';
+          }).catch(chartError => {
+            console.error('Failed to initialize Gantt chart:', chartError);
+            showTimelineError(
+              'Display Error',
+              'Timeline generated successfully but could not be displayed. Please refresh the page and try again.',
+              true
+            );
           });
         }
         
-        // Handle errors
+        // Handle errors with user-friendly messages
         if (data.status === 'failed') {
-          eventSource.close();
-          throw new Error(data.error || 'Timeline generation failed');
+          cleanup();
+          
+          // Parse error message to provide better feedback
+          let errorMessage = 'Timeline generation failed. Please try again.';
+          
+          if (data.error) {
+            const errorLower = data.error.toLowerCase();
+            
+            if (errorLower.includes('timeout')) {
+              errorMessage = 'The request took too long. Please try with fewer deliverables.';
+            } else if (errorLower.includes('memory') || errorLower.includes('resource')) {
+              errorMessage = 'Too many deliverables selected. Please reduce your selection and try again.';
+            } else if (errorLower.includes('invalid') || errorLower.includes('missing')) {
+              errorMessage = 'Some selected deliverables have invalid data. Please review your selection.';
+            } else if (errorLower.includes('api') || errorLower.includes('gpt') || errorLower.includes('openai')) {
+              errorMessage = 'The AI service is temporarily unavailable. Please try again in a moment.';
+            }
+          }
+          
+          showTimelineError('Timeline Generation Failed', errorMessage, true);
         }
         
       } catch (parseError) {
@@ -3163,26 +3329,95 @@ async function generateAITimeline() {
     };
     
     eventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-      eventSource.close();
+      // Don't show error if already timed out or completed
+      if (hasTimedOut) return;
       
-      // Fallback to polling or show error
-      alert('Lost connection to timeline generation. Please try again.');
-      btn.disabled = false;
-      btn.textContent = '🤖 Generate AI Timeline';
-      loading.style.display = 'none';
+      console.error('SSE connection error:', error);
+      cleanup();
+      
+      // Show user-friendly error based on retry attempt
+      if (retryAttempt < 2) {
+        showTimelineError(
+          'Connection Lost',
+          'Lost connection to the timeline generator. The server may be busy. Please try again.',
+          true
+        );
+      } else {
+        showTimelineError(
+          'Service Unavailable',
+          'Unable to maintain connection to the timeline service. Please refresh the page and try again.',
+          true
+        );
+      }
     };
     
   } catch (error) {
     console.error('Error generating AI timeline:', error);
-    alert('Failed to generate timeline: ' + error.message);
+    cleanup();
     
-    // Clean up
-    if (eventSource) eventSource.close();
-    btn.disabled = false;
-    btn.textContent = '🤖 Generate AI Timeline';
+    // Determine the error type and show appropriate message
+    let errorTitle = 'Timeline Generation Failed';
+    let errorMessage = 'Something went wrong. Please try again.';
+    
+    if (error.message) {
+      const errorLower = error.message.toLowerCase();
+      
+      if (errorLower.includes('scenario')) {
+        errorMessage = 'No pricing scenario found. Please complete Step 3 (Build Scenario) first.';
+      } else if (errorLower.includes('deliverable')) {
+        errorMessage = 'No deliverables selected. Please select at least one deliverable in Step 2.';
+      } else if (errorLower.includes('network') || errorLower.includes('fetch')) {
+        errorMessage = 'Network error. Please check your internet connection and try again.';
+      } else {
+        // Use a simplified version of the error if it's not too technical
+        errorMessage = error.message.length < 100 ? error.message : 'An unexpected error occurred. Please try again.';
+      }
+    }
+    
+    showTimelineError(errorTitle, errorMessage, true);
+  }
+}
+
+// Helper function to show user-friendly error messages
+function showUserFriendlyError(title, message) {
+  // Create a nice modal or alert with the error
+  const modalHTML = `
+    <div style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+                background: white; padding: 24px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); 
+                z-index: 10000; max-width: 400px;">
+      <h3 style="margin: 0 0 12px 0; color: #dc2626;">⚠️ ${title}</h3>
+      <p style="margin: 0 0 16px 0; color: #4b5563;">${message}</p>
+      <button onclick="this.parentElement.remove()" 
+              style="padding: 8px 16px; background: #3b82f6; color: white; border: none; 
+                     border-radius: 4px; cursor: pointer;">
+        OK
+      </button>
+    </div>
+    <div style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+                background: rgba(0,0,0,0.5); z-index: 9999;"
+         onclick="this.remove(); this.previousElementSibling.remove()">
+    </div>
+  `;
+  
+  // Add to body
+  document.body.insertAdjacentHTML('beforeend', modalHTML);
+}
+
+// Function to cancel timeline generation and clean up
+function cancelTimelineGeneration() {
+  const loading = document.getElementById('timeline-loading');
+  const btn = document.getElementById('btn-generate-timeline');
+  
+  if (loading) {
     loading.style.display = 'none';
   }
+  
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '🤖 Generate AI Timeline';
+  }
+  
+  console.log('[TIMELINE] Generation cancelled by user');
 }
 
 function updateReasoningPanel(reasoning) {
