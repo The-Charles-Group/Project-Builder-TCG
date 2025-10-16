@@ -273,6 +273,8 @@ async def upload_rfp_endpoint(
     """Upload RFP document (PDF, DOCX, TXT) for processing and optionally trigger analysis"""
     try:
         # Check file type
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
         file_ext = file.filename.split('.')[-1].lower()
         if file_ext not in ['pdf', 'docx', 'txt']:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_ext}")
@@ -804,7 +806,7 @@ class AgencyDB:
         Ensure self.all_rows has a 'Component' column populated from v4's Component_Task_L1 (Column F).
         If other synonyms exist, prefer them in this order.
         """
-        if self.all_rows is None or self.all_rows.empty:
+        if self.all_rows is None or isinstance(self.all_rows, pd.DataFrame) and self.all_rows.empty:
             return
         # Known header names (case-insensitive)
         candidates = ["Component_Task_L1", "Component L1", "Component_L1", "Component"]
@@ -833,15 +835,16 @@ class AgencyDB:
         Ensure self.all_rows has a 'Task_Label' column populated from v4b's Column G.
         Map v4b column G → 'Task_Label' (UI-display name for tasks)
         """
-        if self.all_rows is None or self.all_rows.empty:
+        if self.all_rows is None or isinstance(self.all_rows, pd.DataFrame) and self.all_rows.empty:
             return
 
         # optional UI override from UI_Options.Key == 'Task_Label_Column_Name'
         preferred = None
         try:
-            row = self.ui_options[self.ui_options["Key"] == "Task_Label_Column_Name"]
-            if not row.empty:
-                preferred = str(row["Value"].iloc[0]).strip()
+            if self.ui_options is not None and not self.ui_options.empty:
+                row = self.ui_options[self.ui_options["Key"] == "Task_Label_Column_Name"]
+                if not row.empty and isinstance(row, pd.DataFrame):
+                    preferred = str(row["Value"].iloc[0]).strip()
         except Exception:
             pass
 
@@ -858,11 +861,12 @@ class AgencyDB:
         if not found:
             # last‑ditch: pick column index G (0‑based 6) if it exists
             try:
-                found = self.all_rows.columns[6]
+                if len(self.all_rows.columns) > 6:
+                    found = self.all_rows.columns[6]
             except Exception:
                 found = None
 
-        if found:
+        if found and isinstance(self.all_rows, pd.DataFrame):
             self.all_rows["Task_Label"] = (
                 self.all_rows[found].astype(str).fillna("").str.strip()
             )
@@ -873,7 +877,7 @@ class AgencyDB:
 
     def _normalize_code_columns(self):
         """Map v4/v4b All_Task_Rows code columns to canonical names we use downstream."""
-        if self.all_rows is None or self.all_rows.empty:
+        if self.all_rows is None or isinstance(self.all_rows, pd.DataFrame) and self.all_rows.empty:
             return
         cols = {c.lower(): c for c in self.all_rows.columns}
 
@@ -884,7 +888,7 @@ class AgencyDB:
             return None
 
         # canonical: Deliverable_Code already exists in v4/v4b; keep synonyms just in case
-        if "Deliverable_Code" not in self.all_rows.columns:
+        if isinstance(self.all_rows, pd.DataFrame) and "Deliverable_Code" not in self.all_rows.columns:
             alt = pick("Deliverable Code", "Deliv_Code", "DeliverableID")
             if alt: self.all_rows["Deliverable_Code"] = self.all_rows[alt].astype(str)
 
@@ -898,9 +902,9 @@ class AgencyDB:
         self._col_service_dept  = pick("Service_Department", "Service Department", "Service_Dept", "Department", "Dept")
 
         # Make sure we have Component + Task_Label from prior patches
-        if "Component" not in self.all_rows.columns:
+        if isinstance(self.all_rows, pd.DataFrame) and "Component" not in self.all_rows.columns:
             self.all_rows["Component"] = ""
-        if "Task_Label" not in self.all_rows.columns:
+        if isinstance(self.all_rows, pd.DataFrame) and "Task_Label" not in self.all_rows.columns:
             self.all_rows["Task_Label"] = ""
 
     def _canonical_seniority(self, v: str) -> str:
@@ -919,7 +923,7 @@ class AgencyDB:
 
     def _canonical_deliverable_code(self, v: str) -> str:
         """Map a free-text label to a DB deliverable code"""
-        if not v or self.deliverables is None:
+        if not v or self.deliverables is None or not isinstance(self.deliverables, pd.DataFrame):
             return ""
         
         v_norm = (str(v) or "").strip().lower()
@@ -930,28 +934,28 @@ class AgencyDB:
         exact_code_match = self.deliverables[
             self.deliverables["Deliverable_Code"].astype(str).str.lower() == v_norm
         ]
-        if not exact_code_match.empty:
+        if not exact_code_match.empty and isinstance(exact_code_match, pd.DataFrame):
             return str(exact_code_match["Deliverable_Code"].iloc[0])
         
         # Try exact match on deliverable name
         exact_name_match = self.deliverables[
             self.deliverables["Deliverable"].astype(str).str.lower() == v_norm
         ]
-        if not exact_name_match.empty:
+        if not exact_name_match.empty and isinstance(exact_name_match, pd.DataFrame):
             return str(exact_name_match["Deliverable_Code"].iloc[0])
         
         # Try substring match on deliverable name
         substring_match = self.deliverables[
             self.deliverables["Deliverable"].astype(str).str.lower().str.contains(v_norm, na=False)
         ]
-        if not substring_match.empty:
+        if not substring_match.empty and isinstance(substring_match, pd.DataFrame):
             return str(substring_match["Deliverable_Code"].iloc[0])
         
         # Try substring match on category
         category_match = self.deliverables[
             self.deliverables["Category"].astype(str).str.lower().str.contains(v_norm, na=False)
         ]
-        if not category_match.empty:
+        if not category_match.empty and isinstance(category_match, pd.DataFrame):
             return str(category_match["Deliverable_Code"].iloc[0])
         
         # No match found
@@ -959,7 +963,7 @@ class AgencyDB:
 
     def _normalize_role_and_seniority_columns(self):
         """Normalize Role and Seniority columns to ensure consistent data format"""
-        if self.all_rows is None or self.all_rows.empty:
+        if self.all_rows is None or isinstance(self.all_rows, pd.DataFrame) and self.all_rows.empty:
             return
         cols = {c.lower(): c for c in self.all_rows.columns}
 
@@ -974,7 +978,7 @@ class AgencyDB:
                     .replace({"nan": ""})  # Handle literal "nan" strings
                 )
                 break
-        if "Resource_Title" not in self.all_rows.columns:
+        if isinstance(self.all_rows, pd.DataFrame) and "Resource_Title" not in self.all_rows.columns:
             self.all_rows["Resource_Title"] = ""
         
         # Ensure no blank roles - use placeholder for empty values
@@ -1040,19 +1044,21 @@ class AgencyDB:
 
     def _v4_complexity_tokens(self) -> list[str]:
         toks = set()
-        for c in self.all_rows.columns:
-            if c.endswith("_Hours") and "__" in c:
-                toks.add(c.split("__", 1)[0])
+        if self.all_rows is not None and isinstance(self.all_rows, pd.DataFrame):
+            for c in self.all_rows.columns:
+                if c.endswith("_Hours") and "__" in c:
+                    toks.add(c.split("__", 1)[0])
         return sorted(toks)
 
     def _v4_tier_tokens(self) -> list[str]:
         toks = set()
-        for c in self.all_rows.columns:
-            if c.endswith("_Hours") and "__" in c:
-                # Safety check: ensure column has expected format before splitting
-                parts = c.rsplit("__", 1)[0].split("__", 1)
-                if len(parts) > 1:
-                    toks.add(parts[1].replace("_Hours", ""))
+        if self.all_rows is not None and isinstance(self.all_rows, pd.DataFrame):
+            for c in self.all_rows.columns:
+                if c.endswith("_Hours") and "__" in c:
+                    # Safety check: ensure column has expected format before splitting
+                    parts = c.rsplit("__", 1)[0].split("__", 1)
+                    if len(parts) > 1:
+                        toks.add(parts[1].replace("_Hours", ""))
         return sorted(toks)
 
     def _map_to_v4_token(self, label: str, candidates: list[str]) -> str:
@@ -1186,42 +1192,45 @@ class AgencyDB:
         found: Dict[str, Dict[str, Any]] = {}
 
         # 1) Rule-based suggestions
-        for _, row in self.rfp_rules.iterrows():
-            patt = str(row.get("Regex_Keywords", "") or "")
-            target = str(row.get("Map_To_Deliverable", "") or "")
-            if not patt or not target:
-                continue
-            try:
-                hits = re.findall(patt, text, flags=re.IGNORECASE)
-            except re.error:
-                continue
-            if not hits:
-                continue
+        if self.rfp_rules is not None and isinstance(self.rfp_rules, pd.DataFrame):
+            for _, row in self.rfp_rules.iterrows():
+                patt = str(row.get("Regex_Keywords", "") or "")
+                target = str(row.get("Map_To_Deliverable", "") or "")
+                if not patt or not target:
+                    continue
+                try:
+                    hits = re.findall(patt, text, flags=re.IGNORECASE)
+                except re.error:
+                    continue
+                if not hits:
+                    continue
 
-            # Find deliverable row(s)
-            match_df = self.deliverables[self.deliverables["Deliverable"] == target]
-            if match_df.empty:
-                continue
+                # Find deliverable row(s)
+                if self.deliverables is None or not isinstance(self.deliverables, pd.DataFrame):
+                    continue
+                match_df = self.deliverables[self.deliverables["Deliverable"] == target]
+                if match_df.empty:
+                    continue
 
-            for __, r in match_df.iterrows():
-                code = str(r["Deliverable_Code"]); cat = str(r.get("Category",""))
-                if cat in blocked:
-                    # allow through only if there are at least 2 strong hits
-                    if len(hits) < 2:
-                        continue
+                for __, r in match_df.iterrows():
+                    code = str(r["Deliverable_Code"]); cat = str(r.get("Category",""))
+                    if cat in blocked:
+                        # allow through only if there are at least 2 strong hits
+                        if len(hits) < 2:
+                            continue
 
-                entry = found.setdefault(code, {
-                    "deliverable_code": code,
-                    "deliverable": str(r["Deliverable"]),
-                    "category": cat,
-                    "confidence": 0,
-                    "matches": []
-                })
-                entry["confidence"] += len(hits)
-                uniq = list({str(h).lower() for h in hits if str(h).strip()})
-                for m in uniq:
-                    if m not in entry["matches"]:
-                        entry["matches"].append(m)
+                    entry = found.setdefault(code, {
+                        "deliverable_code": code,
+                        "deliverable": str(r["Deliverable"]),
+                        "category": cat,
+                        "confidence": 0,
+                        "matches": []
+                    })
+                    entry["confidence"] += len(hits)
+                    uniq = list({str(h).lower() for h in hits if str(h).strip()})
+                    for m in uniq:
+                        if m not in entry["matches"]:
+                            entry["matches"].append(m)
 
         # 2) NO fuzzy fallback when strict (prevents "not in RFP" picks)
         if strict:
@@ -1230,18 +1239,19 @@ class AgencyDB:
             return out
 
         # Optional: gentle fallback if strict is off (rare)
-        for _, r in self.deliverables.iterrows():
-            name = str(r["Deliverable"])
-            code = str(r["Deliverable_Code"])
-            if re.search(r"\b" + re.escape(name) + r"\b", text, flags=re.IGNORECASE):
-                if code not in found:
-                    found[code] = {
-                        "deliverable_code": code,
-                        "deliverable": name,
-                        "category": str(r.get("Category","")),
-                        "confidence": 1,
-                        "matches": [name]
-                    }
+        if self.deliverables is not None and isinstance(self.deliverables, pd.DataFrame):
+            for _, r in self.deliverables.iterrows():
+                name = str(r["Deliverable"])
+                code = str(r["Deliverable_Code"])
+                if re.search(r"\b" + re.escape(name) + r"\b", text, flags=re.IGNORECASE):
+                    if code not in found:
+                        found[code] = {
+                            "deliverable_code": code,
+                            "deliverable": name,
+                            "category": str(r.get("Category","")),
+                            "confidence": 1,
+                            "matches": [name]
+                        }
 
         out = list(found.values())
         out.sort(key=lambda x: (-x["confidence"], x["deliverable"]))
@@ -1289,6 +1299,8 @@ class AgencyDB:
 
     # ---------- Bundle helpers ----------
     def included_task_groups(self, category: str, bundle: str) -> List[str]:
+        if self.b_rules is None or not isinstance(self.b_rules, pd.DataFrame):
+            return []
         sub = self.b_rules[(self.b_rules["Category"]==category) & (self.b_rules["Bundle"]==bundle)]
         if sub.empty:
             return []
@@ -1296,8 +1308,10 @@ class AgencyDB:
         return [str(x) for x in sub["Task_Group"].tolist()]
 
     def default_complexity_tier_for_bundle(self, bundle: str) -> tuple[str, str]:
+        if self.b_defaults is None or not isinstance(self.b_defaults, pd.DataFrame):
+            return ("Advanced","T2_MediumVolume")
         row = self.b_defaults[self.b_defaults["Bundle"]==bundle]
-        if row.empty:
+        if row.empty or not isinstance(row, pd.DataFrame):
             return ("Advanced","T2_MediumVolume")
         r = row.iloc[0]
         return str(r["Default_Complexity"]), str(r["Default_Tier"])
@@ -1308,9 +1322,14 @@ class AgencyDB:
 
     def per_resource_price(self, hrs_by_role: pd.DataFrame, rate_band: str="Standard_US") -> float:
         # hrs_by_role columns: Resource_Title, Seniority, Hours
-        band = self.rate_bands[self.rate_bands["Band_Name"]==rate_band]
-        mult = float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
+        if self.rate_bands is None or not isinstance(self.rate_bands, pd.DataFrame):
+            mult = 1.0
+        else:
+            band = self.rate_bands[self.rate_bands["Band_Name"]==rate_band]
+            mult = float(band["Rate_Multiplier"].iloc[0]) if not band.empty and isinstance(band, pd.DataFrame) else 1.0
         # join to rate card
+        if self.role_rate_card is None or not isinstance(self.role_rate_card, pd.DataFrame):
+            return 0.0
         rc = self.role_rate_card[["Resource_Title","Seniority","Rate_USD"]].copy()
         merged = hrs_by_role.merge(rc, on=["Resource_Title","Seniority"], how="left")
         merged["Rate_USD"] = merged["Rate_USD"].fillna(0)
@@ -1321,32 +1340,39 @@ class AgencyDB:
     def scenario_hours_col(self, complexity: str, tier: str) -> str:
         # exact
         col = f"{complexity}__{tier}_Hours"
-        if col in self.all_rows.columns:
+        if self.all_rows is not None and isinstance(self.all_rows, pd.DataFrame) and col in self.all_rows.columns:
             return col
         # try mapping display labels -> v4 tokens
         c_tok = self._map_to_v4_token(complexity, self._v4_complexity_tokens())
         t_tok = self._map_to_v4_token(tier,        self._v4_tier_tokens())
         col2 = f"{c_tok}__{t_tok}_Hours"
-        if col2 not in self.all_rows.columns:
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame) or col2 not in self.all_rows.columns:
             raise HTTPException(400, f"Scenario column not found for ({complexity}, {tier}).")
         return col2
 
     def task_groups_for_deliverable(self, deliverable_code: str) -> List[str]:
         """Get all task groups for a deliverable from the database."""
-        sub = self.all_rows[self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)]
-        if sub.empty:
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
             return []
-        return sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+        sub = self.all_rows[self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)]
+        if sub.empty or not isinstance(sub, pd.DataFrame):
+            return []
+        series = sub["task_group"]
+        if isinstance(series, pd.Series):
+            return sorted(set(series.dropna().astype(str).tolist()))
+        return []
 
     def hours_by_role_for_deliverable(
         self, deliverable_code: str, included_task_groups: List[str], scenario_col: str
     ) -> pd.DataFrame:
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)) &
             (self.all_rows["task_group"].isin(included_task_groups))
         ]
-        if sub.empty or scenario_col not in sub.columns:
-            return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        if sub.empty or not isinstance(sub, pd.DataFrame) or scenario_col not in sub.columns:
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         g = g.rename(columns={scenario_col:"Hours"})
         return g
@@ -1355,8 +1381,10 @@ class AgencyDB:
     def task_group_duration_days(self, task_group: str, complexity: str, tier: str, use_slack: bool,
                                  slack_after_internal: int, slack_after_client: int, slack_global_pct: float) -> float:
         # Base nominal
+        if self.timeline_params is None or not isinstance(self.timeline_params, pd.DataFrame):
+            return 0.0
         tp = self.timeline_params[self.timeline_params["Task_Group"]==task_group]
-        if tp.empty:
+        if tp.empty or not isinstance(tp, pd.DataFrame):
             return 0.0
         base = float(tp["Nominal_Duration_Days"].iloc[0])
 
@@ -1389,6 +1417,8 @@ class AgencyDB:
                        complexity: str, tier: str,
                        use_slack: bool, slack_after_internal: int, slack_after_client: int, slack_global_pct: float,
                        project_start: Optional[str]=None, scenario_letter: str="A") -> List[Dict[str, Any]]:
+        if self.timeline_params is None or not isinstance(self.timeline_params, pd.DataFrame):
+            return []
         order_map = {tg:i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
         tgs = self.sort_task_groups(included_task_groups, scenario_letter)
 
@@ -1451,17 +1481,18 @@ class AgencyDB:
         Fallback: ensure post_production < development for Scenario A.
         """
         try:
-            key = f"Task_Order_Overrides_{letter.upper()}"
-            row = self.ui_options[self.ui_options["Key"] == key]
-            if not row.empty:
-                parts = str(row["Value"].iloc[0]).split(";")
-                pairs = []
-                for p in parts:
-                    if "<" in p:
-                        a, b = [x.strip() for x in p.split("<", 1)]
-                        if a and b: pairs.append((a, b))
-                if pairs:
-                    return pairs
+            if self.ui_options is not None and isinstance(self.ui_options, pd.DataFrame) and not self.ui_options.empty:
+                key = f"Task_Order_Overrides_{letter.upper()}"
+                row = self.ui_options[self.ui_options["Key"] == key]
+                if not row.empty and isinstance(row, pd.DataFrame):
+                    parts = str(row["Value"].iloc[0]).split(";")
+                    pairs = []
+                    for p in parts:
+                        if "<" in p:
+                            a, b = [x.strip() for x in p.split("<", 1)]
+                            if a and b: pairs.append((a, b))
+                    if pairs:
+                        return pairs
         except Exception:
             pass
         if letter.upper() == "A":
@@ -1470,6 +1501,8 @@ class AgencyDB:
 
     def sort_task_groups(self, tgs: list[str], letter: str) -> list[str]:
         """Topological sort using Timeline_Params order as baseline + overrides."""
+        if self.timeline_params is None or not isinstance(self.timeline_params, pd.DataFrame):
+            return tgs
         base = {str(tg): i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
         nodes = [str(x) for x in tgs]
         edges = [(a, b) for (a, b) in self._order_overrides(letter) if a in nodes and b in nodes]
@@ -1496,25 +1529,31 @@ class AgencyDB:
 
     # ---------- Helper methods for task ordering and role detection ----------
     def sorted_task_groups(self, included: List[str]) -> List[str]:
+        if self.timeline_params is None or not isinstance(self.timeline_params, pd.DataFrame):
+            return included
         order_map = {tg: i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
         return sorted([str(x) for x in included], key=lambda tg: order_map.get(tg, 999))
 
     def task_hours_by_task_group(self, deliverable_code: str, included: List[str], scenario_col: str) -> Dict[str, float]:
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return {}
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].isin(included))
         ]
-        if sub.empty or scenario_col not in sub.columns:
+        if sub.empty or not isinstance(sub, pd.DataFrame) or scenario_col not in sub.columns:
             return {}
         g = sub.groupby(["task_group"], as_index=False)[scenario_col].sum()
         return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
 
     def dominant_role_for_task_group(self, deliverable_code: str, task_group: str, scenario_col: str):
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return ("","")
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str) == str(task_group))
         ]
-        if sub.empty or scenario_col not in sub.columns:
+        if sub.empty or not isinstance(sub, pd.DataFrame) or scenario_col not in sub.columns:
             return ("","")
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         r = g.sort_values(scenario_col, ascending=False).iloc[0]
@@ -1522,14 +1561,19 @@ class AgencyDB:
 
     # ---------- Component-level helper methods ----------
     def components_for_deliverable(self, deliverable_code: str, included_tgs: list[str]) -> list[str]:
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return ["General"]
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
         ].copy()
         # Fill per-row only if blank
-        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
-        comps = [c for c in sub["Component"].unique().tolist() if c]
-        has_blanks = (sub["Component"] == "").any()
+        if isinstance(sub, pd.DataFrame):
+            sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+            comps = [c for c in sub["Component"].unique().tolist() if c]
+            has_blanks = (sub["Component"] == "").any()
+        else:
+            return ["General"]
 
         if not comps and not has_blanks:
             # No component values at all for this deliverable → one placeholder bucket
@@ -1540,7 +1584,10 @@ class AgencyDB:
             comps.append("General")
 
         # Order components by earliest task_group position from Timeline_Params
-        order_map = {str(tg): i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
+        if self.timeline_params is not None and isinstance(self.timeline_params, pd.DataFrame):
+            order_map = {str(tg): i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
+        else:
+            order_map = {}
         comp_earliest = {}
         for comp in comps:
             if comp == "General":
@@ -1553,61 +1600,72 @@ class AgencyDB:
         return sorted(comps, key=lambda c: (comp_earliest.get(c, 999), c))
 
     def hours_by_component(self, deliverable_code: str, included_tgs: list[str], scenario_col: str) -> dict[str, float]:
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return {}
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
         ].copy()
-        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
-        # Only attach 'General' to rows that are actually blank
-        sub.loc[sub["Component"] == "", "Component"] = "General"
-        if sub.empty or scenario_col not in sub.columns:
-            return {}
-        g = sub.groupby("Component", as_index=False)[scenario_col].sum()
-        return {str(r["Component"]): float(r[scenario_col]) for _, r in g.iterrows()}
+        if isinstance(sub, pd.DataFrame):
+            sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+            # Only attach 'General' to rows that are actually blank
+            sub.loc[sub["Component"] == "", "Component"] = "General"
+            if sub.empty or scenario_col not in sub.columns:
+                return {}
+            g = sub.groupby("Component", as_index=False)[scenario_col].sum()
+            return {str(r["Component"]): float(r[scenario_col]) for _, r in g.iterrows()}
+        return {}
 
     def hours_by_taskgroup_for_component(self, deliverable_code: str, component: str,
                                          included_tgs: list[str], scenario_col: str) -> dict[str, float]:
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return {}
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
         ].copy()
-        sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
-        # Remap blanks to "General" before filtering (consistent with hours_by_component)
-        sub.loc[sub["Component"] == "", "Component"] = "General"
-        
-        comp_key = (component or "").strip() or "General"
-        sub = sub[sub["Component"] == comp_key]
+        if isinstance(sub, pd.DataFrame):
+            sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+            # Remap blanks to "General" before filtering (consistent with hours_by_component)
+            sub.loc[sub["Component"] == "", "Component"] = "General"
+            
+            comp_key = (component or "").strip() or "General"
+            sub = sub[sub["Component"] == comp_key]
 
-        if sub.empty or scenario_col not in sub.columns:
-            return {}
-        g = sub.groupby("task_group", as_index=False)[scenario_col].sum()
-        return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
+            if sub.empty or scenario_col not in sub.columns:
+                return {}
+            g = sub.groupby("task_group", as_index=False)[scenario_col].sum()
+            return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
+        return {}
 
     def dominant_role_for_component_task(self, deliverable_code: str, component: str,
                                          task_group: str, scenario_col: str) -> tuple[str, str]:
         """Enhanced role picker that prefers non-blank seniority with robust fallbacks"""
         # Narrow to this deliverable + task_group (+ component if present)
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return ("", "Mid")
+            
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str) == str(task_group))
         ].copy()
 
-        if "Component" in sub.columns and (component or "").strip():
+        if isinstance(sub, pd.DataFrame) and "Component" in sub.columns and (component or "").strip():
             sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
             sub = sub[sub["Component"] == str(component).strip()]
 
-        if sub.empty:
+        if not isinstance(sub, pd.DataFrame) or sub.empty:
             # Fallback: ignore component filter
             sub = self.all_rows[
                 (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
                 (self.all_rows["task_group"].astype(str) == str(task_group))
             ].copy()
 
-        if sub.empty:
+        if not isinstance(sub, pd.DataFrame) or sub.empty:
             # Second fallback: any rows for this deliverable
             sub = self.all_rows[self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)].copy()
 
-        if sub.empty:
+        if not isinstance(sub, pd.DataFrame) or sub.empty:
             return ("", "Mid")
 
         # Prefer rows with non-blank seniority
@@ -1615,7 +1673,7 @@ class AgencyDB:
         sub["Seniority"] = sub["Seniority"].astype(str).fillna("").str.strip()
 
         pref = sub[sub["Seniority"] != ""]
-        pick_from = pref if not pref.empty else sub
+        pick_from = pref if isinstance(pref, pd.DataFrame) and not pref.empty else sub
 
         g = pick_from.groupby(["Resource_Title", "Seniority"], as_index=False)[scenario_col].sum()
         r = g.sort_values(scenario_col, ascending=False).iloc[0]
@@ -1629,45 +1687,60 @@ class AgencyDB:
 
     def task_label_for_component_tg(self, deliverable_code: str, component: str, task_group: str) -> str:
         """Get user-friendly task label from Task_Label column for UI display."""
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return str(task_group)
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str) == str(task_group))
         ].copy()
-        if "Component" in sub.columns:
+        if isinstance(sub, pd.DataFrame) and "Component" in sub.columns:
             sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
             # Remap blanks to "General" before filtering (consistent with other helpers)
             sub.loc[sub["Component"] == "", "Component"] = "General"
             comp_key = (component or "").strip() or "General"
             sub = sub[sub["Component"] == comp_key]
 
-        if "Task_Label" in sub.columns:
-            lab = sub["Task_Label"].dropna().astype(str).str.strip()
-            lab = lab[lab != ""]
-            if not lab.empty:
-                # most frequent non‑empty label for that component+task_group
-                return lab.value_counts().idxmax()
+        if isinstance(sub, pd.DataFrame) and "Task_Label" in sub.columns:
+            lab = sub["Task_Label"]
+            if isinstance(lab, pd.Series):
+                lab = lab.dropna().astype(str).str.strip()
+                lab = lab[lab != ""]
+                if isinstance(lab, pd.Series) and not lab.empty:
+                    # most frequent non‑empty label for that component+task_group
+                    return lab.value_counts().idxmax()
         return str(task_group)
 
     # ---------- Pricing helper methods ----------
     def role_rates_table(self, rate_band: str = "Standard_US") -> pd.DataFrame:
         """Rate card with band multiplier applied + normalized Seniority."""
-        band = self.rate_bands[self.rate_bands["Band_Name"] == rate_band]
-        mult = float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
+        if self.rate_bands is None or not isinstance(self.rate_bands, pd.DataFrame):
+            mult = 1.0
+        else:
+            band = self.rate_bands[self.rate_bands["Band_Name"] == rate_band]
+            if isinstance(band, pd.DataFrame) and not band.empty:
+                mult = float(band["Rate_Multiplier"].iloc[0])
+            else:
+                mult = 1.0
+        
+        if self.role_rate_card is None or not isinstance(self.role_rate_card, pd.DataFrame):
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Rate_USD": []})
+            
         rc = self.role_rate_card[["Resource_Title", "Seniority", "Rate_USD"]].copy()
         # normalize seniority if you added _canonical_seniority() earlier
-        if "Seniority" in rc.columns:
+        if isinstance(rc, pd.DataFrame) and "Seniority" in rc.columns:
             try:
                 rc["Seniority"] = rc["Seniority"].astype(str).fillna("").apply(self._canonical_seniority)
             except Exception:
                 rc["Seniority"] = rc["Seniority"].astype(str).fillna("")
-        rc["Rate_USD"] = rc["Rate_USD"].astype(float) * mult
+        if isinstance(rc, pd.DataFrame):
+            rc["Rate_USD"] = rc["Rate_USD"].astype(float) * mult
         return rc
 
     def price_for_hours_by_role(self, hrs_by_role: pd.DataFrame, rate_band: str) -> tuple[float, pd.DataFrame]:
         """Return (price_total, merged_breakdown) for a df with columns: Resource_Title, Seniority, Hours.
         Enforces rate integrity - uses fallback rates with warnings if role/seniority combinations are missing."""
-        if hrs_by_role is None or hrs_by_role.empty:
-            return (0.0, pd.DataFrame(columns=["Resource_Title","Seniority","Hours","Rate_USD","Price"]))
+        if hrs_by_role is None or not isinstance(hrs_by_role, pd.DataFrame) or hrs_by_role.empty:
+            return (0.0, pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": [], "Rate_USD": [], "Price": []}))
         
         rc = self.role_rates_table(rate_band)
         merged = hrs_by_role.merge(rc, on=["Resource_Title","Seniority"], how="left")
@@ -1690,10 +1763,17 @@ class AgencyDB:
             still_missing = fallback_merged[fallback_merged["Rate_USD"].isna()]
             if not still_missing.empty:
                 # Apply band-aware default rate as last resort
-                ps = self.pricing_settings[self.pricing_settings["Key"]=="Default_Blended_Rate"]
-                base_default = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
-                band = self.rate_bands[self.rate_bands["Band_Name"] == rate_band]
-                mult = float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
+                if self.pricing_settings is not None and isinstance(self.pricing_settings, pd.DataFrame):
+                    ps = self.pricing_settings[self.pricing_settings["Key"]=="Default_Blended_Rate"]
+                    base_default = float(ps["Default"].iloc[0]) if isinstance(ps, pd.DataFrame) and not ps.empty else 195.0
+                else:
+                    base_default = 195.0
+                
+                if self.rate_bands is not None and isinstance(self.rate_bands, pd.DataFrame):
+                    band = self.rate_bands[self.rate_bands["Band_Name"] == rate_band]
+                    mult = float(band["Rate_Multiplier"].iloc[0]) if isinstance(band, pd.DataFrame) and not band.empty else 1.0
+                else:
+                    mult = 1.0
                 default_rate = base_default * mult
                 fallback_merged["Rate_USD"] = fallback_merged["Rate_USD"].fillna(default_rate)
                 missing_list = [(row["Resource_Title"], row["Seniority"]) for _, row in still_missing.iterrows()]
@@ -1707,46 +1787,54 @@ class AgencyDB:
 
     def hours_by_role_for_deliverable(self, deliverable_code: str, included_tgs: list[str], scenario_col: str) -> pd.DataFrame:
         """Get hours by role+seniority for an entire deliverable across all included task groups."""
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
         ].copy()
-        if sub.empty or scenario_col not in sub.columns:
-            return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        if not isinstance(sub, pd.DataFrame) or sub.empty or scenario_col not in sub.columns:
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         return g.rename(columns={scenario_col: "Hours"})
 
     def hours_by_role_for_component(self, deliverable_code: str, component: str,
                                     included_tgs: list[str], scenario_col: str) -> pd.DataFrame:
         """Get hours by role+seniority for a specific component."""
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
         ].copy()
-        sub["Component"] = sub.get("Component", "").astype(str).fillna("").str.strip()
-        if (component or "").strip() and component != "General":
-            sub = sub[sub["Component"] == component]
-        else:
-            sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
-        if sub.empty or scenario_col not in sub.columns:
-            return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        if isinstance(sub, pd.DataFrame) and "Component" in sub.columns:
+            sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
+            if (component or "").strip() and component != "General":
+                sub = sub[sub["Component"] == component]
+            else:
+                sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
+        if not isinstance(sub, pd.DataFrame) or sub.empty or scenario_col not in sub.columns:
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         return g.rename(columns={scenario_col: "Hours"})
 
     def hours_by_role_for_component_task(self, deliverable_code: str, component: str,
                                          task_group: str, scenario_col: str) -> pd.DataFrame:
         """Get hours by role+seniority for a specific component+task combination."""
+        if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame):
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         sub = self.all_rows[
             (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
             (self.all_rows["task_group"].astype(str) == str(task_group))
         ].copy()
-        sub["Component"] = sub.get("Component", "").astype(str).fillna("").str.strip()
-        if (component or "").strip() and component != "General":
-            sub = sub[sub["Component"] == component]
-        else:
-            sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
-        if sub.empty or scenario_col not in sub.columns:
-            return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        if isinstance(sub, pd.DataFrame) and "Component" in sub.columns:
+            sub["Component"] = sub["Component"].astype(str).fillna("").str.strip()
+            if (component or "").strip() and component != "General":
+                sub = sub[sub["Component"] == component]
+            else:
+                sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
+        if not isinstance(sub, pd.DataFrame) or sub.empty or scenario_col not in sub.columns:
+            return pd.DataFrame({"Resource_Title": [], "Seniority": [], "Hours": []})
         g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
         return g.rename(columns={scenario_col: "Hours"})
 
