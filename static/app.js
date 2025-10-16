@@ -219,6 +219,70 @@ const SessionManager = {
 window.SessionManager = SessionManager;
 
 // ================================================================================
+// Data Transformation Utilities
+// ================================================================================
+
+/**
+ * Transform SCENARIOS.A backend format to unified pricing table patch format
+ * @param {Object} scenario - Scenario object with items array
+ * @returns {Object} - {deliverables: [...]} format for APBOneTable.hydrateFrom()
+ */
+function transformScenarioToPatchFormat(scenario) {
+  if (!scenario || !scenario.items) {
+    return { deliverables: [] };
+  }
+  
+  // Helper to slugify component names for IDs
+  function slugify(text) {
+    return text
+      .toString()
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '-')           // Replace spaces with -
+      .replace(/[^\w\-]+/g, '')       // Remove all non-word chars
+      .replace(/\-\-+/g, '-')         // Replace multiple - with single -
+      .replace(/^-+/, '')              // Trim - from start
+      .replace(/-+$/, '');             // Trim - from end
+  }
+  
+  const deliverables = scenario.items.map(item => {
+    // Determine cadence based on is_retainer flag
+    const isRetainer = item.is_retainer || item.retainer_months > 0;
+    const cadence = isRetainer ? 'Monthly' : 'One-Time';
+    const months = isRetainer ? (item.retainer_months || 12) : 0;
+    
+    const deliverable = {
+      id: item.deliverable_code,
+      title: item.deliverable_name || item.deliverable || item.deliverable_code,
+      dept: item.category || 'General',
+      cadence: cadence,
+      months: months,
+      hours: item.total_hours || item.hours || 0,
+      rate: item.blended_rate || item.rate || item.effective_rate || 195,
+      price: item.price || 0,
+      resources: item.resources || [],
+      components: []
+    };
+    
+    // Transform components if they exist
+    if (item.components && Array.isArray(item.components)) {
+      deliverable.components = item.components.map(comp => ({
+        id: slugify(comp.name || 'component'),
+        title: comp.name || 'Component',
+        hours: comp.hours || 0,
+        rate: comp.rate || deliverable.rate,
+        cadence: comp.cadence || deliverable.cadence,
+        months: comp.months || deliverable.months
+      }));
+    }
+    
+    return deliverable;
+  });
+  
+  return { deliverables };
+}
+
+// ================================================================================
 // Industry Template System
 // ================================================================================
 let selectedIndustry = null;
@@ -898,6 +962,18 @@ async function initializeGanttChart(tasks = []) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
+        
+        // Emit change to ScenarioStore via GanttBridge
+        if (window.GanttBridge && window.GanttBridge.emitChange) {
+          GanttBridge.emitChange({
+            deliverableId: task.id,
+            start: start.toISOString().split('T')[0],
+            end: end.toISOString().split('T')[0],
+            durationDays: Math.ceil((end - start) / (1000*60*60*24)),
+            resources: task.resources || []
+          });
+        }
+        
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
         if (saveBtn) saveBtn.style.display = '';
@@ -2113,8 +2189,8 @@ async function updatePricing() {
 
 // Re-build scenario with current pricing settings
 async function rebuildScenario() {
-  if (!SCENARIOS || !SCENARIOS.A) {
-    alert('No scenario to rebuild. Please build a scenario first.');
+  if (!window.ScenarioStore) {
+    alert('ScenarioStore not available. Please ensure the unified pricing system is loaded.');
     return;
   }
   
@@ -2123,82 +2199,24 @@ async function rebuildScenario() {
   
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '🔄 Rebuilding...';
+    btn.textContent = '🔄 Saving...';
   }
   
   try {
-    // Store current version if not already stored
-    if (!pricingData.originalScenario) {
-      pricingData.originalScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
-    }
+    // Simply save the current scenario state via ScenarioStore
+    await ScenarioStore.save();
+    console.log('[REBUILD] Scenario saved successfully via ScenarioStore');
     
-    // Increment rebuild version
-    if (!pricingData.rebuildVersion) pricingData.rebuildVersion = 0;
-    pricingData.rebuildVersion++;
-    
-    // Create rebuilt scenario with custom values
-    const rebuiltScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
-    
-    rebuiltScenario.items.forEach(item => {
-      // Get cadence and periods for this deliverable
-      const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
-                         (pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER' ? 'MONTHLY' : 'ONE_TIME');
-      const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
-                     (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
-      
-      // Get custom values or keep originals
-      const customHours = pricingData.customHours.get(item.deliverable_code);
-      const customRate = pricingData.customRates.get(item.deliverable_code);
-      
-      if (customHours !== undefined) item.hours = customHours;
-      if (customRate !== undefined) item.blended_rate = customRate;
-      
-      // Update price calculation (price per period)
-      item.price = (item.hours || 0) * (item.blended_rate || 195);
-      
-      // Mark as retainer if not one-time
-      item.is_retainer = (cadenceType !== 'ONE_TIME');
-      if (item.is_retainer) {
-        item.retainer_months = periods;
-      }
-      
-      // Update components
-      if (item.components) {
-        item.components.forEach(comp => {
-          const compKey = `${item.deliverable_code}::${comp.name}`; // Fixed to use :: separator
-          const compCadence = pricingDataEnhanced.cadenceTypes.get(compKey) || cadenceType;
-          const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || periods;
-          const compHours = pricingData.customHours.get(compKey);
-          const compRate = pricingData.customRates.get(compKey);
-          
-          if (compHours !== undefined) comp.hours = compHours;
-          if (compRate !== undefined) comp.rate = compRate;
-          
-          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
-          comp.is_retainer = (compCadence !== 'ONE_TIME');
-          if (comp.is_retainer) {
-            comp.retainer_months = compPeriods;
-          }
-        });
-      }
-    });
-    
-    // Show comparison modal
-    showScenarioComparison(pricingData.originalScenario, rebuiltScenario);
-    
-    // Update current scenario
-    SCENARIOS.A = rebuiltScenario;
-    updatePricingCalculations();
-    
-    console.log('Scenario rebuilt successfully', rebuiltScenario);
+    // Trigger scenarios:updated event to refresh UI
+    window.dispatchEvent(new Event('scenarios:updated'));
     
   } catch (error) {
-    console.error('Error rebuilding scenario:', error);
-    alert('Error rebuilding scenario. Please try again.');
+    console.error('Error saving scenario:', error);
+    alert('Error saving scenario. Please try again.');
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🔨 Re-build Scenario';
+      btn.textContent = '🔄 Re-build Scenario';
     }
   }
 }

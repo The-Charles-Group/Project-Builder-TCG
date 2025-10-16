@@ -371,35 +371,39 @@
       </div>
 
 
-      <!-- Pricing Details Table -->
-      <div class="pricing-table-container" style="margin-bottom: 20px;">
-        <h3 style="font-size: 1.1em; margin-bottom: 12px; color: var(--text);">📊 Deliverable Pricing Details</h3>
-        <div id="pricing-table-wrapper" style="background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto;">
-          <table id="pricing-details-table" style="width: 100%; border-collapse: collapse;">
-            <thead>
-              <tr style="border-bottom: 2px solid var(--border);">
-                <th style="padding: 8px; text-align: left; color: var(--muted);">Deliverable / Component</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Type</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Months</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Hours</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Rate</th>
-                <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
-                <th style="padding: 8px; text-align: left; color: var(--muted);">Resources</th>
-              </tr>
-            </thead>
-            <tbody id="pricing-tbody">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-        </div>
-        
-        <!-- Re-build Scenario Button -->
-        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
-          <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
-                  style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-            🔄 Re-build Scenario
-          </button>
-        </div>
+      <!-- Unified Pricing Table -->
+      {% include 'templates/partials/pricing-one-table.html' %}
+      
+      <!-- Hydration Script -->
+      <script>
+        // Hydrate unified pricing table from SCENARIOS.A when available
+        (function() {
+          function hydrateUnifiedPricing() {
+            if (window.SCENARIOS && window.SCENARIOS.A && window.transformScenarioToPatchFormat && window.APBOneTable) {
+              const patchData = transformScenarioToPatchFormat(window.SCENARIOS.A);
+              APBOneTable.hydrateFrom(patchData);
+              console.log('[PRICING] Unified table hydrated from SCENARIOS.A', patchData);
+            }
+          }
+          
+          // Try hydration on load
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', hydrateUnifiedPricing);
+          } else {
+            hydrateUnifiedPricing();
+          }
+          
+          // Re-hydrate when scenarios update
+          window.addEventListener('scenarios:updated', hydrateUnifiedPricing);
+        })();
+      </script>
+      
+      <!-- Re-build Scenario Button -->
+      <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+        <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
+                style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          🔄 Re-build Scenario
+        </button>
       </div>
 
       <!-- Enhanced Summary Panel -->
