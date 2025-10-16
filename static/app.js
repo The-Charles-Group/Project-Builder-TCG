@@ -61,6 +61,9 @@ const SessionManager = {
       }
     });
     
+    // CRITICAL FIX: Explicitly clear the problematic key that persists
+    localStorage.removeItem('apb.rfpText.v1');
+    
     // Clear sessionStorage (ALL patterns)
     Object.keys(sessionStorage).forEach(key => {
       if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
@@ -76,6 +79,9 @@ const SessionManager = {
     if (window.APB && window.APB.step2) {
       window.APB.step2.rfpText = '';
     }
+    
+    // Set flag to prevent auto-restore
+    sessionStorage.setItem('just_cleared', 'true');
     
     // Clear server-side cache
     try {
@@ -3379,7 +3385,13 @@ async function boot() {
   OPTIONS = await api("/api/options");
   
   // Initialize APB.step2 state - load RFP text from sessionStorage or localStorage
-  APB.step2.rfpText = sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+  // CRITICAL FIX: Don't auto-restore if just cleared
+  if (sessionStorage.getItem('just_cleared') === 'true') {
+    APB.step2.rfpText = '';
+    sessionStorage.removeItem('just_cleared');
+  } else {
+    APB.step2.rfpText = sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+  }
   APB.step2.allDeliverables = OPTIONS.deliverables || [];
   
   // Initialize DOM element references for Step 2
@@ -3480,7 +3492,11 @@ async function boot() {
       e.preventDefault();
       
       // Task 1.7: Get RFP text from multiple sources including backend cache
-      let rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+      // CRITICAL FIX: Check if just cleared before restoring
+      let rfpText = '';
+      if (sessionStorage.getItem('just_cleared') !== 'true') {
+        rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+      }
       
       // If still no text, check if we have a stored analysis summary
       if (!rfpText && sessionStorage.getItem('apb:rfpSummary')) {
