@@ -1857,7 +1857,22 @@ class AIAssistant {
             </button>
         `;
         
+        console.log('[CHARLES] About to append container to body...');
         document.body.appendChild(container);
+        console.log('[CHARLES] Container appended to body successfully!');
+        
+        // Verify the toggle button is present
+        const toggle = document.getElementById('ai-assistant-toggle');
+        if (toggle) {
+            console.log('[CHARLES] Toggle button found after append:', toggle);
+            // Force it to be visible
+            toggle.style.display = 'flex';
+            toggle.style.visibility = 'visible';
+            toggle.style.opacity = '1';
+            toggle.style.zIndex = '99999';
+        } else {
+            console.error('[CHARLES] Toggle button NOT found after append!');
+        }
     }
     
     addEnhancedStyles() {
@@ -3947,8 +3962,75 @@ class AIAssistant {
 
 // Initialize AI Assistant when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-    window.aiAssistant = new AIAssistant();
-    console.log('[CHARLES] Agent v3.0 initialized with full autonomy, self-healing, and state preservation.');
+    try {
+        console.log('[CHARLES] Starting initialization...');
+        window.aiAssistant = new AIAssistant();
+        console.log('[CHARLES] Agent v3.0 initialized with full autonomy, self-healing, and state preservation.');
+        
+        // Force toggle button to be visible if it exists
+        const toggleBtn = document.getElementById('ai-assistant-toggle');
+        if (toggleBtn) {
+            console.log('[CHARLES] Toggle button found, ensuring visibility...');
+            toggleBtn.style.display = 'flex';
+            toggleBtn.style.visibility = 'visible';
+            toggleBtn.style.opacity = '1';
+        } else {
+            console.error('[CHARLES] Toggle button not found! Attempting to recreate...');
+            // Fallback: Create a simple toggle button if the main one failed
+            const fallbackBtn = document.createElement('button');
+            fallbackBtn.id = 'ai-assistant-toggle-fallback';
+            fallbackBtn.style.cssText = `
+                position: fixed;
+                right: 20px;
+                bottom: 20px;
+                z-index: 99999;
+                padding: 12px 20px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 600;
+                box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            `;
+            fallbackBtn.innerHTML = '🔮 CHARLES';
+            fallbackBtn.onclick = () => {
+                if (window.aiAssistant) {
+                    window.aiAssistant.toggle();
+                }
+            };
+            document.body.appendChild(fallbackBtn);
+            console.log('[CHARLES] Created fallback toggle button');
+        }
+    } catch (error) {
+        console.error('[CHARLES] CRITICAL ERROR during initialization:', error);
+        console.error('[CHARLES] Stack trace:', error.stack);
+        
+        // Create emergency toggle button
+        const emergencyBtn = document.createElement('button');
+        emergencyBtn.style.cssText = `
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            z-index: 99999;
+            padding: 12px 20px;
+            background: red;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 600;
+        `;
+        emergencyBtn.innerHTML = '⚠️ CHARLES ERROR (Click to retry)';
+        emergencyBtn.onclick = () => {
+            location.reload();
+        };
+        document.body.appendChild(emergencyBtn);
+    }
 });
 
 // Export for global access
