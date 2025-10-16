@@ -1,6 +1,7 @@
 /**
- * AI Assistant Chat Sidebar
- * Provides a collapsible chat interface for natural language UI control
+ * CHARLES AGENT - ProBuFo (Progressive Business Forecasting Oracle)
+ * Advanced AI Assistant with Autonomous Self-Healing Capabilities
+ * Version: 3.0.0 - Full Autonomy & State Preservation
  */
 
 class AIAssistant {
@@ -16,6 +17,45 @@ class AIAssistant {
         this.currentTypingIndicators = new Set(); // Track all active typing indicators
         this.apiTimeout = 10000; // 10 seconds timeout for API calls
         
+        // Enhanced State Management
+        this.agentState = {
+            uploadedFiles: [],
+            selectedDeliverables: [],
+            currentStep: 'step1',
+            formValues: {},
+            analysisMode: 'fast',
+            jobId: null,
+            lastError: null,
+            stateHistory: []
+        };
+        
+        // Self-Healing & Error Recovery
+        this.errorRecoveryQueue = [];
+        this.retryAttempts = {};
+        this.maxRetries = 3;
+        this.errorPatterns = [];
+        
+        // Telemetry & Logging
+        this.agentTelemetry = [];
+        this.commandStats = {
+            success: {},
+            failure: {},
+            total: {}
+        };
+        
+        // Visual Feedback
+        this.activeHighlights = new Set();
+        this.progressIndicators = new Map();
+        
+        // Batch Processing
+        this.batchProcessingStatus = {
+            total: 0,
+            completed: 0,
+            failed: 0,
+            inProgress: false,
+            fileStatuses: new Map()
+        };
+        
         this.init();
     }
     
@@ -25,9 +65,1100 @@ class AIAssistant {
     
     init() {
         this.createSidebar();
+        this.addEnhancedStyles();
         this.attachEventListeners();
+        this.initializeAutoRecovery();
+        this.restoreState();
         this.checkAgentStatus();
+        this.initProgressIndicators();
     }
+    
+    // ====================
+    // STATE PRESERVATION SYSTEM
+    // ====================
+    
+    saveState() {
+        const currentState = {
+            timestamp: Date.now(),
+            uploadedFiles: this.agentState.uploadedFiles,
+            selectedDeliverables: this.getSelectedDeliverables(),
+            currentStep: this.detectCurrentStep(),
+            formValues: this.captureFormValues(),
+            analysisMode: document.getElementById('analysis-mode')?.value || 'fast',
+            jobId: this.agentState.jobId,
+            rfpText: document.getElementById('rfpText')?.value || '',
+            scenarios: window.SCENARIOS || null
+        };
+        
+        // Add to history
+        this.agentState.stateHistory.push(currentState);
+        
+        // Keep only last 10 states
+        if (this.agentState.stateHistory.length > 10) {
+            this.agentState.stateHistory.shift();
+        }
+        
+        // Save to localStorage
+        localStorage.setItem('charles_agent_state', JSON.stringify(this.agentState));
+        
+        // Log telemetry
+        this.logAction('state_saved', { timestamp: currentState.timestamp });
+        
+        console.log('[CHARLES] State saved:', currentState);
+        return currentState;
+    }
+    
+    restoreState(stateToRestore = null) {
+        try {
+            // Use provided state or load from localStorage
+            const savedState = stateToRestore || JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+            
+            if (!savedState || Object.keys(savedState).length === 0) {
+                console.log('[CHARLES] No state to restore');
+                return false;
+            }
+            
+            // Get the most recent state
+            const latestState = savedState.stateHistory?.[savedState.stateHistory.length - 1] || savedState;
+            
+            // Restore uploaded files
+            if (latestState.uploadedFiles) {
+                this.agentState.uploadedFiles = latestState.uploadedFiles;
+            }
+            
+            // Restore RFP text
+            if (latestState.rfpText) {
+                const rfpTextEl = document.getElementById('rfpText');
+                if (rfpTextEl) {
+                    rfpTextEl.value = latestState.rfpText;
+                }
+            }
+            
+            // Restore form values
+            if (latestState.formValues) {
+                this.restoreFormValues(latestState.formValues);
+            }
+            
+            // Restore analysis mode
+            if (latestState.analysisMode) {
+                const modeEl = document.getElementById('analysis-mode');
+                if (modeEl) {
+                    modeEl.value = latestState.analysisMode;
+                }
+                // Update UI buttons
+                this.setAnalysisMode(latestState.analysisMode);
+            }
+            
+            // Restore selected deliverables
+            if (latestState.selectedDeliverables && latestState.selectedDeliverables.length > 0) {
+                this.restoreSelectedDeliverables(latestState.selectedDeliverables);
+            }
+            
+            // Navigate to the correct step
+            if (latestState.currentStep && latestState.currentStep !== 'step1') {
+                this.navigateToStep(latestState.currentStep);
+            }
+            
+            // Restore job ID if analysis was in progress
+            if (latestState.jobId) {
+                this.agentState.jobId = latestState.jobId;
+                // Resume tracking
+                this.trackAnalysisJob(latestState.jobId, true);
+            }
+            
+            this.addMessage('✅ Previous state restored successfully', 'assistant');
+            this.logAction('state_restored', { timestamp: latestState.timestamp });
+            
+            return true;
+        } catch (error) {
+            console.error('[CHARLES] Failed to restore state:', error);
+            this.logError('state_restore_failed', error);
+            return false;
+        }
+    }
+    
+    captureFormValues() {
+        const formValues = {};
+        
+        // Capture all input values
+        document.querySelectorAll('input[type="text"], input[type="number"], textarea, select').forEach(el => {
+            if (el.id) {
+                formValues[el.id] = el.value;
+            }
+        });
+        
+        // Capture checkbox states
+        document.querySelectorAll('input[type="checkbox"]').forEach(el => {
+            if (el.id || el.name) {
+                const key = el.id || el.name;
+                formValues[key] = el.checked;
+            }
+        });
+        
+        return formValues;
+    }
+    
+    restoreFormValues(formValues) {
+        Object.entries(formValues).forEach(([key, value]) => {
+            const el = document.getElementById(key) || document.querySelector(`[name="${key}"]`);
+            if (el) {
+                if (el.type === 'checkbox') {
+                    el.checked = value;
+                } else {
+                    el.value = value;
+                }
+                // Trigger change events
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+    }
+    
+    restoreSelectedDeliverables(deliverables) {
+        // Clear current selections
+        document.querySelectorAll('input[type="checkbox"][data-deliverable]').forEach(cb => {
+            cb.checked = false;
+        });
+        
+        // Restore selections
+        deliverables.forEach(code => {
+            const checkbox = document.querySelector(`input[type="checkbox"][data-deliverable="${code}"]`);
+            if (checkbox) {
+                checkbox.checked = true;
+                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        });
+    }
+    
+    // ====================
+    // REAL-TIME PROGRESS DISPLAY
+    // ====================
+    
+    initProgressIndicators() {
+        // Add floating progress indicator to main UI
+        const floatingProgress = document.createElement('div');
+        floatingProgress.id = 'charles-floating-progress';
+        floatingProgress.className = 'charles-floating-progress';
+        floatingProgress.style.display = 'none';
+        floatingProgress.innerHTML = `
+            <div class="charles-progress-header">
+                <span class="charles-progress-title">🔮 CHARLES Processing</span>
+                <span class="charles-progress-close" onclick="this.parentElement.parentElement.style.display='none'">×</span>
+            </div>
+            <div class="charles-progress-content">
+                <div class="charles-progress-bar-container">
+                    <div class="charles-progress-bar" id="charles-main-progress-bar"></div>
+                </div>
+                <div class="charles-progress-text" id="charles-progress-text">Initializing...</div>
+                <div class="charles-progress-details" id="charles-progress-details"></div>
+            </div>
+        `;
+        document.body.appendChild(floatingProgress);
+        
+        // Add progress to Step 1
+        const step1 = document.getElementById('step1');
+        if (step1) {
+            const step1Progress = document.createElement('div');
+            step1Progress.id = 'step1-progress';
+            step1Progress.className = 'charles-step-progress';
+            step1Progress.style.display = 'none';
+            step1Progress.innerHTML = `
+                <div class="progress-bar-container">
+                    <div class="progress-bar" id="step1-progress-bar"></div>
+                </div>
+                <div class="progress-text" id="step1-progress-text"></div>
+            `;
+            step1.insertBefore(step1Progress, step1.querySelector('.card-content') || step1.firstChild);
+        }
+    }
+    
+    updateProgress(percentage, message, details = null) {
+        // Update floating progress
+        const floatingProgress = document.getElementById('charles-floating-progress');
+        const mainBar = document.getElementById('charles-main-progress-bar');
+        const progressText = document.getElementById('charles-progress-text');
+        const progressDetails = document.getElementById('charles-progress-details');
+        
+        if (floatingProgress && percentage >= 0) {
+            floatingProgress.style.display = 'block';
+            if (mainBar) mainBar.style.width = `${percentage}%`;
+            if (progressText) progressText.textContent = message || `Processing... ${percentage}%`;
+            if (progressDetails && details) {
+                progressDetails.innerHTML = details;
+            }
+        }
+        
+        // Update Step 1 progress
+        const step1Progress = document.getElementById('step1-progress');
+        const step1Bar = document.getElementById('step1-progress-bar');
+        const step1Text = document.getElementById('step1-progress-text');
+        
+        if (step1Progress && percentage >= 0) {
+            step1Progress.style.display = 'block';
+            if (step1Bar) step1Bar.style.width = `${percentage}%`;
+            if (step1Text) step1Text.textContent = message || `${percentage}%`;
+        }
+        
+        // Update chat progress
+        this.addProgressMessage(percentage, message, details);
+        
+        // Hide on completion
+        if (percentage >= 100) {
+            setTimeout(() => {
+                if (floatingProgress) floatingProgress.style.display = 'none';
+                if (step1Progress) step1Progress.style.display = 'none';
+            }, 2000);
+        }
+    }
+    
+    addProgressMessage(percentage, message, details) {
+        const messagesContainer = document.getElementById('ai-chat-messages');
+        let progressMsg = document.getElementById('charles-progress-message');
+        
+        if (!progressMsg) {
+            progressMsg = document.createElement('div');
+            progressMsg.id = 'charles-progress-message';
+            progressMsg.className = 'ai-message assistant';
+            messagesContainer.appendChild(progressMsg);
+        }
+        
+        progressMsg.innerHTML = `
+            <div class="ai-message-avatar">🤖</div>
+            <div class="ai-message-content">
+                <div class="progress-indicator">
+                    <div class="progress-bar-mini">
+                        <div class="progress-fill" style="width: ${percentage}%"></div>
+                    </div>
+                    <div class="progress-status">
+                        <strong>${message}</strong>
+                        ${details ? `<div class="progress-details">${details}</div>` : ''}
+                        <div class="progress-percentage">${percentage}%</div>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+    
+    async trackAnalysisJob(jobId, isResume = false) {
+        if (!isResume) {
+            this.agentState.jobId = jobId;
+            this.saveState();
+        }
+        
+        let pollInterval;
+        let pollCount = 0;
+        const maxPolls = 120; // 4 minutes at 2-second intervals
+        
+        this.updateProgress(0, 'Analysis started...', 'Initializing GPT-5 deep analysis');
+        
+        const cleanup = () => {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+            this.agentState.jobId = null;
+        };
+        
+        pollInterval = setInterval(async () => {
+            try {
+                pollCount++;
+                
+                if (pollCount > maxPolls) {
+                    cleanup();
+                    this.updateProgress(100, 'Analysis timed out', 'Processing may continue in background');
+                    this.addMessage('⏱️ Analysis is taking longer than expected. It may still be processing in the background.', 'assistant');
+                    return;
+                }
+                
+                const response = await this.retryWithBackoff(
+                    () => fetch(`/api/agencydb/status/${jobId}`),
+                    3,
+                    1000
+                );
+                
+                if (response.ok) {
+                    const status = await response.json();
+                    
+                    // Update progress with real data
+                    const progress = status.progress || 0;
+                    const stage = status.stage || 'Processing';
+                    
+                    // Create detailed message based on stage
+                    let details = '';
+                    if (status.stage_details) {
+                        details = `<ul>${Object.entries(status.stage_details).map(([k, v]) => 
+                            `<li>${k}: ${v}</li>`
+                        ).join('')}</ul>`;
+                    }
+                    
+                    this.updateProgress(progress, stage, details);
+                    
+                    if (status.status === 'completed') {
+                        cleanup();
+                        this.updateProgress(100, '✅ Analysis Complete!', 'Results loaded successfully');
+                        this.addMessage(`✅ Analysis complete! Found ${status.deliverables_count || 0} relevant deliverables.`, 'assistant');
+                        
+                        // Trigger UI updates
+                        if (typeof window.loadScenarioData === 'function' && status.result) {
+                            window.loadScenarioData(status.result);
+                        }
+                        
+                        // Auto-navigate to Step 2
+                        setTimeout(() => {
+                            this.navigateToStep('step2');
+                            this.saveState();
+                        }, 1000);
+                    } else if (status.status === 'failed') {
+                        cleanup();
+                        this.updateProgress(100, '❌ Analysis Failed', status.error || 'Unknown error');
+                        this.handleError(new Error(status.error || 'Analysis failed'), 'analysis', { jobId });
+                    }
+                }
+            } catch (error) {
+                console.error('[CHARLES] Job tracking error:', error);
+                this.handleError(error, 'job_tracking', { jobId });
+            }
+        }, 2000);
+    }
+    
+    // ====================
+    // VISUAL FEEDBACK SYSTEM
+    // ====================
+    
+    showAgentWorking(message = 'CHARLES is working...') {
+        let overlay = document.getElementById('charles-working-overlay');
+        
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'charles-working-overlay';
+            overlay.className = 'charles-working-overlay';
+            document.body.appendChild(overlay);
+        }
+        
+        overlay.innerHTML = `
+            <div class="charles-working-content">
+                <div class="charles-sphere-animated">🔮</div>
+                <div class="charles-working-text">${message}</div>
+                <div class="charles-working-spinner"></div>
+            </div>
+        `;
+        
+        overlay.style.display = 'flex';
+        
+        return () => {
+            overlay.style.display = 'none';
+        };
+    }
+    
+    flashElement(element, duration = 500, color = '#667eea') {
+        if (!element || this.activeHighlights.has(element)) return;
+        
+        this.activeHighlights.add(element);
+        
+        const originalStyle = {
+            border: element.style.border,
+            boxShadow: element.style.boxShadow,
+            transition: element.style.transition
+        };
+        
+        // Add pulsing animation
+        element.style.transition = 'all 0.3s ease';
+        element.style.border = `2px solid ${color}`;
+        element.style.boxShadow = `0 0 20px ${color}`;
+        element.classList.add('charles-element-highlight');
+        
+        setTimeout(() => {
+            element.style.border = originalStyle.border;
+            element.style.boxShadow = originalStyle.boxShadow;
+            element.style.transition = originalStyle.transition;
+            element.classList.remove('charles-element-highlight');
+            this.activeHighlights.delete(element);
+        }, duration);
+    }
+    
+    showSuccessMessage(message, duration = 3000) {
+        this.showFlashMessage(message, 'success', duration);
+    }
+    
+    showErrorMessage(message, duration = 3000) {
+        this.showFlashMessage(message, 'error', duration);
+    }
+    
+    showFlashMessage(message, type = 'info', duration = 3000) {
+        const flash = document.createElement('div');
+        flash.className = `charles-flash-message charles-flash-${type}`;
+        flash.innerHTML = `
+            <span class="flash-icon">${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span>
+            <span class="flash-text">${message}</span>
+        `;
+        
+        document.body.appendChild(flash);
+        
+        // Animate in
+        setTimeout(() => flash.classList.add('show'), 10);
+        
+        // Remove after duration
+        setTimeout(() => {
+            flash.classList.remove('show');
+            setTimeout(() => flash.remove(), 300);
+        }, duration);
+    }
+    
+    // ====================
+    // SELF-HEALING & ERROR RECOVERY
+    // ====================
+    
+    initializeAutoRecovery() {
+        // Monitor for errors
+        window.addEventListener('error', (event) => {
+            this.handleError(event.error, 'global', { message: event.message });
+        });
+        
+        // Monitor for unhandled promise rejections
+        window.addEventListener('unhandledrejection', (event) => {
+            this.handleError(event.reason, 'promise', { promise: event.promise });
+        });
+        
+        // Monitor for network errors
+        this.interceptNetworkErrors();
+        
+        // Add Auto-Fix button to UI
+        this.addAutoFixButton();
+    }
+    
+    addAutoFixButton() {
+        const autoFixBtn = document.createElement('button');
+        autoFixBtn.id = 'charles-auto-fix';
+        autoFixBtn.className = 'charles-auto-fix-btn';
+        autoFixBtn.innerHTML = '🔧 Enable Auto-Fix';
+        autoFixBtn.onclick = () => this.toggleAutoFix();
+        
+        const header = document.querySelector('.ai-assistant-header');
+        if (header) {
+            header.appendChild(autoFixBtn);
+        }
+    }
+    
+    toggleAutoFix() {
+        this.autoFixEnabled = !this.autoFixEnabled;
+        const btn = document.getElementById('charles-auto-fix');
+        if (btn) {
+            btn.innerHTML = this.autoFixEnabled ? '🔧 Auto-Fix ON' : '🔧 Enable Auto-Fix';
+            btn.classList.toggle('active', this.autoFixEnabled);
+        }
+        
+        if (this.autoFixEnabled) {
+            this.showSuccessMessage('Auto-Fix enabled - I will attempt to recover from errors automatically');
+            this.processErrorQueue();
+        }
+    }
+    
+    async handleError(error, context, metadata = {}) {
+        const errorInfo = {
+            timestamp: Date.now(),
+            error: error?.message || error,
+            stack: error?.stack,
+            context,
+            metadata,
+            retryCount: 0
+        };
+        
+        // Log error
+        this.logError(context, errorInfo);
+        
+        // Add to recovery queue
+        this.errorRecoveryQueue.push(errorInfo);
+        
+        // Save state before attempting recovery
+        this.saveState();
+        
+        // Attempt auto-recovery if enabled
+        if (this.autoFixEnabled) {
+            await this.attemptRecovery(errorInfo);
+        }
+        
+        // Learn from error pattern
+        this.learnErrorPattern(errorInfo);
+    }
+    
+    async attemptRecovery(errorInfo) {
+        const { error, context, metadata } = errorInfo;
+        
+        this.showAgentWorking('Attempting automatic recovery...');
+        
+        try {
+            switch (context) {
+                case 'analysis':
+                    // Retry analysis with fallback options
+                    await this.recoverAnalysis(metadata);
+                    break;
+                    
+                case 'file_upload':
+                    // Retry file upload
+                    await this.recoverFileUpload(metadata);
+                    break;
+                    
+                case 'network':
+                    // Handle network errors
+                    await this.recoverNetwork(metadata);
+                    break;
+                    
+                case 'ui_manipulation':
+                    // Retry UI action
+                    await this.recoverUIAction(metadata);
+                    break;
+                    
+                default:
+                    // Generic recovery
+                    await this.genericRecovery(errorInfo);
+            }
+            
+            this.showSuccessMessage('Recovery successful!');
+            this.errorRecoveryQueue = this.errorRecoveryQueue.filter(e => e !== errorInfo);
+            
+        } catch (recoveryError) {
+            console.error('[CHARLES] Recovery failed:', recoveryError);
+            this.showErrorMessage('Auto-recovery failed. Manual intervention may be required.');
+        } finally {
+            this.showAgentWorking()(); // Hide overlay
+        }
+    }
+    
+    async recoverAnalysis(metadata) {
+        // Try different analysis modes
+        const modes = ['fast', 'deep'];
+        const currentMode = document.getElementById('analysis-mode')?.value || 'fast';
+        const alternateMode = modes.find(m => m !== currentMode);
+        
+        this.addMessage(`🔧 Retrying analysis with ${alternateMode} mode...`, 'assistant');
+        await this.triggerAnalysis(alternateMode);
+    }
+    
+    async recoverFileUpload(metadata) {
+        if (metadata.file) {
+            this.addMessage('🔧 Retrying file upload...', 'assistant');
+            await this.handleSingleFile(metadata.file);
+        }
+    }
+    
+    async recoverNetwork(metadata) {
+        // Wait and retry
+        await this.delay(2000);
+        if (metadata.request) {
+            await this.retryWithBackoff(metadata.request, 3, 1000);
+        }
+    }
+    
+    async recoverUIAction(metadata) {
+        if (metadata.action) {
+            await this.delay(500);
+            await this.executeAction(metadata.action);
+        }
+    }
+    
+    async genericRecovery(errorInfo) {
+        // Restore to last known good state
+        const lastGoodState = this.agentState.stateHistory[this.agentState.stateHistory.length - 2];
+        if (lastGoodState) {
+            this.restoreState({ stateHistory: [lastGoodState] });
+        }
+    }
+    
+    async retryWithBackoff(fn, maxRetries = 3, initialDelay = 1000) {
+        let lastError;
+        
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                return await fn();
+            } catch (error) {
+                lastError = error;
+                if (i < maxRetries - 1) {
+                    const delay = initialDelay * Math.pow(2, i);
+                    console.log(`[CHARLES] Retry ${i + 1}/${maxRetries} after ${delay}ms`);
+                    await this.delay(delay);
+                }
+            }
+        }
+        
+        throw lastError;
+    }
+    
+    interceptNetworkErrors() {
+        const originalFetch = window.fetch;
+        window.fetch = async (...args) => {
+            try {
+                const response = await originalFetch(...args);
+                if (!response.ok && response.status >= 500) {
+                    this.handleError(
+                        new Error(`Network error: ${response.status}`),
+                        'network',
+                        { url: args[0], status: response.status }
+                    );
+                }
+                return response;
+            } catch (error) {
+                this.handleError(error, 'network', { url: args[0] });
+                throw error;
+            }
+        };
+    }
+    
+    processErrorQueue() {
+        if (!this.autoFixEnabled || this.errorRecoveryQueue.length === 0) return;
+        
+        const error = this.errorRecoveryQueue.shift();
+        if (error && error.retryCount < this.maxRetries) {
+            error.retryCount++;
+            this.attemptRecovery(error);
+        }
+    }
+    
+    learnErrorPattern(errorInfo) {
+        // Store error patterns for future prevention
+        this.errorPatterns.push({
+            pattern: errorInfo.error,
+            context: errorInfo.context,
+            timestamp: errorInfo.timestamp,
+            resolution: null
+        });
+        
+        // Keep only last 50 patterns
+        if (this.errorPatterns.length > 50) {
+            this.errorPatterns.shift();
+        }
+    }
+    
+    // ====================
+    // ENHANCED UI MANIPULATION
+    // ====================
+    
+    simulateClick(selector, options = {}) {
+        const element = typeof selector === 'string' ? document.querySelector(selector) : selector;
+        
+        if (!element) {
+            throw new Error(`Element not found: ${selector}`);
+        }
+        
+        // Visual feedback
+        this.flashElement(element, options.flashDuration || 500);
+        
+        // Create and dispatch events
+        const events = ['mousedown', 'mouseup', 'click'];
+        events.forEach(eventType => {
+            const event = new MouseEvent(eventType, {
+                bubbles: true,
+                cancelable: true,
+                view: window,
+                ...options.eventOptions
+            });
+            element.dispatchEvent(event);
+        });
+        
+        // Also trigger change for inputs
+        if (element.tagName === 'INPUT' || element.tagName === 'SELECT') {
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        
+        this.logAction('click', { selector, element: element.tagName });
+        
+        return element;
+    }
+    
+    fillForm(formData, formSelector = null) {
+        const form = formSelector ? document.querySelector(formSelector) : document.querySelector('form');
+        
+        if (!form && !formSelector) {
+            // Fill any matching inputs on the page
+            Object.entries(formData).forEach(([key, value]) => {
+                const input = document.getElementById(key) || 
+                            document.querySelector(`[name="${key}"]`) ||
+                            document.querySelector(`[data-field="${key}"]`);
+                
+                if (input) {
+                    this.fillInput(input, value);
+                }
+            });
+        } else if (form) {
+            // Fill form fields
+            Object.entries(formData).forEach(([key, value]) => {
+                const input = form.querySelector(`#${key}`) || 
+                            form.querySelector(`[name="${key}"]`) ||
+                            form.querySelector(`[data-field="${key}"]`);
+                
+                if (input) {
+                    this.fillInput(input, value);
+                }
+            });
+        }
+        
+        this.logAction('fill_form', { fields: Object.keys(formData) });
+    }
+    
+    fillInput(input, value) {
+        this.flashElement(input);
+        
+        if (input.type === 'checkbox') {
+            input.checked = !!value;
+        } else if (input.type === 'radio') {
+            if (input.value === value) {
+                input.checked = true;
+            }
+        } else if (input.tagName === 'SELECT') {
+            input.value = value;
+            // Try setting by text if value doesn't work
+            if (input.value !== value) {
+                const option = Array.from(input.options).find(o => o.text === value);
+                if (option) option.selected = true;
+            }
+        } else {
+            // Simulate typing for text inputs
+            input.focus();
+            input.value = '';
+            for (let char of value.toString()) {
+                input.value += char;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
+        
+        // Trigger events
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        input.dispatchEvent(new Event('blur', { bubbles: true }));
+    }
+    
+    navigateToStep(stepId) {
+        const targetStep = document.getElementById(stepId);
+        if (!targetStep) {
+            console.warn(`[CHARLES] Step not found: ${stepId}`);
+            return false;
+        }
+        
+        // Hide all steps
+        ['step1', 'step2', 'step3', 'step4'].forEach(id => {
+            const step = document.getElementById(id);
+            if (step) step.style.display = 'none';
+        });
+        
+        // Show target step
+        targetStep.style.display = 'block';
+        
+        // Scroll to step
+        targetStep.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        // Update agent state
+        this.agentState.currentStep = stepId;
+        
+        // Visual feedback
+        this.flashElement(targetStep, 1000, '#10b981');
+        
+        this.logAction('navigate', { to: stepId });
+        
+        return true;
+    }
+    
+    selectCheckboxes(codes, checked = true) {
+        const results = { success: [], failed: [] };
+        
+        codes.forEach(code => {
+            const checkbox = document.querySelector(`input[type="checkbox"][data-deliverable="${code}"]`) ||
+                           document.querySelector(`input[type="checkbox"][value="${code}"]`) ||
+                           document.querySelector(`#${code}`);
+            
+            if (checkbox) {
+                checkbox.checked = checked;
+                checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                this.flashElement(checkbox, 300);
+                results.success.push(code);
+            } else {
+                results.failed.push(code);
+            }
+        });
+        
+        this.logAction('select_checkboxes', { 
+            total: codes.length,
+            success: results.success.length,
+            failed: results.failed.length,
+            checked
+        });
+        
+        return results;
+    }
+    
+    // ====================
+    // TELEMETRY & LOGGING
+    // ====================
+    
+    logAction(action, data = {}) {
+        const entry = {
+            timestamp: Date.now(),
+            action,
+            data,
+            success: true
+        };
+        
+        this.agentTelemetry.push(entry);
+        
+        // Update stats
+        this.commandStats.total[action] = (this.commandStats.total[action] || 0) + 1;
+        this.commandStats.success[action] = (this.commandStats.success[action] || 0) + 1;
+        
+        // Keep only last 100 entries
+        if (this.agentTelemetry.length > 100) {
+            this.agentTelemetry.shift();
+        }
+        
+        console.log(`[CHARLES-TELEMETRY] ${action}:`, data);
+    }
+    
+    logError(action, error) {
+        const entry = {
+            timestamp: Date.now(),
+            action,
+            error: error.message || error,
+            success: false
+        };
+        
+        this.agentTelemetry.push(entry);
+        
+        // Update stats
+        this.commandStats.total[action] = (this.commandStats.total[action] || 0) + 1;
+        this.commandStats.failure[action] = (this.commandStats.failure[action] || 0) + 1;
+        
+        console.error(`[CHARLES-ERROR] ${action}:`, error);
+    }
+    
+    displayTelemetry() {
+        const telemetryDiv = document.getElementById('charles-telemetry') || this.createTelemetryPanel();
+        
+        const stats = Object.keys(this.commandStats.total).map(action => {
+            const total = this.commandStats.total[action] || 0;
+            const success = this.commandStats.success[action] || 0;
+            const failure = this.commandStats.failure[action] || 0;
+            const rate = total > 0 ? ((success / total) * 100).toFixed(1) : 0;
+            
+            return `
+                <tr>
+                    <td>${action}</td>
+                    <td>${total}</td>
+                    <td>${success}</td>
+                    <td>${failure}</td>
+                    <td>${rate}%</td>
+                </tr>
+            `;
+        }).join('');
+        
+        const recentActions = this.agentTelemetry.slice(-10).reverse().map(entry => {
+            const time = new Date(entry.timestamp).toLocaleTimeString();
+            const icon = entry.success ? '✅' : '❌';
+            return `
+                <div class="telemetry-entry ${entry.success ? 'success' : 'error'}">
+                    ${icon} [${time}] ${entry.action}
+                    ${entry.data ? `<span class="telemetry-data">${JSON.stringify(entry.data)}</span>` : ''}
+                </div>
+            `;
+        }).join('');
+        
+        telemetryDiv.innerHTML = `
+            <div class="telemetry-header">
+                <h4>📊 Agent Telemetry</h4>
+                <button onclick="this.parentElement.parentElement.classList.toggle('expanded')">
+                    ${telemetryDiv.classList.contains('expanded') ? 'Collapse' : 'Expand'}
+                </button>
+            </div>
+            <div class="telemetry-content">
+                <div class="telemetry-stats">
+                    <h5>Command Statistics</h5>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Action</th>
+                                <th>Total</th>
+                                <th>Success</th>
+                                <th>Failed</th>
+                                <th>Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody>${stats}</tbody>
+                    </table>
+                </div>
+                <div class="telemetry-recent">
+                    <h5>Recent Actions</h5>
+                    ${recentActions}
+                </div>
+            </div>
+        `;
+        
+        return telemetryDiv;
+    }
+    
+    createTelemetryPanel() {
+        const panel = document.createElement('div');
+        panel.id = 'charles-telemetry';
+        panel.className = 'charles-telemetry-panel';
+        
+        const chatBody = document.querySelector('.ai-assistant-body');
+        if (chatBody) {
+            chatBody.appendChild(panel);
+        }
+        
+        return panel;
+    }
+    
+    // ====================
+    // BATCH FILE PROCESSING
+    // ====================
+    
+    async processFiles(files) {
+        if (!files || files.length === 0) {
+            this.addMessage('No files to process.', 'assistant');
+            return;
+        }
+        
+        this.batchProcessingStatus = {
+            total: files.length,
+            completed: 0,
+            failed: 0,
+            inProgress: true,
+            fileStatuses: new Map()
+        };
+        
+        this.addMessage(`📁 Processing ${files.length} file(s)...`, 'assistant');
+        this.showBatchProgress();
+        
+        // Process files concurrently with limit
+        const batchSize = 3;
+        const results = [];
+        
+        for (let i = 0; i < files.length; i += batchSize) {
+            const batch = Array.from(files).slice(i, i + batchSize);
+            const batchPromises = batch.map(file => this.processSingleFile(file));
+            const batchResults = await Promise.allSettled(batchPromises);
+            results.push(...batchResults);
+        }
+        
+        // Update final status
+        this.batchProcessingStatus.inProgress = false;
+        
+        // Show summary
+        this.showBatchSummary(results);
+    }
+    
+    async processSingleFile(file) {
+        const fileId = `${file.name}_${Date.now()}`;
+        
+        try {
+            // Update status
+            this.batchProcessingStatus.fileStatuses.set(fileId, {
+                name: file.name,
+                status: 'processing',
+                progress: 0
+            });
+            this.updateBatchProgress();
+            
+            // Process based on file type
+            const result = await this.handleSingleFile(file);
+            
+            // Update status
+            this.batchProcessingStatus.completed++;
+            this.batchProcessingStatus.fileStatuses.set(fileId, {
+                name: file.name,
+                status: 'completed',
+                progress: 100,
+                result
+            });
+            this.updateBatchProgress();
+            
+            return { file: file.name, success: true, result };
+            
+        } catch (error) {
+            // Update status
+            this.batchProcessingStatus.failed++;
+            this.batchProcessingStatus.fileStatuses.set(fileId, {
+                name: file.name,
+                status: 'failed',
+                progress: 0,
+                error: error.message
+            });
+            this.updateBatchProgress();
+            
+            console.error(`[CHARLES] Failed to process ${file.name}:`, error);
+            return { file: file.name, success: false, error: error.message };
+        }
+    }
+    
+    showBatchProgress() {
+        let progressDiv = document.getElementById('charles-batch-progress');
+        if (!progressDiv) {
+            progressDiv = document.createElement('div');
+            progressDiv.id = 'charles-batch-progress';
+            progressDiv.className = 'charles-batch-progress';
+            document.querySelector('.ai-chat-messages').appendChild(progressDiv);
+        }
+        
+        this.updateBatchProgress();
+    }
+    
+    updateBatchProgress() {
+        const progressDiv = document.getElementById('charles-batch-progress');
+        if (!progressDiv) return;
+        
+        const { total, completed, failed, fileStatuses } = this.batchProcessingStatus;
+        const progress = total > 0 ? ((completed + failed) / total * 100).toFixed(0) : 0;
+        
+        const filesList = Array.from(fileStatuses.values()).map(file => {
+            const icon = file.status === 'completed' ? '✅' : 
+                        file.status === 'failed' ? '❌' : '⏳';
+            const progressBar = file.status === 'processing' ? 
+                `<div class="file-progress-bar"><div class="file-progress-fill" style="width: ${file.progress}%"></div></div>` : '';
+            
+            return `
+                <div class="batch-file-item ${file.status}">
+                    ${icon} ${file.name}
+                    ${progressBar}
+                    ${file.error ? `<div class="file-error">${file.error}</div>` : ''}
+                </div>
+            `;
+        }).join('');
+        
+        progressDiv.innerHTML = `
+            <div class="batch-progress-header">
+                <strong>Batch Processing</strong>
+                <span>${completed + failed}/${total} files (${progress}%)</span>
+            </div>
+            <div class="batch-progress-bar">
+                <div class="batch-progress-fill" style="width: ${progress}%"></div>
+            </div>
+            <div class="batch-files-list">
+                ${filesList}
+            </div>
+        `;
+    }
+    
+    showBatchSummary(results) {
+        const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+        const failed = results.length - successful;
+        
+        const summary = `
+            📊 **Batch Processing Complete**
+            - Total files: ${results.length}
+            - Successfully processed: ${successful}
+            - Failed: ${failed}
+            ${failed > 0 ? '\n⚠️ Some files failed to process. Check the details above.' : '\n✅ All files processed successfully!'}
+        `;
+        
+        this.addMessage(summary, 'assistant');
+        
+        // Clear batch progress after delay
+        setTimeout(() => {
+            const progressDiv = document.getElementById('charles-batch-progress');
+            if (progressDiv) progressDiv.remove();
+        }, 5000);
+    }
+    
+    // ====================
+    // EXISTING METHODS (ENHANCED)
+    // ====================
     
     createSidebar() {
         // Create main container
@@ -40,10 +1171,13 @@ class AIAssistant {
                     <div class="ai-assistant-title">
                         <span class="ai-icon charles-sphere">🔮</span>
                         <span style="font-weight:700;">CHARLES AGENT</span>
-                        <span style="font-size:10px;opacity:0.8;">ProBuFo</span>
+                        <span style="font-size:10px;opacity:0.8;">ProBuFo v3.0</span>
                         <span class="ai-status-indicator" id="ai-status-indicator">●</span>
                     </div>
                     <div class="ai-assistant-controls">
+                        <button class="ai-btn-telemetry" id="ai-btn-telemetry" title="Show Telemetry" onclick="window.aiAssistant.displayTelemetry()">
+                            📊
+                        </button>
                         <button class="ai-btn-minimize" id="ai-btn-minimize" title="Minimize">
                             <span>_</span>
                         </button>
@@ -65,6 +1199,12 @@ class AIAssistant {
                         </select>
                     </div>
                     
+                    <!-- State Management Controls -->
+                    <div class="ai-state-controls">
+                        <button class="ai-btn-save-state" onclick="window.aiAssistant.saveState()">💾 Save State</button>
+                        <button class="ai-btn-restore-state" onclick="window.aiAssistant.restoreState()">📂 Restore State</button>
+                    </div>
+                    
                     <!-- File Staging Area -->
                     <div class="ai-file-staging" id="ai-file-staging" style="display: none;">
                         <div class="ai-staging-header">
@@ -76,9 +1216,20 @@ class AIAssistant {
                     
                     <div class="ai-chat-messages" id="ai-chat-messages">
                         <div class="ai-welcome-message">
-                            <h4>🔮 Welcome to CHARLES AGENT: ProBuFo</h4>
+                            <h4>🔮 Welcome to CHARLES AGENT: ProBuFo v3.0</h4>
                             <p style="font-style:italic;color:#8b5cf6;">Progressive Business Forecasting Oracle</p>
-                            <p>Your pre-eminent executive project manager AI assistant for Agency Project Builder.</p>
+                            <p>Enhanced with autonomous self-healing, state preservation, and real-time progress tracking.</p>
+                            <div class="ai-capabilities">
+                                <p><strong>New Capabilities:</strong></p>
+                                <ul>
+                                    <li>🔄 Auto-recovery from errors</li>
+                                    <li>💾 Complete state preservation</li>
+                                    <li>📊 Real-time progress tracking</li>
+                                    <li>🎯 Enhanced UI manipulation</li>
+                                    <li>📁 Batch file processing</li>
+                                    <li>📈 Telemetry & analytics</li>
+                                </ul>
+                            </div>
                             <div class="ai-suggestions">
                                 <p><strong>Try commands like:</strong></p>
                                 <ul>
@@ -87,6 +1238,7 @@ class AIAssistant {
                                     <li>📊 "Add 20% markup to all deliverables"</li>
                                     <li>📅 "Generate an optimized timeline"</li>
                                     <li>💾 "Export to Excel"</li>
+                                    <li>🔧 "Enable auto-recovery"</li>
                                 </ul>
                             </div>
                         </div>
@@ -129,14 +1281,23 @@ class AIAssistant {
         `;
         
         document.body.appendChild(container);
-        
-        // Add styles
-        this.addStyles();
     }
     
-    addStyles() {
+    addEnhancedStyles() {
         const style = document.createElement('style');
         style.textContent = `
+            ${this.getBaseStyles()}
+            ${this.getProgressStyles()}
+            ${this.getVisualFeedbackStyles()}
+            ${this.getTelemetryStyles()}
+            ${this.getBatchProcessingStyles()}
+            ${this.getEnhancedAnimations()}
+        `;
+        document.head.appendChild(style);
+    }
+    
+    getBaseStyles() {
+        return `
             .ai-assistant-container {
                 position: fixed;
                 right: 20px;
@@ -149,8 +1310,8 @@ class AIAssistant {
                 position: fixed;
                 right: 20px;
                 bottom: 80px;
-                width: 380px;
-                height: 600px;
+                width: 420px;
+                height: 650px;
                 background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
                 border-radius: 12px;
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3), 0 0 20px rgba(139, 92, 246, 0.2);
@@ -180,6 +1341,538 @@ class AIAssistant {
                 }
             }
             
+            .ai-state-controls {
+                display: flex;
+                gap: 8px;
+                padding: 8px 16px;
+                background: rgba(16, 185, 129, 0.1);
+                border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+            }
+            
+            .ai-state-controls button {
+                flex: 1;
+                padding: 6px 12px;
+                background: rgba(255, 255, 255, 0.1);
+                color: white;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s;
+            }
+            
+            .ai-state-controls button:hover {
+                background: rgba(255, 255, 255, 0.2);
+                transform: translateY(-1px);
+            }
+            
+            .charles-auto-fix-btn {
+                padding: 4px 8px;
+                background: rgba(251, 191, 36, 0.1);
+                color: #fbbf24;
+                border: 1px solid rgba(251, 191, 36, 0.3);
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 11px;
+                transition: all 0.2s;
+            }
+            
+            .charles-auto-fix-btn.active {
+                background: rgba(251, 191, 36, 0.3);
+                border-color: #fbbf24;
+            }
+            
+            .ai-btn-telemetry {
+                width: 28px;
+                height: 28px;
+                border: none;
+                background: rgba(139, 92, 246, 0.1);
+                color: #8b5cf6;
+                border-radius: 6px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: all 0.2s;
+                font-size: 14px;
+            }
+            
+            .ai-btn-telemetry:hover {
+                background: rgba(139, 92, 246, 0.2);
+                transform: scale(1.1);
+            }
+        `;
+    }
+    
+    getProgressStyles() {
+        return `
+            .charles-floating-progress {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                width: 350px;
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                border: 1px solid rgba(139, 92, 246, 0.3);
+                border-radius: 12px;
+                box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+                z-index: 10001;
+                animation: slideDown 0.3s ease-out;
+            }
+            
+            @keyframes slideDown {
+                from {
+                    opacity: 0;
+                    transform: translateY(-20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
+            
+            .charles-progress-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 12px 16px;
+                background: rgba(139, 92, 246, 0.1);
+                border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+                border-radius: 12px 12px 0 0;
+            }
+            
+            .charles-progress-title {
+                color: white;
+                font-weight: 600;
+                font-size: 14px;
+            }
+            
+            .charles-progress-close {
+                color: rgba(255, 255, 255, 0.5);
+                cursor: pointer;
+                font-size: 20px;
+                transition: color 0.2s;
+            }
+            
+            .charles-progress-close:hover {
+                color: white;
+            }
+            
+            .charles-progress-content {
+                padding: 16px;
+            }
+            
+            .charles-progress-bar-container,
+            .progress-bar-container {
+                width: 100%;
+                height: 8px;
+                background: rgba(0, 0, 0, 0.3);
+                border-radius: 4px;
+                overflow: hidden;
+                margin-bottom: 12px;
+            }
+            
+            .charles-progress-bar,
+            .progress-bar {
+                height: 100%;
+                background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+                border-radius: 4px;
+                transition: width 0.3s ease;
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .charles-progress-bar::after,
+            .progress-bar::after {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                bottom: 0;
+                right: 0;
+                background: linear-gradient(
+                    90deg,
+                    transparent,
+                    rgba(255, 255, 255, 0.3),
+                    transparent
+                );
+                animation: shimmer 2s infinite;
+            }
+            
+            @keyframes shimmer {
+                0% { transform: translateX(-100%); }
+                100% { transform: translateX(100%); }
+            }
+            
+            .charles-progress-text,
+            .progress-text {
+                color: white;
+                font-size: 14px;
+                margin-bottom: 8px;
+            }
+            
+            .charles-progress-details {
+                color: rgba(255, 255, 255, 0.7);
+                font-size: 12px;
+                line-height: 1.4;
+            }
+            
+            .charles-progress-details ul {
+                margin: 4px 0;
+                padding-left: 20px;
+            }
+            
+            .charles-step-progress {
+                margin: 16px 0;
+                padding: 12px;
+                background: rgba(139, 92, 246, 0.1);
+                border: 1px solid rgba(139, 92, 246, 0.2);
+                border-radius: 8px;
+            }
+            
+            .progress-indicator {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            
+            .progress-bar-mini {
+                width: 100%;
+                height: 4px;
+                background: rgba(0, 0, 0, 0.2);
+                border-radius: 2px;
+                overflow: hidden;
+            }
+            
+            .progress-fill {
+                height: 100%;
+                background: #10b981;
+                transition: width 0.3s ease;
+            }
+            
+            .progress-status {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                font-size: 13px;
+            }
+            
+            .progress-percentage {
+                color: #10b981;
+                font-weight: 600;
+            }
+        `;
+    }
+    
+    getVisualFeedbackStyles() {
+        return `
+            .charles-working-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.8);
+                backdrop-filter: blur(4px);
+                display: none;
+                align-items: center;
+                justify-content: center;
+                z-index: 9999;
+            }
+            
+            .charles-working-content {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 16px;
+            }
+            
+            .charles-sphere-animated {
+                font-size: 48px;
+                animation: rotateSphere 2s infinite linear;
+                filter: drop-shadow(0 0 30px rgba(139, 92, 246, 1));
+            }
+            
+            .charles-working-text {
+                color: white;
+                font-size: 18px;
+                font-weight: 600;
+            }
+            
+            .charles-working-spinner {
+                width: 40px;
+                height: 40px;
+                border: 3px solid rgba(139, 92, 246, 0.2);
+                border-top: 3px solid #8b5cf6;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+            }
+            
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            
+            .charles-element-highlight {
+                animation: pulse-highlight 0.5s ease;
+            }
+            
+            @keyframes pulse-highlight {
+                0% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+                100% { transform: scale(1); }
+            }
+            
+            .charles-flash-message {
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                padding: 16px 24px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                z-index: 10002;
+                transform: translateX(400px);
+                transition: transform 0.3s ease;
+            }
+            
+            .charles-flash-message.show {
+                transform: translateX(0);
+            }
+            
+            .charles-flash-success {
+                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                color: white;
+            }
+            
+            .charles-flash-error {
+                background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+                color: white;
+            }
+            
+            .charles-flash-info {
+                background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+                color: white;
+            }
+            
+            .flash-icon {
+                font-size: 20px;
+            }
+            
+            .flash-text {
+                font-size: 14px;
+                font-weight: 500;
+            }
+        `;
+    }
+    
+    getTelemetryStyles() {
+        return `
+            .charles-telemetry-panel {
+                background: rgba(59, 130, 246, 0.05);
+                border: 1px solid rgba(59, 130, 246, 0.2);
+                border-radius: 8px;
+                margin: 12px;
+                max-height: 200px;
+                overflow: hidden;
+                transition: max-height 0.3s ease;
+            }
+            
+            .charles-telemetry-panel.expanded {
+                max-height: 400px;
+            }
+            
+            .telemetry-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 12px;
+                background: rgba(59, 130, 246, 0.1);
+                border-bottom: 1px solid rgba(59, 130, 246, 0.2);
+            }
+            
+            .telemetry-header h4 {
+                margin: 0;
+                color: white;
+                font-size: 14px;
+            }
+            
+            .telemetry-header button {
+                background: rgba(255, 255, 255, 0.1);
+                color: white;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+            }
+            
+            .telemetry-content {
+                padding: 12px;
+                overflow-y: auto;
+                max-height: 340px;
+            }
+            
+            .telemetry-stats table {
+                width: 100%;
+                font-size: 11px;
+                color: rgba(255, 255, 255, 0.9);
+                border-collapse: collapse;
+            }
+            
+            .telemetry-stats th {
+                text-align: left;
+                padding: 4px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+                color: #60a5fa;
+            }
+            
+            .telemetry-stats td {
+                padding: 4px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            }
+            
+            .telemetry-recent {
+                margin-top: 12px;
+            }
+            
+            .telemetry-recent h5 {
+                margin: 0 0 8px 0;
+                color: #60a5fa;
+                font-size: 12px;
+            }
+            
+            .telemetry-entry {
+                padding: 4px 8px;
+                margin: 2px 0;
+                background: rgba(0, 0, 0, 0.2);
+                border-radius: 4px;
+                font-size: 11px;
+                color: rgba(255, 255, 255, 0.8);
+            }
+            
+            .telemetry-entry.success {
+                border-left: 2px solid #10b981;
+            }
+            
+            .telemetry-entry.error {
+                border-left: 2px solid #ef4444;
+            }
+            
+            .telemetry-data {
+                display: inline-block;
+                margin-left: 8px;
+                color: rgba(255, 255, 255, 0.5);
+                font-family: monospace;
+                font-size: 10px;
+            }
+        `;
+    }
+    
+    getBatchProcessingStyles() {
+        return `
+            .charles-batch-progress {
+                background: rgba(251, 191, 36, 0.1);
+                border: 1px solid rgba(251, 191, 36, 0.2);
+                border-radius: 8px;
+                padding: 12px;
+                margin: 12px 0;
+            }
+            
+            .batch-progress-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                color: #fbbf24;
+                font-size: 13px;
+                font-weight: 600;
+                margin-bottom: 8px;
+            }
+            
+            .batch-progress-bar {
+                width: 100%;
+                height: 6px;
+                background: rgba(0, 0, 0, 0.3);
+                border-radius: 3px;
+                overflow: hidden;
+                margin-bottom: 12px;
+            }
+            
+            .batch-progress-fill {
+                height: 100%;
+                background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%);
+                transition: width 0.3s ease;
+            }
+            
+            .batch-files-list {
+                max-height: 150px;
+                overflow-y: auto;
+            }
+            
+            .batch-file-item {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px;
+                margin: 4px 0;
+                background: rgba(0, 0, 0, 0.2);
+                border-radius: 4px;
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.8);
+            }
+            
+            .batch-file-item.completed {
+                border-left: 2px solid #10b981;
+            }
+            
+            .batch-file-item.failed {
+                border-left: 2px solid #ef4444;
+            }
+            
+            .batch-file-item.processing {
+                border-left: 2px solid #fbbf24;
+            }
+            
+            .file-progress-bar {
+                flex: 1;
+                height: 3px;
+                background: rgba(0, 0, 0, 0.3);
+                border-radius: 2px;
+                overflow: hidden;
+            }
+            
+            .file-progress-fill {
+                height: 100%;
+                background: #fbbf24;
+                transition: width 0.3s ease;
+            }
+            
+            .file-error {
+                color: #ef4444;
+                font-size: 11px;
+                margin-top: 4px;
+            }
+        `;
+    }
+    
+    getEnhancedAnimations() {
+        return `
+            @keyframes rotateSphere {
+                0% { transform: rotateY(0deg) rotateX(0deg); }
+                25% { transform: rotateY(90deg) rotateX(15deg); }
+                50% { transform: rotateY(180deg) rotateX(0deg); }
+                75% { transform: rotateY(270deg) rotateX(-15deg); }
+                100% { transform: rotateY(360deg) rotateX(0deg); }
+            }
+            
+            .charles-sphere {
+                display: inline-block;
+                animation: rotateSphere 8s infinite linear;
+                filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.8));
+            }
+            
+            /* Existing styles */
             .ai-assistant-header {
                 display: flex;
                 justify-content: space-between;
@@ -201,20 +1894,6 @@ class AIAssistant {
             
             .ai-icon {
                 font-size: 20px;
-            }
-            
-            .charles-sphere {
-                display: inline-block;
-                animation: rotateSphere 8s infinite linear;
-                filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.8));
-            }
-            
-            @keyframes rotateSphere {
-                0% { transform: rotateY(0deg) rotateX(0deg); }
-                25% { transform: rotateY(90deg) rotateX(15deg); }
-                50% { transform: rotateY(180deg) rotateX(0deg); }
-                75% { transform: rotateY(270deg) rotateX(-15deg); }
-                100% { transform: rotateY(360deg) rotateX(0deg); }
             }
             
             .ai-gpt5-selector {
@@ -383,6 +2062,21 @@ class AIAssistant {
                 color: rgba(255, 255, 255, 0.8);
                 font-size: 14px;
                 line-height: 1.5;
+            }
+            
+            .ai-capabilities {
+                margin: 12px 0;
+                padding: 12px;
+                background: rgba(16, 185, 129, 0.1);
+                border-radius: 6px;
+                border: 1px solid rgba(16, 185, 129, 0.2);
+            }
+            
+            .ai-capabilities ul {
+                margin: 8px 0 0 0;
+                padding-left: 20px;
+                color: rgba(255, 255, 255, 0.9);
+                font-size: 13px;
             }
             
             .ai-suggestions {
@@ -635,351 +2329,228 @@ class AIAssistant {
             
             .notification-badge {
                 position: absolute;
-                top: -5px;
-                right: -5px;
-                width: 20px;
-                height: 20px;
+                top: -4px;
+                right: -4px;
+                width: 16px;
+                height: 16px;
                 background: #ef4444;
+                color: white;
                 border-radius: 50%;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                font-size: 12px;
+                font-size: 10px;
+                font-weight: 600;
                 animation: bounce 2s infinite;
             }
             
             @keyframes bounce {
                 0%, 100% { transform: translateY(0); }
-                50% { transform: translateY(-5px); }
+                50% { transform: translateY(-4px); }
             }
         `;
-        
-        document.head.appendChild(style);
     }
+    
+    // Continue with existing methods (enhanced versions)
     
     attachEventListeners() {
         // Toggle button
-        document.getElementById('ai-assistant-toggle').addEventListener('click', () => {
-            this.toggle();
-        });
+        const toggleBtn = document.getElementById('ai-assistant-toggle');
+        toggleBtn?.addEventListener('click', () => this.toggle());
         
         // Close button
-        document.getElementById('ai-btn-close').addEventListener('click', () => {
-            this.close();
-        });
+        const closeBtn = document.getElementById('ai-btn-close');
+        closeBtn?.addEventListener('click', () => this.close());
         
         // Minimize button
-        document.getElementById('ai-btn-minimize').addEventListener('click', () => {
-            this.toggleMinimize();
-        });
+        const minimizeBtn = document.getElementById('ai-btn-minimize');
+        minimizeBtn?.addEventListener('click', () => this.minimize());
         
         // Send button
-        document.getElementById('ai-send-btn').addEventListener('click', () => {
-            this.sendMessage();
-        });
+        const sendBtn = document.getElementById('ai-send-btn');
+        sendBtn?.addEventListener('click', () => this.sendMessage());
         
-        // Input field - Enter to send
-        document.getElementById('ai-chat-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+        // Chat input
+        const chatInput = document.getElementById('ai-chat-input');
+        if (chatInput) {
+            chatInput.addEventListener('input', () => this.updateSendButton());
+            chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    this.sendMessage();
+                }
+            });
+            
+            // Enable drag and drop
+            chatInput.addEventListener('dragover', (e) => {
                 e.preventDefault();
-                this.sendMessage();
+                chatInput.style.background = 'rgba(139, 92, 246, 0.1)';
+            });
+            
+            chatInput.addEventListener('dragleave', () => {
+                chatInput.style.background = '';
+            });
+            
+            chatInput.addEventListener('drop', (e) => {
+                e.preventDefault();
+                chatInput.style.background = '';
+                
+                if (e.dataTransfer.files.length > 0) {
+                    this.handleFileDrop(e.dataTransfer.files);
+                }
+            });
+        }
+        
+        // File button
+        const fileBtn = document.getElementById('ai-file-btn');
+        const fileInput = document.getElementById('ai-file-input');
+        fileBtn?.addEventListener('click', () => fileInput?.click());
+        fileInput?.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                this.handleFileDrop(e.target.files);
             }
         });
         
-        // Enable/disable send button based on input or staged files
-        document.getElementById('ai-chat-input').addEventListener('input', (e) => {
+        // Clear files button
+        const clearFilesBtn = document.getElementById('ai-clear-files');
+        clearFilesBtn?.addEventListener('click', () => {
+            this.stagedFiles = [];
+            this.updateStagedFiles();
             this.updateSendButton();
         });
         
-        // Click on suggestions
-        document.addEventListener('click', (e) => {
-            if (e.target.closest('.ai-suggestions li')) {
-                const command = e.target.textContent.replace(/^[^\s]+\s/, '').replace(/[""]/g, '');
-                document.getElementById('ai-chat-input').value = command;
-                this.updateSendButton();
-            }
-        });
-        
-        // File upload button
-        document.getElementById('ai-file-btn').addEventListener('click', () => {
-            document.getElementById('ai-file-input').click();
-        });
-        
-        // File input change - support multiple files
-        document.getElementById('ai-file-input').addEventListener('change', (e) => {
-            const files = Array.from(e.target.files);
-            if (files.length > 0) {
-                this.stageFiles(files);
-            }
-            // Reset file input to allow same files to be selected again
-            e.target.value = '';
-        });
-        
-        // Clear staged files button
-        document.getElementById('ai-clear-files').addEventListener('click', () => {
-            this.clearStagedFiles();
-        });
-        
-        // Drag and drop support for files
-        const chatInput = document.getElementById('ai-chat-input');
-        chatInput.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            chatInput.style.background = 'rgba(139, 92, 246, 0.1)';
-            chatInput.placeholder = '📥 Drop files here...';
-        });
-        
-        chatInput.addEventListener('dragleave', (e) => {
-            e.preventDefault();
-            chatInput.style.background = '';
-            chatInput.placeholder = 'Type your command or drag & drop files here...';
-        });
-        
-        chatInput.addEventListener('drop', (e) => {
-            e.preventDefault();
-            chatInput.style.background = '';
-            chatInput.placeholder = 'Type your command or drag & drop files here...';
-            const files = Array.from(e.dataTransfer.files);
-            if (files.length > 0) {
-                this.stageFiles(files);
-            }
+        // Suggestion items
+        const suggestions = document.querySelectorAll('.ai-suggestions li');
+        suggestions.forEach(suggestion => {
+            suggestion.addEventListener('click', () => {
+                const input = document.getElementById('ai-chat-input');
+                if (input) {
+                    input.value = suggestion.textContent.replace(/^[^\s]+\s/, '');
+                    this.updateSendButton();
+                }
+            });
         });
     }
     
-    stageFiles(files) {
-        // Add files to staging area
-        files.forEach(file => {
-            // Check if file already staged
-            if (!this.stagedFiles.find(f => f.name === file.name)) {
-                this.stagedFiles.push(file);
-            }
-        });
-        
-        this.updateFileStaging();
-        this.updateSendButton();
-    }
+    // Existing method implementations with enhancements...
     
-    updateFileStaging() {
-        const stagingArea = document.getElementById('ai-file-staging');
-        const stagedFilesList = document.getElementById('ai-staged-files');
+    setAnalysisMode(mode) {
+        const fastBtn = document.getElementById('mode-fast');
+        const deepBtn = document.getElementById('mode-deep');
+        const modeInput = document.getElementById('analysis-mode');
         
-        if (this.stagedFiles.length === 0) {
-            stagingArea.style.display = 'none';
-            stagedFilesList.innerHTML = '';
-            return;
+        if (mode === 'fast') {
+            fastBtn?.classList.add('mode-active');
+            deepBtn?.classList.remove('mode-active');
+            if (modeInput) modeInput.value = 'fast';
+        } else {
+            deepBtn?.classList.add('mode-active');
+            fastBtn?.classList.remove('mode-active');
+            if (modeInput) modeInput.value = 'deep';
         }
         
-        stagingArea.style.display = 'block';
-        stagedFilesList.innerHTML = '';
+        this.agentState.analysisMode = mode;
+    }
+    
+    async triggerAnalysis(mode = 'deep') {
+        this.saveState();
+        this.addMessage(`🧠 Starting ${mode} AI analysis with GPT-5...`, 'assistant');
         
-        this.stagedFiles.forEach((file, index) => {
-            const fileDiv = document.createElement('div');
-            fileDiv.className = 'ai-staged-file';
-            
-            const fileIcon = this.getFileIcon(file.name);
-            const fileSize = (file.size / 1024).toFixed(1) + ' KB';
-            
-            fileDiv.innerHTML = `
-                <div class="ai-file-info">
-                    <span>${fileIcon}</span>
-                    <span>${file.name}</span>
-                    <span style="color: #666; font-size: 11px;">(${fileSize})</span>
-                </div>
-                <span class="ai-file-remove" data-index="${index}">×</span>
-            `;
-            
-            // Add click handler for remove button
-            fileDiv.querySelector('.ai-file-remove').addEventListener('click', (e) => {
-                this.removestagedFile(parseInt(e.target.dataset.index));
-            });
-            
-            stagedFilesList.appendChild(fileDiv);
-        });
-    }
-    
-    removestagedFile(index) {
-        this.stagedFiles.splice(index, 1);
-        this.updateFileStaging();
-        this.updateSendButton();
-    }
-    
-    clearStagedFiles() {
-        this.stagedFiles = [];
-        this.updateFileStaging();
-        this.updateSendButton();
-    }
-    
-    getFileIcon(filename) {
-        const ext = filename.split('.').pop().toLowerCase();
-        const icons = {
-            'pdf': '📄',
-            'docx': '📝',
-            'doc': '📝',
-            'txt': '📃',
-            'xlsx': '📊',
-            'xls': '📊'
-        };
-        return icons[ext] || '📎';
-    }
-    
-    updateSendButton() {
-        const sendBtn = document.getElementById('ai-send-btn');
-        const input = document.getElementById('ai-chat-input');
+        const hideOverlay = this.showAgentWorking(`Triggering ${mode} analysis...`);
         
-        // Enable if there's text or staged files, and not processing
-        const hasContent = input.value.trim() || this.stagedFiles.length > 0;
-        sendBtn.disabled = !hasContent || this.isProcessing;
-    }
-    
-    async checkAgentStatus() {
         try {
-            const response = await fetch('/api/agent/status');
-            const status = await response.json();
-            
-            const indicator = document.getElementById('ai-status-indicator');
-            if (status.available) {
-                indicator.classList.remove('offline');
-                indicator.title = 'AI Agent Online';
+            // Find and click the analyze button
+            const analyzeBtn = document.querySelector(`[data-mode="${mode}"]`);
+            if (analyzeBtn) {
+                this.simulateClick(analyzeBtn);
+                
+                // Wait for analysis to start
+                await this.delay(1000);
+                
+                // Check if a job was started
+                const jobIdMatch = document.body.textContent.match(/Job ID: ([\w-]+)/);
+                if (jobIdMatch) {
+                    const jobId = jobIdMatch[1];
+                    await this.trackAnalysisJob(jobId);
+                } else {
+                    // Wait and hope for the best
+                    await this.delay(3000);
+                    this.addMessage('✅ Analysis triggered. Check Step 2 for results.', 'assistant');
+                }
             } else {
-                indicator.classList.add('offline');
-                indicator.title = 'AI Agent Offline';
+                throw new Error('Analyze button not found');
             }
         } catch (error) {
-            console.error('[AI Assistant] Status check failed:', error);
-            const indicator = document.getElementById('ai-status-indicator');
-            indicator.classList.add('offline');
-            indicator.title = 'AI Agent Connection Error';
-        }
-    }
-    
-    toggle() {
-        this.isOpen = !this.isOpen;
-        const sidebar = document.querySelector('.ai-assistant-sidebar');
-        
-        if (this.isOpen) {
-            sidebar.classList.add('open');
-            document.getElementById('ai-chat-input').focus();
-        } else {
-            sidebar.classList.remove('open');
-        }
-    }
-    
-    open() {
-        this.isOpen = true;
-        const sidebar = document.querySelector('.ai-assistant-sidebar');
-        sidebar.classList.add('open');
-        document.getElementById('ai-chat-input').focus();
-    }
-    
-    close() {
-        this.isOpen = false;
-        const sidebar = document.querySelector('.ai-assistant-sidebar');
-        sidebar.classList.remove('open');
-    }
-    
-    toggleMinimize() {
-        this.isMinimized = !this.isMinimized;
-        const sidebar = document.querySelector('.ai-assistant-sidebar');
-        
-        if (this.isMinimized) {
-            sidebar.classList.add('minimized');
-        } else {
-            sidebar.classList.remove('minimized');
+            this.handleError(error, 'analysis', { mode });
+        } finally {
+            hideOverlay();
         }
     }
     
     async handleFileUpload(files) {
-        // Handle single file for backward compatibility
-        if (!Array.isArray(files)) {
-            files = [files];
-        }
-        
-        // Process staged files if any
-        if (this.stagedFiles.length > 0) {
-            for (const file of this.stagedFiles) {
-                await this.processFile(file);
-            }
-            this.clearStagedFiles();
-        }
-        // Or process directly passed files
-        else {
-            for (const file of files) {
-                await this.processFile(file);
-            }
+        if (files.length > 1) {
+            // Batch processing
+            await this.processFiles(files);
+        } else {
+            // Single file
+            await this.handleSingleFile(files[0]);
         }
     }
     
-    async processFile(file) {
-        // Show file info in chat
-        this.addMessage(`📎 Processing: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`, 'user');
-        
-        // Check file type
+    async handleSingleFile(file) {
         const fileExt = file.name.split('.').pop().toLowerCase();
         
         if (['pdf', 'docx', 'txt'].includes(fileExt)) {
-            // This is likely an RFP document
-            this.addMessage(`🔍 Analyzing document "${file.name}" as RFP...`, 'assistant');
+            this.addMessage(`📄 Uploading "${file.name}"...`, 'assistant');
             
-            // Create typing indicator with unique ID
-            const typingId = this.addTypingIndicator();
-            
-            // Upload the file to Step 1
             const formData = new FormData();
             formData.append('file', file);
             
             try {
-                // Create timeout wrapper
-                const uploadWithTimeout = this.withTimeout(
-                    fetch('/api/upload_rfp', {
+                const response = await this.retryWithBackoff(
+                    () => fetch('/api/upload', {
                         method: 'POST',
                         body: formData
                     }),
-                    this.apiTimeout
+                    3,
+                    2000
                 );
                 
-                const uploadResponse = await uploadWithTimeout;
-                
-                if (uploadResponse.ok) {
-                    const result = await uploadResponse.json();
+                if (response.ok) {
+                    const result = await response.json();
                     
-                    // Remove typing indicator
-                    this.removeTypingIndicator(typingId);
-                    
-                    this.addMessage(`✅ RFP uploaded successfully! Extracted ${result.text_length || 0} characters.`, 'assistant');
-                    
-                    // Store the text for Step 1
-                    if (result.text) {
-                        const rfpTextEl = document.getElementById('rfpText');
-                        if (rfpTextEl) {
-                            rfpTextEl.value = result.text;
-                        }
-                        sessionStorage.setItem('rfp_text', result.text);
+                    // Update RFP text area if it exists
+                    const rfpTextEl = document.getElementById('rfpText');
+                    if (rfpTextEl && result.text) {
+                        rfpTextEl.value = result.text;
+                        // Trigger change event
+                        rfpTextEl.dispatchEvent(new Event('input', { bubbles: true }));
+                        rfpTextEl.dispatchEvent(new Event('change', { bubbles: true }));
                     }
                     
-                    // Auto-trigger analysis if not already started
-                    if (result.job_id && result.analysis_started) {
-                        this.addMessage(`🧠 AI analysis started (Job ID: ${result.job_id}). Tracking progress...`, 'assistant');
-                        await this.trackAnalysisJob(result.job_id);
-                    } else {
-                        // Manually trigger deep analysis
-                        await this.triggerAnalysis('deep');
+                    // Store in agent state
+                    this.agentState.uploadedFiles.push({
+                        name: file.name,
+                        timestamp: Date.now(),
+                        text: result.text
+                    });
+                    
+                    this.saveState();
+                    
+                    this.showSuccessMessage(`File "${file.name}" uploaded successfully!`);
+                    this.addMessage(`✅ Document uploaded successfully. ${result.text ? `Extracted ${result.text.split(' ').length} words.` : ''}`, 'assistant');
+                    
+                    // Auto-trigger analysis if this is the first file
+                    if (this.agentState.uploadedFiles.length === 1) {
+                        this.addMessage('🎯 Ready to analyze! Say "analyze" or "deep mode" to begin.', 'assistant');
                     }
                 } else {
-                    this.removeTypingIndicator(typingId);
-                    this.addMessage(`❌ Failed to upload file. Server returned: ${uploadResponse.status}`, 'assistant');
+                    throw new Error(`Upload failed: ${response.statusText}`);
                 }
             } catch (error) {
-                // Always remove typing indicator on error
-                this.removeTypingIndicator(typingId);
-                
-                if (error.name === 'TimeoutError') {
-                    this.addMessage(`⏱️ Upload timed out. The file may be too large or the server is slow.`, 'assistant');
-                } else {
-                    console.error('[CHARLES] File upload error:', error);
-                    this.addMessage(`❌ Error uploading file: ${error.message}`, 'assistant');
-                }
+                this.handleError(error, 'file_upload', { file });
             }
         } else if (fileExt === 'xlsx') {
-            // Excel file - likely configuration
             this.addMessage(`📊 Processing Excel configuration file "${file.name}"...`, 'assistant');
             this.addMessage('⚠️ Excel configuration upload not yet implemented.', 'assistant');
         } else {
@@ -987,40 +2558,104 @@ class AIAssistant {
         }
     }
     
-    async triggerAnalysis(mode = 'deep') {
-        this.addMessage(`🧠 Starting ${mode} AI analysis with GPT-5...`, 'assistant');
-        
-        const typingId = this.addTypingIndicator();
-        
-        try {
-            // Find and click the analyze button
-            const analyzeBtn = document.querySelector(`[data-mode="${mode}"]`);
-            if (analyzeBtn) {
-                analyzeBtn.click();
-                
-                // Wait a moment for the analysis to start
-                await this.delay(1000);
-                
-                // Check if a job was started by looking for job tracking
-                const jobIdMatch = document.body.textContent.match(/Job ID: ([\w-]+)/);
-                if (jobIdMatch) {
-                    const jobId = jobIdMatch[1];
-                    this.removeTypingIndicator(typingId);
-                    await this.trackAnalysisJob(jobId);
-                } else {
-                    // Just wait and hope for the best
-                    await this.delay(3000);
-                    this.removeTypingIndicator(typingId);
-                    this.addMessage('✅ Analysis triggered. Check Step 2 for results.', 'assistant');
-                }
-            } else {
-                this.removeTypingIndicator(typingId);
-                this.addMessage('❌ Could not find analyze button. Please trigger analysis manually.', 'assistant');
+    handleFileDrop(files) {
+        // Add files to staging area
+        Array.from(files).forEach(file => {
+            if (!this.stagedFiles.find(f => f.name === file.name)) {
+                this.stagedFiles.push(file);
             }
-        } catch (error) {
-            this.removeTypingIndicator(typingId);
-            this.addMessage(`❌ Failed to trigger analysis: ${error.message}`, 'assistant');
+        });
+        
+        this.updateStagedFiles();
+        this.updateSendButton();
+    }
+    
+    updateStagedFiles() {
+        const stagingArea = document.getElementById('ai-file-staging');
+        const stagedFilesDiv = document.getElementById('ai-staged-files');
+        
+        if (this.stagedFiles.length === 0) {
+            stagingArea.style.display = 'none';
+            return;
         }
+        
+        stagingArea.style.display = 'block';
+        
+        stagedFilesDiv.innerHTML = this.stagedFiles.map((file, index) => `
+            <div class="ai-staged-file">
+                <div class="ai-file-info">
+                    <span>📄</span>
+                    <span>${file.name}</span>
+                    <span style="color: rgba(255,255,255,0.5); font-size: 11px;">(${(file.size / 1024).toFixed(1)} KB)</span>
+                </div>
+                <span class="ai-file-remove" onclick="window.aiAssistant.removeStagedFile(${index})">×</span>
+            </div>
+        `).join('');
+    }
+    
+    removeStagedFile(index) {
+        this.stagedFiles.splice(index, 1);
+        this.updateStagedFiles();
+        this.updateSendButton();
+    }
+    
+    updateSendButton() {
+        const sendBtn = document.getElementById('ai-send-btn');
+        const input = document.getElementById('ai-chat-input');
+        
+        if (sendBtn) {
+            const hasInput = input?.value?.trim().length > 0;
+            const hasFiles = this.stagedFiles.length > 0;
+            sendBtn.disabled = !hasInput && !hasFiles;
+        }
+    }
+    
+    // Continue with existing methods...
+    
+    toggle() {
+        this.isOpen = !this.isOpen;
+        const sidebar = document.querySelector('.ai-assistant-sidebar');
+        if (sidebar) {
+            sidebar.classList.toggle('open', this.isOpen);
+        }
+        
+        if (this.isOpen && this.isMinimized) {
+            this.isMinimized = false;
+            sidebar.classList.remove('minimized');
+        }
+    }
+    
+    close() {
+        this.isOpen = false;
+        const sidebar = document.querySelector('.ai-assistant-sidebar');
+        if (sidebar) {
+            sidebar.classList.remove('open');
+        }
+    }
+    
+    minimize() {
+        this.isMinimized = !this.isMinimized;
+        const sidebar = document.querySelector('.ai-assistant-sidebar');
+        if (sidebar) {
+            sidebar.classList.toggle('minimized', this.isMinimized);
+        }
+    }
+    
+    checkAgentStatus() {
+        // Check if agent API is available
+        fetch('/api/agent/status')
+            .then(response => {
+                const indicator = document.getElementById('ai-status-indicator');
+                if (response.ok) {
+                    indicator?.classList.remove('offline');
+                } else {
+                    indicator?.classList.add('offline');
+                }
+            })
+            .catch(() => {
+                const indicator = document.getElementById('ai-status-indicator');
+                indicator?.classList.add('offline');
+            });
     }
     
     async sendMessage() {
@@ -1042,6 +2677,11 @@ class AIAssistant {
             
             // Process staged files
             await this.handleFileUpload(this.stagedFiles);
+            
+            // Clear staging area
+            this.stagedFiles = [];
+            this.updateStagedFiles();
+            
             return;
         }
         
@@ -1054,7 +2694,13 @@ class AIAssistant {
         input.value = '';
         this.updateSendButton();
         
-        // Check for direct submission commands
+        // Check for direct commands
+        if (this.isAnalysisCommand(message)) {
+            const mode = message.toLowerCase().includes('deep') ? 'deep' : 'fast';
+            await this.triggerAnalysis(mode);
+            return;
+        }
+        
         if (this.isSubmissionCommand(message)) {
             await this.executeSubmission();
             return;
@@ -1072,19 +2718,22 @@ class AIAssistant {
             const gpt5TierSelector = document.getElementById('gpt5-tier-selector');
             const gpt5Tier = gpt5TierSelector ? gpt5TierSelector.value : 'auto';
             
-            // Send message to AI agent with GPT-5 tier and timeout
-            const responsePromise = fetch('/api/agent/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: message,
-                    context: context,
-                    session_id: this.sessionId,
-                    gpt5_tier: gpt5Tier
-                })
-            });
+            // Send message to AI agent with retry
+            const response = await this.retryWithBackoff(
+                () => fetch('/api/agent/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        context: context,
+                        session_id: this.sessionId,
+                        gpt5_tier: gpt5Tier
+                    })
+                }),
+                2,
+                1000
+            );
             
-            const response = await this.withTimeout(responsePromise, this.apiTimeout);
             const result = await response.json();
             
             // Remove typing indicator
@@ -1099,22 +2748,23 @@ class AIAssistant {
             }
             
         } catch (error) {
-            console.error('[AI Assistant] Error:', error);
+            console.error('[CHARLES] Error:', error);
             this.removeTypingIndicator(typingId);
-            
-            if (error.name === 'TimeoutError') {
-                this.addMessage('⏱️ Request timed out. Please try again with a simpler command.', 'assistant');
-            } else {
-                this.addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
-            }
+            this.handleError(error, 'chat', { message });
         } finally {
             this.setProcessing(false);
         }
     }
     
+    isAnalysisCommand(message) {
+        const lowerMessage = message.toLowerCase();
+        const analysisKeywords = ['analyze', 'analysis', 'deep mode', 'fast mode', 'scan', 'evaluate'];
+        return analysisKeywords.some(keyword => lowerMessage.includes(keyword));
+    }
+    
     isSubmissionCommand(message) {
         const lowerMessage = message.toLowerCase();
-        const submitKeywords = ['submit', 'upload', 'analyze', 'process', 'send it', 'go ahead', 'do it'];
+        const submitKeywords = ['submit', 'upload', 'process', 'send it', 'go ahead', 'do it'];
         return submitKeywords.some(keyword => lowerMessage.includes(keyword));
     }
     
@@ -1151,11 +2801,8 @@ class AIAssistant {
         const steps = ['step1', 'step2', 'step3', 'step4'];
         for (let step of steps) {
             const element = document.getElementById(step);
-            if (element && element.offsetHeight > 0) {
-                const rect = element.getBoundingClientRect();
-                if (rect.top >= 0 && rect.top < window.innerHeight) {
-                    return step;
-                }
+            if (element && element.offsetHeight > 0 && element.style.display !== 'none') {
+                return step;
             }
         }
         return 'step1';
@@ -1305,9 +2952,10 @@ class AIAssistant {
                 actionItem.classList.add('completed');
                 
             } catch (error) {
-                console.error(`[AI Assistant] Action failed:`, error);
+                console.error(`[CHARLES] Action failed:`, error);
                 actionItem.classList.remove('executing');
                 actionItem.style.color = '#ef4444';
+                this.handleError(error, 'ui_manipulation', { action });
             }
             
             // Delay between actions for visibility
@@ -1323,14 +2971,14 @@ class AIAssistant {
     }
     
     async executeAction(action) {
-        console.log('[AI Assistant] Executing action:', action);
+        console.log('[CHARLES] Executing action:', action);
         
         switch (action.type) {
             case 'click':
-                return this.executeClick(action.target);
+                return this.simulateClick(action.target);
                 
             case 'fill':
-                return this.executeFill(action.target, action.value);
+                return this.fillForm({ [action.target]: action.value });
                 
             case 'select':
                 return this.executeSelect(action.target, action.value);
@@ -1348,10 +2996,10 @@ class AIAssistant {
                 return this.executeToggle(action.target);
                 
             case 'check':
-                return this.executeCheck(action.target, true);
+                return this.selectCheckboxes([action.target], true);
                 
             case 'uncheck':
-                return this.executeCheck(action.target, false);
+                return this.selectCheckboxes([action.target], false);
                 
             case 'wait':
                 return this.delay(action.value || 500);
@@ -1364,61 +3012,16 @@ class AIAssistant {
                 return Promise.resolve(true);
                 
             default:
-                console.warn('[AI Assistant] Unknown action type:', action.type);
-        }
-    }
-    
-    executeClick(selector) {
-        const element = document.querySelector(selector);
-        if (element) {
-            // Highlight briefly
-            this.flashElement(element);
-            
-            // Trigger click
-            element.click();
-            
-            // Also trigger change event for some elements
-            if (element.tagName === 'INPUT' || element.tagName === 'SELECT') {
-                element.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-            
-            return this.delay(200);
-        } else {
-            throw new Error(`Element not found: ${selector}`);
-        }
-    }
-    
-    executeFill(selector, value) {
-        const element = document.querySelector(selector);
-        if (element) {
-            // Highlight briefly
-            this.flashElement(element);
-            
-            // Set value
-            element.value = value;
-            
-            // Trigger events
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-            
-            return this.delay(200);
-        } else {
-            throw new Error(`Element not found: ${selector}`);
+                console.warn('[CHARLES] Unknown action type:', action.type);
         }
     }
     
     executeSelect(selector, value) {
         const element = document.querySelector(selector);
         if (element && element.tagName === 'SELECT') {
-            // Highlight briefly
             this.flashElement(element);
-            
-            // Set value
             element.value = value;
-            
-            // Trigger change event
             element.dispatchEvent(new Event('change', { bubbles: true }));
-            
             return this.delay(200);
         } else {
             throw new Error(`Select element not found: ${selector}`);
@@ -1467,27 +3070,15 @@ class AIAssistant {
         }
     }
     
-    executeCheck(selector, checked) {
-        const element = document.querySelector(selector);
-        if (element && element.type === 'checkbox') {
-            element.checked = checked;
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-            this.flashElement(element);
-            return this.delay(200);
-        }
-    }
-    
     async executeCustom(functionName, params) {
         // Execute custom functions based on name
         switch (functionName) {
             case 'extendTimeline':
-                // Custom timeline extension logic
-                console.log('[AI Assistant] Extending timeline:', params);
+                console.log('[CHARLES] Extending timeline:', params);
                 // Would call actual timeline extension function here
                 break;
                 
             case 'clearAllData':
-                // Custom data clearing with confirmation
                 if (window.confirm('Are you sure you want to clear all data?')) {
                     if (typeof clearAllDataWithConfirmation === 'function') {
                         clearAllDataWithConfirmation();
@@ -1495,25 +3086,19 @@ class AIAssistant {
                 }
                 break;
                 
+            case 'saveState':
+                this.saveState();
+                break;
+                
+            case 'restoreState':
+                this.restoreState();
+                break;
+                
             default:
-                console.warn('[AI Assistant] Unknown custom function:', functionName);
+                console.warn('[CHARLES] Unknown custom function:', functionName);
         }
         
         return this.delay(500);
-    }
-    
-    flashElement(element, duration = 500) {
-        const originalBorder = element.style.border;
-        const originalBoxShadow = element.style.boxShadow;
-        
-        element.style.border = '2px solid #667eea';
-        element.style.boxShadow = '0 0 10px rgba(139, 92, 246, 0.5)';
-        element.style.transition = 'all 0.2s';
-        
-        setTimeout(() => {
-            element.style.border = originalBorder;
-            element.style.boxShadow = originalBoxShadow;
-        }, duration);
     }
     
     getActionIcon(type) {
@@ -1538,95 +3123,13 @@ class AIAssistant {
     delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
-    
-    // Helper function to add timeout to promises
-    withTimeout(promise, timeout) {
-        return Promise.race([
-            promise,
-            new Promise((_, reject) => 
-                setTimeout(() => {
-                    const error = new Error(`Operation timed out after ${timeout}ms`);
-                    error.name = 'TimeoutError';
-                    reject(error);
-                }, timeout)
-            )
-        ]);
-    }
-    
-    async trackAnalysisJob(jobId) {
-        let pollInterval;
-        let pollCount = 0;
-        const maxPolls = 60; // Max 60 polls (2 minutes at 2-second intervals)
-        
-        const typingId = this.addTypingIndicator();
-        
-        const cleanup = () => {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-                pollInterval = null;
-            }
-            this.removeTypingIndicator(typingId);
-        };
-        
-        pollInterval = setInterval(async () => {
-            try {
-                pollCount++;
-                
-                // Check if we've exceeded max polls
-                if (pollCount > maxPolls) {
-                    cleanup();
-                    this.addMessage('⏱️ Analysis is taking longer than expected. It may still be processing in the background.', 'assistant');
-                    return;
-                }
-                
-                const response = await this.withTimeout(
-                    fetch(`/api/agencydb/status/${jobId}`),
-                    5000 // 5 second timeout for status checks
-                );
-                
-                if (response.ok) {
-                    const status = await response.json();
-                    
-                    if (status.status === 'completed') {
-                        cleanup();
-                        this.addMessage('✅ Analysis complete! Results loaded in Step 2.', 'assistant');
-                        
-                        // Trigger any UI updates
-                        if (typeof window.loadScenarioData === 'function' && status.result) {
-                            window.loadScenarioData(status.result);
-                        }
-                    } else if (status.status === 'failed') {
-                        cleanup();
-                        this.addMessage(`❌ Analysis failed: ${status.error || 'Unknown error'}`, 'assistant');
-                    } else if (status.progress) {
-                        // Update progress message
-                        console.log(`[CHARLES] Job ${jobId} progress: ${status.progress}%`);
-                    }
-                } else {
-                    // Non-OK response
-                    cleanup();
-                    this.addMessage('⚠️ Could not check analysis status. It may still be running.', 'assistant');
-                }
-            } catch (error) {
-                cleanup();
-                
-                if (error.name === 'TimeoutError') {
-                    this.addMessage('⏱️ Status check timed out. Analysis may still be running in the background.', 'assistant');
-                } else {
-                    console.error('[CHARLES] Job tracking error:', error);
-                    this.addMessage('⚠️ Lost connection to analysis job. Check Step 2 for results.', 'assistant');
-                }
-            }
-        }, 2000); // Poll every 2 seconds
-    }
 }
 
-// Initialize the AI Assistant when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        window.aiAssistant = new AIAssistant();
-    });
-} else {
-    // DOM is already ready
+// Initialize AI Assistant when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
     window.aiAssistant = new AIAssistant();
-}
+    console.log('[CHARLES] Agent v3.0 initialized with full autonomy, self-healing, and state preservation.');
+});
+
+// Export for global access
+window.AIAssistant = AIAssistant;
