@@ -170,12 +170,47 @@ def embed_many(texts: List[str], model: str = "text-embedding-3-large", client=N
             from openai import OpenAI
             client = OpenAI()
         
-        BATCH_SIZE = 256  # OpenAI's recommended batch size
+        # Token-based chunking to avoid exceeding context limits
+        MAX_TOKENS = 6000  # Conservative limit (8192 max, keep buffer)
+        MAX_BATCH_SIZE = 100  # Max items per batch
         
-        for b in range(0, len(pending), BATCH_SIZE):
-            chunk = pending[b:b+BATCH_SIZE]
-            idxs = [i for (i, _) in chunk]
-            payload = [t for (_, t) in chunk]
+        def estimate_tokens(text):
+            # Rough estimate: 1 token per 4 characters
+            return len(text) / 4
+        
+        # Group texts into batches that don't exceed token limit
+        batches = []
+        current_batch = []
+        current_tokens = 0
+        
+        for idx, text in pending:
+            text_tokens = estimate_tokens(text)
+            
+            # If single text exceeds limit, truncate it
+            if text_tokens > MAX_TOKENS:
+                print(f"[EMBED CACHE] Warning: Text {idx} exceeds token limit, truncating...")
+                # Truncate to approximately MAX_TOKENS * 4 characters
+                text = text[:int(MAX_TOKENS * 4)]
+                text_tokens = estimate_tokens(text)
+            
+            # Check if adding this text would exceed limits
+            if (current_tokens + text_tokens > MAX_TOKENS or 
+                len(current_batch) >= MAX_BATCH_SIZE) and current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_tokens = 0
+            
+            current_batch.append((idx, text))
+            current_tokens += text_tokens
+        
+        if current_batch:
+            batches.append(current_batch)
+        
+        print(f"[EMBED CACHE] Processing {len(batches)} batches...")
+        
+        for batch_num, batch in enumerate(batches, 1):
+            idxs = [i for (i, _) in batch]
+            payload = [t for (_, t) in batch]
             
             if not payload:
                 continue
@@ -193,10 +228,31 @@ def embed_many(texts: List[str], model: str = "text-embedding-3-large", client=N
                     out[j] = vec
                     _put_cached_embed(conn, model, texts[j], vec, session_id)
                     
+                if batch_num % 5 == 0:
+                    print(f"[EMBED CACHE] Processed batch {batch_num}/{len(batches)}")
+                    
             except Exception as e:
-                print(f"[EMBED CACHE] Error computing embeddings: {e}")
-                # Return partial results if available
-                raise
+                print(f"[EMBED CACHE] Error in batch {batch_num}: {e}")
+                # Try to process items individually if batch fails
+                if "context length" in str(e).lower():
+                    print(f"[EMBED CACHE] Retrying batch {batch_num} with smaller chunks...")
+                    for idx, text in batch:
+                        try:
+                            # Process individually with truncation if needed
+                            truncated_text = text[:8000] if len(text) > 8000 else text
+                            response = client.embeddings.create(
+                                model=model,
+                                input=[truncated_text]
+                            )
+                            vec = response.data[0].embedding
+                            out[idx] = vec
+                            _put_cached_embed(conn, model, truncated_text, vec, session_id)
+                        except Exception as inner_e:
+                            print(f"[EMBED CACHE] Failed to embed text {idx}: {inner_e}")
+                            # Use zero vector as fallback
+                            out[idx] = [0.0] * 1536  # Default dimension for text-embedding-3-large
+                else:
+                    raise
     
     conn.close()
     return out

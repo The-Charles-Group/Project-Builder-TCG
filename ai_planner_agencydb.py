@@ -1157,15 +1157,23 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
         "comprehensive": 100     # For comprehensive agency RFPs
     }
     
-    # FIXED: Always force 100 minimum for ALL RFPs to ensure comprehensive coverage
-    # This ensures rich deliverable suggestions for testing
-    MINIMUM_DELIVERABLES = 100
-    print(f"[AUTO-RESCUE] Forcing minimum of 100 deliverables for ALL RFPs")
+    # Use reasonable minimum deliverables based on RFP complexity
+    # This prevents artificially inflating deliverable count with fake ones
+    if is_comprehensive:
+        MINIMUM_DELIVERABLES = 35  # Comprehensive RFPs get more deliverables
+    elif rfp_complexity == "high":
+        MINIMUM_DELIVERABLES = 30  # High complexity
+    elif rfp_complexity == "medium":
+        MINIMUM_DELIVERABLES = 20  # Medium complexity  
+    else:
+        MINIMUM_DELIVERABLES = 15  # Low complexity
     
-    # Override with environment variable if set (but default to 100)
-    env_min = int(os.environ.get("AI_FORCE_MIN_DELIVERABLES", "100"))
+    print(f"[AUTO-RESCUE] Using minimum of {MINIMUM_DELIVERABLES} deliverables for {rfp_complexity} complexity")
+    
+    # Override with environment variable if set (but cap at reasonable limit)
+    env_min = int(os.environ.get("AI_FORCE_MIN_DELIVERABLES", "20"))
     if env_min > 0:
-        MINIMUM_DELIVERABLES = max(100, env_min)  # Never go below 100
+        MINIMUM_DELIVERABLES = min(50, env_min)  # Cap at 50 maximum to prevent bloat
         print(f"[AUTO-RESCUE] Using forced minimum from env: {MINIMUM_DELIVERABLES}")
     
     # FIXED: Always check and ensure minimum deliverables
@@ -1930,13 +1938,9 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         deliv_info = deliv_lookup.get(deliv_code, None)
         
         if deliv_info is None:
-            # Fallback: if not in lookup, create minimal deliverable info
-            print(f"[COMPOSE WARNING] Deliverable {deliv_code} not in lookup, creating fallback")
-            deliv_info = {
-                "id": deliv_code,
-                "title": d_item.get("title", f"Deliverable {deliv_code}"),
-                "dept": "Strategy"
-            }
+            # Skip deliverables not in the database catalog (these are fake IDs)
+            print(f"[COMPOSE] Skipping unknown deliverable {deliv_code} - not in database catalog")
+            continue  # Skip this deliverable entirely instead of creating a fallback
         
         # FIXED: Ensure dept exists with fallback to 'Strategy'
         dept = deliv_info.get("dept", "Strategy")  # Use .get() for safe access
@@ -2282,8 +2286,9 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     print(f"[ANALYZE] Running auto-rescue (autorelax={AI_AUTORELAX}, complexity={rfp_complexity})")
     fused = _auto_rescue_if_empty(fused, all_recall, llm_scores, rfp_complexity, summary)
     
-    # EXPANSION FOR COMPREHENSIVE RFPs - BEFORE final filtering
-    # Check if this is a comprehensive RFP that needs 100+ deliverables
+    # EXPANSION FOR COMPREHENSIVE RFPs - DISABLED
+    # We no longer artificially expand deliverables with fake variations
+    # Only use the actual deliverables from the database
     is_comprehensive_rfp = (
         summary.get("complexity") == "high" or
         is_luxury_fashion or
@@ -2295,27 +2300,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     if is_comprehensive_rfp:
         # Get deliverables that passed so far
         passing_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
-        print(f"[ANALYZE] Comprehensive RFP detected with {len(passing_delivs)} deliverables before expansion")
-        
-        if len(passing_delivs) < 100:
-            # Expand deliverables
-            expanded_delivs = expand_deliverables_for_comprehensive_rfp(passing_delivs, summary, target_count=100)
-            print(f"[ANALYZE] Expanded from {len(passing_delivs)} to {len(expanded_delivs)} deliverables")
-            
-            # Add expanded deliverables back to fused list with proper attributes
-            existing_ids = {x["id"] for x in fused}
-            for exp_deliv in expanded_delivs:
-                if exp_deliv["id"] not in existing_ids:
-                    # Add the expanded deliverable to fused list
-                    exp_deliv["pass"] = True  # Force pass for expanded deliverables
-                    exp_deliv["level"] = "deliverable"
-                    exp_deliv["dept"] = exp_deliv.get("dept", "Strategy")
-                    exp_deliv["calibrated_confidence"] = exp_deliv.get("calibrated_confidence", 0.60)  # Higher confidence for expanded deliverables
-                    exp_deliv["ai_selected"] = True
-                    fused.append(exp_deliv)
-                    existing_ids.add(exp_deliv["id"])
-            
-            print(f"[ANALYZE] Added {len(expanded_delivs) - len(passing_delivs)} new deliverables through expansion")
+        print(f"[ANALYZE] Comprehensive RFP detected with {len(passing_delivs)} deliverables (no artificial expansion)")
     
     # Check final deliverable count
     final_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
