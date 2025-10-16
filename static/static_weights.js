@@ -49,6 +49,24 @@ window.TCGWeights = (function(){
       const isSelected = alreadySelected.has(row.deliverable_code);
       const tr = document.createElement('tr');
       tr.className = isSelected ? 'already-selected' : '';
+      
+      // Create score display with both TF-IDF and confidence
+      let scoreDisplay = `<strong>${row.match_percent.toFixed(1)}%</strong>`;
+      
+      // Show TF-IDF similarity if available
+      if (row.tfidf_similarity !== undefined) {
+        scoreDisplay += `<br><small style="color: var(--muted);">TF-IDF: ${row.tfidf_similarity.toFixed(2)}</small>`;
+      }
+      
+      // Show if this was boosted by direct match
+      if (row.direct_match) {
+        scoreDisplay += `<br><small style="color: #10b981;">✓ Direct Match</small>`;
+        if (row.matched_keywords && row.matched_keywords.length > 0) {
+          const keywords = row.matched_keywords.slice(0, 3).join(', ');
+          scoreDisplay += `<br><small style="color: #6b7280; font-size: 0.75em;">${keywords}</small>`;
+        }
+      }
+      
       tr.innerHTML = `
         <td>
           <input type="checkbox" 
@@ -61,7 +79,7 @@ window.TCGWeights = (function(){
           ${row.deliverable||row.deliverable_code}
           ${isSelected ? '<span class="badge">Selected</span>' : ''}
         </td>
-        <td><strong>${row.match_percent.toFixed(1)}%</strong></td>
+        <td>${scoreDisplay}</td>
       `;
       tbody.appendChild(tr);
       
@@ -95,6 +113,20 @@ window.TCGWeights = (function(){
     });
     
     c.appendChild(table);
+    
+    // Add explanatory text
+    const explanation = _el(`
+      <div style="margin-top: 12px; padding: 12px; background: rgba(59, 130, 246, 0.1); border-radius: 8px; font-size: 0.85em; color: var(--text);">
+        <strong>Understanding the Scores:</strong><br>
+        <div style="margin-top: 6px; line-height: 1.6;">
+          • <strong>Confidence %</strong>: Our overall certainty this deliverable matches your needs (0-100%)<br>
+          • <strong>TF-IDF Score</strong>: Content similarity based on keyword frequency analysis (0.00-1.00 scale)<br>
+          • <strong style="color: #10b981;">✓ Direct Match</strong>: Deliverable name appears explicitly in your RFP (boosts to 90%+)<br>
+          <span style="opacity: 0.8;">Direct matches are prioritized even if TF-IDF is lower, as explicit mentions indicate clear requirements.</span>
+        </div>
+      </div>
+    `);
+    c.appendChild(explanation);
     
     // Add action buttons
     const actions = _el(`
