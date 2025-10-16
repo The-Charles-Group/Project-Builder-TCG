@@ -3470,27 +3470,55 @@ async def clear_session(payload: ClearSessionPayload):
     session_id = payload.session_id
     
     # Clear embedding cache for this session
-    from embedding_cache import clear_cache
-    clear_cache(session_id=session_id)
+    try:
+        from embedding_cache import clear_cache
+        clear_cache(session_id=session_id)
+        embedding_cleared = True
+    except Exception as e:
+        print(f"[SESSION] Warning: Could not clear embedding cache: {e}")
+        embedding_cleared = False
     
-    # Clear any session-specific global data
+    # Clear ALL global data caches
     global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE
+    global LAST_UPLOAD_FILENAME, OPTIONS_CACHE
+    
+    print(f"[SESSION] Clearing all cached data for session: {session_id}")
+    print(f"[SESSION] Before clear - RFP_TEXT_CACHE length: {len(RFP_TEXT_CACHE or '')}")
+    
     RFP_TEXT_CACHE_TEXTAREA = None
     RFP_TEXT_CACHE_FILE = None
     RFP_TEXT_CACHE = None
+    LAST_UPLOAD_FILENAME = None
     
-    # Clear job store entries for this session (if we tracked session_id in jobs)
-    # Note: Current job store doesn't have session_id tracking yet
-    # This would be a future enhancement
+    # Clear OPTIONS_CACHE if it exists
+    if 'OPTIONS_CACHE' in globals():
+        OPTIONS_CACHE = None
     
-    print(f"[SESSION] Cleared server-side data for session: {session_id}")
+    # Clear all jobs from JOB_STORE
+    global JOB_STORE
+    cleared_jobs = []
+    for job_id in list(JOB_STORE.keys()):
+        cleared_jobs.append(job_id)
+        del JOB_STORE[job_id]
+    
+    # Clear any cached scenarios
+    if 'SCENARIOS_CACHE' in globals():
+        global SCENARIOS_CACHE
+        SCENARIOS_CACHE = None
+    
+    print(f"[SESSION] After clear - All caches reset")
+    print(f"[SESSION] Cleared {len(cleared_jobs)} jobs: {cleared_jobs}")
     
     return {
         "ok": True,
-        "message": f"Session {session_id} cleared successfully",
+        "message": f"Session {session_id} cleared completely",
         "cleared": {
-            "embedding_cache": True,
-            "rfp_text_cache": True
+            "embedding_cache": embedding_cleared,
+            "rfp_text_cache": True,
+            "upload_filename": True,
+            "jobs": len(cleared_jobs),
+            "job_ids": cleared_jobs,
+            "timestamp": datetime.datetime.now().isoformat()
         }
     }
 

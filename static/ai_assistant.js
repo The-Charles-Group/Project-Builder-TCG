@@ -116,8 +116,76 @@ class AIAssistant {
         return currentState;
     }
     
+    clearAllData() {
+        console.log('[CHARLES] Clearing all AI Assistant data...');
+        
+        // Clear localStorage
+        localStorage.removeItem('charles_agent_state');
+        localStorage.removeItem('charles_width');
+        
+        // Reset agent state completely
+        this.agentState = {
+            uploadedFiles: [],
+            selectedDeliverables: [],
+            currentStep: 'step1',
+            formValues: {},
+            analysisMode: 'fast',
+            jobId: null,
+            lastError: null,
+            stateHistory: []
+        };
+        
+        // Clear conversation history
+        const messagesDiv = document.getElementById('charles-messages');
+        if (messagesDiv) {
+            messagesDiv.innerHTML = '';
+        }
+        
+        // Clear staged files
+        this.stagedFiles = [];
+        
+        // Clear any active operations
+        this.operationTracker.currentOperations.clear();
+        this.operationTracker.stuckOperations.clear();
+        
+        // Clear action queue
+        this.actionQueue = [];
+        this.currentActions = [];
+        
+        // Reset error recovery
+        this.errorRecoveryQueue = [];
+        this.retryAttempts = {};
+        
+        // Clear batch processing status
+        this.batchProcessingStatus = {
+            total: 0,
+            completed: 0,
+            failed: 0,
+            inProgress: false,
+            fileStatuses: new Map()
+        };
+        
+        // Close the assistant if open
+        if (this.isOpen) {
+            this.toggleAssistant();
+        }
+        
+        console.log('[CHARLES] ✅ All AI Assistant data cleared');
+    }
+    
     restoreState(stateToRestore = null) {
         try {
+            // Check if data was recently cleared - don't restore if so
+            const clearFlag = localStorage.getItem('apb.data_cleared');
+            const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+            const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
+            
+            // Don't restore if cleared within last hour
+            if (clearFlag === 'true' && timeSinceClear < 3600000) {
+                console.log('[CHARLES] Data was cleared recently, not restoring state');
+                return false;
+            }
+            
             // Use provided state or load from localStorage
             const savedState = stateToRestore || JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
             

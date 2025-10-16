@@ -54,34 +54,127 @@ const SessionManager = {
   async clearAllData() {
     const sessionId = this.getCurrentSessionId();
     
-    // Clear localStorage (ALL patterns: 'apb.' AND 'apb:')
+    console.log('[CLEAR] Starting complete data clear at', new Date().toISOString());
+    
+    // Track what we're clearing for logging
+    const clearingLog = {
+      localStorage: [],
+      sessionStorage: [],
+      inMemory: [],
+      timestamp: Date.now()
+    };
+    
+    // Clear localStorage (ALL patterns - be aggressive)
     Object.keys(localStorage).forEach(key => {
-      if (key.startsWith('apb.') || key.startsWith('apb:')) {
+      if (key.startsWith('apb.') || key.startsWith('apb:') || 
+          key.includes('rfp') || key.includes('RFP') ||
+          key.includes('scenario') || key.includes('deliverable') ||
+          key.includes('timeline') || key.includes('pricing') ||
+          key.includes('charles') || key.includes('session')) {
+        clearingLog.localStorage.push(key);
         localStorage.removeItem(key);
       }
     });
     
-    // CRITICAL FIX: Explicitly clear the problematic key that persists
-    localStorage.removeItem('apb.rfpText.v1');
-    
-    // Clear sessionStorage (ALL patterns)
-    Object.keys(sessionStorage).forEach(key => {
-      if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
-        sessionStorage.removeItem(key);
+    // Explicitly clear ALL known problematic keys
+    const explicitKeys = [
+      'apb.rfpText.v1', 'charles_agent_state', 'latest_scenarios',
+      'current_session_id', 'timeline_synced', 'timeline_data',
+      'timeline_reasoning', 'apb.analyzeImages', 'charles_width'
+    ];
+    explicitKeys.forEach(key => {
+      if (localStorage.getItem(key)) {
+        clearingLog.localStorage.push(key + ' (explicit)');
       }
+      localStorage.removeItem(key);
     });
     
-    // Clear in-memory data to prevent persistence across sessions
+    // Clear ALL sessionStorage
+    Object.keys(sessionStorage).forEach(key => {
+      clearingLog.sessionStorage.push(key);
+      sessionStorage.removeItem(key);
+    });
+    
+    // Clear ALL in-memory data comprehensively
     if (window.APP) {
+      clearingLog.inMemory.push('APP object');
       window.APP.summary = null;
       window.APP.rfpText = '';
-    }
-    if (window.APB && window.APB.step2) {
-      window.APB.step2.rfpText = '';
+      window.APP.suggestions = null;
+      window.APP.deliverables = [];
     }
     
-    // Set flag to prevent auto-restore
-    sessionStorage.setItem('just_cleared', 'true');
+    if (window.APB) {
+      clearingLog.inMemory.push('APB object');
+      if (window.APB.step2) {
+        window.APB.step2.rfpText = '';
+        window.APB.step2.deliverables = [];
+        window.APB.step2.components = {};
+      }
+    }
+    
+    // Clear global variables
+    if (window.SCENARIOS) {
+      clearingLog.inMemory.push('SCENARIOS');
+      window.SCENARIOS = null;
+    }
+    if (window.DELIVERABLES) {
+      clearingLog.inMemory.push('DELIVERABLES');
+      window.DELIVERABLES = [];
+    }
+    if (window.OPTIONS) {
+      clearingLog.inMemory.push('OPTIONS');
+      window.OPTIONS = null;
+    }
+    if (window.DELIV_INDEX) {
+      clearingLog.inMemory.push('DELIV_INDEX');
+      window.DELIV_INDEX = {};
+      window.DELIV_INDEX_LO = {};
+    }
+    if (window.selectionStore) {
+      clearingLog.inMemory.push('selectionStore');
+      window.selectionStore.deliverables.clear();
+      window.selectionStore.components.clear();
+      window.selectionStore.manualDeliverables.clear();
+      window.selectionStore.manualComponents.clear();
+    }
+    if (window.pricingData) {
+      clearingLog.inMemory.push('pricingData');
+      window.pricingData.deliverableTypes.clear();
+      window.pricingData.retainers.clear();
+      window.pricingData.complexity.clear();
+      window.pricingData.urgency.clear();
+      window.pricingData.resourceTypes.clear();
+      window.pricingData.discounts.clear();
+    }
+    if (window.componentDataCache) {
+      clearingLog.inMemory.push('componentDataCache');
+      window.componentDataCache.clear();
+    }
+    
+    // Clear AI Assistant state
+    if (window.aiAssistant) {
+      clearingLog.inMemory.push('AI Assistant');
+      window.aiAssistant.agentState = {
+        uploadedFiles: [],
+        selectedDeliverables: [],
+        currentStep: 'step1',
+        formValues: {},
+        analysisMode: 'fast',
+        jobId: null,
+        lastError: null,
+        stateHistory: []
+      };
+    }
+    
+    // Set PERMANENT flag to prevent auto-restore
+    localStorage.setItem('apb.data_cleared', 'true');
+    localStorage.setItem('apb.clear_timestamp', Date.now().toString());
+    
+    // Log what we cleared
+    console.log('[CLEAR] Cleared localStorage keys:', clearingLog.localStorage);
+    console.log('[CLEAR] Cleared sessionStorage keys:', clearingLog.sessionStorage);
+    console.log('[CLEAR] Cleared in-memory data:', clearingLog.inMemory);
     
     // Clear server-side cache
     try {
@@ -90,15 +183,16 @@ const SessionManager = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId })
       });
-      console.log('[SESSION] Server cache cleared for session:', sessionId);
+      console.log('[CLEAR] Server cache cleared for session:', sessionId);
     } catch (err) {
-      console.warn('[SESSION] Failed to clear server cache:', err);
+      console.warn('[CLEAR] Failed to clear server cache:', err);
     }
     
     // Start fresh session
     this.startNewSession();
     
-    console.log('[SESSION] All data cleared, new session started');
+    console.log('[CLEAR] ✅ All data cleared completely at', new Date().toISOString());
+    return clearingLog;
   },
   
   getSessionKey(key) {
@@ -230,6 +324,7 @@ async function clearAllDataWithConfirmation() {
     'This will:\n' +
     '• Delete all stored RFP data\n' +
     '• Clear all analysis results\n' +
+    '• Clear AI Assistant history\n' +
     '• Reset the application to fresh state\n' +
     '• Clear server-side cache\n\n' +
     'This action cannot be undone. Continue?'
@@ -238,6 +333,8 @@ async function clearAllDataWithConfirmation() {
   if (!confirmed) return;
   
   try {
+    console.log('[CLEAR] User confirmed data clear at', new Date().toISOString());
+    
     // Show loading state
     const btn = document.getElementById('btnClearAllData');
     if (btn) {
@@ -245,12 +342,21 @@ async function clearAllDataWithConfirmation() {
       btn.innerHTML = '⏳ Clearing...';
     }
     
-    // Clear all data
-    await SessionManager.clearAllData();
+    // Clear all data - this now returns detailed log
+    const clearLog = await SessionManager.clearAllData();
     
-    // Reset UI
+    // Clear AI Assistant data
+    if (window.aiAssistant) {
+      window.aiAssistant.clearAllData();
+    }
+    
+    // Reset UI completely
     document.getElementById('rfpText').value = '';
     document.getElementById('rfpFile').value = '';
+    
+    // Clear any file previews
+    const filePreview = document.getElementById('file-preview');
+    if (filePreview) filePreview.innerHTML = '';
     
     // Hide all steps except Step 1
     document.getElementById('step1').style.display = 'block';
@@ -260,13 +366,26 @@ async function clearAllDataWithConfirmation() {
     const step4 = document.getElementById('step4');
     if (step4) step4.style.display = 'none';
     
+    // Clear any visible deliverables or components panels
+    const delivPanel = document.getElementById('deliverableList');
+    if (delivPanel) delivPanel.innerHTML = '';
+    const compPanel = document.getElementById('componentsList');
+    if (compPanel) compPanel.innerHTML = '';
+    
+    // Log what was cleared
+    console.log('[CLEAR] Clear operation completed:', clearLog);
+    
     // Reset button state
     if (btn) {
       btn.disabled = false;
       btn.innerHTML = '🗑️ Clear All Data';
     }
     
-    alert('✅ All data cleared successfully!\n\nThe application has been reset to a fresh state.');
+    alert(
+      '✅ All data cleared successfully!\n\n' +
+      'The application has been reset to a fresh state.\n\n' +
+      'The page will reload to ensure complete cleanup.'
+    );
     
     // Reload page for complete reset
     setTimeout(() => window.location.reload(), 500);
@@ -3558,12 +3677,23 @@ async function boot() {
   OPTIONS = await api("/api/options");
   
   // Initialize APB.step2 state - load RFP text from sessionStorage or localStorage
-  // CRITICAL FIX: Don't auto-restore if just cleared
-  if (sessionStorage.getItem('just_cleared') === 'true') {
+  // CRITICAL FIX: Check if data was recently cleared (don't auto-restore)
+  const dataClearedFlag = localStorage.getItem('apb.data_cleared');
+  const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+  const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
+  
+  // Don't auto-restore if cleared within last hour (3600000 ms)
+  if (dataClearedFlag === 'true' && timeSinceClear < 3600000) {
+    console.log('[RESTORE] Data was cleared recently, not auto-restoring');
     APB.step2.rfpText = '';
-    sessionStorage.removeItem('just_cleared');
   } else {
-    APB.step2.rfpText = sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+    // Only restore if not recently cleared
+    console.log('[RESTORE] Checking for stored data...');
+    const restoredText = sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+    if (restoredText) {
+      console.log('[RESTORE] Found and restored RFP text, length:', restoredText.length);
+    }
+    APB.step2.rfpText = restoredText;
   }
   APB.step2.allDeliverables = OPTIONS.deliverables || [];
   
@@ -3665,10 +3795,19 @@ async function boot() {
       e.preventDefault();
       
       // Task 1.7: Get RFP text from multiple sources including backend cache
-      // CRITICAL FIX: Check if just cleared before restoring
+      // CRITICAL FIX: Check if data was recently cleared
+      const dataClearedFlag = localStorage.getItem('apb.data_cleared');
+      const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+      const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
+      
       let rfpText = '';
-      if (sessionStorage.getItem('just_cleared') !== 'true') {
-        rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+      // Only restore if not recently cleared (within last hour)
+      if (dataClearedFlag !== 'true' || timeSinceClear > 3600000) {
+        rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || '';
+        // IMPORTANT: Do NOT restore from localStorage.getItem('apb.rfpText.v1') anymore
+        console.log('[ANALYZE] Attempting to use existing RFP text, length:', rfpText?.length || 0);
+      } else {
+        console.log('[ANALYZE] Data was cleared recently, not using stored RFP text');
       }
       
       // If still no text, check if we have a stored analysis summary
@@ -4102,8 +4241,9 @@ async function pollProgress(jobId) {
         if (progress.status === 'completed' && progress.result_text) {
           APB.step2.rfpText = progress.result_text;
           sessionStorage.setItem('apb.rfp_text', progress.result_text);
-          localStorage.setItem('apb.rfpText.v1', progress.result_text);
-          console.log('[Image Analysis] Results merged into RFP text cache');
+          // REMOVED: localStorage.setItem('apb.rfpText.v1', progress.result_text);
+          // Don't persist to localStorage to prevent data restoration issues
+          console.log('[Image Analysis] Results stored in session only (not persisted)');
         }
       }, 2000);
     }
