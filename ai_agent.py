@@ -167,7 +167,7 @@ For EXTEND_TIMELINE, parameters should include:
             tier_mapping = {
                 "auto": "mini",  # Fast parsing by default
                 "mini": "mini",
-                "thinking-mini": "thinking-mini",
+                "thinking-mini": "mini",  # Map to actual model
                 "thinking": "thinking", 
                 "pro": "pro"
             }
@@ -176,20 +176,53 @@ For EXTEND_TIMELINE, parameters should include:
             # Use selected GPT-5 tier for intent parsing
             print(f"[CHARLES] Using GPT-5 tier: {selected_tier} (from input: {gpt5_tier})")
             
-            response = gpt5_text(
-                sync_client,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                tier=selected_tier,
-                max_output_tokens=500,
-                response_format={"type": "json_object"}
-            )
+            # Add JSON instruction to the system prompt
+            json_system_prompt = system_prompt + "\n\nIMPORTANT: You must respond with valid JSON only, no other text."
+            
+            # Add timeout handling
+            import signal
+            
+            class TimeoutException(Exception):
+                pass
+            
+            def timeout_handler(signum, frame):
+                raise TimeoutException("GPT-5 API call timed out after 15 seconds")
+            
+            # Set timeout alarm
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(15)  # 15 second timeout
+            
+            try:
+                response = gpt5_text(
+                    sync_client,
+                    messages=[
+                        {"role": "system", "content": json_system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    tier=selected_tier,
+                    max_output_tokens=500,
+                    use_retry=False  # Disable retry for faster response
+                )
+                signal.alarm(0)  # Cancel the alarm
+            except TimeoutException as te:
+                print(f"[CHARLES] GPT-5 timeout: {te}")
+                signal.alarm(0)  # Cancel the alarm
+                raise Exception(str(te))
             
             if response:
                 print(f"[CHARLES] GPT-5 response received, parsing JSON...")
-                parsed = json.loads(response)
+                # Try to extract JSON from response even if it has extra text
+                try:
+                    # First try direct parse
+                    parsed = json.loads(response)
+                except json.JSONDecodeError:
+                    # Try to find JSON in the response
+                    import re
+                    json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                    if json_match:
+                        parsed = json.loads(json_match.group())
+                    else:
+                        raise ValueError(f"No valid JSON found in response: {response[:200]}...")
                 
                 # Log the parsed command for debugging
                 print(f"[CHARLES] Parsed command: {parsed.get('command_type', 'UNKNOWN')} with confidence: {parsed.get('confidence', 0)}")
