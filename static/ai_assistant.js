@@ -48,6 +48,25 @@ class AIAssistant {
             fileStatuses: new Map()
         };
         
+        // Stuck State Detection & Operation Tracking
+        this.operationTracker = {
+            currentOperations: new Map(), // Map of operation ID to operation info
+            operationTimeouts: {
+                file_upload: 60000,    // 60 seconds for file uploads
+                analysis: 30000,       // 30 seconds for analysis
+                ui_action: 15000,      // 15 seconds for UI actions
+                network: 10000,        // 10 seconds for network requests
+                default: 30000         // 30 seconds default
+            },
+            stuckOperations: new Set()
+        };
+        
+        // Auto-Fix State
+        this.autoFixEnabled = false;
+        this.healthCheckInterval = null;
+        this.healthCheckFrequency = 5000; // Check every 5 seconds
+        this.lastHealthCheck = Date.now();
+        
         this.init();
     }
     
@@ -916,6 +935,10 @@ class AIAssistant {
         this.showFlashMessage(message, 'error', duration);
     }
     
+    showInfoMessage(message, duration = 3000) {
+        this.showFlashMessage(message, 'info', duration);
+    }
+    
     showFlashMessage(message, type = 'info', duration = 3000) {
         const flash = document.createElement('div');
         flash.className = `charles-flash-message charles-flash-${type}`;
@@ -954,34 +977,168 @@ class AIAssistant {
         // Monitor for network errors
         this.interceptNetworkErrors();
         
-        // Add Auto-Fix button to UI
+        // Add Auto-Fix button to main application header (not sidebar)
         this.addAutoFixButton();
+        
+        // Initialize operation tracking
+        this.initializeOperationTracking();
     }
     
     addAutoFixButton() {
+        // Remove any existing button first
+        const existingBtn = document.getElementById('charles-auto-fix-main');
+        if (existingBtn) existingBtn.remove();
+        
+        // Create Auto-Fix button for main application header
         const autoFixBtn = document.createElement('button');
-        autoFixBtn.id = 'charles-auto-fix';
-        autoFixBtn.className = 'charles-auto-fix-btn';
-        autoFixBtn.innerHTML = '🔧 Enable Auto-Fix';
+        autoFixBtn.id = 'charles-auto-fix-main';
+        autoFixBtn.className = 'charles-auto-fix-btn-main';
+        autoFixBtn.innerHTML = `
+            <span class="auto-fix-icon">🔧</span>
+            <span class="auto-fix-text">Auto-Fix OFF</span>
+            <span class="auto-fix-status">●</span>
+        `;
         autoFixBtn.onclick = () => this.toggleAutoFix();
         
-        const header = document.querySelector('.ai-assistant-header');
-        if (header) {
-            header.appendChild(autoFixBtn);
+        // Add button to main application header
+        const mainHeader = document.querySelector('header');
+        if (mainHeader) {
+            // Create a controls container if it doesn't exist
+            let controlsContainer = mainHeader.querySelector('.header-controls');
+            if (!controlsContainer) {
+                controlsContainer = document.createElement('div');
+                controlsContainer.className = 'header-controls';
+                controlsContainer.style.cssText = `
+                    position: absolute;
+                    top: 20px;
+                    right: 20px;
+                    display: flex;
+                    gap: 12px;
+                    align-items: center;
+                `;
+                mainHeader.appendChild(controlsContainer);
+            }
+            controlsContainer.appendChild(autoFixBtn);
+        }
+        
+        // Add styles for the button
+        if (!document.getElementById('auto-fix-main-styles')) {
+            const styles = document.createElement('style');
+            styles.id = 'auto-fix-main-styles';
+            styles.textContent = `
+                .charles-auto-fix-btn-main {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    padding: 10px 16px;
+                    background: linear-gradient(135deg, rgba(50, 50, 60, 0.9), rgba(30, 30, 40, 0.9));
+                    border: 2px solid rgba(100, 100, 255, 0.3);
+                    border-radius: 25px;
+                    color: #ffffff;
+                    font-weight: 600;
+                    font-size: 14px;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+                    position: relative;
+                    overflow: hidden;
+                }
+                
+                .charles-auto-fix-btn-main:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 6px 20px rgba(100, 100, 255, 0.4);
+                    border-color: rgba(100, 100, 255, 0.6);
+                }
+                
+                .charles-auto-fix-btn-main.active {
+                    background: linear-gradient(135deg, rgba(100, 100, 255, 0.3), rgba(139, 92, 246, 0.3));
+                    border-color: #6464ff;
+                    animation: pulse-glow 2s ease-in-out infinite;
+                }
+                
+                .charles-auto-fix-btn-main .auto-fix-icon {
+                    font-size: 18px;
+                    animation: rotate-tool 4s linear infinite;
+                }
+                
+                .charles-auto-fix-btn-main.active .auto-fix-icon {
+                    animation: rotate-tool 1s linear infinite;
+                }
+                
+                .charles-auto-fix-btn-main .auto-fix-status {
+                    font-size: 10px;
+                    color: #ff4444;
+                    transition: color 0.3s ease;
+                }
+                
+                .charles-auto-fix-btn-main.active .auto-fix-status {
+                    color: #44ff44;
+                    animation: blink 1s ease-in-out infinite;
+                }
+                
+                @keyframes pulse-glow {
+                    0%, 100% {
+                        box-shadow: 0 6px 20px rgba(100, 100, 255, 0.4);
+                    }
+                    50% {
+                        box-shadow: 0 8px 30px rgba(139, 92, 246, 0.6);
+                    }
+                }
+                
+                @keyframes rotate-tool {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                
+                @keyframes blink {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.5; }
+                }
+                
+                /* Stuck state warning */
+                .charles-auto-fix-btn-main.stuck-detected {
+                    background: linear-gradient(135deg, rgba(255, 100, 0, 0.3), rgba(255, 50, 50, 0.3));
+                    border-color: #ff6600;
+                    animation: flash-warning 0.5s ease-in-out infinite;
+                }
+                
+                @keyframes flash-warning {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.7; }
+                }
+            `;
+            document.head.appendChild(styles);
         }
     }
     
     toggleAutoFix() {
         this.autoFixEnabled = !this.autoFixEnabled;
-        const btn = document.getElementById('charles-auto-fix');
-        if (btn) {
-            btn.innerHTML = this.autoFixEnabled ? '🔧 Auto-Fix ON' : '🔧 Enable Auto-Fix';
-            btn.classList.toggle('active', this.autoFixEnabled);
+        
+        // Update main button
+        const mainBtn = document.getElementById('charles-auto-fix-main');
+        if (mainBtn) {
+            mainBtn.classList.toggle('active', this.autoFixEnabled);
+            const textSpan = mainBtn.querySelector('.auto-fix-text');
+            if (textSpan) {
+                textSpan.textContent = this.autoFixEnabled ? 'Auto-Fix ON' : 'Auto-Fix OFF';
+            }
         }
         
         if (this.autoFixEnabled) {
-            this.showSuccessMessage('Auto-Fix enabled - I will attempt to recover from errors automatically');
+            this.showSuccessMessage('🔧 Auto-Fix ENABLED - Monitoring for stuck states and errors');
+            this.addMessage('🔧 Auto-Fix is now ON. I will monitor for stuck operations and automatically recover from errors.', 'assistant');
+            
+            // Start health check monitoring
+            this.startHealthCheckMonitoring();
+            
+            // Process any existing errors
             this.processErrorQueue();
+        } else {
+            this.showInfoMessage('🔧 Auto-Fix DISABLED - Manual intervention required for errors');
+            this.addMessage('🔧 Auto-Fix is now OFF. You will need to handle errors manually.', 'assistant');
+            
+            // Stop health check monitoring
+            this.stopHealthCheckMonitoring();
         }
     }
     
@@ -1157,6 +1314,343 @@ class AIAssistant {
         // Keep only last 50 patterns
         if (this.errorPatterns.length > 50) {
             this.errorPatterns.shift();
+        }
+    }
+    
+    // ====================
+    // OPERATION TRACKING & STUCK STATE DETECTION
+    // ====================
+    
+    initializeOperationTracking() {
+        console.log('[CHARLES] Initializing operation tracking system');
+        
+        // Set up stuck state detector
+        setInterval(() => {
+            if (this.autoFixEnabled) {
+                this.checkForStuckOperations();
+            }
+        }, 2000); // Check every 2 seconds for stuck operations
+    }
+    
+    startOperation(type, description, metadata = {}) {
+        const operationId = `op_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const timeout = this.operationTracker.operationTimeouts[type] || this.operationTracker.operationTimeouts.default;
+        
+        const operation = {
+            id: operationId,
+            type,
+            description,
+            metadata,
+            startTime: Date.now(),
+            timeout,
+            timeoutHandle: setTimeout(() => {
+                this.handleOperationTimeout(operationId);
+            }, timeout)
+        };
+        
+        this.operationTracker.currentOperations.set(operationId, operation);
+        
+        console.log(`[CHARLES] Started operation: ${description} (${operationId})`);
+        this.updateOperationStatus();
+        
+        return operationId;
+    }
+    
+    completeOperation(operationId) {
+        const operation = this.operationTracker.currentOperations.get(operationId);
+        if (operation) {
+            clearTimeout(operation.timeoutHandle);
+            this.operationTracker.currentOperations.delete(operationId);
+            this.operationTracker.stuckOperations.delete(operationId);
+            
+            const duration = Date.now() - operation.startTime;
+            console.log(`[CHARLES] Completed operation: ${operation.description} (${operationId}) in ${duration}ms`);
+            
+            this.updateOperationStatus();
+        }
+    }
+    
+    handleOperationTimeout(operationId) {
+        const operation = this.operationTracker.currentOperations.get(operationId);
+        if (operation) {
+            console.warn(`[CHARLES] Operation timeout: ${operation.description} (${operationId})`);
+            
+            // Mark as stuck
+            this.operationTracker.stuckOperations.add(operationId);
+            
+            // Update UI to show stuck state
+            const mainBtn = document.getElementById('charles-auto-fix-main');
+            if (mainBtn) {
+                mainBtn.classList.add('stuck-detected');
+            }
+            
+            // Show warning
+            this.addMessage(`⚠️ Operation stuck: ${operation.description}. Auto-Fix will attempt recovery...`, 'assistant');
+            
+            if (this.autoFixEnabled) {
+                // Attempt automatic recovery
+                this.recoverFromStuckOperation(operation);
+            } else {
+                this.addMessage(`🔧 Enable Auto-Fix to automatically recover from this stuck operation.`, 'assistant');
+            }
+        }
+    }
+    
+    checkForStuckOperations() {
+        const now = Date.now();
+        const stuckFound = [];
+        
+        for (const [id, operation] of this.operationTracker.currentOperations.entries()) {
+            const elapsed = now - operation.startTime;
+            const isStuck = elapsed > operation.timeout;
+            
+            if (isStuck && !this.operationTracker.stuckOperations.has(id)) {
+                this.operationTracker.stuckOperations.add(id);
+                stuckFound.push(operation);
+                
+                console.warn(`[CHARLES] Detected stuck operation: ${operation.description} (running for ${elapsed}ms)`);
+            }
+        }
+        
+        // Update UI if stuck operations found
+        const mainBtn = document.getElementById('charles-auto-fix-main');
+        if (mainBtn) {
+            if (this.operationTracker.stuckOperations.size > 0) {
+                mainBtn.classList.add('stuck-detected');
+                const textSpan = mainBtn.querySelector('.auto-fix-text');
+                if (textSpan && this.autoFixEnabled) {
+                    textSpan.textContent = `Fixing (${this.operationTracker.stuckOperations.size})...`;
+                }
+            } else {
+                mainBtn.classList.remove('stuck-detected');
+                const textSpan = mainBtn.querySelector('.auto-fix-text');
+                if (textSpan && this.autoFixEnabled) {
+                    textSpan.textContent = 'Auto-Fix ON';
+                }
+            }
+        }
+        
+        // Attempt recovery for stuck operations
+        if (this.autoFixEnabled && stuckFound.length > 0) {
+            stuckFound.forEach(operation => {
+                this.recoverFromStuckOperation(operation);
+            });
+        }
+    }
+    
+    async recoverFromStuckOperation(operation) {
+        console.log(`[CHARLES] Attempting recovery for stuck operation: ${operation.description}`);
+        
+        // Show recovery message
+        this.showAgentWorking(`Recovering from stuck ${operation.type} operation...`);
+        
+        try {
+            // First, try to cancel the stuck operation
+            this.cancelOperation(operation.id);
+            
+            // Wait a bit before retrying
+            await this.delay(1000);
+            
+            // Attempt recovery based on operation type
+            switch (operation.type) {
+                case 'file_upload':
+                    await this.recoverFileUpload(operation.metadata);
+                    break;
+                
+                case 'analysis':
+                    await this.recoverAnalysis(operation.metadata);
+                    break;
+                
+                case 'ui_action':
+                    await this.recoverUIAction(operation.metadata);
+                    break;
+                
+                case 'network':
+                    await this.recoverNetwork(operation.metadata);
+                    break;
+                
+                default:
+                    // Generic recovery - refresh or reset state
+                    await this.genericRecovery({
+                        error: `Operation stuck: ${operation.description}`,
+                        context: operation.type,
+                        metadata: operation.metadata
+                    });
+            }
+            
+            this.addMessage(`✅ Successfully recovered from stuck ${operation.type} operation`, 'assistant');
+            this.showSuccessMessage('Recovery successful!');
+            
+        } catch (error) {
+            console.error(`[CHARLES] Failed to recover from stuck operation:`, error);
+            this.addMessage(`❌ Could not automatically recover from stuck ${operation.type} operation. Manual intervention may be required.`, 'assistant');
+            this.showErrorMessage('Recovery failed - manual intervention required');
+        } finally {
+            this.showAgentWorking()(); // Hide overlay
+        }
+    }
+    
+    cancelOperation(operationId) {
+        const operation = this.operationTracker.currentOperations.get(operationId);
+        if (operation) {
+            clearTimeout(operation.timeoutHandle);
+            this.operationTracker.currentOperations.delete(operationId);
+            this.operationTracker.stuckOperations.delete(operationId);
+            
+            console.log(`[CHARLES] Cancelled operation: ${operation.description} (${operationId})`);
+            this.updateOperationStatus();
+        }
+    }
+    
+    updateOperationStatus() {
+        // Update UI to show current operations count
+        const activeCount = this.operationTracker.currentOperations.size;
+        const stuckCount = this.operationTracker.stuckOperations.size;
+        
+        if (activeCount > 0) {
+            console.log(`[CHARLES] Active operations: ${activeCount}, Stuck: ${stuckCount}`);
+        }
+    }
+    
+    // ====================
+    // HEALTH CHECK MONITORING
+    // ====================
+    
+    startHealthCheckMonitoring() {
+        console.log('[CHARLES] Starting health check monitoring');
+        
+        // Clear any existing interval
+        this.stopHealthCheckMonitoring();
+        
+        // Run initial health check
+        this.performHealthCheck();
+        
+        // Set up periodic health checks
+        this.healthCheckInterval = setInterval(() => {
+            if (this.autoFixEnabled) {
+                this.performHealthCheck();
+            }
+        }, this.healthCheckFrequency);
+    }
+    
+    stopHealthCheckMonitoring() {
+        if (this.healthCheckInterval) {
+            clearInterval(this.healthCheckInterval);
+            this.healthCheckInterval = null;
+            console.log('[CHARLES] Stopped health check monitoring');
+        }
+    }
+    
+    async performHealthCheck() {
+        const now = Date.now();
+        const timeSinceLastCheck = now - this.lastHealthCheck;
+        
+        // Skip if checked recently
+        if (timeSinceLastCheck < this.healthCheckFrequency - 1000) {
+            return;
+        }
+        
+        this.lastHealthCheck = now;
+        
+        // Check various health indicators
+        const healthStatus = {
+            timestamp: now,
+            operations: {
+                active: this.operationTracker.currentOperations.size,
+                stuck: this.operationTracker.stuckOperations.size
+            },
+            errors: {
+                queue: this.errorRecoveryQueue.length,
+                recent: this.errorPatterns.filter(e => now - e.timestamp < 60000).length // Errors in last minute
+            },
+            state: {
+                step: this.detectCurrentStep(),
+                hasData: this.agentState.uploadedFiles.length > 0 || this.agentState.selectedDeliverables.length > 0
+            }
+        };
+        
+        // Log health status
+        if (healthStatus.operations.stuck > 0 || healthStatus.errors.queue > 0) {
+            console.warn('[CHARLES] Health Check - Issues detected:', healthStatus);
+            
+            // Attempt to fix issues
+            if (healthStatus.operations.stuck > 0) {
+                this.addMessage(`🔧 Auto-Fix: Detected ${healthStatus.operations.stuck} stuck operations. Attempting recovery...`, 'assistant');
+            }
+            
+            if (healthStatus.errors.queue > 0) {
+                this.processErrorQueue();
+            }
+        } else {
+            console.log('[CHARLES] Health Check - System healthy');
+        }
+        
+        // Check for specific issues
+        this.checkForCommonIssues();
+        
+        return healthStatus;
+    }
+    
+    checkForCommonIssues() {
+        // Check if analysis job is stuck
+        if (this.agentState.jobId) {
+            const jobAge = Date.now() - (this.agentState.jobStartTime || 0);
+            if (jobAge > 240000) { // 4 minutes
+                console.warn('[CHARLES] Long-running analysis job detected');
+                this.addMessage('⚠️ Analysis is taking longer than expected. Checking status...', 'assistant');
+                this.attemptResultRecovery(this.agentState.jobId);
+            }
+        }
+        
+        // Check for disconnected state
+        if (navigator.onLine === false) {
+            this.handleError(new Error('Network connection lost'), 'network', { online: false });
+        }
+        
+        // Check for UI responsiveness
+        const lastInteraction = Date.now() - (this.lastUserInteraction || Date.now());
+        if (lastInteraction > 300000) { // 5 minutes of inactivity
+            console.log('[CHARLES] No user interaction for 5 minutes');
+        }
+    }
+    
+    // Track wrapped operations
+    async trackOperation(type, description, asyncFn, metadata = {}) {
+        const operationId = this.startOperation(type, description, metadata);
+        
+        try {
+            const result = await asyncFn();
+            this.completeOperation(operationId);
+            return result;
+        } catch (error) {
+            this.completeOperation(operationId);
+            throw error;
+        }
+    }
+    
+    // Wrap common operations with tracking
+    async trackedFetch(url, options = {}, operationType = 'network') {
+        return this.trackOperation(
+            operationType,
+            `Fetching ${url}`,
+            () => fetch(url, options),
+            { url, method: options.method || 'GET' }
+        );
+    }
+    
+    // Add tracking to existing methods
+    wrapMethodWithTracking(methodName, operationType, getDescription) {
+        const originalMethod = this[methodName];
+        if (originalMethod && typeof originalMethod === 'function') {
+            this[methodName] = async function(...args) {
+                const description = getDescription ? getDescription(...args) : methodName;
+                return this.trackOperation(
+                    operationType,
+                    description,
+                    () => originalMethod.apply(this, args),
+                    { method: methodName, args: args.slice(0, 2) } // Only store first 2 args for safety
+                );
+            }.bind(this);
         }
     }
     
@@ -2780,6 +3274,9 @@ class AIAssistant {
     }
     
     async triggerAnalysis(mode = 'deep') {
+        // Start tracking this operation
+        const operationId = this.startOperation('analysis', `AI analysis (${mode} mode)`, { mode });
+        
         this.saveState();
         this.addMessage(`🧠 Starting ${mode} AI analysis with GPT-5...`, 'assistant');
         
@@ -2804,10 +3301,14 @@ class AIAssistant {
                     await this.delay(3000);
                     this.addMessage('✅ Analysis triggered. Check Step 2 for results.', 'assistant');
                 }
+                // Complete the operation successfully
+                this.completeOperation(operationId);
             } else {
+                this.completeOperation(operationId);
                 throw new Error('Analyze button not found');
             }
         } catch (error) {
+            this.completeOperation(operationId);
             this.handleError(error, 'analysis', { mode });
         } finally {
             hideOverlay();
@@ -2828,6 +3329,9 @@ class AIAssistant {
         const fileExt = file.name.split('.').pop().toLowerCase();
         
         if (['pdf', 'docx', 'txt'].includes(fileExt)) {
+            // Start tracking this operation
+            const operationId = this.startOperation('file_upload', `Uploading ${file.name}`, { file: file.name });
+            
             // Create task monitor
             const taskMonitor = this.createTaskMonitor();
             taskMonitor.addTask('Upload document', 'in_progress');
@@ -3542,46 +4046,74 @@ class AIAssistant {
     async executeAction(action) {
         console.log('[CHARLES] Executing action:', action);
         
-        switch (action.type) {
-            case 'click':
-                return this.simulateClick(action.target);
+        // Start tracking this UI action
+        const operationId = this.startOperation('ui_action', `${action.type} action: ${action.description || action.target}`, { action });
+        
+        try {
+            let result;
+            switch (action.type) {
+                case 'click':
+                    result = await this.simulateClick(action.target);
+                    break;
+                    
+                case 'fill':
+                    result = await this.fillForm({ [action.target]: action.value });
+                    break;
+                    
+                case 'select':
+                    result = await this.executeSelect(action.target, action.value);
+                    break;
+                    
+                case 'scroll':
+                    result = await this.executeScroll(action.target, action.value);
+                    break;
                 
-            case 'fill':
-                return this.fillForm({ [action.target]: action.value });
-                
-            case 'select':
-                return this.executeSelect(action.target, action.value);
-                
-            case 'scroll':
-                return this.executeScroll(action.target, action.value);
-                
-            case 'focus':
-                return this.executeFocus(action.target);
-                
-            case 'highlight':
-                return this.executeHighlight(action.target);
-                
-            case 'toggle':
-                return this.executeToggle(action.target);
-                
-            case 'check':
-                return this.selectCheckboxes([action.target], true);
-                
-            case 'uncheck':
-                return this.selectCheckboxes([action.target], false);
-                
-            case 'wait':
-                return this.delay(action.value || 500);
-                
-            case 'execute':
-                return this.executeCustom(action.target, action.value);
-                
-            case 'confirm':
-                // Auto-confirm for demonstration
-                return Promise.resolve(true);
-                
-            default:
-                console.warn('[CHARLES] Unknown action type:', action.type);
+                case 'focus':
+                    result = await this.executeFocus(action.target);
+                    break;
+                    
+                case 'highlight':
+                    result = await this.executeHighlight(action.target);
+                    break;
+                    
+                case 'toggle':
+                    result = await this.executeToggle(action.target);
+                    break;
+                    
+                case 'check':
+                    result = await this.selectCheckboxes([action.target], true);
+                    break;
+                    
+                case 'uncheck':
+                    result = await this.selectCheckboxes([action.target], false);
+                    break;
+                    
+                case 'wait':
+                    result = await this.delay(action.value || 500);
+                    break;
+                    
+                case 'execute':
+                    result = await this.executeCustom(action.target, action.value);
+                    break;
+                    
+                case 'confirm':
+                    // Auto-confirm for demonstration
+                    result = await Promise.resolve(true);
+                    break;
+                    
+                default:
+                    console.warn('[CHARLES] Unknown action type:', action.type);
+            }
+            
+            // Complete the operation successfully
+            this.completeOperation(operationId);
+            return result;
+            
+        } catch (error) {
+            // Complete the operation with error
+            this.completeOperation(operationId);
+            console.error('[CHARLES] Action execution failed:', error);
+            throw error;
         }
     }
     
