@@ -1712,19 +1712,19 @@ function updatePricingSummary() {
     }
   }
   
-  // Update Grand Total
-  const grandTotal = oneTimeCost + (retainerMonthlyCost * 12);
+  // FIX: Update Grand Total - read from scenarios.A.totals.price
+  const scenarioTotal = (scenario.totals && scenario.totals.price) ? scenario.totals.price : oneTimeCost;
+  const grandTotal = scenarioTotal + (retainerMonthlyCost * 12);
   const grandTotalEl = document.getElementById('grand-total-cost');
   const grandBreakdownEl = document.getElementById('grand-total-breakdown');
   
   if (grandTotalEl) grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
   if (grandBreakdownEl) {
-    if (retainerCount > 0 && oneTimeCount > 0) {
-      grandBreakdownEl.textContent = `One-time ($${Math.round(oneTimeCost).toLocaleString()}) + 12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
-    } else if (retainerCount > 0) {
-      grandBreakdownEl.textContent = `12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
+    // Always show scenario total even when retainer is $0
+    if (retainerMonthlyCost > 0) {
+      grandBreakdownEl.textContent = `Scenario total ($${Math.round(scenarioTotal).toLocaleString()}) + 12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
     } else {
-      grandBreakdownEl.textContent = 'One-time project cost';
+      grandBreakdownEl.textContent = `Scenario total: $${Math.round(scenarioTotal).toLocaleString()}`;
     }
   }
 }
@@ -2556,12 +2556,27 @@ async function exportPricingDetails() {
     monthly_breakdown: []
   };
   
-  // Call export endpoint
+  // FIX: Wire Excel/CSV export button - Call POST /api/export with scenario + file_format
   try {
-    const response = await fetch('/api/export/pricing-details', {
+    // Get the scenario (default to A)
+    const scenario = SCENARIOS?.A;
+    if (!scenario) {
+      alert('Please build a scenario first before exporting');
+      return;
+    }
+    
+    // Get export format from dropdown
+    const formatSelect = document.getElementById('export-format');
+    const fileFormat = formatSelect?.value || 'xlsx';
+    
+    // Call export endpoint with scenario and format
+    const response = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(exportData)
+      body: JSON.stringify({
+        scenario: scenario,
+        file_format: fileFormat
+      })
     });
     
     if (response.ok) {
@@ -2569,11 +2584,16 @@ async function exportPricingDetails() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${exportData.project_name}_pricing_${new Date().toISOString().split('T')[0]}.xlsx`;
+      const ext = fileFormat === 'xlsx' ? 'xlsx' : 'csv';
+      a.download = `${exportData.project_name}_pricing_${new Date().toISOString().split('T')[0]}.${ext}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+    } else {
+      const errorText = await response.text();
+      console.error('Export failed:', errorText);
+      alert('Failed to export pricing details. Please try again.');
     }
   } catch (error) {
     console.error('Error exporting pricing details:', error);
@@ -5564,35 +5584,48 @@ async function applyAllSelectedFromAI() {
         if (res.ok) {
           const l3Data = await res.json();
           
+          // FIX: Handle l3_by_component structure from API
+          const tasksData = l3Data.l3_by_component || l3Data;
+          
           // Store L2 tasks for each component
-          for (const [compName, tasks] of Object.entries(l3Data)) {
+          for (const [compName, tasks] of Object.entries(tasksData)) {
             const key = `${delivCode}::${compName}`;
             if (!selectionStore.l3ByComponent.has(key)) {
               selectionStore.l3ByComponent.set(key, new Set());
             }
             const existingTasks = selectionStore.l3ByComponent.get(key);
-            // FIX: Extract task name string from object if it's an object
-            tasks.forEach(task => {
-              // Ensure we always get a string value, not an object
-              let taskName;
-              if (typeof task === 'string') {
-                taskName = task;
-              } else if (task && typeof task === 'object') {
-                // Extract string from object - check all possible property names
-                taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
-                // If still no valid string, try converting to string
-                if (!taskName && task.toString && task.toString() !== '[object Object]') {
-                  taskName = task.toString();
+            
+            // Handle array of tasks properly
+            if (Array.isArray(tasks)) {
+              tasks.forEach(task => {
+                // Ensure we always get a string value, not an object
+                let taskName;
+                if (typeof task === 'string') {
+                  taskName = task;
+                } else if (task && typeof task === 'object') {
+                  // Extract string from object - check all possible property names
+                  taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
+                  // If still no valid string, try converting to string
+                  if (!taskName && task.toString && task.toString() !== '[object Object]') {
+                    taskName = task.toString();
+                  }
                 }
-              }
-              // Only add if we have a valid string
-              if (taskName && typeof taskName === 'string' && taskName !== '[object Object]') {
-                existingTasks.add(taskName);
-              }
-            });
+                // Only add if we have a valid string
+                if (taskName && typeof taskName === 'string' && taskName !== '[object Object]') {
+                  existingTasks.add(taskName);
+                }
+              });
+            }
           }
           
-          console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(l3Data));
+          // Auto-activate first component if available
+          if (firstDelivCode && firstCompName) {
+            S2.activeComponentName = firstCompName;
+            // Trigger component panel refresh to show L2 tasks immediately
+            await refreshL3Panel();
+          }
+          
+          console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(tasksData));
         }
       } catch (error) {
         console.error(`Failed to fetch L2 tasks for ${delivCode}:`, error);
