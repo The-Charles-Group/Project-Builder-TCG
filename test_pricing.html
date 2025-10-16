@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pricing Grand Total Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #1a1a1a; color: white; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .summary-panel { background: #2a2a2a; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        h2 { color: #6aa3ff; }
+        .grand-total { background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(106,163,255,0.1)); 
+                       border: 2px solid rgba(139,92,246,0.3); border-radius: 12px; padding: 20px; text-align: center; }
+        .grand-total-cost { font-size: 2.5em; font-weight: bold; color: #6aa3ff; }
+        button { background: #6aa3ff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Testing Grand Total Calculation</h1>
+        
+        <div class="summary-panel">
+            <h2>📦 One-Time Deliverables</h2>
+            <div>Items: <strong id="one-time-count">3</strong></div>
+            <div>Total Hours: <strong id="one-time-hours">805</strong></div>
+            <div>Total Cost: <strong id="one-time-cost">$156,975</strong></div>
+        </div>
+        
+        <div class="summary-panel">
+            <h2>🔄 Monthly Retainer Services</h2>
+            <div>Items: <strong id="retainer-count">0</strong></div>
+            <div>Monthly Hours: <strong id="retainer-monthly-hours">0</strong></div>
+            <div>Monthly Cost: <strong id="retainer-monthly-cost">$0</strong></div>
+            <div>Annual Cost: <strong id="retainer-annual-cost">$0</strong></div>
+        </div>
+        
+        <div class="grand-total">
+            <h2>💰 Grand Total</h2>
+            <div id="grand-total-cost" class="grand-total-cost">$0</div>
+            <div id="grand-total-breakdown">One-time + 12 months retainer</div>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <button onclick="testScenario1()">Test: One-Time Only ($156,975)</button>
+            <button onclick="testScenario2()">Test: Retainer Only ($120,000/year)</button>
+            <button onclick="testScenario3()">Test: Mixed ($156,975 + $120,000)</button>
+            <button onclick="calculateGrandTotal()">Recalculate Grand Total</button>
+        </div>
+        
+        <div id="pricing-container" style="margin-top: 20px;"></div>
+    </div>
+    
+    <script>
+        // Mock SCENARIOS data
+        window.SCENARIOS = {
+            A: {
+                items: [
+                    { deliverable_code: 'DEL-0001', deliverable: 'Content Plan', hours: 320, blended_rate: 195 },
+                    { deliverable_code: 'DEL-0011', deliverable: 'Campaign Strategy', hours: 240, blended_rate: 195 },
+                    { deliverable_code: 'DEL-0044', deliverable: 'Development', hours: 245, blended_rate: 195 }
+                ]
+            }
+        };
+        
+        // Mock pricingData
+        window.pricingData = {
+            deliverableTypes: new Map(),
+            customHours: new Map(),
+            customRates: new Map(),
+            retainers: new Map()
+        };
+        
+        // Include the updatePricingSummary function from app.js
+        function updatePricingSummary() {
+            if (!SCENARIOS) return;
+            
+            const scenario = SCENARIOS.A || SCENARIOS[0];
+            if (!scenario || !scenario.items) return;
+            
+            let oneTimeCount = 0;
+            let oneTimeHours = 0;
+            let oneTimeCost = 0;
+            
+            let retainerCount = 0;
+            let retainerMonthlyHours = 0;
+            let retainerMonthlyCost = 0;
+            
+            scenario.items.forEach(item => {
+                const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
+                const isRetainer = (delivType === 'RETAINER');
+                
+                const hours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
+                const rate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
+                const cost = hours * rate;
+                
+                if (isRetainer) {
+                    retainerCount++;
+                    retainerMonthlyHours += hours;
+                    retainerMonthlyCost += cost;
+                } else {
+                    oneTimeCount++;
+                    oneTimeHours += hours;
+                    oneTimeCost += cost;
+                }
+            });
+            
+            // Update One-Time Summary
+            document.getElementById('one-time-count').textContent = oneTimeCount;
+            document.getElementById('one-time-hours').textContent = Math.round(oneTimeHours).toLocaleString();
+            document.getElementById('one-time-cost').textContent = '$' + Math.round(oneTimeCost).toLocaleString();
+            
+            // Update Retainer Summary
+            document.getElementById('retainer-count').textContent = retainerCount;
+            document.getElementById('retainer-monthly-hours').textContent = Math.round(retainerMonthlyHours).toLocaleString();
+            document.getElementById('retainer-monthly-cost').textContent = '$' + Math.round(retainerMonthlyCost).toLocaleString();
+            document.getElementById('retainer-annual-cost').textContent = '$' + Math.round(retainerMonthlyCost * 12).toLocaleString();
+            
+            // Update Grand Total - THIS IS THE KEY FIX
+            const grandTotal = oneTimeCost + (retainerMonthlyCost * 12);
+            const grandTotalEl = document.getElementById('grand-total-cost');
+            const grandBreakdownEl = document.getElementById('grand-total-breakdown');
+            
+            if (grandTotalEl) grandTotalEl.textContent = '$' + Math.round(grandTotal).toLocaleString();
+            if (grandBreakdownEl) {
+                if (retainerCount > 0 && oneTimeCount > 0) {
+                    grandBreakdownEl.textContent = `One-time ($${Math.round(oneTimeCost).toLocaleString()}) + 12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
+                } else if (retainerCount > 0) {
+                    grandBreakdownEl.textContent = `12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
+                } else {
+                    grandBreakdownEl.textContent = 'One-time project cost';
+                }
+            }
+            
+            console.log('Grand Total Calculated:', grandTotal);
+            console.log('One-Time Cost:', oneTimeCost);
+            console.log('Retainer Annual:', retainerMonthlyCost * 12);
+        }
+        
+        function calculateGrandTotal() {
+            updatePricingSummary();
+        }
+        
+        function testScenario1() {
+            // All one-time
+            pricingData.deliverableTypes.set('DEL-0001', 'PROJECT');
+            pricingData.deliverableTypes.set('DEL-0011', 'PROJECT');
+            pricingData.deliverableTypes.set('DEL-0044', 'PROJECT');
+            updatePricingSummary();
+        }
+        
+        function testScenario2() {
+            // All retainer
+            pricingData.deliverableTypes.set('DEL-0001', 'RETAINER');
+            pricingData.deliverableTypes.set('DEL-0011', 'RETAINER');
+            pricingData.deliverableTypes.set('DEL-0044', 'RETAINER');
+            updatePricingSummary();
+        }
+        
+        function testScenario3() {
+            // Mixed
+            pricingData.deliverableTypes.set('DEL-0001', 'PROJECT');
+            pricingData.deliverableTypes.set('DEL-0011', 'RETAINER');
+            pricingData.deliverableTypes.set('DEL-0044', 'PROJECT');
+            updatePricingSummary();
+        }
+        
+        // Initial calculation
+        window.onload = function() {
+            testScenario1(); // Start with all one-time
+        };
+    </script>
+</body>
+</html>

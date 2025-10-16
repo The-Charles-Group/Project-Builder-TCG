@@ -1584,10 +1584,13 @@ function updatePricingTable() {
             <div style="font-size: 0.9em; color: var(--muted); margin-bottom: 4px;">
               Total Investment
             </div>
-            <div style="font-size: 2.5em; font-weight: 700; 
+            <div id="grand-total-cost" style="font-size: 2.5em; font-weight: 700; 
                         background: linear-gradient(135deg, var(--accent), var(--accent2)); 
                         -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
               $${grandTotal.toLocaleString()}
+            </div>
+            <div id="grand-total-breakdown" style="font-size: 0.85em; color: var(--muted); margin-top: 4px;">
+              <!-- Breakdown will be updated by updatePricingSummary -->
             </div>
           </div>
           <div style="text-align: right;">
