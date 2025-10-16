@@ -39,6 +39,66 @@ DEPARTMENTS = [
 ]
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Service Mapping for Explicit Match Detection
+# ──────────────────────────────────────────────────────────────────────────────
+SERVICE_MAPPING = {
+    # Paid Media Services
+    "paid media buying": ["PM.01", "PM.02", "PM.03", "PM.04", "PM.05", "PM.06"],
+    "paid media planning": ["PM.01", "PM.02", "PM.03", "PM.04"],
+    "media buying": ["PM.01", "PM.02", "PM.03", "PM.04", "PM.05", "PM.06"],
+    "media planning": ["PM.01", "PM.02", "PM.03", "PM.04"],
+    "performance reporting": ["PM.04", "PM.05", "PM.06", "CS.04"],
+    "analytics reporting": ["PM.04", "PM.05", "PM.06", "CS.04"],
+    "campaign measurement": ["PM.04", "PM.05", "PM.06", "CS.04"],
+    "performance tracking": ["PM.04", "PM.05", "PM.06", "CS.04"],
+    
+    # Campaign Strategy
+    "campaign strategy": ["CS.01", "CS.02", "CS.03", "CS.04"],
+    "strategic planning": ["CS.01", "CS.02", "CS.03"],
+    "marketing strategy": ["CS.01", "CS.02", "CS.03"],
+    "audience strategy": ["CS.01", "CS.02", "CS.03", "PM.01"],
+    "audience targeting": ["CS.01", "CS.02", "PM.01", "PM.02"],
+    
+    # Creative Services
+    "creative development": ["CR.01", "CR.02", "CR.03", "CR.04"],
+    "creative production": ["CR.01", "CR.02", "CR.03", "CR.04", "CR.05"],
+    "content creation": ["CO.01", "CO.02", "CO.03", "CO.04", "CO.05"],
+    "social media content": ["CO.01", "CO.02", "CO.03", "CO.04"],
+    "video production": ["CR.03", "CR.04", "CR.05", "CO.03"],
+    
+    # Digital Marketing
+    "search engine marketing": ["PM.02", "PM.03", "PM.05"],
+    "sem": ["PM.02", "PM.03", "PM.05"],
+    "seo": ["CO.01", "CO.02", "CS.03"],
+    "search engine optimization": ["CO.01", "CO.02", "CS.03"],
+    "social media advertising": ["PM.01", "PM.02", "PM.03", "CO.02"],
+    "programmatic advertising": ["PM.01", "PM.02", "PM.03", "PM.06"],
+    "display advertising": ["PM.01", "PM.02", "PM.03", "CR.02"],
+    
+    # Reporting & Analytics
+    "reporting": ["PM.04", "PM.05", "PM.06", "CS.04"],
+    "analytics": ["PM.04", "PM.05", "PM.06", "CS.04"],
+    "insights": ["CS.03", "CS.04", "PM.05", "PM.06"],
+    "measurement": ["PM.04", "PM.05", "PM.06", "CS.04"],
+    "optimization": ["PM.05", "PM.06", "CS.04"],
+    
+    # Integrated Services
+    "brand strategy": ["CS.01", "CS.02", "CR.01"],
+    "integrated marketing": ["IMM.01", "IMM.02", "IMM.03", "CS.01"],
+    "channel planning": ["CS.02", "CS.03", "PM.01", "IMM.02"],
+    "media optimization": ["PM.05", "PM.06", "CS.04"],
+    
+    # Technology Services
+    "marketing technology": ["TECH.01", "TECH.02", "TECH.03"],
+    "martech": ["TECH.01", "TECH.02", "TECH.03"],
+    "data integration": ["TECH.02", "TECH.03", "PM.06"],
+    "technical implementation": ["TECH.01", "TECH.02", "TECH.03"],
+}
+
+# Normalize mapping keys for case-insensitive matching
+SERVICE_MAPPING_NORMALIZED = {k.lower(): v for k, v in SERVICE_MAPPING.items()}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Background Job Tracking for AI Analysis
 # ──────────────────────────────────────────────────────────────────────────────
 class AIJobStatus(str, Enum):
@@ -437,11 +497,43 @@ def lexical_score(text: str, title: str, desc: str, keywords: List[str], dept: s
     title_words = set(tokenize(title.lower()))
     keyword_set = set([k.lower() for k in keywords]) if keywords else set()
     
-    # Boost if media keywords present
-    if title_words & media_keywords or keyword_set & media_keywords:
-        base_score = min(1.0, base_score * 1.2)  # 1.2x boost for media keywords
+    # NEW: Check for exact phrase matches from SERVICE_MAPPING_NORMALIZED
+    text_lower = text.lower()
+    title_lower = title.lower() if title else ""
     
-    return base_score
+    # Check for explicit service phrase matches
+    exact_phrase_boost = 1.0
+    for service_phrase in SERVICE_MAPPING_NORMALIZED.keys():
+        # Check if the service phrase appears in the RFP text
+        if service_phrase in text_lower:
+            # Check if this deliverable title contains related keywords
+            phrase_tokens = set(tokenize(service_phrase))
+            if phrase_tokens & title_words:
+                exact_phrase_boost = 2.0  # 2.0x boost for exact phrase matches
+                break
+    
+    # Special handling for "Required Services" section
+    if "required services" in text_lower or "specific services required" in text_lower:
+        # If this deliverable is mentioned in required services section, boost it
+        section_start = max(
+            text_lower.find("required services"),
+            text_lower.find("specific services required")
+        )
+        if section_start != -1:
+            section_text = text_lower[section_start:section_start+1000]
+            # Check if title keywords appear in this section
+            if any(word in section_text for word in title_words):
+                exact_phrase_boost = max(exact_phrase_boost, 1.8)  # At least 1.8x boost
+    
+    # Apply media keyword boost
+    media_boost = 1.0
+    if title_words & media_keywords or keyword_set & media_keywords:
+        media_boost = 1.2  # 1.2x boost for media keywords
+    
+    # Apply all boosts
+    final_score = min(1.0, base_score * media_boost * exact_phrase_boost)
+    
+    return final_score
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Summarize request
@@ -514,6 +606,116 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
     topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:120]
     
     return topD + topC + topT, cands
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Explicit Requirements Extraction for RFP Matching
+# ──────────────────────────────────────────────────────────────────────────────
+def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
+    """
+    Extract explicitly requested services from RFP text.
+    Looks for sections like "Specific Services Required", "Required Services", 
+    "Scope of Work", etc., and maps them to deliverable codes.
+    
+    Returns:
+        Dict mapping deliverable codes to explicit requirement phrases
+    """
+    explicit_requirements = {}
+    
+    # Convert to lowercase for matching
+    rfp_lower = rfp_text.lower()
+    
+    # Look for key sections that indicate required services
+    required_sections = [
+        "specific services required",
+        "required services",
+        "services required",
+        "scope of work",
+        "scope of services",
+        "services requested",
+        "deliverables",
+        "key deliverables"
+    ]
+    
+    # Find the section containing required services
+    section_text = ""
+    for section_marker in required_sections:
+        marker_pos = rfp_lower.find(section_marker)
+        if marker_pos != -1:
+            # Extract text from this section (up to next major section or 1500 chars)
+            end_pos = marker_pos + 1500
+            next_section_pos = rfp_lower.find("\n\n", marker_pos + len(section_marker))
+            if next_section_pos != -1 and next_section_pos < end_pos:
+                end_pos = next_section_pos
+            section_text = rfp_text[marker_pos:end_pos].lower()
+            break
+    
+    # If we found a required services section, extract bullet points and match to deliverables
+    if section_text:
+        # Extract bullet points (various formats)
+        import re
+        bullets = []
+        
+        # Match different bullet formats
+        patterns = [
+            r'[•●▪▫◦‣⁃]\s*([^\n•●▪▫◦‣⁃]+)',  # Unicode bullets
+            r'\d+\.\s*([^\n]+)',  # Numbered lists
+            r'[-*]\s*([^\n]+)',  # Dash or asterisk bullets
+            r'[a-z]\)\s*([^\n]+)',  # Letter bullets
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, section_text)
+            bullets.extend([m.strip() for m in matches if m.strip()])
+        
+        # Also check the full RFP for these explicit phrases
+        bullets.extend([
+            phrase for phrase in SERVICE_MAPPING_NORMALIZED.keys()
+            if phrase in rfp_lower
+        ])
+        
+        # Map bullets to deliverable codes
+        for bullet in bullets:
+            bullet_lower = bullet.lower().strip()
+            
+            # Check each service mapping
+            for service_phrase, deliv_codes in SERVICE_MAPPING_NORMALIZED.items():
+                # Check if the service phrase appears in the bullet point
+                if service_phrase in bullet_lower:
+                    for code in deliv_codes:
+                        if code not in explicit_requirements:
+                            explicit_requirements[code] = []
+                        explicit_requirements[code].append(bullet[:100])  # Store first 100 chars
+        
+        # Also do a direct phrase search in the entire RFP
+        for service_phrase, deliv_codes in SERVICE_MAPPING_NORMALIZED.items():
+            if service_phrase in rfp_lower:
+                for code in deliv_codes:
+                    if code not in explicit_requirements:
+                        explicit_requirements[code] = []
+                    # Add a note that this was found in the full text
+                    explicit_requirements[code].append(f"[Found in RFP: {service_phrase}]")
+    
+    # Special case: Always check for exact phrase matches in the full RFP
+    key_phrases_to_check = [
+        "paid media buying", "paid media planning", "media buying", "media planning",
+        "performance reporting", "analytics", "campaign measurement", "optimization",
+        "campaign strategy", "audience strategy", "creative development", 
+        "content creation", "social media", "search engine marketing", "sem", "seo"
+    ]
+    
+    for phrase in key_phrases_to_check:
+        if phrase in rfp_lower:
+            if phrase in SERVICE_MAPPING_NORMALIZED:
+                for code in SERVICE_MAPPING_NORMALIZED[phrase]:
+                    if code not in explicit_requirements:
+                        explicit_requirements[code] = []
+                    explicit_requirements[code].append(f"[Explicit: {phrase}]")
+    
+    print(f"[EXPLICIT MATCH] Found {len(explicit_requirements)} explicitly requested deliverable codes")
+    if explicit_requirements:
+        print(f"[EXPLICIT MATCH] Sample matches: {list(explicit_requirements.keys())[:5]}")
+    
+    return explicit_requirements
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Background Batch Analyzer for Job Runner
@@ -605,16 +807,25 @@ You think strategically about:
 - Competitive differentiation and innovation
 - Long-term client relationships
 
+IMPORTANT: Pay special attention to services that are EXPLICITLY REQUESTED in the RFP. 
+If a service appears directly in a "Required Services" or "Scope of Work" section, it should receive a confidence score of 85-95%.
+
 Score each deliverable/component/task with REALISTIC confidence scores:
-- 90-100: Essential, directly requested, mission-critical
-- 70-89: Very relevant, strongly recommended, adds significant value
+- 85-95: Explicitly requested in RFP requirements (e.g., "Paid media buying" if RFP lists "Paid media buying & planning")
+- 70-84: Very relevant, strongly recommended, adds significant value
 - 50-69: Moderately relevant, nice-to-have, enhances project
 - 30-49: Tangentially related, optional, limited value
 - 0-29: Not relevant, would not recommend
 
+Look for explicit mentions like:
+- "Paid media buying" → Paid Media deliverables should score 85+%
+- "Performance reporting" → Reporting deliverables should score 85+%
+- "Campaign strategy" → Strategy deliverables should score 85+%
+- "Analytics" → Analytics deliverables should score 85+%
+
 For TASKS, set select=true ONLY if specifically needed for THIS project. Exclude generic/boilerplate tasks that don't match the specific request.
 Think about the complete project lifecycle, dependencies, and what will actually deliver results for the client."""},
-        {"role": "user", "content": f"REQUEST SUMMARY:\n{safe_summary}\n\nGOALS:\n- " + "\n- ".join(safe_goals) + f"\n\nCHANNELS: {', '.join(safe_channels)} | MARKETS: {', '.join(safe_markets)} | COMPLIANCE: {', '.join(safe_compliance)}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nProvide realistic confidence scores based on actual relevance. Do NOT default to any specific score like 62%. Each item should have a unique, justified confidence level."}
+        {"role": "user", "content": f"REQUEST SUMMARY:\n{safe_summary}\n\nGOALS:\n- " + "\n- ".join(safe_goals) + f"\n\nCHANNELS: {', '.join(safe_channels)} | MARKETS: {', '.join(safe_markets)} | COMPLIANCE: {', '.join(safe_compliance)}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nIMPORTANT: If the RFP explicitly requests services like 'Paid media buying', 'Performance reporting', 'Campaign measurement', etc., mark those deliverables with confidence 85-95%. Check if the deliverable title contains keywords from the explicit requirements.\n\nProvide realistic confidence scores based on actual relevance. Each item should have a unique, justified confidence level."}
     ]
     
     try:
@@ -1036,7 +1247,8 @@ def _generate_embedding_fallback_scores(candidates: List[Dict[str, Any]], summar
 # ──────────────────────────────────────────────────────────────────────────────
 # Fusion, calibration, AUTO-RELAX & RESCUE
 # ──────────────────────────────────────────────────────────────────────────────
-def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]], strictness: str = "balanced") -> List[Dict[str, Any]]:
+def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]], strictness: str = "balanced", 
+                       explicit_requirements: Dict[str, List[str]] = None) -> List[Dict[str, Any]]:
     # FIXED: Handle case where GPT-5 completely failed
     if not llm_scores:
         print("[FUSION WARNING] No LLM scores available - using pure embedding-based fusion")
@@ -1066,53 +1278,75 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
         llm_val = (l["relevance"] / 100.0) if l else 0.0
         llm_select = l.get("select", True) if l else True  # Default to True if no LLM score
         
+        # NEW: Check for explicit match FIRST - this overrides all other scoring
+        explicit_match = False
+        explicit_reason = ""
+        if explicit_requirements and c["level"] == "deliverable":
+            # Extract deliverable code from ID (format: "PM.01" or similar)
+            deliv_code = c["id"].split("::")[0] if "::" in c["id"] else c["id"]
+            
+            # Check if this deliverable code is in explicit requirements
+            if deliv_code in explicit_requirements:
+                explicit_match = True
+                explicit_reason = explicit_requirements[deliv_code][0] if explicit_requirements[deliv_code] else "Explicitly requested in RFP"
+                print(f"[EXPLICIT MATCH] {c['id']}: {explicit_reason}")
+        
         # Check if this is a universal deliverable
         is_universal = c.get("level") == "deliverable" and is_universal_deliverable(c.get("title", ""))
         
-        # Calculate raw fusion score
-        if is_universal:
-            # Universal deliverables get maximum score
-            raw = 0.95
-            llm_val = 0.95
-            llm_select = True
+        # If explicit match found, set high confidence immediately
+        if explicit_match:
+            raw = 0.90  # High raw score for explicit matches
+            calibrated = 0.88  # 88% confidence for explicitly requested services
+            pass_gate = True  # Always pass explicit matches
+            llm_select = True  # Override LLM selection
+            print(f"[EXPLICIT OVERRIDE] {c['id']}: Setting confidence to 88% (explicitly requested)")
         else:
-            raw = W["emb"] * c.get("embScore", 0.5) + W["lex"] * c.get("lexScore", 0.5) + W["recall"] * c.get("recall", 0.5) + W["llm"] * llm_val + W["hist"] * hist_prior
-        
-        # FIXED: Apply more aggressive media keyword boost
-        boost_factor = 1.0
-        if c.get("title"):
-            title_words = set(tokenize(c["title"].lower()))
-            keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
+            # Calculate raw fusion score for non-explicit matches
+            if is_universal:
+                # Universal deliverables get maximum score
+                raw = 0.95
+                llm_val = 0.95
+                llm_select = True
+            else:
+                raw = W["emb"] * c.get("embScore", 0.5) + W["lex"] * c.get("lexScore", 0.5) + W["recall"] * c.get("recall", 0.5) + W["llm"] * llm_val + W["hist"] * hist_prior
             
-            # Count keyword matches
-            title_matches = len(title_words & media_keywords)
-            keyword_matches = len(keyword_set & media_keywords)
+            # FIXED: Apply more aggressive media keyword boost
+            boost_factor = 1.0
+            if c.get("title"):
+                title_words = set(tokenize(c["title"].lower()))
+                keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
+                
+                # Count keyword matches
+                title_matches = len(title_words & media_keywords)
+                keyword_matches = len(keyword_set & media_keywords)
+                
+                if title_matches > 0 or keyword_matches > 0:
+                    # More matches = bigger boost
+                    boost_factor = min(1.5, 1.2 + (title_matches + keyword_matches) * 0.05)
+                    raw = min(1.0, raw * boost_factor)
+                    print(f"[FUSION BOOST] {c['id']}: {title_matches} title matches, {keyword_matches} keyword matches, boost={boost_factor:.2f}")
             
-            if title_matches > 0 or keyword_matches > 0:
-                # More matches = bigger boost
-                boost_factor = min(1.5, 1.2 + (title_matches + keyword_matches) * 0.05)
-                raw = min(1.0, raw * boost_factor)
-                print(f"[FUSION BOOST] {c['id']}: {title_matches} title matches, {keyword_matches} keyword matches, boost={boost_factor:.2f}")
-        
-        # FIXED: Even gentler calibration curve for 100+ deliverables
-        calibrated = 1.0 / (1.0 + math.exp(-(1.5 * raw - 0.7)))  # Further adjusted to 1.5/0.7 for more permissive scoring
-        
-        # FIXED: For deliverables with no LLM score, boost confidence
-        if c["level"] == "deliverable" and not l:
-            calibrated = max(0.50, calibrated)  # Minimum 50% confidence for deliverables
-            print(f"[FUSION RESCUE] Deliverable {c['id']} has no LLM score, boosted to {calibrated:.2f}")
-        
-        # For tasks: only pass if AI explicitly selected it OR if we have no LLM scores at all
-        if c["level"] == "task" and llm_scores and not llm_select:
-            pass_gate = False
-        else:
-            # Universal deliverables always pass
-            pass_gate = is_universal or calibrated >= gates.get(strictness, gates["balanced"])
+            # FIXED: Even gentler calibration curve for 100+ deliverables
+            calibrated = 1.0 / (1.0 + math.exp(-(1.5 * raw - 0.7)))  # Further adjusted to 1.5/0.7 for more permissive scoring
+            
+            # FIXED: For deliverables with no LLM score, boost confidence
+            if c["level"] == "deliverable" and not l:
+                calibrated = max(0.50, calibrated)  # Minimum 50% confidence for deliverables
+                print(f"[FUSION RESCUE] Deliverable {c['id']} has no LLM score, boosted to {calibrated:.2f}")
+            
+            # For tasks: only pass if AI explicitly selected it OR if we have no LLM scores at all
+            if c["level"] == "task" and llm_scores and not llm_select:
+                pass_gate = False
+            else:
+                # Universal deliverables always pass
+                pass_gate = is_universal or calibrated >= gates.get(strictness, gates["balanced"])
         
         # Log pass/fail decisions for debugging
         if c["level"] == "deliverable":
             status = "PASS" if pass_gate else "FAIL"
-            print(f"[FUSION] {c['id']}: raw={raw:.3f}, calibrated={calibrated:.3f}, gate={gates.get(strictness, gates['balanced']):.3f} => {status}")
+            match_status = " [EXPLICIT]" if explicit_match else ""
+            print(f"[FUSION] {c['id']}: raw={raw:.3f}, calibrated={calibrated:.3f}, gate={gates.get(strictness, gates['balanced']):.3f} => {status}{match_status}")
         
         out.append({
             **c, 
@@ -1121,7 +1355,9 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
             "calibrated_confidence": calibrated, 
             "pass": pass_gate, 
             "ai_selected": llm_select,
-            "boost_applied": boost_factor > 1.0
+            "boost_applied": boost_factor > 1.0 if not explicit_match else False,
+            "explicit_match": explicit_match,
+            "explicit_reason": explicit_reason
         })
     
     # Log summary
@@ -2255,9 +2491,16 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     # Stage 6: Calibrate and fuse scores
     _update_job(job_id, "Stage 6/7: Calibrating scores and selecting deliverables...", 70)
     
-    # FIXED: Ensure fusion always happens
+    # NEW: Extract explicit requirements from RFP before fusion
+    explicit_requirements = extract_explicit_requirements(request_text)
+    if explicit_requirements:
+        print(f"[ANALYZE] Extracted {len(explicit_requirements)} explicitly requested deliverables from RFP")
+    else:
+        print(f"[ANALYZE] No explicit requirements found in RFP")
+    
+    # FIXED: Ensure fusion always happens - now with explicit requirements
     try:
-        fused = fuse_and_calibrate(candidates, llm_scores, strictness)
+        fused = fuse_and_calibrate(candidates, llm_scores, strictness, explicit_requirements)
         print(f"[ANALYZE] Fusion completed, {len(fused)} items fused")
     except Exception as e:
         print(f"[ANALYZE ERROR] Fusion failed: {e}, using candidates directly")
