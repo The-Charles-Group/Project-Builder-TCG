@@ -13,6 +13,21 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
+## CRITICAL DEVELOPMENT PRINCIPLES - MANDATORY
+
+### NO PATCH FIXES - EVER
+**THIS IS NON-NEGOTIABLE**: Any developer working on this codebase MUST follow these principles. Violations are unacceptable.
+
+1. **NO TIMEOUTS AS FIXES** - Never add timeouts to "solve" hanging operations. Fix the actual async/blocking issue.
+2. **NO DATA TRUNCATION** - Never reduce data size (e.g., text[:8000]) to avoid issues. Handle full data properly.
+3. **NO ERROR SILENCING** - Never catch and ignore exceptions. Fix the root cause.
+4. **NO ARBITRARY LIMITS** - Never limit iterations/processing to avoid problems. Implement proper solutions.
+5. **NO FAKE PROGRESS** - Never show illusions of functionality. Be transparent about actual state.
+
+**See CORE_PRINCIPLES.md for full enforcement rules and examples.**
+
+**Remember**: "If a fix makes the app appear to work while actually reducing functionality, it's not a fix - it's a lie."
+
 ## System Architecture
 
 ### Backend Architecture

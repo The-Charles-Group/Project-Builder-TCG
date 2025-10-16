@@ -99,6 +99,15 @@ async def lifespan(app: FastAPI):
     # STARTUP
     print("[STARTUP] Initializing Agency Project Builder...")
     
+    # 0) Enforce no-patch policy - scan for violations
+    try:
+        from patch_detector import enforce_no_patches
+        enforce_no_patches()
+    except ImportError:
+        pass  # Module not yet available on first run
+    except Exception as e:
+        print(f"[WARNING] Patch detection check: {e}")
+    
     # 1) Global HTTP client for OpenAI/external APIs (connection pooling)
     app.state.http = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_connections=100))
     print("[STARTUP] HTTP client initialized with connection pooling")
