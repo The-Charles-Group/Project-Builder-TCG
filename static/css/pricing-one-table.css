@@ -1,0 +1,16 @@
+.apb-table { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+.apb-table th, .apb-table td { border-bottom: 1px solid #2f3440; padding: 8px 10px; }
+.apb-row-deliv { background: #1e2430; }
+.apb-row-comp { background: #151a24; }
+.apb-row-totals { background: #232a36; }
+.apb-cell-title { width: 32%; white-space: nowrap; }
+.apb-right { text-align: right; }
+.apb-input { width: 100%; box-sizing: border-box; background: #0f131b; color: #e6eefc; border: 1px solid #2b3241; border-radius: 4px; padding: 6px 8px; }
+.apb-input:focus { outline: none; border-color: #6aa0ff; }
+.apb-num { text-align: right; }
+.apb-sel { min-width: 120px; }
+.apb-txt { min-width: 180px; }
+.apb-exp { background: none; color: #a9b6d8; border: none; font-size: 14px; cursor: pointer; }
+.apb-btn { cursor: pointer; padding: 6px 10px; border-radius: 6px; border: 1px solid #3a4154; background: #2b3241; color: #e6eefc; }
+.apb-btn.apb-sm { padding: 4px 8px; font-size: 12px; }
+.apb-spacer { color: #7684a5; margin-right: 4px; }
