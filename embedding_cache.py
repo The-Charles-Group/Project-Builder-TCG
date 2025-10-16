@@ -171,12 +171,13 @@ def embed_many(texts: List[str], model: str = "text-embedding-3-large", client=N
             client = OpenAI()
         
         # Token-based chunking to avoid exceeding context limits
-        MAX_TOKENS = 6000  # Conservative limit (8192 max, keep buffer)
-        MAX_BATCH_SIZE = 100  # Max items per batch
+        MAX_TOKENS = 4000  # More conservative limit to prevent errors (8192 max, keep large buffer)
+        MAX_BATCH_SIZE = 50  # Reduced max items per batch to prevent token overflow
         
         def estimate_tokens(text):
-            # Rough estimate: 1 token per 4 characters
-            return len(text) / 4
+            # More conservative estimate: 1 token per 3 characters (safer)
+            # This prevents underestimating tokens which causes the 8318 token error
+            return len(text) / 3
         
         # Group texts into batches that don't exceed token limit
         batches = []
