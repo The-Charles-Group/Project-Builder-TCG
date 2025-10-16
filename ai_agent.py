@@ -174,6 +174,8 @@ For EXTEND_TIMELINE, parameters should include:
             selected_tier = tier_mapping.get(gpt5_tier, "mini")
             
             # Use selected GPT-5 tier for intent parsing
+            print(f"[CHARLES] Using GPT-5 tier: {selected_tier} (from input: {gpt5_tier})")
+            
             response = gpt5_text(
                 sync_client,
                 messages=[
@@ -186,7 +188,12 @@ For EXTEND_TIMELINE, parameters should include:
             )
             
             if response:
+                print(f"[CHARLES] GPT-5 response received, parsing JSON...")
                 parsed = json.loads(response)
+                
+                # Log the parsed command for debugging
+                print(f"[CHARLES] Parsed command: {parsed.get('command_type', 'UNKNOWN')} with confidence: {parsed.get('confidence', 0)}")
+                
                 return ParsedCommand(
                     command_type=CommandType(parsed.get("command_type", "UNKNOWN")),
                     parameters=parsed.get("parameters", {}),
@@ -224,6 +231,7 @@ For EXTEND_TIMELINE, parameters should include:
 
 def fallback_intent_parser(message: str) -> ParsedCommand:
     """Rule-based fallback parser for when AI is not available"""
+    print(f"[CHARLES] Using fallback parser for message: {message[:50]}...")
     msg_lower = message.lower()
     
     # Simple pattern matching

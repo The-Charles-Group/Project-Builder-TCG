@@ -212,8 +212,106 @@ async def health_check():
     """Simple health check endpoint"""
     return {"status": "healthy", "service": "Agency Project Builder", "version": "1.0"}
 
+# ---------- AI Agent Endpoints (CHARLES AGENT) ----------
+class AgentChatRequest(BaseModel):
+    message: str
+    context: Optional[Dict[str, Any]] = None
+    session_id: Optional[str] = None
+    gpt5_tier: str = "auto"
+
+@app.post("/api/agent/chat")
+async def agent_chat_endpoint(request: AgentChatRequest):
+    """Chat with CHARLES AGENT using selected GPT-5 intelligence tier"""
+    try:
+        # Log the request for debugging
+        print(f"[CHARLES] Chat request - Tier: {request.gpt5_tier}, Message: {request.message[:100]}...")
+        
+        # Process the chat message
+        response = await chat_with_agent(
+            message=request.message,
+            context=request.context,
+            session_id=request.session_id,
+            gpt5_tier=request.gpt5_tier
+        )
+        
+        return response.__dict__ if hasattr(response, '__dict__') else response
+        
+    except Exception as e:
+        print(f"[CHARLES] Error in chat endpoint: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Error processing request: {str(e)}",
+            "command": {"type": "UNKNOWN", "parameters": {}, "confidence": 0.0},
+            "actions": []
+        }
+
+@app.get("/api/agent/status")
+async def agent_status_endpoint():
+    """Check CHARLES AGENT availability and GPT-5 status"""
+    return {
+        "available": True,
+        "gpt5_available": getattr(app.state, "gpt5_available", False),
+        "agent_name": "CHARLES AGENT: ProBuFo",
+        "version": "1.0.0",
+        "capabilities": [
+            "upload_rfp",
+            "analyze_rfp", 
+            "select_deliverables",
+            "modify_pricing",
+            "optimize_timeline",
+            "export_project"
+        ]
+    }
+
+@app.post("/api/upload_rfp")
+async def upload_rfp_endpoint(file: UploadFile = File(...)):
+    """Upload RFP document (PDF, DOCX, TXT) for processing"""
+    try:
+        # Check file type
+        file_ext = file.filename.split('.')[-1].lower()
+        if file_ext not in ['pdf', 'docx', 'txt']:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_ext}")
+        
+        # Read file content
+        content = await file.read()
+        
+        # Extract text based on file type
+        text = ""
+        if file_ext == 'txt':
+            text = content.decode('utf-8', errors='ignore')
+        elif file_ext == 'pdf' and PdfReader:
+            pdf_reader = PdfReader(io.BytesIO(content))
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+        elif file_ext == 'docx' and Document:
+            doc = Document(io.BytesIO(content))
+            for paragraph in doc.paragraphs:
+                text += paragraph.text + "\n"
+        else:
+            raise HTTPException(status_code=500, detail="Document parsing library not available")
+        
+        # Cache the RFP text
+        global RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE
+        RFP_TEXT_CACHE_FILE = text.strip()
+        RFP_TEXT_CACHE = text.strip()
+        
+        return {
+            "success": True,
+            "filename": file.filename,
+            "text": text.strip(),
+            "text_length": len(text.strip()),
+            "message": f"Successfully uploaded and extracted text from {file.filename}"
+        }
+        
+    except Exception as e:
+        print(f"[UPLOAD] Error processing file: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ---------- AI Planner Integration (AgencyDB) ----------
 from ai_planner_agencydb import mount_routes_agencydb
+
+# ---------- AI Agent Integration (CHARLES) ----------
+from ai_agent import chat_with_agent, parse_user_intent, CommandType
 
 # ---------- Industry Template System Import ----------
 from luxury_fashion_template import (
