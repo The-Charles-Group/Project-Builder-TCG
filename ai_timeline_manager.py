@@ -6,19 +6,38 @@ Generates optimized timelines with dependency analysis and resource allocation
 import os
 import json
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple, Set
 from dataclasses import dataclass, field
 from enum import Enum
 import random
 
+logger = logging.getLogger(__name__)
+
 # OpenAI client initialization
 try:
     from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable is not set")
+    client = AsyncOpenAI(api_key=api_key)
     OPENAI_AVAILABLE = True
+    logger.info("[AI Timeline] OpenAI client initialized successfully")
+except ImportError as e:
+    logger.error(f"[AI Timeline] Failed to import OpenAI library. Install with: pip install openai. Error: {e}")
+    OPENAI_AVAILABLE = False
+    client = None
+except ValueError as e:
+    logger.error(f"[AI Timeline] OpenAI API key configuration error: {e}")
+    OPENAI_AVAILABLE = False
+    client = None
+except TypeError as e:
+    logger.error(f"[AI Timeline] OpenAI client initialization failed due to invalid API key type: {e}")
+    OPENAI_AVAILABLE = False
+    client = None
 except Exception as e:
-    print(f"[AI Timeline] OpenAI not available: {e}")
+    logger.error(f"[AI Timeline] Unexpected error initializing OpenAI client: {type(e).__name__}: {e}", exc_info=True)
     OPENAI_AVAILABLE = False
     client = None
 
@@ -306,6 +325,10 @@ class CPMCalculator:
     def _calculate_duration(self, start_date: str, end_date: str) -> float:
         """Calculate duration in business days"""
         if not start_date or not end_date:
+            logger.warning(
+                f"[CPM Duration] Empty date string provided. start_date='{start_date}', end_date='{end_date}'. "
+                f"Returning 0 duration."
+            )
             return 0
         try:
             start = datetime.fromisoformat(start_date)
@@ -320,7 +343,28 @@ class CPMCalculator:
                 current += timedelta(days=1)
             
             return max(1, business_days)  # Minimum 1 day
-        except:
+        except ValueError as e:
+            logger.error(
+                f"[CPM Duration] Invalid date format for duration calculation. "
+                f"start_date='{start_date}', end_date='{end_date}'. "
+                f"Expected ISO format (YYYY-MM-DD). Error: {e}. "
+                f"Returning default duration of 1 day."
+            )
+            return 1
+        except TypeError as e:
+            logger.error(
+                f"[CPM Duration] Type error in date calculation. "
+                f"start_date type={type(start_date).__name__}, end_date type={type(end_date).__name__}. "
+                f"start_date='{start_date}', end_date='{end_date}'. "
+                f"Error: {e}. Returning default duration of 1 day."
+            )
+            return 1
+        except OverflowError as e:
+            logger.error(
+                f"[CPM Duration] Date calculation overflow. "
+                f"Date range too large: start_date='{start_date}', end_date='{end_date}'. "
+                f"Error: {e}. Returning default duration of 1 day."
+            )
             return 1
     
     def _generate_cpm_metrics(self, critical_path_ids: Set[str], project_duration: float) -> Dict[str, Any]:
@@ -1476,7 +1520,11 @@ Return as JSON with keys:
             try:
                 ai_insights = json.loads(response_content)
             except json.JSONDecodeError as e:
-                print(f"[AI Timeline] Failed to parse JSON response: {e}")
+                logger.warning(
+                    f"[AI Timeline] Failed to parse JSON response from GPT-5: {e}. "
+                    f"Response content (first 200 chars): {response_content[:200]}. "
+                    f"Attempting to clean and retry..."
+                )
                 # Try to fix common issues in response
                 try:
                     # Remove any leading/trailing non-JSON characters
@@ -1486,9 +1534,15 @@ Return as JSON with keys:
                     if cleaned_content.endswith('```'):
                         cleaned_content = cleaned_content[:-3]
                     ai_insights = json.loads(cleaned_content.strip())
-                except:
+                    logger.info("[AI Timeline] Successfully parsed JSON after cleaning response")
+                except (json.JSONDecodeError, ValueError, TypeError) as parse_error:
                     # If all parsing fails, use defaults
-                    print(f"[AI Timeline] Using default insights due to parsing error")
+                    logger.error(
+                        f"[AI Timeline] All JSON parsing attempts failed. "
+                        f"Original error: {e}. Cleanup error: {parse_error}. "
+                        f"Response content: {response_content[:500]}. "
+                        f"Using default AI insights as fallback."
+                    )
                     ai_insights = {
                         'strategic_rationale': 'Timeline structured for optimal project flow',
                         'risk_mitigation': ['Risk buffers included in critical path'],

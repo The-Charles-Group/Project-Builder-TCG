@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 import math, re
+import logging
 from collections import Counter, defaultdict
 from typing import Dict, Any, List, Tuple
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # -----------------------------
 # Tokenization / TF-IDF basics
@@ -107,7 +110,14 @@ def eval_rules(rfp_text: str, ai_rules_df: pd.DataFrame) -> Tuple[List[float], L
 def _cfg(config: Dict[str, Any], key: str, default: float) -> float:
     try:
         return float(config.get(key, default))
-    except Exception:
+    except (ValueError, TypeError) as e:
+        value = config.get(key, default)
+        logger.error(
+            f"Failed to convert config key '{key}' to float. "
+            f"Value found: {value!r} (type: {type(value).__name__}). "
+            f"Returning default: {default}. "
+            f"Error: {e}"
+        )
         return default
 
 def aggregate_scores(ai_index_df: pd.DataFrame,

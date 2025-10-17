@@ -79,9 +79,49 @@ class AIAssistant {
         this.addEnhancedStyles();
         this.attachEventListeners();
         this.initializeAutoRecovery();
+        
+        // FAILSAFE: Check for and stop phantom polling immediately
+        this.stopPhantomPolling();
+        
         this.restoreState();
         this.checkAgentStatus();
         this.initProgressIndicators();
+    }
+    
+    // FAILSAFE: Detect and stop phantom jobId polling on init
+    stopPhantomPolling() {
+        try {
+            const savedState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+            const latestState = savedState.stateHistory?.[savedState.stateHistory.length - 1] || savedState;
+            
+            if (latestState.jobId) {
+                console.log('[CHARLES] Failsafe: Found jobId in localStorage, verifying existence...');
+                
+                // Immediately check if the job exists
+                fetch(`/api/ai/jobs/${latestState.jobId}`)
+                    .then(response => {
+                        if (response.status === 404) {
+                            console.log('[CHARLES] Failsafe: Job not found (404), clearing phantom jobId');
+                            // Clear the phantom jobId
+                            this.agentState.jobId = null;
+                            localStorage.removeItem('charles_agent_state');
+                            // Stop any active polling
+                            if (this.currentPollInterval) {
+                                clearInterval(this.currentPollInterval);
+                                this.currentPollInterval = null;
+                            }
+                        }
+                    })
+                    .catch(error => {
+                        console.error('[CHARLES] Failsafe: Error checking job:', error);
+                        // On error, also clear to be safe
+                        this.agentState.jobId = null;
+                        localStorage.removeItem('charles_agent_state');
+                    });
+            }
+        } catch (error) {
+            console.error('[CHARLES] Failsafe error:', error);
+        }
     }
     
     // ====================
@@ -109,6 +149,11 @@ class AIAssistant {
             this.agentState.stateHistory.shift();
         }
         
+        // Clear the data_cleared flag when saving new state
+        // This allows restoration to work after user starts new work
+        localStorage.removeItem('apb.data_cleared');
+        localStorage.removeItem('apb.clear_timestamp');
+        
         // Save to localStorage
         localStorage.setItem('charles_agent_state', JSON.stringify(this.agentState));
         
@@ -119,9 +164,20 @@ class AIAssistant {
     clearAllData() {
         console.log('[CHARLES] Clearing all AI Assistant data...');
         
+        // Stop any active polling immediately
+        if (this.currentPollInterval) {
+            console.log('[CHARLES] Stopping active poll interval');
+            clearInterval(this.currentPollInterval);
+            this.currentPollInterval = null;
+        }
+        
         // Clear localStorage
         localStorage.removeItem('charles_agent_state');
         localStorage.removeItem('charles_width');
+        
+        // Set flags to prevent restoration
+        localStorage.setItem('apb.data_cleared', 'true');
+        localStorage.setItem('apb.clear_timestamp', Date.now().toString());
         
         // Reset agent state completely
         this.agentState = {
@@ -235,11 +291,37 @@ class AIAssistant {
                 this.navigateToStep(latestState.currentStep);
             }
             
-            // Restore job ID if analysis was in progress
+            // Restore job ID if analysis was in progress - but verify it still exists first
             if (latestState.jobId) {
-                this.agentState.jobId = latestState.jobId;
-                // Resume tracking
-                this.trackAnalysisJob(latestState.jobId, true);
+                console.log('[CHARLES] Found previous jobId:', latestState.jobId, '- verifying it still exists...');
+                
+                // Preflight check: verify the job still exists before resuming polling
+                fetch(`/api/ai/jobs/${latestState.jobId}`)
+                    .then(response => {
+                        if (response.ok) {
+                            // Job exists, safe to resume tracking
+                            console.log('[CHARLES] Job exists, resuming tracking');
+                            this.agentState.jobId = latestState.jobId;
+                            this.trackAnalysisJob(latestState.jobId, null, true);
+                        } else if (response.status === 404) {
+                            // Job no longer exists, clear it
+                            console.log('[CHARLES] Previous job no longer exists (404), clearing jobId');
+                            this.agentState.jobId = null;
+                            localStorage.removeItem('charles_agent_state');
+                            this.addMessage('ℹ️ Previous analysis job no longer exists. Starting fresh.', 'assistant');
+                        } else {
+                            // Other error, also clear to be safe
+                            console.log('[CHARLES] Error checking job status:', response.status, '- clearing jobId');
+                            this.agentState.jobId = null;
+                            localStorage.removeItem('charles_agent_state');
+                        }
+                    })
+                    .catch(error => {
+                        // Network error or other issue, clear the jobId
+                        console.error('[CHARLES] Failed to verify job existence:', error);
+                        this.agentState.jobId = null;
+                        localStorage.removeItem('charles_agent_state');
+                    });
             }
             
             this.addMessage('✅ Previous state restored successfully', 'assistant');
@@ -682,6 +764,17 @@ class AIAssistant {
                     3,
                     1000
                 );
+                
+                // Check for 404 - job doesn't exist, stop polling permanently
+                if (response.status === 404) {
+                    console.log('[CHARLES] Job not found (404), stopping polling permanently');
+                    this.agentState.jobId = null;
+                    clearInterval(this.currentPollInterval);
+                    this.currentPollInterval = null;
+                    this.saveState();
+                    this.addMessage('ℹ️ Analysis job no longer exists. It may have been cleaned up or the server restarted.', 'assistant');
+                    return;
+                }
                 
                 if (response.ok) {
                     const status = await response.json();
