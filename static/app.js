@@ -4810,24 +4810,22 @@ async function buildFromCurrentSelection() {
   // Generate session ID for tracking
   const sessionId = generateSessionId();
   
-  // NEW: Simplified payload for build_scenario endpoint
+  // Payload for /api/scenarios endpoint (Brad build format)
   const payload = {
-    session_id: sessionId,
-    selection: {
-      deliverable_codes: codes,
-      components_map: selectedComponentsPayload,
-      l3_map: l3Payload
-    },
-    // Additional configuration
-    pricing_mode: window.getPricingModeFromUI?.() || 'Flat_Blended',
-    blended_rate: window.getBlendedRateFromUI?.() || 195,
-    rate_band: window.getRateBandFromUI?.() || 'Standard_US',
-    project_start: window.getProjectStartFromUI?.() || null,
-    client_budget_usd: window.getClientBudgetFromUI?.() || null,
+    selectedDeliverableCodes: codes,
+    selectedComponentsMap: selectedComponentsPayload,
+    selectedL2Map: l3Payload,  // L2 tasks (server accepts L2 keys now)
+    pricingMode: window.getPricingModeFromUI?.() || 'Flat_Blended',
+    blendedRate: window.getBlendedRateFromUI?.() || 195,
+    rateBand: window.getRateBandFromUI?.() || 'Standard_US',
+    projectStart: window.getProjectStartFromUI?.() || null,
+    clientBudgetUsd: window.getClientBudgetFromUI?.() || null,
     retainers: retainersPayload
   };
 
-  const res = await fetch('/api/pricing/build_scenario', {
+  console.log('[BUILD] Calling /api/scenarios with payload:', payload);
+
+  const res = await fetch('/api/scenarios', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -4841,12 +4839,21 @@ async function buildFromCurrentSelection() {
   
   const json = await res.json();
   
-  // Store the scenario returned from the new endpoint
-  const scenario = json.scenario || json;
+  console.log('[BUILD] Received response:', json);
   
+  // Extract scenarios from response (supports both Brad and legacy formats)
+  let scenarios = json.scenarios || {};
+  let scenario = scenarios.A || json.scenario || json;
+  
+  // If no scenarios map but we have a valid scenario, wrap it
+  if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
+    scenarios = { A: scenario };
+  }
+  
+  // Final validation
   if (!scenario || !scenario.items) {
-    console.warn('Build response', json);
-    alert('Malformed build response: missing scenario data');
+    console.warn('[BUILD] Malformed response:', json);
+    alert('Build failed: missing scenario data. Check console for details.');
     return;
   }
 
@@ -4855,16 +4862,16 @@ async function buildFromCurrentSelection() {
   
   // Save to client state
   window.APP_STATE = window.APP_STATE || {};
-  window.APP_STATE.scenarios = { A: scenario };
+  window.APP_STATE.scenarios = scenarios;
   window.APP_STATE.activeScenario = 'A';
   window.APP_STATE.sessionId = sessionId;
   
   // Legacy aliases for backward compatibility
-  window.BUILD = { scenarios: { A: scenario } };
+  window.BUILD = { scenarios };
   window.appState = window.appState || {};
-  window.appState.scenarios = { A: scenario };
-  window.latestScenarios = { A: scenario };
-  window.SCENARIOS = { A: scenario };
+  window.appState.scenarios = scenarios;
+  window.latestScenarios = scenarios;
+  window.SCENARIOS = scenarios;
 
   // Update AI button states now that scenario exists
   updateAIButtonStates();
@@ -4878,7 +4885,7 @@ async function buildFromCurrentSelection() {
 
   // Render Scenario A only
   if (window.renderScenario) {
-    window.renderScenario('scenarioA', scenarios.A);
+    window.renderScenario('scenarioA', scenario);
   }
 
   // Show Step 4 (Timeline) and Step 5 (Export)

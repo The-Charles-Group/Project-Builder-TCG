@@ -6358,7 +6358,10 @@ def api_post_scenarios(payload: dict):
         selected_l3_map = (
             payload.get("selected_l3_map") or 
             payload.get("selectedL3Map") or 
-            payload.get("l3Map")
+            payload.get("l3Map") or
+            payload.get("selected_l2_map") or
+            payload.get("selectedL2Map") or
+            payload.get("l2Map")
         )
         
         # Log what we're building with
@@ -6391,12 +6394,20 @@ def api_post_scenarios(payload: dict):
             # Update the global scenarios store
             _CURRENT_SCENARIOS.update(window_scenarios)
             
+            # Add legacy top-level totals for UI compatibility
+            scenario_a = window_scenarios.get("A") or {}
+            totals = scenario_a.get("totals") or {}
+            total_hours = totals.get("hours", scenario_a.get("total_hours", 0))
+            total_price = totals.get("price", scenario_a.get("total_price", 0))
+            
             # Return in the expected format
             return {
                 "ok": True,
                 "scenarios": window_scenarios,
                 "totals": result.get("totals", {}),
-                "metadata": result.get("metadata", {})
+                "metadata": result.get("metadata", {}),
+                "total_hours": total_hours,
+                "total_price": total_price
             }
         
         return result
