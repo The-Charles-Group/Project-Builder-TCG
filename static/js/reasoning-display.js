@@ -206,5 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('[REASONING] Auto-display enabled for all buttons');
 });
 
-// Export for use in other scripts
-export { ReasoningDisplay };
+// Make available globally (no module export for compatibility)
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { ReasoningDisplay };
+}
