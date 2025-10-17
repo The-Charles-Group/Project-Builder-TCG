@@ -976,6 +976,11 @@ function readSelectedCodesFromUI() {
 // ================================================================================
 // Gantt Chart and AI Timeline Functions
 // ================================================================================
+
+// Per-task debounce storage to prevent lost updates when dragging multiple tasks
+// Each task gets its own debounce timer, ensuring all updates eventually commit
+const taskDebouncers = new Map();
+
 async function initializeGanttChart(tasks = []) {
   const container = document.querySelector('#gantt');
   if (!container || !window.Gantt) {
@@ -984,8 +989,9 @@ async function initializeGanttChart(tasks = []) {
     return;
   }
   
-  // Clear any existing chart
+  // Clear any existing chart and clean up debounce timers
   container.innerHTML = '';
+  taskDebouncers.clear();
   
   if (tasks.length === 0) {
     container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">No timeline data. Click "Generate AI Timeline" to create one.</div>';
@@ -1021,27 +1027,38 @@ async function initializeGanttChart(tasks = []) {
       },
       on_date_change: function(task, start, end) {
         console.log('Task date changed:', task.name, start, end);
-        // Update the task in our state
-        const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
-        if (taskIndex >= 0) {
-          currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
-          currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
-        }
         
-        // Emit change to ScenarioStore via GanttBridge
-        if (window.GanttBridge && window.GanttBridge.emitChange) {
-          GanttBridge.emitChange({
-            deliverableId: task.id,
-            start: start.toISOString().split('T')[0],
-            end: end.toISOString().split('T')[0],
-            durationDays: Math.ceil((end - start) / (1000*60*60*24)),
-            resources: task.resources || []
-          });
-        }
-        
-        // Show save button
+        // Show save button IMMEDIATELY for user feedback (non-debounced)
         const saveBtn = document.getElementById('btn-save-timeline');
         if (saveBtn) saveBtn.style.display = '';
+        
+        // Get or create a debouncer for this specific task
+        // This ensures each task has its own timer, preventing lost updates
+        // when dragging multiple tasks in quick succession
+        if (!taskDebouncers.has(task.id)) {
+          taskDebouncers.set(task.id, debounce((t, s, e) => {
+            // Update the task in our state
+            const taskIndex = currentTimelineTasks.findIndex(ct => ct.id === t.id);
+            if (taskIndex >= 0) {
+              currentTimelineTasks[taskIndex].start = s.toISOString().split('T')[0];
+              currentTimelineTasks[taskIndex].end = e.toISOString().split('T')[0];
+            }
+            
+            // Emit change to ScenarioStore via GanttBridge
+            if (window.GanttBridge && window.GanttBridge.emitChange) {
+              GanttBridge.emitChange({
+                deliverableId: t.id,
+                start: s.toISOString().split('T')[0],
+                end: e.toISOString().split('T')[0],
+                durationDays: Math.ceil((e - s) / (1000*60*60*24)),
+                resources: t.resources || []
+              });
+            }
+          }, 300));
+        }
+        
+        // Call the task-specific debounced function
+        taskDebouncers.get(task.id)(task, start, end);
       },
       on_progress_change: function(task, progress) {
         console.log('Task progress changed:', task.name, progress);
