@@ -346,12 +346,7 @@ class AIAssistant {
     }
     
     updateProgress(percentage, message, details = null) {
-        // Update ChatGPT sidebar progress
-        if (this.chatgptSidebar) {
-            this.chatgptSidebar.showProgress(message, percentage);
-        }
-        
-        // Also update floating progress if it exists
+        // Update floating progress
         const floatingProgress = document.getElementById('charles-floating-progress');
         const mainBar = document.getElementById('charles-main-progress-bar');
         const progressText = document.getElementById('charles-progress-text');
