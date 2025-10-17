@@ -162,11 +162,71 @@
         for (const c of d.components || []) if (!c._customCadence) c.months = months;
       }
       this.recompute(); this.emit();
+    },
+    applyResourceLeveling(levelingData) {
+      if (!levelingData) return;
+      
+      const { totalCost, deliverableConflicts } = levelingData;
+      
+      // Store resource leveling data in state
+      this.state.resourceLeveling = {
+        totalCost: totalCost || 0,
+        deliverableConflicts: deliverableConflicts || {},
+        lastUpdated: new Date().toISOString()
+      };
+      
+      // Apply leveling costs to affected deliverables
+      for (const delivId in deliverableConflicts) {
+        const d = this.state.deliverables.find(x => x.id === delivId);
+        if (!d) continue;
+        
+        const conflict = deliverableConflicts[delivId];
+        
+        // Store conflict information on the deliverable
+        d.resourceConflict = {
+          hasConflict: true,
+          cost: conflict.totalCost,
+          conflicts: conflict.conflicts,
+          riskLevel: Math.max(...conflict.conflicts.map(c => c.riskLevel === 'High' ? 3 : c.riskLevel === 'Medium' ? 2 : 1))
+        };
+      }
+      
+      // Clear conflicts from deliverables not in the conflict list
+      this.state.deliverables.forEach(d => {
+        if (!deliverableConflicts[d.id] && d.resourceConflict) {
+          delete d.resourceConflict;
+        }
+      });
+      
+      // Recompute totals including leveling costs
+      this.recomputeWithLeveling();
+      this.emit();
+      
+      // Emit event for UI updates
+      document.dispatchEvent(new CustomEvent('pricing:leveling-applied', { 
+        detail: this.state.resourceLeveling 
+      }));
+    },
+    recomputeWithLeveling() {
+      // First do regular recompute
+      this.recompute();
+      
+      // Then add resource leveling costs
+      if (this.state.resourceLeveling && this.state.resourceLeveling.totalCost > 0) {
+        // Add leveling cost to the grand total
+        const levelingCost = this.state.resourceLeveling.totalCost;
+        this.state.totals.resourceLevelingCost = levelingCost;
+        this.state.totals.grandTotalWithLeveling = this.state.totals.grandTotal12 + levelingCost;
+      } else {
+        this.state.totals.resourceLevelingCost = 0;
+        this.state.totals.grandTotalWithLeveling = this.state.totals.grandTotal12;
+      }
     }
   };
 
   window.ScenarioStore = ScenarioStore;
   document.addEventListener("gantt:changed", (ev) => ScenarioStore.updateFromGantt(ev.detail || {}));
+  document.addEventListener("resource:conflicts", (ev) => ScenarioStore.applyResourceLeveling(ev.detail || {}));
 
   // bootstrap from localStorage if available
   try {

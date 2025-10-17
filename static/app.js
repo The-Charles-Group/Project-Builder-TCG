@@ -468,6 +468,71 @@ async function clearAllDataWithConfirmation() {
 
 window.clearAllDataWithConfirmation = clearAllDataWithConfirmation;
 
+// ================================================================================
+// Resource Leveling Event Listeners
+// ================================================================================
+// Listen for pricing leveling applied events to refresh the pricing display
+document.addEventListener('pricing:leveling-applied', (event) => {
+  console.log('[Resource Leveling] Pricing updated with leveling costs:', event.detail);
+  
+  // Refresh pricing table to show conflict indicators
+  if (typeof updatePricingTable === 'function') {
+    updatePricingTable();
+  }
+  
+  // Refresh pricing summary to show leveling costs
+  if (typeof updatePricingSummary === 'function') {
+    updatePricingSummary();
+  }
+  
+  // Notify user of the resource conflicts detected
+  const levelingData = event.detail;
+  if (levelingData && levelingData.totalCost > 0) {
+    const conflictCount = Object.keys(levelingData.deliverableConflicts || {}).length;
+    console.log(`[Resource Leveling] ${conflictCount} deliverables affected by resource conflicts. Total leveling cost: $${Math.round(levelingData.totalCost).toLocaleString()}`);
+  }
+});
+
+// Listen for gantt:changed events to re-analyze resource conflicts
+document.addEventListener('gantt:changed', (event) => {
+  console.log('[Resource Leveling] Gantt changed, re-analyzing resource conflicts');
+  
+  // Get all tasks from the Gantt if available
+  if (window.gantt && typeof window.gantt.getTaskByTime === 'function') {
+    const tasks = window.gantt.getTaskByTime();
+    if (tasks && tasks.length > 0) {
+      // Re-analyze resource risks which will emit resource:conflicts event
+      analyzeResourceRisks(tasks);
+    }
+  }
+});
+
+// Listen for timeline task drag events to provide real-time feedback
+document.addEventListener('task:dragging', (event) => {
+  const { taskId, newStart, newEnd } = event.detail || {};
+  if (!taskId) return;
+  
+  // Get current tasks and create a temporary updated list
+  if (window.gantt && typeof window.gantt.getTaskByTime === 'function') {
+    const tasks = window.gantt.getTaskByTime();
+    const tempTasks = tasks.map(task => {
+      if (task.id === taskId) {
+        return { ...task, start: newStart, end: newEnd };
+      }
+      return task;
+    });
+    
+    // Analyze temporary state for preview
+    const tempRisks = analyzeResourceRisks(tempTasks);
+    
+    // Show preview of cost impact (could be displayed in a tooltip or status bar)
+    if (tempRisks.length > 0) {
+      const totalCost = tempRisks.reduce((sum, risk) => sum + risk.idleCost, 0);
+      console.log(`[Resource Leveling Preview] Potential leveling cost: $${Math.round(totalCost).toLocaleString()}`);
+    }
+  }
+});
+
 // ISSUE 3: Retainer Options Functions
 
 // ISSUE FIX 3: Add global retainer suggestions function
@@ -1413,8 +1478,24 @@ function updatePricingTable() {
     // Get tasks list
     const tasks = extractDeliverableTasks(item);
     
+    // Check for resource conflicts from ScenarioStore
+    let hasResourceConflict = false;
+    let conflictCost = 0;
+    let conflictTooltip = '';
+    
+    if (window.ScenarioStore && window.ScenarioStore.state.resourceLeveling) {
+      const conflicts = window.ScenarioStore.state.resourceLeveling.deliverableConflicts[item.deliverable_code];
+      if (conflicts) {
+        hasResourceConflict = true;
+        conflictCost = conflicts.totalCost || 0;
+        const conflictTypes = [...new Set(conflicts.conflicts.map(c => c.type))];
+        const resources = [...new Set(conflicts.conflicts.map(c => c.resource))];
+        conflictTooltip = `Resource conflicts detected:\n- ${resources.join(', ')}\n- Type: ${conflictTypes.join(', ')}\n- Leveling Cost: $${conflictCost.toLocaleString()}`;
+      }
+    }
+    
     // Update grand total
-    grandTotal += totalPrice;
+    grandTotal += totalPrice + conflictCost;
     
     // Determine row background (alternating + highlight for recurring)
     const isRecurring = cadenceType !== 'ONE_TIME';
@@ -1425,7 +1506,7 @@ function updatePricingTable() {
     // Main deliverable row
     tableHTML += `
       <tr data-deliverable="${item.deliverable_code}" data-row-type="deliverable" 
-          style="${rowBg} border-bottom: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;">
+          style="${rowBg} ${hasResourceConflict ? 'border-left: 4px solid #ef4444;' : ''} border-bottom: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;">
         <td style="padding: 12px; font-weight: 700; color: var(--text);">
           <button onclick="toggleDeliverableExpand('${item.deliverable_code}')" 
                   style="background: transparent; border: none; color: var(--accent); cursor: pointer; padding: 0 8px 0 0; font-size: 0.9em; transition: transform 0.2s;"
@@ -1435,6 +1516,13 @@ function updatePricingTable() {
           <span style="color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
             ${item.deliverable}
           </span>
+          ${hasResourceConflict ? `
+            <span class="resource-conflict-badge" 
+                  style="background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; 
+                         margin-left: 8px; font-size: 0.75em; font-weight: 600; cursor: help;"
+                  title="${conflictTooltip}">
+              ⚠️ Resource Conflict
+            </span>` : ''}
         </td>
         <td style="padding: 8px; text-align: center;">
           ${isEditing ? 
@@ -1790,18 +1878,31 @@ function updatePricingSummary() {
   
   // FIX: Update Grand Total - read from scenarios.A.totals.price
   const scenarioTotal = (scenario.totals && scenario.totals.price) ? scenario.totals.price : oneTimeCost;
-  const grandTotal = scenarioTotal + (retainerMonthlyCost * 12);
+  
+  // Get resource leveling costs from ScenarioStore if available
+  let resourceLevelingCost = 0;
+  if (window.ScenarioStore && window.ScenarioStore.state.resourceLeveling) {
+    resourceLevelingCost = window.ScenarioStore.state.resourceLeveling.totalCost || 0;
+  }
+  
+  const grandTotal = scenarioTotal + (retainerMonthlyCost * 12) + resourceLevelingCost;
   const grandTotalEl = document.getElementById('grand-total-cost');
   const grandBreakdownEl = document.getElementById('grand-total-breakdown');
   
   if (grandTotalEl) grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
   if (grandBreakdownEl) {
-    // Always show scenario total even when retainer is $0
+    // Build breakdown text including resource leveling if applicable
+    let breakdownParts = [`Scenario total ($${Math.round(scenarioTotal).toLocaleString()})`];
+    
     if (retainerMonthlyCost > 0) {
-      grandBreakdownEl.textContent = `Scenario total ($${Math.round(scenarioTotal).toLocaleString()}) + 12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
-    } else {
-      grandBreakdownEl.textContent = `Scenario total: $${Math.round(scenarioTotal).toLocaleString()}`;
+      breakdownParts.push(`12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`);
     }
+    
+    if (resourceLevelingCost > 0) {
+      breakdownParts.push(`<span style="color: #ef4444;">Resource leveling ($${Math.round(resourceLevelingCost).toLocaleString()})</span>`);
+    }
+    
+    grandBreakdownEl.innerHTML = breakdownParts.join(' + ');
   }
 }
 
@@ -3718,6 +3819,7 @@ function analyzeResourceRisks(tasks) {
   
   const risks = [];
   const resourceSchedule = {};
+  const deliverableConflicts = {};  // Track conflicts by deliverable
   
   // Build resource schedule
   tasks.forEach(task => {
@@ -3726,15 +3828,22 @@ function analyzeResourceRisks(tasks) {
     if (!resourceSchedule[resource]) {
       resourceSchedule[resource] = [];
     }
+    
+    // Extract deliverable ID from task ID or name
+    const deliverableId = task.deliverable_id || task.id?.split('-')[0] || task.parent_id || 'unknown';
+    
     resourceSchedule[resource].push({
       taskId: task.id,
       taskName: task.name,
+      deliverableId: deliverableId,
       start: new Date(task.start),
       end: new Date(task.end)
     });
   });
   
   // Analyze each resource for conflicts and idle time
+  let totalLevelingCost = 0;
+  
   Object.entries(resourceSchedule).forEach(([resource, schedule]) => {
     if (schedule.length < 2) return;
     
@@ -3748,22 +3857,83 @@ function analyzeResourceRisks(tasks) {
       
       const gapDays = Math.floor((next.start - current.end) / (1000 * 60 * 60 * 24));
       
-      if (gapDays > 3) { // More than 3 days gap
-        const idleCost = gapDays * 800; // Assume $800/day cost
+      // Check for overlaps (negative gap)
+      const overlapDays = Math.floor((current.end - next.start) / (1000 * 60 * 60 * 24));
+      
+      let conflictCost = 0;
+      let conflictType = null;
+      let affectedDeliverables = [];
+      
+      if (overlapDays > 0) {
+        // Resource conflict - overlapping tasks
+        conflictCost = overlapDays * 1200; // Higher cost for conflicts ($1200/day)
+        conflictType = 'overlap';
+        affectedDeliverables = [current.deliverableId, next.deliverableId];
+        
+        risks.push({
+          resource: resource,
+          waitingPeriod: -overlapDays, // Negative to indicate overlap
+          idleCost: conflictCost,
+          riskLevel: 'High',
+          conflictType: 'overlap',
+          affectedTasks: [current.taskName, next.taskName],
+          affectedDeliverables: affectedDeliverables,
+          recommendation: 'Resource conflict - same resource scheduled for multiple tasks simultaneously'
+        });
+      } else if (gapDays > 3) {
+        // Idle time gap
+        conflictCost = gapDays * 800; // $800/day for idle time
+        conflictType = 'idle';
         const riskLevel = gapDays > 10 ? 'High' : gapDays > 5 ? 'Medium' : 'Low';
+        affectedDeliverables = [next.deliverableId]; // Affects the waiting deliverable
         
         risks.push({
           resource: resource,
           waitingPeriod: gapDays,
-          idleCost: idleCost,
+          idleCost: conflictCost,
           riskLevel: riskLevel,
+          conflictType: 'idle',
+          affectedTasks: [current.taskName, next.taskName],
+          affectedDeliverables: affectedDeliverables,
           recommendation: gapDays > 10 
             ? 'Consider reassigning tasks or adjusting timeline to reduce idle time'
             : 'Minor gap - may be acceptable for resource availability'
         });
       }
+      
+      // Track costs by deliverable
+      if (conflictCost > 0) {
+        totalLevelingCost += conflictCost;
+        affectedDeliverables.forEach(delivId => {
+          if (!deliverableConflicts[delivId]) {
+            deliverableConflicts[delivId] = {
+              totalCost: 0,
+              conflicts: []
+            };
+          }
+          deliverableConflicts[delivId].totalCost += conflictCost / affectedDeliverables.length;
+          deliverableConflicts[delivId].conflicts.push({
+            resource: resource,
+            type: conflictType,
+            cost: conflictCost / affectedDeliverables.length,
+            riskLevel: risks[risks.length - 1].riskLevel
+          });
+        });
+      }
     }
   });
+  
+  // Emit resource leveling event to pricing system
+  const levelingData = {
+    totalCost: totalLevelingCost,
+    deliverableConflicts: deliverableConflicts,
+    risks: risks
+  };
+  
+  console.log('[Resource Leveling] Emitting resource:conflicts event:', levelingData);
+  document.dispatchEvent(new CustomEvent('resource:conflicts', { 
+    detail: levelingData
+  }));
   
   return risks;
 }
