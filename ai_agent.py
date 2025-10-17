@@ -641,33 +641,8 @@ Return a JSON object with the parsed command."""
                     parsing_method="gpt5"
                 )
         else:
-            # Fallback to GPT-4
-            response = await client.chat.completions.create(
-                model="gpt-4-turbo-preview",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=2000,
-                temperature=0.3
-            )
-            
-            parsed = json.loads(response.choices[0].message.content)
-            command_type_str = parsed.get("command_type", "UNKNOWN").upper()
-            try:
-                command_type = CommandType[command_type_str]
-            except KeyError:
-                command_type = CommandType.UNKNOWN
-                
-            return ParsedCommand(
-                command_type=command_type,
-                parameters=parsed.get("parameters", {}),
-                confidence=float(parsed.get("confidence", 0.5)),
-                raw_text=message,
-                explanation=parsed.get("explanation", ""),
-                parsing_method="gpt4"
-            )
+            # No fallback allowed - GPT-5 must be available
+            raise RuntimeError("GPT-5 tier configuration required. Set gpt5_tier parameter or enable GPT-5 in environment.")
             
     except Exception as e:
         print(f"[CHARLES] GPT parsing error: {str(e)}")

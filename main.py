@@ -2150,7 +2150,7 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
                     raise Exception("Async OpenAI client not available")
                 
                 response = await async_openai_client.chat.completions.create(
-                    model="gpt-4o",  # Use GPT-4o for vision analysis
+                    model="gpt-5",  # GPT-5 enforced (sitecustomize.py handles mapping)
                     messages=[
                         {
                             "role": "user",
