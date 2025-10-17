@@ -9,7 +9,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
 from ai_weighted_matcher import score_rfp
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -168,11 +168,29 @@ async def lifespan(app: FastAPI):
         print(f"[STARTUP] ⚠️ Could not import GPT-5 helpers: {e}")
         print("[STARTUP] ℹ️ System will operate in embedding-only mode")
     
-    # 5) Start background job cleanup task
+    # 5) Initialize background task registry for asyncio task tracking
+    app.state.async_tasks = {}
+    print("[STARTUP] Background task registry initialized")
+    
+    # 6) Start background job cleanup task
     async def periodic_cleanup():
         while True:
             await asyncio.sleep(300)  # Every 5 minutes
             await cleanup_old_jobs()
+            # Also cleanup finished asyncio tasks
+            finished_tasks = [job_id for job_id, task in app.state.async_tasks.items() if task.done()]
+            for job_id in finished_tasks:
+                task = app.state.async_tasks.pop(job_id)
+                try:
+                    # Call result() to surface any exceptions
+                    task.result()
+                except Exception as e:
+                    print(f"[CLEANUP] Background task {job_id} failed: {e}")
+                    # Mark job as failed if still in store
+                    if job_id in SSE_JOB_STORE:
+                        update_sse_job(job_id, status=StreamJobStatus.FAILED, error=str(e))
+            if finished_tasks:
+                print(f"[CLEANUP] Removed {len(finished_tasks)} finished tasks from registry")
     
     app.state._cleanup_task = asyncio.create_task(periodic_cleanup())
     print("[STARTUP] Background job cleanup task started")
@@ -4328,7 +4346,7 @@ def api_weighted_scores(payload: dict):
         raise HTTPException(status_code=500, detail=f"Weighted scoring failed: {str(e)}")
 
 @app.post("/api/ai/generate_timeline")
-async def generate_timeline(request: TimelineGenerationRequest):
+async def generate_timeline(http_request: Request, payload: TimelineGenerationRequest):
     """
     Generate intelligent project timeline with parallel workstreams and dependencies.
     Uses the new intelligent scheduler for realistic project planning.
@@ -4347,6 +4365,7 @@ async def generate_timeline(request: TimelineGenerationRequest):
     
     # Start the timeline generation in background
     async def generate_with_progress():
+        print(f"[TIMELINE] generate_with_progress started for job_id={job_id}")
         try:
             # Update job status
             update_sse_job(job_id, 
@@ -4358,13 +4377,13 @@ async def generate_timeline(request: TimelineGenerationRequest):
             
             # Enrich deliverables with database information
             enriched_deliverables = []
-            total_deliverables = len(request.deliverables)
+            total_deliverables = len(payload.deliverables)
             
             # Log for large projects
             if total_deliverables > 20:
                 print(f"[Timeline] Processing large project with {total_deliverables} deliverables")
             
-            for i, deliv in enumerate(request.deliverables):
+            for i, deliv in enumerate(payload.deliverables):
                 code = deliv.get('deliverable_code', '')
                 
                 # Update progress more frequently for large sets
@@ -4482,7 +4501,7 @@ async def generate_timeline(request: TimelineGenerationRequest):
             await asyncio.sleep(0.1)
             
             # Use the intelligent timeline generator
-            if request.use_intelligent_scheduler:
+            if payload.use_intelligent_scheduler:
                 # Progress: Using intelligent scheduler (40-70%)
                 update_sse_job(job_id,
                               status=StreamJobStatus.PROCESSING,
@@ -4493,12 +4512,12 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 # Use the new intelligent scheduler
                 result = await generate_intelligent_timeline(
                     enriched_deliverables,
-                    request.project_start,
-                    request.optimization_mode
+                    payload.project_start,
+                    payload.optimization_mode
                 )
                 
                 # Progress: AI reasoning (70-90%)
-                if request.rfp_text:
+                if payload.rfp_text:
                     update_sse_job(job_id,
                                   status=StreamJobStatus.PROCESSING,
                                   progress=75.0,
@@ -4508,7 +4527,7 @@ async def generate_timeline(request: TimelineGenerationRequest):
                     from ai_timeline_manager import enhance_with_ai_reasoning
                     result = await enhance_with_ai_reasoning(
                         result,
-                        request.rfp_text,
+                        payload.rfp_text,
                         enriched_deliverables
                     )
             else:
@@ -4522,9 +4541,9 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 # Use the standard AI timeline generator
                 result = await generate_ai_timeline(
                     enriched_deliverables,
-                    request.rfp_text or RFP_TEXT_CACHE or "",
-                    request.project_start,
-                    request.optimization_mode,
+                    payload.rfp_text or RFP_TEXT_CACHE or "",
+                    payload.project_start,
+                    payload.optimization_mode,
                     use_intelligent_scheduler=False
                 )
             
@@ -4537,7 +4556,7 @@ async def generate_timeline(request: TimelineGenerationRequest):
             
             # Add success flag
             result['success'] = True
-            result['message'] = f"Generated timeline with {len(result.get('tasks', []))} tasks using {'intelligent' if request.use_intelligent_scheduler else 'standard'} scheduler"
+            result['message'] = f"Generated timeline with {len(result.get('tasks', []))} tasks using {'intelligent' if payload.use_intelligent_scheduler else 'standard'} scheduler"
             
             # Complete the job
             update_sse_job(job_id,
@@ -4571,9 +4590,16 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 },
                 'metadata': {}
             }
+        finally:
+            # Cleanup: ensure task is removed from registry
+            if job_id in http_request.app.state.async_tasks:
+                http_request.app.state.async_tasks.pop(job_id, None)
+                print(f"[TIMELINE] Task {job_id} removed from registry")
     
-    # Start the background task
-    asyncio.create_task(generate_with_progress())
+    # Start the background task and register it
+    task = asyncio.create_task(generate_with_progress())
+    http_request.app.state.async_tasks[job_id] = task
+    print(f"[TIMELINE] Task {job_id} created and registered")
     
     # Return immediately with the job ID
     return JSONResponse({
