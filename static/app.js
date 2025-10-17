@@ -1128,7 +1128,13 @@ function categoryFor(code) {
 
 // Read currently chosen deliverables from the Your Selection column
 function readSelectedCodesFromUI() {
-  return Array.from(S2.selectedCodes);
+  // Check both old and new state systems for compatibility
+  // New UI uses APB.step2.selectedCodes, old UI uses S2.selectedCodes
+  const newSystemCodes = (window.APB?.step2?.selectedCodes) ? Array.from(APB.step2.selectedCodes) : [];
+  const oldSystemCodes = Array.from(S2.selectedCodes);
+  
+  // Return whichever has data (prefer new system if both have data)
+  return newSystemCodes.length > 0 ? newSystemCodes : oldSystemCodes;
 }
 
 // ================================================================================
@@ -4710,12 +4716,19 @@ async function buildFromCurrentSelection() {
   if (window.appState) window.appState.selectedCodes = codes;
   window.selectedCodes = codes;
 
-  // Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
+  // Convert component selections to API format (plain objects)
+  // Check both old (S2.selectedComponentsMap) and new (APB.step2.selectedComponentsByCode) state systems
   const selectedComponentsPayload = {};
   
   // For all selected deliverables, ensure we have component info
   codes.forEach(code => {
-    const compSet = S2.selectedComponentsMap[code];
+    // Try new state system first (preferred)
+    let compSet = window.APB?.step2?.selectedComponentsByCode?.[code];
+    
+    // Fall back to old state system if new system has no data
+    if (!compSet) {
+      compSet = S2.selectedComponentsMap[code];
+    }
     
     if (compSet instanceof Set) {
       // User has customized component selection (could be all, some, or none)
