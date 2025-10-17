@@ -4,26 +4,6 @@
 This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.6** (October 16, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
 ## Recent Changes
-- **October 17, 2025**: Critical bug fixes - ERROR_SILENCING violations and phantom polling
-  - **CRITICAL FIX**: Eliminated ERROR_SILENCING violations that caused silent timeline generation failures
-    - Fixed `ai_timeline_manager.py` (lines 16, 323): Replaced bare `except:` blocks with specific exception handling (ValueError, TypeError, OverflowError, ImportError)
-    - Fixed `ai_weighted_matcher.py` (line 110): Replaced broad `except Exception:` with specific ValueError/TypeError handling
-    - Added comprehensive error logging with detailed context (what failed, problematic values, fallback actions)
-    - Timeline generation failures now visible in logs instead of silently failing
-  - **CRITICAL FIX**: Resolved phantom jobId polling causing endless 404 errors
-    - Added `stopPhantomPolling()` failsafe that validates jobIds on initialization
-    - Fixed `restoreState()`: Validates job exists before resuming polling (preflight API check)
-    - Fixed `trackAnalysisJob()`: Detects 404 responses and permanently stops polling
-    - Fixed `clearAllData()`: Properly stops active polling intervals before clearing state
-    - Fixed `saveState()`: Clears data_cleared flags to allow restoration after new work begins
-    - Also fixed phantom polling in `app.js` pollJobStatus() function
-    - New browser sessions no longer experience phantom polling (old sessions need hard refresh)
-  - **VERIFIED**: All fixes approved by architect review
-    - Exception handling covers all possible failure cases
-    - Phantom polling fixes work across all user scenarios (refresh, close tab, server restart)
-    - No regression in state restoration functionality
-    - Error logging provides actionable debugging information
-
 - **October 17, 2025**: Security dependency updates verification
   - **VERIFIED**: All security updates functioning correctly after dependency updates
   - Re-verified `jinja2==3.1.6` (CVE-2025-27516 fixed) - Application rendering correctly

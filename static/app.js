@@ -3197,20 +3197,6 @@ async function generateAITimeline(retryAttempt = 0) {
       
       try {
         const response = await fetch(`/api/ai/jobs/${jobId}`);
-        
-        // Handle 404 - job no longer exists, stop polling permanently
-        if (response.status === 404) {
-          console.log('[TIMELINE] Job not found (404), stopping polling permanently');
-          if (pollingIntervalId) {
-            clearInterval(pollingIntervalId);
-            pollingIntervalId = null;
-          }
-          jobId = null;
-          isPolling = false;
-          handleTimelineError('Job no longer exists. It may have been cleaned up or the server restarted.');
-          return;
-        }
-        
         if (!response.ok) throw new Error('Failed to get job status');
         
         const data = await response.json();
