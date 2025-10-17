@@ -1133,8 +1133,23 @@ function readSelectedCodesFromUI() {
   const newSystemCodes = (window.APB?.step2?.selectedCodes) ? Array.from(APB.step2.selectedCodes) : [];
   const oldSystemCodes = Array.from(S2.selectedCodes);
   
-  // Return whichever has data (prefer new system if both have data)
-  return newSystemCodes.length > 0 ? newSystemCodes : oldSystemCodes;
+  // Get whichever has data (prefer new system if both have data)
+  const codes = newSystemCodes.length > 0 ? newSystemCodes : oldSystemCodes;
+  
+  // Filter out null, undefined, empty strings, and invalid values
+  const validCodes = codes.filter(code => {
+    if (code == null || code === undefined) return false;
+    if (typeof code !== 'string') return false;
+    if (code.trim() === '') return false;
+    return true;
+  });
+  
+  console.log(`[readSelectedCodesFromUI] Total: ${codes.length}, Valid: ${validCodes.length}`);
+  if (codes.length !== validCodes.length) {
+    console.warn('[readSelectedCodesFromUI] Filtered out invalid codes:', codes.filter(c => !validCodes.includes(c)));
+  }
+  
+  return validCodes;
 }
 
 // ================================================================================
@@ -4295,6 +4310,16 @@ async function hydrateL3For(delivCode, componentName) {
 }
 
 async function selectDeliverable(code) {
+  // Validate code before adding to prevent null/undefined/empty values
+  if (code == null || code === undefined) {
+    console.error('[selectDeliverable] Cannot add null/undefined code');
+    return;
+  }
+  if (typeof code !== 'string' || code.trim() === '') {
+    console.error('[selectDeliverable] Cannot add invalid code:', code);
+    return;
+  }
+  
   selectionStore.deliverables.add(code);
   APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
   
