@@ -448,6 +448,39 @@ async def get_agencydb_job_status(job_id: str):
             
             return response
         
+        # Check SSE_JOB_STORE for timeline generation jobs
+        try:
+            from app_perf.stream import SSE_JOB_STORE, StreamJobStatus
+            if job_id in SSE_JOB_STORE:
+                job = SSE_JOB_STORE[job_id]
+                
+                # Map StreamJobStatus to expected format
+                status_map = {
+                    StreamJobStatus.QUEUED: "pending",
+                    StreamJobStatus.PROCESSING: "processing",
+                    StreamJobStatus.COMPLETED: "completed",
+                    StreamJobStatus.FAILED: "failed",
+                    StreamJobStatus.CANCELLED: "cancelled"
+                }
+                
+                response = {
+                    "job_id": job.job_id,
+                    "status": status_map.get(job.status, "processing"),
+                    "progress": round(job.progress, 2),
+                    "message": job.message or f"Timeline generation {job.status.value}",
+                    "current_stage": job.current_stage if hasattr(job, 'current_stage') else ""
+                }
+                
+                if job.status == StreamJobStatus.COMPLETED and job.result:
+                    response["data"] = job.result
+                
+                if job.status == StreamJobStatus.FAILED and job.error:
+                    response["error"] = job.error
+                
+                return response
+        except ImportError:
+            pass
+        
         # Job not found in any store
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     
