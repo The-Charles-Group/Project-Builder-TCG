@@ -116,6 +116,8 @@ class AIAnalysisJob:
     total_chunks: int = 0
     processed_chunks: int = 0
     current_stage: str = "Initializing..."
+    current_reasoning: str = ""  # NEW: AI thinking steps visible to user
+    reasoning_history: List[str] = field(default_factory=list)  # Track all reasoning steps
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
@@ -2283,8 +2285,8 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
 # ──────────────────────────────────────────────────────────────────────────────
 # Public API
 # ──────────────────────────────────────────────────────────────────────────────
-def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks: int = None, processed_chunks: int = None):
-    """Helper to update job progress with granular tracking"""
+def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks: int = None, processed_chunks: int = None, reasoning: str = ""):
+    """Helper to update job progress with granular tracking and AI reasoning visibility"""
     if job_id and job_id in AI_JOB_STORE:
         job = AI_JOB_STORE[job_id]
         job.current_stage = stage
@@ -2295,7 +2297,14 @@ def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks:
         # Calculate progress from chunks if not explicitly set
         if progress_pct is None and job.total_chunks > 0:
             progress_pct = int((job.processed_chunks / job.total_chunks) * 100)
-        print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%)")
+        
+        # NEW: Add reasoning visibility for users
+        if reasoning:
+            job.current_reasoning = reasoning
+            job.reasoning_history.append(f"[{stage}] {reasoning}")
+            print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%) - AI Thinking: {reasoning}")
+        else:
+            print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%)")
 
 def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None) -> Dict[str, Any]:
     """Main analysis function using AgencyDB with Fast/Deep mode support and session isolation
@@ -2321,7 +2330,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     print(f"[ANALYZE START] Mode: {mode}, Request length: {len(request_text)}, strictness: {strictness}, tier: {tier}")
     
     # Update job status - Stage 1
-    _update_job(job_id, "Stage 1/7: Loading database catalog...", 10)
+    _update_job(job_id, "Stage 1/7: Loading database catalog...", 10, 
+                reasoning="Accessing AgencyDB with 1,900+ deliverables, components, and tasks across 6 departments")
     
     # Build catalog from AgencyDB
     catalog = build_catalog_from_agencydb(db)
@@ -2340,12 +2350,25 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     deliverable_count = len([x for x in catalog if x["level"] == "deliverable"])
     print(f"[ANALYZE] Catalog contains {deliverable_count} deliverables")
     
+    _update_job(job_id, "Stage 1/7: Database loaded", 15,
+                reasoning=f"Found {deliverable_count} deliverables across Strategy, Creative, Content, Paid Media, Technology, and IMM departments")
+    
     # Stage 2: Summarize request (skip for Fast mode to save time)
     if mode == "deep":
-        _update_job(job_id, "Stage 2/7: Summarizing request with GPT-5...", 20)
+        _update_job(job_id, "Stage 2/7: Summarizing request with GPT-5...", 20,
+                    reasoning="Using GPT-5 to extract: business goals, target channels, markets, compliance requirements, and project complexity")
         try:
             summary = summarize_request(request_text)
             print(f"[ANALYZE] Summary generated successfully")
+            
+            # Extract key insights for reasoning
+            goals_count = len(summary.get("goals", []))
+            channels = summary.get("channels", [])
+            markets = summary.get("markets", [])
+            complexity = summary.get("complexity", "medium")
+            
+            _update_job(job_id, "Stage 2/7: RFP analyzed", 25,
+                        reasoning=f"Identified {goals_count} business goals, {len(channels)} channels ({', '.join(channels[:3])}{'...' if len(channels) > 3 else ''}), {len(markets)} market(s). Complexity: {complexity}")
         except Exception as e:
             print(f"[ANALYZE WARNING] Summary failed: {e}, using default summary")
             summary = {
@@ -2360,9 +2383,12 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 "complexity": "medium",
                 "risk_flags": []
             }
+            _update_job(job_id, "Stage 2/7: Using fallback summary", 25,
+                        reasoning="GPT-5 summarization failed - using keyword extraction for basic analysis")
     else:
         # Fast mode: Skip GPT-5 summarization
-        _update_job(job_id, "Stage 2/7: Fast mode - skipping summarization...", 20)
+        _update_job(job_id, "Stage 2/7: Fast mode - skipping summarization...", 20,
+                    reasoning="Fast mode active - using keyword-based analysis instead of full GPT-5 summarization for speed")
         summary = {
             "summary": request_text[:500],
             "goals": ["Fast analysis"],
@@ -2377,7 +2403,12 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         }
     
     # Stage 3: Compute embeddings and find candidates (skip embeddings for Fast mode)
-    _update_job(job_id, f"Stage 3/7: {'Finding candidates with keywords...' if mode == 'fast' else 'Computing embeddings and similarity scores...'}", 30)
+    if mode == 'fast':
+        _update_job(job_id, f"Stage 3/7: Finding candidates with keywords...", 30,
+                    reasoning="Using TF-IDF keyword matching to rapidly identify relevant deliverables without AI embeddings")
+    else:
+        _update_job(job_id, f"Stage 3/7: Computing embeddings and similarity scores...", 30,
+                    reasoning=f"Generating semantic embeddings for RFP and {len(catalog)} catalog items to find deep pattern matches")
     
     # Pass mode to skip embeddings in Fast mode
     candidates, all_recall = recall_candidates(request_text, catalog, client=client or oai, mode=mode, session_id=session_id)
@@ -2389,6 +2420,10 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         all_recall = catalog
     
     print(f"[ANALYZE] Found {len(candidates)} candidates")
+    
+    deliv_candidates_count = len([c for c in candidates if c["level"] == "deliverable"])
+    _update_job(job_id, f"Stage 3/7: Candidate matching complete", 35,
+                reasoning=f"Matched {deliv_candidates_count} relevant deliverables from semantic analysis - now filtering to top matches")
     
     # Stage 4: Fast vs Deep mode divergence
     if mode == "fast":

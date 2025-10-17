@@ -444,7 +444,9 @@ async def get_agencydb_job_status(job_id: str):
         "status": status_map[job.status],
         "progress": progress,
         "current_stage": job.current_stage,
-        "message": job.current_stage
+        "message": job.current_stage,
+        "reasoning": job.current_reasoning if hasattr(job, 'current_reasoning') else "",  # NEW: AI thinking steps
+        "reasoning_history": job.reasoning_history if hasattr(job, 'reasoning_history') else []  # Full thinking log
     }
     
     # Add deliverables data if job is completed
