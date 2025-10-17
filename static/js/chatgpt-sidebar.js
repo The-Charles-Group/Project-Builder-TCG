@@ -17,6 +17,7 @@ class ChatGPTSidebar {
         this.statusText = null;
         this.progressBar = null;
         this.chatSection = null;
+        this.floatingToggle = null;
         this.initialized = false;
         
         // Initialize on page load
@@ -30,6 +31,7 @@ class ChatGPTSidebar {
     init() {
         if (this.initialized) return;
         
+        this.createFloatingToggleButton();
         this.createSidebarHTML();
         this.attachEventListeners();
         this.restoreExpandedState();
@@ -41,6 +43,20 @@ class ChatGPTSidebar {
         window.chatgptSidebar = this;
         
         console.log('[CHATGPT SIDEBAR] Initialized and exposed globally');
+    }
+
+    createFloatingToggleButton() {
+        // Create the always-visible floating toggle button
+        this.floatingToggle = document.createElement('button');
+        this.floatingToggle.id = 'chatgpt-toggle-btn';
+        this.floatingToggle.className = 'chatgpt-floating-toggle';
+        this.floatingToggle.innerHTML = '<span class="vertical-bars">|||</span>';
+        this.floatingToggle.title = 'Toggle ChatGPT Sidebar';
+        
+        // Add to body directly (not inside sidebar)
+        document.body.appendChild(this.floatingToggle);
+        
+        console.log('[CHATGPT SIDEBAR] Floating toggle button created');
     }
 
     createSidebarHTML() {
@@ -170,7 +186,15 @@ class ChatGPTSidebar {
     }
 
     attachEventListeners() {
-        // Hamburger toggle
+        // Floating toggle button (always visible)
+        if (this.floatingToggle) {
+            this.floatingToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleSidebar();
+            });
+        }
+        
+        // Hamburger toggle (inside sidebar)
         const hamburger = document.getElementById('chatgpt-hamburger');
         if (hamburger) {
             hamburger.addEventListener('click', (e) => {
@@ -188,11 +212,13 @@ class ChatGPTSidebar {
             });
         }
         
-        // Click outside to close
+        // Click outside to close (exclude floating toggle button)
         document.addEventListener('click', (e) => {
             if (this.isExpanded && 
                 !this.container.contains(e.target) &&
-                e.target.id !== 'chatgpt-hamburger') {
+                e.target.id !== 'chatgpt-hamburger' &&
+                e.target.id !== 'chatgpt-toggle-btn' &&
+                !this.floatingToggle.contains(e.target)) {
                 this.collapse();
             }
         });
@@ -408,6 +434,44 @@ class ChatGPTSidebar {
     addStyles() {
         const style = document.createElement('style');
         style.textContent = `
+            /* Floating Toggle Button - Always Visible */
+            .chatgpt-floating-toggle {
+                position: fixed;
+                top: 10px;
+                left: 10px;
+                z-index: 10000;
+                width: 40px;
+                height: 40px;
+                background: rgba(32, 33, 35, 0.9);
+                border: none;
+                border-radius: 8px;
+                color: white;
+                font-size: 18px;
+                font-weight: bold;
+                letter-spacing: 2px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: background 0.2s ease;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+            }
+
+            .chatgpt-floating-toggle:hover {
+                background: rgba(52, 53, 65, 0.95);
+            }
+
+            .chatgpt-floating-toggle:active {
+                transform: scale(0.95);
+            }
+
+            .chatgpt-floating-toggle .vertical-bars {
+                font-family: monospace;
+                font-size: 16px;
+                line-height: 1;
+                letter-spacing: 2px;
+            }
+
             /* ChatGPT Sidebar Container */
             .chatgpt-sidebar {
                 position: fixed;
