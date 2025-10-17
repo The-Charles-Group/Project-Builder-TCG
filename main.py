@@ -8689,6 +8689,119 @@ def download_shipped_project(ship_id: str):
         media_type="application/zip"
     )
 
+@app.post("/api/timeline/save")
+async def save_timeline(request: dict):
+    """
+    Save timeline data (tasks, durations, dependencies) to backend storage.
+    This endpoint integrates timeline changes with scenario data and persists everything.
+    """
+    try:
+        tasks = request.get("tasks", [])
+        reasoning = request.get("reasoning", {})
+        metadata = request.get("metadata", {})
+        scenario_letter = request.get("scenario", "A")
+        
+        # Get the current scenario
+        scen = _CURRENT_SCENARIOS.get(scenario_letter)
+        if not scen:
+            # Initialize scenario if it doesn't exist
+            scen = {
+                "items": [],
+                "totals": {"hours": 0, "price": 0},
+                "timeline": {},
+                "metadata": {}
+            }
+            _CURRENT_SCENARIOS[scenario_letter] = scen
+        
+        # Update timeline data in the scenario
+        scen["timeline_tasks"] = tasks
+        scen["timeline_reasoning"] = reasoning
+        scen["timeline_metadata"] = metadata
+        scen["timeline_last_saved"] = datetime.datetime.now(ZoneInfo("America/New_York")).isoformat()
+        
+        # Calculate timeline metrics
+        total_duration = 0
+        critical_path = []
+        resource_allocation = {}
+        
+        if tasks:
+            # Calculate total duration
+            earliest_start = min((datetime.datetime.fromisoformat(t["start"].replace("Z", "+00:00")) for t in tasks if "start" in t), default=None)
+            latest_end = max((datetime.datetime.fromisoformat(t["end"].replace("Z", "+00:00")) for t in tasks if "end" in t), default=None)
+            
+            if earliest_start and latest_end:
+                total_duration = (latest_end - earliest_start).days
+                scen["timeline"]["start"] = earliest_start.isoformat()
+                scen["timeline"]["end"] = latest_end.isoformat()
+                scen["timeline"]["duration_days"] = total_duration
+            
+            # Calculate resource allocation
+            for task in tasks:
+                if "resources" in task:
+                    for resource in task.get("resources", []):
+                        resource_name = resource if isinstance(resource, str) else resource.get("name", "Unknown")
+                        resource_allocation[resource_name] = resource_allocation.get(resource_name, 0) + task.get("hours", 0)
+            
+            # Identify critical path (simplified - tasks with no slack)
+            critical_path = [t["id"] for t in tasks if t.get("is_critical", False)]
+        
+        # Update scenario items with timeline data
+        for task in tasks:
+            deliverable_code = task.get("deliverable_code") or task.get("id", "").split("-")[0]
+            
+            # Find matching item in scenario
+            for item in scen.get("items", []):
+                if item.get("deliverable_code") == deliverable_code:
+                    # Update hours based on timeline duration
+                    if "duration" in task and "days" in task["duration"]:
+                        hours_per_day = metadata.get("hours_per_day", 6)
+                        resource_count = len(task.get("resources", [])) or 1
+                        calculated_hours = task["duration"]["days"] * hours_per_day * resource_count
+                        
+                        # Update item hours
+                        item["timeline_hours"] = calculated_hours
+                        
+                        # If timeline hours significantly differ from original, use timeline
+                        if abs(item.get("total_hours", 0) - calculated_hours) > 1:
+                            item["total_hours"] = calculated_hours
+                            item["hours_updated_from_timeline"] = True
+                    
+                    # Store timeline-specific data
+                    item["timeline_start"] = task.get("start")
+                    item["timeline_end"] = task.get("end")
+                    item["timeline_dependencies"] = task.get("dependencies", [])
+                    break
+        
+        # Store the complete scenario with timeline data
+        _CURRENT_SCENARIOS[scenario_letter] = scen
+        
+        # Also save to ScenarioStore if it exists
+        if hasattr(app.state, "scenario_store"):
+            app.state.scenario_store[scenario_letter] = scen
+        
+        print(f"[TIMELINE SAVE] Saved {len(tasks)} tasks for scenario {scenario_letter}")
+        print(f"[TIMELINE SAVE] Duration: {total_duration} days, Resources: {len(resource_allocation)}")
+        
+        return {
+            "success": True,
+            "message": f"Timeline saved successfully for scenario {scenario_letter}",
+            "metrics": {
+                "total_tasks": len(tasks),
+                "total_duration_days": total_duration,
+                "critical_path_count": len(critical_path),
+                "resource_count": len(resource_allocation),
+                "resource_allocation": resource_allocation,
+                "saved_at": scen["timeline_last_saved"]
+            },
+            "scenario": scen  # Return updated scenario for frontend sync
+        }
+        
+    except Exception as e:
+        print(f"[TIMELINE SAVE ERROR] {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to save timeline: {str(e)}")
+
 @app.post("/api/scenario/duplicate")
 async def duplicate_scenario(payload: DuplicateScenarioPayload):
     """

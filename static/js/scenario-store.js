@@ -41,6 +41,8 @@
     updateDeliverable(did, patch) {
       const d = this.state.deliverables.find(x => x.id === did);
       if (!d) return;
+      const oldHours = d.hours;
+      const oldMonths = d.months;
       Object.assign(d, patch || {});
       if (patch && patch.cadence) {
         // propagate unless component has an explicit override
@@ -48,16 +50,50 @@
           c.cadence = d.cadence; c.months = d.months;
         }
       }
-      this.recompute(); this.emit();
+      this.recompute(); 
+      this.emit();
+      
+      // Emit pricing:changed event when hours or months change
+      if ((patch.hours !== undefined && patch.hours !== oldHours) || 
+          (patch.months !== undefined && patch.months !== oldMonths)) {
+        this.emitPricingChange(did, d);
+      }
     },
     updateComponent(did, cid, patch) {
       const d = this.state.deliverables.find(x => x.id === did);
       if (!d) return;
       const c = (d.components || []).find(x => x.id === cid);
       if (!c) return;
+      const oldHours = c.hours;
       Object.assign(c, patch || {});
       if (patch && (patch.cadence || patch.months != null)) c._customCadence = true;
-      this.recompute(); this.emit();
+      this.recompute(); 
+      this.emit();
+      
+      // Emit pricing:changed event when component hours change
+      if (patch.hours !== undefined && patch.hours !== oldHours) {
+        this.emitPricingChange(did, d);
+      }
+    },
+    emitPricingChange(deliverableId, deliverable) {
+      // Emit event for Gantt to update
+      const detail = {
+        deliverableId,
+        hours: deliverable.hours,
+        months: deliverable.months || 1,
+        cadence: deliverable.cadence || "One-Time",
+        hoursPerDay: this.state.hoursPerDay || DEFAULTS.hoursPerDay,
+        resources: deliverable.resources || []
+      };
+      
+      // Calculate duration in days from hours
+      const hoursPerDay = detail.hoursPerDay;
+      const resourceCount = Math.max(1, detail.resources.length);
+      const durationDays = Math.ceil(detail.hours / (hoursPerDay * resourceCount));
+      detail.durationDays = durationDays;
+      
+      console.log('[ScenarioStore] Emitting pricing:changed event:', detail);
+      document.dispatchEvent(new CustomEvent("pricing:changed", { detail }));
     },
     upsertMany(deliverables) {
       for (const d of deliverables || []) this.upsertDeliverable(d);

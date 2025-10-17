@@ -3845,54 +3845,150 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   
-  // Save timeline changes
+  // Save timeline changes - unified save mechanism
   const btnSave = document.getElementById('btn-save-timeline');
   if (btnSave) {
     btnSave.addEventListener('click', async () => {
-      // Save timeline changes to backend
+      // Save BOTH timeline and scenario data together
       if (!currentTimelineTasks || currentTimelineTasks.length === 0) {
         alert('No timeline data to save');
         return;
       }
       
+      // Show syncing status
+      const originalText = btnSave.textContent;
+      btnSave.textContent = 'Syncing...';
+      btnSave.disabled = true;
+      
       try {
-        const response = await fetch('/api/timeline/save', {
+        // First save timeline data
+        const timelineResponse = await fetch('/api/timeline/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             tasks: currentTimelineTasks,
             reasoning: timelineReasoning,
+            scenario: window.currentScenario || 'A',
             metadata: {
               saved_at: new Date().toISOString(),
-              project_name: document.getElementById('projectName')?.value || 'Project'
+              project_name: document.getElementById('projectName')?.value || 'Project',
+              hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 6
             }
           })
         });
         
-        if (response.ok) {
-          alert('✅ Timeline changes saved successfully');
-          btnSave.style.display = 'none';
+        // Then save scenario data if ScenarioStore exists
+        if (window.ScenarioStore && window.ScenarioStore.save) {
+          await window.ScenarioStore.save();
+          console.log('[SYNC] Scenario data saved');
+        }
+        
+        if (timelineResponse.ok) {
+          const result = await timelineResponse.json();
+          
+          // Update UI with sync status
+          btnSave.innerHTML = '✅ Synced';
+          btnSave.classList.add('synced');
           
           // Mark timeline as synced
           localStorage.setItem('timeline_synced', 'true');
           localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
+          
+          // Log sync metrics
+          console.log('[SYNC] Timeline saved successfully:', result.metrics);
+          
+          // Hide save button after 2 seconds
+          setTimeout(() => {
+            btnSave.style.display = 'none';
+            btnSave.textContent = originalText;
+            btnSave.classList.remove('synced');
+            btnSave.disabled = false;
+          }, 2000);
         } else {
-          // Fallback to local storage
-          localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
-          localStorage.setItem('timeline_reasoning', JSON.stringify(timelineReasoning));
-          alert('Timeline saved locally (will sync when server is available)');
+          throw new Error('Failed to save timeline');
         }
       } catch (error) {
-        console.error('Error saving timeline:', error);
+        console.error('[SYNC ERROR]', error);
         // Save to local storage as fallback
         localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
         localStorage.setItem('timeline_reasoning', JSON.stringify(timelineReasoning));
-        alert('Timeline saved locally');
+        
+        btnSave.textContent = '⚠️ Saved Locally';
+        btnSave.classList.add('warning');
+        
+        setTimeout(() => {
+          btnSave.textContent = originalText;
+          btnSave.classList.remove('warning');
+          btnSave.disabled = false;
+        }, 3000);
       }
-      
-      btnSave.style.display = 'none';
     });
   }
+  
+  // Listen for pricing:changed events and update Gantt
+  document.addEventListener('pricing:changed', (event) => {
+    const detail = event.detail;
+    console.log('[GANTT SYNC] Received pricing:changed event:', detail);
+    
+    if (!ganttChart || !detail.deliverableId) return;
+    
+    // Find the task in Gantt
+    const task = ganttChart.get_task(detail.deliverableId);
+    if (!task) {
+      console.log('[GANTT SYNC] Task not found in Gantt:', detail.deliverableId);
+      return;
+    }
+    
+    // Calculate new end date based on duration
+    const startDate = new Date(task.start);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + detail.durationDays);
+    
+    // Update task in Gantt
+    try {
+      ganttChart.update_task({
+        id: detail.deliverableId,
+        start: task.start,
+        end: endDate.toISOString(),
+        duration: detail.durationDays,
+        resources: detail.resources
+      });
+      
+      // Show visual feedback
+      const taskEl = document.querySelector(`[data-task-id="${detail.deliverableId}"]`);
+      if (taskEl) {
+        taskEl.classList.add('synced-from-pricing');
+        setTimeout(() => {
+          taskEl.classList.remove('synced-from-pricing');
+        }, 1500);
+      }
+      
+      // Update currentTimelineTasks if exists
+      if (currentTimelineTasks) {
+        const taskIndex = currentTimelineTasks.findIndex(t => 
+          t.id === detail.deliverableId || t.deliverable_code === detail.deliverableId
+        );
+        if (taskIndex >= 0) {
+          currentTimelineTasks[taskIndex].duration = { days: detail.durationDays };
+          currentTimelineTasks[taskIndex].end = endDate.toISOString();
+          console.log('[GANTT SYNC] Updated task duration:', detail.deliverableId, detail.durationDays, 'days');
+        }
+      }
+      
+      // Show save button since timeline changed
+      if (btnSave) {
+        btnSave.style.display = 'inline-block';
+      }
+    } catch (error) {
+      console.error('[GANTT SYNC ERROR] Failed to update Gantt:', error);
+    }
+  });
+  
+  // Listen for gantt:changed events (already handled by ScenarioStore)
+  document.addEventListener('gantt:changed', (event) => {
+    console.log('[PRICING SYNC] Gantt changed, pricing will update via ScenarioStore:', event.detail);
+    // ScenarioStore already handles this event
+  });
 });
 
 // Export timeline data for use in exports
