@@ -5578,42 +5578,111 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         # Build scenario items from selection
         items = []
         
-        # Iterate through deliverables in selection
-        for deliv_code, deliv_data in selection.items():
-            if not isinstance(deliv_data, dict):
-                continue
-            
+        # Parse selection structure: {deliverable_codes: [...], components_map: {...}, l3_map: {...}}
+        deliverable_codes = selection.get('deliverable_codes', [])
+        components_map = selection.get('components_map', {})
+        l3_map = selection.get('l3_map', {})
+        
+        # For now, just use the existing /api/build logic to generate items
+        # We'll call the existing scenario builder and store the result in SCENARIO_STORE
+        from copy import deepcopy
+        
+        # Build a standard payload for the existing /api/build endpoint
+        build_payload_dict = {
+            "deliverable_codes": deliverable_codes,
+            "selected_components": components_map,
+            "selected_l3": l3_map,
+            "pricing_mode": payload.pricing_mode or "Flat_Blended",
+            "blended_rate": payload.blended_rate or 195,
+            "rate_band": payload.rate_band or "Standard_US",
+            "project_start": payload.project_start or datetime.date.today().isoformat(),
+            "client_budget_usd": payload.client_budget_usd or None,
+            "use_slack": True,
+            "slack_after_internal": 0,
+            "slack_after_client": 0,
+            "slack_global_pct": 0,
+            "retainers": payload.retainers or []
+        }
+        
+        # Build using existing logic (reuse the code)
+        # For now, we'll create a simple scenario with basic items
+        for deliv_code in deliverable_codes:
             # Get deliverable info from database
-            db_row = DB.deliverables[DB.deliverables['Deliverable_Code'] == deliv_code]
-            if db_row.empty:
+            db_rows = DB.all_rows[DB.all_rows['Deliverable_Code'] == deliv_code]
+            if db_rows.empty:
                 continue
             
-            deliverable_name = db_row['Deliverable'].iloc[0] if 'Deliverable' in db_row.columns else deliv_code
+            deliverable_name = db_rows['Deliverable'].iloc[0] if 'Deliverable' in db_rows.columns else deliv_code
             
-            # Get components for this deliverable
-            components = deliv_data.get('components', [])
+            # Get components - either user-selected or all default components
+            comp_selection = components_map.get(deliv_code, "__ALL__")
             
-            for component in components:
-                component_name = component.get('name', '')
-                tasks = component.get('tasks', [])
+            if comp_selection == "__ALL__":
+                # Include all components for this deliverable
+                components_for_deliv = db_rows['Component'].unique().tolist()
+            elif isinstance(comp_selection, dict):
+                # User selected specific components
+                components_for_deliv = list(comp_selection.keys())
+            else:
+                components_for_deliv = []
+            
+            for component_name in components_for_deliv:
+                if not component_name or component_name == "":
+                    continue
                 
-                for task in tasks:
-                    task_label = task.get('label', '')
-                    hours = float(task.get('hours', 0) or 0)
-                    rate = float(task.get('rate', 150) or 150)
-                    
-                    # Create item row
-                    item = {
-                        "Deliverable": deliverable_name,
-                        "Deliverable_Code": deliv_code,
-                        "Component": component_name,
-                        "Task_Label": task_label,
-                        "Planned_Hours": hours,
-                        "Rate_USD": rate,
-                        "Price_USD": round(hours * rate, 2)
-                    }
-                    
-                    items.append(item)
+                # Get L3 tasks for this deliverable/component
+                l3_tasks = l3_map.get(deliv_code, {}).get(component_name, [])
+                
+                # Get rows for this deliverable/component
+                comp_rows = db_rows[db_rows['Component'] == component_name]
+                
+                if not l3_tasks:
+                    # No specific L3 tasks selected, use defaults from DB
+                    for _, row in comp_rows.iterrows():
+                        task_label = row.get('Task_Label', '')
+                        if not task_label:
+                            continue
+                        
+                        hours = float(row.get('Hours', 0) or 0)
+                        rate = float(row.get('Rate_USD', 150) or 150)
+                        
+                        items.append({
+                            "Deliverable": deliverable_name,
+                            "Deliverable_Code": deliv_code,
+                            "Component": component_name,
+                            "Task_Label": task_label,
+                            "Planned_Hours": hours,
+                            "Rate_USD": rate,
+                            "Price_USD": round(hours * rate, 2),
+                            "Role": row.get('Role', 'Generalist'),
+                            "Seniority": row.get('Seniority', 'Mid'),
+                            "Service Department": row.get('Service Department', '')
+                        })
+                else:
+                    # User selected specific L3 tasks
+                    for task_label in l3_tasks:
+                        # Find the corresponding row in DB
+                        task_rows = comp_rows[comp_rows['Task_Label'] == task_label]
+                        if not task_rows.empty:
+                            row = task_rows.iloc[0]
+                            hours = float(row.get('Hours', 0) or 0)
+                            rate = float(row.get('Rate_USD', 150) or 150)
+                        else:
+                            hours = 0.0
+                            rate = 150.0
+                        
+                        items.append({
+                            "Deliverable": deliverable_name,
+                            "Deliverable_Code": deliv_code,
+                            "Component": component_name,
+                            "Task_Label": task_label,
+                            "Planned_Hours": hours,
+                            "Rate_USD": rate,
+                            "Price_USD": round(hours * rate, 2),
+                            "Role": row.get('Role', 'Generalist') if not task_rows.empty else 'Generalist',
+                            "Seniority": row.get('Seniority', 'Mid') if not task_rows.empty else 'Mid',
+                            "Service Department": row.get('Service Department', '') if not task_rows.empty else ''
+                        })
         
         # Create scenario
         scenario = {
@@ -5635,6 +5704,7 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         return {
             "success": True,
             "session_id": session_id,
+            "scenario": scenario,  # Return full scenario for frontend
             "total_items": len(items),
             "totals": scenario["totals"]
         }
