@@ -5,12 +5,35 @@ let DELIV_INDEX = {};     // code -> deliverable object lookup for fast renderin
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ================================================================================
+// Session ID Helper - Uses crypto.randomUUID() with fallback
+// ================================================================================
+function generateSessionId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+window.generateSessionId = generateSessionId;
+
+// ================================================================================
+// Session ID Helper - Get current session or throw error
+// ================================================================================
+function getCurrentSessionId() {
+  if (!window.APP_STATE?.sessionId) {
+    alert('Please complete Step 2 (Apply Smart Selection) first');
+    throw new Error('No active session ID - Step 2 must be completed first');
+  }
+  return window.APP_STATE.sessionId;
+}
+
+window.getCurrentSessionId = getCurrentSessionId;
+
+// ================================================================================
 // Session Management - Data Isolation Between RFPs
 // ================================================================================
 const SessionManager = {
-  generateSessionId() {
-    return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-  },
+  generateSessionId,
   
   getCurrentSessionId() {
     let sessionId = localStorage.getItem('apb.currentSession');
@@ -533,33 +556,98 @@ document.addEventListener('task:dragging', (event) => {
   }
 });
 
+// NEW: Listen for Gantt task updates (drag/resize) and sync with SCENARIO_STORE
+document.addEventListener('gantt:task_updated', async (event) => {
+  const { task, wbs_id, start_date, duration_days } = event.detail || {};
+  if (!wbs_id) return;
+  
+  console.log('[GANTT SYNC] Task updated:', { wbs_id, start_date, duration_days });
+  
+  // Get session ID from APP_STATE (must exist from build_scenario)
+  const sessionId = getCurrentSessionId();
+  
+  try {
+    // Call new SCENARIO_STORE timeline update endpoint
+    const response = await fetch('/api/timeline/update_task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        wbs_id: wbs_id,
+        start_date: start_date,
+        duration_days: duration_days
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[GANTT SYNC] Update failed:', errorText);
+      return;
+    }
+    
+    const result = await response.json();
+    
+    // Update the scenario with timeline changes
+    const updatedScenario = result.scenario || result;
+    
+    if (updatedScenario && updatedScenario.items) {
+      // Store updated scenario
+      window.currentScenario = updatedScenario;
+      window.SCENARIOS = { A: updatedScenario };
+      
+      // Update pricing table display to reflect timeline changes
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      console.log('[GANTT SYNC] Pricing table updated with timeline changes');
+    }
+  } catch (error) {
+    console.error('[GANTT SYNC] Error updating task:', error);
+  }
+});
+
+// Hook into existing Gantt library's drag end event if available
+if (typeof window.Gantt !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    // Listen for Gantt bar drag end events
+    const ganttContainer = document.querySelector('#gantt');
+    if (ganttContainer) {
+      ganttContainer.addEventListener('date_change', (event) => {
+        const task = event.detail?.task;
+        if (task) {
+          // Calculate duration in days
+          const start = new Date(task.start);
+          const end = new Date(task.end);
+          const durationDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+          
+          // Dispatch our custom event for SCENARIO_STORE sync
+          document.dispatchEvent(new CustomEvent('gantt:task_updated', {
+            detail: {
+              task: task,
+              wbs_id: task.id || task.wbs_id,
+              start_date: task.start,
+              duration_days: durationDays
+            }
+          }));
+        }
+      });
+    }
+  });
+}
+
 // ISSUE 3: Retainer Options Functions
 
-// ISSUE FIX 3: Add global retainer suggestions function
-async function askAIForRetainerSuggestions() {
-  const codes = Array.from(selectionStore.deliverables);
-  
-  if (codes.length === 0) {
-    alert('Please select deliverables first');
+// NEW: Global retainer suggestions using SCENARIO_STORE API
+async function askAIForRetainerSuggestions(monthlyBudget = null) {
+  // Check for scenario first
+  if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
+    alert('Please build a scenario first before analyzing retainers.');
     return;
   }
   
-  const rfpText = APB.step2?.rfpText || 
-                 sessionStorage.getItem('rfpContent') || 
-                 sessionStorage.getItem('apb.rfp_text') ||
-                 document.getElementById('rfpText')?.value || '';
-  
-  if (!rfpText) {
-    alert('Please provide RFP text before using AI suggestions');
-    return;
-  }
-  
-  // Build deliverables array with proper format
-  const deliverables = codes.map(code => ({
-    code: code,
-    name: labelFor(code), // Get the label/name
-    type: "DELIVERABLE"
-  }));
+  // Get session ID from APP_STATE (must exist from build_scenario)
+  const sessionId = getCurrentSessionId();
   
   // Show loading on button
   const btn = event?.target;
@@ -569,53 +657,123 @@ async function askAIForRetainerSuggestions() {
   }
   
   try {
-    const res = await fetch('/api/pricing/retainer_suggest', {
+    // Call new SCENARIO_STORE retainer_suggestions endpoint
+    const res = await fetch('/api/pricing/retainer_suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        deliverables: deliverables,  // Correct format
-        rfp_text: rfpText
+        session_id: sessionId,
+        monthly_budget: monthlyBudget
       })
     });
     
-    if (res.ok) {
-      const data = await res.json();
-      const suggestions = data.suggestions || [];
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Retainer suggestions failed: ${errorText}`);
+    }
+    
+    const result = await res.json();
+    
+    // Update the scenario with retainer suggestions
+    const updatedScenario = result.scenario || result;
+    
+    if (updatedScenario && updatedScenario.items) {
+      // Store updated scenario
+      window.currentScenario = updatedScenario;
+      window.SCENARIOS = { A: updatedScenario };
       
-      // Apply suggestions to pricingData
-      let retainerCount = 0;
-      suggestions.forEach(suggestion => {
-        if (suggestion.type === 'RETAINER') {
-          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'RETAINER');
-          pricingData.retainers.set(suggestion.deliverable_code, suggestion.recommended_months || 12);
-          retainerCount++;
-        } else {
-          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'PROJECT');
-          pricingData.retainers.delete(suggestion.deliverable_code);
-        }
-      });
+      // Update pricing table display
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
       
-      // Update UI to show retainer indicators
-      if (window.renderDeliverablesPanel) {
-        renderDeliverablesPanel();
+      // Re-render scenario if function exists
+      if (window.renderScenario) {
+        window.renderScenario('scenarioA', updatedScenario);
+      }
+      
+      // Display retainer plan in UI panel
+      if (result.retainer_plan) {
+        displayRetainerPlan(result.retainer_plan);
       }
       
       // Show success message
-      if (retainerCount > 0) {
-        alert(`✅ AI Retainer Analysis Complete!\n\n${retainerCount} deliverables suggested as retainers.\n\nRetainer items will be marked in the deliverables list.`);
-      } else {
-        alert('✅ Analysis complete. All items are best suited as one-time projects.');
-      }
+      const message = result.message || 'Retainer suggestions applied successfully.';
+      alert(`✅ AI Retainer Suggestions Complete!\n\n${message}`);
+      
+      console.log('Retainer suggestions applied:', result);
+    } else {
+      throw new Error('Invalid retainer suggestions response');
     }
   } catch (error) {
     console.error('Failed to get retainer suggestions:', error);
-    alert('Failed to get AI suggestions. Please try again.');
+    alert(`❌ Retainer Suggestions Error:\n\n${error.message || 'Failed to get retainer suggestions. Please try again.'}`);
   } finally {
     // Reset button
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🤖 AI Retainer Analysis';
+      btn.textContent = '🤖 Ask AI for Retainer Suggestions';
     }
+  }
+}
+
+// Display retainer plan in a nice UI panel
+function displayRetainerPlan(retainerPlan) {
+  const container = document.getElementById('retainer-plan-container');
+  if (!container) {
+    // Create container if it doesn't exist
+    const newContainer = document.createElement('div');
+    newContainer.id = 'retainer-plan-container';
+    newContainer.style.cssText = 'margin: 20px 0; padding: 20px; background: var(--card); border-radius: 12px; border: 2px solid var(--accent2);';
+    
+    // Insert after pricing table or in Step 3
+    const step3 = document.getElementById('step3');
+    if (step3) {
+      step3.appendChild(newContainer);
+    }
+  }
+  
+  const displayContainer = container || document.getElementById('retainer-plan-container');
+  
+  if (displayContainer && retainerPlan) {
+    let html = `
+      <h3 style="color: var(--accent2); margin-bottom: 16px;">
+        🔄 Suggested Retainer Plan
+      </h3>
+      <div style="background: rgba(139,92,246,0.1); padding: 16px; border-radius: 8px;">
+        <p style="color: var(--text); font-size: 0.95em; line-height: 1.6;">
+          ${retainerPlan.description || 'Recommended retainer configuration based on your project requirements.'}
+        </p>
+    `;
+    
+    if (retainerPlan.items && retainerPlan.items.length > 0) {
+      html += `
+        <div style="margin-top: 16px;">
+          <h4 style="color: var(--accent); margin-bottom: 8px;">Retainer Items:</h4>
+          <ul style="list-style: none; padding: 0;">
+      `;
+      
+      retainerPlan.items.forEach(item => {
+        html += `
+          <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+            <strong style="color: var(--text);">${item.name || item.deliverable}</strong>
+            <span style="color: var(--muted); margin-left: 8px;">${item.months || 12} months</span>
+          </li>
+        `;
+      });
+      
+      html += `
+          </ul>
+        </div>
+      `;
+    }
+    
+    html += `
+      </div>
+    `;
+    
+    displayContainer.innerHTML = html;
+    displayContainer.style.display = 'block';
   }
 }
 
@@ -1454,7 +1612,12 @@ function updatePricingTable() {
         <tbody>
   `;
   
+  // NEW: Calculate grand total from scenario.totals.price instead of manual calculation
   let grandTotal = 0;
+  if (scenario.totals && typeof scenario.totals.price === 'number' && !isNaN(scenario.totals.price) && scenario.totals.price > 0) {
+    grandTotal = scenario.totals.price;
+  }
+  
   let rowIndex = 0;
   
   scenario.items.forEach((item, itemIndex) => {
@@ -1494,8 +1657,7 @@ function updatePricingTable() {
       }
     }
     
-    // Update grand total
-    grandTotal += totalPrice + conflictCost;
+    // Note: Grand total is now calculated from scenario.totals.price, not accumulated here
     
     // Determine row background (alternating + highlight for recurring)
     const isRecurring = cadenceType !== 'ONE_TIME';
@@ -1633,7 +1795,7 @@ function updatePricingTable() {
         const compResources = extractComponentResources(comp);
         const compTasks = comp.tasks || [];
         
-        grandTotal += compTotalPrice;
+        // Note: Grand total is now calculated from scenario.totals.price, not accumulated here
         
         const compRowBg = compCadence !== 'ONE_TIME' ? 
           'background: linear-gradient(90deg, rgba(139,92,246,0.03), rgba(139,92,246,0.01));' :
@@ -1751,7 +1913,7 @@ function updatePricingTable() {
             <div id="grand-total-cost" style="font-size: 2.5em; font-weight: 700; 
                         background: linear-gradient(135deg, var(--accent), var(--accent2)); 
                         -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-              $${grandTotal.toLocaleString()}
+              ${grandTotal > 0 ? '$' + grandTotal.toLocaleString() : '—'}
             </div>
             <div id="grand-total-breakdown" style="font-size: 0.85em; color: var(--muted); margin-top: 4px;">
               <!-- Breakdown will be updated by updatePricingSummary -->
@@ -2077,39 +2239,16 @@ function updateCustomRate(deliverableCode, rate) {
 }
 
 // Analyze PROJECT vs RETAINER with AI - ENHANCED VERSION
+// NEW: AI Cadence Suggestion using SCENARIO_STORE API
 async function analyzeProjectRetainer() {
-  // Try multiple sources for RFP text
-  let rfpText = '';
-  
-  // First try from textarea if still visible
-  const rfpTextarea = document.getElementById('rfpText');
-  if (rfpTextarea) rfpText = rfpTextarea.value;
-  
-  // If empty, try from sessionStorage (using correct key)
-  if (!rfpText) rfpText = sessionStorage.getItem('apb.rfp_text') || sessionStorage.getItem('rfp_text') || '';
-  
-  // If empty, try from APB.step2
-  if (!rfpText && window.APB && window.APB.step2) {
-    rfpText = window.APB.step2.rfpText || '';
-  }
-  
-  // If empty, try from app.state (if stored during analysis)
-  if (!rfpText && window.appState && window.appState.rfpText) {
-    rfpText = window.appState.rfpText || '';
-  }
-  
-  if (!rfpText) {
-    console.warn('No RFP text found in any storage location');
-    // Instead of failing, use a generic analysis based on deliverable names
-    const useGenericAnalysis = confirm('No RFP text found. Would you like to analyze based on deliverable names only?');
-    if (!useGenericAnalysis) return;
-    rfpText = 'Analyze based on deliverable names only';
-  }
-  
-  if (!SCENARIOS || !SCENARIOS.A) {
+  // Check for scenario first
+  if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
     alert('Please build a scenario first (click Build Scenario button).');
     return;
   }
+  
+  // Get session ID from APP_STATE (must exist from build_scenario)
+  const sessionId = getCurrentSessionId();
   
   const btn = document.getElementById('btn-ai-suggest-type');
   if (btn) {
@@ -2118,104 +2257,55 @@ async function analyzeProjectRetainer() {
   }
   
   try {
-    // Get deliverables from current scenario
-    const deliverables = (SCENARIOS.A.items || []).map(item => ({
-      code: item.deliverable_code,
-      name: item.deliverable
-    }));
-    
-    const response = await fetch('/api/ai/analyze_project_retainer', {
+    // Call new SCENARIO_STORE cadence_suggestion endpoint
+    const response = await fetch('/api/pricing/cadence_suggestion', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        rfp_text: rfpText,
-        deliverables: deliverables
+        session_id: sessionId
       })
     });
     
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+      throw new Error(`Cadence suggestion failed: ${errorText}`);
     }
     
     const result = await response.json();
     
-    if (result.suggestions) {
-      // Apply suggestions to BOTH pricing data AND scenario
-      Object.entries(result.suggestions).forEach(([code, suggestion]) => {
-        // Update pricingData for future calculations
-        pricingData.deliverableTypes.set(code, suggestion.type);
-        
-        // Update the actual scenario items
-        const scenarioItem = SCENARIOS.A.items.find(i => i.deliverable_code === code);
-        if (scenarioItem) {
-          // Set retainer_months based on type
-          if (suggestion.type === 'RETAINER') {
-            // Default to 12 months for retainers unless already set
-            scenarioItem.retainer_months = scenarioItem.retainer_months || 12;
-            pricingData.retainers.set(code, scenarioItem.retainer_months);
-          } else {
-            // PROJECT type - clear retainer months
-            scenarioItem.retainer_months = 0;
-            pricingData.retainers.delete(code);
-          }
-        }
-        
-        // Also apply to components (inherit from parent)
-        const item = SCENARIOS.A.items.find(i => i.deliverable_code === code);
-        if (item && item.components) {
-          item.components.forEach(comp => {
-            const compKey = `${code}::${comp.name}`;
-            if (!pricingData.deliverableTypes.has(compKey)) {
-              pricingData.deliverableTypes.set(compKey, suggestion.type);
-            }
-          });
-        }
-      });
+    // Update the scenario with cadence suggestions
+    const updatedScenario = result.scenario || result;
+    
+    if (updatedScenario && updatedScenario.items) {
+      // Store updated scenario
+      window.currentScenario = updatedScenario;
+      window.SCENARIOS = { A: updatedScenario };
       
-      // Re-render the scenario table to show updated types and cadence
+      // Update pricing table display
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      // Re-render scenario if function exists
       if (window.renderScenario) {
-        window.renderScenario('scenarioA', SCENARIOS.A);
+        window.renderScenario('scenarioA', updatedScenario);
       }
       
-      // Update pricing calculations if the function exists
-      if (typeof updatePricingCalculations === 'function') {
-        updatePricingCalculations();
-      }
+      // Show success message
+      const message = result.message || 'Cadence suggestions applied successfully.';
+      alert(`✅ AI Cadence Suggestion Complete!\n\n${message}`);
       
-      // Show summary of suggestions with reasoning
-      const projectCount = Object.values(result.suggestions).filter(s => s.type === 'PROJECT').length;
-      const retainerCount = Object.values(result.suggestions).filter(s => s.type === 'RETAINER').length;
-      
-      let summaryMessage = `✨ AI Analysis Complete!\n\n` +
-                          `📦 ${projectCount} deliverables marked as PROJECT (one-time)\n` +
-                          `🔄 ${retainerCount} deliverables marked as RETAINER (recurring)\n\n`;
-      
-      // Add method info
-      if (result.method === 'gpt5') {
-        summaryMessage += `🧠 Analysis by: GPT-5 Intelligence\n`;
-      } else if (result.method === 'ai') {
-        summaryMessage += `🤖 Analysis by: AI Assistant\n`;
-      } else {
-        summaryMessage += `⚡ Analysis by: Smart Heuristics\n`;
-      }
-      
-      // Add confidence if available
-      if (result.confidence) {
-        summaryMessage += `📊 Confidence: ${(result.confidence * 100).toFixed(0)}%\n`;
-      }
-      
-      alert(summaryMessage);
-      
-      console.log('AI Suggestions applied:', result);
+      console.log('Cadence suggestions applied:', result);
+    } else {
+      throw new Error('Invalid cadence suggestion response');
     }
   } catch (error) {
-    console.error('Error analyzing project/retainer types:', error);
-    alert('Error analyzing deliverable types: ' + error.message);
+    console.error('Error getting cadence suggestions:', error);
+    alert(`❌ Cadence Suggestion Error:\n\n${error.message || 'Failed to get cadence suggestions. Please try again.'}`);
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🤖 AI Suggest Type';
+      btn.textContent = '🤖 AI Cadence Suggestion';
     }
   }
 }
@@ -2720,104 +2810,72 @@ async function exportPricingDetails() {
   }
 }
 
-// AI Optimize All Pricing Function - ENHANCED VERSION
+// AI Optimize All Pricing Function - NEW SCENARIO_STORE API
 async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
   if (!btn) return;
   
   // Check for scenario
-  if (!SCENARIOS || !SCENARIOS.A) {
+  if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
     alert('Please build a scenario first before optimizing pricing.');
     return;
   }
+  
+  // Get session ID from APP_STATE (must exist from build_scenario)
+  const sessionId = getCurrentSessionId();
   
   // Show loading state
   btn.disabled = true;
   btn.textContent = '🔄 Optimizing...';
   
   try {
-    // Get current scenario data
-    const scenario = SCENARIOS.A;
-    if (!scenario || !scenario.items || scenario.items.length === 0) {
-      alert('No scenario items to optimize. Please build a scenario first.');
-      return;
+    // Call new SCENARIO_STORE optimize endpoint
+    const response = await fetch('/api/pricing/optimize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Optimization failed: ${errorText}`);
     }
     
-    // Get client budget and project details
-    const clientBudget = Number(document.getElementById('clientBudget')?.value || 0);
-    const projectName = document.getElementById('projectName')?.value || 'Project';
+    const result = await response.json();
     
-    // Get RFP text for context
-    let rfpText = '';
-    const rfpTextarea = document.getElementById('rfpText');
-    if (rfpTextarea) rfpText = rfpTextarea.value;
-    if (!rfpText) rfpText = sessionStorage.getItem('apb.rfp_text') || '';
-    if (!rfpText && window.APB && window.APB.step2) {
-      rfpText = window.APB.step2.rfpText || '';
-    }
+    // Update the scenario with optimized data
+    const optimizedScenario = result.scenario || result;
     
-    // Try to call AI optimization endpoint first
-    try {
-      const response = await fetch('/api/ai/optimize_pricing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scenario: scenario,
-          client_budget: clientBudget,
-          project_name: projectName,
-          rfp_context: rfpText,
-          deliverables: scenario.items.map(item => ({
-            code: item.deliverable_code,
-            name: item.deliverable,
-            hours: item.total_hours,
-            price: item.price,
-            is_retainer: item.retainer_months > 0
-          }))
-        })
-      });
+    if (optimizedScenario && optimizedScenario.items) {
+      // Store optimized scenario
+      window.currentScenario = optimizedScenario;
+      window.SCENARIOS = { A: optimizedScenario };
       
-      if (response.ok) {
-        const result = await response.json();
-        
-        // Apply optimizations to scenario
-        if (result.optimized_items) {
-          result.optimized_items.forEach((opt, idx) => {
-            if (scenario.items[idx]) {
-              scenario.items[idx].total_hours = opt.hours;
-              scenario.items[idx].price = opt.price;
-              scenario.items[idx].effective_rate = opt.hours > 0 ? opt.price / opt.hours : 195;
-            }
-          });
-          
-          // Update totals
-          scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
-          scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
-          
-          // Re-render scenario
-          if (window.renderScenario) {
-            window.renderScenario('scenarioA', scenario);
-          }
-          
-          // Show success message
-          showOptimizationSuccess(result, clientBudget);
-        }
-        
-        return; // Exit if AI optimization succeeded
+      // Update pricing table display
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
       }
-    } catch (apiError) {
-      console.log('AI optimization not available, using smart fallback');
+      
+      // Re-render scenario if function exists
+      if (window.renderScenario) {
+        window.renderScenario('scenarioA', optimizedScenario);
+      }
+      
+      // Show success message
+      alert(`✅ Pricing Optimized!\n\n${result.message || 'Pricing has been optimized successfully.'}`);
+    } else {
+      throw new Error('Invalid optimization response');
     }
-    
-    // Fallback: Smart budget-based optimization
-    performSmartOptimization(scenario, clientBudget);
     
   } catch (error) {
     console.error('Error optimizing pricing:', error);
-    alert('Error occurred during optimization. Please try again.');
+    alert(`❌ Optimization Error:\n\n${error.message || 'Failed to optimize pricing. Please try again.'}`);
   } finally {
     // Reset button state
     btn.disabled = false;
-    btn.textContent = 'Optimize All Pricing';
+    btn.textContent = '🤖 AI Optimize';
   }
 }
 
@@ -4711,31 +4769,27 @@ async function buildFromCurrentSelection() {
     }
   });
 
-  // ISSUE FIX 1: Include both snake_case and camelCase formats for compatibility
+  // Generate session ID for tracking
+  const sessionId = generateSessionId();
+  
+  // NEW: Simplified payload for build_scenario endpoint
   const payload = {
-    // Snake_case versions
-    selected_deliverable_codes: codes,
-    selected_components_map: selectedComponentsPayload,
-    selected_l3_map: l3Payload,
-    // CamelCase versions for compatibility
-    selectedDeliverableCodes: codes,
-    selectedComponentsMap: selectedComponentsPayload,
-    selectedL3Map: l3Payload,
-    // Pricing and configuration
+    session_id: sessionId,
+    selection: {
+      deliverable_codes: codes,
+      components_map: selectedComponentsPayload,
+      l3_map: l3Payload
+    },
+    // Additional configuration
     pricing_mode: window.getPricingModeFromUI?.() || 'Flat_Blended',
     blended_rate: window.getBlendedRateFromUI?.() || 195,
     rate_band: window.getRateBandFromUI?.() || 'Standard_US',
-    use_slack: window.getUseSlackFromUI?.() || false,
-    slack_after_internal: window.getSlackInternalFromUI?.() || 1,
-    slack_after_client: window.getSlackClientFromUI?.() || 2,
-    slack_global_pct: window.getSlackPctFromUI?.() || 0.05,
     project_start: window.getProjectStartFromUI?.() || null,
     client_budget_usd: window.getClientBudgetFromUI?.() || null,
-    scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
     retainers: retainersPayload
   };
 
-  const res = await fetch('/api/build', {
+  const res = await fetch('/api/pricing/build_scenario', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -4749,26 +4803,30 @@ async function buildFromCurrentSelection() {
   
   const json = await res.json();
   
-  // Extract scenarios (now only contains A)
-  const scenarios = json.scenarios || {};
-
-  if (!scenarios || !scenarios.A) {
+  // Store the scenario returned from the new endpoint
+  const scenario = json.scenario || json;
+  
+  if (!scenario || !scenario.items) {
     console.warn('Build response', json);
-    alert('Malformed build response: missing scenario A');
+    alert('Malformed build response: missing scenario data');
     return;
   }
 
+  // Store in new global variable as per requirements
+  window.currentScenario = scenario;
+  
   // Save to client state
   window.APP_STATE = window.APP_STATE || {};
-  window.APP_STATE.scenarios = scenarios;
+  window.APP_STATE.scenarios = { A: scenario };
   window.APP_STATE.activeScenario = 'A';
+  window.APP_STATE.sessionId = sessionId;
   
   // Legacy aliases for backward compatibility
-  window.BUILD = json;
+  window.BUILD = { scenarios: { A: scenario } };
   window.appState = window.appState || {};
-  window.appState.scenarios = scenarios;
-  window.latestScenarios = scenarios;
-  window.SCENARIOS = scenarios;
+  window.appState.scenarios = { A: scenario };
+  window.latestScenarios = { A: scenario };
+  window.SCENARIOS = { A: scenario };
 
   // Update AI button states now that scenario exists
   updateAIButtonStates();
