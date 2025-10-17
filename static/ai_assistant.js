@@ -346,7 +346,12 @@ class AIAssistant {
     }
     
     updateProgress(percentage, message, details = null) {
-        // Update floating progress
+        // Update ChatGPT sidebar progress
+        if (this.chatgptSidebar) {
+            this.chatgptSidebar.showProgress(message, percentage);
+        }
+        
+        // Also update floating progress if it exists
         const floatingProgress = document.getElementById('charles-floating-progress');
         const mainBar = document.getElementById('charles-main-progress-bar');
         const progressText = document.getElementById('charles-progress-text');
@@ -385,7 +390,7 @@ class AIAssistant {
     }
     
     addProgressMessage(percentage, message, details) {
-        const messagesContainer = document.getElementById('ai-chat-messages');
+        const messagesContainer = this.sidebarElements?.messages || document.getElementById('chatgpt-messages');
         let progressMsg = document.getElementById('charles-progress-message');
         
         if (!progressMsg) {
@@ -3032,138 +3037,66 @@ class AIAssistant {
     // ====================
     
     createSidebar() {
-        // Create main container
-        const container = document.createElement('div');
-        container.id = 'ai-assistant-container';
-        container.className = 'ai-assistant-container';
-        container.innerHTML = `
-            <div class="ai-assistant-resize-handle" title="Drag to resize"></div>
-            <div class="ai-assistant-sidebar ${this.isMinimized ? 'minimized' : ''}">
-                <div class="ai-assistant-header">
-                    <div class="ai-assistant-title">
-                        <span class="ai-icon charles-sphere">🔮</span>
-                        <span style="font-weight:700;">CHARLES AGENT</span>
-                        <span style="font-size:10px;opacity:0.8;">ProBuFo v3.0</span>
-                        <span class="ai-status-indicator" id="ai-status-indicator">●</span>
-                    </div>
-                    <div class="ai-assistant-controls">
-                        <button class="ai-btn-minimize" id="ai-btn-minimize" title="Minimize">
-                            <span>_</span>
-                        </button>
-                        <button class="ai-btn-close" id="ai-btn-close" title="Close">
-                            <span>×</span>
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="ai-assistant-body">
-                    <div class="ai-gpt5-selector">
-                        <label style="color:#8b5cf6;font-size:12px;font-weight:600;">GPT-5 Intelligence Level</label>
-                        <select id="gpt5-tier-selector" style="width:100%;padding:8px;background:#1a1a2e;color:white;border:1px solid #8b5cf6;border-radius:6px;margin-top:4px;">
-                            <option value="auto">🚀 Auto (Fast & Smart)</option>
-                            <option value="mini">⚡ GPT-5 Mini (Fastest)</option>
-                            <option value="thinking-mini">🧠 Thinking Mini (Balanced)</option>
-                            <option value="thinking">💭 Thinking (Deep Analysis)</option>
-                            <option value="pro">👑 Pro (Maximum Intelligence)</option>
-                        </select>
-                    </div>
-                    
-                    <!-- State Management Controls -->
-                    <div class="ai-state-controls">
-                        <button class="ai-btn-save-state" onclick="window.aiAssistant.saveState()">💾 Save State</button>
-                        <button class="ai-btn-restore-state" onclick="window.aiAssistant.restoreState()">📂 Restore State</button>
-                    </div>
-                    
-                    <!-- File Staging Area -->
-                    <div class="ai-file-staging" id="ai-file-staging" style="display: none;">
-                        <div class="ai-staging-header">
-                            <span>📁 Files Ready to Send</span>
-                            <button class="ai-clear-files" id="ai-clear-files" title="Clear All">×</button>
-                        </div>
-                        <div class="ai-staged-files" id="ai-staged-files"></div>
-                    </div>
-                    
-                    <div class="ai-chat-messages" id="ai-chat-messages">
-                        <div class="ai-welcome-message">
-                            <h4>🔮 Welcome to CHARLES AGENT: ProBuFo v3.0</h4>
-                            <p style="font-style:italic;color:#8b5cf6;">Progressive Business Forecasting Oracle</p>
-                            <p>Enhanced with autonomous self-healing, state preservation, and real-time progress tracking.</p>
-                            <div class="ai-capabilities">
-                                <p><strong>New Capabilities:</strong></p>
-                                <ul>
-                                    <li>🔄 Auto-recovery from errors</li>
-                                    <li>💾 Complete state preservation</li>
-                                    <li>📊 Real-time progress tracking</li>
-                                    <li>🎯 Enhanced UI manipulation</li>
-                                    <li>📁 Batch file processing</li>
-                                </ul>
-                            </div>
-                            <div class="ai-suggestions">
-                                <p><strong>Try commands like:</strong></p>
-                                <ul>
-                                    <li>📄 "Analyze the RFP in deep mode"</li>
-                                    <li>💰 "Set Creative Strategy to $10k monthly"</li>
-                                    <li>📊 "Add 20% markup to all deliverables"</li>
-                                    <li>📅 "Generate an optimized timeline"</li>
-                                    <li>💾 "Export to Excel"</li>
-                                    <li>🔧 "Enable auto-recovery"</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="ai-action-preview" id="ai-action-preview" style="display: none;">
-                        <div class="ai-action-header">
-                            <span>📋 Executing Actions</span>
-                            <span class="ai-action-count" id="ai-action-count">0/0</span>
-                        </div>
-                        <div class="ai-action-list" id="ai-action-list"></div>
-                    </div>
-                    
-                    <div class="ai-chat-input">
-                        <textarea 
-                            id="ai-chat-input" 
-                            placeholder="Type your command or drag & drop files here..."
-                            rows="2"
-                            maxlength="500"
-                        ></textarea>
-                        <div class="ai-input-controls">
-                            <input type="file" id="ai-file-input" accept=".pdf,.docx,.txt,.xlsx" multiple style="display:none;">
-                            <button id="ai-file-btn" class="ai-file-btn" title="Upload Documents">
-                                <span>📎</span>
-                            </button>
-                            <button id="ai-send-btn" class="ai-send-btn" disabled>
-                                <span class="send-icon">➤</span>
-                                <span class="loading-icon" style="display: none;">⏳</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <button class="ai-assistant-toggle" id="ai-assistant-toggle" title="Open CHARLES AGENT">
-                <span class="toggle-icon charles-sphere">🔮</span>
-                <span class="toggle-text">CHARLES</span>
-                <span class="notification-badge" id="ai-notification-badge" style="display: none;">!</span>
-            </button>
-        `;
+        // The ChatGPT-style sidebar is created in chatgpt-sidebar.js
+        // This method waits for it to be ready, then sets up integration
+        console.log('[CHARLES] Using ChatGPT-style sidebar integration');
         
-        console.log('[CHARLES] About to append container to body...');
-        document.body.appendChild(container);
-        console.log('[CHARLES] Container appended to body successfully!');
+        // Wait for ChatGPT sidebar to be fully initialized
+        const waitForSidebar = () => {
+            if (window.chatgptSidebar && document.getElementById('chatgpt-sidebar')) {
+                this.syncWithChatGPTSidebar();
+            } else {
+                // Retry after a short delay
+                setTimeout(waitForSidebar, 50);
+            }
+        };
         
-        // Verify the toggle button is present
-        const toggle = document.getElementById('ai-assistant-toggle');
-        if (toggle) {
-            console.log('[CHARLES] Toggle button found after append:', toggle);
-            // Force it to be visible
-            toggle.style.display = 'flex';
-            toggle.style.visibility = 'visible';
-            toggle.style.opacity = '1';
-            toggle.style.zIndex = '99999';
-        } else {
-            console.error('[CHARLES] Toggle button NOT found after append!');
+        waitForSidebar();
+    }
+    
+    syncWithChatGPTSidebar() {
+        // Verify ChatGPT sidebar elements exist
+        const sidebarContainer = document.getElementById('chatgpt-sidebar');
+        const toggleButton = document.getElementById('chatgpt-hamburger');
+        const messagesDiv = document.getElementById('chatgpt-messages');
+        
+        if (!sidebarContainer || !toggleButton || !messagesDiv) {
+            console.error('[CHARLES] ChatGPT sidebar elements not found!');
+            return;
         }
+        
+        // Store references to ChatGPT sidebar elements (don't change their IDs)
+        this.sidebarElements = {
+            container: sidebarContainer,
+            toggleButton: toggleButton,
+            closeButton: document.getElementById('chatgpt-close'),
+            messages: messagesDiv,
+            input: document.getElementById('chatgpt-input'),
+            sendBtn: document.getElementById('chatgpt-send-btn'),
+            fileBtn: document.getElementById('chatgpt-file-btn'),
+            fileInput: document.getElementById('chatgpt-file-input'),
+            actionPreview: document.getElementById('chatgpt-action-preview'),
+            actionList: document.getElementById('chatgpt-action-list'),
+            actionCount: document.getElementById('chatgpt-action-count'),
+            fileStaging: document.getElementById('chatgpt-file-staging'),
+            stagedFiles: document.getElementById('chatgpt-staged-files'),
+            clearFiles: document.getElementById('chatgpt-clear-files'),
+            gpt5Selector: document.getElementById('chatgpt-gpt5-tier'),
+            statusText: document.getElementById('chatgpt-status-text'),
+            progressBar: document.getElementById('chatgpt-progress-bar'),
+            progressContainer: document.getElementById('chatgpt-progress-container')
+        };
+        
+        // Link to ChatGPT sidebar instance
+        this.chatgptSidebar = window.chatgptSidebar;
+        
+        // Hook into ChatGPT sidebar's toggle functionality
+        if (this.chatgptSidebar) {
+            this.toggle = () => this.chatgptSidebar.toggleSidebar();
+            this.isOpen = this.chatgptSidebar.isExpanded;
+        }
+        
+        console.log('[CHARLES] Synced with ChatGPT sidebar successfully');
     }
     
     addEnhancedStyles() {
@@ -4856,23 +4789,29 @@ class AIAssistant {
     }
     
     addMessage(content, sender) {
-        const messagesContainer = document.getElementById('ai-chat-messages');
+        // Use ChatGPT sidebar messages container
+        const messagesContainer = this.sidebarElements?.messages || document.getElementById('chatgpt-messages');
+        
+        if (!messagesContainer) {
+            console.warn('[CHARLES] Messages container not found');
+            return;
+        }
         
         // Remove welcome message if this is the first real message
-        const welcome = messagesContainer.querySelector('.ai-welcome-message');
+        const welcome = messagesContainer.querySelector('.chatgpt-welcome');
         if (welcome && messagesContainer.children.length === 1) {
             welcome.remove();
         }
         
         const messageDiv = document.createElement('div');
-        messageDiv.className = `ai-message ${sender}`;
+        messageDiv.className = `chatgpt-message ${sender}`;
         
         const avatar = document.createElement('div');
-        avatar.className = 'ai-message-avatar';
+        avatar.className = 'chatgpt-message-avatar';
         avatar.textContent = sender === 'user' ? '👤' : '🤖';
         
         const contentDiv = document.createElement('div');
-        contentDiv.className = 'ai-message-content';
+        contentDiv.className = 'chatgpt-message-content';
         contentDiv.textContent = content;
         
         messageDiv.appendChild(avatar);
@@ -5197,53 +5136,11 @@ function initializeCharles() {
         console.log('[CHARLES] Starting initialization...');
         window.aiAssistant = new AIAssistant();
         console.log('[CHARLES] Agent v3.0 initialized with full autonomy, self-healing, and state preservation.');
-        
-        // Force toggle button to be visible if it exists
-        setTimeout(() => {
-            const toggleBtn = document.getElementById('ai-assistant-toggle');
-            if (toggleBtn) {
-                console.log('[CHARLES] Toggle button found, ensuring visibility...');
-                toggleBtn.style.display = 'flex';
-                toggleBtn.style.visibility = 'visible';
-                toggleBtn.style.opacity = '1';
-            } else {
-                console.error('[CHARLES] Toggle button not found! Attempting to recreate...');
-                // Fallback: Create a simple toggle button if the main one failed
-                const fallbackBtn = document.createElement('button');
-                fallbackBtn.id = 'ai-assistant-toggle-fallback';
-                fallbackBtn.style.cssText = `
-                    position: fixed;
-                    right: 20px;
-                    bottom: 20px;
-                    z-index: 99999;
-                    padding: 12px 20px;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    border: none;
-                    border-radius: 12px;
-                    cursor: pointer;
-                    font-size: 14px;
-                    font-weight: 600;
-                    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                `;
-                fallbackBtn.innerHTML = '🔮 CHARLES';
-                fallbackBtn.onclick = () => {
-                    if (window.aiAssistant) {
-                        window.aiAssistant.toggle();
-                    }
-                };
-                document.body.appendChild(fallbackBtn);
-                console.log('[CHARLES] Created fallback toggle button');
-            }
-        }, 100);
     } catch (error) {
         console.error('[CHARLES] CRITICAL ERROR during initialization:', error);
         console.error('[CHARLES] Stack trace:', error.stack);
         
-        // Create emergency toggle button
+        // Create emergency reload button
         const emergencyBtn = document.createElement('button');
         emergencyBtn.style.cssText = `
             position: fixed;
@@ -5263,6 +5160,7 @@ function initializeCharles() {
             location.reload();
         };
         document.body.appendChild(emergencyBtn);
+        console.error('[CHARLES] Emergency reload button created');
     }
 }
 

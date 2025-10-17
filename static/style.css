@@ -926,3 +926,43 @@ button:disabled{opacity:.6;cursor:not-allowed}
     width: 50px;
   }
 }
+
+/* ChatGPT Sidebar Integration Enhancements */
+.ai-status-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #10b981;
+  margin-right: 6px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Ensure main content doesn't overlap with ChatGPT sidebar when expanded */
+body {
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.chatgpt-sidebar-expanded {
+  margin-left: 280px;
+}
+
+/* Mobile responsiveness for ChatGPT sidebar */
+@media (max-width: 768px) {
+  body.chatgpt-sidebar-expanded {
+    margin-left: 0;
+  }
+  
+  .chatgpt-sidebar.expanded {
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+  }
+}
