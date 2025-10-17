@@ -466,6 +466,15 @@ async def get_agencydb_job_status(job_id: str):
     
     return response
 
+# ---------- Backward Compatibility Alias for /api/ai/jobs/{job_id} ----------
+@app.get("/api/ai/jobs/{job_id}")
+async def get_ai_job_status_alias(job_id: str):
+    """
+    Alias endpoint for /api/agencydb/status/{job_id}
+    Provides backward compatibility for app.js polling
+    """
+    return await get_agencydb_job_status(job_id)
+
 # ---------- Industry Template System Import ----------
 from luxury_fashion_template import (
     get_industry_template,
