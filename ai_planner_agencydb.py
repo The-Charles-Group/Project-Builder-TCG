@@ -29,6 +29,27 @@ AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "3
 FAST_TOP_K = int(os.getenv("FAST_TOP_K", "120"))     # Lexical prefilter for Fast mode - increased for comprehensive RFPs
 DEEP_TOP_K = int(os.getenv("DEEP_TOP_K", "100"))     # LLM rescoring set for Deep mode - increased to 100 for luxury fashion
 
+# Configurable limits for controlling cost/performance
+FAST_TOP_COMPONENTS = int(os.getenv('FAST_TOP_COMPONENTS', '120'))
+FAST_TOP_TASKS = int(os.getenv('FAST_TOP_TASKS', '160'))
+FAST_MAX_COMPONENTS_PER_DELIV = int(os.getenv('FAST_MAX_COMPONENTS_PER_DELIV', '3'))
+FAST_MAX_TASKS_PER_COMPONENT = int(os.getenv('FAST_MAX_TASKS_PER_COMPONENT', '2'))
+DEEP_MAX_COMPONENTS_PER_DELIV = int(os.getenv('DEEP_MAX_COMPONENTS_PER_DELIV', '5'))
+DEEP_MAX_TASKS_PER_COMPONENT = int(os.getenv('DEEP_MAX_TASKS_PER_COMPONENT', '3'))
+
+# Text sanitization limits
+MAX_JSON_SANITIZE_CHARS = int(os.getenv('MAX_JSON_SANITIZE_CHARS', '4000'))  # 0 = unbounded
+
+# Additional configurable limits to prevent data truncation
+MAX_KEYWORDS = int(os.getenv('MAX_KEYWORDS', '0'))  # 0 = unbounded (no limit)
+MAX_EVIDENCE_CHARS = int(os.getenv('MAX_EVIDENCE_CHARS', '0'))  # 0 = unbounded (no limit)
+FAST_TOP_DELIVERABLES = int(os.getenv('FAST_TOP_DELIVERABLES', '80'))
+DEEP_TOP_DELIVERABLES = int(os.getenv('DEEP_TOP_DELIVERABLES', '60'))
+DEEP_TOP_COMPONENTS = int(os.getenv('DEEP_TOP_COMPONENTS', '90'))
+DEEP_TOP_TASKS = int(os.getenv('DEEP_TOP_TASKS', '120'))
+FAST_TOP_CATALOG = int(os.getenv('FAST_TOP_CATALOG', '0'))  # 0 = use all candidates
+EMERGENCY_DELIVERABLES_LIMIT = int(os.getenv('EMERGENCY_DELIVERABLES_LIMIT', '25'))
+
 DEPARTMENTS = [
     "Creative",
     "Strategy",
@@ -144,8 +165,21 @@ def cleanup_ai_jobs():
 # Text Sanitization for LLM Safety
 # ──────────────────────────────────────────────────────────────────────────────
 def sanitize_for_json(text: str) -> str:
-    """Sanitize text to prevent JSON parsing errors in LLM responses"""
-    if not text:
+    """
+    Sanitize text to prevent JSON parsing errors in LLM responses.
+    
+    Note: Both None and empty string inputs return "" (empty string).
+    This is intentional - JSON string fields should be "" not null for consistency.
+    
+    Args:
+        text: Input text to sanitize (None is acceptable and treated as empty string)
+    
+    Returns:
+        Sanitized string safe for JSON inclusion, never None
+    """
+    # Explicitly handle None vs empty string - both return ""
+    # This is intentional: JSON fields should be "" not null
+    if text is None or text == "":
         return ""
     text = str(text)
     # Replace problematic characters that break JSON
@@ -156,9 +190,10 @@ def sanitize_for_json(text: str) -> str:
     text = text.replace('\t', ' ')      # Replace tabs
     # Remove control characters
     text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\r\t')
-    # Limit length to prevent token overflow
-    if len(text) > 500:
-        text = text[:500] + "..."
+    # Limit length to prevent excessive payload size (configurable via MAX_JSON_SANITIZE_CHARS)
+    if MAX_JSON_SANITIZE_CHARS > 0 and len(text) > MAX_JSON_SANITIZE_CHARS:
+        print(f"[SANITIZE] Truncating text from {len(text)} to {MAX_JSON_SANITIZE_CHARS} chars")
+        text = text[:MAX_JSON_SANITIZE_CHARS] + "..."
     return text.strip()
 
 def repair_json_response(text: str) -> str:
@@ -466,7 +501,10 @@ def _extract_keywords(text: str) -> List[str]:
     # Remove common stop words
     stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
     keywords = [w for w in words if w not in stopwords and len(w) > 2]
-    return keywords[:10]  # Limit to 10 keywords
+    # Apply configurable limit (0 = no limit)
+    if MAX_KEYWORDS > 0:
+        return keywords[:MAX_KEYWORDS]
+    return keywords
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -581,9 +619,10 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
             cands.append({**it, "embScore": 0, "lexScore": lex, "recall": lex})
         
         # Select top candidates based on lexical score only
-        topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:80]
-        topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:120]
-        topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:160]
+        topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:FAST_TOP_DELIVERABLES]
+        topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:FAST_TOP_COMPONENTS]
+        topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:FAST_TOP_TASKS]
+        print(f"[FAST MODE] Selected top {len(topD)}/{FAST_TOP_DELIVERABLES} deliverables, {len(topC)}/{FAST_TOP_COMPONENTS} components, {len(topT)}/{FAST_TOP_TASKS} tasks")
         
         return topD + topC + topT, cands
     
@@ -603,9 +642,9 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
         cands.append({**it, "embScore": emb, "lexScore": lex, "recall": recall})
     
     # Generous cuts to feed re-ranker
-    topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:60]
-    topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:90]
-    topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:120]
+    topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:DEEP_TOP_DELIVERABLES]
+    topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:DEEP_TOP_COMPONENTS]
+    topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:DEEP_TOP_TASKS]
     
     return topD + topC + topT, cands
 
@@ -686,7 +725,9 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
                     for code in deliv_codes:
                         if code not in explicit_requirements:
                             explicit_requirements[code] = []
-                        explicit_requirements[code].append(bullet[:100])  # Store first 100 chars
+                        # Apply configurable evidence limit (0 = no limit)
+                        evidence_text = bullet[:MAX_EVIDENCE_CHARS] if MAX_EVIDENCE_CHARS > 0 else bullet
+                        explicit_requirements[code].append(evidence_text)
         
         # Also do a direct phrase search in the entire RFP
         for service_phrase, deliv_codes in SERVICE_MAPPING_NORMALIZED.items():
@@ -715,7 +756,8 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
     
     print(f"[EXPLICIT MATCH] Found {len(explicit_requirements)} explicitly requested deliverable codes")
     if explicit_requirements:
-        print(f"[EXPLICIT MATCH] Sample matches: {list(explicit_requirements.keys())[:5]}")
+        # Show all matches, not just first 5
+        print(f"[EXPLICIT MATCH] Sample matches: {list(explicit_requirements.keys())}")
     
     return explicit_requirements
 
@@ -972,21 +1014,23 @@ async def _process_single_chunk_async(block: List[Dict[str, Any]], chunk_num: in
     payload = []
     for c in block:
         evidence = best_evidence(request_text, c, 2)
+        # Apply configurable evidence limit (0 = no limit)
+        evidence_list = [sanitize_for_json(e)[:MAX_EVIDENCE_CHARS] if MAX_EVIDENCE_CHARS > 0 else sanitize_for_json(e) for e in evidence]
         payload.append({
             "id": sanitize_for_json(c["id"]),
             "dept": c["dept"],
             "level": c["level"],
-            "title": sanitize_for_json(c["title"])[:100],
-            "desc": sanitize_for_json(c.get("desc", ""))[:100],
-            "evidence": [sanitize_for_json(e)[:100] for e in evidence]
+            "title": sanitize_for_json(c["title"]),
+            "desc": sanitize_for_json(c.get("desc", "")),
+            "evidence": evidence_list
         })
     
-    # Sanitize summary fields (keep shorter to save tokens)
-    safe_summary = sanitize_for_json(summary.get('summary', ''))[:200]
-    safe_goals = [sanitize_for_json(g)[:50] for g in summary.get("goals", [])][:3]
-    safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])][:3]
-    safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])][:3]
-    safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])][:2]
+    # Sanitize summary fields without truncation (sanitize_for_json handles length limits)
+    safe_summary = sanitize_for_json(summary.get('summary', ''))
+    safe_goals = [sanitize_for_json(g) for g in summary.get("goals", [])]
+    safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])]
+    safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])]
+    safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])]
     
     messages = [
         {"role": "system", "content": """Senior Agency Executive scoring deliverables.
@@ -1550,11 +1594,11 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
     # Enhanced phases (4 phases for comprehensive coverage)
     phases = ["Discovery", "Launch", "Growth", "Optimization"]
     
-    # Enhanced regions - now includes Latin America and more
+    # Enhanced regions - now includes Latin America and more (no artificial limits)
     if is_global:
-        regions = ["North America", "Europe", "Asia-Pacific", "Latin America", "Middle East", "Africa"][:5]
+        regions = ["North America", "Europe", "Asia-Pacific", "Latin America", "Middle East", "Africa"]
     else:
-        regions = markets[:3] if markets else ["US"]
+        regions = markets if markets else ["US"]
     
     # Quarters and seasons for annual/fashion engagements
     quarters = ["Q1", "Q2", "Q3", "Q4"] if is_annual else []
@@ -1566,13 +1610,13 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
     # Audience segments for targeted marketing
     audience_segments = ["Gen Z", "Millennials", "Gen X", "Boomers", "Affluent", "Mass Market"] if is_comprehensive else []
     
-    # Products for multi-product launches
+    # Products for multi-product launches (no artificial limits)
     products = []
     if is_multiproduct:
         if is_fashion:
-            products = ["Menswear", "Womenswear", "Accessories", "Footwear", "Bags"][:4]
+            products = ["Menswear", "Womenswear", "Accessories", "Footwear", "Bags"]
         else:
-            products = ["Product A", "Product B", "Product C", "Hero Product"][:3]
+            products = ["Product A", "Product B", "Product C", "Hero Product"]
     
     # Enhanced channels - more specific and aggressive
     all_channels = ["Instagram", "Facebook", "TikTok", "YouTube", "LinkedIn", "Twitter", 
@@ -1580,9 +1624,9 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     "Events", "Influencer", "Podcast", "Streaming"]
     
     if is_multichannel:
-        # Aggressively expand channels
+        # Aggressively expand channels (no artificial limits)
         expanded_channels = []
-        for ch in channels[:8]:
+        for ch in channels:
             ch_lower = ch.lower()
             if 'digital' in ch_lower:
                 expanded_channels.extend(["Web", "Mobile App", "Email", "SMS"])
@@ -1594,17 +1638,17 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                 expanded_channels.extend(["Instagram Influencers", "TikTok Creators", "YouTube Partners"])
             else:
                 expanded_channels.append(ch)
-        channels_to_use = list(set(expanded_channels))[:8]  # Unique channels, max 8 for aggressive expansion
+        channels_to_use = list(set(expanded_channels))
     else:
-        channels_to_use = channels[:4]
+        channels_to_use = channels
     
-    # Platform variations for technology
-    platforms = ["Web", "iOS", "Android", "Salesforce", "Adobe", "Shopify", "AWS", "Azure"][:5]
+    # Platform variations for technology (no artificial limits)
+    platforms = ["Web", "iOS", "Android", "Salesforce", "Adobe", "Shopify", "AWS", "Azure"]
     
-    # Annual/year variations for multi-year engagements
+    # Annual/year variations for multi-year engagements (no artificial limits)
     years = []
     if is_multiyear:
-        years = ["Year 1", "Year 2", "Year 3"][:3]
+        years = ["Year 1", "Year 2", "Year 3"]
     
     # Track unique IDs to prevent duplicates
     seen_ids = set()
@@ -1636,7 +1680,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
         if d_dept == "Strategy":
             # Regional variations if global (now more aggressive)
             if is_global:
-                for region in regions[:4]:  # Increased from 3 to 4 regions
+                for region in regions:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{region.replace(' ', '_')}"
@@ -1667,7 +1711,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Add audience segment variations for targeted strategies
             if audience_segments and ('audience' in d_title or 'persona' in d_title or 'target' in d_title or 'segment' in d_title):
-                for segment in audience_segments[:3]:
+                for segment in audience_segments:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{segment.replace(' ', '_')}"
@@ -1683,7 +1727,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Add quarterly strategy reviews for annual engagements
             if is_annual and quarters:
-                for quarter in quarters[:4]:  # All quarters for annual
+                for quarter in quarters:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Strategy-{quarter}"
@@ -1699,7 +1743,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Multi-year variations for long-term engagements
             if is_multiyear and years:
-                for year in years[:2]:
+                for year in years:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{year.replace(' ', '_')}"
@@ -1716,7 +1760,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
         # Creative deliverables → Channel-specific versions + Phases + Collections
         elif d_dept == "Creative":
             # Channel-specific versions (more aggressive)
-            for channel in channels_to_use[:6]:  # Increased from 4 to 6
+            for channel in channels_to_use:
                 if expansions_for_this >= max_expansions_per_deliverable:
                     break
                 variant_id = f"{d['id']}-{channel.replace(' ', '_')}"
@@ -1732,7 +1776,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Collection-specific variations for fashion/luxury
             if (is_fashion or is_luxury) and collections:
-                for collection in collections[:3]:
+                for collection in collections:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{collection.replace('/', '_')}"
@@ -1748,7 +1792,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Seasonal variations for fashion/retail creative
             if (is_fashion or is_retail) and seasons:
-                for season in seasons[:2]:
+                for season in seasons:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{season}"
@@ -1764,7 +1808,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Add phase variations for creative campaigns
             if 'campaign' in d_title or 'concept' in d_title or True:  # Apply to all creative
-                for phase in phases[:3]:
+                for phase in phases:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Creative-{phase}"
@@ -1780,7 +1824,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Audience segment variations for creative targeting
             if audience_segments and ('campaign' in d_title or 'creative' in d_title):
-                for segment in audience_segments[:2]:
+                for segment in audience_segments:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Creative-{segment.replace(' ', '_')}"
@@ -1813,7 +1857,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         expansion_count += 1
             
             # Channel variations for content (more aggressive)
-            for channel in channels_to_use[:5]:  # Increased from 3 to 5
+            for channel in channels_to_use:
                 if expansions_for_this >= max_expansions_per_deliverable:
                     break
                 variant_id = f"{d['id']}-Content-{channel.replace(' ', '_')}"
@@ -1829,7 +1873,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Product-specific content for multi-product launches
             if products and is_multiproduct:
-                for product in products[:2]:
+                for product in products:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{product.replace(' ', '_')}"
@@ -1845,7 +1889,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Seasonal content for fashion/retail
             if (is_fashion or is_retail) and seasons:
-                for season in seasons[:2]:
+                for season in seasons:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Content-{season}"
@@ -1861,7 +1905,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Audience-specific content
             if audience_segments and ('content' in d_title or 'story' in d_title or 'editorial' in d_title):
-                for segment in audience_segments[:2]:
+                for segment in audience_segments:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Content-{segment.replace(' ', '_')}"
@@ -1878,7 +1922,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
         # Technology deliverables → Platform-specific versions
         elif d_dept == "Technology":
             # Platform-specific variations
-            for platform in platforms[:3]:
+            for platform in platforms:
                 if expansions_for_this >= max_expansions_per_deliverable:
                     break
                 variant_id = f"{d['id']}-{platform}"
@@ -1912,7 +1956,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             # Channel-specific media buying (more aggressive)
             media_channels = ["Google Ads", "Facebook Ads", "Instagram Ads", "LinkedIn", 
                             "Programmatic", "YouTube", "TikTok Ads", "Amazon Ads", "Spotify Ads"]
-            for channel in media_channels[:5]:  # Increased from 3 to 5
+            for channel in media_channels:
                 if expansions_for_this >= max_expansions_per_deliverable:
                     break
                 variant_id = f"{d['id']}-{channel.replace(' ', '_')}"
@@ -1928,7 +1972,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Regional media variations if global (more aggressive)
             if is_global:
-                for region in regions[:4]:  # Increased from 2 to 4
+                for region in regions:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Media-{region.replace(' ', '_')}"
@@ -1944,7 +1988,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Audience segment targeting for paid media
             if audience_segments:
-                for segment in audience_segments[:3]:
+                for segment in audience_segments:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Media-{segment.replace(' ', '_')}"
@@ -1960,7 +2004,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Product-specific media campaigns
             if products and is_multiproduct:
-                for product in products[:2]:
+                for product in products:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Media-{product.replace(' ', '_')}"
@@ -1976,7 +2020,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Quarterly media plans for annual
             if is_annual and quarters:
-                for quarter in quarters[:4]:  # All quarters for annual
+                for quarter in quarters:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Media-{quarter}"
@@ -1992,7 +2036,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Seasonal campaigns for fashion/retail
             if (is_fashion or is_retail) and seasons:
-                for season in seasons[:2]:
+                for season in seasons:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Media-{season}"
@@ -2025,7 +2069,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Add quarterly reviews for annual
             if is_annual and quarters:
-                for quarter in quarters[:2]:
+                for quarter in quarters:
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-IMM-{quarter}-Review"
@@ -2045,7 +2089,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
         print(f"[EXPAND] Still need {remaining_needed} more deliverables, adding aggressive variations")
         
         # Add cross-department variations for top deliverables
-        for d in deliverables_sorted[:40]:  # Increased from 20 to 40 for more aggressive expansion
+        for d in deliverables_sorted:
             if len(expanded) >= target_count * 1.2:  # Go up to 120 deliverables to ensure we hit 100+
                 break
                 
@@ -2054,7 +2098,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             
             # Add lifecycle variations
             lifecycle = ["Planning", "Execution", "Optimization", "Reporting", "Analysis", "Review"]
-            for stage in lifecycle[:4]:
+            for stage in lifecycle:
                 variant_id = f"{d['id']}-{stage}"
                 if variant_id not in seen_ids:
                     variant = d.copy()
@@ -2070,7 +2114,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             # Add format variations for deliverables that make sense
             if any(term in d_title for term in ['report', 'analysis', 'audit', 'assessment']):
                 formats = ["Executive Summary", "Detailed Report", "Dashboard View", "Presentation"]
-                for format_type in formats[:2]:
+                for format_type in formats:
                     variant_id = f"{d['id']}-{format_type.replace(' ', '_')}"
                     if variant_id not in seen_ids:
                         variant = d.copy()
@@ -2086,7 +2130,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             # Add stakeholder variations for strategy/planning deliverables
             if any(term in d_title for term in ['strategy', 'plan', 'roadmap', 'framework']):
                 stakeholders = ["Executive", "Board", "Investor", "Partner"]
-                for stakeholder in stakeholders[:2]:
+                for stakeholder in stakeholders:
                     variant_id = f"{d['id']}-{stakeholder}"
                     if variant_id not in seen_ids:
                         variant = d.copy()
@@ -2102,7 +2146,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             # Add testing/validation variations for campaigns and creative
             if any(term in d_title for term in ['campaign', 'creative', 'content', 'ad']):
                 testing_types = ["A/B Test", "Pilot", "Beta", "Full Launch"]
-                for test_type in testing_types[:2]:
+                for test_type in testing_types:
                     variant_id = f"{d['id']}-{test_type.replace(' ', '_').replace('/', '_')}"
                     if variant_id not in seen_ids:
                         variant = d.copy()
@@ -2122,7 +2166,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
         for dept in DEPARTMENTS:
             if len(expanded) >= target_count:
                 break
-            dept_delivs = [d for d in deliverables_sorted if d.get("dept") == dept][:5]
+            dept_delivs = [d for d in deliverables_sorted if d.get("dept") == dept]
             for d in dept_delivs:
                 for phase in ["Kickoff", "Mid-point", "Final"]:
                     variant_id = f"{d['id']}-{dept}-{phase}"
@@ -2367,12 +2411,14 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             markets = summary.get("markets", [])
             complexity = summary.get("complexity", "medium")
             
+            # Display all channels in reasoning without truncation
+            channels_display = ', '.join(channels) if channels else 'none specified'
             _update_job(job_id, "Stage 2/7: RFP analyzed", 25,
-                        reasoning=f"Identified {goals_count} business goals, {len(channels)} channels ({', '.join(channels[:3])}{'...' if len(channels) > 3 else ''}), {len(markets)} market(s). Complexity: {complexity}")
+                        reasoning=f"Identified {goals_count} business goals, {len(channels)} channels ({channels_display}), {len(markets)} market(s). Complexity: {complexity}")
         except Exception as e:
             print(f"[ANALYZE WARNING] Summary failed: {e}, using default summary")
             summary = {
-                "summary": request_text[:500],
+                "summary": request_text,
                 "goals": ["Provide comprehensive services"],
                 "channels": ["Digital", "Social", "Traditional"],
                 "markets": ["US"],
@@ -2390,7 +2436,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         _update_job(job_id, "Stage 2/7: Fast mode - skipping summarization...", 20,
                     reasoning="Fast mode active - using keyword-based analysis instead of full GPT-5 summarization for speed")
         summary = {
-            "summary": request_text[:500],
+            "summary": request_text,
             "goals": ["Fast analysis"],
             "channels": ["Digital"],
             "markets": ["US"],
@@ -2416,7 +2462,9 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     if not candidates:
         # FIXED: If no candidates, use entire catalog as fallback
         print(f"[ANALYZE WARNING] No candidates from recall, using entire catalog")
-        candidates = catalog[:270]  # Top 270 items
+        # Apply configurable catalog limit (0 = use all candidates)
+        catalog_limit = FAST_TOP_CATALOG if FAST_TOP_CATALOG > 0 else len(catalog)
+        candidates = catalog[:catalog_limit]
         all_recall = catalog
     
     print(f"[ANALYZE] Found {len(candidates)} candidates")
@@ -2456,7 +2504,11 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             components = [c for c in candidates if c["level"] == "component" and c.get("parentId") == deliv["id"]]
             components.sort(key=lambda x: x.get("recall", 0), reverse=True)
             
-            for comp in components[:3]:  # Top 3 components per deliverable
+            selected_components = components[:FAST_MAX_COMPONENTS_PER_DELIV]
+            if len(components) > FAST_MAX_COMPONENTS_PER_DELIV:
+                print(f"[FAST MODE] Capped components for {deliv['id']}: {len(selected_components)}/{len(components)} (limit: {FAST_MAX_COMPONENTS_PER_DELIV})")
+            
+            for comp in selected_components:
                 llm_scores.append({
                     "id": comp["id"],
                     "level": comp["level"],
@@ -2470,7 +2522,11 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
                 tasks.sort(key=lambda x: x.get("recall", 0), reverse=True)
                 
-                for task in tasks[:2]:  # Top 2 tasks per component
+                selected_tasks = tasks[:FAST_MAX_TASKS_PER_COMPONENT]
+                if len(tasks) > FAST_MAX_TASKS_PER_COMPONENT:
+                    print(f"[FAST MODE] Capped tasks for {comp['id']}: {len(selected_tasks)}/{len(tasks)} (limit: {FAST_MAX_TASKS_PER_COMPONENT})")
+                
+                for task in selected_tasks:
                     llm_scores.append({
                         "id": task["id"],
                         "level": task["level"],
@@ -2498,10 +2554,17 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             llm_candidates.append(deliv)
             # Add components and tasks for this deliverable
             components = [c for c in candidates if c["level"] == "component" and c.get("parentId") == deliv["id"]]
-            for comp in components[:5]:  # Up to 5 components per deliverable
+            selected_components = components[:DEEP_MAX_COMPONENTS_PER_DELIV]
+            if len(components) > DEEP_MAX_COMPONENTS_PER_DELIV:
+                print(f"[DEEP MODE] Capped components for {deliv['id']}: {len(selected_components)}/{len(components)} (limit: {DEEP_MAX_COMPONENTS_PER_DELIV})")
+            
+            for comp in selected_components:
                 llm_candidates.append(comp)
                 tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
-                llm_candidates.extend(tasks[:3])  # Up to 3 tasks per component
+                selected_tasks = tasks[:DEEP_MAX_TASKS_PER_COMPONENT]
+                if len(tasks) > DEEP_MAX_TASKS_PER_COMPONENT:
+                    print(f"[DEEP MODE] Capped tasks for {comp['id']}: {len(selected_tasks)}/{len(tasks)} (limit: {DEEP_MAX_TASKS_PER_COMPONENT})")
+                llm_candidates.extend(selected_tasks)
         
         _update_job(job_id, "Stage 5/7: Deep mode - scoring with GPT-5...", 50,
                     reasoning=f"Sending {len(llm_candidates)} items to GPT-5 Thinking for advanced context-aware relevance analysis")
@@ -2598,8 +2661,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         print(f"[ANALYZE] Plan composed successfully")
     except Exception as e:
         print(f"[ANALYZE ERROR] Plan composition failed: {e}, using emergency plan")
-        # Emergency plan - just return top deliverables
-        emergency_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]][:25]
+        # Emergency plan - return top deliverables (configurable limit)
+        emergency_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]][:EMERGENCY_DELIVERABLES_LIMIT]
         plan = {
             "summary": summary,
             "strictness": strictness,
@@ -2650,8 +2713,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     try:
         cache_stats = get_cache_stats()
         print(f"[CACHE STATS] {cache_stats}")
-    except Exception:
-        pass
+    except (AttributeError, KeyError, ImportError) as e:
+        print(f"[CACHE STATS WARNING] Cache stats unavailable: {e}")
     
     print(f"[ANALYZE COMPLETE] Mode: {mode}, Deliverables: {delivs_in_plan}, Time: {datetime.datetime.now().timestamp() - (AI_JOB_STORE[job_id].start_time if job_id and job_id in AI_JOB_STORE else datetime.datetime.now().timestamp()):.1f}s")
     return result

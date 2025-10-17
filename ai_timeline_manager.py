@@ -15,6 +15,10 @@ import random
 
 logger = logging.getLogger(__name__)
 
+# Configuration from environment variables
+MAX_RFP_TEXT_IN_PROMPT = int(os.getenv("MAX_RFP_TEXT_IN_PROMPT", "50000"))  # Default: 50000 chars for RFP text in prompts
+MAX_LOG_CONTENT = int(os.getenv("MAX_LOG_CONTENT", "1000"))  # Default: 1000 chars for logging
+
 # OpenAI client initialization
 try:
     from openai import AsyncOpenAI
@@ -719,7 +723,7 @@ class GovernanceFramework:
                 transition_date = datetime.fromisoformat(next_task.start_date)
                 phase_transitions.append((task.department, next_task.department, transition_date))
         
-        for from_dept, to_dept, date in phase_transitions[:3]:  # Limit to first 3 major transitions
+        for from_dept, to_dept, date in phase_transitions:
             # Schedule briefing 1 day before transition
             briefing_date = date - timedelta(days=1)
             while briefing_date.weekday() >= 5:
@@ -762,7 +766,7 @@ class GovernanceFramework:
                 
                 milestone = TimelineTask(
                     id=f"gov_risk_review_{task.id}",
-                    name=f"⚠️ Risk Review: {task.name[:30]}",
+                    name=f"⚠️ Risk Review: {task.name}",
                     deliverable_code="GOV_RISK",
                     deliverable_name="Risk Review Meeting",
                     department="Project Management",
@@ -788,13 +792,13 @@ class GovernanceFramework:
         # Find major deliverables (those with high hours or critical path)
         major_deliverables = [t for t in self.tasks if t.hours > 30 or t.is_critical]
         
-        for task in major_deliverables[:6]:  # Limit to 6 quality gates
+        for task in major_deliverables:
             # Schedule quality gate at task completion
             gate_date = datetime.fromisoformat(task.end_date)
             
             milestone = TimelineTask(
                 id=f"gov_quality_gate_{task.id}",
-                name=f"✅ Quality Gate: {task.name[:30]}",
+                name=f"✅ Quality Gate: {task.name}",
                 deliverable_code="GOV_QUALITY",
                 deliverable_name="Quality Gate Review",
                 department="Quality Assurance",
@@ -954,7 +958,7 @@ class GovernanceFramework:
         # Find critical phases (high-hour tasks on critical path)
         critical_phases = [t for t in self.tasks if t.is_critical and t.hours > 40]
         
-        for phase in critical_phases[:2]:  # Limit to 2 critical phases
+        for phase in critical_phases:
             phase_start = datetime.fromisoformat(phase.start_date)
             phase_end = datetime.fromisoformat(phase.end_date)
             phase_duration_days = (phase_end - phase_start).days
@@ -969,7 +973,7 @@ class GovernanceFramework:
                 
                 standup = TimelineTask(
                     id=f"comm_daily_standup_{phase.id}_{day+1}",
-                    name=f"🏃 Daily Standup - {phase.name[:20]} Day {day+1}",
+                    name=f"🏃 Daily Standup - {phase.name} Day {day+1}",
                     deliverable_code="COMM_DAILY",
                     deliverable_name="Daily Standup",
                     department="Project Management",
@@ -1025,7 +1029,7 @@ class GovernanceFramework:
         # Add peer reviews for major deliverables
         major_deliverables = [t for t in self.tasks if t.hours > 20 and t.department in ["Creative", "Content", "Technology"]]
         
-        for task in major_deliverables[:5]:  # Limit to 5 peer reviews
+        for task in major_deliverables:
             # Schedule peer review 1 day before task ends
             review_date = datetime.fromisoformat(task.end_date) - timedelta(days=1)
             
@@ -1034,7 +1038,7 @@ class GovernanceFramework:
             
             review = TimelineTask(
                 id=f"qa_peer_review_{task.id}",
-                name=f"👥 Peer Review: {task.name[:30]}",
+                name=f"👥 Peer Review: {task.name}",
                 deliverable_code="QA_PEER",
                 deliverable_name="Peer Review",
                 department="Quality Assurance",
@@ -1057,7 +1061,7 @@ class GovernanceFramework:
         # Find technology/digital deliverables
         digital_tasks = [t for t in self.tasks if t.department == "Technology" and t.hours > 30]
         
-        for task in digital_tasks[:3]:  # Limit to 3 UAT phases
+        for task in digital_tasks:
             # Schedule UAT after task completion
             uat_start = datetime.fromisoformat(task.end_date) + timedelta(days=1)
             uat_end = uat_start + timedelta(days=5)  # 5-day UAT period
@@ -1070,7 +1074,7 @@ class GovernanceFramework:
             
             uat_phase = TimelineTask(
                 id=f"qa_uat_{task.id}",
-                name=f"🧪 UAT: {task.name[:30]}",
+                name=f"🧪 UAT: {task.name}",
                 deliverable_code="QA_UAT",
                 deliverable_name="User Acceptance Testing",
                 department="Quality Assurance",
@@ -1143,13 +1147,13 @@ class GovernanceFramework:
         # Find digital/web deliverables
         digital_tasks = [t for t in self.tasks if t.department in ["Technology", "Creative"] and "digital" in t.name.lower()]
         
-        for task in digital_tasks[:2]:  # Limit to 2 accessibility tests
+        for task in digital_tasks:
             # Schedule accessibility testing after task completion
             test_date = datetime.fromisoformat(task.end_date)
             
             test = TimelineTask(
                 id=f"qa_accessibility_{task.id}",
-                name=f"♿ Accessibility Testing: {task.name[:25]}",
+                name=f"♿ Accessibility Testing: {task.name}",
                 deliverable_code="QA_ACCESSIBILITY",
                 deliverable_name="Accessibility Testing",
                 department="Quality Assurance",
@@ -1172,7 +1176,7 @@ class GovernanceFramework:
         # Find technology deliverables that need performance testing
         tech_tasks = [t for t in self.tasks if t.department == "Technology" and t.hours > 25]
         
-        for task in tech_tasks[:3]:  # Limit to 3 performance tests
+        for task in tech_tasks:
             # Schedule performance testing before task ends
             test_date = datetime.fromisoformat(task.end_date) - timedelta(days=2)
             
@@ -1181,7 +1185,7 @@ class GovernanceFramework:
             
             test = TimelineTask(
                 id=f"qa_performance_{task.id}",
-                name=f"⚡ Performance Testing: {task.name[:25]}",
+                name=f"⚡ Performance Testing: {task.name}",
                 deliverable_code="QA_PERFORMANCE",
                 deliverable_name="Performance Testing",
                 department="Quality Assurance",
@@ -1269,7 +1273,7 @@ class GovernanceFramework:
         # Add escalation points before critical milestones
         critical_tasks = [t for t in self.tasks if t.is_critical and t.hours > 35]
         
-        for task in critical_tasks[:3]:  # Limit to 3 escalation points
+        for task in critical_tasks:
             # Schedule escalation point 3 days before critical task
             escalation_date = datetime.fromisoformat(task.start_date) - timedelta(days=3)
             
@@ -1282,7 +1286,7 @@ class GovernanceFramework:
             
             point = TimelineTask(
                 id=f"risk_escalation_{task.id}",
-                name=f"🚨 Issue Escalation Point: {task.name[:25]}",
+                name=f"🚨 Issue Escalation Point: {task.name}",
                 deliverable_code="RISK_ESCALATION",
                 deliverable_name="Issue Escalation Point",
                 department="Project Management",
@@ -1464,7 +1468,7 @@ async def enhance_with_ai_reasoning(
         prompt = f"""As an expert project manager, analyze this project timeline and provide strategic insights.
 
 PROJECT CONTEXT:
-{rfp_text[:1000] if rfp_text else 'Standard agency project'}
+{rfp_text[:MAX_RFP_TEXT_IN_PROMPT] if rfp_text else 'Standard agency project'}
 
 TIMELINE METRICS:
 - Duration: {total_days} days
@@ -1474,7 +1478,7 @@ TIMELINE METRICS:
 - Total deliverables: {len(deliverables)}
 
 CURRENT REASONING:
-{json.dumps(timeline_result.get('reasoning', {}), indent=2)[:1000]}
+{json.dumps(timeline_result.get('reasoning', {}), indent=2)[:MAX_RFP_TEXT_IN_PROMPT]}
 
 Provide strategic insights on:
 1. Why this timeline structure makes sense for this specific project
@@ -1522,7 +1526,7 @@ Return as JSON with keys:
             except json.JSONDecodeError as e:
                 logger.warning(
                     f"[AI Timeline] Failed to parse JSON response from GPT-5: {e}. "
-                    f"Response content (first 200 chars): {response_content[:200]}. "
+                    f"Response content (first {MAX_LOG_CONTENT} chars): {response_content[:MAX_LOG_CONTENT]}. "
                     f"Attempting to clean and retry..."
                 )
                 # Try to fix common issues in response
@@ -1540,7 +1544,7 @@ Return as JSON with keys:
                     logger.error(
                         f"[AI Timeline] All JSON parsing attempts failed. "
                         f"Original error: {e}. Cleanup error: {parse_error}. "
-                        f"Response content: {response_content[:500]}. "
+                        f"Response content: {response_content[:MAX_LOG_CONTENT]}. "
                         f"Using default AI insights as fallback."
                     )
                     ai_insights = {
@@ -1632,7 +1636,7 @@ async def generate_ai_timeline(
         prompt = f"""You are an expert project manager specializing in agency work and marketing campaigns.
 
 CONTEXT:
-- Project brief: {rfp_text[:2000] if rfp_text else 'Standard agency project'}
+- Project brief: {rfp_text[:MAX_RFP_TEXT_IN_PROMPT] if rfp_text else 'Standard agency project'}
 - Optimization goal: {optimization_mode}
 - Project start: {project_start or 'Next Monday'}
 
@@ -1822,19 +1826,19 @@ def process_ai_timeline(
         # Add governance milestones
         governance_tasks.extend(governance.generate_governance_milestones())
         
-        # Add communication cadence (limit to avoid clutter)
+        # Add communication cadence
         comm_tasks = governance.generate_communication_cadence()
         # Only add essential communication milestones to avoid overwhelming the timeline
-        essential_comm = [t for t in comm_tasks if 'steering' in t.id.lower() or 'quarterly' in t.id.lower()][:10]
+        essential_comm = [t for t in comm_tasks if 'steering' in t.id.lower() or 'quarterly' in t.id.lower()]
         governance_tasks.extend(essential_comm)
         
         # Add quality assurance milestones
         qa_tasks = governance.generate_quality_assurance_milestones()
-        governance_tasks.extend(qa_tasks[:8])  # Limit to 8 QA milestones
+        governance_tasks.extend(qa_tasks)
         
         # Add risk management milestones
         risk_tasks = governance.generate_risk_management_milestones()
-        governance_tasks.extend(risk_tasks[:8])  # Limit to 8 risk milestones
+        governance_tasks.extend(risk_tasks)
         
         # Mark all governance tasks clearly
         for task in governance_tasks:

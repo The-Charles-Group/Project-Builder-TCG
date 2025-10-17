@@ -5,13 +5,19 @@
 # No external deps beyond pandas.
 
 from __future__ import annotations
-import math, re
+import math, re, os
 import logging
 from collections import Counter, defaultdict
 from typing import Dict, Any, List, Tuple
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Configurable limits for L2/L3 match truncation
+MAX_L2_MATCHES_STORED = int(os.getenv('MAX_L2_MATCHES_STORED', '12'))
+MAX_L3_MATCHES_STORED = int(os.getenv('MAX_L3_MATCHES_STORED', '12'))
+MAX_L2_MATCHES_DISPLAYED = int(os.getenv('MAX_L2_MATCHES_DISPLAYED', '6'))
+MAX_L3_MATCHES_DISPLAYED = int(os.getenv('MAX_L3_MATCHES_DISPLAYED', '8'))
 
 # -----------------------------
 # Tokenization / TF-IDF basics
@@ -177,13 +183,22 @@ def aggregate_scores(ai_index_df: pd.DataFrame,
         comp_best = max([sc for (_, sc) in l2_details.get(code, [])] or [0.0])
         task_best = max([sc for (_, sc) in l3_details.get(code, [])] or [0.0])
         sc = sc_l1 + comp_mult*comp_best + task_mult*task_best
+        
+        l2_full = sorted(l2_details.get(code, []), key=lambda x: x[1], reverse=True)
+        l3_full = sorted(l3_details.get(code, []), key=lambda x: x[1], reverse=True)
+        
+        if len(l2_full) > MAX_L2_MATCHES_STORED:
+            logger.debug(f"Truncating L2 matches for {code}: {len(l2_full)} -> {MAX_L2_MATCHES_STORED}")
+        if len(l3_full) > MAX_L3_MATCHES_STORED:
+            logger.debug(f"Truncating L3 matches for {code}: {len(l3_full)} -> {MAX_L3_MATCHES_STORED}")
+        
         final[code] = {
             "score": sc,
             "l1_parts": base,
             "comp_best": comp_best,
             "task_best": task_best,
-            "l2_list": sorted(l2_details.get(code, []), key=lambda x: x[1], reverse=True)[:12],
-            "l3_list": sorted(l3_details.get(code, []), key=lambda x: x[1], reverse=True)[:12],
+            "l2_list": l2_full[:MAX_L2_MATCHES_STORED],
+            "l3_list": l3_full[:MAX_L3_MATCHES_STORED],
         }
     return final
 
@@ -382,7 +397,12 @@ def score_rfp(rfp_text: str,
         l2 = []
         best_c = max([s for (_, s) in data.get("l2_list", [])] or [1.0])
         if best_c == 0: best_c = 1.0
-        for row_idx, s in data.get("l2_list", [])[:6]:
+        
+        l2_list = data.get("l2_list", [])
+        if len(l2_list) > MAX_L2_MATCHES_DISPLAYED:
+            logger.debug(f"Displaying top {MAX_L2_MATCHES_DISPLAYED} of {len(l2_list)} L2 matches for {code}")
+        
+        for row_idx, s in l2_list[:MAX_L2_MATCHES_DISPLAYED]:
             row = index_df.iloc[row_idx]
             l2.append({
                 "component": str(row.get("Component_Task_L1","")),
@@ -393,7 +413,12 @@ def score_rfp(rfp_text: str,
         l3 = []
         best_t = max([s for (_, s) in data.get("l3_list", [])] or [1.0])
         if best_t == 0: best_t = 1.0
-        for row_idx, s in data.get("l3_list", [])[:8]:
+        
+        l3_list = data.get("l3_list", [])
+        if len(l3_list) > MAX_L3_MATCHES_DISPLAYED:
+            logger.debug(f"Displaying top {MAX_L3_MATCHES_DISPLAYED} of {len(l3_list)} L3 matches for {code}")
+        
+        for row_idx, s in l3_list[:MAX_L3_MATCHES_DISPLAYED]:
             row = index_df.iloc[row_idx]
             l3.append({
                 "component": str(row.get("Component_Task_L1","")),
