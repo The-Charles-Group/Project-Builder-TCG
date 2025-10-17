@@ -509,9 +509,12 @@ class TimelineScheduler:
     ) -> Dict[str, Any]:
         """Generate optimized timeline with parallel workstreams"""
         
+        print(f"[OPTIMIZE] Starting with {len(deliverables)} deliverables, mode={optimization_mode}")
+        
         tasks = []
         
         # Phase 1: Create tasks and assign to workstreams/phases
+        print(f"[OPTIMIZE] Phase 1: Creating tasks...")
         for deliv in deliverables:
             workstream = self.identify_workstream(
                 deliv.get('deliverable_name', ''),
@@ -553,10 +556,15 @@ class TimelineScheduler:
             self.workstreams[workstream].append(task)
             self.phases[phase].append(task)
         
+        print(f"[OPTIMIZE] Phase 1 complete: Created {len(tasks)} tasks")
+        
         # Phase 2: Detect and apply dependencies
+        print(f"[OPTIMIZE] Phase 2: Detecting dependencies...")
         raw_dependencies = self.detect_dependencies(
             [{'id': t.id, 'name': t.name, 'workstream': t.workstream} for t in tasks]
         )
+        
+        print(f"[OPTIMIZE] Found {len(raw_dependencies)} dependencies")
         
         # Apply dependencies to tasks
         for dep in raw_dependencies:
@@ -564,29 +572,46 @@ class TimelineScheduler:
             if task:
                 task.dependencies.append(dep)
         
+        print(f"[OPTIMIZE] Phase 2 complete")
+        
         # Phase 3: Identify parallel opportunities
+        print(f"[OPTIMIZE] Phase 3: Identifying parallel opportunities...")
         parallel_opps = self.identify_parallel_opportunities(tasks)
         for task_id, parallel_ids in parallel_opps.items():
             task = next((t for t in tasks if t.id == task_id), None)
             if task:
                 task.parallel_tasks = parallel_ids
         
+        print(f"[OPTIMIZE] Phase 3 complete: Found {len(parallel_opps)} parallel opportunities")
+        
         # Phase 4: Apply scheduling constraints
+        print(f"[OPTIMIZE] Phase 4: Applying scheduling constraints...")
         tasks = await self.apply_scheduling_constraints(tasks, optimization_mode)
+        print(f"[OPTIMIZE] Phase 4 complete")
         
         # Phase 5: Calculate critical path
+        print(f"[OPTIMIZE] Phase 5: Calculating critical path...")
         critical_path_ids = self.calculate_critical_path(tasks)
         for task in tasks:
             task.is_critical = task.id in critical_path_ids
         
+        print(f"[OPTIMIZE] Phase 5 complete: {len(critical_path_ids)} critical tasks")
+        
         # Phase 6: Apply resource constraints
+        print(f"[OPTIMIZE] Phase 6: Applying resource constraints...")
         tasks = self.apply_resource_constraints(tasks)
+        print(f"[OPTIMIZE] Phase 6 complete")
         
         # Phase 7: Add milestones
+        print(f"[OPTIMIZE] Phase 7: Adding milestones...")
         milestones = self.add_milestones(tasks, project_start)
         tasks.extend(milestones)
+        print(f"[OPTIMIZE] Phase 7 complete: Added {len(milestones)} milestones")
         
-        return self.format_timeline_response(tasks, optimization_mode)
+        print(f"[OPTIMIZE] Formatting response...")
+        result = self.format_timeline_response(tasks, optimization_mode)
+        print(f"[OPTIMIZE] Complete! Returning timeline with {len(tasks)} tasks")
+        return result
     
     async def apply_scheduling_constraints(
         self,
@@ -907,6 +932,8 @@ async def generate_intelligent_timeline(
 ) -> Dict[str, Any]:
     """Generate an intelligent timeline with parallel workstreams"""
     
+    print(f"[INTELLIGENT TIMELINE] Starting generation with {len(deliverables)} deliverables, mode={optimization_mode}")
+    
     # Parse start date
     if project_start:
         start_date = datetime.fromisoformat(project_start)
@@ -916,14 +943,19 @@ async def generate_intelligent_timeline(
         days_until_monday = (7 - today.weekday()) % 7 or 7
         start_date = today + timedelta(days=days_until_monday)
     
+    print(f"[INTELLIGENT TIMELINE] Project start date: {start_date}")
+    
     # Create scheduler instance
     scheduler = TimelineScheduler()
+    print(f"[INTELLIGENT TIMELINE] Scheduler instance created")
     
     # Generate optimized timeline
+    print(f"[INTELLIGENT TIMELINE] Calling optimize_timeline...")
     timeline = await scheduler.optimize_timeline(
         deliverables,
         start_date,
         optimization_mode
     )
+    print(f"[INTELLIGENT TIMELINE] optimize_timeline returned successfully")
     
     return timeline

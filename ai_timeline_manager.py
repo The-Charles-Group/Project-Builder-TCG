@@ -320,7 +320,10 @@ class CPMCalculator:
                 current += timedelta(days=1)
             
             return max(1, business_days)  # Minimum 1 day
-        except:
+        except Exception as e:
+            print(f"[AI Timeline] Error calculating duration: {e}")
+            import traceback
+            traceback.print_exc()
             return 1
     
     def _generate_cpm_metrics(self, critical_path_ids: Set[str], project_duration: float) -> Dict[str, Any]:
@@ -1486,8 +1489,9 @@ Return as JSON with keys:
                     if cleaned_content.endswith('```'):
                         cleaned_content = cleaned_content[:-3]
                     ai_insights = json.loads(cleaned_content.strip())
-                except:
+                except Exception as parse_error:
                     # If all parsing fails, use defaults
+                    print(f"[AI Timeline] Failed to parse cleaned JSON: {parse_error}")
                     print(f"[AI Timeline] Using default insights due to parsing error")
                     ai_insights = {
                         'strategic_rationale': 'Timeline structured for optimal project flow',
