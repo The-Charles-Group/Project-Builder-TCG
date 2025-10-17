@@ -1,9 +1,39 @@
 # Agency Project Builder - Production Ready
 
 ## Overview
-This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.6** (October 16, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
+This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.7** (October 17, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
 ## Recent Changes
+- **October 17, 2025**: SCENARIO_STORE Architecture + Timeline Timeout Fix (v5.7)
+  - **CRITICAL FIX**: Resolved timeline generation timeout/hang at 100% issue
+    - Implemented **real chunking** for large projects (>150 deliverables processed in batches of 150)
+    - Fixed background job completion signal to properly set `StreamJobStatus.COMPLETED`
+    - Added batch-level progress reporting with clear status messages
+    - Resilient error handling: continues processing even if individual batches fail
+    - Partial results returned if some batches succeed
+  - **NEW ARCHITECTURE**: Centralized SCENARIO_STORE for data synchronization
+    - Single source of truth for all pricing/timeline/Gantt data per session
+    - Global `SCENARIO_STORE: Dict[str, Dict[str, Any]]` keyed by session_id
+    - Helper function `_recompute_totals()` ensures Price_USD and totals stay synchronized
+  - **NEW API ENDPOINTS**: Session-based pricing and timeline management
+    - `POST /api/pricing/build_scenario` - Creates scenario from Step 2 selections with WBS hierarchy
+    - `POST /api/pricing/optimize` - Redistributes hours using existing optimizer, recomputes totals
+    - `POST /api/pricing/cadence_suggestion` - Analyzes retainer vs project pricing
+    - `POST /api/pricing/retainer_suggestions` - Generates global retainer distribution plan
+    - `POST /api/timeline/update_task` - Syncs Gantt bar edits back to pricing (updates duration/hours)
+  - **ENHANCED XML EXPORT**: Updated to read from SCENARIO_STORE with full WF_COLUMNS support
+    - Includes Component and Service Department columns as required by Workfront
+    - Maintains backward compatibility with existing payload formats
+    - Session-scoped data ensures correct scenario is exported
+  - **FRONTEND IMPROVEMENTS**: Session management and API integration
+    - Added `getCurrentSessionId()` helper to enforce Step 2 completion before later steps
+    - Updated all API calls to use session-based endpoints
+    - Gantt bar drag/resize now syncs changes back to pricing table in real-time
+    - Single global "Ask AI for Retainer Suggestions" button (replaced per-deliverable buttons)
+    - Clear error messages if user skips Step 2
+  - **DATA FLOW**: Gantt ↔ Pricing ↔ XML now fully synchronized through SCENARIO_STORE
+  - All changes architect-reviewed and verified
+
 - **October 17, 2025**: Security dependency updates verification
   - **VERIFIED**: All security updates functioning correctly after dependency updates
   - Re-verified `jinja2==3.1.6` (CVE-2025-27516 fixed) - Application rendering correctly
@@ -64,6 +94,7 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data, calculations, and manipulations.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
+- **SCENARIO_STORE Architecture**: Centralized session-based data store for pricing, timeline, and Gantt synchronization. Ensures all edits (pricing table, Gantt bar adjustments, XML exports) operate on the same canonical scenario data. Includes automatic totals recalculation via `_recompute_totals()` helper.
 - **AI Planner v3 (GPT-5 + AgencyDB)**: Advanced reasoning-based AI intelligence layer connected to a real database for granular task selection. Features include asynchronous processing with job tracking, real-time progress updates, granular L2 task selection, holistic project flow analysis, and evidence-based matching with calibrated confidence scores. It also incorporates smart multipliers for complexity, channel, market, and compliance factors, and auto-relaxation/rescue logic.
 - **GPT-5 Enforcer System**: Centralized model enforcement through `sitecustomize.py` that:
   - **Blocks ALL non-GPT-5 models** automatically at SDK level (no silent downgrades to gpt-4, o1, o3)
