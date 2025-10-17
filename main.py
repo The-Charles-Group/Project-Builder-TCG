@@ -418,6 +418,36 @@ async def get_agencydb_job_status(job_id: str):
         except ImportError:
             pass
         
+        # Check JOB_STORE for image processing jobs (need forward reference since JOB_STORE defined later)
+        # Use globals() to access it
+        job_store = globals().get('JOB_STORE', {})
+        if job_id in job_store:
+            job = job_store[job_id]
+            
+            # Map JobStatus to expected format
+            status_map = {
+                "pending": "pending",
+                "processing": "processing",
+                "completed": "completed",
+                "failed": "failed",
+                "cancelled": "failed"
+            }
+            
+            response = {
+                "job_id": job.job_id,
+                "status": status_map.get(job.status.value, job.status.value),
+                "progress": round(job.percentage, 2),
+                "message": f"Processing images: {job.processed_images}/{job.total_images}"
+            }
+            
+            if job.status.value == "completed" and job.result_text:
+                response["data"] = {"text": job.result_text}
+            
+            if job.status.value == "failed" and job.errors:
+                response["error"] = "; ".join(job.errors)
+            
+            return response
+        
         # Job not found in any store
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     
@@ -5466,6 +5496,11 @@ class BuildScenarioPayload(BaseModel):
     selection: Dict[str, Any]  # Deliverables with components from Step 2
     project_name: Optional[str] = None
     project_start: Optional[str] = None
+    pricing_mode: Optional[str] = "Flat_Blended"
+    blended_rate: Optional[float] = 195.0
+    rate_band: Optional[str] = "Standard_US"
+    client_budget_usd: Optional[float] = None
+    retainers: Optional[List[Dict[str, Any]]] = None
 
 class OptimizeScenarioPayload(BaseModel):
     """Optimize pricing for a scenario"""
