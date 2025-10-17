@@ -4,18 +4,34 @@
 This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. **Status: Production Ready - v5.6** (October 16, 2025) It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
 ## Recent Changes
-- **October 17, 2025**: Security dependency updates verification
-  - **VERIFIED**: All security updates functioning correctly after dependency updates
-  - Re-verified `jinja2==3.1.6` (CVE-2025-27516 fixed) - Application rendering correctly
-  - Re-verified `python-multipart==0.0.20` (CVE-2024-24762 & CVE-2024-53981 fixed) - File uploads working
-  - Comprehensive functionality tests passed:
-    - ✅ FastAPI server running successfully
-    - ✅ Database loaded (1916 rows)
-    - ✅ All API endpoints operational (/api/options, /api/load, /api/suggest_by_file)
-    - ✅ File upload and multipart form parsing working correctly
-    - ✅ UI rendering and page loads successful
-    - ✅ GPT-5 integration active and responding
-  - No breaking changes detected from security updates
+- **October 17, 2025**: Gantt Chart Performance Fix + Timeline Generation Stability
+  - **CRITICAL FIX**: Resolved browser freeze when dragging deliverables in Gantt chart (Step 4)
+    - Root cause: `on_date_change` callback firing continuously during drag operations
+    - Implemented **per-task debouncing** using Map data structure (300ms delay)
+    - Each task gets independent debounce timer, preventing lost updates when dragging multiple tasks rapidly
+    - Expensive operations (array search, GanttBridge event emissions, state updates) now batched after drag completes
+    - Save button displays immediately for instant user feedback while updates batch in background
+    - Added `taskDebouncers.clear()` on chart rebuild for immediate cleanup of retired task IDs
+    - Users can now smoothly drag multiple deliverables without browser freezing or lost data
+    - Architect-reviewed and approved for production
+  - **CRITICAL FIX**: Resolved infinite loop in timeline generation (Phase 5 - critical path calculation)
+    - Added max iteration guards (2x task count) to forward and backward passes in `calculate_critical_path()`
+    - Implemented stall detection - breaks out if no progress made in iteration
+    - Added fallback processing for unprocessed tasks with default values
+    - Timeline generation now completes successfully even with circular dependencies
+    - Added detailed [CRITICAL PATH] logging to trace execution and diagnose issues
+  - **Security Updates Verification**:
+    - **VERIFIED**: All security updates functioning correctly after dependency updates
+    - Re-verified `jinja2==3.1.6` (CVE-2025-27516 fixed) - Application rendering correctly
+    - Re-verified `python-multipart==0.0.20` (CVE-2024-24762 & CVE-2024-53981 fixed) - File uploads working
+    - Comprehensive functionality tests passed:
+      - ✅ FastAPI server running successfully
+      - ✅ Database loaded (1916 rows)
+      - ✅ All API endpoints operational (/api/options, /api/load, /api/suggest_by_file)
+      - ✅ File upload and multipart form parsing working correctly
+      - ✅ UI rendering and page loads successful
+      - ✅ GPT-5 integration active and responding
+    - No breaking changes detected from security updates
 
 - **October 16, 2025**: Unified Pricing Table + Critical bug fixes
   - **NEW FEATURE**: Unified Editable Pricing Table (Step 3)
