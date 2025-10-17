@@ -688,7 +688,8 @@ class AIAssistant {
                     
                     // Update progress with real data
                     const progress = status.progress || 0;
-                    const stage = status.stage || 'Processing';
+                    const stage = status.current_stage || status.stage || status.message || 'Processing';
+                    const reasoning = status.reasoning || '';
                     
                     // Create detailed message based on stage
                     let details = '';
@@ -696,6 +697,11 @@ class AIAssistant {
                         details = `<ul>${Object.entries(status.stage_details).map(([k, v]) => 
                             `<li>${k}: ${v}</li>`
                         ).join('')}</ul>`;
+                    }
+                    
+                    // Show reasoning in universal display
+                    if (window.reasoningDisplay && reasoning) {
+                        window.reasoningDisplay.show(stage, reasoning, progress);
                     }
                     
                     this.updateProgress(progress, stage, details);
@@ -715,6 +721,12 @@ class AIAssistant {
                     if (status.status === 'completed') {
                         console.log('[CHARLES] Analysis completed, cleaning up poll interval');
                         cleanup();
+                        
+                        // Hide reasoning display on completion
+                        if (window.reasoningDisplay) {
+                            window.reasoningDisplay.hide();
+                        }
+                        
                         this.updateProgress(100, '✅ Analysis Complete!', 'Loading deliverables into app...');
                         
                         if (taskMonitor) {

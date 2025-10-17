@@ -2428,7 +2428,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     # Stage 4: Fast vs Deep mode divergence
     if mode == "fast":
         # FAST MODE: No LLM calls, use TF-IDF/lexical scoring only
-        _update_job(job_id, "Stage 4/7: Fast mode - scoring with TF-IDF only...", 50)
+        _update_job(job_id, "Stage 4/7: Fast mode - scoring with TF-IDF only...", 50,
+                    reasoning=f"Fast Mode: Statistically scoring {deliv_candidates_count} deliverables using keyword frequency analysis (no AI)")
         
         # Filter to top FAST_TOP_K deliverables based on lexical+embedding scores
         deliverable_candidates = [c for c in candidates if c["level"] == "deliverable"]
@@ -2483,7 +2484,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         
     else:
         # DEEP MODE: Use LLM for intelligent re-ranking
-        _update_job(job_id, "Stage 4/7: Deep mode - pre-filtering candidates...", 40)
+        _update_job(job_id, "Stage 4/7: Deep mode - pre-filtering candidates...", 40,
+                    reasoning=f"Deep Mode: Preparing top {DEEP_TOP_K} deliverables for GPT-5 Thinking analysis with deep reasoning")
         
         # Pre-filter to DEEP_TOP_K candidates for LLM scoring
         deliverable_candidates = [c for c in candidates if c["level"] == "deliverable"]
@@ -2501,7 +2503,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
                 llm_candidates.extend(tasks[:3])  # Up to 3 tasks per component
         
-        _update_job(job_id, "Stage 5/7: Deep mode - scoring with GPT-5...", 50)
+        _update_job(job_id, "Stage 5/7: Deep mode - scoring with GPT-5...", 50,
+                    reasoning=f"Sending {len(llm_candidates)} items to GPT-5 Thinking for advanced context-aware relevance analysis")
         
         # Wrap LLM scoring in try/except with guaranteed fallback
         try:
@@ -2524,7 +2527,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             print(f"[ANALYZE] Using fallback scores for {len(llm_scores)} candidates")
     
     # Stage 6: Calibrate and fuse scores
-    _update_job(job_id, "Stage 6/7: Calibrating scores and selecting deliverables...", 70)
+    _update_job(job_id, "Stage 6/7: Calibrating scores and selecting deliverables...", 70,
+                reasoning="Combining AI reasoning with statistical analysis to calibrate confidence scores and select final deliverables")
     
     # NEW: Extract explicit requirements from RFP before fusion
     explicit_requirements = extract_explicit_requirements(request_text)
@@ -2585,7 +2589,8 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     print(f"[ANALYZE] After rescue and expansion: {len(final_delivs)} deliverables will be included")
     
     # Stage 7: Compose final plan
-    _update_job(job_id, "Stage 7/7: Building final project plan...", 90)
+    _update_job(job_id, "Stage 7/7: Building final project plan...", 90,
+                reasoning=f"Assembling final project plan with {len([f for f in fused if f.get('pass')])} approved deliverables and their components")
     
     # FIXED: Ensure plan composition always succeeds
     try:
