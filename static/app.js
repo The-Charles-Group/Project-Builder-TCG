@@ -4979,6 +4979,30 @@ function startProgressPolling(jobId) {
 let aiAnalysisJobId = null;
 let aiAnalysisInterval = null;
 
+// Clean up polling on page unload or visibility change
+function cleanupPolling() {
+  if (aiAnalysisInterval) {
+    console.log('[POLLING] Cleaning up polling interval');
+    clearInterval(aiAnalysisInterval);
+    aiAnalysisInterval = null;
+  }
+  if (pollingIntervalId) {
+    console.log('[POLLING] Cleaning up timeline polling interval');
+    clearInterval(pollingIntervalId);
+    pollingIntervalId = null;
+  }
+}
+
+// Stop polling when user leaves the page
+window.addEventListener('beforeunload', cleanupPolling);
+
+// Stop polling when page becomes hidden
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cleanupPolling();
+  }
+});
+
 function showAIProgressBar() {
   let progressBar = document.getElementById('ai-progress-bar');
   if (!progressBar) {
@@ -5041,13 +5065,37 @@ function updateAIProgress(status) {
 async function pollAIAnalysis(jobId) {
   try {
     const res = await fetch(`/api/ai/jobs/${jobId}`);
-    if (!res.ok) return;
+    
+    // Stop polling if job doesn't exist (404)
+    if (res.status === 404) {
+      console.warn(`[POLLING] Job ${jobId} not found, stopping polling`);
+      clearInterval(aiAnalysisInterval);
+      aiAnalysisInterval = null;
+      hideAIProgressBar();
+      return;
+    }
+    
+    if (!res.ok) {
+      console.error(`[POLLING] Error fetching job status: ${res.status}`);
+      return;
+    }
     
     const status = await res.json();
     updateAIProgress(status);
     
-    if (status.status === 'completed' && status.result) {
+    // Check for completion states (completed, complete, done, etc.)
+    const isCompleted = status.status === 'completed' || 
+                        status.status === 'complete' || 
+                        status.status === 'done';
+    
+    const isFailed = status.status === 'failed' || 
+                     status.status === 'error' || 
+                     status.status === 'cancelled';
+    
+    if (isCompleted && status.result) {
+      console.log(`[POLLING] Job ${jobId} completed, stopping polling`);
       clearInterval(aiAnalysisInterval);
+      aiAnalysisInterval = null;
       hideAIProgressBar();
       
       // Handle completed analysis
@@ -5069,10 +5117,12 @@ async function pollAIAnalysis(jobId) {
         btnAnalyze.disabled = false;
         btnAnalyze.textContent = 'Analyze with AI';
       }
-    } else if (status.status === 'failed') {
+    } else if (isFailed) {
+      console.log(`[POLLING] Job ${jobId} failed, stopping polling`);
       clearInterval(aiAnalysisInterval);
+      aiAnalysisInterval = null;
       hideAIProgressBar();
-      alert(`AI analysis failed: ${status.error || 'Unknown error'}`);
+      alert(`AI analysis failed: ${status.error || status.message || 'Unknown error'}`);
       
       const btnAnalyze = document.querySelector('#btnAnalyze');
       if (btnAnalyze) {
@@ -5081,7 +5131,8 @@ async function pollAIAnalysis(jobId) {
       }
     }
   } catch (error) {
-    console.error('Error polling AI analysis:', error);
+    console.error('[POLLING] Error polling AI analysis:', error);
+    // Don't stop polling on network errors, let it retry
   }
 }
 
@@ -5272,6 +5323,13 @@ async function onRunReconcile() {
       aiAnalysisJobId = jobInfo.job_id;
       showAIProgressBar();
       updateAIProgress({ progress: 0, current_stage: 'Starting AI analysis...', elapsed_seconds: 0, eta_seconds: null });
+      
+      // Clear any existing polling interval before starting a new one
+      if (aiAnalysisInterval) {
+        console.log('[POLLING] Clearing existing interval before starting new polling');
+        clearInterval(aiAnalysisInterval);
+        aiAnalysisInterval = null;
+      }
       
       // Start polling for job status (SSE not implemented for AI jobs yet)
       // Poll the correct endpoint for job status

@@ -2098,7 +2098,7 @@ async def _quick_relevance_check_async(img_bytes: bytes, page_num: int, img_inde
                         ]
                     }
                 ],
-                max_tokens=10  # Minimal token usage
+                max_completion_tokens=10  # Minimal token usage for GPT-5 vision
             )
             
             # Extract text from Chat Completions response
@@ -2179,7 +2179,7 @@ async def _analyze_single_image_async(img_bytes: bytes, page_num: int, img_index
                             ]
                         }
                     ],
-                    max_tokens=500
+                    max_completion_tokens=500  # Updated for GPT-5 vision compatibility
                 )
                 
                 # Extract text from Chat Completions response
