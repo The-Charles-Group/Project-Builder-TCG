@@ -703,7 +703,7 @@ class AIAssistant {
                     if (window.reasoningSidebar) {
                         window.reasoningSidebar.show(jobId);
                         if (reasoning) {
-                            window.reasoningSidebar.update(reasoning, stage, progress, status.status);
+                            window.reasoningSidebar.update(reasoning, stage, progress, status.status, jobId);
                         }
                     }
                     

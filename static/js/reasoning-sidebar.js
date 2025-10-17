@@ -115,7 +115,7 @@ class ReasoningSidebar {
     show(jobId = null) {
         if (!this.initialized) this.init();
 
-        // Clear any pending auto-hide timeout
+        // ALWAYS clear any pending auto-hide timeout
         if (this.autoHideTimeout) {
             clearTimeout(this.autoHideTimeout);
             this.autoHideTimeout = null;
@@ -126,8 +126,10 @@ class ReasoningSidebar {
         if (jobId && jobId !== this.currentJobId) {
             this.reset();
             this.currentJobId = jobId;
-            this.isJobActive = true; // Mark job as active
         }
+
+        // ALWAYS mark job as active AFTER reset (so it doesn't get cleared)
+        this.isJobActive = true;
 
         this.container.classList.add('visible');
         
@@ -137,7 +139,7 @@ class ReasoningSidebar {
             this.container.classList.remove('minimized');
         }
 
-        console.log('[REASONING SIDEBAR] Shown for job:', jobId);
+        console.log('[REASONING SIDEBAR] Shown for job:', jobId, '- Job active');
     }
 
     /**
@@ -172,9 +174,20 @@ class ReasoningSidebar {
 
     /**
      * Update sidebar with new reasoning data
+     * @param {string} reasoning - The AI thinking step to display
+     * @param {string} stage - Current processing stage
+     * @param {number} progress - Progress percentage (0-100)
+     * @param {string} status - Job status ('processing', 'completed', 'failed')
+     * @param {string} jobId - Optional job ID to verify this update belongs to current job
      */
-    update(reasoning, stage = '', progress = 0, status = 'processing') {
+    update(reasoning, stage = '', progress = 0, status = 'processing', jobId = null) {
         if (!this.initialized) this.init();
+
+        // If jobId provided, verify it matches current job (prevent stale updates)
+        if (jobId && this.currentJobId && jobId !== this.currentJobId) {
+            console.log('[REASONING SIDEBAR] Ignoring update from stale job:', jobId);
+            return;
+        }
 
         // Update stage
         if (stage) {
@@ -195,7 +208,7 @@ class ReasoningSidebar {
             }
         }
 
-        // Auto-hide on completion
+        // Auto-hide on completion (only for current job)
         if (status === 'completed' || status === 'failed') {
             this.isJobActive = false; // Mark job as inactive
             
