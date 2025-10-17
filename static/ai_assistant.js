@@ -699,9 +699,12 @@ class AIAssistant {
                         ).join('')}</ul>`;
                     }
                     
-                    // Show reasoning in universal display
-                    if (window.reasoningDisplay && reasoning) {
-                        window.reasoningDisplay.show(stage, reasoning, progress);
+                    // Show reasoning in sidebar
+                    if (window.reasoningSidebar) {
+                        window.reasoningSidebar.show(jobId);
+                        if (reasoning) {
+                            window.reasoningSidebar.update(reasoning, stage, progress, status.status);
+                        }
                     }
                     
                     this.updateProgress(progress, stage, details);
@@ -722,11 +725,7 @@ class AIAssistant {
                         console.log('[CHARLES] Analysis completed, cleaning up poll interval');
                         cleanup();
                         
-                        // Hide reasoning display on completion
-                        if (window.reasoningDisplay) {
-                            window.reasoningDisplay.hide();
-                        }
-                        
+                        // Reasoning sidebar will auto-hide on completion
                         this.updateProgress(100, '✅ Analysis Complete!', 'Loading deliverables into app...');
                         
                         if (taskMonitor) {
