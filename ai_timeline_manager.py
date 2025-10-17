@@ -1449,7 +1449,7 @@ Return as JSON with keys:
 """
 
         response = await client.chat.completions.create(
-            model="gpt-3.5-turbo",  # Use actual OpenAI model
+            model="gpt-5-mini",  # Use GPT-5 model (system enforces GPT-5 only)
             messages=[
                 {"role": "system", "content": "You are a senior project management consultant."},
                 {"role": "user", "content": prompt}
@@ -1636,18 +1636,11 @@ Return a JSON object with this structure:
         if not client:
             raise RuntimeError("OpenAI client not available")
             
-        # Map GPT-5 models to real OpenAI models
-        model_mapping = {
-            "gpt-5": "gpt-4-turbo-preview",
-            "gpt-5-mini": "gpt-3.5-turbo",
-            "gpt-5-pro": "gpt-4",
-            "gpt-5-thinking": "gpt-4-turbo-preview",
-            "gpt-5-thinking-mini": "gpt-3.5-turbo"
-        }
-        actual_model = model_mapping.get(model, "gpt-4-turbo-preview")
+        # Use GPT-5 models directly - sitecustomize.py handles the mapping automatically
+        # No manual mapping needed - the enforcer will convert to appropriate models
         
         response = await client.chat.completions.create(
-            model=actual_model,  # Use actual OpenAI model
+            model=model,  # Use GPT-5 model directly (enforcer handles mapping)
             messages=[
                 {"role": "system", "content": "You are a project scheduling expert. Provide realistic timelines based on industry standards."},
                 {"role": "user", "content": prompt}

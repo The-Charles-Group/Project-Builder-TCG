@@ -2071,7 +2071,7 @@ async def _quick_relevance_check_async(img_bytes: bytes, page_num: int, img_inde
                 return (True, "no_client")
             
             response = await async_openai_client.chat.completions.create(
-                model="gpt-4o",  # Use GPT-4o for vision analysis
+                model="gpt-5",  # Use GPT-5 (system enforces GPT-5 only)
                 messages=[
                     {
                         "role": "user",
@@ -5510,7 +5510,7 @@ Example: {{"deck_strategy": {{"type": "PROJECT", "confidence": 0.9, "reasoning":
             # Call OpenAI API
             client = app.state.openai_client
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 messages=[
                     {"role": "system", "content": "You are an expert at analyzing project scopes and determining whether deliverables are one-time projects or ongoing retainer services."},
                     {"role": "user", "content": prompt}
