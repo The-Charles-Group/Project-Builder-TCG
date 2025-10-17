@@ -4982,15 +4982,11 @@ let aiAnalysisInterval = null;
 // Clean up polling on page unload or visibility change
 function cleanupPolling() {
   if (aiAnalysisInterval) {
-    console.log('[POLLING] Cleaning up polling interval');
+    console.log('[POLLING] Cleaning up AI analysis polling interval');
     clearInterval(aiAnalysisInterval);
     aiAnalysisInterval = null;
   }
-  if (pollingIntervalId) {
-    console.log('[POLLING] Cleaning up timeline polling interval');
-    clearInterval(pollingIntervalId);
-    pollingIntervalId = null;
-  }
+  // Note: pollingIntervalId is managed within generateAITimeline function scope
 }
 
 // Stop polling when user leaves the page
@@ -5066,12 +5062,18 @@ async function pollAIAnalysis(jobId) {
   try {
     const res = await fetch(`/api/ai/jobs/${jobId}`);
     
-    // Stop polling if job doesn't exist (404)
+    // Only stop polling if THIS job (current job) returns 404
     if (res.status === 404) {
-      console.warn(`[POLLING] Job ${jobId} not found, stopping polling`);
-      clearInterval(aiAnalysisInterval);
-      aiAnalysisInterval = null;
-      hideAIProgressBar();
+      // Check if this is the current job we're tracking
+      if (jobId === aiAnalysisJobId) {
+        console.warn(`[POLLING] Current job ${jobId} not found (404), stopping polling`);
+        clearInterval(aiAnalysisInterval);
+        aiAnalysisInterval = null;
+        hideAIProgressBar();
+      } else {
+        // Old job returning 404, ignore it
+        console.log(`[POLLING] Old job ${jobId} not found (404), ignoring`);
+      }
       return;
     }
     
@@ -5081,6 +5083,7 @@ async function pollAIAnalysis(jobId) {
     }
     
     const status = await res.json();
+    console.log(`[POLLING] Job ${jobId} status:`, status);
     updateAIProgress(status);
     
     // Check for completion states (completed, complete, done, etc.)
@@ -5092,25 +5095,32 @@ async function pollAIAnalysis(jobId) {
                      status.status === 'error' || 
                      status.status === 'cancelled';
     
-    if (isCompleted && status.result) {
-      console.log(`[POLLING] Job ${jobId} completed, stopping polling`);
+    // Handle completion - check for result OR if status is complete with 100% progress
+    if (isCompleted) {
+      console.log(`[ANALYSIS] Job complete, advancing to Step 2`, status);
       clearInterval(aiAnalysisInterval);
       aiAnalysisInterval = null;
       hideAIProgressBar();
       
-      // Handle completed analysis
-      const aiPlanResponse = status.result;
+      // Handle completed analysis - result might be in status.result or status.data
+      const aiPlanResponse = status.result || status.data || status;
       window.APP = window.APP || {};
       window.APP.aiPlan = aiPlanResponse;
       sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
       
       const step2 = document.getElementById('step2');
       if (step2) {
+        console.log('[ANALYSIS] Showing Step 2');
         step2.style.display = 'block';
         step2.scrollIntoView({ behavior: 'smooth' });
       }
       
-      renderAIPlan(aiPlanResponse);
+      // Only call renderAIPlan if we have a valid plan structure
+      if (aiPlanResponse && (aiPlanResponse.plan || aiPlanResponse.deliverables)) {
+        renderAIPlan(aiPlanResponse);
+      } else {
+        console.warn('[ANALYSIS] No valid plan structure found in response:', aiPlanResponse);
+      }
       
       const btnAnalyze = document.querySelector('#btnAnalyze');
       if (btnAnalyze) {
