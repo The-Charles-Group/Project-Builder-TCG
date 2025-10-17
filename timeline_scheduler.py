@@ -427,7 +427,13 @@ class TimelineScheduler:
         
         # Process remaining tasks
         processed = set(earliest_start.keys())
-        while len(processed) < len(tasks):
+        max_iterations = len(tasks) * 2  # Safety limit
+        iteration = 0
+        
+        while len(processed) < len(tasks) and iteration < max_iterations:
+            iteration += 1
+            tasks_processed_this_iteration = 0
+            
             for task in tasks:
                 if task.id in processed:
                     continue
@@ -448,6 +454,18 @@ class TimelineScheduler:
                         earliest_finish[task.id] = task.end_date
                     
                     processed.add(task.id)
+                    tasks_processed_this_iteration += 1
+            
+            # Break if no progress is made (deadlock detected)
+            if tasks_processed_this_iteration == 0:
+                print(f"[CRITICAL PATH] Warning: Forward pass stalled at iteration {iteration}, {len(processed)}/{len(tasks)} tasks processed")
+                # Process remaining tasks with default values
+                for task in tasks:
+                    if task.id not in processed:
+                        earliest_start[task.id] = task.start_date
+                        earliest_finish[task.id] = task.end_date
+                        processed.add(task.id)
+                break
         
         # Backward pass - calculate latest start/finish times
         # Check if we have any tasks to process
@@ -467,7 +485,15 @@ class TimelineScheduler:
         
         # Process remaining tasks in reverse
         processed = set(latest_finish.keys())
-        while len(processed) < len(tasks):
+        max_iterations = len(tasks) * 2  # Safety limit
+        iteration = 0
+        
+        print(f"[CRITICAL PATH] Starting backward pass, {len(processed)}/{len(tasks)} tasks have no successors")
+        
+        while len(processed) < len(tasks) and iteration < max_iterations:
+            iteration += 1
+            tasks_processed_this_iteration = 0
+            
             for task in reversed(tasks):
                 if task.id in processed:
                     continue
@@ -487,6 +513,20 @@ class TimelineScheduler:
                         latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
                     
                     processed.add(task.id)
+                    tasks_processed_this_iteration += 1
+            
+            # Break if no progress is made (deadlock detected)
+            if tasks_processed_this_iteration == 0:
+                print(f"[CRITICAL PATH] Warning: Backward pass stalled at iteration {iteration}, {len(processed)}/{len(tasks)} tasks processed")
+                # Process remaining tasks with default values
+                for task in tasks:
+                    if task.id not in processed:
+                        latest_finish[task.id] = project_end
+                        latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
+                        processed.add(task.id)
+                break
+        
+        print(f"[CRITICAL PATH] Backward pass complete after {iteration} iterations")
         
         # Identify critical path - tasks with zero slack
         critical_path = []
