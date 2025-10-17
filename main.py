@@ -559,6 +559,45 @@ RFP_TEXT_CACHE_TEXTAREA: str | None = None  # Text from textarea input
 RFP_TEXT_CACHE_FILE: str | None = None       # Text from uploaded file
 RFP_TEXT_CACHE: str | None = None            # Merged text (backward compatibility)
 
+# SCENARIO_STORE: Unified storage for session_id -> scenario data
+# Syncs Gantt ↔ Pricing ↔ XML data through a single source of truth
+SCENARIO_STORE: Dict[str, Dict[str, Any]] = {}
+
+def _recompute_totals(scn: dict) -> dict:
+    """
+    Recompute Price_USD and totals for a scenario.
+    Ensures all rows have Price_USD = Rate_USD * Planned_Hours.
+    Updates totals.hours and totals.price.
+    
+    Args:
+        scn: Scenario dictionary with 'items' list
+        
+    Returns:
+        Updated scenario dictionary
+    """
+    items = scn.get("items", [])
+    total_hours = 0.0
+    total_price = 0.0
+    
+    for item in items:
+        # Calculate Price_USD from Rate_USD * Planned_Hours
+        rate = float(item.get("Rate_USD", 0) or 0)
+        hours = float(item.get("Planned_Hours", 0) or 0)
+        item["Price_USD"] = round(rate * hours, 2)
+        
+        # Accumulate totals
+        total_hours += hours
+        total_price += item["Price_USD"]
+    
+    # Update scenario totals
+    if "totals" not in scn:
+        scn["totals"] = {}
+    
+    scn["totals"]["hours"] = round(total_hours, 2)
+    scn["totals"]["price"] = round(total_price, 2)
+    
+    return scn
+
 # Configure file upload limits - allow up to 20MB files
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -4122,6 +4161,7 @@ class TimelineGenerationRequest(BaseModel):
     project_start: Optional[str] = None  # ISO date format YYYY-MM-DD
     optimization_mode: str = "balanced"  # "speed" | "quality" | "balanced" | "cost"
     use_intelligent_scheduler: bool = True  # Use new intelligent scheduler
+    session_id: Optional[str] = None  # Session ID for SCENARIO_STORE sync
 
 def _component_catalog_for_deliverable(db: AgencyDB, dcode: str, max_tasks_per_comp: int = 40) -> Dict[str, List[str]]:
     """Return {component: [top task labels]} limited for token safety."""
@@ -4360,9 +4400,8 @@ async def generate_timeline(request: TimelineGenerationRequest):
             enriched_deliverables = []
             total_deliverables = len(request.deliverables)
             
-            # Log for large projects
-            if total_deliverables > 20:
-                print(f"[Timeline] Processing large project with {total_deliverables} deliverables")
+            # CRITICAL: Chunk processing for large projects to avoid timeout
+            CHUNK_SIZE = 150  # Process max 150 tasks at a time
             
             for i, deliv in enumerate(request.deliverables):
                 code = deliv.get('deliverable_code', '')
@@ -4473,7 +4512,7 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 
                 enriched_deliverables.append(enriched)
             
-            # Progress: Creating dependencies (30-50%)
+            # Progress: Creating dependencies (30-40%)
             update_sse_job(job_id,
                           status=StreamJobStatus.PROCESSING,
                           progress=35.0,
@@ -4481,52 +4520,160 @@ async def generate_timeline(request: TimelineGenerationRequest):
                           current_stage="creating_dependencies")
             await asyncio.sleep(0.1)
             
-            # Use the intelligent timeline generator
-            if request.use_intelligent_scheduler:
-                # Progress: Using intelligent scheduler (40-70%)
+            # CRITICAL: Determine if chunking is needed to avoid timeout
+            total_enriched = len(enriched_deliverables)
+            needs_chunking = total_enriched > CHUNK_SIZE
+            
+            if needs_chunking:
+                # Large project - process in chunks to prevent timeout
+                print(f"[Timeline] Large project detected: {total_enriched} deliverables will be processed in chunks of {CHUNK_SIZE}")
+                
                 update_sse_job(job_id,
                               status=StreamJobStatus.PROCESSING,
                               progress=40.0,
-                              message="Using intelligent scheduler to optimize timeline...",
-                              current_stage="optimizing_schedule")
+                              message=f"Processing large project ({total_enriched} deliverables) in chunks of {CHUNK_SIZE}...",
+                              current_stage="chunking")
                 
-                # Use the new intelligent scheduler
-                result = await generate_intelligent_timeline(
-                    enriched_deliverables,
-                    request.project_start,
-                    request.optimization_mode
-                )
+                # Calculate chunk count
+                chunk_count = (total_enriched + CHUNK_SIZE - 1) // CHUNK_SIZE
+                print(f"[Timeline] Will process {chunk_count} chunks")
                 
-                # Progress: AI reasoning (70-90%)
-                if request.rfp_text:
+                # Process chunks with error handling
+                all_tasks = []
+                successful_chunks = 0
+                failed_chunks = []
+                
+                for chunk_idx in range(chunk_count):
+                    start_idx = chunk_idx * CHUNK_SIZE
+                    end_idx = min((chunk_idx + 1) * CHUNK_SIZE, total_enriched)
+                    chunk = enriched_deliverables[start_idx:end_idx]
+                    
+                    # Calculate progress: 40% at start, 85% at end of chunking
+                    chunk_progress = 40.0 + ((chunk_idx + 1) / chunk_count) * 45.0
+                    
                     update_sse_job(job_id,
                                   status=StreamJobStatus.PROCESSING,
-                                  progress=75.0,
-                                  message="Enhancing timeline with AI reasoning...",
-                                  current_stage="ai_reasoning")
+                                  progress=chunk_progress,
+                                  message=f"Processing batch {chunk_idx + 1}/{chunk_count} ({len(chunk)} deliverables)...",
+                                  current_stage=f"batch_{chunk_idx + 1}_of_{chunk_count}",
+                                  processed_items=chunk_idx + 1,
+                                  total_items=chunk_count)
                     
-                    from ai_timeline_manager import enhance_with_ai_reasoning
-                    result = await enhance_with_ai_reasoning(
-                        result,
-                        request.rfp_text,
-                        enriched_deliverables
-                    )
-            else:
-                # Progress: Using standard scheduler (40-90%)
-                update_sse_job(job_id,
-                              status=StreamJobStatus.PROCESSING,
-                              progress=50.0,
-                              message="Generating timeline with standard scheduler...",
-                              current_stage="generating_timeline")
+                    try:
+                        # Generate timeline for this chunk
+                        print(f"[Timeline] Processing batch {chunk_idx + 1}/{chunk_count} ({start_idx+1}-{end_idx} of {total_enriched})")
+                        
+                        if request.use_intelligent_scheduler:
+                            chunk_result = await generate_intelligent_timeline(
+                                chunk,
+                                request.project_start,
+                                request.optimization_mode
+                            )
+                        else:
+                            chunk_result = await generate_ai_timeline(
+                                chunk,
+                                request.rfp_text or RFP_TEXT_CACHE or "",
+                                request.project_start,
+                                request.optimization_mode,
+                                use_intelligent_scheduler=False
+                            )
+                        
+                        # Merge tasks from successful chunk
+                        if chunk_result and 'tasks' in chunk_result:
+                            chunk_tasks = chunk_result['tasks']
+                            all_tasks.extend(chunk_tasks)
+                            successful_chunks += 1
+                            print(f"[Timeline] Batch {chunk_idx + 1}/{chunk_count} completed successfully: {len(chunk_tasks)} tasks generated")
+                        else:
+                            print(f"[Timeline] WARNING: Batch {chunk_idx + 1}/{chunk_count} returned no tasks")
+                            failed_chunks.append(chunk_idx + 1)
+                            
+                    except Exception as chunk_error:
+                        # Log error but continue with other chunks
+                        error_msg = str(chunk_error)
+                        print(f"[Timeline] ERROR in batch {chunk_idx + 1}/{chunk_count}: {error_msg}")
+                        failed_chunks.append(chunk_idx + 1)
+                        
+                        # Update SSE with warning but continue
+                        update_sse_job(job_id,
+                                      status=StreamJobStatus.PROCESSING,
+                                      progress=chunk_progress,
+                                      message=f"Warning: Batch {chunk_idx + 1} failed, continuing with remaining batches...",
+                                      current_stage=f"batch_{chunk_idx + 1}_failed")
+                        await asyncio.sleep(0.1)
                 
-                # Use the standard AI timeline generator
-                result = await generate_ai_timeline(
-                    enriched_deliverables,
-                    request.rfp_text or RFP_TEXT_CACHE or "",
-                    request.project_start,
-                    request.optimization_mode,
-                    use_intelligent_scheduler=False
-                )
+                # Log final chunking results
+                print(f"[Timeline] Chunking complete: {successful_chunks}/{chunk_count} batches successful, {len(failed_chunks)} failed")
+                if failed_chunks:
+                    print(f"[Timeline] Failed batches: {failed_chunks}")
+                
+                # Combine all chunks into final result
+                result = {
+                    'tasks': all_tasks,
+                    'success': True,
+                    'metadata': {
+                        'chunked': True,
+                        'chunk_count': chunk_count,
+                        'successful_chunks': successful_chunks,
+                        'failed_chunks': failed_chunks,
+                        'total_deliverables': total_enriched,
+                        'total_tasks': len(all_tasks),
+                        'partial_results': len(failed_chunks) > 0
+                    }
+                }
+                
+                # Add warning message if some chunks failed
+                if failed_chunks:
+                    result['warning'] = f"{len(failed_chunks)} batches failed - showing partial results from {successful_chunks} successful batches"
+                
+            else:
+                # Standard processing for smaller projects
+                # Use the intelligent timeline generator
+                if request.use_intelligent_scheduler:
+                    # Progress: Using intelligent scheduler (40-70%)
+                    update_sse_job(job_id,
+                                  status=StreamJobStatus.PROCESSING,
+                                  progress=40.0,
+                                  message="Using intelligent scheduler to optimize timeline...",
+                                  current_stage="optimizing_schedule")
+                    
+                    # Use the new intelligent scheduler
+                    result = await generate_intelligent_timeline(
+                        enriched_deliverables,
+                        request.project_start,
+                        request.optimization_mode
+                    )
+                    
+                    # Progress: AI reasoning (70-90%)
+                    if request.rfp_text:
+                        update_sse_job(job_id,
+                                      status=StreamJobStatus.PROCESSING,
+                                      progress=75.0,
+                                      message="Enhancing timeline with AI reasoning...",
+                                      current_stage="ai_reasoning")
+                        
+                        from ai_timeline_manager import enhance_with_ai_reasoning
+                        result = await enhance_with_ai_reasoning(
+                            result,
+                            request.rfp_text,
+                            enriched_deliverables
+                        )
+                else:
+                    # Progress: Using standard scheduler (40-90%)
+                    update_sse_job(job_id,
+                                  status=StreamJobStatus.PROCESSING,
+                                  progress=50.0,
+                                  message="Generating timeline with standard scheduler...",
+                                  current_stage="generating_timeline")
+                    
+                    # Use the standard AI timeline generator
+                    result = await generate_ai_timeline(
+                        enriched_deliverables,
+                        request.rfp_text or RFP_TEXT_CACHE or "",
+                        request.project_start,
+                        request.optimization_mode,
+                        use_intelligent_scheduler=False
+                    )
             
             # Progress: Finalizing (90-100%)
             update_sse_job(job_id,
@@ -4535,17 +4682,52 @@ async def generate_timeline(request: TimelineGenerationRequest):
                           message="Finalizing timeline and preparing visualization...",
                           current_stage="finalizing")
             
-            # Add success flag
+            # Add success flag and descriptive message
             result['success'] = True
-            result['message'] = f"Generated timeline with {len(result.get('tasks', []))} tasks using {'intelligent' if request.use_intelligent_scheduler else 'standard'} scheduler"
             
-            # Complete the job
+            # Create descriptive message based on processing mode
+            scheduler_type = 'intelligent' if request.use_intelligent_scheduler else 'standard'
+            task_count = len(result.get('tasks', []))
+            
+            if needs_chunking:
+                # Include chunking information in message
+                metadata = result.get('metadata', {})
+                chunk_count = metadata.get('chunk_count', 0)
+                successful = metadata.get('successful_chunks', 0)
+                
+                if metadata.get('partial_results'):
+                    result['message'] = f"Generated timeline with {task_count} tasks from {successful}/{chunk_count} batches using {scheduler_type} scheduler (some batches failed)"
+                else:
+                    result['message'] = f"Generated timeline with {task_count} tasks from {chunk_count} batches using {scheduler_type} scheduler"
+            else:
+                result['message'] = f"Generated timeline with {task_count} tasks using {scheduler_type} scheduler"
+            
+            # CRITICAL: Store result in SCENARIO_STORE if session_id is provided
+            if hasattr(request, 'session_id') and request.session_id:
+                session_id = request.session_id
+                if session_id in SCENARIO_STORE:
+                    # Update existing scenario with timeline
+                    SCENARIO_STORE[session_id]['timeline'] = result
+                    print(f"[Timeline] Stored timeline result in SCENARIO_STORE for session {session_id}")
+                else:
+                    # Create new scenario with timeline
+                    SCENARIO_STORE[session_id] = {
+                        'timeline': result,
+                        'project_start': request.project_start,
+                        'items': [],
+                        'totals': {'hours': 0.0, 'price': 0.0}
+                    }
+                    print(f"[Timeline] Created new scenario in SCENARIO_STORE for session {session_id}")
+            
+            # Complete the job - ENSURE status is COMPLETED not just processing at 100%
             update_sse_job(job_id,
                           status=StreamJobStatus.COMPLETED,
                           progress=100.0,
                           message="Timeline generation complete!",
                           current_stage="completed",
                           result=result)
+            
+            print(f"[Timeline] Job {job_id} marked as COMPLETED with {len(result.get('tasks', []))} tasks")
             
             return result
             
@@ -5276,6 +5458,43 @@ class RetainerDistributionPayload(BaseModel):
     ramp_up: bool = True
     seasonality: Optional[List[float]] = None
 
+# ========== NEW SCENARIO_STORE ENDPOINTS MODELS ==========
+
+class BuildScenarioPayload(BaseModel):
+    """Build scenario from Step 2 selection"""
+    session_id: str
+    selection: Dict[str, Any]  # Deliverables with components from Step 2
+    project_name: Optional[str] = None
+    project_start: Optional[str] = None
+
+class OptimizeScenarioPayload(BaseModel):
+    """Optimize pricing for a scenario"""
+    session_id: str
+    deliverable_index: int
+    new_total_hours: float
+    use_ai: bool = True
+
+class CadenceSuggestionPayload(BaseModel):
+    """Get retainer vs project cadence suggestion"""
+    session_id: str
+    deliverable_index: int
+
+class RetainerSuggestionsPayload(BaseModel):
+    """Calculate retainer distribution"""
+    session_id: str
+    deliverable_index: int
+    monthly_hours: float
+    duration_months: int = 12
+
+class UpdateTaskPayload(BaseModel):
+    """Update Gantt task and sync pricing"""
+    session_id: str
+    wbs_id: str
+    duration_days: Optional[float] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    hours_per_day: float = 8.0
+
 # Removed duplicate endpoint - see the other /api/pricing/redistribute-hours endpoint below
 
 @app.post("/api/pricing/analyze-retainer")
@@ -5336,6 +5555,346 @@ async def api_retainer_distribution(payload: RetainerDistributionPayload):
         }
     except Exception as e:
         print(f"[Pricing API] Error calculating distribution: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+# ========== NEW SCENARIO_STORE API ENDPOINTS ==========
+
+@app.post("/api/pricing/build_scenario")
+async def api_build_scenario(payload: BuildScenarioPayload):
+    """
+    Build scenario from Step 2 selection and store in SCENARIO_STORE.
+    Creates rows with Deliverable/Component/Task_Label structure.
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    try:
+        session_id = payload.session_id
+        selection = payload.selection
+        
+        # Build scenario items from selection
+        items = []
+        
+        # Iterate through deliverables in selection
+        for deliv_code, deliv_data in selection.items():
+            if not isinstance(deliv_data, dict):
+                continue
+            
+            # Get deliverable info from database
+            db_row = DB.deliverables[DB.deliverables['Deliverable_Code'] == deliv_code]
+            if db_row.empty:
+                continue
+            
+            deliverable_name = db_row['Deliverable'].iloc[0] if 'Deliverable' in db_row.columns else deliv_code
+            
+            # Get components for this deliverable
+            components = deliv_data.get('components', [])
+            
+            for component in components:
+                component_name = component.get('name', '')
+                tasks = component.get('tasks', [])
+                
+                for task in tasks:
+                    task_label = task.get('label', '')
+                    hours = float(task.get('hours', 0) or 0)
+                    rate = float(task.get('rate', 150) or 150)
+                    
+                    # Create item row
+                    item = {
+                        "Deliverable": deliverable_name,
+                        "Deliverable_Code": deliv_code,
+                        "Component": component_name,
+                        "Task_Label": task_label,
+                        "Planned_Hours": hours,
+                        "Rate_USD": rate,
+                        "Price_USD": round(hours * rate, 2)
+                    }
+                    
+                    items.append(item)
+        
+        # Create scenario
+        scenario = {
+            "items": items,
+            "project_name": payload.project_name or "New Project",
+            "project_start": payload.project_start or datetime.date.today().isoformat(),
+            "totals": {
+                "hours": 0.0,
+                "price": 0.0
+            }
+        }
+        
+        # Recompute totals
+        scenario = _recompute_totals(scenario)
+        
+        # Store in SCENARIO_STORE
+        SCENARIO_STORE[session_id] = scenario
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "total_items": len(items),
+            "totals": scenario["totals"]
+        }
+        
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error building scenario: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.post("/api/pricing/optimize")
+async def api_optimize_scenario(payload: OptimizeScenarioPayload):
+    """
+    Optimize pricing for a deliverable in the scenario using AI redistribution.
+    Calls redistribute_hours() and recomputes totals.
+    """
+    try:
+        session_id = payload.session_id
+        
+        # Get scenario from store
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        items = scenario.get("items", [])
+        
+        if payload.deliverable_index >= len(items):
+            raise HTTPException(400, "Invalid deliverable index")
+        
+        # Get the deliverable item
+        item = items[payload.deliverable_index]
+        deliverable_name = item.get("Deliverable", "")
+        deliverable_code = item.get("Deliverable_Code", "")
+        
+        # Get all components for this deliverable
+        deliverable_items = [i for i in items if i.get("Deliverable_Code") == deliverable_code]
+        
+        # Group by component
+        components = []
+        seen_components = set()
+        for di in deliverable_items:
+            comp_name = di.get("Component", "")
+            if comp_name and comp_name not in seen_components:
+                seen_components.add(comp_name)
+                comp_hours = sum(i.get("Planned_Hours", 0) for i in deliverable_items if i.get("Component") == comp_name)
+                components.append({
+                    "name": comp_name,
+                    "hours": comp_hours
+                })
+        
+        # Call redistribute_hours
+        result = await redistribute_hours(
+            deliverable_name=deliverable_name,
+            deliverable_code=deliverable_code,
+            new_total_hours=payload.new_total_hours,
+            components=components,
+            use_ai=payload.use_ai
+        )
+        
+        # Update hours in scenario based on result
+        if result and hasattr(result, 'components'):
+            for comp_alloc in result.components:
+                # Update all items with this component
+                for i in items:
+                    if i.get("Deliverable_Code") == deliverable_code and i.get("Component") == comp_alloc.name:
+                        # Proportionally adjust hours
+                        old_comp_hours = sum(x.get("Planned_Hours", 0) for x in deliverable_items if x.get("Component") == comp_alloc.name)
+                        if old_comp_hours > 0:
+                            ratio = comp_alloc.suggested_hours / old_comp_hours
+                            i["Planned_Hours"] = round(i.get("Planned_Hours", 0) * ratio, 2)
+        
+        # Recompute totals
+        scenario = _recompute_totals(scenario)
+        SCENARIO_STORE[session_id] = scenario
+        
+        return {
+            "success": True,
+            "result": result,
+            "totals": scenario["totals"]
+        }
+        
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error optimizing: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.post("/api/pricing/cadence_suggestion")
+async def api_cadence_suggestion(payload: CadenceSuggestionPayload):
+    """
+    Get retainer vs project-based cadence suggestion for a deliverable.
+    Calls analyze_retainer_vs_project().
+    """
+    try:
+        session_id = payload.session_id
+        
+        # Get scenario from store
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        items = scenario.get("items", [])
+        
+        if payload.deliverable_index >= len(items):
+            raise HTTPException(400, "Invalid deliverable index")
+        
+        # Get the deliverable
+        item = items[payload.deliverable_index]
+        deliverable_name = item.get("Deliverable", "")
+        
+        # Calculate total hours for this deliverable
+        deliverable_code = item.get("Deliverable_Code", "")
+        total_hours = sum(i.get("Planned_Hours", 0) for i in items if i.get("Deliverable_Code") == deliverable_code)
+        
+        # Call analyze_retainer_vs_project
+        result = analyze_retainer_vs_project(
+            deliverable_name=deliverable_name,
+            total_hours=total_hours
+        )
+        
+        return {
+            "success": True,
+            "result": result
+        }
+        
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error getting cadence suggestion: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.post("/api/pricing/retainer_suggestions")
+async def api_retainer_suggestions(payload: RetainerSuggestionsPayload):
+    """
+    Calculate retainer distribution and store in scenario.
+    Calls calculate_retainer_distribution() and updates scenario.
+    """
+    try:
+        session_id = payload.session_id
+        
+        # Get scenario from store
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        items = scenario.get("items", [])
+        
+        if payload.deliverable_index >= len(items):
+            raise HTTPException(400, "Invalid deliverable index")
+        
+        # Get the deliverable
+        item = items[payload.deliverable_index]
+        deliverable_code = item.get("Deliverable_Code", "")
+        
+        # Call calculate_retainer_distribution
+        distribution = calculate_retainer_distribution(
+            monthly_hours=payload.monthly_hours,
+            duration_months=payload.duration_months
+        )
+        
+        # Store retainer info in scenario
+        if "retainer_distributions" not in scenario:
+            scenario["retainer_distributions"] = {}
+        
+        scenario["retainer_distributions"][deliverable_code] = {
+            "monthly_hours": payload.monthly_hours,
+            "duration_months": payload.duration_months,
+            "distribution": distribution
+        }
+        
+        SCENARIO_STORE[session_id] = scenario
+        
+        return {
+            "success": True,
+            "distribution": distribution,
+            "total_hours": sum(distribution.values()) if isinstance(distribution, dict) else 0
+        }
+        
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error calculating retainer suggestions: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.post("/api/timeline/update_task")
+async def api_update_timeline_task(payload: UpdateTaskPayload):
+    """
+    Update Gantt task and sync pricing.
+    Updates task duration/dates and recalculates Planned_Hours.
+    """
+    try:
+        session_id = payload.session_id
+        
+        # Get scenario from store
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        items = scenario.get("items", [])
+        
+        # Find item by WBS_ID
+        target_item = None
+        for item in items:
+            if item.get("WBS_ID") == payload.wbs_id:
+                target_item = item
+                break
+        
+        if not target_item:
+            raise HTTPException(404, f"Task not found with WBS_ID {payload.wbs_id}")
+        
+        # Update duration/dates if provided
+        if payload.duration_days is not None:
+            target_item["Duration_Days"] = payload.duration_days
+            # Recalculate hours: Duration_Days * Hours_Per_Day
+            new_hours = payload.duration_days * payload.hours_per_day
+            target_item["Planned_Hours"] = round(new_hours, 2)
+        
+        if payload.start_date:
+            target_item["Start_Date"] = payload.start_date
+        
+        if payload.end_date:
+            target_item["End_Date"] = payload.end_date
+        
+        # Recompute totals
+        scenario = _recompute_totals(scenario)
+        SCENARIO_STORE[session_id] = scenario
+        
+        # Update timeline if it exists
+        if "timeline" in scenario:
+            timeline = scenario["timeline"]
+            if "tasks" in timeline:
+                for task in timeline["tasks"]:
+                    if task.get("id") == payload.wbs_id:
+                        if payload.duration_days is not None:
+                            task["duration_days"] = payload.duration_days
+                            task["hours"] = payload.duration_days * payload.hours_per_day
+                        if payload.start_date:
+                            task["start_date"] = payload.start_date
+                        if payload.end_date:
+                            task["end_date"] = payload.end_date
+                        break
+        
+        return {
+            "success": True,
+            "updated_item": target_item,
+            "totals": scenario["totals"]
+        }
+        
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error updating task: {e}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(
             {"success": False, "error": str(e)},
             status_code=500
@@ -6095,7 +6654,29 @@ def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
     Accepts formats:
     - {"scenario": {...}, "project_name": "Project"}
     - {"scenarios": {"A": {...}}, "project_name": "Project"}
+    - {"session_id": "...", "project_name": "Project"}  # NEW: Read from SCENARIO_STORE
     """
+    # NEW: Check if session_id is provided to read from SCENARIO_STORE
+    if isinstance(payload, dict) and "session_id" in payload and "scenario" not in payload:
+        session_id = payload.get("session_id")
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        # Get scenario from SCENARIO_STORE
+        scenario = SCENARIO_STORE[session_id]
+        
+        # Create new payload with scenario from store
+        payload_dict = {
+            "scenario": scenario,
+            "project_name": payload.get("project_name") or scenario.get("project_name", "Project"),
+            "scenario_label": payload.get("scenario_label", "A"),
+            "sheet_name": payload.get("sheet_name", "WBS Export"),
+            "start_date_mode": payload.get("start_date_mode", "today"),
+            "fixed_start_iso": payload.get("fixed_start_iso") or scenario.get("project_start"),
+            "hours_per_day": payload.get("hours_per_day", 8.0)
+        }
+        return api_export_xml(payload_dict)
+    
     # Delegate to the existing export_xml function
     return api_export_xml(payload)
 
