@@ -22,6 +22,8 @@ class ReasoningSidebar {
         this.isMinimized = false;
         this.currentJobId = null;
         this.reasoningHistory = [];
+        this.isJobActive = false; // Track if job is actively running
+        this.autoHideTimeout = null; // Track auto-hide timeout
         
         // Initialize on page load
         if (document.readyState === 'loading') {
@@ -87,10 +89,11 @@ class ReasoningSidebar {
         // Add to page
         document.body.appendChild(this.container);
 
-        // Click outside to close
+        // Click outside to close (only when job is NOT active)
         document.addEventListener('click', (e) => {
             if (this.container.classList.contains('visible') && 
-                !this.container.contains(e.target)) {
+                !this.container.contains(e.target) &&
+                !this.isJobActive) {
                 this.hide();
             }
         });
@@ -112,10 +115,18 @@ class ReasoningSidebar {
     show(jobId = null) {
         if (!this.initialized) this.init();
 
+        // Clear any pending auto-hide timeout
+        if (this.autoHideTimeout) {
+            clearTimeout(this.autoHideTimeout);
+            this.autoHideTimeout = null;
+            console.log('[REASONING SIDEBAR] Cleared pending auto-hide timeout');
+        }
+
         // If new job, reset everything
         if (jobId && jobId !== this.currentJobId) {
             this.reset();
             this.currentJobId = jobId;
+            this.isJobActive = true; // Mark job as active
         }
 
         this.container.classList.add('visible');
@@ -186,9 +197,20 @@ class ReasoningSidebar {
 
         // Auto-hide on completion
         if (status === 'completed' || status === 'failed') {
-            setTimeout(() => {
-                this.hide();
-                console.log('[REASONING SIDEBAR] Auto-hidden after completion');
+            this.isJobActive = false; // Mark job as inactive
+            
+            // Clear any existing timeout
+            if (this.autoHideTimeout) {
+                clearTimeout(this.autoHideTimeout);
+            }
+            
+            // Set new auto-hide timeout
+            this.autoHideTimeout = setTimeout(() => {
+                // Double-check job is still inactive before hiding
+                if (!this.isJobActive) {
+                    this.hide();
+                    console.log('[REASONING SIDEBAR] Auto-hidden after completion');
+                }
             }, 3000);
         }
     }
@@ -220,11 +242,18 @@ class ReasoningSidebar {
      * Reset sidebar for new job
      */
     reset() {
+        // Clear any pending auto-hide timeout
+        if (this.autoHideTimeout) {
+            clearTimeout(this.autoHideTimeout);
+            this.autoHideTimeout = null;
+        }
+        
         this.reasoningHistory = [];
         this.logContainer.innerHTML = '';
         this.stageIndicator.textContent = 'Initializing...';
         this.progressBar.style.width = '0%';
         this.currentJobId = null;
+        this.isJobActive = false;
         console.log('[REASONING SIDEBAR] Reset');
     }
 
