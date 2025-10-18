@@ -42,6 +42,12 @@
     display: none !important;
   }
   
+  /* Hide floating Auto-Fix button on mobile - it's in the hamburger menu instead */
+  .charles-auto-fix-btn-main,
+  .header-controls {
+    display: none !important;
+  }
+  
   /* Specifically hide duplicate Clear All Data button in Step 1 - removed from HTML */
   #btnClearAllData {
     display: none !important;
@@ -465,6 +471,12 @@
       display: none !important;
     }
     
+    /* Hide floating Auto-Fix button on tablet portrait */
+    .charles-auto-fix-btn-main,
+    .header-controls {
+      display: none !important;
+    }
+    
     /* Specifically hide duplicate Clear All Data button if exists */
     #btnClearAllData {
       display: none !important;
@@ -577,6 +589,12 @@
 
   /* Show desktop header controls */
   .desktop-header-controls {
+    display: flex !important;
+  }
+  
+  /* Show floating Auto-Fix button on desktop */
+  .charles-auto-fix-btn-main,
+  .header-controls {
     display: flex !important;
   }
 

@@ -112,8 +112,18 @@
       this.toggleButton.classList.add('active');
       document.body.style.overflow = 'hidden'; // Prevent background scrolling
       
+      // Sync Auto-Fix checkbox with current state
+      this.syncAutoFixCheckbox();
+      
       // Analytics
       console.log('[MobileMenu] Opened');
+    },
+    
+    syncAutoFixCheckbox: function() {
+      const checkbox = document.getElementById('mobile-auto-fix');
+      if (checkbox && window.aiAssistant) {
+        checkbox.checked = window.aiAssistant.autoFixEnabled || false;
+      }
     },
 
     close: function() {
@@ -323,6 +333,28 @@
     }
   };
 
+  // Auto-Fix Controller for Mobile Menu
+  const AutoFixController = {
+    init: function() {
+      const checkbox = document.getElementById('mobile-auto-fix');
+      if (!checkbox) return;
+      
+      // Wire up the checkbox to toggle Auto-Fix
+      checkbox.addEventListener('change', (e) => {
+        if (window.aiAssistant && typeof window.aiAssistant.toggleAutoFix === 'function') {
+          // Only toggle if the state doesn't match
+          if (e.target.checked !== window.aiAssistant.autoFixEnabled) {
+            window.aiAssistant.toggleAutoFix();
+          }
+        } else {
+          console.warn('[AutoFix] AI Assistant not available');
+        }
+      });
+      
+      console.log('[AutoFix] Mobile checkbox wired up');
+    }
+  };
+  
   // Global Functions (exposed for onclick handlers)
   window.toggleMobileMenu = function() {
     MobileMenu.toggle();
@@ -339,6 +371,7 @@
       ViewModeController.init();
       TouchEnhancements.init();
       ResponsiveLayoutManager.init();
+      AutoFixController.init();
       console.log('[Mobile] All mobile enhancements initialized');
     });
   } else {
@@ -347,6 +380,7 @@
     ViewModeController.init();
     TouchEnhancements.init();
     ResponsiveLayoutManager.init();
+    AutoFixController.init();
     console.log('[Mobile] All mobile enhancements initialized');
   }
 
