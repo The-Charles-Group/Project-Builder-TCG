@@ -9982,6 +9982,146 @@ def api_xml_export_flexible(payload: XMLExportPayload):
         if os.path.exists(temp_xlsx):
             os.remove(temp_xlsx)
 
+# ---------- Scenario Real-time Sync Endpoint ----------
+
+# In-memory store for scenario sync state
+SCENARIO_SYNC_STATE = {}  # session_id -> {scenario, version, last_modified, checksum}
+
+class ScenarioSyncPayload(BaseModel):
+    session_id: str
+    client_version: int
+    last_server_version: int
+    scenario: Optional[Dict[str, Any]] = None
+    selections: Optional[Dict[str, Any]] = None
+    timestamp: int
+    checksum: Optional[str] = None
+
+@app.post("/api/scenario/sync")
+async def sync_scenario(payload: ScenarioSyncPayload):
+    """
+    Real-time synchronization endpoint for scenario data.
+    Handles conflict detection, resolution, and incremental updates.
+    """
+    session_id = payload.session_id
+    client_version = payload.client_version
+    
+    # Initialize session state if not exists
+    if session_id not in SCENARIO_SYNC_STATE:
+        SCENARIO_SYNC_STATE[session_id] = {
+            "scenario": None,
+            "selections": {},
+            "version": 0,
+            "last_modified": 0,
+            "checksum": "",
+            "history": []
+        }
+    
+    server_state = SCENARIO_SYNC_STATE[session_id]
+    server_version = server_state["version"]
+    
+    # Check for conflicts
+    has_conflicts = False
+    conflicts = []
+    
+    if server_version > payload.last_server_version:
+        # Server has newer data that client doesn't know about
+        has_conflicts = True
+        
+        # Detect specific conflicts
+        if payload.scenario and server_state["scenario"]:
+            # Check for field-level conflicts
+            client_total = payload.scenario.get("totals", {}).get("grandTotal12", 0)
+            server_total = server_state["scenario"].get("totals", {}).get("grandTotal12", 0)
+            
+            if abs(client_total - server_total) > 0.01:
+                conflicts.append({
+                    "field": "totals.grandTotal12",
+                    "clientValue": client_total,
+                    "serverValue": server_total,
+                    "resolution": "server-wins"
+                })
+    
+    # Apply client changes if newer
+    changes_applied = False
+    if payload.scenario and (not has_conflicts or payload.client_version > server_version):
+        # Update server state with client data
+        server_state["scenario"] = payload.scenario
+        server_state["selections"] = payload.selections or {}
+        server_state["version"] = max(server_version + 1, payload.client_version)
+        server_state["last_modified"] = payload.timestamp
+        server_state["checksum"] = payload.checksum or ""
+        
+        # Keep history for debugging (limit to last 10)
+        server_state["history"].append({
+            "version": server_state["version"],
+            "timestamp": payload.timestamp,
+            "source": "client"
+        })
+        if len(server_state["history"]) > 10:
+            server_state["history"] = server_state["history"][-10:]
+        
+        changes_applied = True
+        
+        # Also update global _CURRENT_SCENARIOS if exists
+        if payload.scenario and payload.scenario.get("items"):
+            _CURRENT_SCENARIOS[f"{session_id}_sync"] = payload.scenario
+    
+    # Determine what to send back to client
+    response_data = {
+        "serverVersion": server_state["version"],
+        "hasChanges": False,
+        "hasConflicts": has_conflicts,
+        "conflicts": conflicts,
+        "timestamp": int(time.time() * 1000)
+    }
+    
+    # Send server data if client is behind
+    if server_version > payload.last_server_version and server_state["scenario"]:
+        response_data["hasChanges"] = True
+        response_data["scenario"] = server_state["scenario"]
+        response_data["selections"] = server_state["selections"]
+        
+        # Calculate changed elements for UI updates
+        changed_elements = []
+        if server_state["scenario"] and server_state["scenario"].get("items"):
+            for item in server_state["scenario"]["items"]:
+                changed_elements.append({
+                    "type": "deliverable",
+                    "id": item.get("deliverable_code"),
+                    "field": "hours",
+                    "value": item.get("hours", 0)
+                })
+        response_data["changedElements"] = changed_elements
+    
+    return response_data
+
+@app.get("/api/scenario/sync/status/{session_id}")
+async def get_sync_status(session_id: str):
+    """Get the current sync status for a session"""
+    if session_id not in SCENARIO_SYNC_STATE:
+        return {
+            "exists": False,
+            "message": "No sync state for this session"
+        }
+    
+    state = SCENARIO_SYNC_STATE[session_id]
+    return {
+        "exists": True,
+        "version": state["version"],
+        "last_modified": state["last_modified"],
+        "has_scenario": state["scenario"] is not None,
+        "history_count": len(state["history"]),
+        "checksum": state["checksum"]
+    }
+
+@app.post("/api/scenario/sync/clear/{session_id}")
+async def clear_sync_state(session_id: str):
+    """Clear sync state for a session (for testing or reset)"""
+    if session_id in SCENARIO_SYNC_STATE:
+        del SCENARIO_SYNC_STATE[session_id]
+        return {"success": True, "message": "Sync state cleared"}
+    return {"success": False, "message": "No sync state found"}
+
 # ---------- AI Agent API Endpoints ----------
 from ai_agent import (
     AgentChatRequest,
