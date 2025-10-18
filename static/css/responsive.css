@@ -37,8 +37,10 @@
     display: none; /* Hide subtitle on mobile to save space */
   }
 
-  /* Hide desktop session controls on mobile */
-  #session-controls {
+  /* Hide desktop session controls and Auto-Fix toggle on mobile */
+  #session-controls,
+  .auto-fix-toggle,
+  #btnClearAllData {
     display: none !important;
   }
 
@@ -117,9 +119,8 @@
   .mobile-menu {
     position: fixed;
     top: 0;
-    right: -100%;
-    width: 85%;
-    max-width: 320px;
+    right: -400px; /* Start completely off-screen */
+    width: 320px; /* Fixed width for consistency */
     height: 100vh;
     background: linear-gradient(180deg, #1a2332 0%, #151a22 100%);
     border-left: 1px solid var(--border);
@@ -130,7 +131,7 @@
   }
 
   .mobile-menu.open {
-    right: 0;
+    right: 0; /* Slide all the way to the edge */
   }
 
   .mobile-menu-header {
