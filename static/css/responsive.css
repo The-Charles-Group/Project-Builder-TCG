@@ -1,0 +1,858 @@
+/* ================================================================================
+   Agency Project Builder - Responsive Design System
+   Mobile-First Approach with Progressive Enhancement
+   ================================================================================ */
+
+/* ================================================================================
+   Base Mobile Styles (0 - 767px)
+   ================================================================================ */
+
+/* Root and Typography Adjustments for Mobile */
+@media screen and (max-width: 767px) {
+  :root {
+    --mobile-padding: 12px;
+    --mobile-gap: 8px;
+    --touch-target-min: 44px;
+  }
+
+  body {
+    font-size: 16px; /* Prevent zoom on iOS */
+    -webkit-text-size-adjust: 100%;
+    touch-action: manipulation; /* Better touch handling */
+  }
+
+  /* Header Mobile Layout */
+  header {
+    padding: 12px 16px;
+    position: relative;
+  }
+
+  header h1 {
+    font-size: 18px;
+    margin-right: 60px; /* Space for hamburger */
+  }
+
+  header .sub {
+    font-size: 11px;
+    display: none; /* Hide subtitle on mobile to save space */
+  }
+
+  /* Hide desktop session controls on mobile */
+  #session-controls {
+    display: none !important;
+  }
+
+  /* Mobile Navigation Toggle */
+  .mobile-menu-toggle {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    transform: translateY(-50%);
+    width: 44px;
+    height: 44px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1002;
+    transition: all 0.3s ease;
+  }
+
+  .mobile-menu-toggle:active {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .mobile-menu-toggle .hamburger {
+    width: 20px;
+    height: 14px;
+    position: relative;
+  }
+
+  .mobile-menu-toggle .hamburger span {
+    display: block;
+    position: absolute;
+    height: 2px;
+    width: 100%;
+    background: var(--text);
+    border-radius: 2px;
+    opacity: 1;
+    left: 0;
+    transform: rotate(0deg);
+    transition: .25s ease-in-out;
+  }
+
+  .mobile-menu-toggle .hamburger span:nth-child(1) {
+    top: 0px;
+  }
+
+  .mobile-menu-toggle .hamburger span:nth-child(2) {
+    top: 6px;
+  }
+
+  .mobile-menu-toggle .hamburger span:nth-child(3) {
+    top: 12px;
+  }
+
+  /* Hamburger animation when menu is open */
+  .mobile-menu-toggle.active .hamburger span:nth-child(1) {
+    top: 6px;
+    transform: rotate(135deg);
+  }
+
+  .mobile-menu-toggle.active .hamburger span:nth-child(2) {
+    opacity: 0;
+    left: -20px;
+  }
+
+  .mobile-menu-toggle.active .hamburger span:nth-child(3) {
+    top: 6px;
+    transform: rotate(-135deg);
+  }
+
+  /* Mobile Slide-Out Menu */
+  .mobile-menu {
+    position: fixed;
+    top: 0;
+    right: -100%;
+    width: 85%;
+    max-width: 320px;
+    height: 100vh;
+    background: linear-gradient(180deg, #1a2332 0%, #151a22 100%);
+    border-left: 1px solid var(--border);
+    z-index: 1001;
+    transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow-y: auto;
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.5);
+  }
+
+  .mobile-menu.open {
+    right: 0;
+  }
+
+  .mobile-menu-header {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(106, 163, 255, 0.1);
+  }
+
+  .mobile-menu-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 0;
+  }
+
+  .mobile-menu-content {
+    padding: 20px;
+  }
+
+  .mobile-menu-section {
+    margin-bottom: 24px;
+  }
+
+  .mobile-menu-section-title {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .mobile-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    margin-bottom: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    min-height: 44px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .mobile-menu-item:active {
+    background: rgba(106, 163, 255, 0.1);
+    border-color: var(--accent);
+  }
+
+  .mobile-menu-item label {
+    flex: 1;
+    margin: 0;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .mobile-menu-button {
+    width: 100%;
+    padding: 14px;
+    margin-bottom: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 8px;
+    min-height: 44px;
+  }
+
+  /* Menu Overlay */
+  .mobile-menu-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  .mobile-menu-overlay.visible {
+    display: block;
+    opacity: 1;
+  }
+
+  /* Main Content Mobile Adjustments */
+  main {
+    padding: 12px;
+    max-width: 100%;
+  }
+
+  /* Cards Mobile Layout */
+  .card {
+    padding: 16px;
+    margin: 12px 0;
+    border-radius: 8px;
+  }
+
+  /* Step 1 Mobile Layout */
+  #step1 h2 {
+    font-size: 18px;
+    margin-bottom: 12px;
+  }
+
+  #btnClearAllData {
+    display: none; /* Hide duplicate clear button on mobile */
+  }
+
+  /* Analysis Mode Cards - Stack Vertically on Mobile */
+  #step1 .mode-btn {
+    display: block;
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 16px;
+    min-height: 80px;
+    text-align: left;
+  }
+
+  #step1 .mode-btn div {
+    margin-top: 8px;
+    line-height: 1.4;
+  }
+
+  /* Industry Selector Mobile */
+  #industry-selector {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px; /* Prevent zoom on iOS */
+    min-height: 44px;
+  }
+
+  /* RFP Text Area Mobile */
+  #rfpText {
+    min-height: 120px;
+    font-size: 16px;
+    padding: 12px;
+  }
+
+  /* File Input Mobile */
+  #rfpFile {
+    padding: 12px;
+    min-height: 44px;
+  }
+
+  /* Buttons Mobile Sizing */
+  button, .btn {
+    min-height: 44px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    touch-action: manipulation;
+  }
+
+  .btn-sm {
+    min-height: 36px;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  /* Actions Section Mobile */
+  .actions {
+    margin-top: 16px;
+  }
+
+  .actions button {
+    width: 100%;
+    margin-bottom: 8px;
+  }
+
+  /* Step 2 Mobile Layout */
+  #step2 .selection-grid {
+    display: block !important;
+  }
+
+  #step2 .selection-panel {
+    margin-bottom: 16px;
+    padding: 12px;
+  }
+
+  #step2 .selection-panel h3 {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+
+  /* Selection Lists Mobile */
+  #s2-deliv-list,
+  #s2-comp-list,
+  #s2-l3-list {
+    height: 250px !important;
+    font-size: 14px;
+  }
+
+  .selection-item {
+    padding: 12px;
+    min-height: 44px;
+    margin-bottom: 8px;
+  }
+
+  .selection-item-name {
+    font-size: 14px;
+  }
+
+  .selection-item-category {
+    font-size: 12px;
+  }
+
+  /* Step 3 Mobile Layout */
+  #step3 .pricing-summary-panel {
+    grid-template-columns: 1fr !important;
+  }
+
+  #pricing-details-table {
+    font-size: 12px;
+  }
+
+  #pricing-details-table th,
+  #pricing-details-table td {
+    padding: 8px 4px;
+  }
+
+  #pricing-details-table input[type="number"] {
+    width: 60px;
+    padding: 4px;
+    font-size: 12px;
+  }
+
+  /* Step 4 Timeline Mobile */
+  .timeline-layout {
+    display: block !important;
+  }
+
+  .timeline-main {
+    margin-bottom: 16px;
+  }
+
+  .sidebar {
+    margin-bottom: 16px;
+    max-height: 300px;
+  }
+
+  /* Table Mobile Adjustments */
+  .table-compact {
+    font-size: 12px;
+  }
+
+  .table-compact th,
+  .table-compact td {
+    padding: 8px 6px;
+  }
+
+  /* Hide hover effects on mobile */
+  @media (hover: none) and (pointer: coarse) {
+    button:hover,
+    .btn:hover,
+    .selection-item:hover,
+    .weights-table tbody tr:hover {
+      background: inherit;
+      transform: none;
+    }
+
+    /* Use active states instead */
+    button:active,
+    .btn:active {
+      transform: scale(0.95);
+    }
+  }
+
+  /* Modals on Mobile */
+  .modal-content {
+    width: 95%;
+    max-width: 100%;
+    margin: 20px;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+
+  /* AI Assistant Sidebar Mobile */
+  #chatgpt-sidebar,
+  .reasoning-sidebar {
+    width: 100% !important;
+    right: -100% !important;
+  }
+
+  #chatgpt-sidebar.visible,
+  .reasoning-sidebar.visible {
+    right: 0 !important;
+  }
+
+  /* Floating buttons mobile positioning */
+  #chatgpt-toggle,
+  .floating-toggle {
+    bottom: 20px !important;
+    right: 20px !important;
+  }
+
+  /* Hide complex grids on mobile */
+  .stage2-grid {
+    display: block !important;
+  }
+
+  .scenarios {
+    display: block !important;
+  }
+
+  .scenario {
+    margin-bottom: 16px;
+  }
+}
+
+/* ================================================================================
+   Tablet Styles (768px - 1024px)
+   ================================================================================ */
+
+@media screen and (min-width: 768px) and (max-width: 1024px) {
+  /* Header adjustments for tablet */
+  header {
+    padding: 20px 24px;
+  }
+
+  /* Main content tablet width */
+  main {
+    max-width: 100%;
+    padding: 16px;
+  }
+
+  /* Cards tablet spacing */
+  .card {
+    padding: 18px;
+  }
+
+  /* Mode buttons side by side on tablet */
+  #step1 .mode-btn {
+    flex: 1;
+  }
+
+  /* Selection grid 2 columns on tablet */
+  #step2 .selection-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  #step2 .selection-panel:last-child {
+    grid-column: span 2;
+  }
+
+  /* Pricing table adjustments */
+  #pricing-details-table {
+    font-size: 13px;
+  }
+
+  /* Timeline layout side by side on tablet */
+  .timeline-layout {
+    grid-template-columns: 2fr 1fr;
+  }
+
+  /* Stage 2 grid responsive */
+  .stage2-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Scenarios side by side on tablet */
+  .scenarios {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  /* Hide mobile menu on tablet */
+  .mobile-menu-toggle,
+  .mobile-menu,
+  .mobile-menu-overlay {
+    display: none !important;
+  }
+}
+
+/* ================================================================================
+   Desktop Styles (1025px+)
+   ================================================================================ */
+
+@media screen and (min-width: 1025px) {
+  /* Ensure mobile menu is hidden on desktop */
+  .mobile-menu-toggle,
+  .mobile-menu,
+  .mobile-menu-overlay {
+    display: none !important;
+  }
+
+  /* Show desktop session controls */
+  #session-controls {
+    display: flex !important;
+  }
+
+  /* Ensure proper header spacing to prevent overlaps */
+  header {
+    position: relative;
+    padding-right: 350px; /* Space for session controls */
+  }
+
+  #session-controls {
+    position: absolute;
+    top: 15px;
+    right: 20px;
+    flex-wrap: wrap;
+    max-width: 320px;
+  }
+
+  /* Keep original desktop layouts */
+  #step2 .selection-grid {
+    grid-template-columns: 1fr 1fr 350px;
+  }
+
+  .timeline-layout {
+    grid-template-columns: 1fr 300px;
+  }
+
+  .stage2-grid {
+    grid-template-columns: 2fr 3fr 2fr;
+  }
+
+  .scenarios {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* ================================================================================
+   View Toggle Feature
+   ================================================================================ */
+
+.view-toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+.view-toggle-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.view-toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 28px;
+}
+
+.view-toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.view-toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--border);
+  transition: .4s;
+  border-radius: 28px;
+}
+
+.view-toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked + .view-toggle-slider {
+  background-color: var(--accent);
+}
+
+input:checked + .view-toggle-slider:before {
+  transform: translateX(32px);
+}
+
+.view-toggle-text {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Force desktop view on mobile when toggled */
+body.force-desktop-view {
+  min-width: 1200px !important;
+}
+
+body.force-desktop-view main {
+  max-width: 1200px !important;
+}
+
+body.force-desktop-view .mobile-menu-toggle,
+body.force-desktop-view .mobile-menu,
+body.force-desktop-view .mobile-menu-overlay {
+  display: none !important;
+}
+
+body.force-desktop-view #session-controls {
+  display: flex !important;
+}
+
+/* ================================================================================
+   Utility Classes
+   ================================================================================ */
+
+/* Hide on mobile */
+@media screen and (max-width: 767px) {
+  .hide-mobile {
+    display: none !important;
+  }
+}
+
+/* Hide on tablet */
+@media screen and (min-width: 768px) and (max-width: 1024px) {
+  .hide-tablet {
+    display: none !important;
+  }
+}
+
+/* Hide on desktop */
+@media screen and (min-width: 1025px) {
+  .hide-desktop {
+    display: none !important;
+  }
+}
+
+/* Show only on mobile */
+.show-mobile {
+  display: none !important;
+}
+
+@media screen and (max-width: 767px) {
+  .show-mobile {
+    display: block !important;
+  }
+
+  .show-mobile-flex {
+    display: flex !important;
+  }
+
+  .show-mobile-inline {
+    display: inline-block !important;
+  }
+}
+
+/* Stack on mobile */
+@media screen and (max-width: 767px) {
+  .stack-mobile {
+    display: block !important;
+    width: 100% !important;
+  }
+
+  .stack-mobile > * {
+    width: 100% !important;
+    margin-bottom: 12px;
+  }
+}
+
+/* Full width on mobile */
+@media screen and (max-width: 767px) {
+  .full-mobile {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+}
+
+/* Larger text on mobile for readability */
+@media screen and (max-width: 767px) {
+  .text-mobile-lg {
+    font-size: 16px !important;
+  }
+
+  .text-mobile-md {
+    font-size: 14px !important;
+  }
+
+  .text-mobile-sm {
+    font-size: 12px !important;
+  }
+}
+
+/* Touch-friendly spacing */
+@media screen and (max-width: 767px) {
+  .touch-friendly {
+    padding: 12px !important;
+    min-height: 44px !important;
+  }
+
+  .touch-spacing > * {
+    margin-bottom: 12px;
+  }
+}
+
+/* ================================================================================
+   Accessibility Improvements
+   ================================================================================ */
+
+/* Focus styles for keyboard navigation */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Skip to main content link */
+.skip-to-main {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--accent);
+  color: white;
+  padding: 8px;
+  z-index: 100;
+  text-decoration: none;
+  border-radius: 0 0 4px 0;
+}
+
+.skip-to-main:focus {
+  top: 0;
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  :root {
+    --bg: #000;
+    --card: #111;
+    --text: #fff;
+    --muted: #ccc;
+    --accent: #00a2ff;
+    --accent2: #00ff88;
+    --border: #666;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ================================================================================
+   Print Styles
+   ================================================================================ */
+
+@media print {
+  /* Hide navigation and controls */
+  header,
+  .mobile-menu-toggle,
+  .mobile-menu,
+  #session-controls,
+  #chatgpt-sidebar,
+  .reasoning-sidebar,
+  .floating-toggle,
+  .actions,
+  button {
+    display: none !important;
+  }
+
+  /* Optimize for print */
+  body {
+    background: white;
+    color: black;
+    font-size: 12pt;
+  }
+
+  .card {
+    border: 1px solid #ddd;
+    page-break-inside: avoid;
+  }
+
+  main {
+    max-width: 100%;
+  }
+}
+
+/* ================================================================================
+   Loading States
+   ================================================================================ */
+
+/* Skeleton loading animation */
+@keyframes skeleton-loading {
+  0% {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+  50% {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+  100% {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+}
+
+.skeleton-loading {
+  animation: skeleton-loading 1.5s ease-in-out infinite;
+  border-radius: 4px;
+}
+
+/* Pulse animation for active elements */
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(106, 163, 255, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(106, 163, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(106, 163, 255, 0);
+  }
+}
+
+.pulse-active {
+  animation: pulse 2s infinite;
+}

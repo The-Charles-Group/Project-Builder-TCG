@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <title>Agency Project Builder</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes" />
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/static_weights.css" />
+  <link rel="stylesheet" href="/static/css/responsive.css" />
   <!-- Frappe Gantt Library -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
   <!-- ChatGPT-Style Left Sidebar -->
@@ -20,6 +21,8 @@
   <script src="/static/js/step2-sync.js"></script>
   <script src="/static/js/step3-sync.js"></script>
   <script src="/static/js/step4-sync.js"></script>
+  <!-- Mobile Responsive Enhancements -->
+  <script src="/static/js/mobile.js"></script>
 </head>
 <body>
   <header>
@@ -35,7 +38,71 @@
       <button id="new-session-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="startNewSession()">New Session</button>
       <button id="clear-data-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer; background: #f44336; color: white; border: none; border-radius: 4px;" onclick="clearAllData()">Clear Data</button>
     </div>
+    
+    <!-- Mobile Menu Toggle Button -->
+    <button class="mobile-menu-toggle" id="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle Menu">
+      <div class="hamburger">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </button>
   </header>
+  
+  <!-- Mobile Slide-Out Menu -->
+  <div class="mobile-menu" id="mobile-menu">
+    <div class="mobile-menu-header">
+      <h3 class="mobile-menu-title">Settings & Controls</h3>
+    </div>
+    <div class="mobile-menu-content">
+      <!-- Session Controls Section -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Session Management</div>
+        <div class="mobile-menu-item" onclick="toggleSessionInfo()">
+          <label>Show Session Info</label>
+          <span>📋</span>
+        </div>
+        <button class="mobile-menu-button" onclick="startNewSession()">Start New Session</button>
+        <button class="mobile-menu-button" style="background: #f44336;" onclick="clearAllData()">🗑️ Clear All Data</button>
+      </div>
+      
+      <!-- Auto-Fix Controls Section -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">AI Controls</div>
+        <div class="mobile-menu-item">
+          <label for="mobile-auto-fix">Auto-Fix Enabled</label>
+          <input type="checkbox" id="mobile-auto-fix" checked>
+        </div>
+      </div>
+      
+      <!-- View Mode Toggle Section -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Display Mode</div>
+        <div class="view-toggle-container">
+          <span class="view-toggle-label">Mobile View</span>
+          <label class="view-toggle-switch">
+            <input type="checkbox" id="view-toggle" onchange="toggleViewMode(this)">
+            <span class="view-toggle-slider"></span>
+          </label>
+          <span class="view-toggle-label">Desktop View</span>
+        </div>
+      </div>
+      
+      <!-- Additional Options -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Quick Actions</div>
+        <button class="mobile-menu-button" onclick="document.getElementById('btnAnalyze').click(); toggleMobileMenu();">
+          🚀 Analyze with AI
+        </button>
+        <button class="mobile-menu-button" onclick="window.scrollTo(0, 0); toggleMobileMenu();">
+          ⬆️ Back to Top
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Mobile Menu Overlay -->
+  <div class="mobile-menu-overlay" id="mobile-menu-overlay" onclick="toggleMobileMenu()"></div>
 
   <main>
     <!-- Step 1: Upload RFP -->
