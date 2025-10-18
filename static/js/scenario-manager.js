@@ -17,7 +17,279 @@
       sessionId: null,
       rfpText: '',
       buildPayload: null, // Last payload sent to /api/scenarios
-      apiResponse: null   // Last response from /api/scenarios
+      apiResponse: null,   // Last response from /api/scenarios
+      lastSaved: null,
+      isDirty: false,
+      autoSaveTimer: null,
+      saveIndicator: null
+    },
+    
+    // Initialize with persistence support
+    init() {
+      // Get or create session ID from localStorage
+      let sessionId = localStorage.getItem('apb.currentSession');
+      if (!sessionId) {
+        sessionId = this.generateSessionId();
+        localStorage.setItem('apb.currentSession', sessionId);
+        console.log('[ScenarioManager] Created new session:', sessionId);
+      } else {
+        console.log('[ScenarioManager] Restored session:', sessionId);
+      }
+      
+      this.state.sessionId = sessionId;
+      
+      // Store sessionId globally for compatibility
+      if (window.SessionManager) {
+        window.SessionManager.currentSessionId = sessionId;
+      }
+      
+      // Load scenario from backend if exists
+      this.loadFromBackend().then(loaded => {
+        if (loaded) {
+          console.log('[ScenarioManager] Loaded scenario from backend');
+        } else {
+          console.log('[ScenarioManager] No existing scenario, starting fresh');
+        }
+      });
+      
+      // Set up auto-save
+      this.setupAutoSave();
+      
+      // Set up beforeunload handler
+      window.addEventListener('beforeunload', (e) => {
+        if (this.state.isDirty) {
+          this.saveToBackend(true); // Synchronous save
+          e.preventDefault();
+          e.returnValue = 'You have unsaved changes.';
+        }
+      });
+      
+      // Create save indicator UI
+      this.createSaveIndicator();
+      
+      return this;
+    },
+    
+    // Generate a new session ID
+    generateSessionId() {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+      }
+      return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    },
+    
+    // Load scenario from backend
+    async loadFromBackend() {
+      try {
+        const sessionId = this.state.sessionId;
+        if (!sessionId) return false;
+        
+        const response = await fetch(`/api/scenario/${sessionId}`);
+        if (!response.ok) return false;
+        
+        const data = await response.json();
+        if (!data.success || !data.scenario) return false;
+        
+        const scenario = data.scenario;
+        
+        // Restore state from scenario
+        if (scenario.state) {
+          // Restore deliverables
+          if (scenario.state.deliverables) {
+            this.state.deliverables = scenario.state.deliverables;
+          }
+          
+          // Restore selections
+          if (scenario.state.selectedDeliverables) {
+            this.state.selectedDeliverables = new Set(scenario.state.selectedDeliverables);
+          }
+          if (scenario.state.selectedComponents) {
+            this.state.selectedComponents = scenario.state.selectedComponents;
+          }
+          if (scenario.state.selectedL3Tasks) {
+            this.state.selectedL3Tasks = scenario.state.selectedL3Tasks;
+          }
+          
+          // Restore other state
+          if (scenario.state.totals) {
+            this.state.totals = scenario.state.totals;
+          }
+          if (scenario.state.blendedRate) {
+            this.state.blendedRate = scenario.state.blendedRate;
+          }
+          if (scenario.state.rfpText) {
+            this.state.rfpText = scenario.state.rfpText;
+          }
+        }
+        
+        // Restore scenario-level data
+        if (scenario.items) {
+          this.updateDeliverablesFromAPI({ scenario });
+        }
+        
+        // Update last saved timestamp
+        this.state.lastSaved = scenario.last_saved || null;
+        this.state.isDirty = false;
+        
+        // Emit change event
+        this.emit();
+        
+        return true;
+      } catch (error) {
+        console.error('[ScenarioManager] Error loading from backend:', error);
+        return false;
+      }
+    },
+    
+    // Save scenario to backend
+    async saveToBackend(synchronous = false) {
+      try {
+        if (!this.state.isDirty && !synchronous) return;
+        
+        const sessionId = this.state.sessionId;
+        if (!sessionId) return;
+        
+        // Prepare save payload
+        const payload = {
+          session_id: sessionId,
+          scenario: {
+            state: {
+              deliverables: this.state.deliverables,
+              selectedDeliverables: Array.from(this.state.selectedDeliverables || []),
+              selectedComponents: this.state.selectedComponents,
+              selectedL3Tasks: this.state.selectedL3Tasks,
+              totals: this.state.totals,
+              blendedRate: this.state.blendedRate,
+              rfpText: this.state.rfpText,
+              createdAt: this.state.createdAt,
+              updatedAt: this.state.updatedAt
+            },
+            items: this.getCurrentScenario().items,
+            totals: this.state.totals,
+            metadata: {
+              createdAt: this.state.createdAt,
+              updatedAt: new Date().toISOString(),
+              sessionId: sessionId
+            }
+          }
+        };
+        
+        // Include current step and UI state
+        if (window.APP_STATE) {
+          payload.scenario.currentStep = window.APP_STATE.currentStep;
+          payload.scenario.activeScenario = window.APP_STATE.activeScenario;
+        }
+        
+        // Show saving indicator
+        this.updateSaveIndicator('saving');
+        
+        if (synchronous) {
+          // Use synchronous XHR for beforeunload
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', '/api/scenario/save', false);
+          xhr.setRequestHeader('Content-Type', 'application/json');
+          xhr.send(JSON.stringify(payload));
+        } else {
+          const response = await fetch('/api/scenario/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            this.state.lastSaved = result.saved_at || new Date().toISOString();
+            this.state.isDirty = false;
+            this.updateSaveIndicator('saved');
+            console.log('[ScenarioManager] Saved to backend at', this.state.lastSaved);
+          } else {
+            this.updateSaveIndicator('error');
+            console.error('[ScenarioManager] Save failed:', response.status);
+          }
+        }
+      } catch (error) {
+        this.updateSaveIndicator('error');
+        console.error('[ScenarioManager] Error saving to backend:', error);
+      }
+    },
+    
+    // Set up auto-save with debouncing
+    setupAutoSave() {
+      const AUTOSAVE_DELAY = 3000; // 3 seconds
+      
+      // Override emit to track changes
+      const originalEmit = this.emit.bind(this);
+      this.emit = () => {
+        this.state.isDirty = true;
+        this.state.updatedAt = new Date().toISOString();
+        
+        // Clear existing timer
+        if (this.state.autoSaveTimer) {
+          clearTimeout(this.state.autoSaveTimer);
+        }
+        
+        // Set new timer for auto-save
+        this.state.autoSaveTimer = setTimeout(() => {
+          this.saveToBackend();
+        }, AUTOSAVE_DELAY);
+        
+        originalEmit();
+      };
+    },
+    
+    // Create save indicator UI
+    createSaveIndicator() {
+      const existing = document.getElementById('save-indicator');
+      if (existing) existing.remove();
+      
+      const indicator = document.createElement('div');
+      indicator.id = 'save-indicator';
+      indicator.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 20px;
+        font-size: 14px;
+        z-index: 10000;
+        display: none;
+        align-items: center;
+        gap: 10px;
+      `;
+      
+      document.body.appendChild(indicator);
+      this.state.saveIndicator = indicator;
+    },
+    
+    // Update save indicator
+    updateSaveIndicator(status) {
+      const indicator = this.state.saveIndicator;
+      if (!indicator) return;
+      
+      indicator.style.display = 'flex';
+      
+      switch (status) {
+        case 'saving':
+          indicator.innerHTML = '<span>💾</span> Saving...';
+          indicator.style.background = 'rgba(33, 150, 243, 0.9)';
+          break;
+        case 'saved':
+          indicator.innerHTML = '<span>✓</span> Saved';
+          indicator.style.background = 'rgba(76, 175, 80, 0.9)';
+          setTimeout(() => {
+            indicator.style.display = 'none';
+          }, 2000);
+          break;
+        case 'error':
+          indicator.innerHTML = '<span>⚠️</span> Save failed';
+          indicator.style.background = 'rgba(244, 67, 54, 0.9)';
+          setTimeout(() => {
+            indicator.style.display = 'none';
+          }, 3000);
+          break;
+      }
     },
     
     // Get the current scenario in window.currentScenario format for compatibility
@@ -365,4 +637,14 @@
   });
   
   console.log('[ScenarioManager] Initialized and ready');
+  
+  // Auto-initialize when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      ScenarioManager.init();
+    });
+  } else {
+    // DOM already loaded
+    ScenarioManager.init();
+  }
 })();

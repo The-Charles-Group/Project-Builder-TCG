@@ -25,6 +25,16 @@
   <header>
     <h1>Agency Project Builder</h1>
     <div class="sub">Build project estimates from RFPs with 2‑step AI assistance</div>
+    <!-- Session Management UI -->
+    <div id="session-controls" style="position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; align-items: center; font-size: 12px; color: #666;">
+      <div id="session-info" style="display: none;">
+        <span>Session: <code id="session-id-display" style="font-size: 10px;"></code></span>
+        <span id="last-saved-display" style="margin-left: 10px;"></span>
+      </div>
+      <button id="toggle-session-info" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="toggleSessionInfo()">📋</button>
+      <button id="new-session-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="startNewSession()">New Session</button>
+      <button id="clear-data-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer; background: #f44336; color: white; border: none; border-radius: 4px;" onclick="clearAllData()">Clear Data</button>
+    </div>
   </header>
 
   <main>

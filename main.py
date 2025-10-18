@@ -5630,6 +5630,121 @@ async def api_retainer_distribution(payload: RetainerDistributionPayload):
 
 # ========== NEW SCENARIO_STORE API ENDPOINTS ==========
 
+# ---------- Scenario Persistence Endpoints ----------
+@app.get("/api/scenario/{session_id}")
+async def api_get_scenario(session_id: str):
+    """Retrieve saved scenario from SCENARIO_STORE"""
+    if session_id in SCENARIO_STORE:
+        scenario = SCENARIO_STORE[session_id]
+        # Add timestamp if not present
+        if 'last_retrieved' not in scenario:
+            scenario['last_retrieved'] = datetime.datetime.now().isoformat()
+        return {
+            "success": True,
+            "scenario": scenario,
+            "session_id": session_id,
+            "found": True
+        }
+    return {
+        "success": False, 
+        "error": f"No scenario found for session {session_id}",
+        "found": False
+    }
+
+@app.post("/api/scenario/save")
+async def api_save_scenario(payload: Dict[str, Any]):
+    """Explicitly save scenario to SCENARIO_STORE"""
+    try:
+        session_id = payload.get("session_id")
+        if not session_id:
+            return JSONResponse(
+                {"success": False, "error": "session_id is required"},
+                status_code=400
+            )
+        
+        # Store the scenario with timestamp
+        scenario_data = payload.get("scenario", payload)
+        scenario_data['last_saved'] = datetime.datetime.now().isoformat()
+        scenario_data['session_id'] = session_id
+        
+        SCENARIO_STORE[session_id] = scenario_data
+        
+        print(f"[SCENARIO_STORE] Saved scenario for session {session_id}")
+        return {
+            "success": True,
+            "session_id": session_id,
+            "saved_at": scenario_data['last_saved']
+        }
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error saving scenario: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.delete("/api/scenario/{session_id}")
+async def api_delete_scenario(session_id: str):
+    """Clear scenario from SCENARIO_STORE"""
+    if session_id in SCENARIO_STORE:
+        del SCENARIO_STORE[session_id]
+        print(f"[SCENARIO_STORE] Deleted scenario for session {session_id}")
+        return {"success": True, "deleted": True}
+    return {"success": True, "deleted": False, "message": "No scenario to delete"}
+
+@app.get("/api/scenario/exists/{session_id}")
+async def api_scenario_exists(session_id: str):
+    """Check if scenario exists in SCENARIO_STORE"""
+    exists = session_id in SCENARIO_STORE
+    scenario_info = None
+    
+    if exists:
+        scenario = SCENARIO_STORE[session_id]
+        scenario_info = {
+            "last_saved": scenario.get('last_saved'),
+            "has_deliverables": bool(scenario.get('items') or scenario.get('deliverables')),
+            "has_timeline": bool(scenario.get('timeline')),
+            "project_name": scenario.get('project_name', 'Untitled Project')
+        }
+    
+    return {
+        "exists": exists,
+        "session_id": session_id,
+        "info": scenario_info
+    }
+
+# Clean up old sessions periodically (24 hours)
+@app.post("/api/scenario/cleanup")
+async def api_cleanup_old_scenarios():
+    """Remove scenarios older than 24 hours"""
+    try:
+        now = datetime.datetime.now()
+        removed = []
+        
+        for session_id, scenario in list(SCENARIO_STORE.items()):
+            saved_at_str = scenario.get('last_saved')
+            if saved_at_str:
+                try:
+                    saved_at = datetime.datetime.fromisoformat(saved_at_str)
+                    age_hours = (now - saved_at).total_seconds() / 3600
+                    if age_hours > 24:
+                        del SCENARIO_STORE[session_id]
+                        removed.append(session_id)
+                except Exception:
+                    pass  # Skip malformed timestamps
+        
+        print(f"[SCENARIO_STORE] Cleaned up {len(removed)} old scenarios")
+        return {
+            "success": True,
+            "removed_count": len(removed),
+            "removed_sessions": removed
+        }
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Cleanup error: {e}")
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
 @app.post("/api/pricing/build_scenario")
 async def api_build_scenario(payload: BuildScenarioPayload):
     """

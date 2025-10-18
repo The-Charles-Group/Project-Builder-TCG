@@ -9865,6 +9865,69 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+// Session management UI functions
+function toggleSessionInfo() {
+  const sessionInfo = document.getElementById('session-info');
+  if (sessionInfo) {
+    sessionInfo.style.display = sessionInfo.style.display === 'none' ? 'block' : 'none';
+    
+    // Update session display
+    if (sessionInfo.style.display === 'block' && window.ScenarioManager) {
+      const sessionIdDisplay = document.getElementById('session-id-display');
+      const lastSavedDisplay = document.getElementById('last-saved-display');
+      
+      if (sessionIdDisplay) {
+        sessionIdDisplay.textContent = window.ScenarioManager.state.sessionId || 'None';
+      }
+      
+      if (lastSavedDisplay) {
+        if (window.ScenarioManager.state.lastSaved) {
+          const date = new Date(window.ScenarioManager.state.lastSaved);
+          lastSavedDisplay.textContent = 'Last saved: ' + date.toLocaleTimeString();
+        } else {
+          lastSavedDisplay.textContent = 'Not saved yet';
+        }
+      }
+    }
+  }
+}
+
+function startNewSession() {
+  if (confirm('Start a new session? This will clear all current data.')) {
+    // Clear current data and start fresh
+    SessionManager.startNewSession();
+    
+    // Clear ScenarioManager state
+    if (window.ScenarioManager) {
+      window.ScenarioManager.clear();
+      window.ScenarioManager.state.sessionId = SessionManager.getCurrentSessionId();
+      window.ScenarioManager.saveToBackend();
+    }
+    
+    // Reload the page to start fresh
+    window.location.reload();
+  }
+}
+
+function clearAllData() {
+  if (confirm('Clear all data? This cannot be undone.')) {
+    clearAllDataWithConfirmation();
+  }
+}
+
+// Update session info periodically
+setInterval(() => {
+  const sessionInfo = document.getElementById('session-info');
+  if (sessionInfo && sessionInfo.style.display === 'block') {
+    toggleSessionInfo(); // Refresh display
+    toggleSessionInfo(); // Show again
+  }
+}, 30000); // Every 30 seconds
+
+window.toggleSessionInfo = toggleSessionInfo;
+window.startNewSession = startNewSession;
+window.clearAllData = clearAllData;
+
 window.addEventListener("load", boot);
 
 // LEARN button functionality (Learning Brain integration)
