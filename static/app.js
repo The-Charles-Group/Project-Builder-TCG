@@ -638,16 +638,34 @@ if (typeof window.Gantt !== 'undefined') {
 
 // ISSUE 3: Retainer Options Functions
 
-// NEW: Global retainer suggestions using SCENARIO_STORE API
+// NEW: Global retainer suggestions using ScenarioManager and updated backend
 async function askAIForRetainerSuggestions(monthlyBudget = null) {
-  // Check for scenario first
-  if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
+  // Check if ScenarioManager is available
+  if (!window.ScenarioManager) {
+    alert('ScenarioManager not available. Please reload the page.');
+    return;
+  }
+  
+  // Get current scenario from ScenarioManager
+  const currentScenario = window.ScenarioManager.getCurrentScenario();
+  
+  // Check for scenario
+  if (!currentScenario || !currentScenario.items || currentScenario.items.length === 0) {
     alert('Please build a scenario first before analyzing retainers.');
     return;
   }
   
-  // Get session ID from APP_STATE (must exist from build_scenario)
-  const sessionId = getCurrentSessionId();
+  // Get session ID - prioritize ScenarioManager's session ID
+  let sessionId;
+  try {
+    sessionId = window.ScenarioManager.state.sessionId || window.APP_STATE?.sessionId || getCurrentSessionId();
+  } catch (e) {
+    // If getCurrentSessionId throws, generate a new one
+    sessionId = window.generateSessionId ? window.generateSessionId() : 'session_' + Date.now();
+    if (window.ScenarioManager) {
+      window.ScenarioManager.state.sessionId = sessionId;
+    }
+  }
   
   // Show loading on button
   const btn = event?.target;
@@ -657,13 +675,14 @@ async function askAIForRetainerSuggestions(monthlyBudget = null) {
   }
   
   try {
-    // Call new SCENARIO_STORE retainer_suggestions endpoint
+    // Call updated retainer_suggestions endpoint with full scenario
     const res = await fetch('/api/pricing/retainer_suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
-        monthly_budget: monthlyBudget
+        monthly_budget: monthlyBudget,
+        scenario: currentScenario  // Send the full scenario for analysis
       })
     });
     
@@ -675,10 +694,16 @@ async function askAIForRetainerSuggestions(monthlyBudget = null) {
     const result = await res.json();
     
     // Update the scenario with retainer suggestions
-    const updatedScenario = result.scenario || result;
+    const updatedScenario = result.scenario;
     
     if (updatedScenario && updatedScenario.items) {
-      // Store updated scenario
+      // Update ScenarioManager with new data
+      window.ScenarioManager.updateDeliverablesFromAPI({ 
+        scenarios: { A: updatedScenario },
+        scenario: updatedScenario 
+      });
+      
+      // Also update global references for compatibility
       window.currentScenario = updatedScenario;
       window.SCENARIOS = { A: updatedScenario };
       
@@ -697,16 +722,25 @@ async function askAIForRetainerSuggestions(monthlyBudget = null) {
         displayRetainerPlan(result.retainer_plan);
       }
       
-      // Show success message
-      const message = result.message || 'Retainer suggestions applied successfully.';
-      alert(`✅ AI Retainer Suggestions Complete!\n\n${message}`);
+      // Display individual suggestions in AI Assistant panel if available
+      if (result.suggestions && result.suggestions.length > 0) {
+        displayRetainerSuggestions(result.suggestions);
+      }
       
-      console.log('Retainer suggestions applied:', result);
+      // Show success message with details
+      const message = result.message || 'Retainer suggestions applied successfully.';
+      const details = result.converted_count > 0 
+        ? `\n\n✓ ${result.converted_count} deliverables converted to retainers\n✓ ${result.retainer_plan?.monthly_hours || 0} total monthly hours\n✓ $${result.retainer_plan?.monthly_budget || 0} monthly budget`
+        : '';
+      
+      alert(`✅ AI Retainer Suggestions Complete!\n\n${message}${details}`);
+      
+      console.log('[Retainer Suggestions] Applied:', result);
     } else {
       throw new Error('Invalid retainer suggestions response');
     }
   } catch (error) {
-    console.error('Failed to get retainer suggestions:', error);
+    console.error('[Retainer Suggestions] Failed:', error);
     alert(`❌ Retainer Suggestions Error:\n\n${error.message || 'Failed to get retainer suggestions. Please try again.'}`);
   } finally {
     // Reset button
@@ -777,8 +811,134 @@ function displayRetainerPlan(retainerPlan) {
   }
 }
 
-// Export the function globally
+// Display individual retainer suggestions in the AI Assistant panel
+function displayRetainerSuggestions(suggestions) {
+  // Find or create container for suggestions in the AI Assistant panel
+  let suggestionsContainer = document.getElementById('retainer-suggestions-list');
+  
+  if (!suggestionsContainer) {
+    // Try to find AI Assistant panel or create in Step 3
+    const aiAssistantPanel = document.querySelector('.ai-assistant-panel') || 
+                            document.querySelector('#ai-assistant-content');
+    
+    if (aiAssistantPanel) {
+      suggestionsContainer = document.createElement('div');
+      suggestionsContainer.id = 'retainer-suggestions-list';
+      suggestionsContainer.className = 'retainer-suggestions-list';
+      aiAssistantPanel.appendChild(suggestionsContainer);
+    } else {
+      // Create in Step 3 as fallback
+      const step3 = document.getElementById('step3');
+      if (step3) {
+        suggestionsContainer = document.createElement('div');
+        suggestionsContainer.id = 'retainer-suggestions-list';
+        suggestionsContainer.style.cssText = 'margin: 20px 0; padding: 20px; background: var(--card); border-radius: 12px; border: 2px solid var(--accent2);';
+        step3.appendChild(suggestionsContainer);
+      }
+    }
+  }
+  
+  if (!suggestionsContainer) return;
+  
+  // Build HTML for suggestions
+  let html = `
+    <h4 style="color: var(--accent2); margin-bottom: 16px;">
+      🤖 AI Retainer Analysis
+    </h4>
+    <div class="suggestions-grid" style="display: grid; gap: 12px;">
+  `;
+  
+  suggestions.forEach(suggestion => {
+    const confidence = Math.round((suggestion.confidence || 0.85) * 100);
+    const confidenceColor = confidence >= 80 ? '#10b981' : confidence >= 60 ? '#f59e0b' : '#ef4444';
+    
+    html += `
+      <div class="suggestion-card" style="padding: 16px; background: rgba(139,92,246,0.05); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+          <h5 style="color: var(--text); margin: 0; font-size: 0.95em;">
+            ${suggestion.deliverable_name}
+          </h5>
+          <span style="padding: 2px 8px; background: ${confidenceColor}20; color: ${confidenceColor}; border-radius: 4px; font-size: 0.8em;">
+            ${confidence}% confidence
+          </span>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0;">
+          <div style="text-align: center;">
+            <div style="color: var(--muted); font-size: 0.8em;">Monthly Hours</div>
+            <div style="color: var(--accent); font-weight: bold;">${suggestion.monthly_hours}</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="color: var(--muted); font-size: 0.8em;">Duration</div>
+            <div style="color: var(--accent); font-weight: bold;">${suggestion.suggested_months} mo</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="color: var(--muted); font-size: 0.8em;">Total Hours</div>
+            <div style="color: var(--accent); font-weight: bold;">${suggestion.total_hours}</div>
+          </div>
+        </div>
+        
+        <p style="color: var(--muted); font-size: 0.85em; margin: 8px 0; font-style: italic;">
+          ${suggestion.reasoning}
+        </p>
+        
+        <button 
+          onclick="applyRetainerSuggestion('${suggestion.deliverable_code}', ${suggestion.suggested_months}, ${suggestion.monthly_hours})"
+          style="width: 100%; padding: 8px; background: var(--accent2); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em;"
+          onmouseover="this.style.opacity='0.9'" 
+          onmouseout="this.style.opacity='1'"
+        >
+          Apply This Retainer
+        </button>
+      </div>
+    `;
+  });
+  
+  html += `
+    </div>
+  `;
+  
+  suggestionsContainer.innerHTML = html;
+  suggestionsContainer.style.display = 'block';
+}
+
+// Apply individual retainer suggestion
+function applyRetainerSuggestion(deliverableCode, months, monthlyHours) {
+  // Update in ScenarioManager
+  if (window.ScenarioManager) {
+    const deliverable = window.ScenarioManager.state.deliverables.find(
+      d => d.id === deliverableCode || d.deliverable_code === deliverableCode
+    );
+    
+    if (deliverable) {
+      // Update deliverable to retainer
+      deliverable.cadence = 'Monthly';
+      deliverable.months = months;
+      deliverable.monthly_hours = monthlyHours;
+      deliverable.is_retainer = true;
+      
+      // Recalculate price
+      deliverable.price = monthlyHours * months * (deliverable.rate || 195);
+      
+      // Trigger updates
+      window.ScenarioManager.recompute();
+      window.ScenarioManager.emit();
+      
+      // Update pricing table
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      // Show confirmation
+      alert(`✅ Applied retainer configuration:\n\n${deliverable.title}\n${monthlyHours} hours/month for ${months} months`);
+    }
+  }
+}
+
+// Export the functions globally
 window.askAIForRetainerSuggestions = askAIForRetainerSuggestions;
+window.displayRetainerSuggestions = displayRetainerSuggestions;
+window.applyRetainerSuggestion = applyRetainerSuggestion;
 
 function toggleRetainerType(code, isRetainer) {
   if (isRetainer) {

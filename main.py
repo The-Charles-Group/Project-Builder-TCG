@@ -10122,6 +10122,144 @@ async def clear_sync_state(session_id: str):
         return {"success": True, "message": "Sync state cleared"}
     return {"success": False, "message": "No sync state found"}
 
+# ---------- AI Pricing Retainer Suggestions ----------
+class RetainerSuggestionsPayload(BaseModel):
+    session_id: str
+    monthly_budget: Optional[float] = None
+    scenario: Optional[Dict[str, Any]] = None
+
+@app.post("/api/pricing/retainer_suggestions")
+async def analyze_retainer_suggestions(payload: RetainerSuggestionsPayload):
+    """
+    Analyze all deliverables in a scenario and suggest which should be retainers.
+    Uses AI to analyze deliverable names and characteristics to recommend retainer setup.
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    # Get scenario from sync state or payload
+    scenario = None
+    if payload.session_id in SCENARIO_SYNC_STATE:
+        scenario = SCENARIO_SYNC_STATE[payload.session_id].get("scenario")
+    
+    if not scenario and payload.scenario:
+        scenario = payload.scenario
+    
+    if not scenario or not scenario.get("items"):
+        raise HTTPException(400, "No scenario found for session. Please build a scenario first.")
+    
+    # Import pricing optimizer
+    from ai_pricing_optimizer import PricingOptimizer
+    
+    optimizer = PricingOptimizer()
+    
+    suggestions = []
+    total_converted = 0
+    total_monthly_hours = 0
+    
+    # Analyze each deliverable for retainer potential
+    for item in scenario["items"]:
+        deliverable_name = item.get("deliverable_name") or item.get("deliverable", "")
+        deliverable_code = item.get("deliverable_code", "")
+        current_hours = item.get("hours", 0)
+        is_already_retainer = item.get("is_retainer", False)
+        
+        # Skip if already a retainer
+        if is_already_retainer:
+            continue
+        
+        # Check if this should be a retainer
+        try:
+            analysis = await optimizer.should_be_retainer(
+                deliverable_name=deliverable_name,
+                rfp_text=RFP_TEXT_CACHE or ""
+            )
+            
+            if analysis["is_retainer"]:
+                suggested_months = analysis.get("suggested_months", 12)
+                # Calculate monthly hours from total
+                monthly_hours = round(current_hours / suggested_months, 1) if suggested_months > 0 else current_hours
+                
+                suggestion = {
+                    "deliverable_code": deliverable_code,
+                    "deliverable_name": deliverable_name,
+                    "is_retainer": True,
+                    "suggested_months": suggested_months,
+                    "monthly_hours": monthly_hours,
+                    "total_hours": current_hours,
+                    "reasoning": analysis.get("reasoning", "Ongoing work pattern detected"),
+                    "confidence": analysis.get("confidence", 0.85)
+                }
+                
+                suggestions.append(suggestion)
+                total_converted += 1
+                total_monthly_hours += monthly_hours
+                
+                # Update the item in scenario
+                item["is_retainer"] = True
+                item["retainer_months"] = suggested_months
+                item["monthly_hours"] = monthly_hours
+                item["cadence"] = "Monthly"
+                
+        except Exception as e:
+            print(f"[Retainer Analysis] Error analyzing {deliverable_name}: {e}")
+            # Fallback to rule-based check
+            keywords = ["management", "monthly", "ongoing", "maintenance", "monitoring", "optimization", "support"]
+            if any(keyword in deliverable_name.lower() for keyword in keywords):
+                monthly_hours = round(current_hours / 12, 1)
+                suggestion = {
+                    "deliverable_code": deliverable_code,
+                    "deliverable_name": deliverable_name,
+                    "is_retainer": True,
+                    "suggested_months": 12,
+                    "monthly_hours": monthly_hours,
+                    "total_hours": current_hours,
+                    "reasoning": "Keyword-based detection: ongoing work pattern",
+                    "confidence": 0.75
+                }
+                suggestions.append(suggestion)
+                total_converted += 1
+                total_monthly_hours += monthly_hours
+                
+                # Update the item
+                item["is_retainer"] = True
+                item["retainer_months"] = 12
+                item["monthly_hours"] = monthly_hours
+                item["cadence"] = "Monthly"
+    
+    # Update scenario in sync state
+    if payload.session_id in SCENARIO_SYNC_STATE:
+        SCENARIO_SYNC_STATE[payload.session_id]["scenario"] = scenario
+        SCENARIO_SYNC_STATE[payload.session_id]["version"] += 1
+        SCENARIO_SYNC_STATE[payload.session_id]["last_modified"] = time.time()
+    
+    # Create retainer plan summary
+    retainer_plan = None
+    if suggestions:
+        retainer_plan = {
+            "total_retainers": total_converted,
+            "monthly_hours": round(total_monthly_hours, 1),
+            "monthly_budget": round(total_monthly_hours * (scenario.get("blended_rate", 195)), 2),
+            "suggested_duration": 12,
+            "deliverables": suggestions
+        }
+    
+    message = f"Analyzed {len(scenario['items'])} deliverables. "
+    if total_converted > 0:
+        message += f"Converted {total_converted} to retainers with {total_monthly_hours:.0f} monthly hours."
+    else:
+        message += "No deliverables suitable for retainer conversion found."
+    
+    return {
+        "success": True,
+        "scenario": scenario,
+        "retainer_plan": retainer_plan,
+        "suggestions": suggestions,
+        "message": message,
+        "analyzed_count": len(scenario["items"]),
+        "converted_count": total_converted
+    }
+
 # ---------- AI Agent API Endpoints ----------
 from ai_agent import (
     AgentChatRequest,
