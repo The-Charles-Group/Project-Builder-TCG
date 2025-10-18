@@ -3196,15 +3196,13 @@ async function generateAITimeline(retryAttempt = 0) {
   
   const deliverableCount = selectedCodes.length;
   
-  // Connection health tracking
-  let lastHeartbeatTime = Date.now();
-  let lastDataTime = Date.now();
-  const HEARTBEAT_TIMEOUT_MS = 30000; // 30 seconds without any data = real issue
-  const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds if SSE fails
+  // Polling configuration
+  const POLLING_INTERVAL_MS = 2500; // Poll every 2.5 seconds
+  const MAX_POLLING_TIME_MS = 600000; // 10 minutes timeout
   
-  // Polling fallback state
-  let isPolling = false;
+  // Polling state
   let pollingIntervalId = null;
+  let pollingStartTime = Date.now();
   
   // Show loading state with progress UI
   btn.disabled = true;
@@ -3223,11 +3221,6 @@ async function generateAITimeline(retryAttempt = 0) {
           ℹ️ Processing ${deliverableCount} deliverables. We're optimizing your timeline with AI.
         </p>
       </div>` : ''}
-      <div id="timeline-connection-status" style="display: none; background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.2); padding: 8px; border-radius: 4px; margin-bottom: 12px;">
-        <p style="margin: 0; color: #ea580c; font-size: 0.85em;">
-          🔄 Connection switched to polling mode. Timeline generation continues...
-        </p>
-      </div>
       <div id="timeline-progress-content">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <strong id="timeline-progress-stage" style="color: #6366f1;">Initializing...</strong>
@@ -3272,9 +3265,7 @@ async function generateAITimeline(retryAttempt = 0) {
   loading.style.display = 'block';
   container.style.display = 'none';
   
-  let eventSource = null;
   let jobId = null;
-  let heartbeatCheckInterval = null;
   
   // Helper function to show error in the UI
   const showTimelineError = (title, message, canRetry = true) => {
@@ -3311,73 +3302,101 @@ async function generateAITimeline(retryAttempt = 0) {
   
   // Clean up function
   const cleanup = () => {
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
-    if (heartbeatCheckInterval) {
-      clearInterval(heartbeatCheckInterval);
-      heartbeatCheckInterval = null;
-    }
     if (pollingIntervalId) {
       clearInterval(pollingIntervalId);
       pollingIntervalId = null;
     }
   };
   
-  // Start heartbeat monitoring
-  const startHeartbeatMonitor = () => {
-    heartbeatCheckInterval = setInterval(() => {
-      const timeSinceLastData = Date.now() - lastDataTime;
-      
-      if (timeSinceLastData > HEARTBEAT_TIMEOUT_MS && !isPolling) {
-        console.log('[TIMELINE] No data for 30s, switching to polling fallback');
-        
-        // Switch to polling mode
-        if (eventSource) {
-          eventSource.close();
-          eventSource = null;
-        }
-        
-        // Show polling mode message
-        const connectionStatus = document.getElementById('timeline-connection-status');
-        if (connectionStatus) {
-          connectionStatus.style.display = 'block';
-        }
-        
-        // Start polling
-        startPollingFallback();
-      }
-    }, 5000); // Check every 5 seconds
-  };
-  
-  // Polling fallback function
-  const startPollingFallback = async () => {
-    isPolling = true;
+  // Polling function for job status
+  const startPolling = async () => {
+    if (!jobId) {
+      console.error('[TIMELINE] Cannot start polling: no job ID');
+      return;
+    }
+    
+    console.log('[TIMELINE] Starting polling for job:', jobId);
     
     const pollJobStatus = async () => {
       if (!jobId) return;
       
+      // Check for timeout
+      const elapsed = Date.now() - pollingStartTime;
+      if (elapsed > MAX_POLLING_TIME_MS) {
+        cleanup();
+        showTimelineError(
+          'Timeline Generation Timeout',
+          'Timeline generation took longer than expected (10 minutes). This usually happens with very large projects. Please try with fewer deliverables or contact support.',
+          true
+        );
+        return;
+      }
+      
       try {
-        const response = await fetch(`/api/ai/jobs/${jobId}`);
-        if (!response.ok) throw new Error('Failed to get job status');
+        const response = await fetch(`/api/agencydb/status/${jobId}`);
+        
+        if (!response.ok) {
+          if (response.status === 404) {
+            // Job not found - might have been cleaned up
+            console.error('[TIMELINE] Job not found:', jobId);
+            cleanup();
+            showTimelineError(
+              'Job Not Found',
+              'The timeline generation job could not be found. It may have been cancelled or expired. Please try again.',
+              true
+            );
+            return;
+          }
+          throw new Error(`Status check failed: ${response.status}`);
+        }
         
         const data = await response.json();
+        
+        console.log('[TIMELINE] Poll update:', {
+          status: data.status,
+          progress: data.progress,
+          stage: data.current_stage
+        });
         
         // Update UI with polling data
         updateProgressUI(data);
         
         // Check if job is complete
-        if (data.status === 'completed' && data.result) {
+        if (data.status === 'completed') {
           cleanup();
-          handleTimelineCompletion(data.result);
+          
+          // Extract result from either 'data' or 'result' field
+          const result = data.data || data.result;
+          if (result) {
+            handleTimelineCompletion(result);
+          } else {
+            showTimelineError(
+              'Invalid Response',
+              'Timeline generation completed but no data was returned. Please try again.',
+              true
+            );
+          }
         } else if (data.status === 'failed') {
           cleanup();
           handleTimelineError(data.error || 'Timeline generation failed');
         }
+        // Otherwise continue polling (status is still "pending" or "processing")
+        
       } catch (error) {
         console.error('[TIMELINE] Polling error:', error);
-        // Continue polling despite errors
+        
+        // For network errors, continue polling but log the issue
+        // Only stop if we've been trying for too long
+        const elapsedMinutes = Math.floor(elapsed / 60000);
+        if (elapsedMinutes >= 10) {
+          cleanup();
+          showTimelineError(
+            'Network Error',
+            'Unable to check timeline status due to network issues. Please check your connection and try again.',
+            true
+          );
+        }
+        // Otherwise, continue polling - transient network issues should resolve
       }
     };
     
@@ -3708,72 +3727,12 @@ async function generateAITimeline(retryAttempt = 0) {
       return;
     }
     
-    // Store job ID for potential polling fallback
+    // Store job ID and start polling
     jobId = jobData.job_id;
+    console.log('[TIMELINE] Timeline generation started, job ID:', jobId);
     
-    // Connect to SSE stream for progress updates
-    eventSource = new EventSource(`/api/stream/${jobData.job_id}`);
-    
-    // Start heartbeat monitoring
-    startHeartbeatMonitor();
-    
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Update last data time for heartbeat tracking
-        lastDataTime = Date.now();
-        
-        // Handle heartbeat messages
-        if (data.type === 'heartbeat') {
-          lastHeartbeatTime = Date.now();
-          console.log('[TIMELINE] Heartbeat received:', new Date(data.timestamp * 1000).toLocaleTimeString());
-          return; // Don't process heartbeat as regular update
-        }
-        
-        // Update progress UI using the helper function
-        updateProgressUI(data);
-        
-        // Handle completion
-        if (data.status === 'completed' && data.result) {
-          cleanup();
-          handleTimelineCompletion(data.result);
-        }
-        
-        // Handle errors
-        if (data.status === 'failed') {
-          cleanup();
-          handleTimelineError(data.error);
-        }
-        
-      } catch (parseError) {
-        console.error('Error parsing SSE data:', parseError);
-      }
-    };
-    
-    eventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-      
-      // Try polling fallback instead of immediately showing error
-      if (!isPolling) {
-        console.log('[TIMELINE] SSE connection failed, switching to polling fallback');
-        
-        // Show polling mode message
-        const connectionStatus = document.getElementById('timeline-connection-status');
-        if (connectionStatus) {
-          connectionStatus.style.display = 'block';
-        }
-        
-        // Close the SSE connection
-        if (eventSource) {
-          eventSource.close();
-          eventSource = null;
-        }
-        
-        // Start polling
-        startPollingFallback();
-      }
-    };
+    // Start polling for status updates
+    await startPolling();
     
   } catch (error) {
     console.error('Error generating AI timeline:', error);
