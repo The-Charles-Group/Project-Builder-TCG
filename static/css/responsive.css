@@ -37,9 +37,12 @@
     display: none; /* Hide subtitle on mobile to save space */
   }
 
-  /* Hide desktop session controls and Auto-Fix toggle on mobile */
-  #session-controls,
-  .auto-fix-toggle,
+  /* Hide desktop header controls on mobile */
+  .desktop-header-controls {
+    display: none !important;
+  }
+  
+  /* Specifically hide duplicate Clear All Data button in Step 1 - removed from HTML */
   #btnClearAllData {
     display: none !important;
   }
@@ -457,9 +460,12 @@
 
   /* Show hamburger menu on tablets in portrait mode */
   @media (orientation: portrait) {
-    /* Hide desktop session controls on tablet portrait */
-    #session-controls,
-    .auto-fix-toggle,
+    /* Hide desktop header controls on tablet portrait */
+    .desktop-header-controls {
+      display: none !important;
+    }
+    
+    /* Specifically hide duplicate Clear All Data button if exists */
     #btnClearAllData {
       display: none !important;
     }
@@ -543,7 +549,15 @@
     }
     
     /* Show desktop controls on landscape tablet */
+    .desktop-header-controls {
+      display: flex !important;
+    }
+    
     #session-controls {
+      display: flex !important;
+    }
+    
+    .auto-fix-toggle {
       display: flex !important;
     }
   }
@@ -561,6 +575,11 @@
     display: none !important;
   }
 
+  /* Show desktop header controls */
+  .desktop-header-controls {
+    display: flex !important;
+  }
+
   /* Show desktop session controls */
   #session-controls {
     display: flex !important;
@@ -569,15 +588,21 @@
   /* Ensure proper header spacing to prevent overlaps */
   header {
     position: relative;
-    padding-right: 350px; /* Space for session controls */
+    padding-right: 550px; /* Increased space for both Auto-Fix toggle and session controls */
   }
 
-  #session-controls {
+  /* Ensure desktop header controls don't overlap */
+  .desktop-header-controls {
     position: absolute;
     top: 15px;
     right: 20px;
-    flex-wrap: wrap;
-    max-width: 320px;
+    flex-wrap: nowrap;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .auto-fix-toggle {
+    display: flex !important;
   }
 
   /* Keep original desktop layouts */

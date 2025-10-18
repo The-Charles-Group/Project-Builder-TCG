@@ -28,15 +28,26 @@
   <header>
     <h1>Agency Project Builder</h1>
     <div class="sub">Build project estimates from RFPs with 2‑step AI assistance</div>
-    <!-- Session Management UI -->
-    <div id="session-controls" style="position: absolute; top: 10px; right: 10px; display: flex; gap: 10px; align-items: center; font-size: 12px; color: #666;">
-      <div id="session-info" style="display: none;">
-        <span>Session: <code id="session-id-display" style="font-size: 10px;"></code></span>
-        <span id="last-saved-display" style="margin-left: 10px;"></span>
+    <!-- Desktop Header Controls -->
+    <div class="desktop-header-controls" style="position: absolute; top: 12px; right: 20px; display: flex; gap: 16px; align-items: center;">
+      <!-- Auto-Fix Toggle (Desktop) -->
+      <div class="auto-fix-toggle" style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 6px;">
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0; font-size: 12px; color: var(--text); font-weight: 500;">
+          <span>🔧 Auto-Fix</span>
+          <input type="checkbox" id="desktop-auto-fix" checked style="margin: 0; cursor: pointer;">
+        </label>
       </div>
-      <button id="toggle-session-info" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="toggleSessionInfo()">📋</button>
-      <button id="new-session-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="startNewSession()">New Session</button>
-      <button id="clear-data-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer; background: #f44336; color: white; border: none; border-radius: 4px;" onclick="clearAllData()">Clear Data</button>
+      
+      <!-- Session Management UI -->
+      <div id="session-controls" style="display: flex; gap: 10px; align-items: center; font-size: 12px; color: #666;">
+        <div id="session-info" style="display: none;">
+          <span>Session: <code id="session-id-display" style="font-size: 10px;"></code></span>
+          <span id="last-saved-display" style="margin-left: 10px;"></span>
+        </div>
+        <button id="toggle-session-info" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="toggleSessionInfo()">📋</button>
+        <button id="new-session-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="startNewSession()">New Session</button>
+        <button id="clear-data-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer; background: #f44336; color: white; border: none; border-radius: 4px;" onclick="clearAllData()">Clear All Data</button>
+      </div>
     </div>
     
     <!-- Mobile Menu Toggle Button -->
@@ -107,13 +118,7 @@
   <main>
     <!-- Step 1: Upload RFP -->
     <section class="card" id="step1">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h2 style="margin: 0;">Step 1 — Upload Your RFP / Brief</h2>
-        <button id="btnClearAllData" onclick="clearAllDataWithConfirmation()" 
-                style="background: #dc2626; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; display: flex; align-items: center; gap: 6px;">
-          🗑️ Clear All Data
-        </button>
-      </div>
+      <h2>Step 1 — Upload Your RFP / Brief</h2>
       
       <!-- Fast/Deep Mode Selector -->
       <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px;">
