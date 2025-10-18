@@ -1309,6 +1309,119 @@ class TimelineOptimizer:
         "Content": ["Strategy", "Creative"]
     }
     
+    # Enhanced deliverable category dependencies (based on naming patterns)
+    CATEGORY_DEPENDENCIES = {
+        # Strategy/Planning categories (must come first)
+        "deck_strategy": [],  # No predecessors
+        "deck_brief": [],
+        "deck_planning": [],
+        "deck_kickoff": [],
+        "research": [],
+        "audit": [],
+        
+        # Brand/Identity (depends on strategy)
+        "guidelines": ["deck_strategy", "deck_brief"],
+        "brand": ["deck_strategy"],
+        "identity": ["deck_strategy", "brand"],
+        
+        # Creative Development (depends on brand/guidelines)
+        "concept": ["guidelines", "brand", "deck_strategy"],
+        "design": ["concept", "guidelines"],
+        "creative": ["concept", "brand"],
+        
+        # Content Creation (depends on creative)
+        "content": ["creative", "guidelines"],
+        "copy": ["creative", "brand"],
+        "social": ["creative", "content"],
+        
+        # Production/Assets (depends on design/creative)
+        "assets": ["design", "creative"],
+        "production": ["design", "creative"],
+        "video": ["creative", "concept"],
+        "photo": ["creative", "concept"],
+        
+        # Campaign Execution (depends on assets)
+        "campaign": ["assets", "creative", "content"],
+        "media": ["campaign", "assets"],
+        "paid": ["campaign", "media"],
+        
+        # Implementation/Launch (depends on campaign)
+        "implementation": ["campaign", "assets"],
+        "launch": ["implementation", "campaign"],
+        "execution": ["campaign", "implementation"],
+        
+        # Reporting/Analytics (depends on execution)
+        "report": ["execution", "launch", "campaign"],
+        "analytics": ["execution", "campaign"],
+        "dashboard": ["analytics", "report"],
+        "metrics": ["execution", "analytics"],
+        
+        # Ongoing/Support (can run parallel)
+        "management": [],  # Can run parallel
+        "support": ["launch"],
+        "optimization": ["launch", "analytics"],
+        "retainer": []  # Special handling for retainers
+    }
+    
+    # Phase definitions with percentage allocations
+    PHASE_ALLOCATIONS = {
+        "Discovery": {
+            "percentage": 0.25,  # 25% of timeline
+            "categories": ["deck_strategy", "research", "audit", "deck_brief", "deck_planning"],
+            "departments": ["Strategy", "Account Management"]
+        },
+        "Development": {
+            "percentage": 0.45,  # 45% of timeline
+            "categories": ["guidelines", "brand", "concept", "design", "creative", "content", "assets"],
+            "departments": ["Creative", "Content", "Technology"]
+        },
+        "Execution": {
+            "percentage": 0.30,  # 30% of timeline
+            "categories": ["campaign", "media", "implementation", "launch", "report"],
+            "departments": ["Paid Media", "Integrated Marketing Management"]
+        }
+    }
+    
+    # Task relationship types with lag times
+    RELATIONSHIP_TYPES = {
+        "strategy_to_creative": {
+            "type": DependencyType.FINISH_TO_START,
+            "lag_days": 2  # 2 day buffer between strategy and creative
+        },
+        "parallel_creative": {
+            "type": DependencyType.START_TO_START,
+            "lag_days": 1  # Can start 1 day after predecessor starts
+        },
+        "milestone_gate": {
+            "type": DependencyType.FINISH_TO_START,
+            "lag_days": 0  # No lag for milestone gates
+        },
+        "review_buffer": {
+            "type": DependencyType.FINISH_TO_START,
+            "lag_days": 3  # 3 days for review and feedback
+        }
+    }
+    
+    # Intelligent duration calculations based on complexity
+    COMPLEXITY_MULTIPLIERS = {
+        "simple": 1.0,    # Base duration
+        "moderate": 1.3,  # 30% more time
+        "complex": 1.6,   # 60% more time
+        "strategic": 2.0  # Double time for strategic work
+    }
+    
+    # Minimum durations by category (in business days)
+    MIN_DURATIONS = {
+        "deck_strategy": 5,    # Strategic decks need at least 5 days
+        "research": 5,
+        "guidelines": 7,
+        "brand": 10,
+        "creative": 7,
+        "campaign": 10,
+        "report": 3,
+        "default": 2  # Default minimum duration
+    }
+    
     def calculate_business_days(self, start_date: datetime, duration_days: int) -> datetime:
         """Calculate end date considering only business days (Mon-Fri)"""
         current = start_date
@@ -1321,35 +1434,169 @@ class TimelineOptimizer:
                 
         return current
     
+    def get_deliverable_category(self, deliverable_name: str) -> str:
+        """Extract category from deliverable name for dependency matching"""
+        name_lower = deliverable_name.lower()
+        
+        # Check each category pattern
+        for category in self.CATEGORY_DEPENDENCIES.keys():
+            # Replace underscores with spaces for matching
+            pattern = category.replace('_', ' ')
+            if pattern in name_lower:
+                return category
+                
+        # Additional pattern matching
+        if 'strategy' in name_lower or 'strategic' in name_lower:
+            return 'deck_strategy'
+        elif 'brief' in name_lower:
+            return 'deck_brief'
+        elif 'guideline' in name_lower or 'style' in name_lower:
+            return 'guidelines'
+        elif 'brand' in name_lower or 'identity' in name_lower:
+            return 'brand'
+        elif 'concept' in name_lower:
+            return 'concept'
+        elif 'design' in name_lower:
+            return 'design'
+        elif 'creative' in name_lower:
+            return 'creative'
+        elif 'content' in name_lower or 'copy' in name_lower:
+            return 'content'
+        elif 'asset' in name_lower or 'production' in name_lower:
+            return 'assets'
+        elif 'campaign' in name_lower:
+            return 'campaign'
+        elif 'media' in name_lower or 'paid' in name_lower:
+            return 'media'
+        elif 'launch' in name_lower or 'implement' in name_lower:
+            return 'launch'
+        elif 'report' in name_lower or 'analytic' in name_lower:
+            return 'report'
+        elif 'dashboard' in name_lower or 'metric' in name_lower:
+            return 'dashboard'
+        elif 'management' in name_lower or 'support' in name_lower:
+            return 'management'
+        
+        return 'default'
+    
+    def calculate_intelligent_duration(self, hours: float, category: str, complexity: str = "moderate") -> int:
+        """Calculate realistic task duration based on hours, category, and complexity"""
+        # Base calculation: assume 6 productive hours per day
+        base_days = max(1, int(hours / 6))
+        
+        # Apply complexity multiplier
+        multiplier = self.COMPLEXITY_MULTIPLIERS.get(complexity, 1.3)
+        adjusted_days = int(base_days * multiplier)
+        
+        # Apply minimum duration for category
+        min_duration = self.MIN_DURATIONS.get(category, self.MIN_DURATIONS['default'])
+        final_duration = max(min_duration, adjusted_days)
+        
+        # Add buffer for large tasks
+        if hours > 40:  # More than a week of work
+            final_duration += 2  # Add 2 days buffer
+        elif hours > 80:  # More than two weeks
+            final_duration += 4  # Add 4 days buffer
+            
+        return final_duration
+    
+    def generate_wbs_id(self, phase_num: int, deliverable_num: int, component_num: Optional[int] = None) -> str:
+        """Generate hierarchical WBS ID"""
+        if component_num is not None:
+            return f"{phase_num}.{deliverable_num}.{component_num}"
+        return f"{phase_num}.{deliverable_num}"
+    
     def identify_dependencies(self, tasks: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-        """Identify logical dependencies between tasks based on business rules"""
+        """Identify intelligent dependencies between tasks based on PM best practices"""
         dependencies = {}
-        task_by_dept_comp = {}
         
-        # Group tasks by department and component
+        # Create lookup structures
+        tasks_by_category = {}
+        tasks_by_dept = {}
+        tasks_by_deliverable = {}
+        task_map = {t['id']: t for t in tasks}
+        
+        # Categorize all tasks
         for task in tasks:
-            dept = task.get('department', 'Strategy')
-            comp = task.get('component', '')
-            key = f"{dept}:{comp}"
-            if key not in task_by_dept_comp:
-                task_by_dept_comp[key] = []
-            task_by_dept_comp[key].append(task)
-        
-        # Apply dependency rules
-        for i, task in enumerate(tasks):
             task_id = task['id']
             dependencies[task_id] = []
             
-            # Same deliverable, earlier components
-            for j, other in enumerate(tasks[:i]):
-                if task['deliverable_code'] == other['deliverable_code']:
-                    # Check if departments have dependency
-                    task_dept = task.get('department', 'Strategy')
-                    other_dept = other.get('department', 'Strategy')
+            # Get task category
+            category = self.get_deliverable_category(task.get('deliverable_name', ''))
+            task['category'] = category
+            
+            # Group by category
+            if category not in tasks_by_category:
+                tasks_by_category[category] = []
+            tasks_by_category[category].append(task)
+            
+            # Group by department
+            dept = task.get('department', 'Strategy')
+            if dept not in tasks_by_dept:
+                tasks_by_dept[dept] = []
+            tasks_by_dept[dept].append(task)
+            
+            # Group by deliverable
+            deliv_code = task.get('deliverable_code', '')
+            if deliv_code not in tasks_by_deliverable:
+                tasks_by_deliverable[deliv_code] = []
+            tasks_by_deliverable[deliv_code].append(task)
+        
+        # Apply category-based dependencies
+        for task in tasks:
+            task_id = task['id']
+            category = task['category']
+            
+            # Get required predecessor categories
+            required_categories = self.CATEGORY_DEPENDENCIES.get(category, [])
+            
+            for req_cat in required_categories:
+                if req_cat in tasks_by_category:
+                    # Find the latest task from required category
+                    predecessor_tasks = tasks_by_category[req_cat]
+                    for pred_task in predecessor_tasks:
+                        # Don't create self-dependencies
+                        if pred_task['id'] != task_id:
+                            # Check if predecessor should actually come before (by planned dates)
+                            if tasks.index(pred_task) < tasks.index(task):
+                                dependencies[task_id].append(pred_task['id'])
+        
+        # Apply department-based dependencies
+        task_dept = task.get('department', 'Strategy')
+        if task_dept in self.DEPT_DEPENDENCIES:
+            for dep_dept in self.DEPT_DEPENDENCIES[task_dept]:
+                if dep_dept in tasks_by_dept:
+                    # Find tasks from dependent department that should complete first
+                    for dep_task in tasks_by_dept[dep_dept]:
+                        # Only add if it's a different deliverable and comes before
+                        if (dep_task['deliverable_code'] != task['deliverable_code'] and 
+                            tasks.index(dep_task) < tasks.index(task)):
+                            if dep_task['id'] not in dependencies[task_id]:
+                                dependencies[task_id].append(dep_task['id'])
+        
+        # Apply component-level dependencies within same deliverable
+        for deliv_code, deliv_tasks in tasks_by_deliverable.items():
+            if len(deliv_tasks) > 1:
+                # Sort by component order if available
+                sorted_tasks = sorted(deliv_tasks, key=lambda x: (
+                    x.get('component_order', 999),
+                    tasks.index(x)
+                ))
+                
+                # Create sequential dependencies within deliverable
+                for i in range(1, len(sorted_tasks)):
+                    curr_task = sorted_tasks[i]
+                    prev_task = sorted_tasks[i-1]
                     
-                    if task_dept in self.DEPT_DEPENDENCIES:
-                        if other_dept in self.DEPT_DEPENDENCIES[task_dept]:
-                            dependencies[task_id].append(other['id'])
+                    # Add dependency if not already present
+                    if prev_task['id'] not in dependencies[curr_task['id']]:
+                        dependencies[curr_task['id']].append(prev_task['id'])
+        
+        # Limit dependencies to avoid over-complexity (max 3 direct predecessors)
+        for task_id in dependencies:
+            if len(dependencies[task_id]) > 3:
+                # Keep only the most recent/relevant predecessors
+                dependencies[task_id] = dependencies[task_id][-3:]
         
         return dependencies
     
@@ -1647,7 +1894,7 @@ Return a JSON object with this structure:
             ],
             response_format={"type": "json_object"},
             temperature=0.7,  # Add temperature for better results
-            max_tokens=2000  # Use max_tokens for OpenAI models
+            max_completion_tokens=2000  # Use max_completion_tokens for GPT-5 models
         )
         
         content = response.choices[0].message.content if response.choices and response.choices[0].message else None
@@ -1663,6 +1910,61 @@ Return a JSON object with this structure:
         print(f"[AI Timeline] Error generating timeline: {e}")
         return generate_fallback_timeline(deliverables, project_start)
 
+def generate_phase_based_schedule(
+    deliverables: List[Dict[str, Any]],
+    start_date: datetime,
+    total_duration_days: int
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Create phase-based schedule with proper allocations
+    """
+    optimizer = TimelineOptimizer()
+    
+    # Calculate phase boundaries
+    phases = {
+        "Discovery": {
+            "start": start_date,
+            "end": optimizer.calculate_business_days(start_date, int(total_duration_days * 0.25)),
+            "tasks": [],
+            "departments": ["Strategy", "Account Management"]
+        },
+        "Development": {
+            "start": optimizer.calculate_business_days(start_date, int(total_duration_days * 0.20)),
+            "end": optimizer.calculate_business_days(start_date, int(total_duration_days * 0.70)),
+            "tasks": [],
+            "departments": ["Creative", "Content", "Technology"]
+        },
+        "Execution": {
+            "start": optimizer.calculate_business_days(start_date, int(total_duration_days * 0.60)),
+            "end": optimizer.calculate_business_days(start_date, total_duration_days),
+            "tasks": [],
+            "departments": ["Paid Media", "Integrated Marketing Management"]
+        }
+    }
+    
+    # Categorize deliverables into phases
+    for deliv in deliverables:
+        category = optimizer.get_deliverable_category(deliv.get('deliverable_name', ''))
+        deliv['category'] = category
+        
+        # Determine phase
+        assigned = False
+        for phase_name, phase_config in optimizer.PHASE_ALLOCATIONS.items():
+            if category in phase_config['categories']:
+                phases[phase_name]['tasks'].append(deliv)
+                assigned = True
+                break
+        
+        # Default by department if not assigned
+        if not assigned:
+            dept = deliv.get('department', '')
+            for phase_name, phase_info in phases.items():
+                if dept in phase_info['departments']:
+                    phase_info['tasks'].append(deliv)
+                    break
+    
+    return phases
+
 def process_ai_timeline(
     ai_response: Dict[str, Any], 
     deliverables: List[Dict[str, Any]], 
@@ -1670,7 +1972,7 @@ def process_ai_timeline(
     include_governance: bool = True,
     project_complexity: str = "medium"
 ) -> Dict[str, Any]:
-    """Process AI timeline response into Gantt-compatible format with governance milestones"""
+    """Process AI timeline response into Gantt-compatible format with enhanced dependencies"""
     
     # Parse project start date
     if project_start:
@@ -1685,7 +1987,17 @@ def process_ai_timeline(
     tasks = []
     deliverable_lookup = {d['deliverable_code']: d for d in deliverables}
     
-    # Process each task from AI response
+    # Get total project duration from AI response
+    total_duration = ai_response.get('total_duration_days', 90)
+    
+    # Generate phase-based schedule
+    phases = generate_phase_based_schedule(deliverables, start_date, total_duration)
+    
+    # WBS counters for hierarchical IDs
+    wbs_counters = {"Discovery": 1, "Development": 2, "Execution": 3}
+    deliverable_counter = {phase: 0 for phase in phases.keys()}
+    
+    # Process each task from AI response with enhanced logic
     for ai_task in ai_response.get('tasks', []):
         code = ai_task['deliverable_code']
         if code not in deliverable_lookup:
