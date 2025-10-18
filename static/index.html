@@ -1969,15 +1969,46 @@
     window.fmtUSD2 = window.fmtUSD2 || function(n){ return '$' + (Number(n)||0).toFixed(2); };
     window.fmtUSD = window.fmtUSD || (n => Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n));
 
-    // ISSUE 4 FIX: Enhanced scenario rendering function with editable pricing
+    // ISSUE 4 FIX: Enhanced scenario rendering function with editable pricing (updated to use ScenarioManager)
     function renderScenario(targetId, scenario) {
+      // If ScenarioManager is available, get scenario from it
+      if (window.ScenarioManager && !scenario) {
+        scenario = window.ScenarioManager.getCurrentScenario();
+      }
+      
       if (!scenario || !scenario.items || !scenario.items.length) {
         document.getElementById(targetId).innerHTML = '<p>(No data)</p>';
         return;
       }
       
-      // Store scenario globally for editing
+      // Store scenario globally for editing (and sync with ScenarioManager if available)
       window[`currentScenario_${targetId}`] = scenario;
+      
+      // If ScenarioManager is available and APBOneTable exists, use unified pricing table
+      if (window.ScenarioManager && window.APBOneTable && targetId === 'scenarioA') {
+        // Mount unified pricing table to the scenario container
+        const container = document.getElementById(targetId);
+        if (container) {
+          // Clear existing content and add container for unified pricing table
+          container.innerHTML = '<div id="unified-pricing-container"></div>';
+          
+          // Render the unified pricing table
+          window.APBOneTable.mount('#unified-pricing-container', window.ScenarioManager.state);
+          
+          // Subscribe to ScenarioManager changes to auto-update
+          if (!window.scenarioRenderSubscribed) {
+            window.ScenarioManager.subscribe(() => {
+              // Re-render when ScenarioManager state changes
+              const currentContainer = document.getElementById('unified-pricing-container');
+              if (currentContainer) {
+                window.APBOneTable.mount('#unified-pricing-container', window.ScenarioManager.state);
+              }
+            });
+            window.scenarioRenderSubscribed = true;
+          }
+        }
+        return; // Exit early - unified table handles everything
+      }
       
       // Check for retainer items
       const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
@@ -3019,6 +3050,11 @@
   </script>
   <!-- Frappe Gantt Library -->
   <script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
+  <!-- ScenarioStore and ScenarioManager for centralized state management -->
+  <script src="/static/js/scenario-store.js"></script>
+  <script src="/static/js/scenario-manager.js"></script>
+  <!-- Pricing Table Component -->
+  <script src="/static/js/pricing-one-table.js"></script>
   <script src="/static/static_weights.js"></script>
   <script src="/static/app.js?v=5.9" defer></script>
   <script>

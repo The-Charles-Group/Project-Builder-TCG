@@ -4771,7 +4771,7 @@ function renderDeliverableList(items){
   });
 }
 
-// Build from current S2 selection (surgical patch implementation)
+// Build from current S2 selection (updated to use ScenarioManager)
 async function buildFromCurrentSelection() {
   const codes = readSelectedCodesFromUI();
   if (!codes.length) {
@@ -4779,13 +4779,21 @@ async function buildFromCurrentSelection() {
     return;
   }
 
+  // Initialize ScenarioManager session if not already initialized
+  if (!window.ScenarioManager) {
+    console.error('[BUILD] ScenarioManager not loaded. Please ensure scenario-manager.js is included.');
+    alert('ScenarioManager not available. Please refresh the page.');
+    return;
+  }
+
+  const sessionId = window.ScenarioManager.initSession(generateSessionId());
+
   // Sync legacy state for compatibility
   selectedCodes = codes;
   if (window.appState) window.appState.selectedCodes = codes;
   window.selectedCodes = codes;
 
   // Convert component selections to API format (plain objects)
-  // Check both old (S2.selectedComponentsMap) and new (APB.step2.selectedComponentsByCode) state systems
   const selectedComponentsPayload = {};
   
   // For all selected deliverables, ensure we have component info
@@ -4819,14 +4827,11 @@ async function buildFromCurrentSelection() {
   });
 
   // Include L3 subtasks from APB.step2.selectedL3ByKey
-  // Format: { deliverableCode: { component: [l3tasks...] } }
-  // FIX: Ensure we only send strings, not objects
   const l3Payload = {};
   Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
     const [code, component] = key.split('::');
     if (codes.includes(code) && l3Set && l3Set.size > 0) {
       if (!l3Payload[code]) l3Payload[code] = {};
-      // Convert Set to Array and ensure all items are strings
       l3Payload[code][component] = Array.from(l3Set).map(item => {
         if (typeof item === 'string') return item;
         if (item && typeof item === 'object') {
@@ -4837,6 +4842,9 @@ async function buildFromCurrentSelection() {
       }).filter(name => name && name !== '[object Object]' && name !== '');
     }
   });
+
+  // Update ScenarioManager with selected deliverables
+  window.ScenarioManager.setSelectedDeliverables(codes, selectedComponentsPayload, l3Payload);
 
   // ISSUE 3 FIX: Build retainers payload from pricingData
   const retainersPayload = [];
@@ -4849,94 +4857,97 @@ async function buildFromCurrentSelection() {
       });
     }
   });
-
-  // Generate session ID for tracking
-  const sessionId = generateSessionId();
   
-  // Payload for /api/scenarios endpoint (Brad build format)
-  const payload = {
-    selectedDeliverableCodes: codes,
-    selectedComponentsMap: selectedComponentsPayload,
-    selectedL2Map: l3Payload,  // L2 tasks (server accepts L2 keys now)
-    pricingMode: window.getPricingModeFromUI?.() || 'Flat_Blended',
-    blendedRate: window.getBlendedRateFromUI?.() || 195,
-    rateBand: window.getRateBandFromUI?.() || 'Standard_US',
-    projectStart: window.getProjectStartFromUI?.() || null,
-    clientBudgetUsd: window.getClientBudgetFromUI?.() || null,
-    retainers: retainersPayload
-  };
-
-  console.log('[BUILD] Calling /api/scenarios with payload:', payload);
-
-  const res = await fetch('/api/scenarios', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+  // Set blended rate in ScenarioManager
+  window.ScenarioManager.setState({
+    blendedRate: window.getBlendedRateFromUI?.() || 195
   });
-  
-  if (!res.ok) {
-    const msg = await res.text().catch(() => '');
-    alert(`Build failed (${res.status}): ${msg}`);
-    return;
-  }
-  
-  const json = await res.json();
-  
-  console.log('[BUILD] Received response:', json);
-  
-  // Extract scenarios from response (supports both Brad and legacy formats)
-  let scenarios = json.scenarios || {};
-  let scenario = scenarios.A || json.scenario || json;
-  
-  // If no scenarios map but we have a valid scenario, wrap it
-  if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
-    scenarios = { A: scenario };
-  }
-  
-  // Final validation
-  if (!scenario || !scenario.items) {
-    console.warn('[BUILD] Malformed response:', json);
-    alert('Build failed: missing scenario data. Check console for details.');
-    return;
-  }
 
-  // Store in new global variable as per requirements
-  window.currentScenario = scenario;
-  
-  // Save to client state
-  window.APP_STATE = window.APP_STATE || {};
-  window.APP_STATE.scenarios = scenarios;
-  window.APP_STATE.activeScenario = 'A';
-  window.APP_STATE.sessionId = sessionId;
-  
-  // Legacy aliases for backward compatibility
-  window.BUILD = { scenarios };
-  window.appState = window.appState || {};
-  window.appState.scenarios = scenarios;
-  window.latestScenarios = scenarios;
-  window.SCENARIOS = scenarios;
+  try {
+    // Use ScenarioManager to build and manage the scenario
+    const json = await window.ScenarioManager.buildScenario();
+    
+    console.log('[BUILD] ScenarioManager successfully built scenario:', json);
+    
+    // Extract scenarios from response (ScenarioManager already handles this internally)
+    let scenarios = json.scenarios || {};
+    let scenario = scenarios.A || json.scenario || json;
+    
+    // If no scenarios map but we have a valid scenario, wrap it
+    if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
+      scenarios = { A: scenario };
+    }
+    
+    // Save to client state (ScenarioManager already updates these)
+    window.APP_STATE = window.APP_STATE || {};
+    window.APP_STATE.scenarios = scenarios;
+    window.APP_STATE.activeScenario = 'A';
+    window.APP_STATE.sessionId = sessionId;
+    
+    // Legacy aliases for backward compatibility
+    window.BUILD = { scenarios };
+    window.appState = window.appState || {};
+    window.appState.scenarios = scenarios;
+    window.latestScenarios = scenarios;
+    window.SCENARIOS = scenarios;
 
-  // Update AI button states now that scenario exists
-  updateAIButtonStates();
+    // Update AI button states now that scenario exists
+    updateAIButtonStates();
 
-  // Show Step 3 and scroll
-  const step3 = document.querySelector("#step3");
-  if (step3) {
-    step3.style.display = "block";
-    step3.scrollIntoView({ behavior: "smooth" });
-  }
+    // Show Step 3 and scroll
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = "block";
+      step3.scrollIntoView({ behavior: "smooth" });
+    }
 
-  // Render Scenario A only
-  if (window.renderScenario) {
-    window.renderScenario('scenarioA', scenario);
-  }
+    // Initialize unified pricing table with ScenarioManager data if APBOneTable is available
+    if (window.APBOneTable) {
+      // Transform scenario to pricing table format
+      const pricingData = window.ScenarioManager.getCurrentScenario();
+      const transformedData = {
+        deliverables: pricingData.items.map(item => ({
+          id: item.deliverable_code,
+          title: item.deliverable_name || item.deliverable,
+          dept: item.category,
+          cadence: item.cadence || (item.is_retainer ? 'Monthly' : 'One-Time'),
+          months: item.retainer_months || 0,
+          hours: item.hours,
+          rate: item.rate || item.blended_rate,
+          price: item.price,
+          resources: item.resources || [],
+          components: (item.components || []).map(comp => ({
+            id: window.ScenarioManager.slugify(comp.name),
+            title: comp.name,
+            hours: comp.hours,
+            rate: comp.rate,
+            cadence: comp.cadence,
+            months: comp.months
+          }))
+        }))
+      };
+      window.APBOneTable.hydrateFrom(transformedData);
+    }
 
-  // Show Step 4 (Timeline) and Step 5 (Export)
-  const step4 = document.querySelector("#step4");
-  const step5 = document.querySelector("#step5");
-  if (step5) step5.style.display = 'block';
-  if (step4 && window.showStep4) {
-    window.showStep4('A');  // Show timeline for Scenario A
+    // Render Scenario A (legacy compatibility)
+    if (window.renderScenario) {
+      window.renderScenario('scenarioA', window.ScenarioManager.getCurrentScenario());
+    }
+
+    // Show Step 4 (Timeline) and Step 5 (Export)
+    const step4 = document.querySelector("#step4");
+    const step5 = document.querySelector("#step5");
+    if (step5) step5.style.display = 'block';
+    if (step4 && window.showStep4) {
+      window.showStep4('A');  // Show timeline for Scenario A
+    }
+
+    // Sync to backend
+    window.ScenarioManager.syncToBackend();
+
+  } catch (error) {
+    console.error('[BUILD] Failed to build scenario:', error);
+    alert(`Build failed: ${error.message}`);
   }
 }
 
@@ -7197,6 +7208,27 @@ function renderComponentsChecklist(code, items) {
         // Remove L3 tasks when component is deselected
         selectionStore.l3ByComponent.delete(key);
       }
+      
+      // Sync with ScenarioManager if it exists and has an active scenario
+      if (window.ScenarioManager && window.ScenarioManager.getCurrentScenario()) {
+        const currentScenario = window.ScenarioManager.getCurrentScenario();
+        if (currentScenario && currentScenario.items) {
+          // Find the deliverable in the scenario
+          const delivItem = currentScenario.items.find(item => 
+            item.deliverable_code === code || 
+            item.deliverable === code
+          );
+          if (delivItem) {
+            // Update components for this deliverable
+            delivItem.components = Array.from(selectedSet);
+            delivItem.included_components = Array.from(selectedSet);
+            
+            // Trigger a scenario update to notify subscribers
+            window.ScenarioManager.setActiveScenario(currentScenario);
+          }
+        }
+      }
+      
       updateSummaryCounts();
     });
   });
