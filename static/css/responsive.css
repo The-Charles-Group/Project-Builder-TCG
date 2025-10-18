@@ -452,6 +452,41 @@
   /* Header adjustments for tablet */
   header {
     padding: 20px 24px;
+    position: relative;
+  }
+
+  /* Show hamburger menu on tablets in portrait mode */
+  @media (orientation: portrait) {
+    /* Hide desktop session controls on tablet portrait */
+    #session-controls,
+    .auto-fix-toggle,
+    #btnClearAllData {
+      display: none !important;
+    }
+
+    /* Show mobile menu toggle on tablet portrait */
+    .mobile-menu-toggle {
+      display: flex !important;
+      position: absolute;
+      top: 50%;
+      right: 24px;
+      transform: translateY(-50%);
+      width: 44px;
+      height: 44px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      z-index: 1002;
+    }
+
+    /* Keep mobile menu available on tablet portrait */
+    .mobile-menu,
+    .mobile-menu-overlay {
+      display: block !important;
+    }
   }
 
   /* Main content tablet width */
@@ -499,11 +534,18 @@
     grid-template-columns: 1fr 1fr;
   }
 
-  /* Hide mobile menu on tablet */
-  .mobile-menu-toggle,
-  .mobile-menu,
-  .mobile-menu-overlay {
-    display: none !important;
+  /* Hide mobile menu on landscape tablets only */
+  @media (orientation: landscape) {
+    .mobile-menu-toggle,
+    .mobile-menu,
+    .mobile-menu-overlay {
+      display: none !important;
+    }
+    
+    /* Show desktop controls on landscape tablet */
+    #session-controls {
+      display: flex !important;
+    }
   }
 }
 
