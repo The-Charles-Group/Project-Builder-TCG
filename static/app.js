@@ -2259,17 +2259,13 @@ function updateCustomRate(deliverableCode, rate) {
   updatePricingCalculations();
 }
 
-// Analyze PROJECT vs RETAINER with AI - ENHANCED VERSION
-// NEW: AI Cadence Suggestion using SCENARIO_STORE API
+// Analyze PROJECT vs RETAINER with AI - BATCH ENDPOINT (Brad build format)
 async function analyzeProjectRetainer() {
   // Check for scenario first
   if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
     alert('Please build a scenario first (click Build Scenario button).');
     return;
   }
-  
-  // Get session ID from APP_STATE (must exist from build_scenario)
-  const sessionId = getCurrentSessionId();
   
   const btn = document.getElementById('btn-ai-suggest-type');
   if (btn) {
@@ -2278,55 +2274,77 @@ async function analyzeProjectRetainer() {
   }
   
   try {
-    // Call new SCENARIO_STORE cadence_suggestion endpoint
-    const response = await fetch('/api/pricing/cadence_suggestion', {
+    // Get scenario and RFP text
+    const scenario = window.currentScenario || SCENARIOS.A;
+    const rfpText = window.APB?.step2?.rfpText || sessionStorage.getItem('rfpText') || '';
+    
+    // Build deliverables array from scenario items
+    const deliverables = scenario.items.map(item => ({
+      code: item.deliverable_code,
+      name: item.deliverable_name || item.deliverable || item.deliverable_code
+    }));
+    
+    console.log('[AI RETAINER] Calling batch endpoint with', deliverables.length, 'deliverables');
+    
+    // Call Brad build batch endpoint
+    const response = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        session_id: sessionId
+        rfp_text: rfpText,
+        deliverables: deliverables
       })
     });
     
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Cadence suggestion failed: ${errorText}`);
+      throw new Error(`Analysis failed: ${errorText}`);
     }
     
     const result = await response.json();
+    console.log('[AI RETAINER] Received suggestions:', result);
     
-    // Update the scenario with cadence suggestions
-    const updatedScenario = result.scenario || result;
-    
-    if (updatedScenario && updatedScenario.items) {
+    // Apply suggestions to scenario items
+    if (result.suggestions) {
+      let updatedCount = 0;
+      scenario.items.forEach(item => {
+        const suggestion = result.suggestions[item.deliverable_code];
+        if (suggestion) {
+          // Update item based on suggestion
+          item.is_retainer = (suggestion.type === 'RETAINER');
+          item.retainer_months = (suggestion.type === 'RETAINER') ? 12 : 0;
+          item.pricing_type = suggestion.type;
+          item.ai_confidence = suggestion.confidence;
+          item.ai_reasoning = suggestion.reasoning;
+          updatedCount++;
+        }
+      });
+      
       // Store updated scenario
-      window.currentScenario = updatedScenario;
-      window.SCENARIOS = { A: updatedScenario };
+      window.currentScenario = scenario;
+      window.SCENARIOS = { A: scenario };
       
       // Update pricing table display
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
       }
       
-      // Re-render scenario if function exists
+      // Re-render scenario
       if (window.renderScenario) {
-        window.renderScenario('scenarioA', updatedScenario);
+        window.renderScenario('scenarioA', scenario);
       }
       
-      // Show success message
-      const message = result.message || 'Cadence suggestions applied successfully.';
-      alert(`✅ AI Cadence Suggestion Complete!\n\n${message}`);
-      
-      console.log('Cadence suggestions applied:', result);
+      alert(`✅ AI Retainer Analysis Complete!\n\n${updatedCount} deliverables classified as PROJECT or RETAINER.`);
     } else {
-      throw new Error('Invalid cadence suggestion response');
+      throw new Error('No suggestions returned from API');
     }
   } catch (error) {
-    console.error('Error getting cadence suggestions:', error);
-    alert(`❌ Cadence Suggestion Error:\n\n${error.message || 'Failed to get cadence suggestions. Please try again.'}`);
+    console.error('[AI RETAINER] Error:', error);
+    alert(`❌ Retainer Analysis Error:\n\n${error.message || 'Failed to analyze deliverables. Please try again.'}`);
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🤖 AI Cadence Suggestion';
+      btn.textContent = '🤖 AI Suggest Type';
     }
   }
 }
@@ -2831,7 +2849,7 @@ async function exportPricingDetails() {
   }
 }
 
-// AI Optimize All Pricing Function - NEW SCENARIO_STORE API
+// AI Optimize All Pricing Function - Calls Brad build redistribute-hours per deliverable
 async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
   if (!btn) return;
@@ -2842,61 +2860,127 @@ async function optimizeAllPricing() {
     return;
   }
   
-  // Get session ID from APP_STATE (must exist from build_scenario)
-  const sessionId = getCurrentSessionId();
-  
   // Show loading state
   btn.disabled = true;
   btn.textContent = '🔄 Optimizing...';
   
   try {
-    // Call new SCENARIO_STORE optimize endpoint
-    const response = await fetch('/api/pricing/optimize', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        session_id: sessionId
-      })
+    const scenario = window.currentScenario || SCENARIOS.A;
+    
+    // Group items by deliverable code
+    const deliverableMap = new Map();
+    scenario.items.forEach(item => {
+      const code = item.deliverable_code;
+      if (!deliverableMap.has(code)) {
+        deliverableMap.set(code, {
+          code: code,
+          name: item.deliverable_name || item.deliverable || code,
+          total_hours: 0,
+          components: []
+        });
+      }
+      const deliv = deliverableMap.get(code);
+      deliv.total_hours += (item.total_hours || item.hours || 0);
+      
+      // Track components
+      const compName = item.component_name || item.component || '';
+      if (compName) {
+        const existing = deliv.components.find(c => c.name === compName);
+        if (existing) {
+          existing.hours += (item.total_hours || item.hours || 0);
+        } else {
+          deliv.components.push({
+            name: compName,
+            hours: (item.total_hours || item.hours || 0)
+          });
+        }
+      }
     });
     
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Optimization failed: ${errorText}`);
+    console.log(`[OPTIMIZE] Processing ${deliverableMap.size} deliverables`);
+    
+    // Call redistribute-hours for each deliverable
+    const optimizationResults = [];
+    for (const [code, deliv] of deliverableMap.entries()) {
+      try {
+        const response = await fetch('/api/pricing/redistribute-hours', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deliverable_code: code,
+            deliverable_name: deliv.name,
+            new_total_hours: deliv.total_hours,
+            components: deliv.components
+          })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          optimizationResults.push({ code, result });
+        } else {
+          console.warn(`[OPTIMIZE] Failed for ${code}:`, await response.text());
+        }
+      } catch (err) {
+        console.error(`[OPTIMIZE] Error for ${code}:`, err);
+      }
     }
     
-    const result = await response.json();
-    
-    // Update the scenario with optimized data
-    const optimizedScenario = result.scenario || result;
-    
-    if (optimizedScenario && optimizedScenario.items) {
-      // Store optimized scenario
-      window.currentScenario = optimizedScenario;
-      window.SCENARIOS = { A: optimizedScenario };
+    // Apply optimization results back to scenario
+    if (optimizationResults.length > 0) {
+      optimizationResults.forEach(({ code, result }) => {
+        if (result.suggested_distribution) {
+          result.suggested_distribution.forEach(compSuggestion => {
+            // Update items matching this deliverable + component
+            scenario.items.forEach(item => {
+              if (item.deliverable_code === code && 
+                  (item.component_name || item.component) === compSuggestion.component) {
+                item.total_hours = compSuggestion.hours;
+                item.hours = compSuggestion.hours;
+                // Recalculate price if needed
+                const rate = item.rate || 195;
+                item.price = Math.round(compSuggestion.hours * rate);
+              }
+            });
+          });
+        }
+      });
       
-      // Update pricing table display
+      // Recompute totals
+      let totalHours = 0;
+      let totalPrice = 0;
+      scenario.items.forEach(item => {
+        totalHours += (item.total_hours || item.hours || 0);
+        totalPrice += (item.price || 0);
+      });
+      
+      if (!scenario.totals) scenario.totals = {};
+      scenario.totals.hours = totalHours;
+      scenario.totals.price = totalPrice;
+      
+      // Store updated scenario
+      window.currentScenario = scenario;
+      window.SCENARIOS = { A: scenario };
+      
+      // Update UI
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
       }
-      
-      // Re-render scenario if function exists
       if (window.renderScenario) {
-        window.renderScenario('scenarioA', optimizedScenario);
+        window.renderScenario('scenarioA', scenario);
       }
       
-      // Show success message
-      alert(`✅ Pricing Optimized!\n\n${result.message || 'Pricing has been optimized successfully.'}`);
+      alert(`✅ Pricing Optimized!\n\n${optimizationResults.length} deliverables redistributed using AI.`);
     } else {
-      throw new Error('Invalid optimization response');
+      alert('⚠️ No optimization results. Please try again.');
     }
     
   } catch (error) {
-    console.error('Error optimizing pricing:', error);
+    console.error('[OPTIMIZE] Error:', error);
     alert(`❌ Optimization Error:\n\n${error.message || 'Failed to optimize pricing. Please try again.'}`);
   } finally {
     // Reset button state
     btn.disabled = false;
-    btn.textContent = '🤖 AI Optimize';
+    btn.textContent = 'Optimize All Pricing';
   }
 }
 
