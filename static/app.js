@@ -5,6 +5,39 @@ let DELIV_INDEX = {};     // code -> deliverable object lookup for fast renderin
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ================================================================================
+// CRITICAL: Global Error Handlers to Prevent App Freezing
+// ================================================================================
+window.addEventListener('error', function(event) {
+  console.error('[GLOBAL ERROR]', event.message, event.filename, event.lineno, event.colno);
+  console.error('[GLOBAL ERROR] Stack:', event.error?.stack);
+  
+  // Show user-friendly message
+  if (!window._errorShown) {
+    window._errorShown = true;
+    setTimeout(() => {
+      alert('An error occurred. Please check the console and try refreshing the page.');
+      window._errorShown = false;
+    }, 100);
+  }
+  
+  // Don't prevent default - let console show the error too
+  return false;
+});
+
+window.addEventListener('unhandledrejection', function(event) {
+  console.error('[UNHANDLED PROMISE REJECTION]', event.reason);
+  
+  // Show user-friendly message
+  if (!window._promiseErrorShown) {
+    window._promiseErrorShown = true;
+    setTimeout(() => {
+      alert('A background operation failed. Please check the console and try again.');
+      window._promiseErrorShown = false;
+    }, 100);
+  }
+});
+
+// ================================================================================
 // Session ID Helper - Uses crypto.randomUUID() with fallback
 // ================================================================================
 function generateSessionId() {
@@ -4971,10 +5004,16 @@ function renderDeliverableList(items){
   });
 }
 
-// Build from current S2 selection (ENHANCED with robust error handling)
+// Build from current S2 selection (SIMPLIFIED to prevent freezing)
 async function buildFromCurrentSelection() {
-  console.log('[BUILD] ========= Starting Step 2 to Step 3 transition =========');
+  console.log('[BUILD] ========= PROCEED TO PRICING CLICKED =========');
   console.log('[BUILD] Timestamp:', new Date().toISOString());
+  
+  // Add timeout protection to prevent infinite freeze
+  const timeoutId = setTimeout(() => {
+    console.error('[BUILD] TIMEOUT - Function taking too long! Forcing Step 3 to show...');
+    forceShowStep3();
+  }, 10000); // 10 second timeout
   
   // Step 1: Clear any previous error states
   clearErrorState();
