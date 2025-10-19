@@ -17,6 +17,9 @@ class AIAssistant {
         this.currentTypingIndicators = new Set(); // Track all active typing indicators
         this.apiTimeout = 10000; // 10 seconds timeout for API calls
         
+        // CRITICAL: Flag to prevent auto-resuming old/dead jobs on page load
+        this.skipJobRestore = true; // Always skip job restore to prevent 404 floods
+        
         // Enhanced State Management
         this.agentState = {
             uploadedFiles: [],
@@ -273,10 +276,14 @@ class AIAssistant {
             }
             
             // Restore job ID if analysis was in progress and not stale
-            // CRITICAL: Check if we're transitioning to pricing to prevent auto-resume
+            // CRITICAL: Check multiple conditions to prevent auto-resume of dead jobs
             const isTransitioningToPricing = window.isTransitioningToPricing || false;
             
-            if (latestState.jobId && !isTransitioningToPricing) {
+            // NEVER auto-resume job polling if skipJobRestore is true
+            if (this.skipJobRestore) {
+                console.log('[CHARLES] skipJobRestore=true, NOT resuming any job polling');
+                this.agentState.jobId = null;
+            } else if (latestState.jobId && !isTransitioningToPricing) {
                 const jobIdAge = latestState.jobIdTimestamp ? (Date.now() - latestState.jobIdTimestamp) : Infinity;
                 const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
                 

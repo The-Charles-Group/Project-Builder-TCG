@@ -4662,38 +4662,79 @@ window.hydrateComponentsFor = hydrateComponentsFor;
 window.hydrateL3For = hydrateL3For;
 
 async function boot() {
-  // CRITICAL CLEANUP: Clear any phantom job polling on page load
-  console.log('[CLEANUP] Checking for stale job polling on page load...');
+  // NUCLEAR CLEANUP: Complete purge of all polling and job IDs on page load
+  console.log('[BOOT] ========= NUCLEAR CLEANUP ON PAGE LOAD =========');
+  console.log('[BOOT] Timestamp:', new Date().toISOString());
   
-  // Clear any existing intervals from previous sessions
+  // 1. Stop ALL polling globally using GlobalPollingManager
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[BOOT] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[BOOT] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Clear any existing intervals from previous sessions
   if (window.aiAnalysisInterval) {
-    console.log('[CLEANUP] Found existing AI analysis interval, clearing it');
+    console.log('[BOOT] Clearing existing AI analysis interval');
     clearInterval(window.aiAnalysisInterval);
     window.aiAnalysisInterval = null;
   }
+  if (window.progressInterval) {
+    console.log('[BOOT] Clearing existing progress interval');
+    clearInterval(window.progressInterval);
+    window.progressInterval = null;
+  }
   
-  // Clear stale job IDs from localStorage
+  // 3. COMPREHENSIVE cleanup of ALL job IDs from localStorage
   const savedState = localStorage.getItem('charles_agent_state');
   if (savedState) {
     try {
       const state = JSON.parse(savedState);
+      let cleaned = false;
+      
+      // Clear top-level jobId (especially the problematic 642a96bd-f94b-440e-b865-d160839a57c0)
       if (state && state.jobId) {
-        const jobIdAge = state.jobIdTimestamp ? (Date.now() - state.jobIdTimestamp) : Infinity;
-        const fiveMinutes = 5 * 60 * 1000; // 5 minutes
-        
-        if (jobIdAge > fiveMinutes) {
-          console.log('[CLEANUP] Found stale job ID, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
-          state.jobId = null;
-          state.jobIdTimestamp = null;
-          localStorage.setItem('charles_agent_state', JSON.stringify(state));
-        } else {
-          console.log('[CLEANUP] Found recent job ID:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
-        }
+        console.log('[BOOT] Clearing top-level jobId:', state.jobId);
+        state.jobId = null;
+        state.jobIdTimestamp = null;
+        cleaned = true;
+      }
+      
+      // CRITICAL: Clear jobId from ALL stateHistory entries (where it keeps resurrecting from!)
+      if (state.stateHistory && Array.isArray(state.stateHistory)) {
+        console.log('[BOOT] Clearing jobIds from', state.stateHistory.length, 'stateHistory entries...');
+        state.stateHistory.forEach((historyState, idx) => {
+          if (historyState.jobId) {
+            console.log(`[BOOT] Clearing jobId from stateHistory[${idx}]:`, historyState.jobId);
+            historyState.jobId = null;
+            historyState.jobIdTimestamp = null;
+            cleaned = true;
+          }
+          if (historyState.agentState && historyState.agentState.jobId) {
+            console.log(`[BOOT] Clearing agentState.jobId from stateHistory[${idx}]:`, historyState.agentState.jobId);
+            historyState.agentState.jobId = null;
+            cleaned = true;
+          }
+        });
+      }
+      
+      // Save the cleaned state back to localStorage
+      if (cleaned) {
+        localStorage.setItem('charles_agent_state', JSON.stringify(state));
+        console.log('[BOOT] Saved cleaned charles_agent_state to localStorage');
       }
     } catch (e) {
-      console.error('[CLEANUP] Failed to clean stale job ID:', e);
+      console.error('[BOOT] Failed to clean job IDs:', e);
     }
   }
+  
+  // 4. Clear any other job-related localStorage items
+  ['aiAnalysisJobId', 'currentJobId', 'pollingJobId'].forEach(key => {
+    if (localStorage.getItem(key)) {
+      console.log('[BOOT] Removing localStorage:', key);
+      localStorage.removeItem(key);
+    }
+  });
   
   // Clear the aiAnalysisJobId if it exists and is stale (generic cleanup)
   if (window.aiAnalysisJobId) {
@@ -7175,6 +7216,47 @@ function clearAllAISelections() {
 }
 
 async function applyAllSelectedFromAI() {
+  // CRITICAL: Stop all polling before applying selections to prevent 404 flood
+  console.log('[APPLY-AI] ========= STOPPING ALL POLLING BEFORE APPLYING =========');
+  
+  // 1. Use GlobalPollingManager master kill switch
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[APPLY-AI] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[APPLY-AI] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Stop AI Assistant polling specifically
+  if (window.aiAssistant) {
+    console.log('[APPLY-AI] Stopping AI Assistant polling...');
+    if (window.aiAssistant.currentPollInterval) {
+      clearInterval(window.aiAssistant.currentPollInterval);
+      window.aiAssistant.currentPollInterval = null;
+    }
+    if (window.aiAssistant.stopJobPolling) {
+      window.aiAssistant.stopJobPolling();
+    }
+    // Clear the job ID from assistant state
+    if (window.aiAssistant.agentState) {
+      window.aiAssistant.agentState.jobId = null;
+    }
+  }
+  
+  // 3. Clear any lingering job IDs from localStorage
+  try {
+    const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+    if (charlesState.jobId) {
+      console.log('[APPLY-AI] Clearing CHARLES jobId:', charlesState.jobId);
+      charlesState.jobId = null;
+      charlesState.jobIdTimestamp = null;
+      localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
+    }
+  } catch (e) {
+    console.error('[APPLY-AI] Error clearing localStorage:', e);
+  }
+  
+  console.log('[APPLY-AI] Polling cleanup complete, now applying selections...');
+  
   // Collect selected deliverables
   const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
   let firstDelivCode = null;
