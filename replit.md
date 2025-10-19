@@ -67,3 +67,53 @@ Preferred communication style: Simple, everyday language.
 - **Excel/CSV**: Core data source.
 - **PDF/DOCX**: For RFP document parsing.
 - **JSON**: For API data exchange.
+
+## Planned Enhancements
+
+### Dual OpenAI API Key Configuration (NOT YET IMPLEMENTED)
+**Status**: Planned - To be implemented later
+
+**Objective**: Configure the application to support two different OpenAI API keys for optimized cost and performance management:
+- **Standard Tier Key**: For routine operations at standard rates and speed
+- **Priority Processing Key**: For critical, time-sensitive operations at premium rates with guaranteed low latency
+
+**Key Findings from Research**:
+- OpenAI enforces rate limits at the **organization level**, not per API key
+- Multiple keys from the same organization share the same rate limit pool
+- Priority Processing requires an **OpenAI Enterprise account**
+- Priority tier is activated using `service_tier="priority"` parameter in API calls
+- Same API key can handle both standard and priority requests
+- Priority Processing offers:
+  - Lower latency and more consistent performance
+  - Enhanced SLA (99.9% uptime for enterprise)
+  - Premium pricing (exact markup negotiated with OpenAI)
+  - Strict ramp rate limits to maintain quality
+
+**Implementation Approach** (when ready):
+1. Store two API keys as Replit secrets:
+   - `OPENAI_API_KEY_STANDARD` - for routine calls
+   - `OPENAI_API_KEY_PRIORITY` - for mission-critical calls (if different org)
+2. Implement smart routing logic to determine which tier to use based on:
+   - Request type (GPT-5 deep analysis vs routine tasks)
+   - User tier (premium customers vs standard)
+   - Time sensitivity (real-time UI updates vs background processing)
+3. Add `service_tier` parameter to API calls
+4. Monitor usage dashboard to track costs per tier
+5. Consider alternative tiers for cost optimization:
+   - **Batch Processing**: 50% cheaper for non-urgent background jobs
+   - **Flex Processing**: ~50% cheaper for internal tools
+
+**Use Cases**:
+- Standard tier: Routine deliverable matching, basic RFP analysis, cached results
+- Priority tier: Real-time GPT-5 deep analysis, live timeline optimization, critical user-facing features
+
+**Requirements**:
+- Verify OpenAI account tier and enterprise status
+- Review Terms of Service for multi-organization usage
+- Implement usage tracking and cost monitoring
+- Add configuration UI for tier selection preferences
+
+**Notes**:
+- DO NOT implement until other priority items are completed
+- Requires coordination with OpenAI account team if pursuing enterprise features
+- Consider cost-benefit analysis before implementation
