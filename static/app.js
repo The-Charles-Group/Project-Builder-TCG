@@ -216,7 +216,7 @@ const SessionManager = {
         selectedDeliverables: [],
         currentStep: 'step1',
         formValues: {},
-        analysisMode: 'fast',
+        analysisMode: 'deep',
         jobId: null,
         lastError: null,
         stateHistory: []

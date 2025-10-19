@@ -26,7 +26,7 @@ class AIAssistant {
             selectedDeliverables: [],
             currentStep: 'step1',
             formValues: {},
-            analysisMode: 'fast',
+            analysisMode: 'deep',
             jobId: null,
             lastError: null,
             stateHistory: []
@@ -169,7 +169,7 @@ class AIAssistant {
             selectedDeliverables: [],
             currentStep: 'step1',
             formValues: {},
-            analysisMode: 'fast',
+            analysisMode: 'deep',
             jobId: null,
             lastError: null,
             stateHistory: []
