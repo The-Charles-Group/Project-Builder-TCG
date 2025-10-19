@@ -242,6 +242,13 @@
     
     // Detect if the UI is stuck (blank screen)
     setupStuckDetection() {
+      // DISABLED: Automatic stuck detection causes false positives
+      // when users step away from the computer during AI analysis.
+      // The app should only reload when explicitly requested by the user.
+      console.log('[ErrorRecovery] Stuck detection disabled to prevent unwanted reloads');
+      return;
+      
+      /* Original code commented out:
       // Initial check after page load
       setTimeout(() => {
         this.detectStuckState();
@@ -253,6 +260,7 @@
           this.detectStuckState();
         }
       }, 10000); // Check every 10 seconds
+      */
     },
     
     // Detect if UI is stuck
@@ -383,11 +391,10 @@
       // Hide fallback after successful load
       window.addEventListener('load', () => {
         setTimeout(() => {
-          // Check if page loaded successfully
-          if (!this.detectStuckState()) {
-            this.hideFallbackUI();
-            console.log('[ErrorRecovery] Page loaded successfully, hiding fallback UI');
-          }
+          // Always hide fallback UI on successful load
+          // Don't call detectStuckState since it can cause false positives
+          this.hideFallbackUI();
+          console.log('[ErrorRecovery] Page loaded successfully, hiding fallback UI');
         }, 1000);
       });
       
