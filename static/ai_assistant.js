@@ -4286,29 +4286,71 @@ class AIAssistant {
         const hideOverlay = this.showAgentWorking(`Triggering ${mode} analysis...`);
         
         try {
-            // Find and click the analyze button
-            const analyzeBtn = document.querySelector(`[data-mode="${mode}"]`);
-            if (analyzeBtn) {
-                this.simulateClick(analyzeBtn);
+            // Get RFP text from various sources
+            const rfpTextEl = document.getElementById('rfpText');
+            const rfpText = rfpTextEl?.value || window.APP?.rfpText || '';
+            
+            if (!rfpText) {
+                this.addMessage('❌ No RFP text found. Please upload or paste an RFP first.', 'assistant');
+                this.completeOperation(operationId);
+                return;
+            }
+            
+            // Map mode to tier
+            const tierMap = {
+                'fast': 'mini',
+                'deep': 'thinking'
+            };
+            const tier = tierMap[mode] || 'thinking';
+            
+            // Generate session ID for cache isolation
+            const sessionId = window.APP_STATE?.sessionId || 'charles_' + Date.now();
+            
+            // Call the API directly
+            console.log('[CHARLES] Calling /api/ai/analyze with mode:', mode);
+            const response = await this.retryWithBackoff(
+                async () => {
+                    const res = await fetch('/api/ai/analyze', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            request_text: rfpText,
+                            strictness: 'balanced',
+                            tier: tier,
+                            mode: mode,
+                            session_id: sessionId
+                        })
+                    });
+                    
+                    if (!res.ok) {
+                        const error = await res.text();
+                        throw new Error(`API error: ${res.status} - ${error}`);
+                    }
+                    
+                    return res;
+                },
+                3,
+                2000
+            );
+            
+            const jobInfo = await response.json();
+            console.log('[CHARLES] Got job info:', jobInfo);
+            
+            if (jobInfo.job_id) {
+                // Save job ID and track it
+                this.agentState.jobId = jobInfo.job_id;
+                this.saveState();
                 
-                // Wait for analysis to start
-                await this.delay(1000);
+                this.addMessage(`✅ Analysis started. Job ID: ${jobInfo.job_id}. Tracking progress...`, 'assistant');
                 
-                // Check if a job was started
-                const jobIdMatch = document.body.textContent.match(/Job ID: ([\w-]+)/);
-                if (jobIdMatch) {
-                    const jobId = jobIdMatch[1];
-                    await this.trackAnalysisJob(jobId);
-                } else {
-                    // Wait and hope for the best
-                    await this.delay(3000);
-                    this.addMessage('✅ Analysis triggered. Check Step 2 for results.', 'assistant');
-                }
+                // Start tracking the job
+                await this.trackAnalysisJob(jobInfo.job_id);
+                
                 // Complete the operation successfully
                 this.completeOperation(operationId);
             } else {
                 this.completeOperation(operationId);
-                throw new Error('Analyze button not found');
+                throw new Error('No job ID returned from API');
             }
         } catch (error) {
             this.completeOperation(operationId);
