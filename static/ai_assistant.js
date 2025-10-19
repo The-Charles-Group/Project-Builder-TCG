@@ -75,6 +75,9 @@ class AIAssistant {
     }
     
     init() {
+        // Clear any stale job IDs on initialization
+        this.cleanupStaleJobIds();
+        
         this.createSidebar();
         this.addEnhancedStyles();
         this.attachEventListeners();
@@ -82,6 +85,48 @@ class AIAssistant {
         this.restoreState();
         this.checkAgentStatus();
         this.initProgressIndicators();
+    }
+    
+    cleanupStaleJobIds() {
+        console.log('[CHARLES] Checking for stale job IDs on initialization...');
+        
+        // Check localStorage for stale job IDs
+        const savedState = localStorage.getItem('charles_agent_state');
+        if (savedState) {
+            try {
+                const state = JSON.parse(savedState);
+                if (state && state.jobId) {
+                    const jobIdAge = state.jobIdTimestamp ? (Date.now() - state.jobIdTimestamp) : Infinity;
+                    const fiveMinutes = 5 * 60 * 1000; // 5 minutes
+                    
+                    if (jobIdAge > fiveMinutes) {
+                        console.log('[CHARLES] Found stale job ID on init, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                        state.jobId = null;
+                        state.jobIdTimestamp = null;
+                        localStorage.setItem('charles_agent_state', JSON.stringify(state));
+                        this.agentState.jobId = null;
+                    }
+                    
+                    // Special case: Clear the known problematic job ID
+                    if (state.jobId === '642a96bd-f94b-440e-b865-d160839a57c0') {
+                        console.log('[CHARLES] Clearing known problematic job ID:', state.jobId);
+                        state.jobId = null;
+                        state.jobIdTimestamp = null;
+                        localStorage.setItem('charles_agent_state', JSON.stringify(state));
+                        this.agentState.jobId = null;
+                    }
+                }
+            } catch (e) {
+                console.error('[CHARLES] Failed to cleanup stale job IDs:', e);
+            }
+        }
+        
+        // Clear any existing polling interval
+        if (this.currentPollInterval) {
+            console.log('[CHARLES] Clearing existing poll interval on init');
+            clearInterval(this.currentPollInterval);
+            this.currentPollInterval = null;
+        }
     }
     
     // ====================
@@ -97,6 +142,7 @@ class AIAssistant {
             formValues: this.captureFormValues(),
             analysisMode: document.getElementById('analysis-mode')?.value || 'fast',
             jobId: this.agentState.jobId,
+            jobIdTimestamp: this.agentState.jobId ? Date.now() : null,  // Add timestamp for job ID
             rfpText: document.getElementById('rfpText')?.value || '',
             scenarios: window.SCENARIOS || null
         };
@@ -235,11 +281,21 @@ class AIAssistant {
                 this.navigateToStep(latestState.currentStep);
             }
             
-            // Restore job ID if analysis was in progress
+            // Restore job ID if analysis was in progress and not stale
             if (latestState.jobId) {
-                this.agentState.jobId = latestState.jobId;
-                // Resume tracking
-                this.trackAnalysisJob(latestState.jobId, true);
+                const jobIdAge = latestState.jobIdTimestamp ? (Date.now() - latestState.jobIdTimestamp) : Infinity;
+                const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
+                
+                if (jobIdAge < fiveMinutes) {
+                    console.log('[CHARLES] Restoring job ID:', latestState.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                    this.agentState.jobId = latestState.jobId;
+                    // Resume tracking
+                    this.trackAnalysisJob(latestState.jobId, true);
+                } else {
+                    console.log('[CHARLES] Job ID is stale (older than 5 minutes), not restoring:', latestState.jobId);
+                    // Clear the stale jobId
+                    this.agentState.jobId = null;
+                }
             }
             
             this.addMessage('✅ Previous state restored successfully', 'assistant');
@@ -619,7 +675,9 @@ class AIAssistant {
         }
         
         let pollCount = 0;
+        let consecutiveFourOhFours = 0; // Track consecutive 404s
         const maxPolls = 120; // 4 minutes at 2-second intervals
+        const max404s = 5; // Stop after 5 consecutive 404s
         
         this.updateProgress(0, 'Analysis started...', 'Initializing GPT-5 deep analysis');
         
@@ -630,6 +688,13 @@ class AIAssistant {
                 this.currentPollInterval = null;
             }
             this.agentState.jobId = null;
+            // Clear from localStorage too
+            const savedState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+            if (savedState) {
+                savedState.jobId = null;
+                savedState.jobIdTimestamp = null;
+                localStorage.setItem('charles_agent_state', JSON.stringify(savedState));
+            }
         };
         
         this.currentPollInterval = setInterval(async () => {
@@ -643,7 +708,7 @@ class AIAssistant {
                     
                     // Try to fetch results one more time in case they're ready
                     try {
-                        const finalCheck = await fetch(`/api/agencydb/status/${jobId}`);
+                        const finalCheck = await fetch(`/api/ai/jobs/${jobId}`);  // Use correct endpoint
                         if (finalCheck.ok) {
                             const finalStatus = await finalCheck.json();
                             if (finalStatus.status === 'completed' && finalStatus.data) {
@@ -677,13 +742,31 @@ class AIAssistant {
                     return;
                 }
                 
+                // Use the correct endpoint for AI jobs
                 const response = await this.retryWithBackoff(
-                    () => fetch(`/api/agencydb/status/${jobId}`),
+                    () => fetch(`/api/ai/jobs/${jobId}`),  // Fixed endpoint
                     3,
                     1000
                 );
                 
+                // Handle 404 - job not found
+                if (response.status === 404) {
+                    consecutiveFourOhFours++;
+                    console.log(`[CHARLES] Job ${jobId} not found (404), consecutive 404s: ${consecutiveFourOhFours}`);
+                    
+                    if (consecutiveFourOhFours >= max404s) {
+                        console.log(`[CHARLES] Job ${jobId} - ${max404s} consecutive 404s reached, stopping polling`);
+                        cleanup();
+                        this.addMessage('❌ Analysis job not found. Please try uploading your document again.', 'assistant');
+                        this.updateProgress(100, 'Job not found', 'Analysis job no longer exists');
+                        return;
+                    }
+                    // Continue polling for a few more times
+                    return;
+                }
+                
                 if (response.ok) {
+                    consecutiveFourOhFours = 0; // Reset counter on successful response
                     const status = await response.json();
                     
                     // Update progress with real data

@@ -4629,6 +4629,45 @@ window.hydrateComponentsFor = hydrateComponentsFor;
 window.hydrateL3For = hydrateL3For;
 
 async function boot() {
+  // CRITICAL CLEANUP: Clear any phantom job polling on page load
+  console.log('[CLEANUP] Checking for stale job polling on page load...');
+  
+  // Clear any existing intervals from previous sessions
+  if (window.aiAnalysisInterval) {
+    console.log('[CLEANUP] Found existing AI analysis interval, clearing it');
+    clearInterval(window.aiAnalysisInterval);
+    window.aiAnalysisInterval = null;
+  }
+  
+  // Clear stale job IDs from localStorage
+  const savedState = localStorage.getItem('charles_agent_state');
+  if (savedState) {
+    try {
+      const state = JSON.parse(savedState);
+      if (state && state.jobId) {
+        const jobIdAge = state.jobIdTimestamp ? (Date.now() - state.jobIdTimestamp) : Infinity;
+        const fiveMinutes = 5 * 60 * 1000; // 5 minutes
+        
+        if (jobIdAge > fiveMinutes) {
+          console.log('[CLEANUP] Found stale job ID, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+          state.jobId = null;
+          state.jobIdTimestamp = null;
+          localStorage.setItem('charles_agent_state', JSON.stringify(state));
+        } else {
+          console.log('[CLEANUP] Found recent job ID:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+        }
+      }
+    } catch (e) {
+      console.error('[CLEANUP] Failed to clean stale job ID:', e);
+    }
+  }
+  
+  // Clear the aiAnalysisJobId if it's the stale one
+  if (window.aiAnalysisJobId === '642a96bd-f94b-440e-b865-d160839a57c0') {
+    console.log('[CLEANUP] Clearing known stale job ID');
+    window.aiAnalysisJobId = null;
+  }
+  
   await api("/api/load");
   OPTIONS = await api("/api/options");
   
@@ -5375,21 +5414,49 @@ function updateAIProgress(status) {
   }
 }
 
+let consecutive404Count = 0; // Track consecutive 404s
 async function pollAIAnalysis(jobId) {
   try {
     const res = await fetch(`/api/ai/jobs/${jobId}`);
     
-    // Only stop polling if THIS job (current job) returns 404
+    // Handle 404s with a counter
     if (res.status === 404) {
+      consecutive404Count++;
+      console.warn(`[POLLING] Job ${jobId} returned 404, consecutive count: ${consecutive404Count}`);
+      
       // Check if this is the current job we're tracking
       if (jobId === aiAnalysisJobId) {
-        console.warn(`[POLLING] Current job ${jobId} not found (404), stopping polling`);
+        if (consecutive404Count >= 5) {
+          console.error(`[POLLING] Job ${jobId} - 5 consecutive 404s reached, stopping polling permanently`);
+          clearInterval(aiAnalysisInterval);
+          aiAnalysisInterval = null;
+          aiAnalysisJobId = null;  // Clear the job ID
+          hideAIProgressBar();
+          
+          // Clear from localStorage to prevent resumption
+          const savedState = localStorage.getItem('charles_agent_state');
+          if (savedState) {
+            try {
+              const state = JSON.parse(savedState);
+              if (state && state.jobId === jobId) {
+                state.jobId = null;
+                state.jobIdTimestamp = null;
+                localStorage.setItem('charles_agent_state', JSON.stringify(state));
+                console.log('[POLLING] Cleared stale job ID from localStorage');
+              }
+            } catch (e) {
+              console.error('[POLLING] Failed to clear job from localStorage:', e);
+            }
+          }
+          consecutive404Count = 0; // Reset counter
+        }
+        // Continue polling for a few more times before 5 consecutive 404s
+      } else {
+        // Old job returning 404, stop immediately
+        console.log(`[POLLING] Old job ${jobId} not found (404), stopping immediately`);
         clearInterval(aiAnalysisInterval);
         aiAnalysisInterval = null;
-        hideAIProgressBar();
-      } else {
-        // Old job returning 404, ignore it
-        console.log(`[POLLING] Old job ${jobId} not found (404), ignoring`);
+        consecutive404Count = 0;
       }
       return;
     }
@@ -5398,6 +5465,9 @@ async function pollAIAnalysis(jobId) {
       console.error(`[POLLING] Error fetching job status: ${res.status}`);
       return;
     }
+    
+    // Reset counter on successful response
+    consecutive404Count = 0;
     
     const status = await res.json();
     console.log(`[POLLING] Job ${jobId} status:`, status);
