@@ -273,7 +273,10 @@ class AIAssistant {
             }
             
             // Restore job ID if analysis was in progress and not stale
-            if (latestState.jobId) {
+            // CRITICAL: Check if we're transitioning to pricing to prevent auto-resume
+            const isTransitioningToPricing = window.isTransitioningToPricing || false;
+            
+            if (latestState.jobId && !isTransitioningToPricing) {
                 const jobIdAge = latestState.jobIdTimestamp ? (Date.now() - latestState.jobIdTimestamp) : Infinity;
                 const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
                 
@@ -287,6 +290,9 @@ class AIAssistant {
                     // Clear the stale jobId
                     this.agentState.jobId = null;
                 }
+            } else if (isTransitioningToPricing) {
+                console.log('[CHARLES] Transitioning to pricing - NOT resuming job polling');
+                this.agentState.jobId = null;
             }
             
             this.addMessage('✅ Previous state restored successfully', 'assistant');

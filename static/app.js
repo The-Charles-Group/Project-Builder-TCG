@@ -5009,28 +5009,100 @@ async function buildFromCurrentSelection() {
   console.log('[BUILD] ========= PROCEED TO PRICING CLICKED =========');
   console.log('[BUILD] Timestamp:', new Date().toISOString());
   
-  // CRITICAL: Stop all polling intervals immediately to prevent UI freeze
-  console.log('[BUILD] Step 0/10: Stopping all polling intervals...');
+  // CRITICAL: NUCLEAR OPTION - Stop ALL polling everywhere
+  console.log('[BUILD] Step 0/10: NUCLEAR SHUTDOWN - Stopping ALL polling...');
   
-  // Call the existing cleanup function
+  // Set global flag to prevent AI Assistant from auto-resuming
+  window.isTransitioningToPricing = true;
+  
+  // 1. Use GlobalPollingManager master kill switch
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[BUILD] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[BUILD] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Clear all job IDs from localStorage to prevent auto-restart
+  console.log('[BUILD] Clearing all job IDs from localStorage...');
+  try {
+    // CRITICAL: Clear CHARLES agent state completely - including ALL stateHistory entries
+    const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+    
+    // Clear top-level jobId
+    if (charlesState.jobId) {
+      console.log('[BUILD] Clearing top-level CHARLES jobId:', charlesState.jobId);
+      charlesState.jobId = null;
+      charlesState.jobIdTimestamp = null;
+    }
+    
+    // CRITICAL: Clear jobId from EVERY stateHistory entry (this is where it resurrects from!)
+    if (charlesState.stateHistory && Array.isArray(charlesState.stateHistory)) {
+      console.log('[BUILD] Clearing jobIds from', charlesState.stateHistory.length, 'stateHistory entries...');
+      charlesState.stateHistory.forEach((state, idx) => {
+        if (state.jobId) {
+          console.log(`[BUILD] Clearing jobId from stateHistory[${idx}]:`, state.jobId);
+          state.jobId = null;
+          state.jobIdTimestamp = null;
+        }
+        if (state.agentState && state.agentState.jobId) {
+          console.log(`[BUILD] Clearing agentState.jobId from stateHistory[${idx}]:`, state.agentState.jobId);
+          state.agentState.jobId = null;
+        }
+      });
+    }
+    
+    // Save the cleaned state back
+    localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
+    console.log('[BUILD] CHARLES agent state cleaned and saved');
+    
+    // Clear any other job-related items
+    const keysToCheck = ['aiAnalysisJobId', 'currentJobId', 'pollingJobId'];
+    keysToCheck.forEach(key => {
+      if (localStorage.getItem(key)) {
+        console.log('[BUILD] Clearing localStorage:', key);
+        localStorage.removeItem(key);
+      }
+    });
+  } catch (e) {
+    console.error('[BUILD] Error clearing localStorage:', e);
+  }
+  
+  // 3. Force stop AI Assistant polling
+  if (window.aiAssistant) {
+    console.log('[BUILD] Stopping AI Assistant polling...');
+    if (window.aiAssistant.currentPollInterval) {
+      clearInterval(window.aiAssistant.currentPollInterval);
+      window.aiAssistant.currentPollInterval = null;
+    }
+    if (window.aiAssistant.stopJobPolling) {
+      window.aiAssistant.stopJobPolling();
+    }
+    // Clear the job ID from assistant state
+    if (window.aiAssistant.agentState) {
+      window.aiAssistant.agentState.jobId = null;
+    }
+  }
+  
+  // 4. Manual cleanup of any remaining intervals
   if (typeof cleanupPolling === 'function') {
     cleanupPolling();
     console.log('[BUILD] Called cleanupPolling()');
   }
   
-  // Also manually clear all known intervals
-  if (typeof aiAnalysisInterval !== 'undefined' && aiAnalysisInterval) {
-    console.log('[BUILD] Clearing aiAnalysisInterval');
+  // 5. Clear global variables
+  if (typeof aiAnalysisInterval !== 'undefined') {
     clearInterval(aiAnalysisInterval);
     aiAnalysisInterval = null;
   }
-  if (typeof progressInterval !== 'undefined' && progressInterval) {
-    console.log('[BUILD] Clearing progressInterval');
+  if (typeof progressInterval !== 'undefined') {
     clearInterval(progressInterval);
     progressInterval = null;
   }
+  if (typeof aiAnalysisJobId !== 'undefined') {
+    aiAnalysisJobId = null;
+  }
   
-  console.log('[BUILD] All polling intervals stopped');
+  console.log('[BUILD] ✅ NUCLEAR SHUTDOWN COMPLETE - All polling stopped');
   
   // Add timeout protection to prevent infinite freeze
   const timeoutId = setTimeout(() => {
