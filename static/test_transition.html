@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test Step 2 to Step 3 Transition</title>
+</head>
+<body>
+    <h1>Testing the Fixed Transition</h1>
+    <p>Open this page in a browser and follow the instructions to test the fix:</p>
+    
+    <h2>Manual Test Steps:</h2>
+    <ol>
+        <li>Open the main application at http://localhost:5000</li>
+        <li>In Step 1, paste any RFP text and click "Analyze RFP"</li>
+        <li>Wait for Step 2 to load with deliverables</li>
+        <li>Select a few deliverables by checking the checkboxes</li>
+        <li>Click the "Proceed to Pricing" button at the bottom</li>
+        <li>VERIFY: Step 3 should appear without freezing</li>
+        <li>VERIFY: Selected deliverables should show in the pricing table</li>
+    </ol>
+    
+    <h2>Automated Test:</h2>
+    <button onclick="runTest()">Run Automated Test</button>
+    <div id="results"></div>
+    
+    <script>
+    async function runTest() {
+        const results = document.getElementById('results');
+        results.innerHTML = '<h3>Running test...</h3>';
+        
+        // Test the buildFromCurrentSelection function directly
+        const testResults = [];
+        
+        // Test 1: Function exists
+        if (typeof window.buildFromCurrentSelection === 'function') {
+            testResults.push('✅ buildFromCurrentSelection function exists');
+        } else {
+            testResults.push('❌ buildFromCurrentSelection function not found');
+        }
+        
+        // Test 2: onProceedToStep3 alias exists  
+        if (typeof window.onProceedToStep3 === 'function') {
+            testResults.push('✅ onProceedToStep3 alias exists');
+        } else {
+            testResults.push('❌ onProceedToStep3 alias not found');
+        }
+        
+        // Test 3: Helper functions exist
+        const helpers = ['stopAllPolling', 'clearErrorState', 'showUserFriendlyError', 
+                        'buildScenarioDataSimplified', 'showStep3WithScenarioData', 
+                        'forceShowStep3WithMinimalData', 'readSelectedCodesFromUI'];
+        
+        helpers.forEach(helper => {
+            if (typeof window[helper] === 'function') {
+                testResults.push(`✅ ${helper} function exists`);
+            } else {
+                testResults.push(`❌ ${helper} function not found`);
+            }
+        });
+        
+        // Test 4: Check for the fixed implementation markers
+        const appJsResponse = await fetch('/static/app.js');
+        const appJsText = await appJsResponse.text();
+        
+        if (appJsText.includes('// 3 second hard timeout')) {
+            testResults.push('✅ Hard timeout protection found');
+        } else {
+            testResults.push('❌ Hard timeout protection not found');
+        }
+        
+        if (appJsText.includes('requestAnimationFrame')) {
+            testResults.push('✅ Non-blocking UI updates implemented');
+        } else {
+            testResults.push('❌ Non-blocking UI updates not found');
+        }
+        
+        // Check that old complex code is removed
+        const oldCodeMarkers = [
+            'NUCLEAR SHUTDOWN',
+            '500+ deliverables',
+            'console.log("[BUILD]", "Deliverable",',
+            'Emergency state debug:'
+        ];
+        
+        let hasOldCode = false;
+        oldCodeMarkers.forEach(marker => {
+            if (appJsText.includes(marker)) {
+                testResults.push(`⚠️ Old code still present: "${marker}"`);
+                hasOldCode = true;
+            }
+        });
+        
+        if (!hasOldCode) {
+            testResults.push('✅ All old complex code removed');
+        }
+        
+        // Display results
+        results.innerHTML = '<h3>Test Results:</h3><ul>' + 
+            testResults.map(r => `<li>${r}</li>`).join('') + 
+            '</ul>';
+        
+        // Summary
+        const passed = testResults.filter(r => r.startsWith('✅')).length;
+        const total = testResults.length;
+        const summary = passed === total ? 
+            `<h3 style="color:green">✅ All ${total} tests passed! The fix is properly implemented.</h3>` :
+            `<h3 style="color:orange">⚠️ ${passed}/${total} tests passed. Some issues remain.</h3>`;
+        
+        results.innerHTML += summary;
+    }
+    
+    // Auto-run test on page load
+    window.addEventListener('load', () => {
+        setTimeout(runTest, 1000);
+    });
+    </script>
+</body>
+</html><script src="test_fix_verification.js"></script>

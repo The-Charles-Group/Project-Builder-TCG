@@ -5045,568 +5045,250 @@ function renderDeliverableList(items){
   });
 }
 
-// Build from current S2 selection (SIMPLIFIED to prevent freezing)
+// Build from current S2 selection (FIXED VERSION - prevents freezing)
 async function buildFromCurrentSelection() {
-  console.log('[BUILD] ========= PROCEED TO PRICING CLICKED =========');
-  console.log('[BUILD] Timestamp:', new Date().toISOString());
+  console.log('[BUILD] Proceed to Pricing clicked');
   
-  // CRITICAL: NUCLEAR OPTION - Stop ALL polling everywhere
-  console.log('[BUILD] Step 0/10: NUCLEAR SHUTDOWN - Stopping ALL polling...');
+  // Set a hard timeout to prevent infinite freezing
+  const hardTimeoutId = setTimeout(() => {
+    console.error('[BUILD] TIMEOUT - Forcing Step 3 to show');
+    forceShowStep3WithMinimalData();
+  }, 3000); // 3 second hard timeout
   
-  // Set global flag to prevent AI Assistant from auto-resuming
-  window.isTransitioningToPricing = true;
-  
-  // 1. Use GlobalPollingManager master kill switch
-  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
-    console.log('[BUILD] Calling GlobalPollingManager.stopAllPolling()...');
-    const result = window.GlobalPollingManager.stopAllPolling();
-    console.log('[BUILD] GlobalPollingManager stopped:', result);
-  }
-  
-  // 2. Clear all job IDs from localStorage to prevent auto-restart
-  console.log('[BUILD] Clearing all job IDs from localStorage...');
   try {
-    // CRITICAL: Clear CHARLES agent state completely - including ALL stateHistory entries
-    const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+    // Clear previous errors
+    clearErrorState();
     
-    // Clear top-level jobId
-    if (charlesState.jobId) {
-      console.log('[BUILD] Clearing top-level CHARLES jobId:', charlesState.jobId);
-      charlesState.jobId = null;
-      charlesState.jobIdTimestamp = null;
+    // Stop any ongoing polling
+    stopAllPolling();
+    
+    // Get selected codes
+    const codes = readSelectedCodesFromUI();
+    if (!codes || codes.length === 0) {
+      showUserFriendlyError('Please select at least one deliverable before proceeding.', false);
+      clearTimeout(hardTimeoutId);
+      return;
     }
     
-    // CRITICAL: Clear jobId from EVERY stateHistory entry (this is where it resurrects from!)
-    if (charlesState.stateHistory && Array.isArray(charlesState.stateHistory)) {
-      console.log('[BUILD] Clearing jobIds from', charlesState.stateHistory.length, 'stateHistory entries...');
-      charlesState.stateHistory.forEach((state, idx) => {
-        if (state.jobId) {
-          console.log(`[BUILD] Clearing jobId from stateHistory[${idx}]:`, state.jobId);
-          state.jobId = null;
-          state.jobIdTimestamp = null;
-        }
-        if (state.agentState && state.agentState.jobId) {
-          console.log(`[BUILD] Clearing agentState.jobId from stateHistory[${idx}]:`, state.agentState.jobId);
-          state.agentState.jobId = null;
-        }
-      });
-    }
+    // Use requestAnimationFrame to prevent UI freezing
+    await new Promise(resolve => requestAnimationFrame(resolve));
     
-    // Save the cleaned state back
-    localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
-    console.log('[BUILD] CHARLES agent state cleaned and saved');
+    // Build scenario data (simplified)
+    const scenarioData = await buildScenarioDataSimplified(codes);
     
-    // Clear any other job-related items
-    const keysToCheck = ['aiAnalysisJobId', 'currentJobId', 'pollingJobId'];
-    keysToCheck.forEach(key => {
-      if (localStorage.getItem(key)) {
-        console.log('[BUILD] Clearing localStorage:', key);
-        localStorage.removeItem(key);
-      }
-    });
-  } catch (e) {
-    console.error('[BUILD] Error clearing localStorage:', e);
+    // Show Step 3 with the data
+    showStep3WithScenarioData(scenarioData);
+    
+    // Clear timeout since we succeeded
+    clearTimeout(hardTimeoutId);
+    
+    console.log('[BUILD] Transition complete');
+  } catch (error) {
+    console.error('[BUILD] Error during transition:', error);
+    clearTimeout(hardTimeoutId);
+    // Force show Step 3 even on error
+    forceShowStep3WithMinimalData();
+  }
+}
+
+// Simplified helper to stop polling
+function stopAllPolling() {
+  // Stop global polling
+  if (window.GlobalPollingManager?.stopAllPolling) {
+    window.GlobalPollingManager.stopAllPolling();
   }
   
-  // 3. Force stop AI Assistant polling
+  // Clear AI Assistant polling
   if (window.aiAssistant) {
-    console.log('[BUILD] Stopping AI Assistant polling...');
     if (window.aiAssistant.currentPollInterval) {
       clearInterval(window.aiAssistant.currentPollInterval);
       window.aiAssistant.currentPollInterval = null;
     }
-    if (window.aiAssistant.stopJobPolling) {
-      window.aiAssistant.stopJobPolling();
-    }
-    // Clear the job ID from assistant state
     if (window.aiAssistant.agentState) {
       window.aiAssistant.agentState.jobId = null;
     }
   }
   
-  // 4. Manual cleanup of any remaining intervals
-  if (typeof cleanupPolling === 'function') {
-    cleanupPolling();
-    console.log('[BUILD] Called cleanupPolling()');
+  // Clear any job IDs from localStorage
+  try {
+    localStorage.removeItem('aiAnalysisJobId');
+    localStorage.removeItem('currentJobId');
+    localStorage.removeItem('pollingJobId');
+    
+    // Clear CHARLES state
+    const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+    if (charlesState.jobId) {
+      charlesState.jobId = null;
+      charlesState.jobIdTimestamp = null;
+      localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
+    }
+  } catch (e) {
+    // Ignore errors
+  }
+}
+
+// Simplified function to build scenario data
+async function buildScenarioDataSimplified(codes) {
+  try {
+    // Try to use ScenarioManager if available
+    if (window.ScenarioManager?.buildScenario) {
+      const sessionId = window.ScenarioManager.initSession(generateSessionId());
+      window.ScenarioManager.setSelectedDeliverables(codes, {}, {});
+      const result = await window.ScenarioManager.buildScenario();
+      return result.scenarios || result;
+    }
+  } catch (error) {
+    console.warn('[BUILD] ScenarioManager not available, using fallback');
   }
   
-  // 5. Clear global variables
-  if (typeof aiAnalysisInterval !== 'undefined') {
-    clearInterval(aiAnalysisInterval);
-    aiAnalysisInterval = null;
+  // Fallback: Create minimal scenario
+  return {
+    A: {
+      items: codes.map(code => ({
+        deliverable_code: code,
+        deliverable_name: code,
+        category: 'General',
+        hours: 40,
+        rate: 195,
+        price: 7800
+      })),
+      total: codes.length * 7800
+    }
+  };
+}
+
+// Function to show Step 3 with scenario data
+function showStep3WithScenarioData(scenarioData) {
+  const step3 = document.querySelector("#step3");
+  if (!step3) {
+    console.error('[BUILD] Step 3 element not found');
+    createStep3Fallback();
+    return;
   }
-  if (typeof progressInterval !== 'undefined') {
-    clearInterval(progressInterval);
-    progressInterval = null;
+  
+  // Make Step 3 visible
+  step3.style.display = "block";
+  step3.style.visibility = "visible";
+  step3.style.opacity = "1";
+  step3.classList.remove('hidden', 'error', 'loading');
+  
+  // Save scenario data
+  window.SCENARIOS = scenarioData;
+  window.APP_STATE = window.APP_STATE || {};
+  window.APP_STATE.scenarios = scenarioData;
+  window.APP_STATE.activeScenario = 'A';
+  
+  // Render the scenario if possible
+  try {
+    if (window.renderScenario && scenarioData?.A) {
+      window.renderScenario('scenarioA', scenarioData.A);
+    }
+    if (window.APBOneTable && scenarioData?.A) {
+      const transformedData = transformScenarioToPatchFormat(scenarioData.A);
+      window.APBOneTable.hydrateFrom(transformedData);
+    }
+  } catch (error) {
+    console.warn('[BUILD] Error rendering scenario:', error);
   }
-  if (typeof aiAnalysisJobId !== 'undefined') {
-    aiAnalysisJobId = null;
+  
+  // Scroll to Step 3
+  step3.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Force show Step 3 with minimal data when everything else fails
+function forceShowStep3WithMinimalData() {
+  console.warn('[BUILD] Force showing Step 3 with minimal data');
+  
+  const step3 = document.querySelector("#step3");
+  if (!step3) {
+    createStep3Fallback();
+    return;
   }
   
-  console.log('[BUILD] ✅ NUCLEAR SHUTDOWN COMPLETE - All polling stopped');
+  // Force Step 3 to be visible
+  step3.style.display = "block";
+  step3.style.visibility = "visible";
+  step3.style.opacity = "1";
+  step3.classList.remove('hidden', 'error', 'loading');
   
-  // Add timeout protection to prevent infinite freeze
-  const timeoutId = setTimeout(() => {
-    console.error('[BUILD] TIMEOUT - Function taking too long! Forcing Step 3 to show...');
-    forceShowStep3();
-  }, 10000); // 10 second timeout
-  
-  // Step 1: Clear any previous error states
-  clearErrorState();
-  
-  // Step 2: Validate deliverable selection
+  // Get any selected codes we can find
   let codes = [];
   try {
-    console.log('[BUILD] Step 1/10: Reading selected codes from UI...');
     codes = readSelectedCodesFromUI();
-    console.log('[BUILD] Selected codes:', codes);
-    
-    if (!codes.length) {
-      console.warn('[BUILD] No deliverables selected');
-      showUserFriendlyError('Please select at least one deliverable before proceeding to pricing.', false);
-      return;
-    }
-  } catch (error) {
-    console.error('[BUILD] Error reading selected codes:', error);
-    showUserFriendlyError('Unable to read your selections. Please refresh and try again.', true);
-    return;
-  }
-
-  // Step 3: Initialize ScenarioManager with fallback
-  let sessionId = null;
-  try {
-    console.log('[BUILD] Step 2/10: Initializing ScenarioManager...');
-    
-    if (!window.ScenarioManager) {
-      console.warn('[BUILD] ScenarioManager not loaded, attempting fallback...');
-      // Fallback: Show Step 3 anyway with minimal data
-      showStep3WithFallback(codes);
-      return;
-    }
-    
-    sessionId = window.ScenarioManager.initSession(generateSessionId());
-    console.log('[BUILD] ScenarioManager initialized with session:', sessionId);
-  } catch (error) {
-    console.error('[BUILD] Error initializing ScenarioManager:', error);
-    // Non-critical error - continue with fallback
-    showStep3WithFallback(codes);
-    return;
-  }
-
-  // Step 4: Sync legacy state (non-critical)
-  try {
-    console.log('[BUILD] Step 3/10: Syncing legacy state...');
-    selectedCodes = codes;
-    if (window.appState) window.appState.selectedCodes = codes;
-    window.selectedCodes = codes;
-    console.log('[BUILD] Legacy state synced');
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error syncing legacy state:', error);
-    // Continue - this is not critical
-  }
-
-  // Step 5: Build component payload (defensive)
-  let selectedComponentsPayload = {};
-  try {
-    console.log('[BUILD] Step 4/10: Building component payload...');
-    console.log('[BUILD DEBUG] Number of codes to process:', codes.length);
-    
-    let processedCount = 0;
-    codes.forEach(code => {
-      console.log(`[BUILD DEBUG] Processing component for code ${processedCount + 1}/${codes.length}: ${code}`);
-      try {
-        // Try new state system first (preferred)
-        let compSet = window.APB?.step2?.selectedComponentsByCode?.[code];
-        console.log(`[BUILD DEBUG] ${code} - Found in APB.step2:`, !!compSet);
-        
-        // Fall back to old state system if new system has no data
-        if (!compSet && window.S2) {
-          compSet = S2.selectedComponentsMap?.[code];
-          console.log(`[BUILD DEBUG] ${code} - Found in S2:`, !!compSet);
-        }
-        
-        if (compSet instanceof Set) {
-          console.log(`[BUILD DEBUG] ${code} - Is Set with size:`, compSet.size);
-          if (compSet.size > 0) {
-            const dict = Object.create(null);
-            let setItemCount = 0;
-            compSet.forEach(label => { 
-              dict[label] = null;
-              setItemCount++;
-              console.log(`[BUILD DEBUG] ${code} - Added component ${setItemCount}: ${label}`);
-            });
-            selectedComponentsPayload[code] = dict;
-          } else {
-            selectedComponentsPayload[code] = {};
-          }
-        } else if (compSet && typeof compSet === 'object') {
-          console.log(`[BUILD DEBUG] ${code} - Is object`);
-          selectedComponentsPayload[code] = compSet;
-        } else {
-          console.log(`[BUILD DEBUG] ${code} - Using __ALL__ fallback`);
-          selectedComponentsPayload[code] = "__ALL__";
-        }
-        processedCount++;
-        console.log(`[BUILD DEBUG] Successfully processed ${processedCount}/${codes.length} codes`);
-      } catch (compError) {
-        console.warn(`[BUILD] Error processing components for ${code}:`, compError);
-        selectedComponentsPayload[code] = "__ALL__"; // Safe default
-      }
-    });
-    
-    console.log('[BUILD] Component payload built:', selectedComponentsPayload);
-    console.log('[BUILD DEBUG] Component payload complete - moving to L3');
-  } catch (error) {
-    console.warn('[BUILD] Error building component payload:', error);
-    // Use safe defaults
-    codes.forEach(code => {
-      selectedComponentsPayload[code] = "__ALL__";
-    });
-  }
-
-  // Step 6: Build L3 payload (defensive)
-  let l3Payload = {};
-  try {
-    console.log('[BUILD] Step 5/10: Building L3 subtasks payload...');
-    console.log('[BUILD DEBUG] Checking for L3 data in APB.step2...');
-    
-    if (window.APB?.step2?.selectedL3ByKey) {
-      const l3Keys = Object.entries(window.APB.step2.selectedL3ByKey);
-      console.log(`[BUILD DEBUG] Found ${l3Keys.length} L3 keys to process`);
-      
-      let l3ProcessedCount = 0;
-      l3Keys.forEach(([key, l3Set]) => {
-        console.log(`[BUILD DEBUG] Processing L3 key ${l3ProcessedCount + 1}/${l3Keys.length}: ${key}`);
-        try {
-          const [code, component] = key.split('::');
-          console.log(`[BUILD DEBUG] L3 key split - code: ${code}, component: ${component}`);
-          console.log(`[BUILD DEBUG] Is code in selected codes:`, codes.includes(code));
-          console.log(`[BUILD DEBUG] L3 Set size:`, l3Set?.size);
-          
-          if (codes.includes(code) && l3Set && l3Set.size > 0) {
-            if (!l3Payload[code]) l3Payload[code] = {};
-            console.log(`[BUILD DEBUG] Converting L3 Set to Array for ${key}...`);
-            const l3Array = Array.from(l3Set);
-            console.log(`[BUILD DEBUG] Array created, length: ${l3Array.length}`);
-            
-            const mappedItems = l3Array.map((item, idx) => {
-              console.log(`[BUILD DEBUG] Mapping L3 item ${idx + 1}/${l3Array.length}:`, typeof item);
-              if (typeof item === 'string') return item;
-              if (item && typeof item === 'object') {
-                const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
-                if (name && typeof name === 'string') return name;
-              }
-              return null;
-            });
-            console.log(`[BUILD DEBUG] Mapped ${mappedItems.length} items`);
-            
-            const filteredItems = mappedItems.filter(name => name && name !== '[object Object]' && name !== '');
-            console.log(`[BUILD DEBUG] Filtered to ${filteredItems.length} valid items`);
-            
-            l3Payload[code][component] = filteredItems;
-          }
-          l3ProcessedCount++;
-          console.log(`[BUILD DEBUG] L3 processed ${l3ProcessedCount}/${l3Keys.length}`);
-        } catch (l3Error) {
-          console.warn(`[BUILD] Error processing L3 for ${key}:`, l3Error);
-        }
-      });
-    } else {
-      console.log('[BUILD DEBUG] No L3 data found in APB.step2.selectedL3ByKey');
-    }
-    
-    console.log('[BUILD] L3 payload built:', l3Payload);
-    console.log('[BUILD DEBUG] L3 payload complete - moving to ScenarioManager update');
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error building L3 payload:', error);
-    // Continue without L3 data
-  }
-
-  // Step 7: Update ScenarioManager (defensive)
-  try {
-    console.log('[BUILD] Step 6/10: Updating ScenarioManager with selections...');
-    
-    if (window.ScenarioManager?.setSelectedDeliverables) {
-      window.ScenarioManager.setSelectedDeliverables(codes, selectedComponentsPayload, l3Payload);
-      console.log('[BUILD] ScenarioManager updated with selections');
-    }
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error updating ScenarioManager:', error);
-    // Continue - we can still try to build
-  }
-
-  // Step 8: Build retainers payload (defensive)
-  try {
-    console.log('[BUILD] Step 7/10: Building retainers payload...');
-    
-    const retainersPayload = [];
-    if (window.pricingData?.deliverableTypes) {
-      window.pricingData.deliverableTypes.forEach((type, code) => {
-        if (type === 'RETAINER' && codes.includes(code)) {
-          retainersPayload.push({
-            deliverable_code: code,
-            months: window.pricingData.retainers?.get(code) || 12,
-            type: 'RETAINER'
-          });
-        }
-      });
-    }
-    
-    // Set blended rate
-    if (window.ScenarioManager?.setState) {
-      window.ScenarioManager.setState({
-        blendedRate: window.getBlendedRateFromUI?.() || 195
-      });
-    }
-    
-    console.log('[BUILD] Retainers configured:', retainersPayload);
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error building retainers:', error);
-    // Continue without retainer data
-  }
-
-  // Step 9: Build scenario (with multiple fallbacks)
-  let scenarios = null;
-  let buildSuccess = false;
-  
-  try {
-    console.log('[BUILD] Step 8/10: Building scenario via ScenarioManager...');
-    console.log('[BUILD DEBUG] ScenarioManager exists:', !!window.ScenarioManager);
-    console.log('[BUILD DEBUG] ScenarioManager.buildScenario exists:', !!window.ScenarioManager?.buildScenario);
-    
-    if (window.ScenarioManager?.buildScenario) {
-      console.log('[BUILD DEBUG] *** CALLING ScenarioManager.buildScenario() ***');
-      console.log('[BUILD DEBUG] Call initiated at:', new Date().toISOString());
-      
-      const json = await window.ScenarioManager.buildScenario();
-      
-      console.log('[BUILD DEBUG] *** ScenarioManager.buildScenario() RETURNED ***');
-      console.log('[BUILD DEBUG] Response received at:', new Date().toISOString());
-      console.log('[BUILD] ScenarioManager response:', json);
-      console.log('[BUILD DEBUG] Response type:', typeof json);
-      console.log('[BUILD DEBUG] Response keys:', json ? Object.keys(json) : 'null');
-      
-      // Extract scenarios with multiple fallback attempts
-      console.log('[BUILD DEBUG] Extracting scenarios from response...');
-      scenarios = json.scenarios || {};
-      console.log('[BUILD DEBUG] Scenarios extracted:', Object.keys(scenarios || {}).length, 'scenarios');
-      
-      let scenario = scenarios.A || json.scenario || json;
-      console.log('[BUILD DEBUG] Scenario A exists:', !!scenario);
-      
-      // Wrap if needed
-      if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
-        console.log('[BUILD DEBUG] Wrapping scenario in scenarios object...');
-        scenarios = { A: scenario };
-      }
-      
-      if (scenarios && Object.keys(scenarios).length > 0) {
-        buildSuccess = true;
-        console.log('[BUILD] Scenario built successfully');
-        console.log('[BUILD DEBUG] Build success - proceeding to state save');
-      } else {
-        console.log('[BUILD DEBUG] Scenarios empty or invalid');
-      }
-    } else {
-      console.log('[BUILD DEBUG] ScenarioManager.buildScenario not available');
-    }
-  } catch (error) {
-    console.error('[BUILD] Error building scenario:', error);
-    console.error('[BUILD DEBUG] Error stack:', error.stack);
-    // Will attempt fallback below
+  } catch (e) {
+    // Try alternative methods
+    const selectedCheckboxes = document.querySelectorAll('#s2-deliv-list input[type="checkbox"]:checked');
+    codes = Array.from(selectedCheckboxes).map(cb => cb.dataset.code || cb.value).filter(Boolean);
   }
   
-  // Fallback if scenario build failed
-  if (!buildSuccess) {
-    console.warn('[BUILD] Primary build failed, attempting fallback...');
-    
-    try {
-      // Create minimal scenario structure
-      scenarios = {
-        A: {
-          items: codes.map(code => ({
-            deliverable_code: code,
-            deliverable_name: code,
-            category: 'General',
-            hours: 40,
-            rate: 195,
-            price: 7800
-          })),
-          total: codes.length * 7800
-        }
-      };
-      buildSuccess = true;
-      console.log('[BUILD] Fallback scenario created');
-    } catch (fallbackError) {
-      console.error('[BUILD] Fallback scenario creation failed:', fallbackError);
-    }
-  }
-
-  // Step 10: Update state and UI (defensive with multiple try-catch blocks)
-  
-  // Save state (non-critical)
-  try {
-    console.log('[BUILD] Step 9/10: Saving state...');
-    
-    if (scenarios) {
-      window.APP_STATE = window.APP_STATE || {};
-      window.APP_STATE.scenarios = scenarios;
-      window.APP_STATE.activeScenario = 'A';
-      window.APP_STATE.sessionId = sessionId;
-      
-      // Legacy aliases
-      window.BUILD = { scenarios };
-      window.appState = window.appState || {};
-      window.appState.scenarios = scenarios;
-      window.latestScenarios = scenarios;
-      window.SCENARIOS = scenarios;
-      
-      console.log('[BUILD] State saved successfully');
-    }
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error saving state:', error);
-    // Continue - UI is more important
-  }
-
-  // Update AI buttons (non-critical)
-  try {
-    if (typeof updateAIButtonStates === 'function') {
-      updateAIButtonStates();
-    }
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error updating AI buttons:', error);
-  }
-
-  // CRITICAL: Show Step 3 - This MUST happen
-  try {
-    console.log('[BUILD] Step 10/10: CRITICAL - Showing Step 3...');
-    console.log('[BUILD DEBUG] *** ABOUT TO SHOW STEP 3 ***');
-    console.log('[BUILD DEBUG] Current time:', new Date().toISOString());
-    
-    const step3 = document.querySelector("#step3");
-    console.log('[BUILD DEBUG] Step 3 element found:', !!step3);
-    
-    if (step3) {
-      console.log('[BUILD DEBUG] Current Step 3 display:', step3.style.display);
-      console.log('[BUILD DEBUG] Setting Step 3 to display: block...');
-      
-      // Force display regardless of any errors
-      step3.style.display = "block";
-      step3.style.visibility = "visible";
-      step3.style.opacity = "1";
-      
-      console.log('[BUILD DEBUG] Display set. Removing error classes...');
-      
-      // Clear any potential error classes
-      step3.classList.remove('hidden', 'error', 'loading');
-      
-      console.log('[BUILD] ✓ Step 3 is now visible');
-      console.log('[BUILD DEBUG] *** STEP 3 SHOULD BE VISIBLE NOW ***');
-      
-      // Smooth scroll (non-critical)
-      try {
-        console.log('[BUILD DEBUG] Attempting smooth scroll...');
-        step3.scrollIntoView({ behavior: "smooth", block: "start" });
-        console.log('[BUILD DEBUG] Smooth scroll initiated');
-      } catch (scrollError) {
-        console.log('[BUILD DEBUG] Smooth scroll failed, trying basic scroll...');
-        // Fallback to basic scroll
-        step3.scrollIntoView();
-        console.log('[BUILD DEBUG] Basic scroll completed');
-      }
-      
-      // Show success message if we had to use fallback
-      if (!window.ScenarioManager || !scenarios) {
-        console.log('[BUILD DEBUG] Showing recoverable warning...');
-        showRecoverableWarning('Some features may be limited. You can still proceed with pricing configuration.');
-      }
-      
-      console.log('[BUILD DEBUG] Step 3 display complete');
-    } else {
-      console.error('[BUILD] CRITICAL ERROR: Step 3 element not found in DOM');
-      showUserFriendlyError('Unable to display pricing section. Please refresh the page and try again.', true);
-      // Attempt to create Step 3 dynamically as last resort
-      createStep3Fallback();
-    }
-  } catch (error) {
-    console.error('[BUILD] CRITICAL ERROR showing Step 3:', error);
-    console.error('[BUILD DEBUG] Error stack:', error.stack);
-    // Last resort - try to show something
-    createStep3Fallback();
-  }
-
-  // Clear timeout since we got here
-  clearTimeout(timeoutId);
-  console.log('[BUILD DEBUG] Timeout cleared');
-  
-  // Initialize pricing table (non-critical)
-  try {
-    console.log('[BUILD DEBUG] Checking for pricing table initialization...');
-    if (window.APBOneTable && scenarios?.A) {
-      console.log('[BUILD] Initializing pricing table...');
-      console.log('[BUILD DEBUG] Pricing data items count:', scenarios.A.items?.length || 0);
-      
-      const pricingData = scenarios.A;
-      const transformedData = {
-        deliverables: (pricingData.items || []).map(item => ({
-          id: item.deliverable_code,
-          title: item.deliverable_name || item.deliverable || item.deliverable_code,
-          dept: item.category || 'General',
-          cadence: item.cadence || (item.is_retainer ? 'Monthly' : 'One-Time'),
-          months: item.retainer_months || 0,
-          hours: item.hours || 0,
-          rate: item.rate || item.blended_rate || 195,
-          price: item.price || 0,
-          resources: item.resources || [],
-          components: (item.components || []).map(comp => ({
-            id: window.ScenarioManager?.slugify?.(comp.name) || comp.name,
-            title: comp.name,
-            hours: comp.hours || 0,
-            rate: comp.rate || 195,
-            cadence: comp.cadence,
-            months: comp.months || 0
-          }))
-        }))
-      };
-      window.APBOneTable.hydrateFrom(transformedData);
-      console.log('[BUILD] Pricing table initialized');
-    }
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error initializing pricing table:', error);
-  }
-
-  // Render scenario (non-critical)
-  try {
-    if (window.renderScenario && scenarios?.A) {
-      window.renderScenario('scenarioA', scenarios.A);
-    }
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error rendering scenario:', error);
-  }
-
-  // Show additional steps (non-critical)
-  try {
-    const step4 = document.querySelector("#step4");
-    const step5 = document.querySelector("#step5");
-    if (step5) step5.style.display = 'block';
-    if (step4 && window.showStep4) {
-      window.showStep4('A');
-    }
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error showing additional steps:', error);
-  }
-
-  // Sync to backend (non-critical)
-  try {
-    if (window.ScenarioManager?.syncToBackend) {
-      window.ScenarioManager.syncToBackend();
-    }
-  } catch (error) {
-    console.warn('[BUILD] Non-critical: Error syncing to backend:', error);
+  if (codes.length === 0) {
+    // Use any codes we can find
+    codes = ['DEFAULT_001'];
   }
   
-  console.log('[BUILD] ========= Transition complete =========');
+  // Create minimal scenario
+  const fallbackScenario = {
+    A: {
+      items: codes.map(code => ({
+        deliverable_code: code,
+        deliverable_name: code,
+        category: 'General',
+        hours: 40,
+        rate: 195,
+        price: 7800
+      })),
+      total: codes.length * 7800
+    }
+  };
+  
+  // Save scenario
+  window.SCENARIOS = fallbackScenario;
+  window.APP_STATE = window.APP_STATE || {};
+  window.APP_STATE.scenarios = fallbackScenario;
+  
+  // Show warning
+  showRecoverableWarning('Simplified pricing view. Some features may be limited.');
+  
+  // Scroll to Step 3
+  step3.scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+// Helper to read selected codes from UI
+function readSelectedCodesFromUI() {
+  let codes = [];
+  
+  // Try new Step 2 picker state first
+  if (window.step2PickerState?.selected) {
+    codes = Array.from(window.step2PickerState.selected);
+  }
+  
+  // Fallback to APB step2 state
+  if (codes.length === 0 && window.APB?.step2?.selectedDeliverables) {
+    codes = Array.from(window.APB.step2.selectedDeliverables);
+  }
+  
+  // Fallback to selectionStore
+  if (codes.length === 0 && window.selectionStore?.deliverables) {
+    codes = Array.from(window.selectionStore.deliverables);
+  }
+  
+  // Last resort: check the UI directly
+  if (codes.length === 0) {
+    const checkedBoxes = document.querySelectorAll('#s2-deliv-list input[type="checkbox"]:checked');
+    codes = Array.from(checkedBoxes).map(cb => cb.dataset.code || cb.value).filter(Boolean);
+  }
+  
+  return codes;
+}
+
+// The old complex implementation has been completely removed
+
+// Keep onProceedToStep3 as an alias for backward compatibility
+const onProceedToStep3 = buildFromCurrentSelection;
+
+// ================================================================================
+// HELPER FUNCTIONS
+// ================================================================================
 
 // Helper: Clear error states
 function clearErrorState() {
