@@ -1,0 +1,72 @@
+{
+  "start_time": "2025-10-19T08:25:48.835085",
+  "steps": [
+    {
+      "name": "AI Deliverable Suggestion",
+      "success": true,
+      "details": {
+        "deliverables_suggested": 4,
+        "response_code": 200,
+        "sample_suggestions": [
+          {
+            "deliverable_code": "DEL-0044",
+            "deliverable": "Development",
+            "category": "development",
+            "confidence": 2,
+            "matches": [
+              "landing page",
+              "ui"
+            ],
+            "retainer_hint": true,
+            "retainer_months_suggested": 3
+          },
+          {
+            "deliverable_code": "DEL-0009",
+            "deliverable": "Brand Style & Usage Guidelines",
+            "category": "guidelines",
+            "confidence": 1,
+            "matches": [
+              "guidelines"
+            ],
+            "retainer_hint": true,
+            "retainer_months_suggested": 3
+          },
+          {
+            "deliverable_code": "DEL-0001",
+            "deliverable": "Content Plan",
+            "category": "deck_strategy",
+            "confidence": 1,
+            "matches": [
+              "content calendar"
+            ],
+            "retainer_hint": true,
+            "retainer_months_suggested": 3
+          }
+        ]
+      },
+      "elapsed_time_seconds": 1.522,
+      "timestamp": "2025-10-19T08:25:50.357305"
+    },
+    {
+      "name": "Create Scenario",
+      "success": false,
+      "details": {
+        "error": "HTTP 422",
+        "response": "{\"detail\":[{\"type\":\"string_type\",\"loc\":[\"body\",\"selected_deliverable_codes\",0],\"msg\":\"Input should be a valid string\",\"input\":{\"deliverable_code\":\"DEL-0044\",\"deliverable\":\"Development\",\"category\":\"development\",\"confidence\":2,\"matches\":[\"landing page\",\"ui\"],\"retainer_hint\":true,\"retainer_months_suggested\":3}},{\"type\":\"string_type\",\"loc\":[\"body\",\"selected_deliverable_codes\",1],\"msg\":\"Input should be a valid string\",\"input\":{\"deliverable_code\":\"DEL-0009\",\"deliverable\":\"Brand Style & Usage Guideline"
+      },
+      "elapsed_time_seconds": 0.008,
+      "timestamp": "2025-10-19T08:25:50.365444"
+    }
+  ],
+  "metrics": {
+    "total_steps": 2,
+    "successful_steps": 1,
+    "failed_steps": 1,
+    "success_rate": 50.0,
+    "total_execution_time": 1.53,
+    "average_step_time": 0.765
+  },
+  "issues": [],
+  "status": "failure",
+  "end_time": "2025-10-19T08:25:50.366911"
+}

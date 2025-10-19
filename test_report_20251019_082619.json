@@ -1,0 +1,114 @@
+{
+  "start_time": "2025-10-19T08:26:18.071404",
+  "steps": [
+    {
+      "name": "AI Deliverable Suggestion",
+      "success": true,
+      "details": {
+        "deliverables_suggested": 4,
+        "response_code": 200,
+        "sample_suggestions": [
+          {
+            "deliverable_code": "DEL-0044",
+            "deliverable": "Development",
+            "category": "development",
+            "confidence": 2,
+            "matches": [
+              "landing page",
+              "ui"
+            ],
+            "retainer_hint": true,
+            "retainer_months_suggested": 3
+          },
+          {
+            "deliverable_code": "DEL-0009",
+            "deliverable": "Brand Style & Usage Guidelines",
+            "category": "guidelines",
+            "confidence": 1,
+            "matches": [
+              "guidelines"
+            ],
+            "retainer_hint": true,
+            "retainer_months_suggested": 3
+          },
+          {
+            "deliverable_code": "DEL-0001",
+            "deliverable": "Content Plan",
+            "category": "deck_strategy",
+            "confidence": 1,
+            "matches": [
+              "content calendar"
+            ],
+            "retainer_hint": true,
+            "retainer_months_suggested": 3
+          }
+        ]
+      },
+      "elapsed_time_seconds": 1.494,
+      "timestamp": "2025-10-19T08:26:19.566399"
+    },
+    {
+      "name": "Create Scenario",
+      "success": false,
+      "details": {
+        "deliverables_count": 4,
+        "items_created": 0,
+        "scenario_a_hours": 0,
+        "scenario_a_price": 0,
+        "has_scenario_b": false,
+        "response_code": 200
+      },
+      "elapsed_time_seconds": 0.079,
+      "timestamp": "2025-10-19T08:26:19.645719"
+    },
+    {
+      "name": "Pricing Calculations",
+      "success": false,
+      "details": {
+        "response_code": 422,
+        "original_price": 0,
+        "original_hours": 0,
+        "has_retainer_opportunities": false,
+        "retainer_confidence": 0
+      },
+      "elapsed_time_seconds": 0.006,
+      "timestamp": "2025-10-19T08:26:19.652784"
+    },
+    {
+      "name": "Timeline Generation",
+      "success": true,
+      "details": {
+        "tasks_count": 0,
+        "project_duration": "Unknown",
+        "response_code": 200,
+        "has_timeline_data": false
+      },
+      "elapsed_time_seconds": 0.005,
+      "timestamp": "2025-10-19T08:26:19.665196"
+    },
+    {
+      "name": "Export Functionality",
+      "success": true,
+      "details": {
+        "response_code": 200,
+        "content_type": "text/csv; charset=utf-8",
+        "content_disposition": "attachment; filename*=utf-8''Test%20Project%20Export%20-%20Workfront_Export%20-%202025-10-19%2004.26AM%20EST.csv",
+        "content_length": 307,
+        "is_valid_export": true
+      },
+      "elapsed_time_seconds": 0.023,
+      "timestamp": "2025-10-19T08:26:19.689305"
+    }
+  ],
+  "metrics": {
+    "total_steps": 5,
+    "successful_steps": 3,
+    "failed_steps": 2,
+    "success_rate": 60.0,
+    "total_execution_time": 1.607,
+    "average_step_time": 0.321
+  },
+  "issues": [],
+  "status": "partial_failure",
+  "end_time": "2025-10-19T08:26:19.712050"
+}

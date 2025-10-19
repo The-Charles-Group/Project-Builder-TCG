@@ -1,0 +1,69 @@
+{
+  "start_time": "2025-10-19T08:21:00.199310",
+  "steps": [
+    {
+      "name": "Check AI Job Status",
+      "success": false,
+      "details": {
+        "error": "HTTP 404",
+        "response": "{\"detail\":\"Job 23ad2edc-0b57-48c8-9146-88e4f5851ccb not found\"}"
+      },
+      "elapsed_time_seconds": 0.004,
+      "timestamp": "2025-10-19T08:21:00.204057"
+    },
+    {
+      "name": "Create Scenario",
+      "success": false,
+      "details": {
+        "deliverables_count": 5,
+        "scenario_a_hours": 0,
+        "scenario_a_price": 0,
+        "has_scenario_b": false,
+        "response_code": 200
+      },
+      "elapsed_time_seconds": 1.53,
+      "timestamp": "2025-10-19T08:21:01.734735"
+    },
+    {
+      "name": "Pricing Calculations",
+      "success": false,
+      "details": {
+        "response_code": 422,
+        "original_price": 0
+      },
+      "elapsed_time_seconds": 0.005,
+      "timestamp": "2025-10-19T08:21:01.740289"
+    },
+    {
+      "name": "Timeline Generation",
+      "success": false,
+      "details": {
+        "error": "HTTP 422",
+        "response": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\",\"deliverables\"],\"msg\":\"Field required\",\"input\":{\"scenario\":{},\"start_date\":\"2025-01-01\",\"session_id\":\"test-flow-session-001\"}}]}"
+      },
+      "elapsed_time_seconds": 0.005,
+      "timestamp": "2025-10-19T08:21:01.749086"
+    },
+    {
+      "name": "XML Export",
+      "success": false,
+      "details": {
+        "error": "HTTP 400",
+        "response": "{\"detail\":\"No build context for XML export. Run Build once in Step 3.\"}"
+      },
+      "elapsed_time_seconds": 0.004,
+      "timestamp": "2025-10-19T08:21:01.753235"
+    }
+  ],
+  "metrics": {
+    "total_steps": 5,
+    "successful_steps": 0,
+    "failed_steps": 5,
+    "success_rate": 0.0,
+    "total_execution_time": 1.548,
+    "average_step_time": 0.31
+  },
+  "issues": [],
+  "status": "partial_failure",
+  "end_time": "2025-10-19T08:21:01.753818"
+}
