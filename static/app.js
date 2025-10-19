@@ -6272,6 +6272,7 @@ function updateAIProgress(status) {
 
 async function pollAIAnalysis(jobId) {
   try {
+    console.log(`[POLLING] Checking status for job ${jobId}`);
     const res = await fetch(`/api/ai/jobs/${jobId}`);
     
     // Handle 410 Gone (zombie job blocked) or 404 - STOP IMMEDIATELY
@@ -6477,7 +6478,8 @@ async function onRunReconcile() {
   const textEl = document.querySelector('#rfpText');
   let rfpText = (textEl?.value || '').trim();
   const btnAnalyze = document.querySelector('#btnAnalyze');
-  const analysisMode = document.getElementById('analysis-mode')?.value || 'fast';
+  const analysisMode = document.getElementById('analysis-mode')?.value || 'deep';
+  console.log('[ANALYSIS] Starting analysis with mode:', analysisMode);
 
   // ============================================================================
   // SESSION ISOLATION: Start fresh session for each new analysis
@@ -6563,6 +6565,13 @@ async function onRunReconcile() {
     // Get selected mode (Fast or Deep) - use analysisMode variable
     const selectedMode = analysisMode || 'deep';
     
+    console.log('[ANALYSIS] Sending API request with:', {
+      mode: selectedMode,
+      tier: tier,
+      textLength: rfpText.length,
+      sessionId: sessionId
+    });
+    
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6580,6 +6589,7 @@ async function onRunReconcile() {
     }
     
     const jobInfo = await aiRes.json();
+    console.log('[ANALYSIS] Job created with ID:', jobInfo.job_id);
     
     // Persist RFP text for Step 2
     window.APP = window.APP || {};
