@@ -4796,6 +4796,67 @@ class AIAssistant {
         }
     }
     
+    async handleUserMessage(message) {
+        if (!message || this.isProcessing) return;
+        
+        this.addMessage(message, 'user');
+        
+        if (message.startsWith('/')) {
+            await this.processSlashCommand(message);
+            return;
+        }
+        
+        if (this.isAnalysisCommand(message)) {
+            const mode = message.toLowerCase().includes('deep') ? 'deep' : 'fast';
+            await this.triggerAnalysis(mode);
+            return;
+        }
+        
+        if (this.isSubmissionCommand(message)) {
+            await this.executeSubmission();
+            return;
+        }
+        
+        this.setProcessing(true);
+        const typingId = this.addTypingIndicator();
+        
+        try {
+            const context = this.getCurrentContext();
+            const gpt5TierSelector = document.getElementById('gpt5-tier-selector') || document.getElementById('chatgpt-gpt5-tier');
+            const gpt5Tier = gpt5TierSelector ? gpt5TierSelector.value : 'auto';
+            
+            const response = await this.retryWithBackoff(
+                () => fetch('/api/agent/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        context: context,
+                        session_id: this.sessionId,
+                        gpt5_tier: gpt5Tier
+                    })
+                }),
+                2,
+                1000
+            );
+            
+            const result = await response.json();
+            this.removeTypingIndicator(typingId);
+            this.addMessage(result.message, 'assistant');
+            
+            if (result.success && result.actions && result.actions.length > 0) {
+                await this.executeActions(result.actions);
+            }
+            
+        } catch (error) {
+            console.error('[CHARLES] Error:', error);
+            this.removeTypingIndicator(typingId);
+            this.handleError(error, 'chat', { message });
+        } finally {
+            this.setProcessing(false);
+        }
+    }
+    
     isAnalysisCommand(message) {
         const lowerMessage = message.toLowerCase();
         const analysisKeywords = ['analyze', 'analysis', 'deep mode', 'fast mode', 'scan', 'evaluate'];
