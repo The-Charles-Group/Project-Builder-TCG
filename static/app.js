@@ -5073,30 +5073,45 @@ async function buildFromCurrentSelection() {
   let selectedComponentsPayload = {};
   try {
     console.log('[BUILD] Step 4/10: Building component payload...');
+    console.log('[BUILD DEBUG] Number of codes to process:', codes.length);
     
+    let processedCount = 0;
     codes.forEach(code => {
+      console.log(`[BUILD DEBUG] Processing component for code ${processedCount + 1}/${codes.length}: ${code}`);
       try {
         // Try new state system first (preferred)
         let compSet = window.APB?.step2?.selectedComponentsByCode?.[code];
+        console.log(`[BUILD DEBUG] ${code} - Found in APB.step2:`, !!compSet);
         
         // Fall back to old state system if new system has no data
         if (!compSet && window.S2) {
           compSet = S2.selectedComponentsMap?.[code];
+          console.log(`[BUILD DEBUG] ${code} - Found in S2:`, !!compSet);
         }
         
         if (compSet instanceof Set) {
+          console.log(`[BUILD DEBUG] ${code} - Is Set with size:`, compSet.size);
           if (compSet.size > 0) {
             const dict = Object.create(null);
-            compSet.forEach(label => { dict[label] = null; });
+            let setItemCount = 0;
+            compSet.forEach(label => { 
+              dict[label] = null;
+              setItemCount++;
+              console.log(`[BUILD DEBUG] ${code} - Added component ${setItemCount}: ${label}`);
+            });
             selectedComponentsPayload[code] = dict;
           } else {
             selectedComponentsPayload[code] = {};
           }
         } else if (compSet && typeof compSet === 'object') {
+          console.log(`[BUILD DEBUG] ${code} - Is object`);
           selectedComponentsPayload[code] = compSet;
         } else {
+          console.log(`[BUILD DEBUG] ${code} - Using __ALL__ fallback`);
           selectedComponentsPayload[code] = "__ALL__";
         }
+        processedCount++;
+        console.log(`[BUILD DEBUG] Successfully processed ${processedCount}/${codes.length} codes`);
       } catch (compError) {
         console.warn(`[BUILD] Error processing components for ${code}:`, compError);
         selectedComponentsPayload[code] = "__ALL__"; // Safe default
@@ -5104,6 +5119,7 @@ async function buildFromCurrentSelection() {
     });
     
     console.log('[BUILD] Component payload built:', selectedComponentsPayload);
+    console.log('[BUILD DEBUG] Component payload complete - moving to L3');
   } catch (error) {
     console.warn('[BUILD] Error building component payload:', error);
     // Use safe defaults
@@ -5116,29 +5132,55 @@ async function buildFromCurrentSelection() {
   let l3Payload = {};
   try {
     console.log('[BUILD] Step 5/10: Building L3 subtasks payload...');
+    console.log('[BUILD DEBUG] Checking for L3 data in APB.step2...');
     
     if (window.APB?.step2?.selectedL3ByKey) {
-      Object.entries(window.APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
+      const l3Keys = Object.entries(window.APB.step2.selectedL3ByKey);
+      console.log(`[BUILD DEBUG] Found ${l3Keys.length} L3 keys to process`);
+      
+      let l3ProcessedCount = 0;
+      l3Keys.forEach(([key, l3Set]) => {
+        console.log(`[BUILD DEBUG] Processing L3 key ${l3ProcessedCount + 1}/${l3Keys.length}: ${key}`);
         try {
           const [code, component] = key.split('::');
+          console.log(`[BUILD DEBUG] L3 key split - code: ${code}, component: ${component}`);
+          console.log(`[BUILD DEBUG] Is code in selected codes:`, codes.includes(code));
+          console.log(`[BUILD DEBUG] L3 Set size:`, l3Set?.size);
+          
           if (codes.includes(code) && l3Set && l3Set.size > 0) {
             if (!l3Payload[code]) l3Payload[code] = {};
-            l3Payload[code][component] = Array.from(l3Set).map(item => {
+            console.log(`[BUILD DEBUG] Converting L3 Set to Array for ${key}...`);
+            const l3Array = Array.from(l3Set);
+            console.log(`[BUILD DEBUG] Array created, length: ${l3Array.length}`);
+            
+            const mappedItems = l3Array.map((item, idx) => {
+              console.log(`[BUILD DEBUG] Mapping L3 item ${idx + 1}/${l3Array.length}:`, typeof item);
               if (typeof item === 'string') return item;
               if (item && typeof item === 'object') {
                 const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
                 if (name && typeof name === 'string') return name;
               }
               return null;
-            }).filter(name => name && name !== '[object Object]' && name !== '');
+            });
+            console.log(`[BUILD DEBUG] Mapped ${mappedItems.length} items`);
+            
+            const filteredItems = mappedItems.filter(name => name && name !== '[object Object]' && name !== '');
+            console.log(`[BUILD DEBUG] Filtered to ${filteredItems.length} valid items`);
+            
+            l3Payload[code][component] = filteredItems;
           }
+          l3ProcessedCount++;
+          console.log(`[BUILD DEBUG] L3 processed ${l3ProcessedCount}/${l3Keys.length}`);
         } catch (l3Error) {
           console.warn(`[BUILD] Error processing L3 for ${key}:`, l3Error);
         }
       });
+    } else {
+      console.log('[BUILD DEBUG] No L3 data found in APB.step2.selectedL3ByKey');
     }
     
     console.log('[BUILD] L3 payload built:', l3Payload);
+    console.log('[BUILD DEBUG] L3 payload complete - moving to ScenarioManager update');
   } catch (error) {
     console.warn('[BUILD] Non-critical: Error building L3 payload:', error);
     // Continue without L3 data
@@ -5193,27 +5235,48 @@ async function buildFromCurrentSelection() {
   
   try {
     console.log('[BUILD] Step 8/10: Building scenario via ScenarioManager...');
+    console.log('[BUILD DEBUG] ScenarioManager exists:', !!window.ScenarioManager);
+    console.log('[BUILD DEBUG] ScenarioManager.buildScenario exists:', !!window.ScenarioManager?.buildScenario);
     
     if (window.ScenarioManager?.buildScenario) {
+      console.log('[BUILD DEBUG] *** CALLING ScenarioManager.buildScenario() ***');
+      console.log('[BUILD DEBUG] Call initiated at:', new Date().toISOString());
+      
       const json = await window.ScenarioManager.buildScenario();
+      
+      console.log('[BUILD DEBUG] *** ScenarioManager.buildScenario() RETURNED ***');
+      console.log('[BUILD DEBUG] Response received at:', new Date().toISOString());
       console.log('[BUILD] ScenarioManager response:', json);
+      console.log('[BUILD DEBUG] Response type:', typeof json);
+      console.log('[BUILD DEBUG] Response keys:', json ? Object.keys(json) : 'null');
       
       // Extract scenarios with multiple fallback attempts
+      console.log('[BUILD DEBUG] Extracting scenarios from response...');
       scenarios = json.scenarios || {};
+      console.log('[BUILD DEBUG] Scenarios extracted:', Object.keys(scenarios || {}).length, 'scenarios');
+      
       let scenario = scenarios.A || json.scenario || json;
+      console.log('[BUILD DEBUG] Scenario A exists:', !!scenario);
       
       // Wrap if needed
       if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
+        console.log('[BUILD DEBUG] Wrapping scenario in scenarios object...');
         scenarios = { A: scenario };
       }
       
       if (scenarios && Object.keys(scenarios).length > 0) {
         buildSuccess = true;
         console.log('[BUILD] Scenario built successfully');
+        console.log('[BUILD DEBUG] Build success - proceeding to state save');
+      } else {
+        console.log('[BUILD DEBUG] Scenarios empty or invalid');
       }
+    } else {
+      console.log('[BUILD DEBUG] ScenarioManager.buildScenario not available');
     }
   } catch (error) {
     console.error('[BUILD] Error building scenario:', error);
+    console.error('[BUILD DEBUG] Error stack:', error.stack);
     // Will attempt fallback below
   }
   
@@ -5281,31 +5344,48 @@ async function buildFromCurrentSelection() {
   // CRITICAL: Show Step 3 - This MUST happen
   try {
     console.log('[BUILD] Step 10/10: CRITICAL - Showing Step 3...');
+    console.log('[BUILD DEBUG] *** ABOUT TO SHOW STEP 3 ***');
+    console.log('[BUILD DEBUG] Current time:', new Date().toISOString());
     
     const step3 = document.querySelector("#step3");
+    console.log('[BUILD DEBUG] Step 3 element found:', !!step3);
+    
     if (step3) {
+      console.log('[BUILD DEBUG] Current Step 3 display:', step3.style.display);
+      console.log('[BUILD DEBUG] Setting Step 3 to display: block...');
+      
       // Force display regardless of any errors
       step3.style.display = "block";
       step3.style.visibility = "visible";
       step3.style.opacity = "1";
       
+      console.log('[BUILD DEBUG] Display set. Removing error classes...');
+      
       // Clear any potential error classes
       step3.classList.remove('hidden', 'error', 'loading');
       
       console.log('[BUILD] ✓ Step 3 is now visible');
+      console.log('[BUILD DEBUG] *** STEP 3 SHOULD BE VISIBLE NOW ***');
       
       // Smooth scroll (non-critical)
       try {
+        console.log('[BUILD DEBUG] Attempting smooth scroll...');
         step3.scrollIntoView({ behavior: "smooth", block: "start" });
+        console.log('[BUILD DEBUG] Smooth scroll initiated');
       } catch (scrollError) {
+        console.log('[BUILD DEBUG] Smooth scroll failed, trying basic scroll...');
         // Fallback to basic scroll
         step3.scrollIntoView();
+        console.log('[BUILD DEBUG] Basic scroll completed');
       }
       
       // Show success message if we had to use fallback
       if (!window.ScenarioManager || !scenarios) {
+        console.log('[BUILD DEBUG] Showing recoverable warning...');
         showRecoverableWarning('Some features may be limited. You can still proceed with pricing configuration.');
       }
+      
+      console.log('[BUILD DEBUG] Step 3 display complete');
     } else {
       console.error('[BUILD] CRITICAL ERROR: Step 3 element not found in DOM');
       showUserFriendlyError('Unable to display pricing section. Please refresh the page and try again.', true);
@@ -5314,14 +5394,21 @@ async function buildFromCurrentSelection() {
     }
   } catch (error) {
     console.error('[BUILD] CRITICAL ERROR showing Step 3:', error);
+    console.error('[BUILD DEBUG] Error stack:', error.stack);
     // Last resort - try to show something
     createStep3Fallback();
   }
 
+  // Clear timeout since we got here
+  clearTimeout(timeoutId);
+  console.log('[BUILD DEBUG] Timeout cleared');
+  
   // Initialize pricing table (non-critical)
   try {
+    console.log('[BUILD DEBUG] Checking for pricing table initialization...');
     if (window.APBOneTable && scenarios?.A) {
       console.log('[BUILD] Initializing pricing table...');
+      console.log('[BUILD DEBUG] Pricing data items count:', scenarios.A.items?.length || 0);
       
       const pricingData = scenarios.A;
       const transformedData = {

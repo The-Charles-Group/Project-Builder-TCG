@@ -6,6 +6,14 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
+## Development Principles
+**CRITICAL**: This project follows strict development principles documented in `DEVELOPMENT_PRINCIPLES.md`:
+- **Never destroy functionality to simplify code** - Always debug and fix the root cause
+- **Preserve all user features** - Component selections, L3 tasks, retainers, state management, etc.
+- **Build additional code if needed** - Add more logic/features to solve problems properly
+- **Debug thoroughly before changing** - Identify root causes with comprehensive logging
+- **Test completely** - Verify all features work after fixes
+
 ## System Architecture
 
 ### Backend Architecture
