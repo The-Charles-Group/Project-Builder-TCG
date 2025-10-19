@@ -88,27 +88,40 @@
         return originalSetInterval.apply(this, arguments);
     };
     
-    // 5. Override XMLHttpRequest to block requests to the problematic job
+    // 5. Override XMLHttpRequest to block requests to problematic jobs
     const originalOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function(method, url, ...args) {
-        if (url && url.includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
-            console.log('☢️ BLOCKED XHR request to problematic job:', url);
+        // Block ALL polling to /api/ai/jobs/ endpoints for first 10 seconds
+        const timeSinceLoad = Date.now() - window.pageLoadTime;
+        if (url && url.includes('/api/ai/jobs/') && timeSinceLoad < 10000) {
+            console.log('☢️ BLOCKED XHR request to AI jobs endpoint (within 10s of page load):', url);
             // Replace with a dummy URL that will return 404 but won't flood logs
+            url = '/api/null';
+        } else if (url && url.includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
+            console.log('☢️ BLOCKED XHR request to problematic job ID:', url);
             url = '/api/null';
         }
         return originalOpen.apply(this, [method, url, ...args]);
     };
     
-    // 6. Override fetch to block requests to the problematic job
+    // 6. Override fetch to block requests to problematic jobs
     const originalFetch = window.fetch;
     window.fetch = function(url, ...args) {
-        if (url && url.toString().includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
-            console.log('☢️ BLOCKED fetch request to problematic job:', url);
+        // Block ALL polling to /api/ai/jobs/ endpoints for first 10 seconds
+        const timeSinceLoad = Date.now() - window.pageLoadTime;
+        if (url && url.toString().includes('/api/ai/jobs/') && timeSinceLoad < 10000) {
+            console.log('☢️ BLOCKED fetch request to AI jobs endpoint (within 10s of page load):', url);
             // Return a fake 404 response
+            return Promise.resolve(new Response(null, { status: 404, statusText: 'Not Found' }));
+        } else if (url && url.toString().includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
+            console.log('☢️ BLOCKED fetch request to problematic job ID:', url);
             return Promise.resolve(new Response(null, { status: 404, statusText: 'Not Found' }));
         }
         return originalFetch.apply(this, arguments);
     };
+    
+    // 7. Set page load time for blocking logic
+    window.pageLoadTime = Date.now();
     
     console.log('☢️ NUCLEAR CLEANUP COMPLETE ☢️');
     console.log('- All intervals cleared');
