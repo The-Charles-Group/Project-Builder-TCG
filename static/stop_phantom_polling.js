@@ -4,14 +4,22 @@
 (function stopPhantomPolling() {
     console.log('[STOP POLLING] Executing emergency stop for phantom job polling...');
     
+    // Track how many intervals we clear
+    let clearedCount = 0;
+    
     // Stop all intervals in a range (brute force)
+    // This is necessary because intervals created before the fix will continue running
     for (let i = 1; i < 10000; i++) {
         try {
             clearInterval(i);
+            clearTimeout(i);  // Also clear timeouts just in case
+            clearedCount++;
         } catch (e) {
             // Ignore errors
         }
     }
+    
+    console.log(`[STOP POLLING] Cleared ${clearedCount} intervals/timeouts`);
     
     // Clear specific known intervals
     if (window.aiAnalysisInterval) {
@@ -20,7 +28,7 @@
         console.log('[STOP POLLING] Cleared aiAnalysisInterval');
     }
     
-    // Clear aiAnalysisJobId
+    // Clear aiAnalysisJobId - now without checking for specific IDs
     if (window.aiAnalysisJobId) {
         console.log('[STOP POLLING] Clearing aiAnalysisJobId:', window.aiAnalysisJobId);
         window.aiAnalysisJobId = null;

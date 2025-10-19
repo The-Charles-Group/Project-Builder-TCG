@@ -106,15 +106,6 @@ class AIAssistant {
                         localStorage.setItem('charles_agent_state', JSON.stringify(state));
                         this.agentState.jobId = null;
                     }
-                    
-                    // Special case: Clear the known problematic job ID
-                    if (state.jobId === '642a96bd-f94b-440e-b865-d160839a57c0') {
-                        console.log('[CHARLES] Clearing known problematic job ID:', state.jobId);
-                        state.jobId = null;
-                        state.jobIdTimestamp = null;
-                        localStorage.setItem('charles_agent_state', JSON.stringify(state));
-                        this.agentState.jobId = null;
-                    }
                 }
             } catch (e) {
                 console.error('[CHARLES] Failed to cleanup stale job IDs:', e);

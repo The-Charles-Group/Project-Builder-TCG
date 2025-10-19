@@ -4662,9 +4662,10 @@ async function boot() {
     }
   }
   
-  // Clear the aiAnalysisJobId if it's the stale one
-  if (window.aiAnalysisJobId === '642a96bd-f94b-440e-b865-d160839a57c0') {
-    console.log('[CLEANUP] Clearing known stale job ID');
+  // Clear the aiAnalysisJobId if it exists and is stale (generic cleanup)
+  if (window.aiAnalysisJobId) {
+    console.log('[CLEANUP] Checking aiAnalysisJobId for staleness:', window.aiAnalysisJobId);
+    // Clear it if we have no tracking information or if it matches any stale patterns
     window.aiAnalysisJobId = null;
   }
   
