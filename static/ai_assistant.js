@@ -100,14 +100,19 @@ class AIAssistant {
                 const state = JSON.parse(savedState);
                 if (state && state.jobId) {
                     const jobIdAge = state.jobIdTimestamp ? (Date.now() - state.jobIdTimestamp) : Infinity;
-                    const fiveMinutes = 5 * 60 * 1000; // 5 minutes
+                    const thirtyMinutes = 30 * 60 * 1000; // 30 minutes - increased from 5
                     
-                    if (jobIdAge > fiveMinutes) {
-                        console.log('[CHARLES] Found stale job ID on init, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                    // Only clear if job is truly stale (older than 30 minutes)
+                    if (jobIdAge > thirtyMinutes) {
+                        console.log('[CHARLES] Found truly stale job ID on init, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
                         state.jobId = null;
                         state.jobIdTimestamp = null;
                         localStorage.setItem('charles_agent_state', JSON.stringify(state));
                         this.agentState.jobId = null;
+                    } else {
+                        console.log('[CHARLES] Preserving active job ID:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                        // Preserve the job ID if it's recent
+                        this.agentState.jobId = state.jobId;
                     }
                 }
             } catch (e) {
@@ -115,9 +120,9 @@ class AIAssistant {
             }
         }
         
-        // Clear any existing polling interval
-        if (this.currentPollInterval) {
-            console.log('[CHARLES] Clearing existing poll interval on init');
+        // Don't immediately clear polling interval - let it continue if there's an active job
+        if (this.currentPollInterval && !this.agentState.jobId) {
+            console.log('[CHARLES] Clearing poll interval as no active job');
             clearInterval(this.currentPollInterval);
             this.currentPollInterval = null;
         }
