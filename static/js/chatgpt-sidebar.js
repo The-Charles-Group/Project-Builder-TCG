@@ -240,15 +240,21 @@ class ChatGPTSidebar {
         
         if (input) {
             input.addEventListener('input', () => {
-                if (sendBtn) {
-                    sendBtn.disabled = !input.value.trim();
+                // Enable send button if there's text OR staged files
+                if (sendBtn && window.aiAssistant) {
+                    const hasInput = input.value.trim().length > 0;
+                    const hasFiles = window.aiAssistant.stagedFiles?.length > 0;
+                    sendBtn.disabled = !hasInput && !hasFiles;
                 }
             });
             
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    if (input.value.trim()) {
+                    // Allow sending if there's text OR staged files
+                    const hasInput = input.value.trim().length > 0;
+                    const hasFiles = window.aiAssistant?.stagedFiles?.length > 0;
+                    if (hasInput || hasFiles) {
                         this.sendMessage();
                     }
                 }

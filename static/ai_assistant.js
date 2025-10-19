@@ -4277,228 +4277,149 @@ class AIAssistant {
     }
     
     async handleFileUpload(files) {
-        if (files.length > 1) {
-            // Batch processing
-            await this.processFiles(files);
-        } else {
-            // Single file
-            await this.handleSingleFile(files[0]);
-        }
+        // REPLIT AGENT BEHAVIOR: Stage files without auto-processing
+        // Add files to staging area (avoid duplicates)
+        Array.from(files).forEach(file => {
+            if (!this.stagedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                this.stagedFiles.push(file);
+            }
+        });
+        
+        this.updateStagedFiles();
+        this.updateSendButton();
+        
+        // Show message about staged files
+        const fileNames = Array.from(files).map(f => f.name).join(', ');
+        this.addMessage(`📎 Added ${files.length} file(s): ${fileNames}`, 'assistant');
+        this.addMessage('💡 Click send or press Enter to submit these files for analysis', 'assistant');
     }
     
     async handleSingleFile(file) {
-        const fileExt = file.name.split('.').pop().toLowerCase();
+        // DEPRECATED: This method is no longer used in the new Replit-style workflow
+        // Files are now staged via handleFileUpload() and submitted via submitStagedFilesForAnalysis()
+        console.warn('[CHARLES] handleSingleFile() is deprecated. Use staging workflow instead.');
         
-        if (['pdf', 'docx', 'txt'].includes(fileExt)) {
-            // Start tracking this operation
-            const operationId = this.startOperation('file_upload', `Uploading ${file.name}`, { file: file.name });
+        // Return basic file info for compatibility
+        return {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            staged: true
+        };
+    }
+    
+    async submitStagedFilesForAnalysis() {
+        // NEW REPLIT-STYLE WORKFLOW: Submit staged files directly to AI analysis
+        if (this.stagedFiles.length === 0) {
+            this.addMessage('⚠️ No files staged for submission.', 'assistant');
+            return;
+        }
+        
+        const operationId = this.startOperation('file_submission', `Submitting ${this.stagedFiles.length} file(s)`, { 
+            fileCount: this.stagedFiles.length 
+        });
+        
+        const taskMonitor = this.createTaskMonitor();
+        taskMonitor.addTask('Upload files to AI analysis', 'in_progress');
+        taskMonitor.addTask('Start AI analysis', 'pending');
+        taskMonitor.addTask('Track analysis progress', 'pending');
+        
+        try {
+            // Show progress message
+            const fileNames = this.stagedFiles.map(f => f.name).join(', ');
+            this.addMessage(`🚀 Submitting ${this.stagedFiles.length} file(s): ${fileNames}`, 'assistant');
             
-            // Create task monitor
-            const taskMonitor = this.createTaskMonitor();
-            taskMonitor.addTask('Upload document', 'in_progress');
-            taskMonitor.addTask('Click Analyze with AI button', 'pending');
-            taskMonitor.addTask('Wait for AI analysis', 'pending');
-            taskMonitor.addTask('Load deliverables', 'pending');
-            taskMonitor.addTask('Select and calculate pricing', 'pending');
+            // Create FormData with all staged files
+            const formData = new FormData();
             
-            this.addMessage(`📄 Setting "${file.name}" in main application...`, 'assistant');
+            // Add all files
+            this.stagedFiles.forEach(file => {
+                formData.append('file', file);
+            });
             
-            try {
-                // Access parent window (main app)
-                const parentWindow = window.parent || window;
-                const parentDoc = parentWindow.document;
-                
-                // Find the main app's file input and analyze button
-                const mainFileInput = parentDoc.querySelector('#rfpFile');
-                const analyzeBtn = parentDoc.querySelector('#btnAnalyze');
-                
-                if (!mainFileInput || !analyzeBtn) {
-                    // Fallback to API if UI elements not found
-                    this.addMessage('⚠️ Could not find UI elements, using direct upload...', 'assistant');
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    formData.append('mode', this.agentState.analysisMode || 'deep');
-                    formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
-                    
-                    const response = await this.retryWithBackoff(
-                        () => fetch('/api/upload_rfp', {
-                            method: 'POST',
-                            body: formData
-                        }),
-                        3,
-                        2000
-                    );
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        taskMonitor.updateTask(0, 'completed');
-                        
-                        if (result.job_id) {
-                            this.agentState.jobId = result.job_id;
-                            this.saveState();
-                            this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
-                            await this.trackAnalysisJob(result.job_id, taskMonitor);
-                        }
-                    }
-                    return;
-                }
-                
-                // Alternative approach: First extract text from file, then put it in textarea
-                this.addMessage('📄 Extracting text from PDF...', 'assistant');
-                
-                // Upload file to extract text
-                const formData = new FormData();
-                formData.append('files', file);
-                formData.append('analyze_images', 'true');
-                
-                const extractResponse = await fetch('/api/summarize_by_file', {
+            // Add analysis parameters
+            const analysisMode = this.agentState.analysisMode || document.getElementById('analysis-mode')?.value || 'deep';
+            const gpt5Tier = document.getElementById('gpt5-tier-selector')?.value || 
+                           document.getElementById('chatgpt-gpt5-tier')?.value || 'thinking-mini';
+            
+            formData.append('mode', analysisMode);
+            formData.append('tier', gpt5Tier);
+            formData.append('analyze', 'true'); // Direct to AI analysis
+            
+            // Submit to API
+            const response = await this.retryWithBackoff(
+                () => fetch('/api/upload_rfp', {
                     method: 'POST',
                     body: formData
+                }),
+                3,
+                2000
+            );
+            
+            if (!response.ok) {
+                throw new Error(`Upload failed: ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            taskMonitor.updateTask(0, 'completed');
+            
+            // Handle the response
+            if (result.job_id) {
+                // Store job ID and track analysis
+                this.agentState.jobId = result.job_id;
+                this.saveState();
+                
+                taskMonitor.updateTask(1, 'completed');
+                taskMonitor.updateTask(2, 'in_progress');
+                
+                this.addMessage(`✅ Files submitted! Job ID: ${result.job_id}`, 'assistant');
+                this.addMessage(`🔍 AI analysis started...`, 'assistant');
+                
+                // Store file info in agent state
+                this.stagedFiles.forEach(file => {
+                    this.agentState.uploadedFiles.push({
+                        name: file.name,
+                        timestamp: Date.now(),
+                        job_id: result.job_id
+                    });
                 });
                 
-                if (!extractResponse.ok) {
-                    throw new Error('Failed to extract text from file');
-                }
+                // Clear staged files after successful submission
+                this.stagedFiles = [];
+                this.updateStagedFiles();
+                this.updateSendButton();
                 
-                const summary = await extractResponse.json();
-                const extractedText = summary.summary_text || '';
+                // Track the analysis job
+                await this.trackAnalysisJob(result.job_id, taskMonitor);
                 
-                if (!extractedText) {
-                    this.addMessage('⚠️ No text extracted from file. Trying visual upload...', 'assistant');
-                    
-                    // Fallback: Try to set file directly (may not work across contexts)
-                    const dt = new DataTransfer();
-                    dt.items.add(file);
-                    mainFileInput.files = dt.files;
-                    mainFileInput.dispatchEvent(new Event('change', { bubbles: true }));
-                } else {
-                    taskMonitor.updateTask(0, 'completed');
-                    this.addMessage(`✅ Extracted ${extractedText.length} characters from PDF`, 'assistant');
-                    
-                    // Put extracted text into the textarea instead
-                    const rfpTextArea = parentDoc.querySelector('#rfpText');
-                    if (rfpTextArea) {
-                        // Visual effect on textarea
-                        this.flashElement(rfpTextArea);
-                        
-                        // Set the text
-                        rfpTextArea.value = extractedText;
-                        rfpTextArea.dispatchEvent(new Event('input', { bubbles: true }));
-                        rfpTextArea.dispatchEvent(new Event('change', { bubbles: true }));
-                        
-                        this.addMessage('📝 Text loaded into RFP content field', 'assistant');
-                        
-                        // Clear any file input to avoid confusion
-                        if (mainFileInput.files.length === 0) {
-                            // Good - no file conflict
-                        } else {
-                            mainFileInput.value = '';
-                        }
-                    }
-                }
+                this.completeOperation(operationId);
                 
-                // Update the file list display if it exists
-                const fileListDisplay = parentDoc.querySelector('#selected-files-list');
-                if (fileListDisplay) {
-                    fileListDisplay.textContent = `Processing: ${file.name}`;
-                    this.flashElement(fileListDisplay);
-                }
-                
-                // Wait a moment for UI to update
-                await this.delay(800);
-                
-                // Click the analyze button with visual effect
-                taskMonitor.updateTask(1, 'in_progress');
-                this.addMessage('🖱️ Clicking "Analyze with AI" button...', 'assistant');
-                
-                // Add visual click effect
-                this.showClickAnimation(analyzeBtn);
-                await this.delay(300);
-                
-                // Actually click the button
-                analyzeBtn.click();
+            } else if (result.success) {
+                // Successful upload without job tracking
                 taskMonitor.updateTask(1, 'completed');
+                taskMonitor.updateTask(2, 'completed');
                 
-                this.addMessage('✅ Analysis started! Watch the progress bar...', 'assistant');
+                this.addMessage(`✅ Files submitted successfully!`, 'assistant');
                 
-                // Monitor for the progress bar
-                taskMonitor.updateTask(2, 'in_progress');
-                await this.monitorMainAppProgress(taskMonitor);
+                // Clear staged files
+                this.stagedFiles = [];
+                this.updateStagedFiles();
+                this.updateSendButton();
                 
-            } catch (error) {
-                console.error('[CHARLES] Error in visual upload:', error);
-                this.handleError(error, 'visual_upload');
+                this.completeOperation(operationId);
                 
-                // Fallback to old method - wrap in its own try-catch
-                try {
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    formData.append('mode', this.agentState.analysisMode || 'deep');
-                    formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
-                    
-                    const response = await this.retryWithBackoff(
-                        () => fetch('/api/upload_rfp', {
-                            method: 'POST',
-                            body: formData
-                        }),
-                        3,
-                        2000
-                    );
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        taskMonitor.updateTask(0, 'completed');
-                        taskMonitor.updateTask(1, 'completed');
-                        
-                        // Store the job ID for tracking
-                        if (result.job_id) {
-                            this.agentState.jobId = result.job_id;
-                            this.saveState();
-                            
-                            taskMonitor.updateTask(2, 'in_progress');
-                            this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
-                            this.addMessage(`🔍 Starting AI analysis...`, 'assistant');
-                            
-                            // Start tracking the analysis job
-                            taskMonitor.updateTask(3, 'in_progress');
-                            await this.trackAnalysisJob(result.job_id, taskMonitor);
-                        } else {
-                            // Fallback for older API responses
-                            const rfpTextEl = document.getElementById('rfpText');
-                            if (rfpTextEl && result.text) {
-                                rfpTextEl.value = result.text;
-                                rfpTextEl.dispatchEvent(new Event('input', { bubbles: true }));
-                                rfpTextEl.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-                            
-                            taskMonitor.updateTask(2, 'completed');
-                            this.addMessage(`✅ Document processed. Text extracted: ${result.text_length || 0} chars`, 'assistant');
-                        }
-                        
-                        // Store in agent state
-                        this.agentState.uploadedFiles.push({
-                            name: file.name,
-                            timestamp: Date.now(),
-                            text: result.text,
-                            job_id: result.job_id
-                        });
-                        
-                        this.saveState();
-                        this.showSuccessMessage(`File "${file.name}" submitted for analysis!`);
-                        
-                    } else {
-                        throw new Error(`Upload failed: ${response.statusText}`);
-                    }
-                } catch (fallbackError) {
-                    taskMonitor.updateAllPending('failed');
-                    this.handleError(fallbackError, 'file_upload', { file });
-                }
+            } else {
+                throw new Error(result.error || 'Unknown error during file submission');
             }
-        } else if (fileExt === 'xlsx') {
-            this.addMessage(`📊 Processing Excel configuration file "${file.name}"...`, 'assistant');
-            this.addMessage('⚠️ Excel configuration upload not yet implemented.', 'assistant');
-        } else {
-            this.addMessage(`⚠️ Unsupported file type: .${fileExt}. Please upload PDF, DOCX, TXT, or XLSX files.`, 'assistant');
+            
+        } catch (error) {
+            console.error('[CHARLES] Error submitting files:', error);
+            taskMonitor.updateAllPending('failed');
+            this.completeOperation(operationId);
+            this.handleError(error, 'file_submission', { fileCount: this.stagedFiles.length });
+            
+            // Don't clear staged files on error so user can retry
+            this.addMessage('❌ File submission failed. Files remain staged - you can try again.', 'assistant');
         }
     }
     
@@ -4709,12 +4630,10 @@ class AIAssistant {
             input.value = '';
             this.updateSendButton();
             
-            // Process staged files
-            await this.handleFileUpload(this.stagedFiles);
+            // NEW REPLIT WORKFLOW: Submit staged files directly to AI analysis
+            await this.submitStagedFilesForAnalysis();
             
-            // Clear staging area
-            this.stagedFiles = [];
-            this.updateStagedFiles();
+            // Note: submitStagedFilesForAnalysis() clears staged files on success
             
             return;
         }
