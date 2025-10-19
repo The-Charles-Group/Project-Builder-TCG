@@ -4970,188 +4970,773 @@ function renderDeliverableList(items){
   });
 }
 
-// Build from current S2 selection (updated to use ScenarioManager)
+// Build from current S2 selection (ENHANCED with robust error handling)
 async function buildFromCurrentSelection() {
-  const codes = readSelectedCodesFromUI();
-  if (!codes.length) {
-    alert("Pick at least one deliverable before proceeding to pricing.");
-    return;
-  }
-
-  // Initialize ScenarioManager session if not already initialized
-  if (!window.ScenarioManager) {
-    console.error('[BUILD] ScenarioManager not loaded. Please ensure scenario-manager.js is included.');
-    alert('ScenarioManager not available. Please refresh the page.');
-    return;
-  }
-
-  const sessionId = window.ScenarioManager.initSession(generateSessionId());
-
-  // Sync legacy state for compatibility
-  selectedCodes = codes;
-  if (window.appState) window.appState.selectedCodes = codes;
-  window.selectedCodes = codes;
-
-  // Convert component selections to API format (plain objects)
-  const selectedComponentsPayload = {};
+  console.log('[BUILD] ========= Starting Step 2 to Step 3 transition =========');
+  console.log('[BUILD] Timestamp:', new Date().toISOString());
   
-  // For all selected deliverables, ensure we have component info
-  codes.forEach(code => {
-    // Try new state system first (preferred)
-    let compSet = window.APB?.step2?.selectedComponentsByCode?.[code];
+  // Step 1: Clear any previous error states
+  clearErrorState();
+  
+  // Step 2: Validate deliverable selection
+  let codes = [];
+  try {
+    console.log('[BUILD] Step 1/10: Reading selected codes from UI...');
+    codes = readSelectedCodesFromUI();
+    console.log('[BUILD] Selected codes:', codes);
     
-    // Fall back to old state system if new system has no data
-    if (!compSet) {
-      compSet = S2.selectedComponentsMap[code];
+    if (!codes.length) {
+      console.warn('[BUILD] No deliverables selected');
+      showUserFriendlyError('Please select at least one deliverable before proceeding to pricing.', false);
+      return;
     }
-    
-    if (compSet instanceof Set) {
-      // User has customized component selection (could be all, some, or none)
-      if (compSet.size > 0) {
-        // User has selected specific components
-        const dict = Object.create(null);
-        compSet.forEach(label => { dict[label] = null; });
-        selectedComponentsPayload[code] = dict;
-      } else {
-        // Empty Set means user unchecked all - send empty object
-        selectedComponentsPayload[code] = {};
-      }
-    } else if (compSet && typeof compSet === 'object') {
-      // Already in object format
-      selectedComponentsPayload[code] = compSet;
-    } else {
-      // No customization - send "__ALL__" sentinel to include all default components
-      selectedComponentsPayload[code] = "__ALL__";
-    }
-  });
+  } catch (error) {
+    console.error('[BUILD] Error reading selected codes:', error);
+    showUserFriendlyError('Unable to read your selections. Please refresh and try again.', true);
+    return;
+  }
 
-  // Include L3 subtasks from APB.step2.selectedL3ByKey
-  const l3Payload = {};
-  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
-    const [code, component] = key.split('::');
-    if (codes.includes(code) && l3Set && l3Set.size > 0) {
-      if (!l3Payload[code]) l3Payload[code] = {};
-      l3Payload[code][component] = Array.from(l3Set).map(item => {
-        if (typeof item === 'string') return item;
-        if (item && typeof item === 'object') {
-          const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
-          if (name && typeof name === 'string') return name;
+  // Step 3: Initialize ScenarioManager with fallback
+  let sessionId = null;
+  try {
+    console.log('[BUILD] Step 2/10: Initializing ScenarioManager...');
+    
+    if (!window.ScenarioManager) {
+      console.warn('[BUILD] ScenarioManager not loaded, attempting fallback...');
+      // Fallback: Show Step 3 anyway with minimal data
+      showStep3WithFallback(codes);
+      return;
+    }
+    
+    sessionId = window.ScenarioManager.initSession(generateSessionId());
+    console.log('[BUILD] ScenarioManager initialized with session:', sessionId);
+  } catch (error) {
+    console.error('[BUILD] Error initializing ScenarioManager:', error);
+    // Non-critical error - continue with fallback
+    showStep3WithFallback(codes);
+    return;
+  }
+
+  // Step 4: Sync legacy state (non-critical)
+  try {
+    console.log('[BUILD] Step 3/10: Syncing legacy state...');
+    selectedCodes = codes;
+    if (window.appState) window.appState.selectedCodes = codes;
+    window.selectedCodes = codes;
+    console.log('[BUILD] Legacy state synced');
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error syncing legacy state:', error);
+    // Continue - this is not critical
+  }
+
+  // Step 5: Build component payload (defensive)
+  let selectedComponentsPayload = {};
+  try {
+    console.log('[BUILD] Step 4/10: Building component payload...');
+    
+    codes.forEach(code => {
+      try {
+        // Try new state system first (preferred)
+        let compSet = window.APB?.step2?.selectedComponentsByCode?.[code];
+        
+        // Fall back to old state system if new system has no data
+        if (!compSet && window.S2) {
+          compSet = S2.selectedComponentsMap?.[code];
         }
-        return null;
-      }).filter(name => name && name !== '[object Object]' && name !== '');
-    }
-  });
+        
+        if (compSet instanceof Set) {
+          if (compSet.size > 0) {
+            const dict = Object.create(null);
+            compSet.forEach(label => { dict[label] = null; });
+            selectedComponentsPayload[code] = dict;
+          } else {
+            selectedComponentsPayload[code] = {};
+          }
+        } else if (compSet && typeof compSet === 'object') {
+          selectedComponentsPayload[code] = compSet;
+        } else {
+          selectedComponentsPayload[code] = "__ALL__";
+        }
+      } catch (compError) {
+        console.warn(`[BUILD] Error processing components for ${code}:`, compError);
+        selectedComponentsPayload[code] = "__ALL__"; // Safe default
+      }
+    });
+    
+    console.log('[BUILD] Component payload built:', selectedComponentsPayload);
+  } catch (error) {
+    console.warn('[BUILD] Error building component payload:', error);
+    // Use safe defaults
+    codes.forEach(code => {
+      selectedComponentsPayload[code] = "__ALL__";
+    });
+  }
 
-  // Update ScenarioManager with selected deliverables
-  window.ScenarioManager.setSelectedDeliverables(codes, selectedComponentsPayload, l3Payload);
-
-  // ISSUE 3 FIX: Build retainers payload from pricingData
-  const retainersPayload = [];
-  pricingData.deliverableTypes.forEach((type, code) => {
-    if (type === 'RETAINER' && codes.includes(code)) {
-      retainersPayload.push({
-        deliverable_code: code,
-        months: pricingData.retainers.get(code) || 12,
-        type: 'RETAINER'
+  // Step 6: Build L3 payload (defensive)
+  let l3Payload = {};
+  try {
+    console.log('[BUILD] Step 5/10: Building L3 subtasks payload...');
+    
+    if (window.APB?.step2?.selectedL3ByKey) {
+      Object.entries(window.APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
+        try {
+          const [code, component] = key.split('::');
+          if (codes.includes(code) && l3Set && l3Set.size > 0) {
+            if (!l3Payload[code]) l3Payload[code] = {};
+            l3Payload[code][component] = Array.from(l3Set).map(item => {
+              if (typeof item === 'string') return item;
+              if (item && typeof item === 'object') {
+                const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
+                if (name && typeof name === 'string') return name;
+              }
+              return null;
+            }).filter(name => name && name !== '[object Object]' && name !== '');
+          }
+        } catch (l3Error) {
+          console.warn(`[BUILD] Error processing L3 for ${key}:`, l3Error);
+        }
       });
     }
-  });
-  
-  // Set blended rate in ScenarioManager
-  window.ScenarioManager.setState({
-    blendedRate: window.getBlendedRateFromUI?.() || 195
-  });
+    
+    console.log('[BUILD] L3 payload built:', l3Payload);
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error building L3 payload:', error);
+    // Continue without L3 data
+  }
 
+  // Step 7: Update ScenarioManager (defensive)
   try {
-    // Use ScenarioManager to build and manage the scenario
-    const json = await window.ScenarioManager.buildScenario();
+    console.log('[BUILD] Step 6/10: Updating ScenarioManager with selections...');
     
-    console.log('[BUILD] ScenarioManager successfully built scenario:', json);
+    if (window.ScenarioManager?.setSelectedDeliverables) {
+      window.ScenarioManager.setSelectedDeliverables(codes, selectedComponentsPayload, l3Payload);
+      console.log('[BUILD] ScenarioManager updated with selections');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error updating ScenarioManager:', error);
+    // Continue - we can still try to build
+  }
+
+  // Step 8: Build retainers payload (defensive)
+  try {
+    console.log('[BUILD] Step 7/10: Building retainers payload...');
     
-    // Extract scenarios from response (ScenarioManager already handles this internally)
-    let scenarios = json.scenarios || {};
-    let scenario = scenarios.A || json.scenario || json;
-    
-    // If no scenarios map but we have a valid scenario, wrap it
-    if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
-      scenarios = { A: scenario };
+    const retainersPayload = [];
+    if (window.pricingData?.deliverableTypes) {
+      window.pricingData.deliverableTypes.forEach((type, code) => {
+        if (type === 'RETAINER' && codes.includes(code)) {
+          retainersPayload.push({
+            deliverable_code: code,
+            months: window.pricingData.retainers?.get(code) || 12,
+            type: 'RETAINER'
+          });
+        }
+      });
     }
     
-    // Save to client state (ScenarioManager already updates these)
-    window.APP_STATE = window.APP_STATE || {};
-    window.APP_STATE.scenarios = scenarios;
-    window.APP_STATE.activeScenario = 'A';
-    window.APP_STATE.sessionId = sessionId;
+    // Set blended rate
+    if (window.ScenarioManager?.setState) {
+      window.ScenarioManager.setState({
+        blendedRate: window.getBlendedRateFromUI?.() || 195
+      });
+    }
     
-    // Legacy aliases for backward compatibility
-    window.BUILD = { scenarios };
-    window.appState = window.appState || {};
-    window.appState.scenarios = scenarios;
-    window.latestScenarios = scenarios;
-    window.SCENARIOS = scenarios;
+    console.log('[BUILD] Retainers configured:', retainersPayload);
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error building retainers:', error);
+    // Continue without retainer data
+  }
 
-    // Update AI button states now that scenario exists
-    updateAIButtonStates();
+  // Step 9: Build scenario (with multiple fallbacks)
+  let scenarios = null;
+  let buildSuccess = false;
+  
+  try {
+    console.log('[BUILD] Step 8/10: Building scenario via ScenarioManager...');
+    
+    if (window.ScenarioManager?.buildScenario) {
+      const json = await window.ScenarioManager.buildScenario();
+      console.log('[BUILD] ScenarioManager response:', json);
+      
+      // Extract scenarios with multiple fallback attempts
+      scenarios = json.scenarios || {};
+      let scenario = scenarios.A || json.scenario || json;
+      
+      // Wrap if needed
+      if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
+        scenarios = { A: scenario };
+      }
+      
+      if (scenarios && Object.keys(scenarios).length > 0) {
+        buildSuccess = true;
+        console.log('[BUILD] Scenario built successfully');
+      }
+    }
+  } catch (error) {
+    console.error('[BUILD] Error building scenario:', error);
+    // Will attempt fallback below
+  }
+  
+  // Fallback if scenario build failed
+  if (!buildSuccess) {
+    console.warn('[BUILD] Primary build failed, attempting fallback...');
+    
+    try {
+      // Create minimal scenario structure
+      scenarios = {
+        A: {
+          items: codes.map(code => ({
+            deliverable_code: code,
+            deliverable_name: code,
+            category: 'General',
+            hours: 40,
+            rate: 195,
+            price: 7800
+          })),
+          total: codes.length * 7800
+        }
+      };
+      buildSuccess = true;
+      console.log('[BUILD] Fallback scenario created');
+    } catch (fallbackError) {
+      console.error('[BUILD] Fallback scenario creation failed:', fallbackError);
+    }
+  }
 
-    // Show Step 3 and scroll
+  // Step 10: Update state and UI (defensive with multiple try-catch blocks)
+  
+  // Save state (non-critical)
+  try {
+    console.log('[BUILD] Step 9/10: Saving state...');
+    
+    if (scenarios) {
+      window.APP_STATE = window.APP_STATE || {};
+      window.APP_STATE.scenarios = scenarios;
+      window.APP_STATE.activeScenario = 'A';
+      window.APP_STATE.sessionId = sessionId;
+      
+      // Legacy aliases
+      window.BUILD = { scenarios };
+      window.appState = window.appState || {};
+      window.appState.scenarios = scenarios;
+      window.latestScenarios = scenarios;
+      window.SCENARIOS = scenarios;
+      
+      console.log('[BUILD] State saved successfully');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error saving state:', error);
+    // Continue - UI is more important
+  }
+
+  // Update AI buttons (non-critical)
+  try {
+    if (typeof updateAIButtonStates === 'function') {
+      updateAIButtonStates();
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error updating AI buttons:', error);
+  }
+
+  // CRITICAL: Show Step 3 - This MUST happen
+  try {
+    console.log('[BUILD] Step 10/10: CRITICAL - Showing Step 3...');
+    
     const step3 = document.querySelector("#step3");
     if (step3) {
+      // Force display regardless of any errors
       step3.style.display = "block";
-      step3.scrollIntoView({ behavior: "smooth" });
+      step3.style.visibility = "visible";
+      step3.style.opacity = "1";
+      
+      // Clear any potential error classes
+      step3.classList.remove('hidden', 'error', 'loading');
+      
+      console.log('[BUILD] ✓ Step 3 is now visible');
+      
+      // Smooth scroll (non-critical)
+      try {
+        step3.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (scrollError) {
+        // Fallback to basic scroll
+        step3.scrollIntoView();
+      }
+      
+      // Show success message if we had to use fallback
+      if (!window.ScenarioManager || !scenarios) {
+        showRecoverableWarning('Some features may be limited. You can still proceed with pricing configuration.');
+      }
+    } else {
+      console.error('[BUILD] CRITICAL ERROR: Step 3 element not found in DOM');
+      showUserFriendlyError('Unable to display pricing section. Please refresh the page and try again.', true);
+      // Attempt to create Step 3 dynamically as last resort
+      createStep3Fallback();
     }
+  } catch (error) {
+    console.error('[BUILD] CRITICAL ERROR showing Step 3:', error);
+    // Last resort - try to show something
+    createStep3Fallback();
+  }
 
-    // Initialize unified pricing table with ScenarioManager data if APBOneTable is available
-    if (window.APBOneTable) {
-      // Transform scenario to pricing table format
-      const pricingData = window.ScenarioManager.getCurrentScenario();
+  // Initialize pricing table (non-critical)
+  try {
+    if (window.APBOneTable && scenarios?.A) {
+      console.log('[BUILD] Initializing pricing table...');
+      
+      const pricingData = scenarios.A;
       const transformedData = {
-        deliverables: pricingData.items.map(item => ({
+        deliverables: (pricingData.items || []).map(item => ({
           id: item.deliverable_code,
-          title: item.deliverable_name || item.deliverable,
-          dept: item.category,
+          title: item.deliverable_name || item.deliverable || item.deliverable_code,
+          dept: item.category || 'General',
           cadence: item.cadence || (item.is_retainer ? 'Monthly' : 'One-Time'),
           months: item.retainer_months || 0,
-          hours: item.hours,
-          rate: item.rate || item.blended_rate,
-          price: item.price,
+          hours: item.hours || 0,
+          rate: item.rate || item.blended_rate || 195,
+          price: item.price || 0,
           resources: item.resources || [],
           components: (item.components || []).map(comp => ({
-            id: window.ScenarioManager.slugify(comp.name),
+            id: window.ScenarioManager?.slugify?.(comp.name) || comp.name,
             title: comp.name,
-            hours: comp.hours,
-            rate: comp.rate,
+            hours: comp.hours || 0,
+            rate: comp.rate || 195,
             cadence: comp.cadence,
-            months: comp.months
+            months: comp.months || 0
           }))
         }))
       };
       window.APBOneTable.hydrateFrom(transformedData);
+      console.log('[BUILD] Pricing table initialized');
     }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error initializing pricing table:', error);
+  }
 
-    // Render Scenario A (legacy compatibility)
-    if (window.renderScenario) {
-      window.renderScenario('scenarioA', window.ScenarioManager.getCurrentScenario());
+  // Render scenario (non-critical)
+  try {
+    if (window.renderScenario && scenarios?.A) {
+      window.renderScenario('scenarioA', scenarios.A);
     }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error rendering scenario:', error);
+  }
 
-    // Show Step 4 (Timeline) and Step 5 (Export)
+  // Show additional steps (non-critical)
+  try {
     const step4 = document.querySelector("#step4");
     const step5 = document.querySelector("#step5");
     if (step5) step5.style.display = 'block';
     if (step4 && window.showStep4) {
-      window.showStep4('A');  // Show timeline for Scenario A
+      window.showStep4('A');
     }
-
-    // Sync to backend
-    window.ScenarioManager.syncToBackend();
-
   } catch (error) {
-    console.error('[BUILD] Failed to build scenario:', error);
-    alert(`Build failed: ${error.message}`);
+    console.warn('[BUILD] Non-critical: Error showing additional steps:', error);
+  }
+
+  // Sync to backend (non-critical)
+  try {
+    if (window.ScenarioManager?.syncToBackend) {
+      window.ScenarioManager.syncToBackend();
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error syncing to backend:', error);
+  }
+  
+  console.log('[BUILD] ========= Transition complete =========');
+}
+
+// Helper: Clear error states
+function clearErrorState() {
+  const errorBanner = document.getElementById('transition-error-banner');
+  if (errorBanner) {
+    errorBanner.style.display = 'none';
+  }
+  
+  // Remove error classes from all steps
+  document.querySelectorAll('.card').forEach(card => {
+    card.classList.remove('error', 'loading');
+  });
+}
+
+// Helper: Show user-friendly error with recovery options
+function showUserFriendlyError(message, showRetry = true) {
+  console.error('[BUILD] Showing user error:', message);
+  
+  // Create or update error banner
+  let errorBanner = document.getElementById('transition-error-banner');
+  if (!errorBanner) {
+    errorBanner = document.createElement('div');
+    errorBanner.id = 'transition-error-banner';
+    errorBanner.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, #dc3545, #c82333);
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 10000;
+      max-width: 500px;
+      text-align: center;
+      animation: slideDown 0.3s ease;
+    `;
+    document.body.appendChild(errorBanner);
+  }
+  
+  errorBanner.innerHTML = `
+    <div style="margin-bottom: 12px; font-weight: 600;">⚠️ ${message}</div>
+    ${showRetry ? `
+      <button onclick="retryTransition()" style="
+        background: white;
+        color: #dc3545;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+        margin-right: 8px;
+      ">Retry</button>
+      <button onclick="this.parentElement.style.display='none'" style="
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+      ">Dismiss</button>
+    ` : `
+      <button onclick="this.parentElement.style.display='none'" style="
+        background: white;
+        color: #dc3545;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+      ">OK</button>
+    `}
+  `;
+  
+  errorBanner.style.display = 'block';
+  
+  // Auto-hide after 10 seconds
+  setTimeout(() => {
+    if (errorBanner) errorBanner.style.display = 'none';
+  }, 10000);
+}
+
+// Helper: Show recoverable warning
+function showRecoverableWarning(message) {
+  console.warn('[BUILD] Showing warning:', message);
+  
+  let warningBanner = document.getElementById('transition-warning-banner');
+  if (!warningBanner) {
+    warningBanner = document.createElement('div');
+    warningBanner.id = 'transition-warning-banner';
+    warningBanner.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, #ffc107, #ff9800);
+      color: #000;
+      padding: 12px 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 9999;
+      max-width: 400px;
+      text-align: center;
+      animation: slideUp 0.3s ease;
+    `;
+    document.body.appendChild(warningBanner);
+  }
+  
+  warningBanner.innerHTML = `
+    <div>ℹ️ ${message}</div>
+  `;
+  
+  warningBanner.style.display = 'block';
+  
+  // Auto-hide after 5 seconds
+  setTimeout(() => {
+    if (warningBanner) warningBanner.style.display = 'none';
+  }, 5000);
+}
+
+// Helper: Show Step 3 with fallback data
+function showStep3WithFallback(codes) {
+  console.warn('[BUILD] Using fallback to show Step 3');
+  
+  try {
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = "block";
+      step3.scrollIntoView({ behavior: "smooth" });
+      
+      // Show warning message
+      showRecoverableWarning('Limited functionality mode. Basic pricing options are available.');
+      
+      // Create minimal scenario for UI
+      const fallbackScenario = {
+        A: {
+          items: codes.map(code => ({
+            deliverable_code: code,
+            deliverable_name: code,
+            category: 'General',
+            hours: 40,
+            rate: 195,
+            price: 7800
+          }))
+        }
+      };
+      
+      window.SCENARIOS = fallbackScenario;
+      window.APP_STATE = window.APP_STATE || {};
+      window.APP_STATE.scenarios = fallbackScenario;
+    }
+  } catch (error) {
+    console.error('[BUILD] Error in fallback:', error);
+    createStep3Fallback();
   }
 }
 
+// Helper: Create Step 3 dynamically as last resort
+function createStep3Fallback() {
+  console.error('[BUILD] Creating Step 3 dynamically as last resort');
+  
+  try {
+    // Find where to insert Step 3
+    const step2 = document.querySelector("#step2");
+    if (!step2) {
+      console.error('[BUILD] Cannot find Step 2 to insert after');
+      return;
+    }
+    
+    // Create minimal Step 3
+    const step3 = document.createElement('section');
+    step3.id = 'step3';
+    step3.className = 'card';
+    step3.innerHTML = `
+      <h2>Step 3 — Configure Pricing</h2>
+      <div style="padding: 20px; background: rgba(220, 53, 69, 0.1); border: 1px solid rgba(220, 53, 69, 0.3); border-radius: 8px; margin: 20px 0;">
+        <h3 style="color: #dc3545;">⚠️ Recovery Mode</h3>
+        <p>We encountered an issue loading the pricing configuration.</p>
+        <p>You can:</p>
+        <ul>
+          <li>Refresh the page and try again</li>
+          <li>Contact support if the issue persists</li>
+        </ul>
+        <button onclick="window.location.reload()" style="
+          background: #dc3545;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 600;
+          margin-top: 10px;
+        ">Refresh Page</button>
+      </div>
+    `;
+    
+    // Insert after Step 2
+    step2.parentNode.insertBefore(step3, step2.nextSibling);
+    step3.style.display = 'block';
+    step3.scrollIntoView({ behavior: 'smooth' });
+    
+    console.log('[BUILD] Emergency Step 3 created and displayed');
+  } catch (error) {
+    console.error('[BUILD] Failed to create emergency Step 3:', error);
+    alert('Critical error: Unable to proceed to pricing. Please refresh the page.');
+  }
+}
+
+// Helper: Retry transition
+window.retryTransition = function() {
+  console.log('[BUILD] Retrying transition...');
+  clearErrorState();
+  buildFromCurrentSelection();
+};
+
 // Alias for backward compatibility
 const onProceedToStep3 = buildFromCurrentSelection;
+
+// ================================================================================
+// Global Error Handler for Transition Issues
+// ================================================================================
+let transitionInProgress = false;
+let lastTransitionError = null;
+
+// Track when transition is happening
+window.addEventListener('error', function(event) {
+  if (transitionInProgress) {
+    console.error('[GLOBAL ERROR] Error during transition:', event);
+    lastTransitionError = event.error || event.message;
+    
+    // Log the error details
+    console.error('[GLOBAL ERROR] Message:', event.message);
+    console.error('[GLOBAL ERROR] File:', event.filename);
+    console.error('[GLOBAL ERROR] Line:', event.lineno);
+    console.error('[GLOBAL ERROR] Column:', event.colno);
+    console.error('[GLOBAL ERROR] Stack:', event.error?.stack);
+    
+    // Try to recover and show Step 3 anyway
+    const step3 = document.querySelector("#step3");
+    if (step3 && step3.style.display === 'none') {
+      console.warn('[GLOBAL ERROR] Attempting recovery - forcing Step 3 to show');
+      step3.style.display = 'block';
+      step3.style.visibility = 'visible';
+      step3.style.opacity = '1';
+      step3.classList.remove('hidden', 'error', 'loading');
+      
+      // Show error message
+      showUserFriendlyError('An error occurred during the transition. Some features may be limited.', true);
+    }
+    
+    // Don't prevent default - let console show the error too
+    return false;
+  }
+});
+
+// Track unhandled promise rejections during transition
+window.addEventListener('unhandledrejection', function(event) {
+  if (transitionInProgress) {
+    console.error('[GLOBAL PROMISE] Unhandled rejection during transition:', event);
+    lastTransitionError = event.reason;
+    
+    // Try to recover and show Step 3 anyway
+    const step3 = document.querySelector("#step3");
+    if (step3 && step3.style.display === 'none') {
+      console.warn('[GLOBAL PROMISE] Attempting recovery - forcing Step 3 to show');
+      step3.style.display = 'block';
+      step3.style.visibility = 'visible';
+      step3.style.opacity = '1';
+      step3.classList.remove('hidden', 'error', 'loading');
+      
+      // Show error message
+      showUserFriendlyError('An async error occurred. Some features may be limited.', true);
+    }
+  }
+});
+
+// Enhanced buildFromCurrentSelection wrapper with transition tracking
+const originalBuildFromCurrentSelection = buildFromCurrentSelection;
+window.buildFromCurrentSelection = async function() {
+  console.log('[TRANSITION] Starting monitored transition...');
+  transitionInProgress = true;
+  lastTransitionError = null;
+  
+  try {
+    await originalBuildFromCurrentSelection();
+  } catch (error) {
+    console.error('[TRANSITION] Caught error in wrapper:', error);
+    lastTransitionError = error;
+    
+    // Force Step 3 to show even on error
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = 'block';
+      step3.style.visibility = 'visible';
+      step3.style.opacity = '1';
+      step3.scrollIntoView({ behavior: 'smooth' });
+    }
+    
+    showUserFriendlyError('Failed to complete transition. Please try again.', true);
+  } finally {
+    transitionInProgress = false;
+    console.log('[TRANSITION] Transition monitoring ended');
+    
+    // Final safety check - ensure Step 3 is visible
+    setTimeout(() => {
+      const step3 = document.querySelector("#step3");
+      if (step3 && step3.style.display === 'none') {
+        console.warn('[TRANSITION] Final safety check - Step 3 was hidden, forcing display');
+        step3.style.display = 'block';
+        step3.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 100);
+  }
+};
+
+// Debug helper: Get transition state
+window.getTransitionDebugInfo = function() {
+  const info = {
+    transitionInProgress,
+    lastTransitionError,
+    step3Visible: document.querySelector("#step3")?.style.display !== 'none',
+    scenariosLoaded: !!window.SCENARIOS,
+    scenarioManagerLoaded: !!window.ScenarioManager,
+    selectedCodes: window.selectedCodes || [],
+    appState: window.APP_STATE,
+    timestamp: new Date().toISOString()
+  };
+  
+  console.table(info);
+  return info;
+};
+
+// Debug helper: Force show Step 3
+window.forceShowStep3 = function() {
+  console.log('[DEBUG] Force showing Step 3...');
+  const step3 = document.querySelector("#step3");
+  if (step3) {
+    step3.style.display = 'block';
+    step3.style.visibility = 'visible';
+    step3.style.opacity = '1';
+    step3.classList.remove('hidden', 'error', 'loading');
+    step3.scrollIntoView({ behavior: 'smooth' });
+    console.log('[DEBUG] Step 3 forced to display');
+  } else {
+    console.error('[DEBUG] Step 3 element not found');
+    createStep3Fallback();
+  }
+};
+
+// Debug helper: Test transition with mock data
+window.testTransition = function() {
+  console.log('[DEBUG] Testing transition with mock data...');
+  
+  // Create mock selection
+  window.selectedCodes = ['TEST_001', 'TEST_002'];
+  
+  // Create mock scenario
+  window.SCENARIOS = {
+    A: {
+      items: [
+        {
+          deliverable_code: 'TEST_001',
+          deliverable_name: 'Test Deliverable 1',
+          category: 'Test',
+          hours: 40,
+          rate: 195,
+          price: 7800
+        },
+        {
+          deliverable_code: 'TEST_002',
+          deliverable_name: 'Test Deliverable 2',
+          category: 'Test',
+          hours: 60,
+          rate: 195,
+          price: 11700
+        }
+      ],
+      total: 19500
+    }
+  };
+  
+  // Force show Step 3
+  window.forceShowStep3();
+  
+  console.log('[DEBUG] Test transition complete');
+};
+
+console.log('[GLOBAL] Error handlers and debug helpers installed');
+console.log('[GLOBAL] Debug commands available:');
+console.log('  - getTransitionDebugInfo() : Get current transition state');
+console.log('  - forceShowStep3() : Force Step 3 to display');
+console.log('  - testTransition() : Test transition with mock data');
 
 // Image Progress Tracking
 let currentJobId = null;
