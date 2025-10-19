@@ -703,9 +703,11 @@ class AIAssistant {
             }
         };
         
+        // Start polling with setInterval
         this.currentPollInterval = setInterval(async () => {
             try {
                 pollCount++;
+                console.log(`[CHARLES] Polling attempt ${pollCount} for job ${jobId}`);
                 
                 if (pollCount > maxPolls) {
                     console.log('[CHARLES] Max polls reached, cleaning up');
@@ -849,12 +851,19 @@ class AIAssistant {
                             taskMonitor.updateTask(4, 'in_progress');
                         }
                         
-                        const deliverableCount = status.data?.deliverables?.length || status.deliverables_count || 0;
+                        // Count deliverables from the correct path
+                        let deliverableCount = 0;
+                        if (status.result?.plan?.suggestions_by_department) {
+                            const suggestions = status.result.plan.suggestions_by_department;
+                            for (const dept in suggestions) {
+                                deliverableCount += suggestions[dept].length;
+                            }
+                        }
                         this.addMessage(`✅ Analysis complete! Found ${deliverableCount} deliverables. Loading into app...`, 'assistant');
                         
-                        // Load the analysis results into the app
-                        if (status.data) {
-                            await this.loadAnalysisResults(status.data);
+                        // Load the analysis results into the app - use result, not data
+                        if (status.result) {
+                            await this.loadAnalysisResults(status.result);
                             
                             // Navigate to Step 2
                             await this.navigateToStep('step2');
@@ -2813,15 +2822,24 @@ class AIAssistant {
     async loadAnalysisResults(data) {
         this.addMessage('📥 Loading deliverables into the application...', 'assistant');
         
+        // Count deliverables from the correct structure
+        let deliverableCount = 0;
+        let deliverables = [];
+        if (data.plan?.suggestions_by_department) {
+            const suggestions = data.plan.suggestions_by_department;
+            for (const dept in suggestions) {
+                deliverableCount += suggestions[dept].length;
+                deliverables = deliverables.concat(suggestions[dept]);
+            }
+        }
+        
         // Call the global function to load data
         if (typeof window.loadScenarioData === 'function') {
             window.loadScenarioData(data);
             await this.delay(1000);
-            this.addMessage(`✅ Loaded ${data.deliverables?.length || 0} deliverables`, 'assistant');
+            this.addMessage(`✅ Loaded ${deliverableCount} deliverables`, 'assistant');
         } else {
             // Fallback - directly manipulate the UI
-            const deliverables = data.deliverables || [];
-            
             // Store in window for app to use
             window.analysisResults = data;
             window.availableDeliverables = deliverables;
@@ -4343,8 +4361,14 @@ class AIAssistant {
                 
                 this.addMessage(`✅ Analysis started. Job ID: ${jobInfo.job_id}. Tracking progress...`, 'assistant');
                 
-                // Start tracking the job
-                await this.trackAnalysisJob(jobInfo.job_id);
+                console.log('[CHARLES] Starting job tracking for:', jobInfo.job_id);
+                
+                // Start tracking the job - DO NOT AWAIT, let it run in background
+                this.trackAnalysisJob(jobInfo.job_id).then(() => {
+                    console.log('[CHARLES] Job tracking completed for:', jobInfo.job_id);
+                }).catch(err => {
+                    console.error('[CHARLES] Job tracking error:', err);
+                });
                 
                 // Complete the operation successfully
                 this.completeOperation(operationId);

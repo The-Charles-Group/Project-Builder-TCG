@@ -2786,8 +2786,14 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             "eta_seconds": round(eta, 1) if eta else None
         }
         
-        if job.status == AIJobStatus.COMPLETED and job.result:
-            response["result"] = job.result
+        # DEBUG: Check if result is actually there
+        if job.status == AIJobStatus.COMPLETED:
+            print(f"[DEBUG] Job {job_id} is completed, has result: {job.result is not None}")
+            if job.result:
+                print(f"[DEBUG] Result keys: {list(job.result.keys()) if isinstance(job.result, dict) else 'Not a dict'}")
+                response["result"] = job.result
+            else:
+                print(f"[DEBUG] Job result is None!")
         
         if job.status == AIJobStatus.FAILED and job.error:
             response["error"] = job.error
