@@ -753,19 +753,41 @@ class AIAssistant {
                     1000
                 );
                 
-                // Handle 404 - job not found
+                // Handle 404 - job not found - STOP IMMEDIATELY
                 if (response.status === 404) {
-                    consecutiveFourOhFours++;
-                    console.log(`[CHARLES] Job ${jobId} not found (404), consecutive 404s: ${consecutiveFourOhFours}`);
+                    console.log(`[CHARLES] Job ${jobId} not found (404), stopping polling immediately`);
                     
-                    if (consecutiveFourOhFours >= max404s) {
-                        console.log(`[CHARLES] Job ${jobId} - ${max404s} consecutive 404s reached, stopping polling`);
-                        cleanup();
-                        this.addMessage('❌ Analysis job not found. Please try uploading your document again.', 'assistant');
-                        this.updateProgress(100, 'Job not found', 'Analysis job no longer exists');
-                        return;
+                    // Call cleanup to stop polling and clear the job ID from everywhere
+                    cleanup();
+                    
+                    // Also clear from all stateHistory items to prevent resumption
+                    if (this.agentState.stateHistory && Array.isArray(this.agentState.stateHistory)) {
+                        this.agentState.stateHistory.forEach(historyItem => {
+                            if (historyItem.jobId === jobId) {
+                                historyItem.jobId = null;
+                                historyItem.jobIdTimestamp = null;
+                            }
+                            if (historyItem.agentState && historyItem.agentState.jobId === jobId) {
+                                historyItem.agentState.jobId = null;
+                            }
+                        });
                     }
-                    // Continue polling for a few more times
+                    
+                    // Save the cleaned state
+                    this.saveState();
+                    
+                    // Clear from any other localStorage keys that might have the job ID
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        const value = localStorage.getItem(key);
+                        if (value && value.includes(jobId)) {
+                            console.log(`[CHARLES] Removing job ID from localStorage key: ${key}`);
+                            localStorage.removeItem(key);
+                        }
+                    }
+                    
+                    this.addMessage('❌ Analysis job not found. It may have expired or been deleted. Please try uploading your document again.', 'assistant');
+                    this.updateProgress(100, 'Job not found', 'Analysis job no longer exists');
                     return;
                 }
                 

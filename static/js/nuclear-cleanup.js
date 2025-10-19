@@ -1,132 +1,104 @@
-// NUCLEAR CLEANUP - Stop all polling and clear problematic job IDs
-// This runs IMMEDIATELY on page load to prevent any polling from starting
+// STALE JOB CLEANUP - Clean up any stale job IDs on page load
+// This runs on page load to clear old job IDs from localStorage
 
 (function() {
     'use strict';
     
-    console.log('☢️ NUCLEAR CLEANUP ACTIVATED ☢️');
-    console.log('Timestamp:', new Date().toISOString());
+    console.log('[CLEANUP] Checking for stale job IDs on page load...');
+    console.log('[CLEANUP] Timestamp:', new Date().toISOString());
     
-    // 1. IMMEDIATELY stop any existing intervals
+    // CRITICAL: Stop any existing polling immediately on page load
+    // Clear ALL intervals that might be running from previous page loads
     const highestIntervalId = setInterval(() => {}, 0);
     for (let i = 0; i < highestIntervalId; i++) {
         clearInterval(i);
     }
-    console.log('☢️ Cleared all intervals up to ID:', highestIntervalId);
+    console.log('[CLEANUP] Cleared all intervals up to ID:', highestIntervalId);
     
-    // 2. Clear ALL localStorage items containing job IDs
-    const keysToNuke = [];
-    for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        const value = localStorage.getItem(key);
-        if (value && value.includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
-            keysToNuke.push(key);
-            console.log('☢️ Found problematic job ID in localStorage:', key);
-        }
-    }
+    // List of known problematic job IDs that should be cleared
+    const problematicJobIds = [
+        '642a96bd-f94b-440e-b865-d160839a57c0'
+        // Add more problematic IDs here as needed
+    ];
     
-    // Remove all problematic keys
-    keysToNuke.forEach(key => {
-        console.log('☢️ Nuking localStorage key:', key);
-        localStorage.removeItem(key);
-    });
+    let cleanedCount = 0;
     
-    // 3. Specifically target charles_agent_state
+    // 1. Clean charles_agent_state
     try {
         const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
         let cleaned = false;
         
-        // Clear top-level jobId
+        // Clear top-level jobId if it's stale (older than 10 minutes) or problematic
         if (charlesState.jobId) {
-            console.log('☢️ Clearing top-level jobId:', charlesState.jobId);
-            charlesState.jobId = null;
-            charlesState.jobIdTimestamp = null;
-            cleaned = true;
+            const jobIdAge = charlesState.jobIdTimestamp ? (Date.now() - charlesState.jobIdTimestamp) : Infinity;
+            const tenMinutes = 10 * 60 * 1000;
+            
+            if (jobIdAge > tenMinutes || problematicJobIds.includes(charlesState.jobId)) {
+                console.log('[CLEANUP] Clearing stale/problematic jobId:', charlesState.jobId, 
+                           'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                charlesState.jobId = null;
+                charlesState.jobIdTimestamp = null;
+                cleaned = true;
+                cleanedCount++;
+            }
         }
         
-        // Clear from ALL stateHistory
+        // Clear from stateHistory
         if (charlesState.stateHistory && Array.isArray(charlesState.stateHistory)) {
             charlesState.stateHistory.forEach((state, idx) => {
-                if (state.jobId) {
-                    console.log(`☢️ Clearing jobId from stateHistory[${idx}]:`, state.jobId);
+                if (state.jobId && problematicJobIds.includes(state.jobId)) {
+                    console.log(`[CLEANUP] Clearing problematic jobId from stateHistory[${idx}]:`, state.jobId);
                     state.jobId = null;
                     state.jobIdTimestamp = null;
                     cleaned = true;
+                    cleanedCount++;
                 }
-                if (state.agentState && state.agentState.jobId) {
-                    console.log(`☢️ Clearing agentState.jobId from stateHistory[${idx}]:`, state.agentState.jobId);
+                if (state.agentState && state.agentState.jobId && 
+                    problematicJobIds.includes(state.agentState.jobId)) {
+                    console.log(`[CLEANUP] Clearing problematic agentState.jobId from stateHistory[${idx}]:`, 
+                               state.agentState.jobId);
                     state.agentState.jobId = null;
                     cleaned = true;
+                    cleanedCount++;
                 }
             });
         }
         
         if (cleaned) {
             localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
-            console.log('☢️ Saved cleaned charles_agent_state');
+            console.log('[CLEANUP] Saved cleaned charles_agent_state');
         }
     } catch (e) {
-        console.error('☢️ Error cleaning charles_agent_state:', e);
+        console.error('[CLEANUP] Error cleaning charles_agent_state:', e);
     }
     
-    // 4. Override setInterval to prevent any polling of the problematic job
-    const originalSetInterval = window.setInterval;
-    window.setInterval = function(callback, delay, ...args) {
-        // Check if the callback contains the problematic job ID
-        const callbackStr = callback.toString();
-        if (callbackStr.includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
-            console.log('☢️ BLOCKED polling attempt for job 642a96bd-f94b-440e-b865-d160839a57c0');
-            return null; // Don't create the interval
-        }
+    // 2. Clear any localStorage entries containing problematic job IDs
+    const keysToClean = [];
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const value = localStorage.getItem(key);
         
-        // Check if it's trying to poll /api/ai/jobs
-        if (callbackStr.includes('/api/ai/jobs/')) {
-            console.log('☢️ WARNING: Attempt to poll /api/ai/jobs/ detected, checking...');
-            // Allow it but log it
+        // Check if value contains any problematic job IDs
+        for (const jobId of problematicJobIds) {
+            if (value && value.includes(jobId)) {
+                keysToClean.push(key);
+                console.log('[CLEANUP] Found problematic job ID in localStorage:', key);
+                break;
+            }
         }
-        
-        return originalSetInterval.apply(this, arguments);
-    };
+    }
     
-    // 5. Override XMLHttpRequest to block requests to problematic jobs
-    const originalOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url, ...args) {
-        // Block ALL polling to /api/ai/jobs/ endpoints for first 10 seconds
-        const timeSinceLoad = Date.now() - window.pageLoadTime;
-        if (url && url.includes('/api/ai/jobs/') && timeSinceLoad < 10000) {
-            console.log('☢️ BLOCKED XHR request to AI jobs endpoint (within 10s of page load):', url);
-            // Replace with a dummy URL that will return 404 but won't flood logs
-            url = '/api/null';
-        } else if (url && url.includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
-            console.log('☢️ BLOCKED XHR request to problematic job ID:', url);
-            url = '/api/null';
-        }
-        return originalOpen.apply(this, [method, url, ...args]);
-    };
+    // Remove problematic keys
+    keysToClean.forEach(key => {
+        console.log('[CLEANUP] Removing localStorage key:', key);
+        localStorage.removeItem(key);
+        cleanedCount++;
+    });
     
-    // 6. Override fetch to block requests to problematic jobs
-    const originalFetch = window.fetch;
-    window.fetch = function(url, ...args) {
-        // Block ALL polling to /api/ai/jobs/ endpoints for first 10 seconds
-        const timeSinceLoad = Date.now() - window.pageLoadTime;
-        if (url && url.toString().includes('/api/ai/jobs/') && timeSinceLoad < 10000) {
-            console.log('☢️ BLOCKED fetch request to AI jobs endpoint (within 10s of page load):', url);
-            // Return a fake 404 response
-            return Promise.resolve(new Response(null, { status: 404, statusText: 'Not Found' }));
-        } else if (url && url.toString().includes('642a96bd-f94b-440e-b865-d160839a57c0')) {
-            console.log('☢️ BLOCKED fetch request to problematic job ID:', url);
-            return Promise.resolve(new Response(null, { status: 404, statusText: 'Not Found' }));
-        }
-        return originalFetch.apply(this, arguments);
-    };
-    
-    // 7. Set page load time for blocking logic
-    window.pageLoadTime = Date.now();
-    
-    console.log('☢️ NUCLEAR CLEANUP COMPLETE ☢️');
-    console.log('- All intervals cleared');
-    console.log('- LocalStorage cleaned');
-    console.log('- Polling interceptors installed');
-    console.log('- Problematic job ID 642a96bd-f94b-440e-b865-d160839a57c0 will be blocked');
+    if (cleanedCount > 0) {
+        console.log(`[CLEANUP] ✓ Cleaned ${cleanedCount} stale/problematic job references`);
+    } else {
+        console.log('[CLEANUP] ✓ No stale job IDs found');
+    }
     
 })();

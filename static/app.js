@@ -6270,50 +6270,67 @@ function updateAIProgress(status) {
   }
 }
 
-let consecutive404Count = 0; // Track consecutive 404s
 async function pollAIAnalysis(jobId) {
   try {
     const res = await fetch(`/api/ai/jobs/${jobId}`);
     
-    // Handle 404s with a counter
+    // Handle 404s - STOP IMMEDIATELY, don't wait for multiple attempts
     if (res.status === 404) {
-      consecutive404Count++;
-      console.warn(`[POLLING] Job ${jobId} returned 404, consecutive count: ${consecutive404Count}`);
+      console.log(`[POLLING] Job ${jobId} not found (404), stopping polling permanently`);
       
-      // Check if this is the current job we're tracking
-      if (jobId === aiAnalysisJobId) {
-        if (consecutive404Count >= 5) {
-          console.error(`[POLLING] Job ${jobId} - 5 consecutive 404s reached, stopping polling permanently`);
-          clearInterval(aiAnalysisInterval);
-          aiAnalysisInterval = null;
-          aiAnalysisJobId = null;  // Clear the job ID
-          hideAIProgressBar();
-          
-          // Clear from localStorage to prevent resumption
-          const savedState = localStorage.getItem('charles_agent_state');
-          if (savedState) {
-            try {
-              const state = JSON.parse(savedState);
-              if (state && state.jobId === jobId) {
-                state.jobId = null;
-                state.jobIdTimestamp = null;
-                localStorage.setItem('charles_agent_state', JSON.stringify(state));
-                console.log('[POLLING] Cleared stale job ID from localStorage');
-              }
-            } catch (e) {
-              console.error('[POLLING] Failed to clear job from localStorage:', e);
-            }
-          }
-          consecutive404Count = 0; // Reset counter
-        }
-        // Continue polling for a few more times before 5 consecutive 404s
-      } else {
-        // Old job returning 404, stop immediately
-        console.log(`[POLLING] Old job ${jobId} not found (404), stopping immediately`);
+      // Clear the interval immediately
+      if (aiAnalysisInterval) {
         clearInterval(aiAnalysisInterval);
         aiAnalysisInterval = null;
-        consecutive404Count = 0;
       }
+      
+      // Clear the job ID from memory
+      aiAnalysisJobId = null;
+      
+      // Hide progress bar
+      hideAIProgressBar();
+      
+      // Clear from ALL localStorage entries to prevent resumption
+      // 1. Clear from charles_agent_state
+      const savedState = localStorage.getItem('charles_agent_state');
+      if (savedState) {
+        try {
+          const state = JSON.parse(savedState);
+          if (state && state.jobId === jobId) {
+            state.jobId = null;
+            state.jobIdTimestamp = null;
+            // Also clear from stateHistory
+            if (state.stateHistory && Array.isArray(state.stateHistory)) {
+              state.stateHistory.forEach(historyItem => {
+                if (historyItem.jobId === jobId) {
+                  historyItem.jobId = null;
+                  historyItem.jobIdTimestamp = null;
+                }
+              });
+            }
+            localStorage.setItem('charles_agent_state', JSON.stringify(state));
+            console.log('[POLLING] Cleared job ID from charles_agent_state');
+          }
+        } catch (e) {
+          console.error('[POLLING] Failed to clear job from localStorage:', e);
+        }
+      }
+      
+      // 2. Clear from any other localStorage keys that might have the job ID
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const value = localStorage.getItem(key);
+        if (value && value.includes(jobId)) {
+          console.log(`[POLLING] Removing job ID from localStorage key: ${key}`);
+          localStorage.removeItem(key);
+        }
+      }
+      
+      // Show error message to user
+      const errorMsg = `Analysis job ${jobId} not found. It may have expired or been deleted.`;
+      console.error('[POLLING]', errorMsg);
+      
+      // Don't continue polling
       return;
     }
     
