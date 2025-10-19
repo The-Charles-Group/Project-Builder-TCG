@@ -478,13 +478,8 @@ async function clearAllDataWithConfirmation() {
     const filePreview = document.getElementById('file-preview');
     if (filePreview) filePreview.innerHTML = '';
     
-    // Hide all steps except Step 1
-    document.getElementById('step1').style.display = 'block';
-    document.getElementById('step2').style.display = 'none';
-    const step3 = document.getElementById('step3');
-    if (step3) step3.style.display = 'none';
-    const step4 = document.getElementById('step4');
-    if (step4) step4.style.display = 'none';
+    // All steps remain visible - open dashboard layout
+    // No need to hide steps as users can see entire workflow
     
     // Clear any visible deliverables or components panels
     const delivPanel = document.getElementById('deliverableList');

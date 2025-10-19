@@ -158,24 +158,21 @@ button:disabled{opacity:.6;cursor:not-allowed}
   pointer-events: none;
 }
 
+/* Force all steps to be visible at all times */
+#step1, #step2, #step3, #step4 {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
 /* Ensure main content is always visible */
-main:has(.card:not([style*="display: none"])) {
+main {
   min-height: calc(100vh - 100px);
 }
 
-/* Fallback when all cards are hidden */
-main:not(:has(.card:not([style*="display: none"]))) {
-  background: var(--bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: calc(100vh - 100px);
-}
-
-main:not(:has(.card:not([style*="display: none"]))):before {
-  content: "Loading application...";
-  color: var(--muted);
-  font-size: 16px;
+/* All cards should always be visible */
+.card {
+  display: block !important;
 }
 
 /* Error banner styles */

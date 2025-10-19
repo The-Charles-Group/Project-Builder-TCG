@@ -7,10 +7,16 @@
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/static_weights.css" />
   <link rel="stylesheet" href="/static/css/responsive.css" />
+  <!-- Dashboard Layout - Force vertical layout -->
+  <link rel="stylesheet" href="/static/css/dashboard-layout.css" />
   <!-- Error Boundaries CSS - Must load early -->
   <link rel="stylesheet" href="/static/css/error-boundaries.css" />
   <!-- Frappe Gantt Library -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
+  <!-- Disable carousel transforms - Must load VERY FIRST -->
+  <script src="/static/js/disable-carousel.js"></script>
+  <!-- Restructure DOM to bypass carousel -->
+  <script src="/static/js/restructure-dom.js"></script>
   <!-- NUCLEAR CLEANUP - Must load FIRST before anything else -->
   <script src="/static/js/nuclear-cleanup.js"></script>
   <!-- Global Polling Manager - Load first to intercept all intervals -->
@@ -31,6 +37,11 @@
   <script src="/static/js/step2-sync.js"></script>
   <script src="/static/js/step3-sync.js"></script>
   <script src="/static/js/step4-sync.js"></script>
+  
+  <!-- Force all steps visible -->
+  <script src="/static/js/force-all-steps-visible.js"></script>
+  <script src="/static/js/show-all-steps-override.js"></script>
+  <script src="/static/js/final-force-all-steps.js"></script>
   <!-- Mobile Responsive Enhancements -->
   <script src="/static/js/mobile.js"></script>
   <!-- Stop Phantom Polling -->
@@ -254,7 +265,7 @@
     </section>
 
     <!-- Step 2: Deliverable Selection (Restructured) -->
-    <section class="card" id="step2" style="display:none;">
+    <section class="card" id="step2">
       <h2>Step 2 — Select & Configure Deliverables</h2>
       
       <!-- DEPRECATED: Old weighted AI button (hidden - now using GPT-5 Pro planner) -->
@@ -265,8 +276,8 @@
         <small style="color: var(--muted);">Get AI-powered recommendations based on your RFP (using weighted matching)</small>
       </div>
 
-      <!-- Weighted Suggestions Display (initially hidden) -->
-      <div id="step2-ai-weights-container" style="margin-bottom: 20px; display: none;">
+      <!-- Weighted Suggestions Display -->
+      <div id="step2-ai-weights-container" style="margin-bottom: 20px;">
         <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 16px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0; color: var(--accent);">📊 Weighted AI Match Results</h3>
@@ -423,7 +434,7 @@
     </section>
 
     <!-- Step 3: Pricing -->
-    <section class="card" id="step3" style="display:none;">
+    <section class="card" id="step3">
       <h2>Step 3 — Pricing Configuration</h2>
       
       <!-- Build Scenario Panel - MOVED TO TOP -->
@@ -653,7 +664,7 @@
     </div>
 
     <!-- Step 4: Project Timeline & Scheduling -->
-    <section class="card" id="step4" style="display:none;">
+    <section class="card" id="step4">
       <h2>Step 4 — Project Timeline & Scheduling</h2>
       
       <!-- Timeline Controls & AI Actions -->
@@ -1032,6 +1043,114 @@
     </section>
   </main>
 
+  <!-- Force all steps visible using the most aggressive approach -->
+  <style>
+    /* NUCLEAR OPTION: Force all steps visible with maximum specificity */
+    body #step1,
+    body #step2,
+    body #step3,
+    body #step4,
+    body #step5 {
+      display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+      position: relative !important;
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+      height: auto !important;
+      min-height: 200px !important;
+      transform: none !important;
+      z-index: auto !important;
+    }
+    
+    /* Remove any transitions that might delay visibility */
+    #step1, #step2, #step3, #step4, #step5 {
+      transition: none !important;
+    }
+    
+    /* Ensure main container can show all content */
+    main {
+      display: block !important;
+      height: auto !important;
+      min-height: 100vh !important;
+      overflow: visible !important;
+    }
+  </style>
+  
+  <script>
+    // Force all steps to be visible - final override with mutation observer
+    (function() {
+      console.log('[ULTIMATE-FORCE] Starting ultimate force visible solution');
+      
+      // Function to make all steps visible
+      function forceStepsVisible() {
+        const stepIds = ['step1', 'step2', 'step3', 'step4', 'step5'];
+        let found = 0;
+        
+        stepIds.forEach(function(stepId) {
+          const step = document.getElementById(stepId);
+          if (step) {
+            found++;
+            // Remove ALL possible hiding mechanisms
+            step.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important; position: relative !important; left: 0 !important; top: 0 !important; width: 100% !important; height: auto !important; min-height: 200px !important;';
+            step.removeAttribute('hidden');
+            step.className = step.className.replace(/\b(hidden|hide|d-none|invisible)\b/g, '');
+          }
+        });
+        
+        console.log('[ULTIMATE-FORCE] Found and made visible ' + found + ' steps');
+        return found;
+      }
+      
+      // Run immediately
+      forceStepsVisible();
+      
+      // Run when DOM is ready
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', forceStepsVisible);
+      } else {
+        forceStepsVisible();
+      }
+      
+      // Run after a delay
+      setTimeout(forceStepsVisible, 100);
+      setTimeout(forceStepsVisible, 500);
+      setTimeout(forceStepsVisible, 1000);
+      setTimeout(forceStepsVisible, 2000);
+      
+      // Set up a mutation observer to catch any attempts to hide steps
+      const observer = new MutationObserver(function(mutations) {
+        let needsForce = false;
+        
+        mutations.forEach(function(mutation) {
+          if (mutation.target && mutation.target.id && mutation.target.id.match(/^step[1-5]$/)) {
+            needsForce = true;
+          }
+        });
+        
+        if (needsForce) {
+          forceStepsVisible();
+        }
+      });
+      
+      // Start observing once DOM is ready
+      function startObserving() {
+        observer.observe(document.body, {
+          attributes: true,
+          attributeFilter: ['style', 'class', 'hidden'],
+          subtree: true
+        });
+        console.log('[ULTIMATE-FORCE] Mutation observer started');
+      }
+      
+      if (document.body) {
+        startObserving();
+      } else {
+        document.addEventListener('DOMContentLoaded', startObserving);
+      }
+    })();
+  </script>
 
   <script>
     // --- Safe DOM helpers ---
@@ -1211,8 +1330,7 @@
           $('projectName').value = baseName;
         }
 
-        // Show Step 2 (deliverable selection) instead of Stage 2
-        $('step2').style.display = 'block';
+        // Step 2 is always visible, just scroll to it if needed
         $('step2').scrollIntoView({ behavior: 'smooth' });
         
         // Initialize Step 2 picker with the built scenarios
@@ -1343,8 +1461,7 @@
         renderLeftPanel(autoData.scenarios.A.items, autoData.scenarios.A.totals);
         renderReconcile(appState.reconciliation);
         
-        // Show Step 2 (deliverable selection) instead of Stage 2
-        document.getElementById('step2').style.display = 'block';
+        // Step 2 is always visible, just scroll to it if needed
         document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
         
         // Initialize Step 2 picker with the built scenarios
@@ -1517,8 +1634,7 @@
       // Update retainer controls for Step 3
       updateRetainerControls();
       
-      // Show Stage 3
-      $('step3').style.display = 'block';
+      // Step 3 is always visible, just scroll to it if needed  
       $('step3').scrollIntoView({ behavior: 'smooth' });
     }
     
