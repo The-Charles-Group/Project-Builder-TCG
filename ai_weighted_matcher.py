@@ -105,9 +105,12 @@ def eval_rules(rfp_text: str, ai_rules_df: pd.DataFrame) -> Tuple[List[float], L
 # -----------------------------
 
 def _cfg(config: Dict[str, Any], key: str, default: float) -> float:
+    """Safely get configuration value as float"""
     try:
         return float(config.get(key, default))
-    except Exception:
+    except (ValueError, TypeError, AttributeError) as e:
+        # Log specific conversion errors for debugging
+        print(f"[MATCHER] Config conversion error for key '{key}': {e}, using default {default}")
         return default
 
 def aggregate_scores(ai_index_df: pd.DataFrame,

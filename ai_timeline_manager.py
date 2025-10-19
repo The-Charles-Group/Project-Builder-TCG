@@ -17,8 +17,12 @@ try:
     from openai import AsyncOpenAI
     client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     OPENAI_AVAILABLE = True
-except Exception as e:
-    print(f"[AI Timeline] OpenAI not available: {e}")
+except (ImportError, ModuleNotFoundError) as e:
+    print(f"[AI Timeline] OpenAI module not installed: {e}")
+    OPENAI_AVAILABLE = False
+    client = None
+except (ValueError, TypeError) as e:
+    print(f"[AI Timeline] OpenAI configuration error: {e}")
     OPENAI_AVAILABLE = False
     client = None
 
@@ -320,8 +324,10 @@ class CPMCalculator:
                 current += timedelta(days=1)
             
             return max(1, business_days)  # Minimum 1 day
-        except:
-            return 1
+        except (ValueError, TypeError) as e:
+            # Log the specific error for debugging
+            print(f"[CPM] Error calculating duration between {start_date} and {end_date}: {e}")
+            return 1  # Default to 1 day if dates are invalid
     
     def _generate_cpm_metrics(self, critical_path_ids: Set[str], project_duration: float) -> Dict[str, Any]:
         """Generate comprehensive CPM metrics"""
@@ -1664,10 +1670,24 @@ async def enhance_with_ai_reasoning(
         phases = timeline_result['metadata'].get('phases', [])
         critical_tasks = timeline_result['metadata'].get('critical_tasks', 0)
         
+        # NOTE: Truncation required for GPT-5 API token limits (128k context window)
+        # With prompt and response format, we need to limit input text
+        max_context_chars = 4000  # Increased from 1000 for richer context
+        max_reasoning_chars = 2000  # Increased from 1000 for better analysis
+        
+        rfp_context = rfp_text[:max_context_chars] if rfp_text else 'Standard agency project'
+        if rfp_text and len(rfp_text) > max_context_chars:
+            rfp_context += f"... [truncated from {len(rfp_text)} chars for API limits]"
+            
+        reasoning_text = json.dumps(timeline_result.get('reasoning', {}), indent=2)
+        reasoning_context = reasoning_text[:max_reasoning_chars]
+        if len(reasoning_text) > max_reasoning_chars:
+            reasoning_context += f"... [truncated from {len(reasoning_text)} chars for API limits]"
+        
         prompt = f"""As an expert project manager, analyze this project timeline and provide strategic insights.
 
 PROJECT CONTEXT:
-{rfp_text[:1000] if rfp_text else 'Standard agency project'}
+{rfp_context}
 
 TIMELINE METRICS:
 - Duration: {total_days} days
@@ -1677,7 +1697,7 @@ TIMELINE METRICS:
 - Total deliverables: {len(deliverables)}
 
 CURRENT REASONING:
-{json.dumps(timeline_result.get('reasoning', {}), indent=2)[:1000]}
+{reasoning_context}
 
 Provide strategic insights on:
 1. Why this timeline structure makes sense for this specific project

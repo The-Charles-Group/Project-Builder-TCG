@@ -143,8 +143,17 @@ def cleanup_ai_jobs():
 # ──────────────────────────────────────────────────────────────────────────────
 # Text Sanitization for LLM Safety
 # ──────────────────────────────────────────────────────────────────────────────
-def sanitize_for_json(text: str) -> str:
-    """Sanitize text to prevent JSON parsing errors in LLM responses"""
+def sanitize_for_json(text: str, max_length: int = 2000) -> str:
+    """
+    Sanitize text to prevent JSON parsing errors in LLM responses.
+    
+    Args:
+        text: Input text to sanitize
+        max_length: Maximum length for LLM token limits (default 2000 chars for GPT-5 context window)
+    
+    NOTE: Truncation is REQUIRED to avoid exceeding LLM API token limits (128k context).
+    For GPT-5 with many items, we must limit individual text fields.
+    """
     if not text:
         return ""
     text = str(text)
@@ -156,9 +165,12 @@ def sanitize_for_json(text: str) -> str:
     text = text.replace('\t', ' ')      # Replace tabs
     # Remove control characters
     text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\r\t')
-    # Limit length to prevent token overflow
-    if len(text) > 500:
-        text = text[:500] + "..."
+    # API TOKEN LIMIT: Must truncate to prevent exceeding context window
+    # With 100+ items in a response, each field must be limited
+    if len(text) > max_length:
+        # Preserve complete words at boundaries
+        truncated = text[:max_length].rsplit(' ', 1)[0] if ' ' in text[:max_length] else text[:max_length]
+        return truncated.strip() + "..."
     return text.strip()
 
 def repair_json_response(text: str) -> str:
