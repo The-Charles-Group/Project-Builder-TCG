@@ -5011,25 +5011,25 @@ async function buildFromCurrentSelection() {
   
   // CRITICAL: Stop all polling intervals immediately to prevent UI freeze
   console.log('[BUILD] Step 0/10: Stopping all polling intervals...');
-  if (window.aiAnalysisInterval) {
+  
+  // Call the existing cleanup function
+  if (typeof cleanupPolling === 'function') {
+    cleanupPolling();
+    console.log('[BUILD] Called cleanupPolling()');
+  }
+  
+  // Also manually clear all known intervals
+  if (typeof aiAnalysisInterval !== 'undefined' && aiAnalysisInterval) {
     console.log('[BUILD] Clearing aiAnalysisInterval');
-    clearInterval(window.aiAnalysisInterval);
-    window.aiAnalysisInterval = null;
+    clearInterval(aiAnalysisInterval);
+    aiAnalysisInterval = null;
   }
-  if (window.progressInterval) {
+  if (typeof progressInterval !== 'undefined' && progressInterval) {
     console.log('[BUILD] Clearing progressInterval');
-    clearInterval(window.progressInterval);
-    window.progressInterval = null;
+    clearInterval(progressInterval);
+    progressInterval = null;
   }
-  if (window.pollingIntervalId) {
-    console.log('[BUILD] Clearing pollingIntervalId');
-    clearInterval(window.pollingIntervalId);
-    window.pollingIntervalId = null;
-  }
-  // Reset consecutive 404 counter
-  if (typeof consecutive404Count !== 'undefined') {
-    consecutive404Count = 0;
-  }
+  
   console.log('[BUILD] All polling intervals stopped');
   
   // Add timeout protection to prevent infinite freeze
@@ -6077,8 +6077,16 @@ function cleanupPolling() {
     clearInterval(aiAnalysisInterval);
     aiAnalysisInterval = null;
   }
+  if (progressInterval) {
+    console.log('[POLLING] Cleaning up progress polling interval');
+    clearInterval(progressInterval);
+    progressInterval = null;
+  }
   // Note: pollingIntervalId is managed within generateAITimeline function scope
 }
+
+// Expose cleanup function globally
+window.cleanupPolling = cleanupPolling;
 
 // Stop polling when user leaves the page
 window.addEventListener('beforeunload', cleanupPolling);
