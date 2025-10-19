@@ -755,9 +755,10 @@ class AIAssistant {
                     1000
                 );
                 
-                // Handle 404 - job not found - STOP IMMEDIATELY
-                if (response.status === 404) {
-                    console.log(`[CHARLES] Job ${jobId} not found (404), stopping polling immediately`);
+                // Handle 410 Gone (zombie job blocked) or 404 - STOP IMMEDIATELY
+                if (response.status === 410 || response.status === 404) {
+                    const statusText = response.status === 410 ? 'expired and blocked by server' : 'not found';
+                    console.log(`[CHARLES] Job ${jobId} ${statusText} (${response.status}), stopping polling immediately`);
                     
                     // Call cleanup to stop polling and clear the job ID from everywhere
                     cleanup();
@@ -788,8 +789,12 @@ class AIAssistant {
                         }
                     }
                     
-                    this.addMessage('❌ Analysis job not found. It may have expired or been deleted. Please try uploading your document again.', 'assistant');
-                    this.updateProgress(100, 'Job not found', 'Analysis job no longer exists');
+                    const userMessage = response.status === 410
+                        ? '❌ Analysis job has expired and was blocked by the server. Please start a new analysis.'
+                        : '❌ Analysis job not found. It may have expired or been deleted. Please try uploading your document again.';
+                    
+                    this.addMessage(userMessage, 'assistant');
+                    this.updateProgress(100, statusText, response.status === 410 ? 'Job expired and blocked' : 'Analysis job no longer exists');
                     return;
                 }
                 

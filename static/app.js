@@ -6274,9 +6274,10 @@ async function pollAIAnalysis(jobId) {
   try {
     const res = await fetch(`/api/ai/jobs/${jobId}`);
     
-    // Handle 404s - STOP IMMEDIATELY, don't wait for multiple attempts
-    if (res.status === 404) {
-      console.log(`[POLLING] Job ${jobId} not found (404), stopping polling permanently`);
+    // Handle 410 Gone (zombie job blocked) or 404 - STOP IMMEDIATELY
+    if (res.status === 410 || res.status === 404) {
+      const statusText = res.status === 410 ? 'expired and blocked' : 'not found';
+      console.log(`[POLLING] Job ${jobId} ${statusText} (${res.status}), stopping polling permanently`);
       
       // Clear the interval immediately
       if (aiAnalysisInterval) {
@@ -6327,7 +6328,9 @@ async function pollAIAnalysis(jobId) {
       }
       
       // Show error message to user
-      const errorMsg = `Analysis job ${jobId} not found. It may have expired or been deleted.`;
+      const errorMsg = res.status === 410 
+        ? `Analysis job ${jobId} has expired. Please start a new analysis.`
+        : `Analysis job ${jobId} not found. It may have expired or been deleted.`;
       console.error('[POLLING]', errorMsg);
       
       // Don't continue polling

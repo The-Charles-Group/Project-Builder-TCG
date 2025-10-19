@@ -203,6 +203,40 @@ async def lifespan(app: FastAPI):
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0", lifespan=lifespan)
 
+# ---------- Zombie Job Detection System ----------
+# Track 404 counts per job ID to detect and block zombie polling
+ZOMBIE_JOB_404_COUNTS: Dict[str, int] = {}
+ZOMBIE_JOB_BLOCKLIST: Set[str] = set()
+ZOMBIE_JOB_THRESHOLD = 10  # Block after 10 consecutive 404s
+ZOMBIE_JOB_CLEANUP_INTERVAL = 3600  # Clean up tracking data after 1 hour
+
+def check_and_block_zombie_job(job_id: str) -> bool:
+    """
+    Track 404 counts for job IDs and block excessive polling.
+    Returns True if job should be blocked (410 Gone).
+    """
+    # Check if already blocked
+    if job_id in ZOMBIE_JOB_BLOCKLIST:
+        return True
+    
+    # Increment 404 count
+    ZOMBIE_JOB_404_COUNTS[job_id] = ZOMBIE_JOB_404_COUNTS.get(job_id, 0) + 1
+    
+    # Check if threshold exceeded
+    if ZOMBIE_JOB_404_COUNTS[job_id] >= ZOMBIE_JOB_THRESHOLD:
+        ZOMBIE_JOB_BLOCKLIST.add(job_id)
+        print(f"[ZOMBIE DETECTOR] Job {job_id} blocked after {ZOMBIE_JOB_404_COUNTS[job_id]} 404s")
+        return True
+    
+    return False
+
+def reset_zombie_tracking(job_id: str):
+    """Reset tracking for a job ID (call when job is found)"""
+    if job_id in ZOMBIE_JOB_404_COUNTS:
+        del ZOMBIE_JOB_404_COUNTS[job_id]
+    if job_id in ZOMBIE_JOB_BLOCKLIST:
+        ZOMBIE_JOB_BLOCKLIST.remove(job_id)
+
 # ---------- Wire Job Runner from sitecustomize ----------
 import sys
 import os
@@ -382,10 +416,20 @@ async def get_agencydb_job_status(job_id: str):
     """
     # Check if job exists in AI_JOB_STORE
     if job_id not in AI_JOB_STORE:
+        # ZOMBIE DETECTION: Check if this job should be blocked
+        if check_and_block_zombie_job(job_id):
+            # Return 410 Gone to force even old clients to stop polling
+            raise HTTPException(
+                status_code=410, 
+                detail=f"Job {job_id} has expired and polling has been terminated. Please start a new analysis."
+            )
         # Also check sitecustomize job store if available
         try:
             from sitecustomize import _JOBS
             if job_id in _JOBS:
+                # ZOMBIE DETECTION: Reset tracking since job was found
+                reset_zombie_tracking(job_id)
+                
                 job = _JOBS[job_id]
                 progress = 0.0
                 if job.total_batches:
@@ -422,6 +466,9 @@ async def get_agencydb_job_status(job_id: str):
         # Use globals() to access it
         job_store = globals().get('JOB_STORE', {})
         if job_id in job_store:
+            # ZOMBIE DETECTION: Reset tracking since job was found
+            reset_zombie_tracking(job_id)
+            
             job = job_store[job_id]
             
             # Map JobStatus to expected format
@@ -452,6 +499,9 @@ async def get_agencydb_job_status(job_id: str):
         try:
             from app_perf.stream import SSE_JOB_STORE, StreamJobStatus
             if job_id in SSE_JOB_STORE:
+                # ZOMBIE DETECTION: Reset tracking since job was found
+                reset_zombie_tracking(job_id)
+                
                 job = SSE_JOB_STORE[job_id]
                 
                 # Map StreamJobStatus to expected format
@@ -486,6 +536,9 @@ async def get_agencydb_job_status(job_id: str):
     
     # Get job from AI_JOB_STORE
     job = AI_JOB_STORE[job_id]
+    
+    # ZOMBIE DETECTION: Reset tracking since job was found
+    reset_zombie_tracking(job_id)
     
     # Calculate progress percentage
     progress = 0
