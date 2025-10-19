@@ -5009,6 +5009,29 @@ async function buildFromCurrentSelection() {
   console.log('[BUILD] ========= PROCEED TO PRICING CLICKED =========');
   console.log('[BUILD] Timestamp:', new Date().toISOString());
   
+  // CRITICAL: Stop all polling intervals immediately to prevent UI freeze
+  console.log('[BUILD] Step 0/10: Stopping all polling intervals...');
+  if (window.aiAnalysisInterval) {
+    console.log('[BUILD] Clearing aiAnalysisInterval');
+    clearInterval(window.aiAnalysisInterval);
+    window.aiAnalysisInterval = null;
+  }
+  if (window.progressInterval) {
+    console.log('[BUILD] Clearing progressInterval');
+    clearInterval(window.progressInterval);
+    window.progressInterval = null;
+  }
+  if (window.pollingIntervalId) {
+    console.log('[BUILD] Clearing pollingIntervalId');
+    clearInterval(window.pollingIntervalId);
+    window.pollingIntervalId = null;
+  }
+  // Reset consecutive 404 counter
+  if (typeof consecutive404Count !== 'undefined') {
+    consecutive404Count = 0;
+  }
+  console.log('[BUILD] All polling intervals stopped');
+  
   // Add timeout protection to prevent infinite freeze
   const timeoutId = setTimeout(() => {
     console.error('[BUILD] TIMEOUT - Function taking too long! Forcing Step 3 to show...');
