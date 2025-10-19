@@ -545,9 +545,19 @@
     }
   }
   
-  // Clean up on page unload
+  // Clean up on page unload with defensive checks
   window.addEventListener('beforeunload', () => {
-    window.ScenarioManager.cleanup();
+    try {
+      // Check if ScenarioManager exists and has cleanup method
+      if (window.ScenarioManager && typeof window.ScenarioManager.cleanup === 'function') {
+        window.ScenarioManager.cleanup();
+        console.log('[ScenarioSync] Cleanup completed successfully');
+      } else {
+        console.warn('[ScenarioSync] ScenarioManager or cleanup method not available');
+      }
+    } catch (error) {
+      console.error('[ScenarioSync] Error during cleanup:', error);
+    }
   });
   
   console.log('[ScenarioSync] Enhanced ScenarioManager with real-time sync loaded');

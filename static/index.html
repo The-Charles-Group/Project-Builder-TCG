@@ -7,8 +7,14 @@
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/static_weights.css" />
   <link rel="stylesheet" href="/static/css/responsive.css" />
+  <!-- Error Boundaries CSS - Must load early -->
+  <link rel="stylesheet" href="/static/css/error-boundaries.css" />
   <!-- Frappe Gantt Library -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
+  <!-- Global Polling Manager - Load first to intercept all intervals -->
+  <script src="/static/js/global-polling-manager.js"></script>
+  <!-- Error Recovery System - Load early to catch errors -->
+  <script src="/static/js/error-recovery.js"></script>
   <!-- ChatGPT-Style Left Sidebar -->
   <script src="/static/js/chatgpt-sidebar.js"></script>
   <!-- AI Assistant -->
@@ -25,8 +31,29 @@
   <script src="/static/js/mobile.js"></script>
   <!-- Stop Phantom Polling -->
   <script src="/static/stop_phantom_polling.js"></script>
+  <!-- Mark JS as loaded when DOM is ready -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      document.body.classList.add('js-loaded');
+      console.log('[Main] JavaScript loaded successfully');
+    });
+  </script>
 </head>
 <body>
+  <!-- NoScript Fallback -->
+  <noscript>
+    <div class="noscript-container">
+      <h1>JavaScript Required</h1>
+      <p>Agency Project Builder requires JavaScript to be enabled in your browser.</p>
+      <p>Please enable JavaScript and reload the page.</p>
+      <p><a href="https://enable-javascript.com/" target="_blank">Learn how to enable JavaScript</a></p>
+    </div>
+  </noscript>
+  
+  <!-- Emergency Reset Button (hidden by default, shown if stuck) -->
+  <button class="emergency-reset" onclick="window.location.reload(true)" title="Emergency reload">
+    🔄 Emergency Reset
+  </button>
   <header>
     <h1>Agency Project Builder</h1>
     <div class="sub">Build project estimates from RFPs with 2‑step AI assistance</div>
