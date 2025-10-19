@@ -275,31 +275,33 @@ class AIAssistant {
                 this.navigateToStep(latestState.currentStep);
             }
             
-            // Restore job ID if analysis was in progress and not stale
-            // CRITICAL: Check multiple conditions to prevent auto-resume of dead jobs
-            const isTransitioningToPricing = window.isTransitioningToPricing || false;
+            // CRITICAL FIX: NEVER auto-resume job polling on page load
+            // This prevents zombie polling loops for dead/expired jobs
+            // If a user refreshes during analysis, they should start a new analysis
             
-            // NEVER auto-resume job polling if skipJobRestore is true
-            if (this.skipJobRestore) {
-                console.log('[CHARLES] skipJobRestore=true, NOT resuming any job polling');
-                this.agentState.jobId = null;
-            } else if (latestState.jobId && !isTransitioningToPricing) {
-                const jobIdAge = latestState.jobIdTimestamp ? (Date.now() - latestState.jobIdTimestamp) : Infinity;
-                const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
+            if (latestState.jobId) {
+                console.log('[CHARLES] Found job ID in localStorage:', latestState.jobId);
+                console.log('[CHARLES] NOT auto-resuming job polling (user must start new analysis if needed)');
                 
-                if (jobIdAge < fiveMinutes) {
-                    console.log('[CHARLES] Restoring job ID:', latestState.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
-                    this.agentState.jobId = latestState.jobId;
-                    // Resume tracking
-                    this.trackAnalysisJob(latestState.jobId, true);
-                } else {
-                    console.log('[CHARLES] Job ID is stale (older than 5 minutes), not restoring:', latestState.jobId);
-                    // Clear the stale jobId
-                    this.agentState.jobId = null;
-                }
-            } else if (isTransitioningToPricing) {
-                console.log('[CHARLES] Transitioning to pricing - NOT resuming job polling');
+                // Clear the job ID completely - don't restore it
                 this.agentState.jobId = null;
+                
+                // Also clear it from localStorage to prevent future attempts
+                const savedState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+                if (savedState) {
+                    savedState.jobId = null;
+                    savedState.jobIdTimestamp = null;
+                    // Clear from stateHistory too
+                    if (savedState.stateHistory && Array.isArray(savedState.stateHistory)) {
+                        savedState.stateHistory.forEach(historyItem => {
+                            if (historyItem.jobId) {
+                                historyItem.jobId = null;
+                                historyItem.jobIdTimestamp = null;
+                            }
+                        });
+                    }
+                    localStorage.setItem('charles_agent_state', JSON.stringify(savedState));
+                }
             }
             
             this.addMessage('✅ Previous state restored successfully', 'assistant');
