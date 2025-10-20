@@ -26,6 +26,7 @@ All code, API endpoints, and documentation use L1 for components and L2 for task
 
 ### Backend Architecture
 - **Framework**: FastAPI (Python) for the REST API.
+- **Static File Serving**: Root route (`@app.get("/")`) serves index.html from static directory; static files mounted at `/static` endpoint.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
