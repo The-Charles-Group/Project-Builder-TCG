@@ -5573,9 +5573,6 @@ window.retryTransition = function() {
   buildFromCurrentSelection();
 };
 
-// Alias for backward compatibility
-const onProceedToStep3 = buildFromCurrentSelection;
-
 // ================================================================================
 // Global Error Handler for Transition Issues
 // ================================================================================
