@@ -626,12 +626,17 @@ async def get_agencydb_job_status(job_id: str):
     # ZOMBIE DETECTION: Reset tracking since job was found
     reset_zombie_tracking(job_id)
     
-    # Calculate progress percentage
-    progress = 0
-    if job.total_chunks > 0:
+    # BUGFIX: Use job.progress as primary source, only fall back to chunk calculation if progress wasn't set
+    if hasattr(job, 'progress') and job.progress > 0:
+        # Use explicitly set progress from _update_job()
+        progress = job.progress
+    elif job.total_chunks > 0:
+        # Fall back to chunk-based calculation only if no explicit progress
         progress = int((job.processed_chunks / job.total_chunks) * 100)
     elif job.status == AIJobStatus.COMPLETED:
         progress = 100
+    else:
+        progress = 0
     
     # Map internal status to expected format
     status_map = {

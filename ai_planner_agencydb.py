@@ -113,6 +113,7 @@ class AIAnalysisJob:
     status: AIJobStatus
     start_time: float = field(default_factory=lambda: datetime.datetime.now().timestamp())
     end_time: Optional[float] = None
+    progress: int = 0  # Progress percentage (0-100)
     total_chunks: int = 0
     processed_chunks: int = 0
     current_stage: str = "Initializing..."
@@ -2309,6 +2310,10 @@ def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks:
         # Calculate progress from chunks if not explicitly set
         if progress_pct is None and job.total_chunks > 0:
             progress_pct = int((job.processed_chunks / job.total_chunks) * 100)
+        
+        # BUGFIX: Actually save the progress percentage to the job object
+        if progress_pct is not None:
+            job.progress = progress_pct
         
         # NEW: Add reasoning visibility for users
         if reasoning:
