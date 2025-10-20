@@ -13,7 +13,7 @@
       ...window.ScenarioStore.state,
       selectedDeliverables: new Set(),
       selectedComponents: {},
-      selectedL3Tasks: {},
+      selectedL2Tasks: {},
       sessionId: null,
       rfpText: '',
       buildPayload: null, // Last payload sent to /api/scenarios
@@ -106,8 +106,8 @@
           if (scenario.state.selectedComponents) {
             this.state.selectedComponents = scenario.state.selectedComponents;
           }
-          if (scenario.state.selectedL3Tasks) {
-            this.state.selectedL3Tasks = scenario.state.selectedL3Tasks;
+          if (scenario.state.selectedL2Tasks) {
+            this.state.selectedL2Tasks = scenario.state.selectedL2Tasks;
           }
           
           // Restore other state
@@ -157,7 +157,7 @@
               deliverables: this.state.deliverables,
               selectedDeliverables: Array.from(this.state.selectedDeliverables || []),
               selectedComponents: this.state.selectedComponents,
-              selectedL3Tasks: this.state.selectedL3Tasks,
+              selectedL2Tasks: this.state.selectedL2Tasks,
               totals: this.state.totals,
               blendedRate: this.state.blendedRate,
               rfpText: this.state.rfpText,
@@ -327,16 +327,16 @@
     },
     
     // Set deliverables from Step 2 selections
-    setSelectedDeliverables(codes, components = {}, l3Tasks = {}) {
+    setSelectedDeliverables(codes, components = {}, l2Tasks = {}) {
       this.state.selectedDeliverables = new Set(codes);
       this.state.selectedComponents = components;
-      this.state.selectedL3Tasks = l3Tasks;
+      this.state.selectedL2Tasks = l2Tasks;
       this.state.updatedAt = new Date().toISOString();
       
       console.log('[ScenarioManager] Updated selections:', {
         deliverables: codes.length,
         components: Object.keys(components).length,
-        l3Tasks: Object.keys(l3Tasks).length
+        l2Tasks: Object.keys(l2Tasks).length
       });
       
       this.emit();
@@ -436,7 +436,7 @@
     buildScenarioPayload() {
       const codes = Array.from(this.state.selectedDeliverables);
       const selectedComponentsPayload = this.state.selectedComponents;
-      const l3Payload = this.state.selectedL3Tasks;
+      const l3Payload = this.state.selectedL2Tasks;
       
       // Get retainer configuration from pricingData if available
       const retainersPayload = [];
@@ -628,7 +628,7 @@
       this.state.deliverables = [];
       this.state.selectedDeliverables.clear();
       this.state.selectedComponents = {};
-      this.state.selectedL3Tasks = {};
+      this.state.selectedL2Tasks = {};
       this.state.totals = { 
         hours: 0, 
         oneTimeCost: 0, 

@@ -300,7 +300,7 @@
         selectionGrid.style.gridTemplateColumns = '1fr';
         
         // Adjust panel heights for mobile
-        document.querySelectorAll('#s2-deliv-list, #s2-comp-list, #s2-l3-list').forEach(list => {
+        document.querySelectorAll('#s2-deliv-list, #s2-comp-list, #s2-l2-list').forEach(list => {
           list.style.height = '250px';
         });
       } else {
@@ -308,7 +308,7 @@
         selectionGrid.style.gridTemplateColumns = '1fr 1fr 350px';
         
         // Restore desktop heights
-        document.querySelectorAll('#s2-deliv-list, #s2-comp-list, #s2-l3-list').forEach(list => {
+        document.querySelectorAll('#s2-deliv-list, #s2-comp-list, #s2-l2-list').forEach(list => {
           list.style.height = '400px';
         });
       }

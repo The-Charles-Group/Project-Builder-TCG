@@ -1141,24 +1141,24 @@ const USE_GPT_FOR_AUTOSUGGEST = true;
 const selectionStore = {
   deliverables: new Set(),                       // deliverable codes (e.g., deck_strategy)
   componentsByDeliv: new Map(),                  // Map<delivCode, Set<componentName>>
-  l3ByComponent: new Map(),                      // Map<delivCode::componentKey, Set<l3Name>>
+  l2ByComponent: new Map(),                      // Map<delivCode::componentKey, Set<l2Name>>
 };
 
 window.APB.step2 = {
   rfpText: '',                                   // filled from Step 1 or sessionStorage
   selectedCodes: selectionStore.deliverables,    // alias for compatibility
   selectedComponentsByCode: {},                  // DEPRECATED: use selectionStore.componentsByDeliv
-  selectedL3ByKey: {},                           // DEPRECATED: use selectionStore.l3ByComponent
+  selectedL2ByKey: {},                           // DEPRECATED: use selectionStore.l2ByComponent
   complexity: 'Advanced',                        // default complexity
   tier: 'T2_MediumVolume',                       // default tier
   activeDeliverableCode: null,                   // currently active deliverable in Components panel
-  activeComponentName: null,                     // currently active component in L3 panel
+  activeComponentName: null,                     // currently active component in L2 panel
   allDeliverables: [],                           // from /api/options
   aiSuggestedCodes: new Set(),                   // codes that came from AI suggestions
   filters: {                                     // Task 1.3: search filter state
     deliverables: '',
     components: '',
-    l3: ''
+    l2: ''
   },
   els: {                                         // DOM element references
     listRight: null,
@@ -1193,58 +1193,58 @@ Object.defineProperty(S2, 'selectedComponentsMap', {
   configurable: true
 });
 
-// CRITICAL FIX: Create Proxy-backed object for selectedL3ByKey (Task 6 fix)
-// This ensures ALL read/write operations sync with selectionStore.l3ByComponent
-const selectedL3Proxy = new Proxy({}, {
+// CRITICAL FIX: Create Proxy-backed object for selectedL2ByKey (Task 6 fix)
+// This ensures ALL read/write operations sync with selectionStore.l2ByComponent
+const selectedL2Proxy = new Proxy({}, {
   get(target, key) {
     // Let Object.entries(), Object.keys() work via ownKeys/getOwnPropertyDescriptor
-    return selectionStore.l3ByComponent.get(String(key));
+    return selectionStore.l2ByComponent.get(String(key));
   },
   set(target, key, value) {
     if (value instanceof Set) {
-      selectionStore.l3ByComponent.set(String(key), value);
+      selectionStore.l2ByComponent.set(String(key), value);
     } else if (Array.isArray(value)) {
-      selectionStore.l3ByComponent.set(String(key), new Set(value));
+      selectionStore.l2ByComponent.set(String(key), new Set(value));
     } else if (value === undefined || value === null) {
-      selectionStore.l3ByComponent.delete(String(key));
+      selectionStore.l2ByComponent.delete(String(key));
     }
     return true;
   },
   deleteProperty(target, key) {
-    selectionStore.l3ByComponent.delete(String(key));
+    selectionStore.l2ByComponent.delete(String(key));
     return true;
   },
   has(target, key) {
-    return selectionStore.l3ByComponent.has(String(key));
+    return selectionStore.l2ByComponent.has(String(key));
   },
   ownKeys() {
-    return Array.from(selectionStore.l3ByComponent.keys());
+    return Array.from(selectionStore.l2ByComponent.keys());
   },
   getOwnPropertyDescriptor(target, key) {
-    if (selectionStore.l3ByComponent.has(String(key))) {
+    if (selectionStore.l2ByComponent.has(String(key))) {
       return {
         enumerable: true,
         configurable: true,
-        value: selectionStore.l3ByComponent.get(String(key))
+        value: selectionStore.l2ByComponent.get(String(key))
       };
     }
   }
 });
 
 // Lock the property to prevent accidental reassignment
-Object.defineProperty(S2, 'selectedL3ByKey', {
-  get() { return selectedL3Proxy; },
+Object.defineProperty(S2, 'selectedL2ByKey', {
+  get() { return selectedL2Proxy; },
   set(value) {
     // If someone tries to replace the whole object, sync it to the Map instead
     if (value === null || (typeof value === 'object' && Object.keys(value).length === 0)) {
-      selectionStore.l3ByComponent.clear();
+      selectionStore.l2ByComponent.clear();
     } else if (typeof value === 'object') {
-      selectionStore.l3ByComponent.clear();
+      selectionStore.l2ByComponent.clear();
       Object.entries(value).forEach(([k, v]) => {
         if (v instanceof Set) {
-          selectionStore.l3ByComponent.set(k, v);
+          selectionStore.l2ByComponent.set(k, v);
         } else if (Array.isArray(v)) {
-          selectionStore.l3ByComponent.set(k, new Set(v));
+          selectionStore.l2ByComponent.set(k, new Set(v));
         }
       });
     }
@@ -4517,21 +4517,21 @@ async function hydrateComponentsFor(delivCode) {
     const comps = await api(`/api/components?deliverable=${encodeURIComponent(delivCode)}`);
     selectionStore.componentsByDeliv.set(delivCode, new Set(comps));
     
-    // Auto-load ALL L3 for ALL components (Task 1.1 requirement)
+    // Auto-load ALL L2 for ALL components (Task 1.1 requirement)
     if (comps.length > 0) {
-      await Promise.all(comps.map(comp => hydrateL3For(delivCode, comp)));
+      await Promise.all(comps.map(comp => hydrateL2For(delivCode, comp)));
     }
   } catch (error) {
     console.error(`Failed to hydrate components for ${delivCode}:`, error);
   }
 }
 
-async function hydrateL3For(delivCode, componentName) {
+async function hydrateL2For(delivCode, componentName) {
   try {
-    const l3 = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
+    const l2 = await api(`/api/l2?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
     const key = `${delivCode}::${componentName}`;
     // FIX: Extract task names from objects if needed
-    const taskNames = l3.map(task => {
+    const taskNames = l2.map(task => {
       if (typeof task === 'string') return task;
       if (task && typeof task === 'object') {
         const name = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
@@ -4539,9 +4539,9 @@ async function hydrateL3For(delivCode, componentName) {
       }
       return null; // Filter out invalid entries
     }).filter(name => name && name !== '[object Object]'); // Remove nulls and object strings
-    selectionStore.l3ByComponent.set(key, new Set(taskNames));
+    selectionStore.l2ByComponent.set(key, new Set(taskNames));
   } catch (error) {
-    console.error(`Failed to hydrate L3 for ${delivCode}::${componentName}:`, error);
+    console.error(`Failed to hydrate L2 for ${delivCode}::${componentName}:`, error);
   }
 }
 
@@ -4613,10 +4613,10 @@ async function deselectDeliverable(code) {
   selectionStore.deliverables.delete(code);
   selectionStore.componentsByDeliv.delete(code);
   
-  // Remove all L3 entries for this deliverable
-  Array.from(selectionStore.l3ByComponent.keys())
+  // Remove all L2 entries for this deliverable
+  Array.from(selectionStore.l2ByComponent.keys())
     .filter(k => k.startsWith(`${code}::`))
-    .forEach(k => selectionStore.l3ByComponent.delete(k));
+    .forEach(k => selectionStore.l2ByComponent.delete(k));
   
   // Also clean up S2 state for compatibility
   delete S2.selectedComponentsByCode[code];
@@ -4659,7 +4659,7 @@ async function deselectDeliverable(code) {
 window.selectDeliverable = selectDeliverable;
 window.deselectDeliverable = deselectDeliverable;
 window.hydrateComponentsFor = hydrateComponentsFor;
-window.hydrateL3For = hydrateL3For;
+window.hydrateL2For = hydrateL2For;
 
 async function boot() {
   // NUCLEAR CLEANUP: Complete purge of all polling and job IDs on page load
@@ -6282,7 +6282,7 @@ async function onRunReconcile() {
   // Reset Step 2 state
   selectionStore.deliverables.clear();
   selectionStore.componentsByDeliv.clear();
-  selectionStore.l3ByComponent.clear();
+  selectionStore.l2ByComponent.clear();
   S2.selectedComponentsByCode = {};
   S2.aiSuggestedCodes = new Set();
   S2.activeDeliverableCode = null;
@@ -7103,7 +7103,7 @@ async function applyAllSelectedFromAI() {
       // Store selected tasks
       if (selectedTasks.size > 0) {
         const key = `${delivCode}::${compTitle}`;
-        selectionStore.l3ByComponent.set(key, selectedTasks);
+        selectionStore.l2ByComponent.set(key, selectedTasks);
       }
     }
     
@@ -7126,7 +7126,7 @@ async function applyAllSelectedFromAI() {
       
       try {
         // Fetch L2 tasks in bulk for all selected components of this deliverable
-        const res = await fetch('/api/step2/l3/bulk', {
+        const res = await fetch('/api/step2/l2/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -7136,18 +7136,18 @@ async function applyAllSelectedFromAI() {
         });
         
         if (res.ok) {
-          const l3Data = await res.json();
+          const l2Data = await res.json();
           
-          // FIX: Handle l3_by_component structure from API
-          const tasksData = l3Data.l3_by_component || l3Data;
+          // FIX: Handle l2_by_component structure from API
+          const tasksData = l2Data.l2_by_component || l2Data;
           
           // Store L2 tasks for each component
           for (const [compName, tasks] of Object.entries(tasksData)) {
             const key = `${delivCode}::${compName}`;
-            if (!selectionStore.l3ByComponent.has(key)) {
-              selectionStore.l3ByComponent.set(key, new Set());
+            if (!selectionStore.l2ByComponent.has(key)) {
+              selectionStore.l2ByComponent.set(key, new Set());
             }
-            const existingTasks = selectionStore.l3ByComponent.get(key);
+            const existingTasks = selectionStore.l2ByComponent.get(key);
             
             // Handle array of tasks properly
             if (Array.isArray(tasks)) {
@@ -7176,7 +7176,7 @@ async function applyAllSelectedFromAI() {
           if (firstDelivCode && firstCompName) {
             S2.activeComponentName = firstCompName;
             // Trigger component panel refresh to show L2 tasks immediately
-            await refreshL3Panel();
+            await refreshL2Panel();
           }
           
           console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(tasksData));
@@ -7187,11 +7187,11 @@ async function applyAllSelectedFromAI() {
     } else {
       // Edge case: deliverable has no components, use "general" fallback
       try {
-        const generalTasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=general`);
+        const generalTasks = await api(`/api/l2?deliverable=${encodeURIComponent(delivCode)}&component=general`);
         if (generalTasks && generalTasks.length > 0) {
           // Store as "general" component
           const key = `${delivCode}::general`;
-          selectionStore.l3ByComponent.set(key, new Set(generalTasks));
+          selectionStore.l2ByComponent.set(key, new Set(generalTasks));
           
           // Also update the component map to have "general"
           selectionStore.componentsByDeliv.set(delivCode, new Set(['general']));
@@ -7227,11 +7227,11 @@ async function applyAllSelectedFromAI() {
     }
   }
   
-  // FIX: Render L3 panel to display the first component's L2 tasks
+  // FIX: Render L2 panel to display the first component's L2 tasks
   if (firstDelivCode && firstCompName) {
-    // Use renderL3Panel which displays L2 tasks in the third column
-    if (window.renderL3Panel) {
-      await renderL3Panel();
+    // Use renderL2Panel which displays L2 tasks in the third column
+    if (window.renderL2Panel) {
+      await renderL2Panel();
     } else if (window.renderTasksPanel) {
       // Fallback to renderTasksPanel if available
       const componentKey = `${firstDelivCode}::${firstCompName}`;
@@ -7281,15 +7281,15 @@ async function renderTasksPanel(componentKey) {
   document.getElementById('s2-tasks-active-component').textContent = `${compName}`;
   
   // Get available tasks for this component
-  const availableTasks = selectionStore.l3ByComponent.get(componentKey) || new Set();
-  const selectedTasks = selectionStore.l3ByComponent.get(componentKey) || new Set();
+  const availableTasks = selectionStore.l2ByComponent.get(componentKey) || new Set();
+  const selectedTasks = selectionStore.l2ByComponent.get(componentKey) || new Set();
   
   if (availableTasks.size === 0) {
     // Fetch tasks if not loaded
     try {
-      const tasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(compName)}`);
+      const tasks = await api(`/api/l2?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(compName)}`);
       tasks.forEach(task => availableTasks.add(task));
-      selectionStore.l3ByComponent.set(componentKey, availableTasks);
+      selectionStore.l2ByComponent.set(componentKey, availableTasks);
     } catch (e) {
       console.error('Error fetching tasks:', e);
       taskList.innerHTML = '<p style="color: #ef4444; text-align: center; padding: 20px;">Error loading tasks</p>';
@@ -7339,14 +7339,14 @@ async function renderTasksPanel(componentKey) {
       const task = e.target.dataset.task;
       const compKey = e.target.dataset.component;
       
-      if (!selectionStore.l3ByComponent.has(compKey)) {
-        selectionStore.l3ByComponent.set(compKey, new Set());
+      if (!selectionStore.l2ByComponent.has(compKey)) {
+        selectionStore.l2ByComponent.set(compKey, new Set());
       }
       
       if (e.target.checked) {
-        selectionStore.l3ByComponent.get(compKey).add(task);
+        selectionStore.l2ByComponent.get(compKey).add(task);
       } else {
-        selectionStore.l3ByComponent.get(compKey).delete(task);
+        selectionStore.l2ByComponent.get(compKey).delete(task);
       }
       
       updateTasksSummary();
@@ -7382,7 +7382,7 @@ function updateTasksSummary() {
   let manualTasks = 0;
   
   // Count all selected tasks
-  for (const [compKey, tasks] of selectionStore.l3ByComponent.entries()) {
+  for (const [compKey, tasks] of selectionStore.l2ByComponent.entries()) {
     const [delivCode, compName] = compKey.split('::');
     for (const task of tasks) {
       totalTasks++;
@@ -7409,7 +7409,7 @@ function updateTasksSummary() {
     if (totalTasks === 0) {
       detailsDiv.innerHTML = '<div style="color: var(--muted); text-align: center; padding: 20px; font-size: 0.85em;">No tasks selected yet</div>';
     } else {
-      const detailsHtml = Array.from(selectionStore.l3ByComponent.entries())
+      const detailsHtml = Array.from(selectionStore.l2ByComponent.entries())
         .filter(([_, tasks]) => tasks.size > 0)
         .map(([compKey, tasks]) => {
           const [delivCode, compName] = compKey.split('::');
@@ -7506,10 +7506,10 @@ function renderAISuggestionsPanel(dCode, ai) {
     </div>
   `).join("");
 
-  const l3html = Object.entries(ai.l3_by_component || {}).map(([comp, tasks]) => `
+  const l2html = Object.entries(ai.l2_by_component || {}).map(([comp, tasks]) => `
     <details class="ai-group" style="margin:8px 0;">
       <summary style="cursor:pointer;font-weight:600;padding:4px 0;">${comp}</summary>
-      <ul class="ai-l3" style="margin:4px 0 0 20px;list-style:disc;">
+      <ul class="ai-l2" style="margin:4px 0 0 20px;list-style:disc;">
         ${tasks.map(t => `<li style="padding:2px 0;">${t.label}${t.why ? ` — <span class="muted" style="font-size:0.85em;">${t.why}</span>` : ""}</li>`).join("")}
       </ul>
     </details>
@@ -7533,8 +7533,8 @@ function renderAISuggestionsPanel(dCode, ai) {
     </div>
 
     <div class="ai-section">
-      <h4 style="margin:8px 0;">GPT‑5 Suggested L3 (per component)</h4>
-      ${l3html || "<div class='muted'>No task suggestions.</div>"}
+      <h4 style="margin:8px 0;">GPT‑5 Suggested L2 (per component)</h4>
+      ${l2html || "<div class='muted'>No task suggestions.</div>"}
     </div>
   `;
 
@@ -7549,9 +7549,9 @@ function renderAISuggestionsPanel(dCode, ai) {
       if (act === "replace") {
         S2.selectedComponentsByCode[d] = new Set();
         selectionStore.componentsByDeliv.set(d, new Set());
-        for (const key of Array.from(selectionStore.l3ByComponent.keys())) {
+        for (const key of Array.from(selectionStore.l2ByComponent.keys())) {
           if (key.startsWith(d + "::")) {
-            selectionStore.l3ByComponent.delete(key);
+            selectionStore.l2ByComponent.delete(key);
           }
         }
       }
@@ -7561,16 +7561,16 @@ function renderAISuggestionsPanel(dCode, ai) {
           S2.selectedComponentsByCode[d] = new Set();
         }
         S2.selectedComponentsByCode[d].add(c);
-        await hydrateL3For(d, c);
+        await hydrateL2For(d, c);
       }
       
-      if (ai.l3_by_component) {
-        for (const [comp, items] of Object.entries(ai.l3_by_component)) {
+      if (ai.l2_by_component) {
+        for (const [comp, items] of Object.entries(ai.l2_by_component)) {
           const key = `${d}::${comp}`;
-          if (!selectionStore.l3ByComponent.has(key)) {
-            selectionStore.l3ByComponent.set(key, new Set());
+          if (!selectionStore.l2ByComponent.has(key)) {
+            selectionStore.l2ByComponent.set(key, new Set());
           }
-          items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
+          items.forEach(t => selectionStore.l2ByComponent.get(key).add(t.label));
         }
       }
       
@@ -8004,16 +8004,16 @@ async function onDeliverableToggle(code, checked) {
           
           for (const c of (ai.components || []).map(x => x.name)) {
             S2.selectedComponentsByCode[code].add(c);
-            await hydrateL3For(code, c);
+            await hydrateL2For(code, c);
           }
           
-          if (ai.l3_by_component) {
-            for (const [comp, items] of Object.entries(ai.l3_by_component)) {
+          if (ai.l2_by_component) {
+            for (const [comp, items] of Object.entries(ai.l2_by_component)) {
               const key = `${code}::${comp}`;
-              if (!selectionStore.l3ByComponent.has(key)) {
-                selectionStore.l3ByComponent.set(key, new Set());
+              if (!selectionStore.l2ByComponent.has(key)) {
+                selectionStore.l2ByComponent.set(key, new Set());
               }
-              items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
+              items.forEach(t => selectionStore.l2ByComponent.get(key).add(t.label));
             }
           }
         } catch (error) {
@@ -8038,7 +8038,7 @@ async function onDeliverableToggle(code, checked) {
               S2.selectedComponentsByCode[code].add(comp);
             });
             
-            await Promise.all(suggested.map(comp => hydrateL3For(code, comp)));
+            await Promise.all(suggested.map(comp => hydrateL2For(code, comp)));
           }
         } catch (error) {
           console.error('Auto-suggest components error:', error);
@@ -8128,13 +8128,13 @@ function renderComponentsChecklist(code, items) {
       
       if (e.target.checked) {
         selectedSet.add(compName);
-        // Clear and refetch L3 tasks when component is reselected (fixes Task 3)
-        selectionStore.l3ByComponent.delete(key);
-        await hydrateL3For(code, compName);
+        // Clear and refetch L2 tasks when component is reselected (fixes Task 3)
+        selectionStore.l2ByComponent.delete(key);
+        await hydrateL2For(code, compName);
       } else {
         selectedSet.delete(compName);
-        // Remove L3 tasks when component is deselected
-        selectionStore.l3ByComponent.delete(key);
+        // Remove L2 tasks when component is deselected
+        selectionStore.l2ByComponent.delete(key);
       }
       
       // Sync with ScenarioManager if it exists and has an active scenario
@@ -8182,15 +8182,15 @@ function updateSummaryCounts() {
     }
   });
   
-  // Count L3 - only for selected components (fixes Task 4)
-  let l3Count = 0;
-  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
+  // Count L2 - only for selected components (fixes Task 4)
+  let l2Count = 0;
+  Object.entries(APB.step2.selectedL2ByKey).forEach(([key, l2Set]) => {
     const [code, compName] = key.split('::');
     // Only count if deliverable is selected AND component is selected
     if (APB.step2.selectedCodes.has(code)) {
       const compSet = APB.step2.selectedComponentsByCode[code];
       if (compSet && compSet.has(compName)) {
-        l3Count += l3Set.size;
+        l2Count += l2Set.size;
       }
     }
   });
@@ -8198,11 +8198,11 @@ function updateSummaryCounts() {
   // Update DOM with counts
   const delivEl = document.getElementById('s2-summary-deliverables');
   const compEl = document.getElementById('s2-summary-components');
-  const l3El = document.getElementById('s2-summary-l3');
+  const l2El = document.getElementById('s2-summary-l2');
   
   if (delivEl) delivEl.textContent = delivCount;
   if (compEl) compEl.textContent = compCount;
-  if (l3El) l3El.textContent = l3Count;
+  if (l2El) l2El.textContent = l2Count;
   
   // Render detailed chips below counts
   renderSummaryChips();
@@ -8214,14 +8214,14 @@ function updateSummaryCounts() {
   }
 }
 
-// Render summary chips with hierarchical L3 display: Deliverable → Component → L3
+// Render summary chips with hierarchical L2 display: Deliverable → Component → L2
 function renderSummaryChips() {
   const container = document.getElementById('s2-summary-status');
   if (!container) return;
   
   let html = '';
   
-  // Group by Deliverable → Component → L3
+  // Group by Deliverable → Component → L2
   APB.step2.selectedCodes.forEach(delivCode => {
     const deliv = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === delivCode);
     const delivName = deliv ? (deliv.Deliverable || delivCode) : delivCode;
@@ -8254,20 +8254,20 @@ function renderSummaryChips() {
       compSet = new Set();
     }
     
-    // Render each component and its L3 items
+    // Render each component and its L2 items
     compSet.forEach(compName => {
       const key = `${delivCode}::${compName}`;
-      const l3Set = APB.step2.selectedL3ByKey[key] || new Set();
+      const l2Set = APB.step2.selectedL2ByKey[key] || new Set();
       
-      if (l3Set.size > 0) {
+      if (l2Set.size > 0) {
         // Component label with reset and remove buttons
         html += `<div style="margin-top:8px;padding-left:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
             <span style="font-size:0.8em;color:var(--muted);">${compName}</span>
             <div style="display:flex;gap:6px;">
-              <button onclick="resetL3ForComponent('${delivCode}', '${compName}')" 
+              <button onclick="resetL2ForComponent('${delivCode}', '${compName}')" 
                       style="background:rgba(139,92,246,0.15);border:none;color:var(--accent);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:0.7em;"
-                      title="Restore all L3 subtasks for this component">
+                      title="Restore all L2 subtasks for this component">
                 ↻ Reset
               </button>
               <button onclick="removeComponentFromSummary('${delivCode}', '${compName}')" 
@@ -8278,13 +8278,13 @@ function renderSummaryChips() {
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:8px;">`;
         
-        // L3 chips for this component
-        l3Set.forEach(l3Name => {
+        // L2 chips for this component
+        l2Set.forEach(l2Name => {
           const escapedKey = key.replace(/'/g, "\\'");
-          const escapedL3 = l3Name.replace(/'/g, "\\'");
+          const escapedL2 = l2Name.replace(/'/g, "\\'");
           html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(16,185,129,0.2);border-radius:12px;font-size:0.7em;">
-            ${l3Name}
-            <button onclick="removeL3FromSummary('${escapedKey}', '${escapedL3}')" 
+            ${l2Name}
+            <button onclick="removeL2FromSummary('${escapedKey}', '${escapedL2}')" 
                     style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.2em;line-height:1;">×</button>
           </span>`;
         });
@@ -8305,7 +8305,7 @@ function renderSummaryChips() {
 
 // Cascading Remove Handlers (Task 2)
 
-// Remove deliverable from summary - cascades to all components and L3
+// Remove deliverable from summary - cascades to all components and L2
 window.removeDeliverableFromSummary = async function(code) {
   await deselectDeliverable(code);
   renderDeliverablesPanel();
@@ -8314,13 +8314,13 @@ window.removeDeliverableFromSummary = async function(code) {
   initAISummaryAndSuggestions();
 }
 
-// Remove component from summary - cascades to its L3 items
+// Remove component from summary - cascades to its L2 items
 window.removeComponentFromSummary = function(delivCode, compName) {
   const key = `${delivCode}::${compName}`;
   
-  // Remove L3 for this component
-  if (APB.step2.selectedL3ByKey[key]) {
-    delete APB.step2.selectedL3ByKey[key];
+  // Remove L2 for this component
+  if (APB.step2.selectedL2ByKey[key]) {
+    delete APB.step2.selectedL2ByKey[key];
   }
   
   // Remove component from selection
@@ -8343,19 +8343,19 @@ window.removeComponentFromSummary = function(delivCode, compName) {
   updateSummaryCounts();
 }
 
-// Remove single L3 from summary - with cleanup
-window.removeL3FromSummary = function(key, l3Name) {
-  const l3Set = APB.step2.selectedL3ByKey[key];
-  if (!l3Set) return;
+// Remove single L2 from summary - with cleanup
+window.removeL2FromSummary = function(key, l2Name) {
+  const l2Set = APB.step2.selectedL2ByKey[key];
+  if (!l2Set) return;
   
-  // Remove the L3 item
-  l3Set.delete(l3Name);
+  // Remove the L2 item
+  l2Set.delete(l2Name);
   
   const [delivCode, compName] = key.split('::');
   
-  // If no L3 left for this component, remove the component
-  if (l3Set.size === 0) {
-    delete APB.step2.selectedL3ByKey[key];
+  // If no L2 left for this component, remove the component
+  if (l2Set.size === 0) {
+    delete APB.step2.selectedL2ByKey[key];
     
     const compSet = APB.step2.selectedComponentsByCode[delivCode];
     if (compSet instanceof Set) {
@@ -8372,26 +8372,26 @@ window.removeL3FromSummary = function(key, l3Name) {
   // Re-render panels
   renderDeliverablesPanel();
   if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
-    renderL3Panel(delivCode, compName);
+    renderL2Panel(delivCode, compName);
   }
   updateSummaryCounts();
 }
 
-// Reset L3 subtasks for a component - refetches all from server
-window.resetL3ForComponent = async function(delivCode, compName) {
+// Reset L2 subtasks for a component - refetches all from server
+window.resetL2ForComponent = async function(delivCode, compName) {
   const key = `${delivCode}::${compName}`;
   
-  // Clear the cached L3 for this component
-  selectionStore.l3ByComponent.delete(key);
+  // Clear the cached L2 for this component
+  selectionStore.l2ByComponent.delete(key);
   
-  // Refetch L3 from server
-  await hydrateL3For(delivCode, compName);
+  // Refetch L2 from server
+  await hydrateL2For(delivCode, compName);
   
   // Update the summary display
   updateSummaryCounts();
 }
 
-// Component clicked - load L3 panel
+// Component clicked - load L2 panel
 window.onComponentClicked = async function onComponentClicked(componentName) {
   const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
   if (!code) return;
@@ -8402,49 +8402,49 @@ window.onComponentClicked = async function onComponentClicked(componentName) {
     const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component_name=${encodeURIComponent(componentName)}`);
     const json = await res.json();
     
-    const items = (json.items || json.l3 || []).map(item => 
+    const items = (json.items || json.l2 || []).map(item => 
       typeof item === 'string' ? item : (item.Task_Label || item.name || '')
     );
     
-    renderL3Checklist(code, componentName, items);
+    renderL2Checklist(code, componentName, items);
   } catch (e) {
-    console.error('Error loading L3:', e);
-    const l3ListEl = document.getElementById('s2-l3-list');
-    if (l3ListEl) {
-      l3ListEl.innerHTML = '<p style="color:#f88;text-align:center;padding:40px 8px;">Error loading subtasks</p>';
+    console.error('Error loading L2:', e);
+    const l2ListEl = document.getElementById('s2-l2-list');
+    if (l2ListEl) {
+      l2ListEl.innerHTML = '<p style="color:#f88;text-align:center;padding:40px 8px;">Error loading subtasks</p>';
     }
   }
 }
 
-// Render L3 checklist
-function renderL3Checklist(code, componentName, items) {
-  const listEl = document.getElementById('s2-l3-list');
+// Render L2 checklist
+function renderL2Checklist(code, componentName, items) {
+  const listEl = document.getElementById('s2-l2-list');
   if (!listEl) return;
   
   if (items.length === 0) {
-    listEl.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 8px;">No L3 subtasks</p>';
+    listEl.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 8px;">No L2 subtasks</p>';
     return;
   }
   
   const key = `${code}::${componentName}`;
   
   // Initialize selection
-  if (!APB.step2.selectedL3ByKey[key]) {
-    APB.step2.selectedL3ByKey[key] = new Set(items);
+  if (!APB.step2.selectedL2ByKey[key]) {
+    APB.step2.selectedL2ByKey[key] = new Set(items);
   }
   
-  const selectedSet = APB.step2.selectedL3ByKey[key];
+  const selectedSet = APB.step2.selectedL2ByKey[key];
   
   listEl.innerHTML = items.map(label => `
     <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
-      <input type="checkbox" class="l3-checkbox" data-label="${label}" 
+      <input type="checkbox" class="l2-checkbox" data-label="${label}" 
              ${selectedSet.has(label) ? 'checked' : ''} />
       <span style="font-size:0.9em;">${label}</span>
     </label>
   `).join('');
   
   // Attach handlers
-  listEl.querySelectorAll('.l3-checkbox').forEach(cb => {
+  listEl.querySelectorAll('.l2-checkbox').forEach(cb => {
     cb.addEventListener('change', e => {
       const label = e.target.dataset.label;
       if (e.target.checked) {
@@ -8727,7 +8727,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // State for new Step 2 UI
 const step2State = {
   currentDeliverable: null,     // Currently selected deliverable for viewing components
-  currentComponent: null,        // Currently selected component for viewing L3 subtasks
+  currentComponent: null,        // Currently selected component for viewing L2 subtasks
   selectedL3Map: {},             // { deliverableCode: { componentName: Set([l3labels...]) } }
 };
 window.step2State = step2State;
@@ -8735,7 +8735,7 @@ window.step2State = step2State;
 // Expose functions globally
 window.updateStep2Summary = updateStep2Summary;
 window.renderComponentsPanel = renderComponentsPanel;
-window.renderL3Panel = renderL3Panel;
+window.renderL2Panel = renderL2Panel;
 
 // Update summary panel with current selection counts
 function updateStep2Summary() {
@@ -8762,16 +8762,16 @@ function updateStep2Summary() {
   const compEl = document.getElementById('s2-summary-components');
   if (compEl) compEl.textContent = compCount;
   
-  // Count L3 subtasks
-  let l3Count = 0;
+  // Count L2 subtasks
+  let l2Count = 0;
   Object.values(step2State.selectedL3Map).forEach(compMap => {
-    Object.values(compMap).forEach(l3Set => {
-      if (l3Set instanceof Set) l3Count += l3Set.size;
-      else if (Array.isArray(l3Set)) l3Count += l3Set.length;
+    Object.values(compMap).forEach(l2Set => {
+      if (l2Set instanceof Set) l2Count += l2Set.size;
+      else if (Array.isArray(l2Set)) l2Count += l2Set.length;
     });
   });
-  const l3El = document.getElementById('s2-summary-l3');
-  if (l3El) l3El.textContent = l3Count;
+  const l2El = document.getElementById('s2-summary-l2');
+  if (l3El) l3El.textContent = l2Count;
   
   // Update status message
   const statusEl = document.getElementById('s2-summary-status');
@@ -8887,11 +8887,11 @@ async function renderComponentsPanel() {
       // Re-render components to show active state
       renderComponentsPanel();
       
-      // Update L2 tasks panel - use onComponentClicked to fetch and display L3 tasks
+      // Update L2 tasks panel - use onComponentClicked to fetch and display L2 tasks
       if (window.onComponentClicked) {
         await onComponentClicked(compName);
-      } else if (window.renderL3Panel) {
-        await renderL3Panel();
+      } else if (window.renderL2Panel) {
+        await renderL2Panel();
       }
     });
   });
@@ -8921,11 +8921,11 @@ async function renderComponentsPanel() {
         S2.activeDeliverableCode = delivCode;
         S2.activeComponentName = compName;
         renderComponentsPanel(); // Re-render to show active state
-        // Update L2 tasks - use onComponentClicked to fetch and display L3 tasks
+        // Update L2 tasks - use onComponentClicked to fetch and display L2 tasks
         if (window.onComponentClicked) {
           onComponentClicked(compName);
-        } else if (window.renderL3Panel) {
-          renderL3Panel(); // Fallback to old method
+        } else if (window.renderL2Panel) {
+          renderL2Panel(); // Fallback to old method
         }
       } else {
         S2.selectedComponentsByCode[delivCode].delete(compName);
@@ -8939,30 +8939,30 @@ async function renderComponentsPanel() {
 }
 
 
-// ISSUE FIX 5: Add hydrateL3For function to fetch L3 tasks for a specific component
-async function hydrateL3For(delivCode, compName) {
+// ISSUE FIX 5: Add hydrateL2For function to fetch L2 tasks for a specific component
+async function hydrateL2For(delivCode, compName) {
   const key = `${delivCode}::${compName}`;
   
   // Skip if already hydrated
-  if (selectionStore.l3ByComponent.has(key)) {
+  if (selectionStore.l2ByComponent.has(key)) {
     return;
   }
   
   try {
-    // Fetch L3 tasks for this specific component
+    // Fetch L2 tasks for this specific component
     const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(delivCode)}&component_name=${encodeURIComponent(compName)}`);
     
     if (!res.ok) {
-      console.warn(`Failed to fetch L3 for ${key}`);
+      console.warn(`Failed to fetch L2 for ${key}`);
       return;
     }
     
     const data = await res.json();
-    const l3Items = data.items || [];
+    const l2Items = data.items || [];
     
-    // Store L3 tasks in selectionStore - ensure strings only
-    if (l3Items.length > 0) {
-      const l3Set = new Set(l3Items.map(item => {
+    // Store L2 tasks in selectionStore - ensure strings only
+    if (l2Items.length > 0) {
+      const l2Set = new Set(l2Items.map(item => {
         if (typeof item === 'string') return item;
         if (item && typeof item === 'object') {
           const name = item.name || item.Task_Label || item.task_label || item.title || item.label || '';
@@ -8970,26 +8970,26 @@ async function hydrateL3For(delivCode, compName) {
         }
         return null;
       }).filter(name => name && name !== '[object Object]'));
-      selectionStore.l3ByComponent.set(key, l3Set);
+      selectionStore.l2ByComponent.set(key, l2Set);
       
-      // Also update S2 selectedL3ByKey for compatibility
-      if (S2.selectedL3ByKey) {
-        S2.selectedL3ByKey[key] = l3Set;
+      // Also update S2 selectedL2ByKey for compatibility
+      if (S2.selectedL2ByKey) {
+        S2.selectedL2ByKey[key] = l2Set;
       }
     }
   } catch (err) {
-    console.error(`Error hydrating L3 for ${key}:`, err);
+    console.error(`Error hydrating L2 for ${key}:`, err);
   }
 }
 
 // Export the function globally
-window.hydrateL3For = hydrateL3For;
+window.hydrateL2For = hydrateL2For;
 
 // Render L2 Tasks panel - shows tasks for the active component
-async function renderL3Panel() {
-  const listEl = document.getElementById('s2-l3-list');
-  const btnAll = document.getElementById('s2-l3-selectall');
-  const btnClear = document.getElementById('s2-l3-clear');
+async function renderL2Panel() {
+  const listEl = document.getElementById('s2-l2-list');
+  const btnAll = document.getElementById('s2-l2-selectall');
+  const btnClear = document.getElementById('s2-l2-clear');
   
   if (!listEl) return;
   
@@ -9006,35 +9006,35 @@ async function renderL3Panel() {
   
   const key = `${activeDeliv}::${activeComp}`;
   
-  // Ensure L3 is hydrated for this component
-  if (!selectionStore.l3ByComponent.has(key)) {
-    await hydrateL3For(activeDeliv, activeComp);
+  // Ensure L2 is hydrated for this component
+  if (!selectionStore.l2ByComponent.has(key)) {
+    await hydrateL2For(activeDeliv, activeComp);
   }
   
-  const l3Set = selectionStore.l3ByComponent.get(key);
-  const allL3 = [];
+  const l2Set = selectionStore.l2ByComponent.get(key);
+  const allL2 = [];
   
-  if (l3Set && l3Set.size > 0) {
-    l3Set.forEach(l3Item => {
+  if (l2Set && l2Set.size > 0) {
+    l2Set.forEach(l2Item => {
       // FIX: Extract task name if it's an object
-      let l3Name = l3Item;
-      if (typeof l3Item === 'object' && l3Item) {
-        l3Name = l3Item.Task_Label || l3Item.task_label || l3Item.name || l3Item.title || l3Item.label || '';
+      let l2Name = l2Item;
+      if (typeof l2Item === 'object' && l2Item) {
+        l2Name = l2Item.Task_Label || l2Item.task_label || l2Item.name || l2Item.title || l2Item.label || '';
       }
       // Only add valid string names
-      if (l3Name && typeof l3Name === 'string' && l3Name !== '[object Object]') {
-        allL3.push({
+      if (l2Name && typeof l2Name === 'string' && l2Name !== '[object Object]') {
+        allL2.push({
           delivCode: activeDeliv,
           delivLabel: labelFor(activeDeliv),
           compName: activeComp,
-          l3Name,
+          l2Name,
           key
         });
       }
     });
   }
   
-  if (allL3.length === 0) {
+  if (allL2.length === 0) {
     listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L2 tasks available for this component</p>';
     if (btnAll) btnAll.disabled = true;
     if (btnClear) btnClear.disabled = true;
@@ -9042,31 +9042,31 @@ async function renderL3Panel() {
   }
   
   // Apply search filter
-  const searchFilter = (APB.step2.filters.l3 || '').toLowerCase();
-  const filteredL3 = searchFilter
-    ? allL3.filter(l => 
-        l.l3Name.toLowerCase().includes(searchFilter)
+  const searchFilter = (APB.step2.filters.l2 || '').toLowerCase();
+  const filteredL2 = searchFilter
+    ? allL2.filter(l => 
+        l.l2Name.toLowerCase().includes(searchFilter)
       )
-    : allL3;
+    : allL2;
   
-  if (btnAll) btnAll.disabled = filteredL3.length > 0;
-  if (btnClear) btnClear.disabled = filteredL3.length === 0;
+  if (btnAll) btnAll.disabled = filteredL2.length > 0;
+  if (btnClear) btnClear.disabled = filteredL2.length === 0;
   
   // Render checkboxes for L2 tasks
-  listEl.innerHTML = filteredL3.map(item => {
-    const isSelected = S2.selectedL3ByKey[item.key]?.has?.(item.l3Name) || false;
-    const isVisible = !searchFilter || item.l3Name.toLowerCase().includes(searchFilter);
+  listEl.innerHTML = filteredL2.map(item => {
+    const isSelected = S2.selectedL2ByKey[item.key]?.has?.(item.l2Name) || false;
+    const isVisible = !searchFilter || item.l2Name.toLowerCase().includes(searchFilter);
     
     return `
       <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px; ${isSelected ? 'background:rgba(139,92,246,0.1);' : ''}" 
-             class="l3-checkbox-label">
+             class="l2-checkbox-label">
         <input type="checkbox" 
                data-key="${item.key}" 
-               data-l3="${item.l3Name}"
+               data-l2="${item.l2Name}"
                data-visible="${isVisible ? '1' : '0'}"
                ${isSelected ? 'checked' : ''}
                style="cursor:pointer;"/>
-        <span style="font-size:0.9em; ${isSelected ? 'color:var(--accent);' : ''}">${item.l3Name}</span>
+        <span style="font-size:0.9em; ${isSelected ? 'color:var(--accent);' : ''}">${item.l2Name}</span>
       </label>
     `;
   }).join('');
@@ -9075,24 +9075,24 @@ async function renderL3Panel() {
   listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
     cb.addEventListener('change', e => {
       const key = e.target.getAttribute('data-key');
-      const l3Name = e.target.getAttribute('data-l3');
+      const l2Name = e.target.getAttribute('data-l2');
       
-      // Ensure the key exists in selectedL3ByKey (will use Proxy)
-      if (!S2.selectedL3ByKey[key]) {
-        S2.selectedL3ByKey[key] = new Set();
-      } else if (!(S2.selectedL3ByKey[key] instanceof Set)) {
-        S2.selectedL3ByKey[key] = new Set(
-          Array.isArray(S2.selectedL3ByKey[key]) 
-            ? S2.selectedL3ByKey[key]
-            : Object.keys(S2.selectedL3ByKey[key] || {})
+      // Ensure the key exists in selectedL2ByKey (will use Proxy)
+      if (!S2.selectedL2ByKey[key]) {
+        S2.selectedL2ByKey[key] = new Set();
+      } else if (!(S2.selectedL2ByKey[key] instanceof Set)) {
+        S2.selectedL2ByKey[key] = new Set(
+          Array.isArray(S2.selectedL2ByKey[key]) 
+            ? S2.selectedL2ByKey[key]
+            : Object.keys(S2.selectedL2ByKey[key] || {})
         );
       }
       
       if (e.target.checked) {
-        S2.selectedL3ByKey[key].add(l3Name);
+        S2.selectedL2ByKey[key].add(l2Name);
         e.target.parentElement.style.background = 'rgba(139,92,246,0.1)';
       } else {
-        S2.selectedL3ByKey[key].delete(l3Name);
+        S2.selectedL2ByKey[key].delete(l2Name);
         e.target.parentElement.style.background = '';
       }
       
@@ -9142,26 +9142,26 @@ document.addEventListener('DOMContentLoaded', function() {
         cb.checked = true;
       });
       
-      // ISSUE FIX 5: Ensure L3 tasks are fetched and displayed after Smart Apply
-      // Hydrate L3 tasks for all selected components
+      // ISSUE FIX 5: Ensure L2 tasks are fetched and displayed after Smart Apply
+      // Hydrate L2 tasks for all selected components
       const hydratePromises = [];
       for (const [delivCode, compSet] of Object.entries(S2.selectedComponentsByCode)) {
         if (compSet instanceof Set && compSet.size > 0) {
           for (const compName of compSet) {
-            if (window.hydrateL3For) {
-              hydratePromises.push(hydrateL3For(delivCode, compName));
+            if (window.hydrateL2For) {
+              hydratePromises.push(hydrateL2For(delivCode, compName));
             }
           }
         }
       }
       
-      // Wait for all L3 hydrations to complete
+      // Wait for all L2 hydrations to complete
       if (hydratePromises.length > 0) {
         await Promise.all(hydratePromises);
       }
       
       if (window.updateStep2Summary) updateStep2Summary();
-      if (window.renderL3Panel) renderL3Panel();
+      if (window.renderL2Panel) renderL2Panel();
     });
   }
   
@@ -9179,7 +9179,7 @@ document.addEventListener('DOMContentLoaded', function() {
       });
       
       if (window.updateStep2Summary) updateStep2Summary();
-      if (window.renderL3Panel) renderL3Panel();
+      if (window.renderL2Panel) renderL2Panel();
     });
   }
   
@@ -9215,8 +9215,8 @@ document.addEventListener('DOMContentLoaded', function() {
             S2.selectedComponentsByCode[activeDeliv].add(comp);
           });
           
-          // Hydrate L3 for each suggested component
-          await Promise.all(suggested.map(comp => hydrateL3For(activeDeliv, comp)));
+          // Hydrate L2 for each suggested component
+          await Promise.all(suggested.map(comp => hydrateL2For(activeDeliv, comp)));
           
           await renderComponentsPanel();
           updateSummaryCounts();
@@ -9233,31 +9233,31 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
-  // L3 panel controls
-  const l3Search = document.getElementById('s2-l3-search');
-  const l3BtnAll = document.getElementById('s2-l3-selectall');
-  const l3BtnClear = document.getElementById('s2-l3-clear');
+  // L2 panel controls
+  const l2Search = document.getElementById('s2-l2-search');
+  const l2BtnAll = document.getElementById('s2-l2-selectall');
+  const l2BtnClear = document.getElementById('s2-l2-clear');
   
-  // L3 search filter
-  if (l3Search) {
-    l3Search.addEventListener('input', debounce(e => {
-      APB.step2.filters.l3 = e.target.value.toLowerCase();
-      renderL3Panel();
+  // L2 search filter
+  if (l2Search) {
+    l2Search.addEventListener('input', debounce(e => {
+      APB.step2.filters.l2 = e.target.value.toLowerCase();
+      renderL2Panel();
     }, 200));
   }
   
-  // L3 All button - select only visible checkboxes
-  if (l3BtnAll) {
-    l3BtnAll.addEventListener('click', async () => {
-      const visibleBoxes = document.querySelectorAll('#s2-l3-list input[type="checkbox"][data-visible="1"]');
+  // L2 All button - select only visible checkboxes
+  if (l2BtnAll) {
+    l2BtnAll.addEventListener('click', async () => {
+      const visibleBoxes = document.querySelectorAll('#s2-l2-list input[type="checkbox"][data-visible="1"]');
       visibleBoxes.forEach(cb => {
         const key = cb.getAttribute('data-key');
-        const l3Name = cb.getAttribute('data-l3');
+        const l2Name = cb.getAttribute('data-l2');
         
-        if (!S2.selectedL3ByKey[key]) {
-          S2.selectedL3ByKey[key] = new Set();
+        if (!S2.selectedL2ByKey[key]) {
+          S2.selectedL2ByKey[key] = new Set();
         }
-        S2.selectedL3ByKey[key].add(l3Name);
+        S2.selectedL2ByKey[key].add(l2Name);
         cb.checked = true;
       });
       
@@ -9265,15 +9265,15 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
   
-  if (l3BtnClear) {
-    l3BtnClear.addEventListener('click', () => {
-      const visibleBoxes = document.querySelectorAll('#s2-l3-list input[type="checkbox"][data-visible="1"]');
+  if (l2BtnClear) {
+    l2BtnClear.addEventListener('click', () => {
+      const visibleBoxes = document.querySelectorAll('#s2-l2-list input[type="checkbox"][data-visible="1"]');
       visibleBoxes.forEach(cb => {
         const key = cb.getAttribute('data-key');
-        const l3Name = cb.getAttribute('data-l3');
+        const l2Name = cb.getAttribute('data-l2');
         
-        if (S2.selectedL3ByKey[key]) {
-          S2.selectedL3ByKey[key].delete(l3Name);
+        if (S2.selectedL2ByKey[key]) {
+          S2.selectedL2ByKey[key].delete(l2Name);
         }
         cb.checked = false;
       });
@@ -9874,7 +9874,7 @@ async function s2LoadDeliverables() {
     btnClear.onclick = () => {
       APB.step2.selectedCodes.clear();
       APB.step2.selectedComponentsByCode = {};
-      APB.step2.selectedL3ByKey = {};
+      APB.step2.selectedL2ByKey = {};
       APB.step2.activeDeliverableCode = null;
       APB.step2.activeComponentName = null;
       renderDeliverablesPanel();

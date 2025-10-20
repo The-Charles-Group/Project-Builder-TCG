@@ -1,6 +1,6 @@
 
 # ai_weighted_matcher.py
-# Self-contained weighted matching engine for Agency Project Builder (L1/L2/L3).
+# Self-contained weighted matching engine for Agency Project Builder (L1/L2).
 # Drop this file into your server package and import score_rfp().
 # No external deps beyond pandas.
 
@@ -137,8 +137,8 @@ def aggregate_scores(ai_index_df: pd.DataFrame,
         rule_map.setdefault(key, []).append(i)
 
     l1_scores = defaultdict(lambda: {"lex":0.0, "rule":0.0, "rows":[]})
-    l2_details = defaultdict(list)   # code -> list[(row_idx, score)]
-    l3_details = defaultdict(list)
+    component_details = defaultdict(list)   # code -> list[(row_idx, score)] for components
+    task_details = defaultdict(list)   # code -> list[(row_idx, score)] for L2 tasks
 
     for idx, row in ai_index_df.iterrows():
         code = row["Deliverable_Code"]
@@ -158,25 +158,24 @@ def aggregate_scores(ai_index_df: pd.DataFrame,
             l1_scores[code]["rows"].append(idx)
         elif level == "L2":
             sc = w_rule_l2 * rhit + w_lex_l2 * lex
-            l2_details[code].append((idx, sc))
+            component_details[code].append((idx, sc))
         else:
             sc = w_rule_l3 * rhit + w_lex_l3 * lex
-            l3_details[code].append((idx, sc))
+            task_details[code].append((idx, sc))
 
     final = {}
     for code in ai_index_df["Deliverable_Code"].unique():
         base = l1_scores.get(code, {"lex":0.0, "rule":0.0, "rows":[]})
         sc_l1 = w_rule_l1*base["rule"] + w_lex_l1*base["lex"]
-        comp_best = max([sc for (_, sc) in l2_details.get(code, [])] or [0.0])
-        task_best = max([sc for (_, sc) in l3_details.get(code, [])] or [0.0])
+        comp_best = max([sc for (_, sc) in component_details.get(code, [])] or [0.0])
+        task_best = max([sc for (_, sc) in task_details.get(code, [])] or [0.0])
         sc = sc_l1 + comp_mult*comp_best + task_mult*task_best
         final[code] = {
             "score": sc,
             "l1_parts": base,
             "comp_best": comp_best,
             "task_best": task_best,
-            "l2_list": sorted(l2_details.get(code, []), key=lambda x: x[1], reverse=True)[:12],
-            "l3_list": sorted(l3_details.get(code, []), key=lambda x: x[1], reverse=True)[:12],
+            "l2_list": sorted(task_details.get(code, []), key=lambda x: x[1], reverse=True)[:12],
         }
     return final
 
@@ -366,7 +365,7 @@ def score_rfp(rfp_text: str,
         })
     delivery.sort(key=lambda x: x["match_percent"], reverse=True)
 
-    # For the top-N deliverables, also expand top components and L3 tasks with their percent (relative to each L1)
+    # For the top-N deliverables, also expand top components and L2 tasks with their percent (relative to each L1)
     # This keeps the payload small for the UI
     per_l1_components = {}
     per_l1_tasks = {}
@@ -383,17 +382,17 @@ def score_rfp(rfp_text: str,
             })
         per_l1_components[code] = l2
 
-        l3 = []
-        best_t = max([s for (_, s) in data.get("l3_list", [])] or [1.0])
+        l2_tasks = []
+        best_t = max([s for (_, s) in data.get("l2_list", [])] or [1.0])
         if best_t == 0: best_t = 1.0
-        for row_idx, s in data.get("l3_list", [])[:8]:
+        for row_idx, s in data.get("l2_list", [])[:8]:
             row = index_df.iloc[row_idx]
-            l3.append({
+            l2_tasks.append({
                 "component": str(row.get("Component_Task_L1","")),
                 "task": str(row.get("Task_Task_L2","")),
                 "percent": round((s/best_t)*100.0, 1)
             })
-        per_l1_tasks[code] = l3
+        per_l1_tasks[code] = l2_tasks
 
     return {
         "deliverables": delivery,
