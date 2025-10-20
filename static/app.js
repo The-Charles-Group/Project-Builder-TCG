@@ -5021,6 +5021,7 @@ async function boot() {
           if (response.ok) {
             const result = await response.json();
             console.log('[FILE UPLOAD] Text extracted successfully:', result.char_count, 'chars');
+            console.log('[FILE UPLOAD] Session ID:', result.session_id);
             
             // Store the extracted text globally
             window.uploadedFileText = result.text;
@@ -5030,6 +5031,7 @@ async function boot() {
             window.APP = window.APP || {};
             window.APP.uploadedFileText = result.text;
             window.APP.uploadedFilenames = result.filenames;
+            window.APP.uploadSessionId = result.session_id;  // CRITICAL: Store session ID for GPT-5 Vision processing
             
             // Update file preview to show success
             if (filePreview) {
@@ -10339,11 +10341,18 @@ document.addEventListener('DOMContentLoaded', () => {
   // Display selected file names when files are chosen AND auto-clear old data
   const fileInput = document.getElementById('rfpFile');
   const filesList = document.getElementById('selected-files-list');
+  
+  console.log('[FILE UPLOAD INIT] File input element:', fileInput ? 'Found' : 'NOT FOUND');
+  console.log('[FILE UPLOAD INIT] Files list element:', filesList ? 'Found' : 'NOT FOUND');
+  
   if (fileInput && filesList) {
+    console.log('[FILE UPLOAD INIT] Adding change event listener to file input');
     fileInput.addEventListener('change', async (e) => {
+      console.log('[FILE CHANGE] Event triggered!', e.target.files);
       const files = e.target.files;
       if (files && files.length > 0) {
         const names = Array.from(files).map(f => f.name).join(', ');
+        console.log('[FILE CHANGE] Files selected:', names);
         filesList.textContent = `Uploading: ${names}...`;
         filesList.style.color = 'var(--accent)';
         
