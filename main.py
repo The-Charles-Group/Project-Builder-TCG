@@ -6614,11 +6614,10 @@ def api_post_scenarios(payload: dict):
         
         selected_l2_map = (
             payload.get("selected_l2_map") or 
-            payload.get("selectedL3Map") or 
-            payload.get("l3Map") or
-            payload.get("selected_l2_map") or
             payload.get("selectedL2Map") or
-            payload.get("l2Map")
+            payload.get("l2Map") or
+            payload.get("selectedL3Map") or  # BACKWARDS COMPATIBILITY: old L3 naming
+            payload.get("l3Map")             # BACKWARDS COMPATIBILITY: old L3 naming
         )
         
         # Log what we're building with

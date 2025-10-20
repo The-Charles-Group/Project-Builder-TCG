@@ -8728,7 +8728,7 @@ document.addEventListener('DOMContentLoaded', function() {
 const step2State = {
   currentDeliverable: null,     // Currently selected deliverable for viewing components
   currentComponent: null,        // Currently selected component for viewing L2 subtasks
-  selectedL3Map: {},             // { deliverableCode: { componentName: Set([l3labels...]) } }
+  selectedL2Map: {},             // { deliverableCode: { componentName: Set([l2labels...]) } }
 };
 window.step2State = step2State;
 
@@ -8764,14 +8764,14 @@ function updateStep2Summary() {
   
   // Count L2 subtasks
   let l2Count = 0;
-  Object.values(step2State.selectedL3Map).forEach(compMap => {
+  Object.values(step2State.selectedL2Map).forEach(compMap => {
     Object.values(compMap).forEach(l2Set => {
       if (l2Set instanceof Set) l2Count += l2Set.size;
       else if (Array.isArray(l2Set)) l2Count += l2Set.length;
     });
   });
   const l2El = document.getElementById('s2-summary-l2');
-  if (l3El) l3El.textContent = l2Count;
+  if (l2El) l2El.textContent = l2Count;
   
   // Update status message
   const statusEl = document.getElementById('s2-summary-status');
