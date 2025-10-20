@@ -3262,8 +3262,8 @@ class BuildPayload(BaseModel):
     retainers: Optional[List[RetainerSelection]] = []
     # NEW: component-level selection per deliverable (supports multiple formats including "__ALL__" sentinel)
     selected_components_map: Optional[Dict[str, Union[str, List[str], Dict[str, Optional[float]]]]] = None
-    # NEW: L3 subtask selection per deliverable and component
-    selected_l3_map: Optional[Dict[str, Dict[str, List[str]]]] = None  # { "<Deliverable_Code>": { "<Component_Name>": ["<Task_Label>", ...] } }
+    # NEW: L2 subtask selection per deliverable and component
+    selected_l2_map: Optional[Dict[str, Dict[str, List[str]]]] = None  # { "<Deliverable_Code>": { "<Component_Name>": ["<Task_Label>", ...] } }
 
 class AutoBuildPayload(BaseModel):
     rfp_text: str
@@ -3400,8 +3400,8 @@ class ReorderPayload(BaseModel):
     complexity: str = "Advanced"
     tier: str = "T2_MediumVolume"
 
-# A1: L3 Request model for bulk component queries
-class L3Request(BaseModel):
+# A1: L2 Request model for bulk component queries
+class L2Request(BaseModel):
     deliverable_code: str
     component: Union[str, List[str]]  # can be one or many components
 
@@ -3952,9 +3952,9 @@ def list_components(deliverable: str):
     )
     return sorted([c for c in comps if c])
 
-@app.get("/api/l3")
-def list_l3(deliverable: str, component: str):
-    """Return all L3 tasks for a given deliverable and component."""
+@app.get("/api/l2")
+def list_l2(deliverable: str, component: str):
+    """Return all L2 tasks for a given deliverable and component."""
     if not DB.loaded:
         DB.load()
     df = DB.all_rows
@@ -4109,9 +4109,9 @@ def api_components_for(deliverable_code: str, complexity: str="Advanced", tier: 
     
     return {"items": [{"name": c, "hours": float(hours_map.get(c, 0.0))} for c in comp_names]}
 
-@app.get("/api/l3_for")
-def api_l3_for(deliverable_code: str, component_name: str):
-    """List L3 subtasks (Task_Label) for a deliverable and component."""
+@app.get("/api/l2_for")
+def api_l2_for(deliverable_code: str, component_name: str):
+    """List L2 subtasks (Task_Label) for a deliverable and component."""
     if not DB.loaded: DB.load()
     
     try:
@@ -4136,7 +4136,7 @@ def api_l3_for(deliverable_code: str, component_name: str):
         
         return {"items": [{"Task_Label": label} for label in task_labels]}
     except Exception as e:
-        print(f"Error in api_l3_for: {e}")
+        print(f"Error in api_l2_for: {e}")
         return {"items": []}
 
 # ============================================================================
@@ -4173,16 +4173,16 @@ async def step2_components(payload: dict):
     
     return out
 
-@app.post("/api/step2/l3")
-async def step2_l3(p: L3Request):
+@app.post("/api/step2/l2")
+async def step2_l2(p: L2Request):
     """
-    Returns L3 subtasks for a deliverable + component(s).
+    Returns L2 subtasks for a deliverable + component(s).
     Supports both single component and multiple components (bulk query).
     
     Single: {"deliverable_code": "deck_strategy", "component": "brief"}
     Bulk: {"deliverable_code": "deck_strategy", "component": ["brief", "art_direction"]}
     
-    Returns merged, deduplicated list of L3 tasks.
+    Returns merged, deduplicated list of L2 tasks.
     """
     if not DB.loaded:
         DB.load()
@@ -4215,13 +4215,13 @@ async def step2_l3(p: L3Request):
     return {
         "deliverable_code": dcode,
         "components": comps,
-        "l3": sorted(out)
+        "l2": sorted(out)
     }
 
-@app.post("/api/step2/l3/bulk")
-async def step2_l3_bulk(payload: dict):
+@app.post("/api/step2/l2/bulk")
+async def step2_l2_bulk(payload: dict):
     """
-    Returns L3 subtasks grouped by component (not merged).
+    Returns L2 subtasks grouped by component (not merged).
     payload: {"deliverable": "deck_strategy", "components": ["brief","art_direction",...]}
     returns: {"brief": ["deck_build","internal_review",...], "art_direction": [...]}
     
@@ -4297,15 +4297,15 @@ def suggest_components(req: SuggestComponentsReq):
     return JSONResponse(out)
 
 
-# --- Suggest L3 tasks for one or more components (dedupe-aware) ---
-class SuggestL3Req(BaseModel):
+# --- Suggest L2 tasks for one or more components (dedupe-aware) ---
+class SuggestL2Req(BaseModel):
     deliverable_code: str
     components: List[str]
     exclude_labels: Optional[List[str]] = None
     limit_per_component: Optional[int] = 20
 
-@app.post("/api/step2/suggest/l3")
-def suggest_l3(req: SuggestL3Req):
+@app.post("/api/step2/suggest/l2")
+def suggest_l2(req: SuggestL2Req):
     if not DB.loaded:
         DB.load()
     d = str(req.deliverable_code)
@@ -4351,9 +4351,9 @@ OPENAI_MODEL = "gpt-5"  # Use GPT-5 model directly
 
 class AISuggestReq(BaseModel):
     deliverable_code: str
-    include_l3: bool = True
+    include_l2: bool = True
     top_components: int = 6
-    top_l3_per_component: int = 12
+    top_l2_per_component: int = 12
     rfp_text: str | None = None
     exclude_labels: List[str] | None = None
     weighted_context: dict | None = None  # Pre-filter context from weighted rules
@@ -4389,8 +4389,8 @@ def _component_catalog_for_deliverable(db: AgencyDB, dcode: str, max_tasks_per_c
         out[comp] = top
     return out
 
-def _rules_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
-                                  top_components: int, top_l3: int,
+def _rules_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
+                                  top_components: int, top_l2: int,
                                   exclude: set[str]) -> dict:
     """Deterministic fallback using frequency + RFP overlaps."""
     catalog = _component_catalog_for_deliverable(db, dcode, 100)
@@ -4406,7 +4406,7 @@ def _rules_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
 
     comp_ranked = [c for c,_ in sorted(comp_scores.items(), key=lambda x: (-x[1], x[0]))][:top_components]
 
-    l3_pick: Dict[str, List[dict]] = {}
+    l2_pick: Dict[str, List[dict]] = {}
     for c in comp_ranked:
         tasks = catalog.get(c, [])
         t_scores = []
@@ -4416,17 +4416,17 @@ def _rules_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
                 continue
             s = 1 + sum(tok in key for tok in toks) * 2
             t_scores.append((lab, s))
-        t_sorted = [lab for lab,_ in sorted(t_scores, key=lambda x: (-x[1], x[0]))][:top_l3]
-        l3_pick[c] = [{"label": lab, "why": "Rule-based relevance"} for lab in t_sorted]
+        t_sorted = [lab for lab,_ in sorted(t_scores, key=lambda x: (-x[1], x[0]))][:top_l2]
+        l2_pick[c] = [{"label": lab, "why": "Rule-based relevance"} for lab in t_sorted]
 
     return {
         "source": "rules",
         "components": [{"name": c, "score": float(comp_scores.get(c, 0)), "why": "High frequency + RFP keyword overlap"} for c in comp_ranked],
-        "l3_by_component": l3_pick
+        "l2_by_component": l2_pick
     }
 
-def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
-                                top_components: int, top_l3: int,
+def _gpt_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
+                                top_components: int, top_l2: int,
                                 exclude: set[str], weighted_context: dict = None) -> dict:
     catalog = _component_catalog_for_deliverable(db, dcode, 60)
     drow = db.deliverables[db.deliverables["Deliverable_Code"].astype(str)==str(dcode)]
@@ -4451,7 +4451,7 @@ def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
         "deliverable": {"code": dcode, "name": dname},
         "catalog": [{"component": c, "tasks": catalog[c]} for c in sorted(catalog.keys())],
         "top_components": top_components,
-        "top_l3_per_component": top_l3,
+        "top_l2_per_component": top_l2,
         "exclude_labels": sorted(list(exclude)),
         "instructions": instructions,
         "return_schema": {
@@ -4469,7 +4469,7 @@ def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
                         "required": ["name"]
                     }
                 },
-                "l3_by_component": {
+                "l2_by_component": {
                     "type": "object",
                     "additionalProperties": {
                         "type": "array",
@@ -4485,7 +4485,7 @@ def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
                 },
                 "rationale_summary": {"type":"string"}
             },
-            "required": ["components","l3_by_component"]
+            "required": ["components","l2_by_component"]
         }
     }
 
@@ -4518,15 +4518,15 @@ def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
     for c in comps:
         c.setdefault("why","Selected by GPT‑5 for RFP fit")
         c.setdefault("score", 0.9)
-    l3 = data.get("l3_by_component") or {}
-    for k, arr in l3.items():
+    l2 = data.get("l2_by_component") or {}
+    for k, arr in l2.items():
         for item in arr:
             item.setdefault("why","GPT‑5 rationale")
 
     return {
         "source": "gpt",
         "components": comps[:top_components],
-        "l3_by_component": {k: v[:top_l3] for k,v in l3.items()},
+        "l2_by_component": {k: v[:top_l2] for k,v in l2.items()},
         "rationale_summary": data.get("rationale_summary","")
     }
 
@@ -4540,8 +4540,8 @@ def ai_suggest(req: AISuggestReq):
     exclude = { (x or "").strip().lower() for x in (req.exclude_labels or []) }
 
     try:
-        payload = _gpt_pick_components_and_l3(
-            db, d, rfp, req.top_components, req.top_l3_per_component, 
+        payload = _gpt_pick_components_and_l2(
+            db, d, rfp, req.top_components, req.top_l2_per_component, 
             exclude, weighted_context=req.weighted_context
         )
         payload["model_used"] = OPENAI_MODEL
@@ -4549,7 +4549,7 @@ def ai_suggest(req: AISuggestReq):
             payload["used_weighted_prefilter"] = True
     except Exception as e:
         print(f"GPT suggest fallback to rules: {e}")
-        payload = _rules_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
+        payload = _rules_pick_components_and_l2(db, d, rfp, req.top_components, req.top_l2_per_component, exclude)
         payload["model_used"] = "rules"
 
     return JSONResponse(payload)
@@ -5903,10 +5903,10 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         # Build scenario items from selection
         items = []
         
-        # Parse selection structure: {deliverable_codes: [...], components_map: {...}, l3_map: {...}}
+        # Parse selection structure: {deliverable_codes: [...], components_map: {...}, l2_map: {...}}
         deliverable_codes = selection.get('deliverable_codes', [])
         components_map = selection.get('components_map', {})
-        l3_map = selection.get('l3_map', {})
+        l2_map = selection.get('l2_map', {})
         
         # For now, just use the existing /api/build logic to generate items
         # We'll call the existing scenario builder and store the result in SCENARIO_STORE
@@ -5916,7 +5916,7 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         build_payload_dict = {
             "deliverable_codes": deliverable_codes,
             "selected_components": components_map,
-            "selected_l3": l3_map,
+            "selected_l2": l2_map,
             "pricing_mode": payload.pricing_mode or "Flat_Blended",
             "blended_rate": payload.blended_rate or 195,
             "rate_band": payload.rate_band or "Standard_US",
@@ -5955,14 +5955,14 @@ async def api_build_scenario(payload: BuildScenarioPayload):
                 if not component_name or component_name == "":
                     continue
                 
-                # Get L3 tasks for this deliverable/component
-                l3_tasks = l3_map.get(deliv_code, {}).get(component_name, [])
+                # Get L2 tasks for this deliverable/component
+                l2_tasks = l2_map.get(deliv_code, {}).get(component_name, [])
                 
                 # Get rows for this deliverable/component
                 comp_rows = db_rows[db_rows['Component'] == component_name]
                 
-                if not l3_tasks:
-                    # No specific L3 tasks selected, use defaults from DB
+                if not l2_tasks:
+                    # No specific L2 tasks selected, use defaults from DB
                     for _, row in comp_rows.iterrows():
                         task_label = row.get('Task_Label', '')
                         if not task_label:
@@ -5984,8 +5984,8 @@ async def api_build_scenario(payload: BuildScenarioPayload):
                             "Service Department": row.get('Service Department', '')
                         })
                 else:
-                    # User selected specific L3 tasks
-                    for task_label in l3_tasks:
+                    # User selected specific L2 tasks
+                    for task_label in l2_tasks:
                         # Find the corresponding row in DB
                         task_rows = comp_rows[comp_rows['Task_Label'] == task_label]
                         if not task_rows.empty:
@@ -6612,8 +6612,8 @@ def api_post_scenarios(payload: dict):
             payload.get("componentsMap")
         )
         
-        selected_l3_map = (
-            payload.get("selected_l3_map") or 
+        selected_l2_map = (
+            payload.get("selected_l2_map") or 
             payload.get("selectedL3Map") or 
             payload.get("l3Map") or
             payload.get("selected_l2_map") or
@@ -6639,7 +6639,7 @@ def api_post_scenarios(payload: dict):
             client_budget_usd=client_budget_usd,
             retainers=payload.get("retainers", []),
             selected_components_map=selected_components_map,
-            selected_l3_map=selected_l3_map
+            selected_l2_map=selected_l2_map
         )
         
         # Call the existing build logic
