@@ -1657,58 +1657,57 @@
       
       console.log('[BUILD] Starting buildScenariosAB()...');
       
-      // Check all possible sources of selected deliverables
-      const selectedFromAppState = appState.selectedCodes || [];
-      const selectedFromGlobal = window.selectedCodes || [];
-      const selectedFromScenarios = window.SCENARIOS ? 
-        Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
-      const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
-      
-      console.log("[BUILD] Validation:", { 
-        selectedFromAppState, 
-        selectedFromGlobal, 
-        selectedFromScenarios, 
-        allSelected,
-        count: allSelected.length 
-      });
-      
-      if (allSelected.length === 0) {
-        alert('No deliverables selected. Please complete Step 2 first.');
-        return;
-      }
-      
-      // Sync the selection to ensure consistency
-      appState.selectedCodes = allSelected;
-      window.selectedCodes = allSelected;
-
-      // Include retainers if toggle is enabled (new system)
-      const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
-      const retainers = retainersEnabled ? (window.APP?.retainers || []) : [];
-
-      // Prepare component selections for payload
-      const selectedComponentsPayload = Object.fromEntries(
-        Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
-      );
-      
-      const payload = {
-        selected_deliverable_codes: appState.selectedCodes,          // <- required
-        selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
-        pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
-        blended_rate: getBlendedRateFromUI(),                        // number or null
-        rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
-        use_slack: getUseSlackFromUI(),
-        slack_after_internal: getSlackInternalFromUI(),
-        slack_after_client: getSlackClientFromUI(),
-        slack_global_pct: getSlackPctFromUI(),
-        project_start: getProjectStartFromUI() || null,
-        client_budget_usd: getClientBudgetFromUI() || null,
-        scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
-        retainers: retainers  // Include retainer data from new toggle system
-      };
-
-      console.log('[BUILD] Sending payload to /api/build:', payload);
-
       try {
+        // Check all possible sources of selected deliverables
+        const selectedFromAppState = appState.selectedCodes || [];
+        const selectedFromGlobal = window.selectedCodes || [];
+        const selectedFromScenarios = window.SCENARIOS ? 
+          Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
+        const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
+        
+        console.log("[BUILD] Validation:", { 
+          selectedFromAppState, 
+          selectedFromGlobal, 
+          selectedFromScenarios, 
+          allSelected,
+          count: allSelected.length 
+        });
+        
+        if (allSelected.length === 0) {
+          alert('No deliverables selected. Please complete Step 2 first.');
+          return;
+        }
+        
+        // Sync the selection to ensure consistency
+        appState.selectedCodes = allSelected;
+        window.selectedCodes = allSelected;
+
+        // Include retainers if toggle is enabled (new system)
+        const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
+        const retainers = retainersEnabled ? (window.APP?.retainers || []) : [];
+
+        // Prepare component selections for payload
+        const selectedComponentsPayload = Object.fromEntries(
+          Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
+        );
+        
+        const payload = {
+          selected_deliverable_codes: appState.selectedCodes,          // <- required
+          selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
+          pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
+          blended_rate: getBlendedRateFromUI(),                        // number or null
+          rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
+          use_slack: getUseSlackFromUI(),
+          slack_after_internal: getSlackInternalFromUI(),
+          slack_after_client: getSlackClientFromUI(),
+          slack_global_pct: getSlackPctFromUI(),
+          project_start: getProjectStartFromUI() || null,
+          client_budget_usd: getClientBudgetFromUI() || null,
+          scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
+          retainers: retainers  // Include retainer data from new toggle system
+        };
+
+        console.log('[BUILD] Sending payload to /api/build:', payload);
         const resp = await fetch('/api/build', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
