@@ -318,27 +318,42 @@
     },
     
     // Step 2 Handlers
-    proceedToPricing() {
+    async proceedToPricing() {
       console.log('[ButtonHandlers] Proceeding to pricing...');
       
-      // Ensure we have selections
-      const selectedDeliverables = window.PRIMARY_SCENARIO?.selectedDeliverables || [];
-      if (selectedDeliverables.length === 0) {
-        alert('Please select at least one deliverable before proceeding');
-        return;
-      }
-      
-      // Update PRIMARY_SCENARIO status
-      window.PRIMARY_SCENARIO.status = 'pricing';
-      window.PRIMARY_SCENARIO.step2CompletedAt = new Date().toISOString();
-      
-      // Move to Step 3
-      if (typeof window.showStep === 'function') {
-        window.showStep(3);
-      } else {
-        // Fallback
-        document.querySelector('#step2').style.display = 'none';
-        document.querySelector('#step3').style.display = 'block';
+      try {
+        // Use the proper buildFromCurrentSelection function which has all the logic
+        if (typeof window.buildFromCurrentSelection === 'function') {
+          await window.buildFromCurrentSelection();
+        } else {
+          // Fallback: ensure we have selections
+          const selectedDeliverables = window.PRIMARY_SCENARIO?.selectedDeliverables || [];
+          if (selectedDeliverables.length === 0) {
+            alert('Please select at least one deliverable before proceeding');
+            return;
+          }
+          
+          // Update PRIMARY_SCENARIO status
+          if (window.PRIMARY_SCENARIO) {
+            window.PRIMARY_SCENARIO.status = 'pricing';
+            window.PRIMARY_SCENARIO.step2CompletedAt = new Date().toISOString();
+          }
+          
+          // Move to Step 3 with proper null checks
+          const step2 = document.querySelector('#step2');
+          const step3 = document.querySelector('#step3');
+          
+          if (step2 && step3) {
+            step2.style.display = 'none';
+            step3.style.display = 'block';
+          } else {
+            console.error('[ButtonHandlers] Step elements not found');
+            alert('Unable to navigate to pricing. Please refresh the page.');
+          }
+        }
+      } catch (error) {
+        console.error('[ButtonHandlers] Error in proceedToPricing:', error);
+        alert('An error occurred while proceeding to pricing. Please try again.');
       }
     },
     
@@ -347,13 +362,19 @@
       window.open('/docs/user-guide.html', '_blank');
     },
     
-    applySmartSelection() {
+    async applySmartSelection() {
       console.log('[ButtonHandlers] Applying smart selection...');
       
-      if (typeof window.applySmartSelection === 'function') {
-        window.applySmartSelection();
-      } else {
-        console.error('[ButtonHandlers] applySmartSelection function not found');
+      try {
+        if (typeof window.applySmartSelection === 'function') {
+          await window.applySmartSelection();
+        } else {
+          console.error('[ButtonHandlers] applySmartSelection function not found');
+          alert('Smart selection feature is not available. Please try refreshing the page.');
+        }
+      } catch (error) {
+        console.error('[ButtonHandlers] Error in applySmartSelection:', error);
+        alert('An error occurred while applying smart selection. Please try again.');
       }
     },
     
