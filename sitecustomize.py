@@ -101,9 +101,9 @@ _CANONICAL = {"gpt-5": "gpt-4-turbo-preview", "gpt-5-pro": "gpt-4", "gpt-5-mini"
               "gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4-0613": "gpt-4-0613",
               "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"}
 
-# Tier → model + effort (map to real models)
-_TIER_TO_MODEL = {"mini": "gpt-3.5-turbo", "thinking": "gpt-4-turbo-preview", "pro": "gpt-4",
-                  "fast": "gpt-3.5-turbo", "balanced": "gpt-4-turbo-preview", "accurate": "gpt-4"}
+# Tier → model + effort (use GPT-5 models as specified)
+_TIER_TO_MODEL = {"mini": "gpt-5-mini", "thinking": "gpt-5", "pro": "gpt-5",
+                  "fast": "gpt-5-mini", "balanced": "gpt-5", "accurate": "gpt-5"}
 _TIER_TO_EFFORT = {"mini": "low", "thinking": "medium", "pro": "high",
                    "fast": "low", "balanced": "medium", "accurate": "high"}
 

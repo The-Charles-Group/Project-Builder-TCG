@@ -10329,7 +10329,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const files = e.target.files;
       if (files && files.length > 0) {
         const names = Array.from(files).map(f => f.name).join(', ');
-        filesList.textContent = `Selected: ${names}`;
+        filesList.textContent = `Uploading: ${names}...`;
         filesList.style.color = 'var(--accent)';
         
         // AUTO-CLEAR: Automatically clear old data when new file is selected
@@ -10351,10 +10351,12 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.APP) {
           window.APP.summary = null;
           window.APP.rfpText = null;
+          window.APP.uploadedFileText = null;
         }
         if (window.APB && window.APB.step2) {
           window.APB.step2.rfpText = null;
         }
+        window.uploadedFileText = null;
         
         // Start fresh session
         const newSessionId = SessionManager.startNewSession();
@@ -10370,9 +10372,59 @@ document.addEventListener('DOMContentLoaded', () => {
           console.warn('[AUTO-CLEAR] Failed to clear server cache:', err);
         }
         
-        console.log('[AUTO-CLEAR] Session cleared, ready for new RFP analysis');
+        console.log('[AUTO-CLEAR] Session cleared, now uploading files...');
+        
+        // ACTUALLY UPLOAD THE FILES TO THE SERVER
+        try {
+          const formData = new FormData();
+          for (const file of files) {
+            formData.append('files', file);
+          }
+          
+          const uploadResponse = await fetch('/api/upload_file', {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (uploadResponse.ok) {
+            const result = await uploadResponse.json();
+            console.log('[FILE UPLOAD] Successfully extracted text:', result.char_count, 'characters');
+            
+            // Store the extracted text for use in analysis
+            window.uploadedFileText = result.text;
+            if (!window.APP) window.APP = {};
+            window.APP.uploadedFileText = result.text;
+            
+            // Update display to show success
+            filesList.textContent = `✅ Uploaded: ${names} (${result.char_count.toLocaleString()} characters)`;
+            filesList.style.color = '#22c55e';
+            
+            // Also put text in the textarea if it's empty
+            const textArea = document.getElementById('rfpText');
+            if (textArea && !textArea.value) {
+              textArea.value = result.text;
+              // Trigger input event to update any listeners
+              textArea.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          } else {
+            const error = await uploadResponse.text();
+            console.error('[FILE UPLOAD] Failed:', error);
+            filesList.textContent = `❌ Upload failed: ${names}`;
+            filesList.style.color = '#ef4444';
+            alert('Failed to upload file. Please try again or paste the text manually.');
+          }
+        } catch (err) {
+          console.error('[FILE UPLOAD] Error:', err);
+          filesList.textContent = `❌ Upload error: ${names}`;
+          filesList.style.color = '#ef4444';
+          alert('Error uploading file: ' + err.message);
+        }
       } else {
         filesList.textContent = '';
+        window.uploadedFileText = null;
+        if (window.APP) {
+          window.APP.uploadedFileText = null;
+        }
       }
     });
   }
