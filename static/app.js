@@ -6225,9 +6225,15 @@ async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
   
-  // FIXED: Check for uploaded file text FIRST, then textarea
+  // Check for uploaded session ID (for GPT-5 Vision PDF processing) or text
   let rfpText = '';
-  if (window.uploadedFileText) {
+  let uploadSessionId = null;
+  
+  if (window.APP?.uploadSessionId) {
+    console.log('[ANALYSIS] Using uploaded PDF session:', window.APP.uploadSessionId);
+    uploadSessionId = window.APP.uploadSessionId;
+    rfpText = window.APP.uploadedFileText || "PDF files uploaded";
+  } else if (window.uploadedFileText) {
     console.log('[ANALYSIS] Using uploaded file text:', window.uploadedFileText.length, 'chars');
     rfpText = window.uploadedFileText;
   } else if (window.APP?.uploadedFileText) {
@@ -6322,7 +6328,8 @@ async function onRunReconcile() {
         strictness: 'balanced',
         tier: tier,
         mode: selectedMode,  // Add mode parameter
-        session_id: sessionId  // Add session_id for cache isolation
+        session_id: sessionId,  // Add session_id for cache isolation
+        upload_session_id: uploadSessionId  // NEW: Pass upload session for PDF processing
       })
     }, 3, 2000);
     
@@ -10388,15 +10395,17 @@ document.addEventListener('DOMContentLoaded', () => {
           
           if (uploadResponse.ok) {
             const result = await uploadResponse.json();
-            console.log('[FILE UPLOAD] Successfully extracted text:', result.char_count, 'characters');
+            console.log('[FILE UPLOAD] Success:', result);
             
-            // Store the extracted text for use in analysis
-            window.uploadedFileText = result.text;
+            // Store session ID for GPT-5 Vision processing
             if (!window.APP) window.APP = {};
-            window.APP.uploadedFileText = result.text;
+            window.APP.uploadSessionId = result.session_id;
+            window.APP.uploadedFileText = result.text || "PDF uploaded for analysis";
+            window.uploadedFileText = result.text || "PDF uploaded for analysis";
             
             // Update display to show success
-            filesList.textContent = `✅ Uploaded: ${names} (${result.char_count.toLocaleString()} characters)`;
+            const charMsg = result.char_count ? ` (${result.char_count.toLocaleString()} characters)` : '';
+            filesList.textContent = `✅ Uploaded: ${names}${charMsg}`;
             filesList.style.color = '#22c55e';
             
             // Also put text in the textarea if it's empty

@@ -306,68 +306,91 @@ async def agent_status_endpoint():
         ]
     }
 
+# Global store for uploaded PDF files (session -> files mapping)
+UPLOADED_PDF_FILES = {}
+
 @app.post("/api/upload_file")
 async def upload_file_endpoint(files: List[UploadFile] = File(...)):
-    """Simple endpoint for extracting text from uploaded files (PDF/DOCX/TXT)."""
+    """Endpoint to store uploaded PDF files for GPT-5 Vision API processing."""
     try:
-        extracted_texts = []
+        import base64
+        session_id = str(uuid.uuid4())
+        stored_files = []
         filenames = []
+        extracted_text = ""  # For backwards compatibility
         
         for file in files:
             content = await file.read()
             filename = file.filename or "unknown"
             filenames.append(filename)
             
-            # Extract text from the file
-            try:
-                text = _extract_text_from_upload(content, filename)
-                # Cap text length for performance
-                if len(text) > 200_000:
-                    text = text[:200_000]
-                extracted_texts.append(text)
-            except Exception as e:
-                print(f"[UPLOAD] Failed to extract text from {filename}: {e}")
-                # Try alternate extraction methods
-                file_ext = filename.split('.')[-1].lower() if '.' in filename else ''
-                if file_ext == 'pdf' and PdfReader:
-                    try:
-                        pdf_reader = PdfReader(io.BytesIO(content))
-                        text = ""
-                        for page in pdf_reader.pages:
-                            text += page.extract_text() + "\n"
-                        extracted_texts.append(text[:200_000] if len(text) > 200_000 else text)
-                    except:
-                        extracted_texts.append("")
-                elif file_ext == 'docx' and Document:
-                    try:
-                        doc = Document(io.BytesIO(content))
-                        text = "\n".join([p.text for p in doc.paragraphs])
-                        extracted_texts.append(text[:200_000] if len(text) > 200_000 else text)
-                    except:
-                        extracted_texts.append("")
-                else:
-                    extracted_texts.append("")
+            file_ext = filename.split('.')[-1].lower() if '.' in filename else ''
+            
+            if file_ext == 'pdf':
+                # Store complete PDF as base64 for GPT-5 Vision API
+                base64_content = base64.b64encode(content).decode('utf-8')
+                stored_files.append({
+                    'filename': filename,
+                    'content_base64': base64_content,
+                    'content_type': 'application/pdf',
+                    'size': len(content)
+                })
+                print(f"[UPLOAD] Stored PDF {filename} ({len(content)} bytes) for GPT-5 Vision")
+                
+                # Try to extract text for preview/fallback
+                try:
+                    text = _extract_text_from_upload(content, filename)
+                    extracted_text += text + "\n\n"
+                except:
+                    pass
+                    
+            elif file_ext == 'docx':
+                # For DOCX, extract text
+                try:
+                    text = _extract_text_from_upload(content, filename)
+                    stored_files.append({
+                        'filename': filename,
+                        'text': text,
+                        'content_type': 'text/plain'
+                    })
+                    extracted_text += text + "\n\n"
+                except:
+                    print(f"[UPLOAD] Failed to extract from {filename}")
+                    
+            else:
+                # For text files
+                try:
+                    text = content.decode('utf-8')
+                except:
+                    text = content.decode('latin-1', errors='ignore')
+                stored_files.append({
+                    'filename': filename,
+                    'text': text,
+                    'content_type': 'text/plain'
+                })
+                extracted_text += text + "\n\n"
         
-        # Combine texts from all files
-        merged_text = "\n\n---\n\n".join(filter(None, extracted_texts))
+        # Store files in global dictionary
+        UPLOADED_PDF_FILES[session_id] = stored_files
         
-        # Store in cache for later use
+        # Store text in cache for backwards compatibility
         global RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
-        RFP_TEXT_CACHE_FILE = merged_text
-        RFP_TEXT_CACHE = merged_text
+        RFP_TEXT_CACHE_FILE = extracted_text
+        RFP_TEXT_CACHE = extracted_text  
         LAST_UPLOAD_FILENAME = filenames[0] if filenames else "upload"
         
-        print(f"[UPLOAD] Extracted {len(merged_text)} chars from {len(files)} file(s)")
+        print(f"[UPLOAD] Session {session_id}: Stored {len(stored_files)} files")
         
         return {
             "success": True,
-            "text": merged_text,
+            "text": extracted_text,  # For backwards compatibility
+            "session_id": session_id,  # NEW: Session ID for GPT-5 Vision processing
             "filenames": filenames,
-            "char_count": len(merged_text)
+            "char_count": len(extracted_text)
         }
     except Exception as e:
         print(f"[UPLOAD] Error: {e}")
-        raise HTTPException(400, f"Failed to extract text: {str(e)}")
+        raise HTTPException(400, f"Failed to process files: {str(e)}")
 
 @app.post("/api/upload_rfp")
 async def upload_rfp_endpoint(

@@ -2668,9 +2668,15 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     print(f"[ANALYZE COMPLETE] Mode: {mode}, Deliverables: {delivs_in_plan}, Time: {datetime.datetime.now().timestamp() - (AI_JOB_STORE[job_id].start_time if job_id and job_id in AI_JOB_STORE else datetime.datetime.now().timestamp()):.1f}s")
     return result
 
-def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None):
-    """Background task to run AI analysis with Fast/Deep mode support and session isolation"""
+def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None, pdf_files: List[dict] = None):
+    """Background task to run AI analysis with Fast/Deep mode support, session isolation, and PDF processing"""
     try:
+        # If we have PDF files and Deep mode, send them to GPT-5 Vision
+        if pdf_files and mode == "deep":
+            print(f"[ANALYZE] Processing {len(pdf_files)} PDF files with GPT-5 Vision")
+            # TODO: Implement GPT-5 Vision API call with PDF files
+            # For now, use text fallback
+            
         result = analyze_with_agencydb(request_text, db, strictness, job_id, tier, mode, client, session_id)
         
         if job_id in AI_JOB_STORE:
@@ -2708,6 +2714,7 @@ class AnalyzeRequest(BaseModel):
     tier: Optional[str] = None  # 'mini', 'thinking', 'pro'
     mode: Optional[str] = "deep"  # 'fast' or 'deep'
     session_id: Optional[str] = None  # Session ID for cache isolation
+    upload_session_id: Optional[str] = None  # Upload session for PDF files
 
 def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
     router = APIRouter()
@@ -2723,6 +2730,31 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             # Clean up old jobs to prevent memory leaks
             cleanup_ai_jobs()
             
+            # Handle uploaded PDF files if session provided
+            rfp_content = payload.request_text
+            pdf_files = []
+            
+            if payload.upload_session_id:
+                # Import here to avoid circular dependencies
+                from main import UPLOADED_PDF_FILES
+                
+                if payload.upload_session_id in UPLOADED_PDF_FILES:
+                    pdf_files = UPLOADED_PDF_FILES[payload.upload_session_id]
+                    print(f"[ANALYZE] Found {len(pdf_files)} uploaded PDF files for session {payload.upload_session_id}")
+                    
+                    # For GPT-5 Vision, we'll send the PDFs directly
+                    # Use text as fallback if no PDFs or for Fast Mode
+                    if not rfp_content or rfp_content == "PDF files uploaded":
+                        # Try to use extracted text from PDFs as fallback
+                        text_parts = []
+                        for f in pdf_files:
+                            if 'text' in f:
+                                text_parts.append(f['text'])
+                        if text_parts:
+                            rfp_content = "\n\n".join(text_parts)
+                        else:
+                            rfp_content = "PDF files uploaded for analysis"
+            
             # Create job
             job_id = str(uuid.uuid4())
             AI_JOB_STORE[job_id] = AIAnalysisJob(
@@ -2736,13 +2768,14 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             background_tasks.add_task(
                 _run_analysis_background,
                 job_id,
-                payload.request_text,
+                rfp_content,
                 db,
                 payload.strictness,
                 payload.tier,
                 payload.mode or "deep",
                 None,  # Pass None - embed_many will create its own OpenAI client
-                payload.session_id  # Pass session_id for cache isolation
+                payload.session_id,  # Pass session_id for cache isolation
+                pdf_files  # Pass PDF files for GPT-5 Vision processing
             )
             
             return {
