@@ -1,0 +1,143 @@
+0) What’s actually breaking Step 3
+
+Root cause: the Step‑2 UI now selects L2 task groups, but the server’s Step‑3 builder still only reads selected_l3_map. When this map is missing, the builder inflates every component → includes all task groups for each deliverable, producing a very large WBS and big JSON payload back to the browser (causing the freeze). See the Step‑3 /api/scenarios handler; it only extracts selected_l3_map / selectedL3Map / l3Map and never looks for the new L2 payload names.
+
+The WBS builder itself will happily expand to all task groups when the map is empty via _inflate_components_if_missing, which we do call in the build pipeline. That safeguard is good for exports, but it’s harmful here because the UI expects a filtered set.
+
+1) Patch: accept L2 and don’t explode the WBS
+
+File: main.py – endpoint @app.post("/api/scenarios")
+
+Change A — accept both L2 and L3 names, prefer L2:
+
+Add extraction of selected_l2_map / selectedL2Map / l2Map and prefer it over the L3 names when present.
+
+# NEW: accept L2 maps from Step 2
+selected_l2_map = (
+    payload.get("selected_l2_map")
+    or payload.get("selectedL2Map")
+    or payload.get("l2Map")
+)
+
+# Existing L3 fallbacks (keep for backward compatibility)
+selected_l3_map = (
+    payload.get("selected_l3_map")
+    or payload.get("selectedL3Map")
+    or payload.get("l3Map")
+)
+
+# Prefer L2 map if provided; otherwise fall back to L3
+task_group_map = selected_l2_map or selected_l3_map
+
+
+Then pass task_group_map into the builder payload instead of hard‑wiring selected_l3_map:
+
+build_payload = BuildPayload(
+    selected_deliverable_codes=codes,
+    scenario_a=scenario_a,
+    pricing_mode=pricing_mode,
+    blended_rate=blended_rate,
+    rate_band=rate_band,
+    use_slack=use_slack,
+    slack_after_internal=slack_after_internal,
+    slack_after_client=slack_after_client,
+    slack_global_pct=slack_global_pct,
+    project_start=project_start,
+    client_budget_usd=client_budget_usd,
+    retainers=payload.get("retainers", []),
+    selected_components_map=selected_components_map,
+    # change ↓
+    selected_l3_map=task_group_map   # semantic: this is “task groups”, L2/L3 agnostic
+)
+
+
+(Where this code currently only fills selected_l3_map from payload—see the present shape. )
+
+Change B — don’t silently inflate to ALL task groups when a filtered map was sent
+
+In the downstream inflation helper you already use (_inflate_components_if_missing), inflation is triggered when the map is empty or equals "__ALL__". Keep that logic, but only run it when no task group map was provided at all (i.e., task_group_map is None). If the UI sent a map—even if it’s empty for a given component—respect it.
+
+Where: the inflation is shown in the build path and WBS path. The current code populates “included_task_groups” whenever the map is missing/empty/"__ALL__".
+
+Minimal guard example (add at the start of _inflate_components_if_missing or where you set included_task_groups[_map]):
+
+# If the scenario was built with an explicit task_group_map from the UI,
+# skip inflation; only inflate if no map was provided for this deliverable at all.
+explicit_map_present = bool(item.get("included_task_groups_map", None) not in (None, "__ALL__"))
+if explicit_map_present:
+    continue
+
+
+This keeps exports safe while preventing Step 3 from ballooning.
+
+2) Keep the response light for the pricing table
+
+The pricing table only needs deliverable/component totals and rollups to compute the “One‑time” and “Monthly Retainer” boxes and Grand Total. The builder already returns scenario totals; the code path that responds from /api/scenarios includes totals in result.get("totals", {}). Make sure the FE uses scenarios.A.totals.price and scenarios.A.totals.hours (and adds 12 × monthly_retainer_cost) for the Grand Total instead of recalculating from the whole WBS.
+
+3) Wire the pricing buttons to existing APIs (so the table actually updates)
+
+You already ship the endpoints:
+
+AI Suggest Type (rename button to “AI Cadence Suggestion” if you want):
+
+Endpoint: POST /api/ai/analyze_project_retainer
+
+Send { rfp_text, deliverables: [{code, name}] }
+
+Apply the returned PROJECT/RETAINER suggestions to the in‑memory scenario items (set retainer.months, default 12 when type==RETAINER), then re-render the editable pricing table. See handler structure and parsing in the file (uses OpenAI then heuristic fallback).
+
+Optimize All Pricing:
+
+Endpoint: POST /api/ai/optimize_pricing
+
+Send { target_budget | client_budget, scenario }
+
+The handler accepts either target_budget or client_budget and will return an optimized scenario (wbs adjusted). Update your table’s hours/rates from that response. Note the server also accepts company_size, urgency, and industry_multiplier flags.
+
+Export Pricing Details:
+
+Use the existing Excel builder that outputs scenarios (A/B/C) with retainer summaries; it’s already writing three sheets + optional “Retainer Summary” sheets and returns a FileResponse. Hook this to the “Export Pricing Details” button (send A as the only scenario if you’re single‑scenario).
+
+Re‑build Scenario:
+
+Call the same /api/scenarios with the current selection and saved preferences; do not nuke the visible table—merge the result back into the table model so edits survive when only non‑edited parts change.
+
+4) Make component rows editable (and keep them in sync)
+
+You already have an API that redistributes hours intelligently across components:
+
+Endpoint: POST /api/pricing/redistribute-hours
+
+Body: { deliverable_name, deliverable_code, new_total_hours, components:[{name, hours}], use_ai }
+
+Use it when the user edits a deliverable’s total hours: call this once, then update each component row’s hours from the suggested_distribution. That keeps the WBS consistent and the pricing table stable.
+
+5) Safety rails to prevent the browser freeze (even if someone selects “everything”)
+
+Add two server‑side guards in build_wbs_with_pricing:
+
+Hard row cap for the WBS (e.g., 12,000 rows). If exceeded, return 400 with a friendly message and a list of the worst offenders (deliverables producing too many rows). This is trivial to insert where rows are appended. (That’s the hot path creating the DataFrame; see where rows.append({...}) happens.)
+
+Summary‑only mode: if query ?summary=1, return just {items, totals} without the full wbs for the first paint of the pricing table. Frontend can add a “Show detail” toggle that pulls full WBS lazily when the user expands a deliverable.
+
+6) Make Step 3 totals show up correctly (Grand Total = one‑time + 12×retainer)
+
+The builder already computes scenarios["A"]["totals"] = {"hours": ..., "price": ...} and also attaches budget_info when a client budget is provided. Read that directly for the One‑Time box and per‑month retainer box (if any), then set the Grand Total to one_time_total + 12 * monthly_total. (The server returns this structure today.)
+
+7) Smoke tests (quick)
+
+Step‑2: select 10–20 deliverables, ensure L2 task groups are chosen.
+
+Step‑3: click Build Scenario once.
+
+Verify the POST /api/scenarios logs show Building with N codes… (present in code).
+
+Verify totals render, component rows render, and the table is editable.
+
+Change a deliverable’s total hours → confirm FE calls /api/pricing/redistribute-hours and updates component rows.
+
+Click AI Cadence Suggestion → apply retainer months, table updates monthly panel.
+
+Click Optimize All Pricing with a budget → table updates rates/prices; Grand Total changes.
+
+Click Export Pricing Details → Excel downloads with Scenario A sheet and optional Retainer Summary.
