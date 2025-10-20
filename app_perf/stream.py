@@ -33,6 +33,7 @@ class StreamJob:
     total_items: int = 0
     processed_items: int = 0
     current_stage: str = ""
+    current_reasoning: str = ""
     eta_seconds: Optional[float] = None
     result: Optional[Any] = None
     error: Optional[str] = None
@@ -48,6 +49,7 @@ class StreamJob:
             "total_items": self.total_items,
             "processed_items": self.processed_items,
             "current_stage": self.current_stage,
+            "current_reasoning": self.current_reasoning,
             "eta_seconds": round(self.eta_seconds, 1) if self.eta_seconds else None,
             "elapsed_seconds": round(time.time() - self.start_time, 1) if self.start_time else 0
         }
@@ -173,7 +175,8 @@ async def sse_event_generator(job_id: str, check_main_store: bool = True):
                             "message": ai_job.current_stage,
                             "total_items": ai_job.total_chunks,
                             "processed_items": ai_job.processed_chunks,
-                            "current_stage": ai_job.current_stage
+                            "current_stage": ai_job.current_stage,
+                            "current_reasoning": ai_job.current_reasoning
                         }
                         
                         # Include result if completed

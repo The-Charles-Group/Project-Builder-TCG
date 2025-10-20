@@ -11,6 +11,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from gpt5_helpers import gpt5_json_schema, gpt5_text
 from embedding_cache import embed_many, get_cache_stats  # Import embedding cache
+from app_perf.stream import update_sse_job, create_sse_job, SSE_JOB_STORE, StreamJobStatus  # Import SSE helpers
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Config
@@ -2322,6 +2323,17 @@ def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks:
             print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%) - AI Thinking: {reasoning}")
         else:
             print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%)")
+        
+        # Sync to SSE job store for real-time streaming
+        update_sse_job(
+            job_id,
+            current_stage=stage,
+            progress=progress_pct if progress_pct is not None else job.progress,
+            total_items=job.total_chunks,
+            processed_items=job.processed_chunks,
+            current_reasoning=reasoning if reasoning else job.current_reasoning,
+            status=StreamJobStatus.PROCESSING if job.status == AIJobStatus.RUNNING else StreamJobStatus.QUEUED
+        )
 
 def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None) -> Dict[str, Any]:
     """Main analysis function using AgencyDB with Fast/Deep mode support and session isolation
@@ -2337,11 +2349,13 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         session_id: Optional session ID for cache isolation
     """
     strictness = strictness or AI_STRICTNESS_DEFAULT
-    # PERFORMANCE FIX: Fast mode always uses "mini" tier for speed
+    # GPT-5 MODEL CONFIGURATION:
+    # Fast mode uses "mini" tier (gpt-5-thinking-mini for speed)
+    # Deep mode uses "pro" tier (gpt-5-pro for advanced reasoning)
     if mode == "fast":
-        tier = "mini"
+        tier = "mini"  # Maps to gpt-5-thinking-mini
     else:
-        tier = tier or "thinking"
+        tier = tier or "pro"  # Maps to gpt-5-pro for deep analysis
     mode = mode or "deep"
     
     print(f"[ANALYZE START] Mode: {mode}, Request length: {len(request_text)}, strictness: {strictness}, tier: {tier}")
@@ -2766,6 +2780,10 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 job_id=job_id,
                 status=AIJobStatus.PENDING
             )
+            
+            # Create SSE job for real-time streaming
+            create_sse_job(job_id, total_items=100)  # Initialize with estimated total
+            print(f"[SSE] Created SSE job {job_id} for real-time progress streaming")
             
             # Start background task with mode, client, and session_id for isolation
             # FIXED: Pass None instead of app.state.http for embedding client
