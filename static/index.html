@@ -1722,16 +1722,26 @@
         }
 
         const json = await resp.json();
-        console.log('[BUILD] API Response:', json);
+        console.log('[BUILD] API Response (full):', JSON.stringify(json, null, 2));
+        console.log('[BUILD] API Response type:', typeof json);
+        console.log('[BUILD] API Response keys:', Object.keys(json));
         
         const scenarios = json.scenarios || {};
+        console.log('[BUILD] Extracted scenarios:', scenarios);
+        console.log('[BUILD] scenarios type:', typeof scenarios);
+        console.log('[BUILD] scenarios.A exists?:', !!scenarios.A);
         
         // Validate scenario structure
         if (!scenarios || !scenarios.A) {
-          console.error('[BUILD] Invalid scenario structure:', json);
+          console.error('[BUILD] Invalid scenario structure. Full json:', json);
+          console.error('[BUILD] scenarios value:', scenarios);
           alert('Invalid build response: missing scenario A');
           return;
         }
+        
+        console.log('[BUILD] scenarios.A:', scenarios.A);
+        console.log('[BUILD] scenarios.A type:', typeof scenarios.A);
+        console.log('[BUILD] scenarios.A.items exists?:', !!scenarios.A.items);
         
         // Validate scenario A has required fields
         if (!scenarios.A.items || !Array.isArray(scenarios.A.items)) {
