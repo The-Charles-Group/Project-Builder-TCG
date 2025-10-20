@@ -344,13 +344,37 @@
     
     // Update deliverables from API response
     updateDeliverablesFromAPI(apiResponse) {
-      if (!apiResponse) return;
-      
-      const scenario = apiResponse.scenarios?.A || apiResponse.scenario || apiResponse;
-      if (!scenario || !scenario.items) {
-        console.warn('[ScenarioManager] Invalid API response format:', apiResponse);
+      if (!apiResponse) {
+        console.warn('[ScenarioManager] No API response provided');
         return;
       }
+      
+      console.log('[ScenarioManager] Processing API response:', apiResponse);
+      
+      // Try to extract scenario from response
+      const scenario = apiResponse.scenarios?.A || apiResponse.scenario || apiResponse;
+      console.log('[ScenarioManager] Extracted scenario:', scenario);
+      
+      // Validate scenario exists and has items
+      if (!scenario) {
+        console.error('[ScenarioManager] Could not extract scenario from API response');
+        alert('Build failed: Invalid API response structure');
+        return;
+      }
+      
+      if (!scenario.items) {
+        console.error('[ScenarioManager] Scenario missing items array:', scenario);
+        alert('Build failed: Scenario data is incomplete');
+        return;
+      }
+      
+      if (!Array.isArray(scenario.items)) {
+        console.error('[ScenarioManager] Scenario items is not an array:', typeof scenario.items);
+        alert('Build failed: Invalid scenario data format');
+        return;
+      }
+      
+      console.log('[ScenarioManager] Valid scenario with', scenario.items.length, 'items');
       
       // Store the API response for reference
       this.state.apiResponse = apiResponse;
