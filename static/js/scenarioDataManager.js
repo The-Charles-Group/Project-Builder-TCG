@@ -386,6 +386,17 @@
         
         if (stored) {
           const data = JSON.parse(stored);
+          
+          // MIGRATION: L3 → L2 naming
+          if (data.selectedL3Tasks && !data.selectedL2Tasks) {
+            console.warn('[ScenarioDataManager] Migrating selectedL3Tasks → selectedL2Tasks from localStorage');
+            data.selectedL2Tasks = data.selectedL3Tasks;
+            delete data.selectedL3Tasks;
+            
+            // Re-save migrated data
+            localStorage.setItem(key, JSON.stringify(data));
+          }
+          
           window.PRIMARY_SCENARIO = {
             ...window.PRIMARY_SCENARIO,
             ...data
