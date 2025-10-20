@@ -185,14 +185,46 @@
       window.PRIMARY_SCENARIO = window.PRIMARY_SCENARIO || {};
       window.PRIMARY_SCENARIO.analysisMode = mode;
       
-      // Update UI
-      document.querySelectorAll('.mode-btn').forEach(btn => {
-        btn.classList.remove('active');
-      });
+      // Update other state variables for backward compatibility
+      window.selectedAnalysisMode = mode;
       
-      const activeBtn = document.querySelector(`#mode-${mode}`);
-      if (activeBtn) {
-        activeBtn.classList.add('active');
+      // Update hidden input
+      const modeInput = document.getElementById('analysis-mode');
+      if (modeInput) modeInput.value = mode;
+      
+      // Update AI Assistant state if it exists
+      if (window.aiAssistant && window.aiAssistant.agentState) {
+        window.aiAssistant.agentState.analysisMode = mode;
+      }
+      
+      // Update UI with proper visual feedback
+      const fastBtn = document.getElementById('mode-fast');
+      const deepBtn = document.getElementById('mode-deep');
+      
+      if (mode === 'fast') {
+        // Fast mode active
+        if (fastBtn) {
+          fastBtn.style.background = '#10b981';
+          fastBtn.style.color = 'white';
+          fastBtn.style.borderColor = '#10b981';
+        }
+        if (deepBtn) {
+          deepBtn.style.background = 'white';
+          deepBtn.style.color = '#6366f1';
+          deepBtn.style.borderColor = '#6366f1';
+        }
+      } else {
+        // Deep mode active
+        if (deepBtn) {
+          deepBtn.style.background = '#6366f1';
+          deepBtn.style.color = 'white';
+          deepBtn.style.borderColor = '#6366f1';
+        }
+        if (fastBtn) {
+          fastBtn.style.background = 'white';
+          fastBtn.style.color = '#10b981';
+          fastBtn.style.borderColor = '#10b981';
+        }
       }
       
       // Store in localStorage
