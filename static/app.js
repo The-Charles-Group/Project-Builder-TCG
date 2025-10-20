@@ -388,7 +388,12 @@ async function handleIndustrySelection() {
   
   // Fetch industry-specific deliverables when button clicked
   applyBtn.onclick = async () => {
-    await applyIndustryTemplate();
+    try {
+      await applyIndustryTemplate();
+    } catch (error) {
+      console.error('[INDUSTRY] Error applying industry template:', error);
+      alert(`An error occurred while applying the industry template. Please try again.`);
+    }
   };
 }
 
@@ -4857,77 +4862,82 @@ async function boot() {
   const reconcileBtn = document.querySelector("#btnRunReconcile");
   if (reconcileBtn) {
     reconcileBtn.onclick = async (e) => {
-      e.preventDefault();
-      
-      // Task 1.7: Get RFP text from multiple sources including backend cache
-      // CRITICAL FIX: Check if data was recently cleared
-      const dataClearedFlag = localStorage.getItem('apb.data_cleared');
-      const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
-      const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
-      
-      let rfpText = '';
-      // Only restore if not recently cleared (within last hour)
-      if (dataClearedFlag !== 'true' || timeSinceClear > 3600000) {
-        rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || '';
-        // IMPORTANT: Do NOT restore from localStorage.getItem('apb.rfpText.v1') anymore
-        console.log('[ANALYZE] Attempting to use existing RFP text, length:', rfpText?.length || 0);
-      } else {
-        console.log('[ANALYZE] Data was cleared recently, not using stored RFP text');
-      }
-      
-      // If still no text, check if we have a stored analysis summary
-      if (!rfpText && sessionStorage.getItem('apb:rfpSummary')) {
-        try {
-          const summary = JSON.parse(sessionStorage.getItem('apb:rfpSummary'));
-          if (summary && summary.summary_text) {
-            rfpText = summary.summary_text; // Use summary as fallback
-          }
-        } catch (e) {
-          console.warn('Could not parse stored summary:', e);
-        }
-      }
-      
-      // Task 1.7: If still no text, try backend RFP cache (uses LAST_UPLOAD_FILENAME)
-      if (!rfpText) {
-        try {
-          const cacheRes = await fetch('/api/rfp/cache');
-          if (cacheRes.ok) {
-            const cacheData = await cacheRes.json();
-            if (cacheData.text) {
-              rfpText = cacheData.text;
-              console.log('Using cached RFP text from backend');
-            }
-          }
-        } catch (e) {
-          console.warn('Could not fetch backend RFP cache:', e);
-        }
-      }
-      
-      if (!rfpText) {
-        // Last resort: show non-blocking message but don't prevent refresh
-        console.warn('No RFP text found - refresh may have limited results');
-      }
-      
       try {
-        const res = await fetch('/api/suggest_by_text', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rfp_text: rfpText })
-        });
+        e.preventDefault();
         
-        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        // Task 1.7: Get RFP text from multiple sources including backend cache
+        // CRITICAL FIX: Check if data was recently cleared
+        const dataClearedFlag = localStorage.getItem('apb.data_cleared');
+        const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+        const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
         
-        const data = await res.json();
-        // Update stored summary with new suggestions
-        window.APP = window.APP || {};
-        window.APP.summary = data;
-        sessionStorage.setItem('apb:rfpSummary', JSON.stringify(data));
+        let rfpText = '';
+        // Only restore if not recently cleared (within last hour)
+        if (dataClearedFlag !== 'true' || timeSinceClear > 3600000) {
+          rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || '';
+          // IMPORTANT: Do NOT restore from localStorage.getItem('apb.rfpText.v1') anymore
+          console.log('[ANALYZE] Attempting to use existing RFP text, length:', rfpText?.length || 0);
+        } else {
+          console.log('[ANALYZE] Data was cleared recently, not using stored RFP text');
+        }
         
-        // Re-render AI summary and suggestions
-        initAISummaryAndSuggestions();
+        // If still no text, check if we have a stored analysis summary
+        if (!rfpText && sessionStorage.getItem('apb:rfpSummary')) {
+          try {
+            const summary = JSON.parse(sessionStorage.getItem('apb:rfpSummary'));
+            if (summary && summary.summary_text) {
+              rfpText = summary.summary_text; // Use summary as fallback
+            }
+          } catch (e) {
+            console.warn('Could not parse stored summary:', e);
+          }
+        }
+        
+        // Task 1.7: If still no text, try backend RFP cache (uses LAST_UPLOAD_FILENAME)
+        if (!rfpText) {
+          try {
+            const cacheRes = await fetch('/api/rfp/cache');
+            if (cacheRes.ok) {
+              const cacheData = await cacheRes.json();
+              if (cacheData.text) {
+                rfpText = cacheData.text;
+                console.log('Using cached RFP text from backend');
+              }
+            }
+          } catch (e) {
+            console.warn('Could not fetch backend RFP cache:', e);
+          }
+        }
+        
+        if (!rfpText) {
+          // Last resort: show non-blocking message but don't prevent refresh
+          console.warn('No RFP text found - refresh may have limited results');
+        }
+        
+        try {
+          const res = await fetch('/api/suggest_by_text', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rfp_text: rfpText })
+          });
+          
+          if (!res.ok) throw new Error(`Server error: ${res.status}`);
+          
+          const data = await res.json();
+          // Update stored summary with new suggestions
+          window.APP = window.APP || {};
+          window.APP.summary = data;
+          sessionStorage.setItem('apb:rfpSummary', JSON.stringify(data));
+          
+          // Re-render AI summary and suggestions
+          initAISummaryAndSuggestions();
+        } catch (error) {
+          console.error('Refresh error:', error);
+          alert(`Failed to refresh suggestions: ${error.message}`);
+        }
       } catch (error) {
-        console.error('Refresh error:', error);
-        alert(`Failed to refresh suggestions: ${error.message}`);
+        console.error('[RECONCILE] Error in reconcile button:', error);
+        alert(`An error occurred while refreshing suggestions. Please try again.`);
       }
     };
   }
@@ -7529,42 +7539,47 @@ function renderAISuggestionsPanel(dCode, ai) {
   `;
 
   host.onclick = async (e) => {
-    const btn = e.target.closest("[data-ai-act]");
-    if (!btn) return;
-    const act = btn.getAttribute("data-ai-act");
-    const d = btn.getAttribute("data-d");
-    const compsPicked = (ai.components || []).map(x => x.name);
+    try {
+      const btn = e.target.closest("[data-ai-act]");
+      if (!btn) return;
+      const act = btn.getAttribute("data-ai-act");
+      const d = btn.getAttribute("data-d");
+      const compsPicked = (ai.components || []).map(x => x.name);
 
-    if (act === "replace") {
-      S2.selectedComponentsByCode[d] = new Set();
-      selectionStore.componentsByDeliv.set(d, new Set());
-      for (const key of Array.from(selectionStore.l3ByComponent.keys())) {
-        if (key.startsWith(d + "::")) {
-          selectionStore.l3ByComponent.delete(key);
-        }
-      }
-    }
-    
-    for (const c of compsPicked) {
-      if (!S2.selectedComponentsByCode[d]) {
+      if (act === "replace") {
         S2.selectedComponentsByCode[d] = new Set();
-      }
-      S2.selectedComponentsByCode[d].add(c);
-      await hydrateL3For(d, c);
-    }
-    
-    if (ai.l3_by_component) {
-      for (const [comp, items] of Object.entries(ai.l3_by_component)) {
-        const key = `${d}::${comp}`;
-        if (!selectionStore.l3ByComponent.has(key)) {
-          selectionStore.l3ByComponent.set(key, new Set());
+        selectionStore.componentsByDeliv.set(d, new Set());
+        for (const key of Array.from(selectionStore.l3ByComponent.keys())) {
+          if (key.startsWith(d + "::")) {
+            selectionStore.l3ByComponent.delete(key);
+          }
         }
-        items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
       }
+      
+      for (const c of compsPicked) {
+        if (!S2.selectedComponentsByCode[d]) {
+          S2.selectedComponentsByCode[d] = new Set();
+        }
+        S2.selectedComponentsByCode[d].add(c);
+        await hydrateL3For(d, c);
+      }
+      
+      if (ai.l3_by_component) {
+        for (const [comp, items] of Object.entries(ai.l3_by_component)) {
+          const key = `${d}::${comp}`;
+          if (!selectionStore.l3ByComponent.has(key)) {
+            selectionStore.l3ByComponent.set(key, new Set());
+          }
+          items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
+        }
+      }
+      
+      await refreshComponentsPanel();
+      updateSummaryCounts();
+    } catch (error) {
+      console.error('[AI SUGGESTIONS] Error applying AI suggestions:', error);
+      alert(`An error occurred while applying AI suggestions. Please try again.`);
     }
-    
-    await refreshComponentsPanel();
-    updateSummaryCounts();
   };
 }
 
@@ -9713,58 +9728,63 @@ function enableTimelineDnD(letter) {
   const btn = document.createElement('button');
   btn.id = 'tl-save'; btn.textContent = 'Save Order';
   btn.onclick = async () => {
-    const scenario = getScenario(letter);
-    if (!scenario) return;
+    try {
+      const scenario = getScenario(letter);
+      if (!scenario) return;
 
-    // Get ordered deliverable codes from UI
-    const rows = [...body.querySelectorAll('.tl-row')];
-    const codes = rows.map(tr => tr.dataset.dcode);
-    
-    // Build included_map from current scenario items
-    const includedMap = Object.fromEntries(
-      scenario.items.map(item => [item.deliverable_code, item.included_task_groups ?? []])
-    );
+      // Get ordered deliverable codes from UI
+      const rows = [...body.querySelectorAll('.tl-row')];
+      const codes = rows.map(tr => tr.dataset.dcode);
+      
+      // Build included_map from current scenario items
+      const includedMap = Object.fromEntries(
+        scenario.items.map(item => [item.deliverable_code, item.included_task_groups ?? []])
+      );
 
-    // Get knobs from current scenario (these are the authoritative values)
-    const knobs = {
-      project_start: scenario.project_start,
-      complexity: scenario.items[0]?.complexity,  // Use first item's complexity as default
-      tier: scenario.items[0]?.tier,  // Use first item's tier as default
-      use_slack: scenario.use_slack,
-      slack_after_internal: scenario.slack_after_internal,
-      slack_after_client: scenario.slack_after_client,
-      slack_global_pct: scenario.slack_global_pct
-    };
-
-    const payload = {
-      scenario_letter: letter,
-      deliverable_codes: codes,
-      included_map: includedMap,
-      project_start: knobs.project_start,
-      complexity: knobs.complexity,
-      tier: knobs.tier,
-      use_slack: knobs.use_slack,
-      slack_after_internal: knobs.slack_after_internal,
-      slack_after_client: knobs.slack_after_client,
-      slack_global_pct: knobs.slack_global_pct
-    };
-
-    const res = await fetch('/api/reorder_timeline', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    }).then(r => r.json());
-
-    // Replace local items with server-persisted order + dates
-    if (res.items && window.appState.scenarios[letter]) {
-      window.appState.scenarios[letter] = {
-        ...window.appState.scenarios[letter],
-        items: res.items,
-        user_order: codes,
-        manual_order_locked: true
+      // Get knobs from current scenario (these are the authoritative values)
+      const knobs = {
+        project_start: scenario.project_start,
+        complexity: scenario.items[0]?.complexity,  // Use first item's complexity as default
+        tier: scenario.items[0]?.tier,  // Use first item's tier as default
+        use_slack: scenario.use_slack,
+        slack_after_internal: scenario.slack_after_internal,
+        slack_after_client: scenario.slack_after_client,
+        slack_global_pct: scenario.slack_global_pct
       };
+
+      const payload = {
+        scenario_letter: letter,
+        deliverable_codes: codes,
+        included_map: includedMap,
+        project_start: knobs.project_start,
+        complexity: knobs.complexity,
+        tier: knobs.tier,
+        use_slack: knobs.use_slack,
+        slack_after_internal: knobs.slack_after_internal,
+        slack_after_client: knobs.slack_after_client,
+        slack_global_pct: knobs.slack_global_pct
+      };
+
+      const res = await fetch('/api/reorder_timeline', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      }).then(r => r.json());
+
+      // Replace local items with server-persisted order + dates
+      if (res.items && window.appState.scenarios[letter]) {
+        window.appState.scenarios[letter] = {
+          ...window.appState.scenarios[letter],
+          items: res.items,
+          user_order: codes,
+          manual_order_locked: true
+        };
+      }
+      renderTimeline(letter);
+    } catch (error) {
+      console.error('[TIMELINE] Error saving timeline order (app.js):', error);
+      alert(`An error occurred while saving the timeline order. Please try again.`);
     }
-    renderTimeline(letter);
   };
   document.getElementById('timeline-controls')?.appendChild(btn);
 }
