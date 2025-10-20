@@ -9,10 +9,18 @@ Preferred communication style: Simple, everyday language.
 ## Development Principles
 **CRITICAL**: This project follows strict development principles documented in `DEVELOPMENT_PRINCIPLES.md`:
 - **Never destroy functionality to simplify code** - Always debug and fix the root cause
-- **Preserve all user features** - Component selections, L3 tasks, retainers, state management, etc.
+- **Preserve all user features** - Component selections, L2 tasks, retainers, state management, etc.
 - **Build additional code if needed** - Add more logic/features to solve problems properly
 - **Debug thoroughly before changing** - Identify root causes with comprehensive logging
 - **Test completely** - Verify all features work after fixes
+
+## Naming Conventions
+**Hierarchy Levels**: The system uses a 3-level hierarchy for project structure:
+- **Deliverables** (Level 0): Top-level project deliverables (e.g., "Social Media Campaign", "Website Redesign")
+- **Components/L1** (Level 1): Sub-components within deliverables (e.g., "Content Strategy", "Visual Design")
+- **Tasks/L2** (Level 2): Individual tasks within components (e.g., "Create Mood Board", "Design Hero Section")
+
+All code, API endpoints, and documentation use L1 for components and L2 for tasks to maintain consistency.
 
 ## System Architecture
 
@@ -49,7 +57,8 @@ Preferred communication style: Simple, everyday language.
 - Supports file uploads for RFP documents and Excel configuration files.
 - Uses JSON for configuration data and calculated scenario responses.
 - Serves static files for frontend assets.
-- Includes endpoints for weighted AI suggestions, bulk L3 task retrieval, and scenario refetching.
+- Includes endpoints for weighted AI suggestions, bulk L2 task retrieval, and scenario refetching.
+- **Key API Endpoints**: `/api/l2`, `/api/step2/l2`, `/api/step2/l2/bulk` for L2 task operations.
 
 ### Database Configuration
 - **Automatic Switching**: Automatic database switching based on the environment (Replit's built-in PostgreSQL for development, separate production database when published).
