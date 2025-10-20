@@ -177,6 +177,15 @@ async def lifespan(app: FastAPI):
     app.state._cleanup_task = asyncio.create_task(periodic_cleanup())
     print("[STARTUP] Background job cleanup task started")
     
+    # 6) Start staging session cleanup task (every hour)
+    async def periodic_staging_cleanup():
+        while True:
+            await asyncio.sleep(3600)  # Every hour
+            await cleanup_old_staging_sessions()
+    
+    app.state._staging_cleanup_task = asyncio.create_task(periodic_staging_cleanup())
+    print("[STARTUP] Background staging cleanup task started (runs every hour)")
+    
     # Final status summary
     if app.state.gpt5_available:
         print("[STARTUP] ✅ Agency Project Builder ready with full GPT-5 intelligence!")
@@ -197,6 +206,10 @@ async def lifespan(app: FastAPI):
     if hasattr(app.state, "_cleanup_task"):
         app.state._cleanup_task.cancel()
         print("[SHUTDOWN] Cleanup task cancelled")
+    
+    if hasattr(app.state, "_staging_cleanup_task"):
+        app.state._staging_cleanup_task.cancel()
+        print("[SHUTDOWN] Staging cleanup task cancelled")
     
     print("[SHUTDOWN] ✅ Cleanup complete")
 
@@ -308,6 +321,129 @@ async def agent_status_endpoint():
 
 # Global store for uploaded PDF files (session -> files mapping)
 UPLOADED_PDF_FILES = {}
+
+# ---------- File Staging System ----------
+# Storage directory for staged files
+STAGED_ROOT = "./staging"
+
+# FileMeta structure for tracking staged files
+@dataclass
+class FileMeta:
+    file_id: str  # UUID
+    filename: str  # Original filename
+    size: int  # File size in bytes
+    mime_type: str  # MIME type
+    upload_time: float  # Timestamp
+    file_path: str  # Path to file on disk
+    
+    def to_dict(self):
+        """Convert to dictionary for JSON responses"""
+        return {
+            "file_id": self.file_id,
+            "filename": self.filename,
+            "size": self.size,
+            "mime_type": self.mime_type,
+            "uploaded_at": datetime.datetime.fromtimestamp(self.upload_time, tz=ZoneInfo("America/New_York")).isoformat(),
+            "file_path": self.file_path
+        }
+
+# Global store for staged files: session_id -> List[FileMeta]
+STAGED_FILES: Dict[str, List[FileMeta]] = {}
+
+# File validation constants
+ALLOWED_EXTENSIONS = {'pdf', 'docx', 'txt'}
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB in bytes
+STAGING_SESSION_TTL = 6 * 3600  # 6 hours in seconds
+
+# MIME type mapping
+MIME_TYPES = {
+    'pdf': 'application/pdf',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'txt': 'text/plain'
+}
+
+def sanitize_filename(filename: str) -> str:
+    """
+    Sanitize filename to prevent path traversal attacks.
+    Removes path separators and dangerous characters.
+    """
+    # Remove path components
+    filename = os.path.basename(filename)
+    # Remove dangerous characters but keep spaces, dots, underscores, hyphens
+    filename = re.sub(r'[^a-zA-Z0-9._\- ]', '', filename)
+    # Prevent hidden files
+    filename = filename.lstrip('.')
+    # Prevent empty filename
+    if not filename:
+        filename = "unnamed_file"
+    return filename
+
+def get_file_extension(filename: str) -> str:
+    """Extract and validate file extension"""
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    return ext if ext in ALLOWED_EXTENSIONS else ''
+
+def validate_file_size(size: int) -> bool:
+    """Check if file size is within limits"""
+    return 0 < size <= MAX_FILE_SIZE
+
+def get_mime_type(extension: str) -> str:
+    """Get MIME type from file extension"""
+    return MIME_TYPES.get(extension, 'application/octet-stream')
+
+async def cleanup_old_staging_sessions():
+    """
+    Remove staging sessions older than STAGING_SESSION_TTL (6 hours).
+    Called periodically by background task.
+    """
+    current_time = time.time()
+    sessions_to_remove = []
+    
+    for session_id, files in STAGED_FILES.items():
+        if not files:
+            # Empty session, mark for removal
+            sessions_to_remove.append(session_id)
+            continue
+        
+        # Check oldest file in session
+        oldest_upload = min(f.upload_time for f in files)
+        session_age = current_time - oldest_upload
+        
+        if session_age > STAGING_SESSION_TTL:
+            sessions_to_remove.append(session_id)
+    
+    # Remove old sessions
+    for session_id in sessions_to_remove:
+        files_deleted = 0
+        
+        # Delete files from disk
+        if session_id in STAGED_FILES:
+            for file_meta in STAGED_FILES[session_id]:
+                try:
+                    if os.path.exists(file_meta.file_path):
+                        os.remove(file_meta.file_path)
+                        files_deleted += 1
+                except Exception as e:
+                    print(f"[STAGE CLEANUP] Error deleting file {file_meta.file_path}: {e}")
+            
+            # Remove session directory
+            session_dir = os.path.join(STAGED_ROOT, session_id)
+            try:
+                if os.path.exists(session_dir):
+                    # Remove any remaining files
+                    for filename in os.listdir(session_dir):
+                        try:
+                            os.remove(os.path.join(session_dir, filename))
+                        except Exception:
+                            pass
+                    # Remove directory
+                    os.rmdir(session_dir)
+            except Exception as e:
+                print(f"[STAGE CLEANUP] Error removing session directory {session_dir}: {e}")
+            
+            # Remove from metadata
+            del STAGED_FILES[session_id]
+            print(f"[STAGE CLEANUP] Removed session {session_id} ({files_deleted} files, age: {session_age/3600:.1f}h)")
 
 @app.post("/api/upload_file")
 async def upload_file_endpoint(files: List[UploadFile] = File(...)):
@@ -480,6 +616,305 @@ async def upload_rfp_endpoint(
     except Exception as e:
         print(f"[UPLOAD] Error processing file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# ---------- File Staging Endpoints ----------
+
+@app.post("/api/stage/upload")
+async def stage_upload_endpoint(
+    files: List[UploadFile] = File(...),
+    session_id: Optional[str] = Form(None)
+):
+    """
+    Stage files without extracting text.
+    Files are saved to disk for later batch processing.
+    """
+    try:
+        # Generate or validate session_id
+        if not session_id:
+            session_id = str(uuid.uuid4())
+        
+        # Create session directory
+        session_dir = os.path.join(STAGED_ROOT, session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        
+        # Initialize session in STAGED_FILES if not exists
+        if session_id not in STAGED_FILES:
+            STAGED_FILES[session_id] = []
+        
+        uploaded_files = []
+        errors = []
+        
+        for file in files:
+            try:
+                # Validate filename
+                if not file.filename:
+                    errors.append({"filename": "unknown", "error": "No filename provided"})
+                    continue
+                
+                # Sanitize filename
+                safe_filename = sanitize_filename(file.filename)
+                
+                # Extract and validate extension
+                ext = get_file_extension(safe_filename)
+                if not ext:
+                    errors.append({"filename": file.filename, "error": f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"})
+                    continue
+                
+                # Read file content
+                content = await file.read()
+                file_size = len(content)
+                
+                # Validate file size
+                if not validate_file_size(file_size):
+                    size_mb = file_size / (1024 * 1024)
+                    errors.append({"filename": file.filename, "error": f"File too large ({size_mb:.1f}MB). Max: 20MB"})
+                    continue
+                
+                # Generate unique file ID and path
+                file_id = str(uuid.uuid4())
+                file_path = os.path.join(session_dir, f"{file_id}.{ext}")
+                
+                # Save file to disk
+                with open(file_path, 'wb') as f:
+                    f.write(content)
+                
+                # Get MIME type
+                mime_type = get_mime_type(ext)
+                
+                # Create FileMeta
+                file_meta = FileMeta(
+                    file_id=file_id,
+                    filename=safe_filename,
+                    size=file_size,
+                    mime_type=mime_type,
+                    upload_time=time.time(),
+                    file_path=file_path
+                )
+                
+                # Add to session
+                STAGED_FILES[session_id].append(file_meta)
+                uploaded_files.append(file_meta.to_dict())
+                
+                print(f"[STAGE] Uploaded {safe_filename} ({file_size} bytes) -> {file_path}")
+                
+            except Exception as file_error:
+                errors.append({"filename": file.filename, "error": str(file_error)})
+        
+        response = {
+            "success": len(uploaded_files) > 0,
+            "session_id": session_id,
+            "files": uploaded_files,
+            "total_uploaded": len(uploaded_files),
+            "total_failed": len(errors)
+        }
+        
+        if errors:
+            response["errors"] = errors
+        
+        return response
+        
+    except Exception as e:
+        print(f"[STAGE] Upload error: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+
+@app.get("/api/stage/list")
+async def stage_list_endpoint(session_id: str):
+    """
+    List all staged files for a session.
+    """
+    if session_id not in STAGED_FILES:
+        return {
+            "success": True,
+            "session_id": session_id,
+            "files": [],
+            "total": 0
+        }
+    
+    files = [meta.to_dict() for meta in STAGED_FILES[session_id]]
+    
+    return {
+        "success": True,
+        "session_id": session_id,
+        "files": files,
+        "total": len(files)
+    }
+
+@app.delete("/api/stage/file/{file_id}")
+async def stage_delete_file_endpoint(file_id: str, session_id: str):
+    """
+    Remove a specific staged file from disk and metadata.
+    """
+    if session_id not in STAGED_FILES:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Find the file
+    file_meta = None
+    file_index = None
+    for i, meta in enumerate(STAGED_FILES[session_id]):
+        if meta.file_id == file_id:
+            file_meta = meta
+            file_index = i
+            break
+    
+    if not file_meta:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Delete from disk
+    try:
+        if os.path.exists(file_meta.file_path):
+            os.remove(file_meta.file_path)
+            print(f"[STAGE] Deleted file: {file_meta.file_path}")
+    except Exception as e:
+        print(f"[STAGE] Error deleting file {file_meta.file_path}: {e}")
+    
+    # Remove from metadata
+    STAGED_FILES[session_id].pop(file_index)
+    
+    return {
+        "success": True,
+        "message": f"File {file_meta.filename} deleted",
+        "file_id": file_id
+    }
+
+@app.delete("/api/stage/clear")
+async def stage_clear_endpoint(session_id: str):
+    """
+    Clear all staged files for a session.
+    """
+    if session_id not in STAGED_FILES:
+        return {
+            "success": True,
+            "message": "Session not found or already empty",
+            "files_deleted": 0
+        }
+    
+    files_deleted = 0
+    
+    # Delete all files from disk
+    for file_meta in STAGED_FILES[session_id]:
+        try:
+            if os.path.exists(file_meta.file_path):
+                os.remove(file_meta.file_path)
+                files_deleted += 1
+        except Exception as e:
+            print(f"[STAGE] Error deleting file {file_meta.file_path}: {e}")
+    
+    # Remove session directory if empty
+    session_dir = os.path.join(STAGED_ROOT, session_id)
+    try:
+        if os.path.exists(session_dir) and not os.listdir(session_dir):
+            os.rmdir(session_dir)
+            print(f"[STAGE] Removed empty session directory: {session_dir}")
+    except Exception as e:
+        print(f"[STAGE] Error removing session directory: {e}")
+    
+    # Clear metadata
+    del STAGED_FILES[session_id]
+    
+    return {
+        "success": True,
+        "message": f"Cleared {files_deleted} files",
+        "files_deleted": files_deleted
+    }
+
+@app.post("/api/analysis/start")
+async def analysis_start_endpoint(
+    background_tasks: BackgroundTasks,
+    session_id: str = Form(...),
+    mode: str = Form("fast"),
+    tier: str = Form("auto"),
+    strictness: str = Form("normal")
+):
+    """
+    Extract text from ALL staged files and start analysis job.
+    """
+    # Validate session exists
+    if session_id not in STAGED_FILES or not STAGED_FILES[session_id]:
+        raise HTTPException(status_code=404, detail="No staged files found for session")
+    
+    # Extract text from all staged files
+    combined_text = ""
+    extraction_errors = []
+    
+    for file_meta in STAGED_FILES[session_id]:
+        try:
+            # Read file from disk
+            with open(file_meta.file_path, 'rb') as f:
+                content = f.read()
+            
+            # Extract text based on file type
+            ext = file_meta.file_path.rsplit('.', 1)[-1].lower()
+            text = ""
+            
+            if ext == 'txt':
+                text = content.decode('utf-8', errors='ignore')
+            elif ext == 'pdf' and PdfReader:
+                pdf_reader = PdfReader(io.BytesIO(content))
+                for page in pdf_reader.pages:
+                    text += page.extract_text() + "\n"
+            elif ext == 'docx' and Document:
+                doc = Document(io.BytesIO(content))
+                for paragraph in doc.paragraphs:
+                    text += paragraph.text + "\n"
+            else:
+                extraction_errors.append(f"Cannot extract text from {file_meta.filename}")
+                continue
+            
+            combined_text += f"\n\n=== {file_meta.filename} ===\n\n{text}"
+            print(f"[STAGE] Extracted {len(text)} chars from {file_meta.filename}")
+            
+        except Exception as e:
+            extraction_errors.append(f"Error extracting {file_meta.filename}: {str(e)}")
+            print(f"[STAGE] Extraction error for {file_meta.filename}: {e}")
+    
+    if not combined_text.strip():
+        raise HTTPException(status_code=400, detail="No text could be extracted from staged files")
+    
+    # Generate job ID
+    job_id = f"staged_{session_id}_{int(time.time())}"
+    
+    # Initialize job tracking
+    AI_JOB_STORE[job_id] = AIAnalysisJob(
+        job_id=job_id,
+        status=AIJobStatus.PENDING,
+        total_chunks=0,
+        processed_chunks=0,
+        current_stage="Starting analysis of staged files..."
+    )
+    
+    # Load database if needed
+    if not app.state.db.loaded:
+        app.state.db.load()
+    
+    # Start background analysis
+    background_tasks.add_task(
+        _run_analysis_background,
+        job_id,
+        combined_text.strip(),
+        app.state.db,
+        strictness,
+        tier,
+        mode,
+        None,  # client will be created
+        session_id
+    )
+    
+    print(f"[STAGE] Started analysis job {job_id} for session {session_id}")
+    
+    response = {
+        "success": True,
+        "job_id": job_id,
+        "session_id": session_id,
+        "files_processed": len(STAGED_FILES[session_id]),
+        "text_length": len(combined_text),
+        "mode": mode,
+        "message": f"Analysis started with {len(STAGED_FILES[session_id])} files"
+    }
+    
+    if extraction_errors:
+        response["warnings"] = extraction_errors
+    
+    return response
 
 # ---------- AI Planner Integration (AgencyDB) ----------
 from ai_planner_agencydb import (
