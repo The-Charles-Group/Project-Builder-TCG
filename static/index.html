@@ -2781,7 +2781,14 @@
         btn.id='tl-save'; btn.textContent='Save Order';
         document.getElementById('timeline-controls').appendChild(btn);
       }
-      btn.onclick = () => saveTimelineOrder(letter);
+      btn.onclick = async () => {
+        try {
+          await saveTimelineOrder(letter);
+        } catch (error) {
+          console.error('[TIMELINE] Error in Save Order button:', error);
+          alert(`An error occurred while saving the timeline order. Please try again.`);
+        }
+      };
     }
 
     // ——— persist new order to backend and merge schedules back ———
@@ -2873,17 +2880,40 @@
       
       // Wire up new pricing buttons
       const btnExportPricing = document.getElementById('btn-export-pricing');
-      if (btnExportPricing) btnExportPricing.onclick = exportPricingDetails;
+      if (btnExportPricing) {
+        btnExportPricing.onclick = async () => {
+          try {
+            await exportPricingDetails();
+          } catch (error) {
+            console.error('[EXPORT] Error in Export Pricing button:', error);
+            alert(`An error occurred while exporting pricing details. Please try again.`);
+          }
+        };
+      }
       
       const btnAiOptimize = document.getElementById('btn-ai-optimize-pricing');
-      if (btnAiOptimize) btnAiOptimize.onclick = optimizeAllPricing;
+      if (btnAiOptimize) {
+        btnAiOptimize.onclick = async () => {
+          try {
+            await optimizeAllPricing();
+          } catch (error) {
+            console.error('[OPTIMIZE] Error in AI Optimize Pricing button:', error);
+            alert(`An error occurred while optimizing pricing. Please try again.`);
+          }
+        };
+      }
       
       // Wire up Generate AI Timeline button
       const btnGenerateTimeline = document.getElementById('btn-generate-timeline');
       if (btnGenerateTimeline) {
-        btnGenerateTimeline.onclick = () => {
-          const letter = document.querySelector('[data-timeline-sel].active')?.dataset?.timelineSel || 'A';
-          generateIntelligentTimeline(letter);
+        btnGenerateTimeline.onclick = async () => {
+          try {
+            const letter = document.querySelector('[data-timeline-sel].active')?.dataset?.timelineSel || 'A';
+            await generateIntelligentTimeline(letter);
+          } catch (error) {
+            console.error('[TIMELINE] Error in Generate AI Timeline button:', error);
+            alert(`An error occurred while generating the timeline. Please try again.`);
+          }
         };
       }
       
