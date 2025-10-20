@@ -246,12 +246,12 @@
       }
       
       // Make API call
-      fetch('/api/analyze', {
+      fetch('/api/ai/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: rfpText,
-          mode: mode,
+          rfp_text: rfpText,
+          analysis_mode: mode,
           session_id: window.PRIMARY_SCENARIO.sessionId
         })
       })
