@@ -39,6 +39,12 @@
     
     // Create fallback UI that's always available
     createFallbackUI() {
+      // DOM-ready guard: if body doesn't exist yet, wait for DOMContentLoaded
+      if (!document.body) {
+        document.addEventListener('DOMContentLoaded', () => this.createFallbackUI());
+        return;
+      }
+      
       // Check if already exists
       if (document.getElementById('error-recovery-fallback')) {
         return;
