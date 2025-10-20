@@ -27,6 +27,8 @@
   <script src="/static/js/charles-chat-fix.js"></script>
   <!-- AI Reasoning Sidebar -->
   <script src="/static/js/reasoning-sidebar.js"></script>
+  <!-- File Staging Module -->
+  <script src="/static/js/file-staging.js"></script>
   <!-- PRIMARY_SCENARIO and Button Management -->
   <script src="/static/js/scenarioDataManager.js"></script>
   <script src="/static/js/buttonManager.js"></script>
@@ -213,6 +215,27 @@
       <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" multiple />
       <div id="selected-files-list" style="margin-top: 8px; font-size: 0.85em; color: var(--muted);"></div>
       <div id="file-preview" style="margin-top: 8px;"></div>
+      
+      <!-- File Cards Container (Replit-style) -->
+      <div id="file-cards-container" class="file-cards-grid" style="display: none;"></div>
+      
+      <!-- Start AI Analysis Button & Progress -->
+      <div style="margin: 20px 0;">
+        <button id="start-analysis-btn" class="btn-primary" disabled style="width: 100%; padding: 14px; font-size: 1.1em; font-weight: 600;">
+          🚀 Start AI Analysis
+        </button>
+        
+        <!-- Analysis Progress Bar -->
+        <div id="analysis-progress" style="display: none; margin-top: 16px; padding: 12px; background: rgba(106, 163, 255, 0.08); border: 1px solid rgba(106, 163, 255, 0.3); border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <strong style="color: var(--accent); font-size: 0.95em;">⚡ AI Analysis in Progress</strong>
+            <span class="progress-text" style="font-weight: 600; color: var(--accent);">0%</span>
+          </div>
+          <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden;">
+            <div class="progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #6aa3ff, #3ddc97); transition: width 0.3s ease;"></div>
+          </div>
+        </div>
+      </div>
       
       <!-- Import Previous Project -->
       <div style="margin: 16px 0; padding: 12px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 6px;">

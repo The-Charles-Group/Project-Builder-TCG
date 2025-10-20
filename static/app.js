@@ -4990,6 +4990,12 @@ async function boot() {
   if (rfpFileEl && !rfpFileEl.dataset.clearOnUploadWired) {
     rfpFileEl.dataset.clearOnUploadWired = 'true';
     rfpFileEl.addEventListener('change', async (e) => {
+      // Skip old flow if file-staging module is active
+      if (e.target.dataset.fileStagingActive === 'true') {
+        console.log('[FILE UPLOAD] Skipping old flow - file-staging module active');
+        return;
+      }
+      
       if (e.target.files && e.target.files.length > 0) {
         console.log('[FILE UPLOAD] Files selected:', e.target.files.length);
         
@@ -10365,6 +10371,12 @@ document.addEventListener('DOMContentLoaded', () => {
   if (fileInput && filesList) {
     console.log('[FILE UPLOAD INIT] Adding change event listener to file input');
     fileInput.addEventListener('change', async (e) => {
+      // Skip old flow if file-staging module is active
+      if (e.target.dataset.fileStagingActive === 'true') {
+        console.log('[FILE CHANGE] Skipping old flow - file-staging module active');
+        return;
+      }
+      
       console.log('[FILE CHANGE] Event triggered!', e.target.files);
       const files = e.target.files;
       if (files && files.length > 0) {
