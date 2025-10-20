@@ -22,7 +22,7 @@
     // Step 2 - Selection
     selectedDeliverables: [],
     selectedComponents: {},
-    selectedL3Tasks: {},
+    selectedL2Tasks: {},
     
     // Step 3 - Pricing
     pricing: {},
@@ -169,7 +169,7 @@
         ...window.PRIMARY_SCENARIO,
         selectedDeliverables: data.selectedDeliverables || window.PRIMARY_SCENARIO.selectedDeliverables,
         selectedComponents: data.selectedComponents || window.PRIMARY_SCENARIO.selectedComponents,
-        selectedL3Tasks: data.selectedL3Tasks || window.PRIMARY_SCENARIO.selectedL3Tasks,
+        selectedL2Tasks: data.selectedL2Tasks || window.PRIMARY_SCENARIO.selectedL2Tasks,
         status: 'selected',
         updatedAt: new Date().toISOString()
       };
@@ -315,7 +315,7 @@
         sessionId: window.PRIMARY_SCENARIO.sessionId,
         selectedDeliverables: new Set(window.PRIMARY_SCENARIO.selectedDeliverables),
         selectedComponents: window.PRIMARY_SCENARIO.selectedComponents,
-        selectedL3Tasks: window.PRIMARY_SCENARIO.selectedL3Tasks,
+        selectedL2Tasks: window.PRIMARY_SCENARIO.selectedL2Tasks,
         deliverables: window.PRIMARY_SCENARIO.deliverables,
         totals: window.PRIMARY_SCENARIO.totals
       };
@@ -327,7 +327,7 @@
         // Update PRIMARY_SCENARIO from ScenarioManager
         window.PRIMARY_SCENARIO.selectedDeliverables = Array.from(state.selectedDeliverables || []);
         window.PRIMARY_SCENARIO.selectedComponents = state.selectedComponents || window.PRIMARY_SCENARIO.selectedComponents;
-        window.PRIMARY_SCENARIO.selectedL3Tasks = state.selectedL3Tasks || window.PRIMARY_SCENARIO.selectedL3Tasks;
+        window.PRIMARY_SCENARIO.selectedL2Tasks = state.selectedL2Tasks || window.PRIMARY_SCENARIO.selectedL2Tasks;
         window.PRIMARY_SCENARIO.deliverables = state.deliverables || window.PRIMARY_SCENARIO.deliverables;
         window.PRIMARY_SCENARIO.totals = state.totals || window.PRIMARY_SCENARIO.totals;
         window.PRIMARY_SCENARIO.updatedAt = new Date().toISOString();
@@ -356,7 +356,7 @@
           ...window.ScenarioManager.state,
           selectedDeliverables: new Set(window.PRIMARY_SCENARIO.selectedDeliverables),
           selectedComponents: window.PRIMARY_SCENARIO.selectedComponents,
-          selectedL3Tasks: window.PRIMARY_SCENARIO.selectedL3Tasks,
+          selectedL2Tasks: window.PRIMARY_SCENARIO.selectedL2Tasks,
           deliverables: window.PRIMARY_SCENARIO.deliverables,
           totals: window.PRIMARY_SCENARIO.totals
         };
@@ -413,7 +413,7 @@
         deliverables: [],
         selectedDeliverables: [],
         selectedComponents: {},
-        selectedL3Tasks: {},
+        selectedL2Tasks: {},
         pricing: {},
         retainerAnalysis: null,
         projectType: 'project',
@@ -454,7 +454,7 @@
       if (window.ScenarioManager) {
         window.ScenarioManager.state.selectedDeliverables = new Set();
         window.ScenarioManager.state.selectedComponents = {};
-        window.ScenarioManager.state.selectedL3Tasks = {};
+        window.ScenarioManager.state.selectedL2Tasks = {};
         window.ScenarioManager.emit();
       }
     },

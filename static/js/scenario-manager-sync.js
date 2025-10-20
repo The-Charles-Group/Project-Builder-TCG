@@ -290,7 +290,7 @@
           selections: {
             deliverables: Array.from(this.state.selectedDeliverables || []),
             components: this.state.selectedComponents || {},
-            l3Tasks: this.state.selectedL3Tasks || {}
+            l2Tasks: this.state.selectedL2Tasks || {}
           },
           timestamp: Date.now(),
           checksum: this.calculateChecksum()
@@ -404,8 +404,8 @@
           if (selections.components) {
             this.state.selectedComponents = selections.components;
           }
-          if (selections.l3Tasks) {
-            this.state.selectedL3Tasks = selections.l3Tasks;
+          if (selections.l2Tasks) {
+            this.state.selectedL2Tasks = selections.l2Tasks;
           }
         }
         
