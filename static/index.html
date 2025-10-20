@@ -2860,7 +2860,16 @@
       if (applyBtn) applyBtn.onclick = applySelection;
       
       const btnBuild = document.getElementById('btnBuild');
-      if (btnBuild) btnBuild.onclick = buildScenariosAB;
+      if (btnBuild) {
+        btnBuild.onclick = async () => {
+          try {
+            await buildScenariosAB();
+          } catch (error) {
+            console.error('[BUILD] Error in Build Scenario button:', error);
+            alert(`An error occurred while building the scenario. Please try again.`);
+          }
+        };
+      }
       
       // Wire up new pricing buttons
       const btnExportPricing = document.getElementById('btn-export-pricing');
