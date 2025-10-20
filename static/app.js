@@ -4975,15 +4975,21 @@ async function boot() {
     });
   }
   
-  // ISSUE 2 FIX: Auto-clear on new file upload
+  // ISSUE 2 FIX: Auto-clear on new file upload AND extract text
   const rfpFileEl = document.querySelector("#rfpFile");
   if (rfpFileEl && !rfpFileEl.dataset.clearOnUploadWired) {
     rfpFileEl.dataset.clearOnUploadWired = 'true';
     rfpFileEl.addEventListener('change', async (e) => {
       if (e.target.files && e.target.files.length > 0) {
-        console.log('[SESSION] Auto-clearing on file upload');
+        console.log('[FILE UPLOAD] Files selected:', e.target.files.length);
         
-        // Clear server cache
+        // Show loading indicator
+        const filePreview = document.getElementById('file-preview');
+        if (filePreview) {
+          filePreview.innerHTML = '<div style="padding: 10px; color: #666;">🔄 Extracting text from file(s)...</div>';
+        }
+        
+        // Clear server cache first
         const sessionId = SessionManager.getCurrentSessionId();
         try {
           await fetch('/api/clear_session', {
@@ -4997,6 +5003,71 @@ async function boot() {
           console.log('[SESSION] Session cleared on file upload');
         } catch (err) {
           console.warn('[SESSION] Failed to clear on file upload:', err);
+        }
+        
+        // Extract text from uploaded files
+        try {
+          const formData = new FormData();
+          for (let i = 0; i < e.target.files.length; i++) {
+            formData.append('files', e.target.files[i]);
+          }
+          
+          console.log('[FILE UPLOAD] Calling /api/upload_file to extract text...');
+          const response = await fetch('/api/upload_file', {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            console.log('[FILE UPLOAD] Text extracted successfully:', result.char_count, 'chars');
+            
+            // Store the extracted text globally
+            window.uploadedFileText = result.text;
+            window.uploadedFilenames = result.filenames;
+            
+            // Also store in APP object for compatibility
+            window.APP = window.APP || {};
+            window.APP.uploadedFileText = result.text;
+            window.APP.uploadedFilenames = result.filenames;
+            
+            // Update file preview to show success
+            if (filePreview) {
+              const filesInfo = result.filenames.join(', ');
+              filePreview.innerHTML = `
+                <div style="padding: 10px; background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 6px; color: #0c4a6e;">
+                  ✅ <strong>File(s) ready:</strong> ${filesInfo}<br>
+                  <small>${result.char_count} characters extracted</small>
+                </div>
+              `;
+            }
+            
+            // Optionally populate the textarea with extracted text (commented out to not override manual text)
+            // const rfpTextEl = document.querySelector('#rfpText');
+            // if (rfpTextEl && result.text) {
+            //   rfpTextEl.value = result.text;
+            // }
+            
+          } else {
+            const error = await response.text();
+            console.error('[FILE UPLOAD] Failed to extract text:', error);
+            if (filePreview) {
+              filePreview.innerHTML = `
+                <div style="padding: 10px; background: #fef2f2; border: 1px solid #f87171; border-radius: 6px; color: #991b1b;">
+                  ❌ Failed to extract text from file(s). Please try again.
+                </div>
+              `;
+            }
+          }
+        } catch (error) {
+          console.error('[FILE UPLOAD] Error extracting text:', error);
+          if (filePreview) {
+            filePreview.innerHTML = `
+              <div style="padding: 10px; background: #fef2f2; border: 1px solid #f87171; border-radius: 6px; color: #991b1b;">
+                ❌ Error processing file(s): ${error.message}
+              </div>
+            `;
+          }
         }
       }
     });
@@ -6153,7 +6224,22 @@ window.setAnalysisMode = function(mode) {
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
-  let rfpText = (textEl?.value || '').trim();
+  
+  // FIXED: Check for uploaded file text FIRST, then textarea
+  let rfpText = '';
+  if (window.uploadedFileText) {
+    console.log('[ANALYSIS] Using uploaded file text:', window.uploadedFileText.length, 'chars');
+    rfpText = window.uploadedFileText;
+  } else if (window.APP?.uploadedFileText) {
+    console.log('[ANALYSIS] Using APP.uploadedFileText:', window.APP.uploadedFileText.length, 'chars');
+    rfpText = window.APP.uploadedFileText;
+  } else {
+    rfpText = (textEl?.value || '').trim();
+    if (rfpText) {
+      console.log('[ANALYSIS] Using textarea text:', rfpText.length, 'chars');
+    }
+  }
+  
   const btnAnalyze = document.querySelector('#btnAnalyze');
   const analysisMode = document.getElementById('analysis-mode')?.value || 'deep';
   console.log('[ANALYSIS] Starting analysis with mode:', analysisMode);
@@ -6185,44 +6271,23 @@ async function onRunReconcile() {
 
   let aiPlanResponse;
   try {
-    // First, extract text from file if provided
-    if (fileEl?.files?.length) {
-      if (btnAnalyze) {
-        btnAnalyze.disabled = true;
-        btnAnalyze.textContent = 'Extracting text...';
-      }
-      
-      updateAIProgress({ progress: 5, current_stage: 'Extracting text from file...', elapsed_seconds: 0, eta_seconds: null });
-      
-      const form = new FormData();
-      for (let i = 0; i < fileEl.files.length; i++) {
-        form.append('files', fileEl.files[i]);
-      }
-      
-      const analyzeToggle = document.querySelector('#analyzeImagesToggle');
-      const analyzeImages = analyzeToggle ? analyzeToggle.checked : true;
-      form.append('analyze_images', analyzeImages);
-      
-      const res = await fetchWithRetry('/api/summarize_by_file', { method: 'POST', body: form });
-      if (!res.ok) {
-        throw new Error(`Server error: ${res.status} ${res.statusText}`);
-      }
-      const summary = await res.json();
-      
-      // Update rfpText from file extraction
-      rfpText = summary.summary_text || '';
-      
-      // Start progress polling if image processing jobs were started
-      if (summary.job_ids && summary.job_ids.length > 0 && summary.processing_images) {
-        startProgressPolling(summary.job_ids[0]);
-      }
-    }
+    // FIXED: No longer need to extract text here since it's done on file selection
+    // Just check if we have text to analyze
     
     if (!rfpText) {
       hideAIProgressBar();
-      alert('Please enter RFP text or upload a file first.');
+      
+      // Provide helpful message based on the situation
+      if (fileEl?.files?.length) {
+        // Files are selected but text wasn't extracted
+        alert('Please wait for the file to finish processing, then click Analyze again. If the problem persists, try re-uploading the file.');
+      } else {
+        alert('Please enter RFP text or upload a document first.');
+      }
       return;
     }
+    
+    console.log('[ANALYSIS] Proceeding with text analysis:', rfpText.length, 'characters');
 
     // Start AI analysis as background job
     if (btnAnalyze) {

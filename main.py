@@ -306,6 +306,69 @@ async def agent_status_endpoint():
         ]
     }
 
+@app.post("/api/upload_file")
+async def upload_file_endpoint(files: List[UploadFile] = File(...)):
+    """Simple endpoint for extracting text from uploaded files (PDF/DOCX/TXT)."""
+    try:
+        extracted_texts = []
+        filenames = []
+        
+        for file in files:
+            content = await file.read()
+            filename = file.filename or "unknown"
+            filenames.append(filename)
+            
+            # Extract text from the file
+            try:
+                text = _extract_text_from_upload(content, filename)
+                # Cap text length for performance
+                if len(text) > 200_000:
+                    text = text[:200_000]
+                extracted_texts.append(text)
+            except Exception as e:
+                print(f"[UPLOAD] Failed to extract text from {filename}: {e}")
+                # Try alternate extraction methods
+                file_ext = filename.split('.')[-1].lower() if '.' in filename else ''
+                if file_ext == 'pdf' and PdfReader:
+                    try:
+                        pdf_reader = PdfReader(io.BytesIO(content))
+                        text = ""
+                        for page in pdf_reader.pages:
+                            text += page.extract_text() + "\n"
+                        extracted_texts.append(text[:200_000] if len(text) > 200_000 else text)
+                    except:
+                        extracted_texts.append("")
+                elif file_ext == 'docx' and Document:
+                    try:
+                        doc = Document(io.BytesIO(content))
+                        text = "\n".join([p.text for p in doc.paragraphs])
+                        extracted_texts.append(text[:200_000] if len(text) > 200_000 else text)
+                    except:
+                        extracted_texts.append("")
+                else:
+                    extracted_texts.append("")
+        
+        # Combine texts from all files
+        merged_text = "\n\n---\n\n".join(filter(None, extracted_texts))
+        
+        # Store in cache for later use
+        global RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
+        RFP_TEXT_CACHE_FILE = merged_text
+        RFP_TEXT_CACHE = merged_text
+        LAST_UPLOAD_FILENAME = filenames[0] if filenames else "upload"
+        
+        print(f"[UPLOAD] Extracted {len(merged_text)} chars from {len(files)} file(s)")
+        
+        return {
+            "success": True,
+            "text": merged_text,
+            "filenames": filenames,
+            "char_count": len(merged_text)
+        }
+    except Exception as e:
+        print(f"[UPLOAD] Error: {e}")
+        raise HTTPException(400, f"Failed to extract text: {str(e)}")
+
 @app.post("/api/upload_rfp")
 async def upload_rfp_endpoint(
     background_tasks: BackgroundTasks,
