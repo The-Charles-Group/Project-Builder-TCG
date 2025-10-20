@@ -27,6 +27,10 @@
   <script src="/static/js/charles-chat-fix.js"></script>
   <!-- AI Reasoning Sidebar -->
   <script src="/static/js/reasoning-sidebar.js"></script>
+  <!-- PRIMARY_SCENARIO and Button Management -->
+  <script src="/static/js/scenarioDataManager.js"></script>
+  <script src="/static/js/buttonManager.js"></script>
+  <script src="/static/js/primary-scenario-integration.js"></script>
   <!-- Enhanced ScenarioManager with Real-time Sync -->
   <script src="/static/js/scenario-manager-sync.js"></script>
   <!-- Step-specific sync integrations -->
@@ -374,8 +378,9 @@
       </div>
 
       <div class="actions" style="margin-top: 20px;">
-        <button id="btnProceedToStep3" class="btn-primary">Proceed to Pricing</button>
-        <button id="learnBtn" type="button" style="background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-left: 10px;">LEARN (opt-in)</button>
+        <button id="btn-apply-smart-selection" type="button" style="background: linear-gradient(135deg, #3b82f6, #2563eb); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Apply Smart Selection</button>
+        <button id="btn-proceed-pricing" class="btn-primary">Proceed to Pricing</button>
+        <button id="btn-learn" type="button" style="background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-left: 10px;">LEARN (opt-in)</button>
       </div>
     </section>
 
@@ -603,6 +608,9 @@
             </button>
             <button id="btn-ai-optimize-pricing" class="btn-primary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
               Optimize All Pricing
+            </button>
+            <button id="btn-update-pricing" class="btn-primary" style="background: linear-gradient(135deg, #059669 0%, #10b981 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
+              💾 Update Pricing
             </button>
           </div>
         </div>
@@ -988,12 +996,12 @@
         </label>
       </div>
       <div class="inline">
-        <button id="btn-export-a">Export Excel</button>
+        <button id="btnExportA">Export Excel</button>
       </div>
       
       <div class="inline" style="margin-top: 8px;">
         <small style="color: var(--muted); display: block; margin-bottom: 4px;">📊 Microsoft Project XML Export:</small>
-        <button id="btn-export-xml-a">Export XML</button>
+        <button id="btn-export-xml">Export XML</button>
       </div>
       
       <!-- Final Ship Section -->
@@ -1002,7 +1010,7 @@
         <p style="color: var(--muted); font-size: 0.9em; margin-bottom: 16px;">
           This will finalize your project, lock all data, and generate comprehensive exports including all scenarios, pricing, and timeline data.
         </p>
-        <button id="btn-final-ship" style="background: linear-gradient(135deg, #dc2626, #ef4444); color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1em;">
+        <button id="btn-final-ship-project" style="background: linear-gradient(135deg, #dc2626, #ef4444); color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1em;">
           🔒 Final Ship Project
         </button>
         <div id="final-ship-status" style="margin-top: 12px; display: none;">
@@ -1010,26 +1018,6 @@
             <strong style="color: #22c55e;">✅ Project Shipped Successfully!</strong>
             <div id="final-ship-downloads" style="margin-top: 8px;"></div>
           </div>
-        </div>
-      </div>
-      
-      <!-- Build Second Scenario Section -->
-      <div style="margin-top: 24px; padding: 20px; background: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(16, 185, 129, 0.1)); border: 2px solid rgba(5, 150, 105, 0.3); border-radius: 8px;">
-        <h3 style="margin: 0 0 12px 0; color: #10b981;">🔄 Build Alternative Scenarios</h3>
-        <p style="color: var(--muted); font-size: 0.9em; margin-bottom: 16px;">
-          Create alternative versions of your project while preserving the original. Compare different approaches side-by-side.
-        </p>
-        <div style="display: flex; gap: 12px;">
-          <button id="btn-build-second-scenario" style="background: #059669; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-            Create Version 2
-          </button>
-          <button id="btn-compare-versions" style="background: #0891b2; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-            Compare Versions
-          </button>
-        </div>
-        <div id="version-list" style="margin-top: 16px; display: none;">
-          <h4 style="color: var(--accent); margin-bottom: 8px;">Available Versions:</h4>
-          <div id="version-items"></div>
         </div>
       </div>
     </section>
