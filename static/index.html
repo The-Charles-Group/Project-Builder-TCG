@@ -9,6 +9,8 @@
   <link rel="stylesheet" href="/static/css/responsive.css" />
   <!-- Error Boundaries CSS - Must load early -->
   <link rel="stylesheet" href="/static/css/error-boundaries.css" />
+  <!-- UI Fixes - Restore hamburger menu and hide stuck modals -->
+  <link rel="stylesheet" href="/static/css/ui-fixes.css" />
   <!-- Frappe Gantt Library -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
   <!-- NUCLEAR CLEANUP - Must load FIRST before anything else -->
@@ -1032,115 +1034,6 @@
       </div>
     </section>
   </main>
-
-  <!-- Force all steps visible using the most aggressive approach -->
-  <style>
-    /* NUCLEAR OPTION: Force all steps visible with maximum specificity */
-    body #step1,
-    body #step2,
-    body #step3,
-    body #step4,
-    body #step5 {
-      display: block !important;
-      visibility: visible !important;
-      opacity: 1 !important;
-      position: relative !important;
-      left: 0 !important;
-      top: 0 !important;
-      width: 100% !important;
-      height: auto !important;
-      min-height: 200px !important;
-      transform: none !important;
-      z-index: auto !important;
-    }
-    
-    /* Remove any transitions that might delay visibility */
-    #step1, #step2, #step3, #step4, #step5 {
-      transition: none !important;
-    }
-    
-    /* Ensure main container can show all content */
-    main {
-      display: block !important;
-      height: auto !important;
-      min-height: 100vh !important;
-      overflow: visible !important;
-    }
-  </style>
-  
-  <script>
-    // Force all steps to be visible - final override with mutation observer
-    (function() {
-      console.log('[ULTIMATE-FORCE] Starting ultimate force visible solution');
-      
-      // Function to make all steps visible
-      function forceStepsVisible() {
-        const stepIds = ['step1', 'step2', 'step3', 'step4', 'step5'];
-        let found = 0;
-        
-        stepIds.forEach(function(stepId) {
-          const step = document.getElementById(stepId);
-          if (step) {
-            found++;
-            // Remove ALL possible hiding mechanisms
-            step.style.cssText = 'display: block !important; visibility: visible !important; opacity: 1 !important; position: relative !important; left: 0 !important; top: 0 !important; width: 100% !important; height: auto !important; min-height: 200px !important;';
-            step.removeAttribute('hidden');
-            step.className = step.className.replace(/\b(hidden|hide|d-none|invisible)\b/g, '');
-          }
-        });
-        
-        console.log('[ULTIMATE-FORCE] Found and made visible ' + found + ' steps');
-        return found;
-      }
-      
-      // Run immediately
-      forceStepsVisible();
-      
-      // Run when DOM is ready
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', forceStepsVisible);
-      } else {
-        forceStepsVisible();
-      }
-      
-      // Run after a delay
-      setTimeout(forceStepsVisible, 100);
-      setTimeout(forceStepsVisible, 500);
-      setTimeout(forceStepsVisible, 1000);
-      setTimeout(forceStepsVisible, 2000);
-      
-      // Set up a mutation observer to catch any attempts to hide steps
-      const observer = new MutationObserver(function(mutations) {
-        let needsForce = false;
-        
-        mutations.forEach(function(mutation) {
-          if (mutation.target && mutation.target.id && mutation.target.id.match(/^step[1-5]$/)) {
-            needsForce = true;
-          }
-        });
-        
-        if (needsForce) {
-          forceStepsVisible();
-        }
-      });
-      
-      // Start observing once DOM is ready
-      function startObserving() {
-        observer.observe(document.body, {
-          attributes: true,
-          attributeFilter: ['style', 'class', 'hidden'],
-          subtree: true
-        });
-        console.log('[ULTIMATE-FORCE] Mutation observer started');
-      }
-      
-      if (document.body) {
-        startObserving();
-      } else {
-        document.addEventListener('DOMContentLoaded', startObserving);
-      }
-    })();
-  </script>
 
   <script>
     // --- Safe DOM helpers ---

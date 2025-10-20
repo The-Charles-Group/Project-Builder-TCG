@@ -1,0 +1,99 @@
+/* UI Fixes - Hide stuck modals and restore hamburger menu */
+
+/* Hide stuck modal dialogs that shouldn't be visible by default */
+.modal:not(.active),
+.modal:not(.show),
+.modal:not(.visible),
+.popup:not(.active),
+.popup:not(.show),
+dialog:not([open]) {
+  display: none !important;
+}
+
+/* Specifically hide modals with Apply Changes and Save buttons if they're stuck open */
+.modal:has(button:contains("Apply Changes")),
+.modal:has(button:contains("Save")):not(.active) {
+  display: none !important;
+}
+
+/* Ensure hamburger menu and sidebar controls are visible */
+.hamburger-menu,
+.mobile-menu-toggle,
+.menu-toggle,
+.sidebar-toggle,
+[class*="hamburger"] {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  position: relative !important;
+  z-index: 1000 !important;
+  pointer-events: auto !important;
+}
+
+/* Ensure agent sidebar and chat elements are accessible */
+.charles-assistant-sidebar,
+.chatgpt-sidebar,
+.reasoning-sidebar,
+.ai-assistant-sidebar,
+.sidebar {
+  pointer-events: auto !important;
+  z-index: 999 !important;
+}
+
+/* Restore proper click functionality */
+button,
+a,
+input,
+select,
+textarea,
+.clickable,
+[onclick],
+[role="button"] {
+  pointer-events: auto !important;
+  cursor: pointer !important;
+}
+
+/* Ensure header controls are visible */
+.header-controls,
+.desktop-header-controls,
+nav {
+  display: flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* Restore proper z-index hierarchy */
+.modal-backdrop,
+.overlay {
+  z-index: 1040 !important;
+}
+
+.modal,
+.popup,
+dialog {
+  z-index: 1050 !important;
+}
+
+/* Make sure main content is interactive */
+main,
+.card,
+section {
+  pointer-events: auto !important;
+  position: relative !important;
+}
+
+/* Remove any blocking overlays */
+.invisible-overlay,
+.blocking-overlay {
+  display: none !important;
+}
+
+/* Ensure Auto-Fix button is visible and clickable */
+.charles-auto-fix-btn-main,
+.auto-fix-toggle,
+#btnAutoFix {
+  display: flex !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  z-index: 1100 !important;
+}
