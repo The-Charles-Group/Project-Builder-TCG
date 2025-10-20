@@ -843,6 +843,12 @@ if not os.path.exists("static"):
     os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Serve main application frontend
+@app.get("/")
+async def root():
+    """Serve the main application interface"""
+    return FileResponse("static/index.html")
+
 # Include AI weights router
 from routes_weights_fastapi import router as weights_router
 app.include_router(weights_router)
