@@ -2781,8 +2781,18 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
     Defensive fallback: if scenario items lack included_task_groups/components,
     auto-expand from DB so exports never go flat.
     Handles both empty lists and "__ALL__" sentinel values.
+    
+    NEW: Per-item inflation - only inflates items without explicit L2 selections.
+    This allows mixed scenarios with both filtered and unfiltered deliverables.
     """
+    
+    # Process each item individually - only inflate items without explicit L2 selections
     for item in scenario.get("items", []):
+        # Skip inflation for items that have explicit L2 selections
+        if item.get("_has_l2_selections"):
+            print(f"[INFLATE] Skipping item {item.get('deliverable_code', 'unknown')} - has explicit L2 selections")
+            continue
+        
         dcode = str(item.get("deliverable_code") or item.get("Deliverable_Code") or "").strip()
         if not dcode:
             continue
@@ -2802,6 +2812,7 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
             # Derive all task groups for this deliverable from DB
             included = DB.task_groups_for_deliverable(dcode)
             item["included_task_groups"] = included
+            print(f"[INFLATE] Inflated item {dcode} with {len(included)} task groups (no explicit L2 selections)")
             # Also convert "__ALL__" sentinel to empty dict for downstream code
             if comp_map == "__ALL__":
                 item["included_task_groups_map"] = {}
@@ -2814,6 +2825,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     Flat_Blended -> uses blended_rate
     Per_Resource -> weighted effective per level
     """
+    # Safety rail: Hard limit on WBS size to prevent browser freeze
+    MAX_WBS_ROWS = 12000
+    row_count_by_deliverable = {}  # Track rows per deliverable code
+    
     # PATCH A: Ensure components are inflated for AI picks (handle "__ALL__" sentinel)
     scenario = _inflate_components_if_missing(scenario)
     
@@ -3022,6 +3037,23 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Price_USD": round(deliv_price, 2),
                 "Type": deliverable_type  # NEW: Add Type column
             })
+            
+            # Track row count by deliverable
+            if dcode:
+                row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
+            
+            # Check if we've exceeded the limit after each deliverable
+            if len(rows) > MAX_WBS_ROWS:
+                # Build error message with worst offenders
+                sorted_offenders = sorted(row_count_by_deliverable.items(), key=lambda x: x[1], reverse=True)
+                top_offenders = sorted_offenders[:5]
+                
+                error_msg = f"WBS too large ({len(rows)} rows > {MAX_WBS_ROWS} limit). "
+                error_msg += "Top contributors: "
+                error_msg += ", ".join([f"{code} ({count} rows)" for code, count in top_offenders])
+                error_msg += ". Please select fewer deliverables or reduce L2 task selections."
+                
+                raise HTTPException(status_code=400, detail=error_msg)
 
             comps = DB.components_for_deliverable(dcode, tg_order)
             # Robust fallback if DB returns no components
@@ -3077,6 +3109,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Rate_USD": round(comp_rate if pricing_mode=="Flat_Blended" else _eff_rate(comp_price, comp_hours_total_display or 0), 2),
                     "Price_USD": round(comp_price, 2)
                 })
+                
+                # Track component row
+                if dcode:
+                    row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
 
                 # --- Tasks under the component ---
                 # Per-month target hours for each task group, then repeat Month 01..N
@@ -3113,6 +3149,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
                             "Assignee_External_ID": "", "Notes": ""
                         })
+                        
+                        # Track task row
+                        if dcode:
+                            row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
 
                         # Role rows for this task in this month
                         hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
@@ -3177,6 +3217,23 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                                 "Rate_USD": round(role_rate, 2),
                                 "Price_USD": row_price
                             })
+                            
+                            # Track role row
+                            if dcode:
+                                row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
+                            
+                            # Check limit after each role row (most granular level)
+                            if len(rows) > MAX_WBS_ROWS:
+                                sorted_offenders = sorted(row_count_by_deliverable.items(), key=lambda x: x[1], reverse=True)
+                                top_offenders = sorted_offenders[:5]
+                                
+                                error_msg = f"WBS too large ({len(rows)} rows > {MAX_WBS_ROWS} limit). "
+                                error_msg += "Top contributors: "
+                                error_msg += ", ".join([f"{code} ({count} rows)" for code, count in top_offenders])
+                                error_msg += ". Please select fewer deliverables or reduce L2 task selections."
+                                
+                                raise HTTPException(status_code=400, detail=error_msg)
+                            
                             prev_role_wbs = wbs_role
 
                         prev_task_last_wbs = prev_role_wbs or wbs_task
@@ -3213,6 +3270,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         df["Price_USD"] = (df["Planned_Hours"] * df["Rate_USD"]).round(0).astype(int)
     else:
         df["Price_USD"] = 0
+    
+    # Log successful WBS build for monitoring
+    print(f"[WBS] Built WBS with {len(rows)} rows from {len(scenario.get('items', []))} deliverables")
 
     return df
 
@@ -5144,12 +5204,18 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
                               pricing_mode: str, blended_rate: Optional[float], rate_band: str,
                               use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
                               project_start: Optional[str], scenario_letter: str,
-                              retainer_months: int = 0, selected_components: Optional[Union[List[str], Dict[str, Optional[float]]]] = None) -> Dict[str, Any]:
+                              retainer_months: int = 0, 
+                              selected_components: Optional[Union[List[str], Dict[str, Optional[float]]]] = None,
+                              selected_l2_tasks: Optional[List[str]] = None) -> Dict[str, Any]:
     # Extract base code for database lookups (handles expanded codes like 'DEL-0027-Google_Ads')
     base_code = extract_base_deliverable_code(deliv_code)
     
     # Which task groups to include?
-    if spec["mode"] == "bundle":
+    if selected_l2_tasks:
+        # User explicitly selected L2 tasks in Step 2 - use only those
+        included = selected_l2_tasks
+        print(f"DEBUG {base_code}: Using L2 task selections: {included}")
+    elif spec["mode"] == "bundle":
         included = DB.included_task_groups(category, spec["bundle"])
     else:
         # Template mode: include all task_groups that exist in data for this deliverable (collapsed to unique)
@@ -5495,6 +5561,20 @@ def api_build(payload: BuildPayload):
             comp_map[str(k)] = {}
     
     print(f"DEBUG Build: Component map processed: {comp_map}")
+    
+    # Build L2 task group selection map from payload
+    l2_map = {}
+    if payload.selected_l2_map:
+        for deliv_code, component_tasks in payload.selected_l2_map.items():
+            # component_tasks is {"Component Name": ["task1", "task2", ...]}
+            # Extract unique task group names across all components
+            all_task_groups = set()
+            for comp_name, task_list in component_tasks.items():
+                if isinstance(task_list, list):
+                    all_task_groups.update(task_list)
+            l2_map[str(deliv_code)] = sorted(all_task_groups) if all_task_groups else None
+        
+        print(f"DEBUG Build: L2 task map processed: {l2_map}")
 
     # Build Scenario A only (B/C removed for simplicity)
     scenarios = {}
@@ -5531,14 +5611,24 @@ def api_build(payload: BuildPayload):
             # If not found, also try with base code as fallback
             months = int(ret_map.get(code, ret_map.get(base_code, 0)))
             selected_components_dict = comp_map.get(str(code), comp_map.get(str(base_code), {}))
+            
+            # Get L2 task selections for this deliverable (try both original code and base code)
+            selected_l2_for_deliverable = l2_map.get(str(code)) or l2_map.get(str(base_code))
+            
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 pricing_mode, blended_rate, rate_band,
                 use_slack, slack_i, slack_c, slack_pct, project_start,
                 scenario_letter=letter,
-                retainer_months=months,   # NEW
-                selected_components=selected_components_dict  # NEW
+                retainer_months=months,
+                selected_components=selected_components_dict,
+                selected_l2_tasks=selected_l2_for_deliverable
             )
+            
+            # NEW: Mark this item if it has explicit L2 selections
+            if selected_l2_for_deliverable:
+                out["_has_l2_selections"] = True
+            
             # Add names for readability
             out["deliverable"] = deliverable_name
             out["category"]    = cat
