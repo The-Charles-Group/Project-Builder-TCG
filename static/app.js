@@ -6251,10 +6251,18 @@ async function onRunReconcile() {
   console.log('[ANALYSIS] Starting analysis with mode:', analysisMode);
 
   // ============================================================================
-  // SESSION ISOLATION: Start fresh session for each new analysis
+  // SESSION ISOLATION: Use existing session if we have uploaded files, otherwise start fresh
   // ============================================================================
-  const sessionId = SessionManager.startNewSession();
-  console.log('[SESSION] New analysis session:', sessionId);
+  let sessionId;
+  if (uploadSessionId) {
+    // Keep existing session if we have uploaded files
+    sessionId = SessionManager.getCurrentSessionId();
+    console.log('[SESSION] Using existing session with uploaded files:', sessionId);
+  } else {
+    // Start fresh session only if no files were uploaded
+    sessionId = SessionManager.startNewSession();
+    console.log('[SESSION] New analysis session:', sessionId);
+  }
   
   // Reset global state for fresh analysis
   SCENARIOS = null;
