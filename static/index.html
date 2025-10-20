@@ -2867,14 +2867,7 @@
       
       const btnBuild = document.getElementById('btnBuild');
       if (btnBuild) {
-        btnBuild.onclick = async () => {
-          try {
-            await buildScenariosAB();
-          } catch (error) {
-            console.error('[BUILD] Error in Build Scenario button:', error);
-            alert(`An error occurred while building the scenario. Please try again.`);
-          }
-        };
+        btnBuild.onclick = () => buildScenariosAB();
       }
       
       // Wire up new pricing buttons
