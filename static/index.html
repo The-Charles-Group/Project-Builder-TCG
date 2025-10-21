@@ -3218,6 +3218,10 @@
   <script src="/static/js/pricing-one-table.js"></script>
   <script src="/static/static_weights.js"></script>
   <script src="/static/app.js?v=11.2" defer></script>
+  
+  <!-- Unified analyze handler - MUST load last to override conflicting handlers -->
+  <script src="/static/js/unified-analyze-handler.js" defer></script>
+  
   <script>
     // Weighted AI Suggestions Handler
     document.addEventListener('DOMContentLoaded', () => {
