@@ -1,0 +1,56 @@
+{
+  "test_name": "E2E Complete Workflow Test",
+  "timestamp": "2025-10-21T21:07:41.482145",
+  "steps": {
+    "STEP 1 START": {
+      "status": "Testing RFP upload and AI analysis",
+      "details": "",
+      "timestamp": "2025-10-21T21:07:41.482163"
+    },
+    "STEP 1 - Analysis Complete": {
+      "status": "\u2705 PASSED",
+      "details": "Found 52 deliverables",
+      "timestamp": "2025-10-21T21:12:12.231995"
+    },
+    "STEP 2 START": {
+      "status": "Testing deliverable selection",
+      "details": "",
+      "timestamp": "2025-10-21T21:12:12.232217"
+    },
+    "STEP 2 - Selection": {
+      "status": "\u2705 PASSED",
+      "details": "Selected 10 deliverables for pricing",
+      "timestamp": "2025-10-21T21:12:12.232231"
+    },
+    "STEP 3 START": {
+      "status": "Testing pricing table generation",
+      "details": "",
+      "timestamp": "2025-10-21T21:12:12.232235"
+    },
+    "STEP 3 - Pricing Data": {
+      "status": "\u2705 PASSED",
+      "details": "Prepared pricing for 10 deliverables",
+      "timestamp": "2025-10-21T21:12:12.232253"
+    },
+    "STEP 4 START": {
+      "status": "Testing AI timeline generation",
+      "details": "",
+      "timestamp": "2025-10-21T21:12:12.232257"
+    },
+    "STEP 4 - Start Timeline": {
+      "status": "\u274c FAILED",
+      "details": "HTTP 404: {\"detail\":\"Not Found\"}",
+      "timestamp": "2025-10-21T21:12:12.236348"
+    },
+    "STEP 5 START": {
+      "status": "Testing export functionality",
+      "details": "",
+      "timestamp": "2025-10-21T21:12:12.236456"
+    },
+    "STEP 5": {
+      "status": "\u26a0\ufe0f SKIPPED",
+      "details": "Step 4 failed",
+      "timestamp": "2025-10-21T21:12:12.236463"
+    }
+  }
+}
