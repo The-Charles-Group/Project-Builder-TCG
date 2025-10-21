@@ -4657,11 +4657,10 @@ async function pollAIAnalysis(jobId) {
       // Hide progress bar
       hideAIProgressBar();
 
-      // Clear from ALL localStorage entries to prevent resumption
-      // 1. Clear from charles_agent_state
-      const savedState = localStorage.getItem('charles_agent_state');
-      if (savedState) {
-        try {
+      // Clear job ID from specific localStorage keys only (avoid scanning all storage)
+      try {
+        const savedState = localStorage.getItem('charles_agent_state');
+        if (savedState) {
           const state = JSON.parse(savedState);
           if (state && state.jobId === jobId) {
             state.jobId = null;
@@ -4675,22 +4674,12 @@ async function pollAIAnalysis(jobId) {
                 }
               });
             }
-            localStorage.setItem('charles_agent_state', JSON.JSON.stringify(state));
+            localStorage.setItem('charles_agent_state', JSON.stringify(state));
             log('[POLLING] Cleared job ID from charles_agent_state');
           }
-        } catch (e) {
-          console.error('[POLLING] Failed to clear job from localStorage:', e);
         }
-      }
-
-      // 2. Clear from any other localStorage keys that might have the job ID
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        const value = localStorage.getItem(key);
-        if (value && value.includes(jobId)) {
-          log(`[POLLING] Removing job ID from localStorage key: ${key}`);
-          localStorage.removeItem(key);
-        }
+      } catch (e) {
+        console.error('[POLLING] Failed to clear job from localStorage:', e);
       }
 
       // Show error message to user
