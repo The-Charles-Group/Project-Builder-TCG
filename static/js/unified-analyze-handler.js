@@ -382,7 +382,7 @@
               newBtn.textContent = 'Analyze with AI';
 
               console.log('[Unified Analyze] Analysis complete! Found', deliverables.length, 'deliverables');
-              console.log('[Unified Analyze] Step 2 should now be populated with deliverables');esults');
+              console.log('[Unified Analyze] Step 2 should now be populated with deliverables');
 
             } else if (status.status === 'failed') {
               clearInterval(pollInterval);
