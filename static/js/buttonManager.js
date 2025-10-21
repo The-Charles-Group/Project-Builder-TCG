@@ -236,14 +236,25 @@
     runAnalysis() {
       console.log('[ButtonHandlers] Running RFP analysis...');
       
-      // Get RFP text
+      // Get RFP text from multiple sources
       const rfpText = document.querySelector('#rfpText')?.value || 
-                     document.querySelector('#rfp-text')?.value || '';
+                     document.querySelector('#rfp-text')?.value || 
+                     window.PRIMARY_SCENARIO?.rfpText || '';
       
-      if (!rfpText.trim()) {
+      // Check if we have staged files
+      const hasStagedFiles = window.FileStagingModule?.state?.files?.length > 0;
+      
+      // Only show error if we have neither text nor files
+      if (!rfpText.trim() && !hasStagedFiles) {
         alert('Please enter RFP text or upload a document first');
         return;
       }
+      
+      // Debug logging to help diagnose validation issues
+      console.log('[VALIDATION] RFP text length:', rfpText.trim().length);
+      console.log('[VALIDATION] Staged files:', hasStagedFiles);
+      console.log('[VALIDATION] PRIMARY_SCENARIO.rfpText length:', window.PRIMARY_SCENARIO?.rfpText?.length || 0);
+      console.log('[VALIDATION] ✅ Validation passed, starting analysis');
       
       // Initialize PRIMARY_SCENARIO
       window.PRIMARY_SCENARIO = {

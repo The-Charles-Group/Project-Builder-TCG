@@ -6631,11 +6631,12 @@ async function onRunReconcile() {
 
   let aiPlanResponse;
   try {
-    // Check for staged files OR text before validation
-    // This prevents false "no file received" errors
-    const hasStagedContent = hasStagedFiles || uploadSessionId || rfpText;
+    // Check for RFP text from multiple sources
+    const hasText = rfpText.trim().length > 0 || 
+                    window.PRIMARY_SCENARIO?.rfpText?.trim().length > 0;
+    const hasStagedFilesCheck = window.FileStagingModule?.state?.files?.length > 0;
     
-    if (!hasStagedContent) {
+    if (!hasText && !hasStagedFilesCheck) {
       hideAIProgressBar();
       
       // Show extraction errors if any
@@ -6647,8 +6648,14 @@ async function onRunReconcile() {
       return;
     }
     
+    // Debug logging to help diagnose validation issues
+    console.log('[VALIDATION] RFP text length:', rfpText.trim().length);
+    console.log('[VALIDATION] Staged files:', hasStagedFilesCheck);
+    console.log('[VALIDATION] PRIMARY_SCENARIO.rfpText length:', window.PRIMARY_SCENARIO?.rfpText?.length || 0);
+    console.log('[VALIDATION] ✅ Validation passed, starting analysis');
+    
     // If we have staged files but no text yet, use placeholder
-    if (!rfpText && (hasStagedFiles || uploadSessionId)) {
+    if (!rfpText && (hasStagedFilesCheck || uploadSessionId)) {
       console.log('[ANALYSIS] Using placeholder for staged files');
       rfpText = "Analyzing uploaded files...";
     }
