@@ -195,6 +195,13 @@
               
               console.log('[Unified Analyze] ✅ Extracted', deliverables.length, 'deliverables');
               
+              // CRITICAL FIX: Update PRIMARY_SCENARIO with deliverables
+              if (deliverables.length > 0 && window.PRIMARY_SCENARIO) {
+                window.PRIMARY_SCENARIO.deliverables = deliverables;
+                window.PRIMARY_SCENARIO.status = 'analyzed';
+                console.log('[Unified Analyze] PRIMARY_SCENARIO updated with', deliverables.length, 'deliverables');
+              }
+              
               if (deliverables.length === 0) {
                 console.error('[Unified Analyze] ❌ No deliverables found in result');
                 console.error('[Unified Analyze] Full result object:', status.result);
