@@ -7227,3 +7227,153 @@ window.clearAllData = clearAllData;
     }
   });
 })();
+
+// ================================================================================
+// Step 2: Deliverables Panel Rendering
+// ================================================================================
+
+/**
+ * Renders the deliverables panel in Step 2
+ * Reads from APB.step2.allDeliverables and renders into #s2-deliv-list
+ * Honors APB.step2.selectedCodes for checkbox states
+ */
+window.renderDeliverablesPanel = function() {
+  console.log('[renderDeliverablesPanel] Starting render...');
+  
+  const container = document.getElementById('s2-deliv-list');
+  if (!container) {
+    console.warn('[renderDeliverablesPanel] Container #s2-deliv-list not found');
+    return;
+  }
+
+  const deliverables = APB.step2.allDeliverables || [];
+  const selectedCodes = APB.step2.selectedCodes || new Set();
+  
+  console.log('[renderDeliverablesPanel] Rendering', deliverables.length, 'deliverables');
+  console.log('[renderDeliverablesPanel] Selected codes:', selectedCodes.size);
+
+  if (deliverables.length === 0) {
+    container.innerHTML = '<p style="color: var(--muted); text-align: center; padding: 40px 20px; font-size: 0.9em;">No deliverables available. Click "Analyze with AI" to get started.</p>';
+    return;
+  }
+
+  // Separate selected and unselected deliverables
+  const selected = [];
+  const unselected = [];
+  
+  deliverables.forEach(deliv => {
+    const code = deliv.deliverable_code || deliv.code;
+    if (selectedCodes.has(code)) {
+      selected.push(deliv);
+    } else {
+      unselected.push(deliv);
+    }
+  });
+
+  // Build HTML - selected first, then unselected
+  let html = '';
+  
+  // Render selected deliverables
+  if (selected.length > 0) {
+    html += '<div style="margin-bottom: 12px;">';
+    html += '<div style="font-size: 0.75em; color: var(--accent); font-weight: 600; padding: 4px 8px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; margin-bottom: 6px;">✓ SELECTED (' + selected.length + ')</div>';
+    selected.forEach(deliv => {
+      html += renderDeliverableRow(deliv, true);
+    });
+    html += '</div>';
+  }
+
+  // Render unselected deliverables
+  if (unselected.length > 0) {
+    html += '<div>';
+    if (selected.length > 0) {
+      html += '<div style="font-size: 0.75em; color: var(--muted); font-weight: 600; padding: 4px 8px; background: rgba(255, 255, 255, 0.03); border-radius: 4px; margin-bottom: 6px;">AVAILABLE (' + unselected.length + ')</div>';
+    }
+    unselected.forEach(deliv => {
+      html += renderDeliverableRow(deliv, false);
+    });
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+  
+  // Attach event listeners to checkboxes
+  attachDeliverableCheckboxListeners();
+  
+  console.log('[renderDeliverablesPanel] Render complete');
+};
+
+/**
+ * Renders a single deliverable row
+ */
+function renderDeliverableRow(deliv, isSelected) {
+  const code = escapeHtml(deliv.deliverable_code || deliv.code || '');
+  const name = escapeHtml(deliv.deliverable || deliv.name || code);
+  const dept = escapeHtml(deliv.service_department || deliv.department || '');
+  
+  return `
+    <div class="deliv-row" data-code="${code}" style="padding: 6px 8px; margin-bottom: 4px; border-radius: 4px; background: ${isSelected ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.02)'}; border: 1px solid ${isSelected ? 'rgba(139, 92, 246, 0.3)' : 'rgba(255,255,255,0.05)'}; cursor: pointer; transition: all 0.2s;">
+      <label style="display: flex; align-items: start; gap: 8px; cursor: pointer; width: 100%;">
+        <input 
+          type="checkbox" 
+          class="deliv-checkbox" 
+          data-code="${code}"
+          ${isSelected ? 'checked' : ''}
+          style="margin-top: 2px; cursor: pointer; flex-shrink: 0;"
+        />
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 0.9em; font-weight: 500; color: var(--text); margin-bottom: 2px;">${name}</div>
+          ${dept ? `<div style="font-size: 0.75em; color: var(--muted);">${dept}</div>` : ''}
+        </div>
+      </label>
+    </div>
+  `;
+}
+
+/**
+ * Attach change event listeners to deliverable checkboxes
+ */
+function attachDeliverableCheckboxListeners() {
+  const checkboxes = document.querySelectorAll('.deliv-checkbox');
+  
+  checkboxes.forEach(checkbox => {
+    checkbox.addEventListener('change', function(e) {
+      e.stopPropagation();
+      const code = this.dataset.code;
+      const isChecked = this.checked;
+      
+      console.log('[Deliverable Toggle]', code, isChecked ? 'selected' : 'unselected');
+      
+      // Update selection store
+      if (isChecked) {
+        APB.step2.selectedCodes.add(code);
+      } else {
+        APB.step2.selectedCodes.delete(code);
+      }
+      
+      // Re-render to update grouping
+      window.renderDeliverablesPanel();
+      
+      // Update summary counts
+      if (typeof updateSummaryCounts === 'function') {
+        updateSummaryCounts();
+      }
+      
+      // Sync with ScenarioManager if available
+      if (window.ScenarioManager && window.ScenarioManager.updateSelection) {
+        window.ScenarioManager.updateSelection({
+          deliverables: Array.from(APB.step2.selectedCodes)
+        });
+      }
+    });
+  });
+}
+
+/**
+ * Helper function to escape HTML for safe rendering
+ */
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
