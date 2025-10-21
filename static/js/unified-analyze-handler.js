@@ -25,8 +25,8 @@
       console.log('[Unified Analyze] Button clicked!');
 
       // Disable button and show progress
-      newBtn.disabled = true;
-      newBtn.textContent = 'Analyzing...';
+      btnAnalyze.disabled = true;
+      btnAnalyze.textContent = 'Analyzing...';
 
       try {
         // Get session ID
@@ -69,8 +69,8 @@
 
         if (!rfpText || rfpText.length < 10) {
           alert('Please upload a file or paste RFP text first.');
-          newBtn.disabled = false;
-          newBtn.textContent = 'Analyze with AI';
+          btnAnalyze.disabled = false;
+          btnAnalyze.textContent = 'Analyze with AI';
           return;
         }
 
@@ -126,8 +126,8 @@
           if (pollCount > maxPolls) {
             clearInterval(pollInterval);
             alert('Analysis timed out. Please try again.');
-            newBtn.disabled = false;
-            newBtn.textContent = 'Analyze with AI';
+            btnAnalyze.disabled = false;
+            btnAnalyze.textContent = 'Analyze with AI';
             return;
           }
 
@@ -255,8 +255,8 @@
                 if (deliverables.length === 0) {
                   console.error('[Unified Analyze] No deliverables found in job result. Full result:', data.result);
                   alert('Analysis completed but no deliverables were found. The analysis job may have failed. Please try again.');
-                  newBtn.disabled = false;
-                  newBtn.textContent = 'Analyze with AI';
+                  btnAnalyze.disabled = false;
+                  btnAnalyze.textContent = 'Analyze with AI';
                   return;
                 }
                 
@@ -378,8 +378,8 @@
                 progressBar.style.display = 'none';
               }
 
-              newBtn.disabled = false;
-              newBtn.textContent = 'Analyze with AI';
+              btnAnalyze.disabled = false;
+              btnAnalyze.textContent = 'Analyze with AI';
 
               console.log('[Unified Analyze] Analysis complete! Found', deliverables.length, 'deliverables');
               console.log('[Unified Analyze] Step 2 should now be populated with deliverables');
@@ -387,8 +387,8 @@
             } else if (status.status === 'failed') {
               clearInterval(pollInterval);
               alert(`Analysis failed: ${status.error || 'Unknown error'}`);
-              newBtn.disabled = false;
-              newBtn.textContent = 'Analyze with AI';
+              btnAnalyze.disabled = false;
+              btnAnalyze.textContent = 'Analyze with AI';
             }
 
             // Update progress if available
@@ -411,8 +411,8 @@
       } catch (error) {
         console.error('[Unified Analyze] Error:', error);
         alert(`Analysis failed: ${error.message}`);
-        newBtn.disabled = false;
-        newBtn.textContent = 'Analyze with AI';
+        btnAnalyze.disabled = false;
+        btnAnalyze.textContent = 'Analyze with AI';
       }
     });
 
