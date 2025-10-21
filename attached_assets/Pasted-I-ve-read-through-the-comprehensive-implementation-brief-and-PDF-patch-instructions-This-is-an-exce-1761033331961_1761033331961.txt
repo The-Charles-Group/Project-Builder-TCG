@@ -1,0 +1,155 @@
+I've read through the comprehensive implementation brief and PDF patch instructions. This is an excellent, well-structured document that clearly identifies the root causes of the current issues and provides a concrete path forward.
+
+Summary of What I Read
+Core Problem Identified:
+
+Step 2 AI analysis results disappeared when moving to "single scenario" architecture
+Polling/state management broke during the refactor
+Step 2→3→4 data flow fragmented (causing the "0 deliverables" issue)
+Selection state not persisting properly between steps
+The Solution Architecture:
+
+P0 - Fix Step 2 AI Results:
+
+Merge to single /api/ai/analyze endpoint (multipart: rfp_text + files[])
+Implement proper JobStore with persistent polling
+Normalize model output to consistent deliverable→component→L2 structure
+Restore the 3-panel UI (Deliverables | Components | Tasks) with department grouping
+P1 - Single Scenario State:
+
+ScenarioStore (frontend) + Scenario JSON (backend)
+Fix Step 3 by respecting selected_l2_map (no double inflation)
+All steps read/write from one canonical Scenario
+P2 - Timeline/Export Consistency:
+
+Gantt reads from scenario.timeline.items
+XML exporter reads current Scenario (not stale step state)
+Support "include anchors" toggle for MS Project
+P3 - Google Sheets Mirror:
+
+SheetsDriver with adapters (GoogleApiAdapter or ReplitConnectorAdapter)
+Debounced sync (700ms)
+Tabs: Meta, Deliverables, Components, Tasks_L2, Pricing, Scenario_Pricing, Timeline, Lookups
+P4 - Project Dashboard:
+
+Password-gated scenario list
+"Open in Sheets" + "Open in App" links
+My Thoughts & Implementation Plan
+✅ What's Excellent About This Brief:
+Evidence-Based: References your working screenshots from 10/16 as acceptance criteria
+Surgical Approach: Identifies exact files/endpoints to change (not a rewrite)
+Testable: Includes standalone test harness for Sheets driver
+Realistic Scope: P0-P4 priority stack
+Data Contract: Clear Scenario JSON schema that mirrors UI needs
+🎯 My Implementation Strategy:
+Phase 1: Restore Step 2 (P0) - CRITICAL
+
+1. Fix /api/ai/analyze endpoint to:
+   - Accept multipart (text + files)
+   - Create persistent job with proper status tracking
+   - Stream progress updates to JobStore (not just in-memory)
+   
+2. Fix frontend polling:
+   - Single Analysis state machine
+   - PollingManager that never stops while status="running"
+   - Clear error: your logs show polling stopping prematurely
+   
+3. Normalize AI output:
+   - Map to deliverables[] with components[] and tasks_l2[]
+   - Keep stable IDs (DEL-0001, DEL-0001::Component, DEL-0001::Component::Task)
+   
+4. Restore Step 2 UI:
+   - Department-grouped cards
+   - 3-panel selector (Deliverables | Components | L2)
+   - Selection Summary counters (31/50/208 like your screenshots)
+   - Confidence %, risk notes, "Added" tags
+Phase 2: Single Scenario State (P1)
+
+5. Create ScenarioStore (frontend):
+   - Single source of truth
+   - selection: {deliverables, components, tasks_l2}
+   - pricing: {line_items, roles, mode, rates}
+   - timeline: {items, project_start}
+   
+6. Fix Step 3 pricing:
+   - Read from ScenarioStore
+   - Don't inflate components when selected_l2_map exists
+   - Write pricing changes back to store
+   
+7. Fix Step 4 timeline:
+   - Read scenario.timeline.items
+   - Write Gantt changes back to store
+Phase 3: Google Sheets Mirror (P3)
+
+8. Add storage_driver.py + sheets_driver.py (provided code)
+9. Wire /api/scenario/save to call SheetsDriver.save()
+10. Add debounced sync (700ms) on frontend changes
+11. Run test harness to validate round-trip
+Phase 4: Exports & Dashboard (P2, P4)
+
+12. Fix XML export to read Scenario (not step locals)
+13. Add "include anchors" toggle
+14. Add project dashboard with scenario list
+Additional Tasks to Add:
+Based on my analysis, I need to add these to your list:
+
+Immediate (blocking Step 2):
+Fix JobStore persistence - Your logs show jobs disappearing mid-poll
+
+Add Redis/file-based persistence (not just in-memory dict)
+Job TTL should be longer (currently 300s might be too short for large RFPs)
+Fix multipart file handling - File staging is initialized but not connected to analysis
+
+Wire /api/stage/extract to /api/ai/analyze
+Pass session_id through the flow
+Normalize database column access - Your code has inconsistent column names
+
+Some code uses Service_Department, others use service_department
+Some use Component_Task_L1, others use Component
+Add a single normalization layer in AgencyDB.load()
+Soon (blocking Step 3/4):
+Fix ScenarioDataManager → ScenarioStore sync
+
+Your logs show ScenarioDataManager exists but has 0 deliverables
+The sync between these two stores is broken
+Add Scenario API versioning
+
+The contract in the brief is different from your current /api/scenarios/A
+Need migration path or parallel endpoints
+Nice-to-have:
+Add Sheets quota monitoring - Google has write limits
+Add Scenario conflict resolution - If Sheets and server diverge
+Add undo/redo for selections - User experience improvement
+Key Risks I See:
+Polling Manager state - Your logs show multiple initialization attempts
+
+GlobalPollingManager.stopAllPolling() being called on page load suggests cleanup issues
+Need to ensure one PollingManager instance per page load
+Double DOM initialization - File staging module logs show "Already initialized, skipping"
+
+Multiple initialization strategies fighting each other
+Consolidate to single DOMContentLoaded handler
+Database version confusion - Code still references v3 in some places
+
+Brief says to use v4 as primary
+Need consistent db.all_rows access pattern
+My Recommendation:
+Start with P0 only - Don't attempt Sheets mirror until Step 2 works. Here's why:
+
+Step 2 is blocking everything (can't test pricing/timeline without selections)
+The polling fix is surgical and testable
+The Sheets driver is well-isolated and can be added later
+This matches the brief's priority stack
+Concrete Next Steps:
+
+I'll fix the /api/ai/analyze endpoint to create persistent jobs
+I'll fix the frontend PollingManager to never stop while running
+I'll normalize the AI output to match the Scenario contract
+I'll restore the Step 2 UI per your 10/16 screenshots
+Then we validate with your test RFP before moving to P1
+Would you like me to start with the P0 fixes (Step 2 restoration)? I can create:
+
+Fixed /api/ai/analyze endpoint
+Fixed PollingManager with proper state machine
+Normalized AI output formatter
+Updated Step 2 UI template
