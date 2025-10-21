@@ -138,18 +138,101 @@
             if (status.status === 'completed') {
               clearInterval(pollInterval);
 
-              // Store results
+              console.log('[Unified Analyze] Job completed, processing results...', status);
+
+              // Extract deliverables from the result structure
+              let deliverables = [];
+              
+              // The result has a nested structure: result.plan.suggestions_by_department
+              if (status.result && status.result.plan && status.result.plan.suggestions_by_department) {
+                const deptSuggestions = status.result.plan.suggestions_by_department;
+                console.log('[Unified Analyze] Found suggestions_by_department:', Object.keys(deptSuggestions));
+                
+                // Flatten all department suggestions into a single array
+                Object.entries(deptSuggestions).forEach(([dept, deptDelivs]) => {
+                  if (Array.isArray(deptDelivs)) {
+                    deptDelivs.forEach(d => {
+                      deliverables.push({
+                        deliverable_code: d.code || d.deliverable_code,
+                        deliverable_name: d.name || d.deliverable_name || d.title,
+                        department: dept,
+                        category: dept,
+                        confidence: d.confidence_score || d.confidence || 0,
+                        relevance: d.relevance_score || d.relevance || 0,
+                        why: d.why || d.reasoning || '',
+                        risks: d.risks || '',
+                        components: d.components || [],
+                        select: d.select !== false
+                      });
+                    });
+                  }
+                });
+                
+                console.log('[Unified Analyze] Extracted', deliverables.length, 'deliverables from departments');
+              }
+
+              // Store results in PRIMARY_SCENARIO
               if (window.PRIMARY_SCENARIO) {
-                window.PRIMARY_SCENARIO.deliverables = status.deliverables || [];
-                window.PRIMARY_SCENARIO.analysisResults = status;
+                window.PRIMARY_SCENARIO.deliverables = deliverables;
+                window.PRIMARY_SCENARIO.analysisResults = status.result;
                 window.PRIMARY_SCENARIO.rfpText = rfpText;
                 window.PRIMARY_SCENARIO.status = 'analyzed';
               }
 
+              // Store in APB.step2 for the UI to access
+              if (!window.APB) window.APB = {};
+              if (!window.APB.step2) {
+                window.APB.step2 = {
+                  selectedCodes: new Set(),
+                  selectedComponentsByCode: {},
+                  selectedL2ByKey: {},
+                  allDeliverables: [],
+                  aiSuggestedCodes: new Set(),
+                  filters: { deliverables: '', components: '', l2: '' },
+                  els: {}
+                };
+              }
+
+              // Convert to APB format
+              window.APB.step2.allDeliverables = deliverables.map(d => ({
+                Deliverable_Code: d.deliverable_code,
+                Deliverable: d.deliverable_name,
+                Category: d.department,
+                Service_Dept_for_PM: d.department,
+                confidence: d.confidence,
+                relevance: d.relevance,
+                why: d.why,
+                risks: d.risks,
+                components: d.components,
+                select: d.select
+              }));
+
+              // Mark AI suggested codes
+              deliverables.forEach(d => {
+                if (d.select && d.deliverable_code) {
+                  window.APB.step2.aiSuggestedCodes.add(d.deliverable_code);
+                }
+              });
+
+              console.log('[Unified Analyze] Populated APB.step2.allDeliverables with', window.APB.step2.allDeliverables.length, 'items');
+
               // Store in session
               if (window.SessionManager) {
-                window.SessionManager.setSessionItem('analysis_results', status);
+                window.SessionManager.setSessionItem('analysis_results', status.result);
                 window.SessionManager.setSessionItem('rfp_text', rfpText);
+              }
+
+              // Populate the AI summary panel
+              if (status.result && status.result.summary) {
+                const summaryPanel = document.getElementById('ai-summary-panel');
+                if (summaryPanel) {
+                  summaryPanel.innerHTML = `
+                    <div style="background: rgba(139, 92, 246, 0.1); padding: 12px; border-radius: 6px; margin-bottom: 12px;">
+                      <h4 style="margin: 0 0 8px 0; color: var(--accent);">📊 RFP Summary</h4>
+                      <p style="margin: 0; font-size: 0.9em; line-height: 1.5;">${status.result.summary.summary || 'Analysis complete'}</p>
+                    </div>
+                  `;
+                }
               }
 
               // Move to Step 2
@@ -160,9 +243,18 @@
                 step1.style.display = 'none';
                 step2.style.display = 'block';
 
-                // Render deliverables if function exists
+                // Render deliverables - call the function that exists
                 if (typeof window.renderDeliverablesPanel === 'function') {
-                  window.renderDeliverablesPanel(status.deliverables || []);
+                  console.log('[Unified Analyze] Calling renderDeliverablesPanel...');
+                  window.renderDeliverablesPanel();
+                } else {
+                  console.warn('[Unified Analyze] renderDeliverablesPanel function not found');
+                }
+
+                // Initialize AI suggestions display
+                if (typeof window.initAISummaryAndSuggestions === 'function') {
+                  console.log('[Unified Analyze] Calling initAISummaryAndSuggestions...');
+                  window.initAISummaryAndSuggestions();
                 }
 
                 step2.scrollIntoView({ behavior: 'smooth' });
@@ -176,7 +268,8 @@
               newBtn.disabled = false;
               newBtn.textContent = 'Analyze with AI';
 
-              console.log('[Unified Analyze] Analysis complete! Found', status.deliverables?.length || 0, 'deliverables');
+              console.log('[Unified Analyze] Analysis complete! Found', deliverables.length, 'deliverables');
+              console.log('[Unified Analyze] Step 2 should now be populated with results');
 
             } else if (status.status === 'failed') {
               clearInterval(pollInterval);

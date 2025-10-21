@@ -475,7 +475,7 @@ window.resumeAIPolling = function(jobId) {
 
   // Reset polling state for fresh start
   window.aiPollingState = null;
-  
+
   // Set protection flags
   window.PROTECTED_AI_POLLING = true;
 
@@ -2004,7 +2004,7 @@ function updatePricingTable() {
                       onchange="updatePeriods('${item.deliverable_code}', this.value)"
                       style="width: 70px; padding: 6px; border: 1px solid rgba(139,92,246,0.3); 
                              border-radius: 4px; font-size: 0.85em;" />` :
-              `<span style="font-weight: 500; color: var(--accent2);">${periods}</span>`) :
+              `<span style="font-weight: 500;">${periods}</span>`) :
             '<span style="color: var(--muted);">-</span>'}
         </td>
         <td style="padding: 8px; text-align: center;">
@@ -4479,11 +4479,11 @@ function updateAIProgress(status) {
 // Helper function to stop polling and clean up
 function stopPollingWithCleanup(message) {
   console.log(`[POLLING] 🛑 Stopping polling: ${message}`);
-  
+
   // Clear polling state
   window.aiPollingState = null;
   window.PROTECTED_AI_POLLING = false;
-  
+
   // Clear all intervals
   if (window.aiAnalysisInterval) {
     clearInterval(window.aiAnalysisInterval);
@@ -4493,7 +4493,7 @@ function stopPollingWithCleanup(message) {
     clearInterval(window.PROTECTED_AI_INTERVAL);
     window.PROTECTED_AI_INTERVAL = null;
   }
-  
+
   // Show alert if there's a message
   if (message) {
     alert(message);
@@ -4518,7 +4518,7 @@ async function pollAIAnalysis(jobId) {
       consecutiveErrorCount: 0,
       totalPollingTime: 0,
       startTime: Date.now(),
-      lastSuccessTime: Date.now(),
+      lastSuccessTime: null,
       backoffDelay: 0,
       maxConsecutive404s: 3,  // Stop after 3 consecutive 404s
       maxConsecutiveErrors: 10, // Stop after 10 consecutive errors
@@ -4555,16 +4555,16 @@ async function pollAIAnalysis(jobId) {
     if (res.status === 404) {
       state.consecutive404Count++;
       state.consecutiveErrorCount++;
-      
+
       console.warn(`[POLLING] 404 for job ${jobId} - consecutive 404s: ${state.consecutive404Count}/${state.maxConsecutive404s}`);
-      
+
       // Only stop after multiple consecutive 404s
       if (state.consecutive404Count >= state.maxConsecutive404s) {
         console.error(`[POLLING] Job ${jobId} not found after ${state.maxConsecutive404s} attempts - stopping polling.`);
         stopPollingWithCleanup(`Analysis job ${jobId} not found after multiple attempts. It may have expired or been deleted.`);
         return;
       }
-      
+
       // Continue polling with backoff
       console.log(`[POLLING] 404 error ${state.consecutive404Count}/${state.maxConsecutive404s} - will retry...`);
       applyBackoff(state);
@@ -4581,16 +4581,16 @@ async function pollAIAnalysis(jobId) {
     // Handle other errors (500, 502, 503, etc.)
     if (!res.ok) {
       state.consecutiveErrorCount++;
-      
+
       console.error(`[POLLING] HTTP ${res.status} error for job ${jobId} - consecutive errors: ${state.consecutiveErrorCount}/${state.maxConsecutiveErrors}`);
-      
+
       // Stop after too many consecutive errors
       if (state.consecutiveErrorCount >= state.maxConsecutiveErrors) {
         console.error(`[POLLING] Too many consecutive errors (${state.consecutiveErrorCount}) - stopping polling.`);
         stopPollingWithCleanup(`Unable to check job status after ${state.consecutiveErrorCount} attempts. Please try again.`);
         return;
       }
-      
+
       // Continue polling with backoff for temporary errors
       console.log(`[POLLING] HTTP ${res.status} error ${state.consecutiveErrorCount}/${state.maxConsecutiveErrors} - will retry with backoff...`);
       applyBackoff(state);
@@ -4611,7 +4611,7 @@ async function pollAIAnalysis(jobId) {
     const isQueued = status.status === 'queued' || 
                      status.status === 'pending' || 
                      status.status === 'waiting';
-    
+
     const isRunning = status.status === 'running' || 
                       status.status === 'processing' || 
                       status.status === 'in_progress';
@@ -4639,7 +4639,7 @@ async function pollAIAnalysis(jobId) {
 
       // Clean up polling state and intervals
       stopPollingWithCleanup(null); // null message = no alert
-      
+
       hideAIProgressBar();
 
       // Handle completed analysis - result might be in status.result or status.data
@@ -4747,16 +4747,16 @@ async function pollAIAnalysis(jobId) {
 
       // Normalize the AI response to expected format
       const normalizedPlan = normalizeAIResponse(aiPlanResponse);
-      
+
       if (normalizedPlan) {
         // Store normalized plan in window.lastAIPlan for renderAIPlan
         window.lastAIPlan = normalizedPlan;
         console.log('[ANALYSIS] Normalized AI plan stored in window.lastAIPlan:', {
           hasSummary: !!normalizedPlan.summary,
-          departments: Object.keys(normalizedPlan.suggestions_by_department || {}),
+          departments: Object.keys(normalizedPlan.suggestions_by_department),
           totals: normalizedPlan.totals
         });
-        
+
         // CRITICAL: Populate PRIMARY_SCENARIO.deliverables from normalized plan
         // This enables the deliverables to render in Step 2
         const allDeliverables = [];
@@ -4764,24 +4764,25 @@ async function pollAIAnalysis(jobId) {
           const deptDeliverables = normalizedPlan.suggestions_by_department[dept] || [];
           deptDeliverables.forEach(d => {
             allDeliverables.push({
-              deliverable_code: d.deliverable_code || d.code,
-              deliverable_name: d.name || d.title,
+              deliverable_code: d.deliverable_code || d.code || `DEL-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
+              deliverable_name: d.deliverable_name || d.name || d.title || d.deliverable || 'Unnamed Deliverable',
               department: dept,
-              confidence: d.calibrated_confidence || 0,
-              confidence_score: d.confidence_score || 0,
-              relevancy_tags: d.relevancy_tags || [],
-              evidence: d.evidence || '',
-              risk: d.risk || '',
+              calibrated_confidence: d.calibrated_confidence || d.confidence || d.confidence_score || 0,
+              risk_notes: d.risk_notes || d.risks || '',
+              evidence: d.evidence || d.why || d.rationale || '',
               components: d.components || [],
-              selected: false
+              // Additional fields for UI
+              selected: d.selected || d.select || false,
+              ai_selected: d.ai_selected !== false, // Default to true
+              hours: d.hours || d.base_hours || 0
             });
           });
         }
-        
+
         // Store in PRIMARY_SCENARIO for Step 2 to access
         window.PRIMARY_SCENARIO.deliverables = allDeliverables;
         console.log('[ANALYSIS] Stored', allDeliverables.length, 'deliverables in PRIMARY_SCENARIO');
-        
+
         // Now populate APB.step2.allDeliverables from PRIMARY_SCENARIO
         // This triggers the code at line 4642 to work properly
         if (allDeliverables.length > 0) {
@@ -4800,7 +4801,7 @@ async function pollAIAnalysis(jobId) {
               els: {}
             };
           }
-          
+
           APB.step2.allDeliverables = allDeliverables.map(d => ({
             Deliverable_Code: d.deliverable_code || d.code,
             Deliverable: d.deliverable_name || d.name,
@@ -4812,10 +4813,10 @@ async function pollAIAnalysis(jobId) {
             relevancy_tags: d.relevancy_tags,
             evidence: d.evidence
           }));
-          
+
           // Also populate DELIVERABLES for backward compatibility
           window.DELIVERABLES = APB.step2.allDeliverables;
-          
+
           // Build the indexes for fast lookup
           window.DELIV_INDEX = {};
           window.DELIV_INDEX_LO = {};
@@ -4824,15 +4825,15 @@ async function pollAIAnalysis(jobId) {
             window.DELIV_INDEX[code] = d;
             window.DELIV_INDEX_LO[code.toLowerCase()] = d;
           });
-          
+
           log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
         }
-        
+
         // Create wrapper for renderAIPlan which expects {plan: ...}
         const planWrapper = {
           plan: normalizedPlan
         };
-        
+
         // Call renderAIPlan with normalized structure
         renderAIPlan(planWrapper);
       } else {
@@ -4871,7 +4872,7 @@ async function pollAIAnalysis(jobId) {
       // Clean up polling state and show error message
       const errorMessage = `AI analysis failed: ${status.error || status.message || 'Unknown error'}`;
       stopPollingWithCleanup(errorMessage);
-      
+
       hideAIProgressBar();
 
       const btnAnalyze = document.querySelector('#btnAnalyze');
@@ -4951,10 +4952,10 @@ window.setAnalysisMode = function(mode) {
 // Normalize AI response to expected format for renderAIPlan
 function normalizeAIResponse(response) {
   console.log('[NORMALIZE] Input response:', response);
-  
+
   // Handle different response structures
   let plan = null;
-  
+
   // Case 1: Response has plan.suggestions_by_department
   if (response?.plan?.suggestions_by_department) {
     plan = response.plan;
@@ -4972,7 +4973,7 @@ function normalizeAIResponse(response) {
       if (!byDept[dept]) byDept[dept] = [];
       byDept[dept].push(d);
     });
-    
+
     plan = {
       suggestions_by_department: byDept,
       summary: response.summary || {}
@@ -4983,13 +4984,13 @@ function normalizeAIResponse(response) {
     console.warn('[NORMALIZE] Unknown response structure, attempting to use as-is');
     plan = response;
   }
-  
+
   // Ensure plan has proper structure
   if (!plan) {
     console.error('[NORMALIZE] Could not normalize response - no valid plan structure found');
     return null;
   }
-  
+
   // Normalize the plan structure
   const normalized = {
     summary: plan.summary || {
@@ -5006,13 +5007,13 @@ function normalizeAIResponse(response) {
       tasks: 0
     }
   };
-  
+
   // Process each department's deliverables
   const depts = plan.suggestions_by_department || {};
   Object.keys(depts).forEach(dept => {
     const deliverables = depts[dept] || [];
     normalized.suggestions_by_department[dept] = [];
-    
+
     deliverables.forEach(deliv => {
       // Normalize deliverable structure
       const normalizedDeliv = {
@@ -5028,7 +5029,7 @@ function normalizeAIResponse(response) {
         ai_selected: deliv.ai_selected !== false, // Default to true
         hours: deliv.hours || deliv.base_hours || 0
       };
-      
+
       // Normalize components if they exist
       if (deliv.components && Array.isArray(deliv.components)) {
         deliv.components.forEach(comp => {
@@ -5039,7 +5040,7 @@ function normalizeAIResponse(response) {
             ai_selected: comp.ai_selected !== false,
             tasks: []
           };
-          
+
           // Normalize tasks if they exist
           if (comp.tasks && Array.isArray(comp.tasks)) {
             comp.tasks.forEach(task => {
@@ -5054,23 +5055,23 @@ function normalizeAIResponse(response) {
               normalized.totals.tasks++;
             });
           }
-          
+
           normalizedDeliv.components.push(normalizedComp);
           normalized.totals.components++;
         });
       }
-      
+
       normalized.suggestions_by_department[dept].push(normalizedDeliv);
       normalized.totals.deliverables++;
     });
   });
-  
+
   console.log('[NORMALIZE] Output structure:', {
     hasSummary: !!normalized.summary,
     departments: Object.keys(normalized.suggestions_by_department),
     totals: normalized.totals
   });
-  
+
   return normalized;
 }
 
@@ -5291,7 +5292,7 @@ async function onRunReconcile() {
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
+      body: JSON.JSON.stringify({ 
         request_text: rfpText,
         strictness: 'balanced',
         tier: tier,
@@ -5299,7 +5300,7 @@ async function onRunReconcile() {
         session_id: sessionId,  // Add session_id for cache isolation
         upload_session_id: uploadSessionId  // NEW: Pass upload session for PDF processing
       })
-    }, 3, 2000);
+    }, 3, 2000); // Use fetchWithRetry for robustness
 
     if (!aiRes.ok) {
       throw new Error(`AI analysis error: ${aiRes.status} ${aiRes.statusText}`);
@@ -5441,7 +5442,7 @@ async function onRunReconcile() {
         // Fallback to polling if SSE fails
         if (!aiAnalysisInterval) {
           window.PROTECTED_AI_POLLING = true;
-          console.log('[POLLING] 🚀 Starting PROTECTED fallback AI polling');
+          console.log('[POLLING] 🚀 Starting PROTECTED AI polling');
           aiAnalysisInterval = setInterval(() => pollAIAnalysis(aiAnalysisJobId), 2000);
           window.PROTECTED_AI_INTERVAL = aiAnalysisInterval;
           pollAIAnalysis(aiAnalysisJobId);
@@ -6124,7 +6125,6 @@ async function applyAllSelectedFromAI() {
 
         if (res.ok) {
           const l2Data = await res.json();
-
           // FIX: Handle l2_by_component structure from API
           const tasksData = l2Data.l2_by_component || l2Data;
 
@@ -6219,8 +6219,7 @@ async function applyAllSelectedFromAI() {
       await renderL2Panel();
     } else if (window.renderTasksPanel) {
       // Fallback to renderTasksPanel if available
-      const componentKey = `${firstDelivCode}::${firstCompName}`;
-      await renderTasksPanel(componentKey);
+      await renderTasksPanel(`${firstDelivCode}::${firstCompName}`);
     }
   }
 
@@ -6296,7 +6295,7 @@ async function renderTasksPanel(componentKey) {
     }
     if (!taskName || taskName === '[object Object]') return ''; // Skip invalid entries
 
-    const isAiRecommended = window.lastAIPlan && isTaskAIRecommended(delivCode, compName, taskName);
+    const isAiRecommended = isTaskAIRecommended(delivCode, compName, taskName);
     const isChecked = selectedTasks.has(taskName);
     const taskColor = isAiRecommended ? '#10b981' : '#6b7280';
 
@@ -6907,905 +6906,6 @@ function s2onRemove(code) {
     console.log("Step 2 picker updated with selection:", selectedCodes);
   };
 })();
-
-function debounce(func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
-}
-
-async function onSearchDeliverables() {
-  const query = document.querySelector("#searchBox").value;
-  const results = document.querySelector("#searchResults");
-
-  if (!query.trim()) {
-    results.innerHTML = "";
-    return;
-  }
-
-  try {
-    const data = await api(`/api/search_deliverables?q=${encodeURIComponent(query)}`);
-    results.innerHTML = "";
-
-    (data.items || []).forEach(item => {
-      const isSelected = selectedCodes.includes(item.Deliverable_Code);
-      const row = el(`
-        <div class="row">
-          <div>
-            <strong>${item.Deliverable}</strong> 
-            <small class="badge">${item.Category}</small>
-          </div>
-          ${isSelected ? '<span class="already-selected">✓</span>' : 
-            `<button onclick="onAdd('${item.Deliverable_Code}')" class="add-btn">Add</button>`}
-        </div>
-      `);
-      results.append(row);
-    });
-  } catch (err) {
-    results.innerHTML = `<div class="error">Search error: ${err.message}</div>`;
-  }
-}
-
-// Removed broken buildScenarios function - using buildScenariosAB from index.html instead
-
-// onBuild function removed - using buildScenariosAB from index.html instead
-
-// Helper function to render budget pill
-function renderBudgetPill(el, scenarioTotalsPrice, clientBudget) {
-  const budget = Number(clientBudget || 0);
-  el.innerHTML = "";
-  el.className = "budget-pill";
-  if (!budget || !scenarioTotalsPrice) return;
-
-  const delta = budget - scenarioTotalsPrice;
-  const pct = scenarioTotalsPrice / budget;
-  const span = document.createElement("span");
-
-  if (delta >= 0) {
-    span.textContent = `Under budget by $${delta.toLocaleString()} (${(100*(1-pct)).toFixed(1)}%)`;
-    el.classList.add("under");
-  } else {
-    span.textContent = `Over budget by $${Math.abs(delta).toLocaleString()} (${(100*(pct-1)).toFixed(1)}%)`;
-    el.classList.add("over");
-  }
-  el.appendChild(span);
-}
-
-function renderScenarios(data){
-  const box = document.querySelector("#scenarios");
-  box.innerHTML = "";
-  ["A","B"].forEach(key => {
-    const scn = data[key];
-    const head = `
-      <h3>Scenario ${key} <span class="badge">${scn.pricing_mode}${scn.pricing_mode==='Per_Resource' ? ' · ' + scn.rate_band : ''}</span>
-        ${scn.pricing_mode==='Flat_Blended' ? `<span class="badge">${Number(scn.blended_rate||0).toFixed(0)}/hr</span>`:''}
-      </h3>
-      <div><strong>Total Hours:</strong> ${Number(scn.totals.hours).toFixed(2)} &nbsp; <strong>Total Price:</strong> ${currency(scn.totals.price)}</div>
-    `;
-    const wrap = el(`<div class="scenario">${head}<div></div></div>`);
-
-    scn.items.forEach(d => {
-      const tgPills = d.included_task_groups.map(tg => `<span class="pill">${tg}</span>`).join(" ");
-      const rows = (d.hours_by_role||[]).map(r => `
-        <tr><td>${r.Resource_Title} <small class="badge">${r.Seniority}</small></td><td>${Number(r.Hours).toFixed(2)}</td></tr>
-      `).join("");
-      const sched = (d.schedule||[]).map(s => `
-        <tr><td>${s.task_group}</td><td>${s.start_date}</td><td>${s.end_date}</td><td>${s.duration_days}</td></tr>
-      `).join("");
-      const card = el(`
-        <div class="card" style="background:#0f141d;">
-          <h4>${d.deliverable} <span class="badge">${d.category}</span> <span class="badge">${d.complexity}×${d.tier}</span></h4>
-          <div class="inline">${tgPills}</div>
-          <table class="tbl"><thead><tr><th>Role</th><th>Hours</th></tr></thead><tbody>${rows || '<tr><td colspan="2">No hours</td></tr>'}</tbody></table>
-          <div class="inline">${currency(d.total_hours)} hrs &nbsp; <strong>Price:</strong> ${currency(d.price)}</div>
-          <details>
-            <summary>Timeline (auto)</summary>
-            <table class="tbl"><thead><tr><th>Task Group</th><th>Start</th><th>End</th><th>Days</th></tr></thead><tbody>${sched || '<tr><td colspan="4">No schedule</td></tr>'}</tbody></table>
-          </details>
-        </div>
-      `);
-      wrap.append(card);
-    });
-
-    box.append(wrap);
-  });
-
-  document.querySelector("#totA").innerText = currency(data.A.totals.price);
-  document.querySelector("#totB").innerText = currency(data.B.totals.price);
-}
-
-async function onExport(which){
-  if(!SCENARIOS){ alert("Build scenarios first."); return; }
-  const res = await fetch("/api/export", {
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body: JSON.JSON.stringify({scenario: SCENARIOS[which]})
-  });
-  if(!res.ok){ alert("Export failed"); return; }
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `workfront_export_${which}.csv`;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
-}
-
-// Component Selection Functionality
-async function openComponentPicker(code, name) {
-  try {
-    const complexity = document.querySelector('#complexity')?.value || 'Advanced';
-    const tier = document.querySelector('#tier')?.value || 'T2_MediumVolume';
-
-    const response = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${encodeURIComponent(complexity)}&tier=${encodeURIComponent(tier)}`);
-    const data = await response.json();
-    const components = data.items || [];
-
-    if (components.length === 0) {
-      alert(`No components found for ${name}`);
-      return;
-    }
-
-    // Check if this deliverable has been customized before
-    // If not, initialize with undefined (not an empty Set) to indicate "use all defaults"
-    let current = APB.step2.selectedComponentsByCode[code];
-    if (!current || current === '__ALL__' || current === 'ALL') {
-      // Default to all selected if no custom selection exists
-      current = new Set(components.map(c => c.name));
-    } else if (current instanceof Set) {
-      // Already a Set
-    } else if (Array.isArray(current)) {
-      // Convert array to Set
-      current = new Set(current);
-    } else if (typeof current === 'object' && current !== null) {
-      // Convert object keys to Set
-      current = new Set(Object.keys(current));
-    } else {
-      // Fallback if state is corrupted - default to all selected
-      current = new Set(components.map(c => c.name));
-    }
-
-    // Ensure the current selection is stored back in the correct format
-    APB.step2.selectedComponentsByCode[code] = current;
-
-    // Create modal
-    const modal = el(`
-      <div id="component-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
-        <div style="background: var(--card); padding: 24px; border-radius: 8px; max-width: 500px; width: 90%; max-height: 80%; overflow-y: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <h3 style="margin: 0;">Components for ${name}</h3>
-            <button onclick="closeComponentPicker()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
-          </div>
-          <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
-          <div id="component-list"></div>
-          <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
-            <button onclick="saveComponentSelection('${code}')" class="btn-primary">Done</button>
-          </div>
-        </div>
-      </div>
-    `);
-
-    document.body.appendChild(modal);
-
-    // Populate component list with auto-apply on change
-    const list = document.getElementById('component-list');
-    components.forEach(comp => {
-      const item = el(`
-        <label style="display: block; margin: 8px 0; cursor: pointer;">
-          <input type="checkbox" data-component="${comp.name}" ${current.has(comp.name) ? 'checked' : ''}>
-          ${comp.name} <small style="color: var(--muted);">(${Math.round(comp.hours)} h)</small>
-        </label>
-      `);
-
-      // Auto-apply changes when checkbox changes
-      const checkbox = item.querySelector('input[type="checkbox"]');
-      checkbox.addEventListener('change', (e) => {
-        // Ensure we are working with a Set
-        if (!(current instanceof Set)) {
-          current = new Set(Array.from(current || []));
-          APB.step2.selectedComponentsByCode[code] = current;
-        }
-
-        if (e.target.checked) {
-          current.add(comp.name);
-        } else {
-          current.delete(comp.name);
-        }
-
-        // Update the global S2 state as well for consistency
-        S2.selectedComponentsByCode[code] = current;
-      });
-
-      list.appendChild(item);
-    });
-
-  } catch (error) {
-    console.error('Error loading components:', error);
-    alert('Error loading components. Please try again.');
-  }
-}
-
-function closeComponentPicker() {
-  const modal = document.getElementById('component-modal');
-  if (modal) modal.remove();
-}
-
-function saveComponentSelection(code) {
-  const modal = document.getElementById('component-modal');
-  const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
-
-  selectedComponentsMap[code] = new Set();
-  checkboxes.forEach(cb => {
-    if (cb.checked) {
-      selectedComponentsMap[code].add(cb.dataset.component);
-    }
-  });
-
-  closeComponentPicker();
-  renderYourSelection(); // Refresh the display to show component count
-}
-
-// ---- Build Scenarios directly from Step 2 ----
-async function s2ApplyAndBuild() {
-  const codes = Array.from(S2.selectedCodes);
-  if (!codes.length) { alert('Please select at least one deliverable.'); return; }
-
-  // gather knobs (fallbacks keep it working even if Step 1 controls are untouched)
-  const pricingMode  = document.querySelector('#pricingMode')?.value || 'Flat_Blended';
-  const blendedRate  = Number(document.querySelector('#blendedRate')?.value || 195);
-  const rateBand     = document.querySelector('#rateBand')?.value || 'Standard_US';
-  const useSlack     = (document.querySelector('#useSlack')?.checked ?? true);
-  const slackI       = Number(document.querySelector('#slackAfterInternal')?.value || 1);
-  const slackC       = Number(document.querySelector('#slackAfterClient')?.value   || 2);
-  const slackPct     = Number(document.querySelector('#slackGlobalPct')?.value     || 0.05);
-  const projectStart = document.querySelector('#projectStart')?.value || null;
-  const scenA        = document.querySelector('#scenarioA')?.value || 'MED_LOW';
-
-  // Convert component selections to proper format (handle "__ALL__" sentinel)
-  const compMap = {};
-  codes.forEach(code => {
-    const compSet = S2.selectedComponentsByCode[code];
-
-    if (compSet instanceof Set && compSet.size > 0) {
-      // User has selected specific components - convert Set to object
-      const dict = Object.create(null);
-      compSet.forEach(label => { dict[label] = null; });
-      compMap[code] = dict;
-    } else if (compSet && typeof compSet === 'object' && !(compSet instanceof Set)) {
-      // Already in object format
-      compMap[code] = compSet;
-    } else {
-      // No specific components selected - send "__ALL__" sentinel
-      compMap[code] = "__ALL__";
-    }
-  });
-
-  const payload = {
-    selected_deliverable_codes: codes,
-    selected_components_map: compMap,
-    scenario_a: { mode: 'template', scenario_key: scenA },
-    scenario_b: { mode: 'template', complexity:'Advanced', tier:'T2_MediumVolume'}, // Default for B
-    pricing_mode: pricingMode,
-    blended_rate: pricingMode === 'Flat_Blended' ? blendedRate : undefined,
-    rate_band: rateBand,
-    use_slack: useSlack,
-    slack_after_internal: slackI,
-    slack_after_client: slackC,
-    slack_global_pct: slackPct,
-    project_start: projectStart
-  };
-
-  const res = await fetch('/api/build', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.JSON.stringify(payload)
-  });
-  const scenarios = await res.json();
-  // keep for future edits
-  window.__lastBuildPayload = payload;
-
-  // if you already have a Step 2 render method, call it here:
-  if (window.renderStep2) {
-    window.renderStep2(scenarios);
-  } else {
-    // minimal fallback
-    console.log('Scenarios rebuilt:', scenarios);
-  }
-
-  // reseed selection from newly built scenarios
-  seedFromCurrentScenarios(scenarios);
-  renderList(el.search.value);
-
-  // Sync with global state for other workflows
-  window.selectedCodes = Array.from(state.selected);
-  if (window.appState) window.appState.selectedCodes = window.selectedCodes;
-}
-
-// ========== New Step 2 UI (4-Column Layout) ==========
-
-// State for new Step 2 UI
-const step2State = {
-  currentDeliverable: null,     // Currently selected deliverable for viewing components
-  currentComponent: null,        // Currently selected component for viewing L2 subtasks
-  selectedL2Map: {},             // { deliverableCode: { componentName: Set([l2labels...]) } }
-};
-window.step2State = step2State;
-
-// Function to render deliverables panel in Step 2 from AI suggestions
-function renderDeliverablesPanel() {
-  console.log('[renderDeliverablesPanel] Starting render');
-  
-  // Check if we have the necessary container
-  const delivContainer = document.querySelector('#deliverables-list, .deliverables-container, #step2-deliverables');
-  if (!delivContainer) {
-    console.warn('[renderDeliverablesPanel] No deliverables container found in DOM');
-    return;
-  }
-  
-  // Check if we have deliverables to render
-  if (!APB.step2 || !APB.step2.allDeliverables || APB.step2.allDeliverables.length === 0) {
-    console.warn('[renderDeliverablesPanel] No deliverables data available');
-    delivContainer.innerHTML = '<div style="padding: 20px; text-align: center; color: #999;">No deliverables available. Please run AI analysis first.</div>';
-    return;
-  }
-  
-  // Group deliverables by category/department
-  const deliverablesByDept = {};
-  APB.step2.allDeliverables.forEach(deliv => {
-    const dept = deliv.Category || deliv.department || 'General';
-    if (!deliverablesByDept[dept]) {
-      deliverablesByDept[dept] = [];
-    }
-    deliverablesByDept[dept].push(deliv);
-  });
-  
-  // Build HTML for deliverables
-  let html = '<div class="deliverables-panel">';
-  
-  // Add header with counts
-  const totalDelivs = APB.step2.allDeliverables.length;
-  const selectedDelivs = APB.step2.selectedCodes?.size || 0;
-  html += `
-    <div style="padding: 10px; background: rgba(0,0,0,0.2); margin-bottom: 10px; border-radius: 4px;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 1.1em; font-weight: 600;">Deliverables</span>
-        <span style="color: #10b981;">${selectedDelivs} / ${totalDelivs} selected</span>
-      </div>
-    </div>
-  `;
-  
-  // Render each department's deliverables
-  Object.keys(deliverablesByDept).sort().forEach(dept => {
-    const deliverables = deliverablesByDept[dept];
-    
-    html += `
-      <details open style="margin-bottom: 10px;">
-        <summary style="cursor: pointer; padding: 8px; background: rgba(99,102,241,0.1); border-radius: 4px; font-weight: 600;">
-          ${dept} (${deliverables.length})
-        </summary>
-        <div style="padding: 8px;">
-    `;
-    
-    deliverables.forEach(deliv => {
-      const code = deliv.Deliverable_Code || deliv.deliverable_code;
-      const name = deliv.Deliverable || deliv.deliverable_name;
-      const isSelected = APB.step2.selectedCodes?.has(String(code)) || false;
-      const confidence = deliv.confidence || deliv.confidence_score || 0;
-      
-      html += `
-        <div class="deliv-row" data-code="${code}" style="display: flex; align-items: center; padding: 6px; margin-bottom: 4px; background: rgba(0,0,0,0.1); border-radius: 4px;">
-          <input type="checkbox" 
-                 class="deliv-checkbox" 
-                 data-deliverable="${code}" 
-                 data-deliverable-code="${code}"
-                 ${isSelected ? 'checked' : ''}
-                 onchange="if(window.selectDeliverable) { this.checked ? selectDeliverable('${code}') : unselectDeliverable('${code}'); }"
-                 style="margin-right: 8px;">
-          <div style="flex: 1;">
-            <div style="font-weight: 500;">${code}: ${name}</div>
-            ${confidence > 0 ? `<div style="font-size: 0.85em; color: #10b981;">Confidence: ${Math.round(confidence * 100)}%</div>` : ''}
-          </div>
-        </div>
-      `;
-    });
-    
-    html += `
-        </div>
-      </details>
-    `;
-  });
-  
-  // Add select all/none buttons
-  html += `
-    <div style="display: flex; gap: 10px; padding: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
-      <button onclick="selectAllDeliverables()" style="padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer;">
-        Select All
-      </button>
-      <button onclick="clearAllDeliverables()" style="padding: 6px 12px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer;">
-        Clear All
-      </button>
-    </div>
-  `;
-  
-  html += '</div>';
-  
-  delivContainer.innerHTML = html;
-  console.log('[renderDeliverablesPanel] Rendered', totalDelivs, 'deliverables');
-}
-
-// Helper functions for select all/clear all
-function selectAllDeliverables() {
-  const checkboxes = document.querySelectorAll('.deliv-checkbox');
-  checkboxes.forEach(cb => {
-    if (!cb.checked) {
-      cb.checked = true;
-      const code = cb.dataset.deliverable;
-      if (code && window.selectDeliverable) {
-        selectDeliverable(code);
-      }
-    }
-  });
-  updateStep2Summary();
-}
-
-function clearAllDeliverables() {
-  const checkboxes = document.querySelectorAll('.deliv-checkbox');
-  checkboxes.forEach(cb => {
-    if (cb.checked) {
-      cb.checked = false;
-      const code = cb.dataset.deliverable;
-      if (code && window.unselectDeliverable) {
-        unselectDeliverable(code);
-      }
-    }
-  });
-  updateStep2Summary();
-}
-
-// Function to render components panel (placeholder for now)
-function renderComponentsPanel(deliverableCode) {
-  console.log('[renderComponentsPanel] Called with deliverable:', deliverableCode);
-  // This function will be implemented when components UI is needed
-  // For now, it's a placeholder to prevent errors
-}
-
-// Function to render L2 panel (placeholder for now)
-function renderL2Panel() {
-  console.log('[renderL2Panel] Called');
-  // This function will be implemented when L2 tasks UI is needed
-  // For now, it's a placeholder to prevent errors
-}
-
-// Expose functions globally
-window.updateStep2Summary = updateStep2Summary;
-window.renderComponentsPanel = renderComponentsPanel;
-window.renderL2Panel = renderL2Panel;
-window.renderDeliverablesPanel = renderDeliverablesPanel;
-window.selectAllDeliverables = selectAllDeliverables;
-window.clearAllDeliverables = clearAllDeliverables;
-
-// Update summary panel with current selection counts
-function updateStep2Summary() {
-  const delivCount = window.step2PickerState?.selected?.size || 0;
-  const delivEl = document.getElementById('s2-summary-deliverables');
-  if (delivEl) delivEl.textContent = delivCount;
-
-  // Count components
-  let compCount = 0;
-  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSet]) => {
-    if (APB.step2.selectedCodes.has(code)) {
-      // Handle '__ALL__' sentinel
-      if (compSet === '__ALL__' || compSet === 'ALL') {
-        // Count all available components for this deliverable
-        const comps = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === code)?.components || [];
-        compCount += comps.length;
-      } else if (compSet instanceof Set) {
-        compCount += compSet.size;
-      } else if (Array.isArray(compSet)) {
-        compCount += compSet.length;
-      } else if (typeof compSet === 'object') {
-        compCount += Object.keys(compSet).length;
-      }
-    }
-  });
-  const compEl = document.getElementById('s2-summary-components');
-  if (compEl) compEl.textContent = compCount;
-
-  // Count L2 - only for selected components (fixes Task 4)
-  let l2Count = 0;
-  Object.entries(APB.step2.selectedL2ByKey).forEach(([key, l2Set]) => {
-    const [code, compName] = key.split('::');
-    // Only count if deliverable is selected AND component is selected
-    if (APB.step2.selectedCodes.has(code)) {
-      const compSet = APB.step2.selectedComponentsByCode[code];
-      // Check if selectedComponentsByCode[code] is NOT '__ALL__' or 'ALL'
-      // And if the component set actually contains the component for this key
-      if (compSet && compSet !== '__ALL__' && compSet !== 'ALL' && compSet instanceof Set && compSet.has(compName)) {
-        if (l2Set instanceof Set) l2Count += l2Set.size;
-        else if (Array.isArray(l2Set)) l2Count += l2Set.length;
-      } else if (compSet === '__ALL__' || compSet === 'ALL') {
-        // If all components are selected, count all L2 tasks for this component
-        // This requires fetching L2 tasks again or assuming they are available
-        // For simplicity, we assume they are counted if the deliverable is selected and component is implicitly selected
-        // A more robust solution would require fetching/storing all L2s initially
-        // For now, we'll skip counting L2 if compSet is '__ALL__' and rely on explicit selections.
-      }
-    }
-  });
-  const l2El = document.getElementById('s2-summary-l2');
-  if (l2El) l2El.textContent = l2Count;
-
-  // Update status message
-  const statusEl = document.getElementById('s2-summary-status');
-  if (statusEl) {
-    if (delivCount === 0) {
-      statusEl.textContent = 'No deliverables selected';
-      statusEl.style.color = 'var(--muted)';
-    } else {
-      statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
-      statusEl.style.color = 'var(--accent)';
-    }
-  }
-}
-
-// Render summary chips with hierarchical display: Deliverable → Component → L2
-function renderSummaryChips() {
-  const container = document.getElementById('s2-summary-status');
-  if (!container) return;
-
-  let html = '';
-
-  // Group by Deliverable → Component → L2
-  Array.from(APB.step2.selectedCodes).forEach(delivCode => {
-    const deliv = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === delivCode);
-    const delivName = deliv ? (deliv.Deliverable || delivCode) : delivCode;
-    const deptColor = getDepartmentColor(deliv?.Category); // Use helper for color
-
-    // Start deliverable group
-    html += `<div style="margin-bottom:16px;padding:8px;border-left:3px solid ${deptColor};background:rgba(139,92,246,0.05);border-radius:4px;">`;
-
-    // Deliverable header with remove button
-    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <strong style="font-size:0.9em;color:var(--accent);">${delivName}</strong>
-      <button onclick="removeDeliverableFromSummary('${delivCode}')" 
-              style="background:rgba(239,68,68,0.2);border:none;color:var(--danger);cursor:pointer;padding:4px 8px;border-radius:4px;font-size:0.75em;">
-        Remove All
-      </button>
-    </div>`;
-
-    // Get components for this deliverable
-    const compSelection = APB.step2.selectedComponentsByCode[delivCode];
-    let compSet;
-
-    // Normalize component selection to Set
-    if (compSelection === '__ALL__' || compSelection === 'ALL') {
-      // If all components are selected, render a single chip for the deliverable
-      compSet = new Set(['All Components']); // Sentinel value
-    } else if (compSelection instanceof Set) {
-      compSet = compSelection;
-    } else if (Array.isArray(compSelection)) {
-      compSet = new Set(compSelection);
-    } else if (typeof compSelection === 'object' && compSelection !== null) {
-      compSet = new Set(Object.keys(compSelection));
-    } else {
-      compSet = new Set(); // Default to empty if undefined or null
-    }
-
-    // Render each component and its L2 items
-    if (compSet.size > 0) {
-      compSet.forEach(compName => {
-        const key = `${delivCode}::${compName}`;
-        const l2Set = APB.step2.selectedL2ByKey[key] || new Set();
-
-        // Render component chips
-        html += `<div style="margin-top:8px;padding-left:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-            <span style="font-size:0.8em;color:var(--muted);">${compName}</span>
-            <div style="display:flex;gap:6px;">
-              <button onclick="resetL2ForComponent('${delivCode}', '${compName}')" 
-                      style="background:rgba(139,92,246,0.15);border:none;color:var(--accent);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:0.7em;"
-                      title="Restore all L2 subtasks for this component">
-                ↻ Reset
-              </button>
-              <button onclick="removeComponentFromSummary('${delivCode}', '${compName}')" 
-                      style="background:none;border:none;color:var(--danger);cursor:pointer;padding:2px 6px;font-size:0.7em;">
-                Remove
-              </button>
-            </div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:8px;">`;
-
-          // L2 chips for this component
-          if (l2Set.size > 0) {
-            l2Set.forEach(l2Name => {
-              const escapedKey = key.replace(/'/g, "\\'"); // Escape single quotes for inline JS
-              const escapedL2 = l2Name.replace(/'/g, "\\'");
-              html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(16,185,129,0.2);border-radius:12px;font-size:0.7em;">
-                ${l2Name}
-                <button onclick="removeL2FromSummary('${escapedKey}', '${escapedL2}')" 
-                        style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.2em;line-height:1;">×</button>
-              </span>`;
-            });
-          } else {
-            html += `<span style="font-size:0.7em;color:var(--muted);font-style:italic;">No L2 tasks selected</span>`;
-          }
-
-          html += `</div></div>`;
-      });
-    } else {
-      // Case where "__ALL__" or "ALL" was selected for components
-      html += `<div style="margin-top:8px;padding-left:8px;">
-        <span style="font-size:0.8em;color:var(--accent);font-style:italic;">All components included</span>
-      </div>`;
-    }
-
-    html += `</div>`;
-  });
-
-  if (html === '') {
-    html = '<div style="text-align:center;color:var(--muted);font-size:0.85em;padding:20px;">No deliverables selected</div>';
-  }
-
-  container.innerHTML = html;
-}
-
-// Remove deliverable from summary - cascades to all components and L2
-window.removeDeliverableFromSummary = async function(code) {
-  await deselectDeliverable(code);
-  renderDeliverablesPanel();
-  await refreshComponentsPanel();
-  updateSummaryCounts();
-  initAISummaryAndSuggestions();
-}
-
-// Remove component from summary - cascades to its L2 items
-window.removeComponentFromSummary = function(delivCode, compName) {
-  const key = `${delivCode}::${compName}`;
-
-  // Remove L2 for this component
-  if (APB.step2.selectedL2ByKey[key]) {
-    delete APB.step2.selectedL2ByKey[key];
-  }
-
-  // Remove component from selection
-  const compSet = APB.step2.selectedComponentsByCode[delivCode];
-  if (compSet instanceof Set) {
-    compSet.delete(compName);
-
-    // If no components left, remove deliverable
-    if (compSet.size === 0) {
-      APB.step2.selectedCodes.delete(delivCode);
-      delete APB.step2.selectedComponentsByCode[delivCode];
-    }
-  }
-
-  // Re-render panels
-  renderDeliverablesPanel();
-  if (APB.step2.activeDeliverableCode === delivCode) {
-    refreshComponentsPanel();
-  }
-  updateSummaryCounts();
-}
-
-// Reset L2 subtasks for a component - refetches all from server
-window.resetL2ForComponent = async function(delivCode, compName) {
-  const key = `${delivCode}::${compName}`;
-
-  // Clear the cached L2 for this component
-  selectionStore.l2ByComponent.delete(key);
-  // Clear from proxy as well
-  delete APB.step2.selectedL2ByKey[key];
-
-  // Refetch L2 from server
-  await hydrateL2For(delivCode, compName);
-
-  // Update the summary display
-  updateSummaryCounts();
-
-  // If this component is the active one, re-render L2 panel
-  if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
-    if (window.renderL2Panel) {
-      renderL2Panel();
-    } else if (window.renderTasksPanel) {
-      await renderTasksPanel(key); // Fallback
-    }
-  }
-}
-
-// Component clicked - load L2 panel
-window.onComponentClicked = async function onComponentClicked(componentName) {
-  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
-  if (!code) return;
-
-  APB.step2.activeComponentName = componentName;
-
-  try {
-    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component_name=${encodeURIComponent(componentName)}`);
-    const json = await res.json();
-    const items = (json.items || json.l2 || []).map(item => 
-      typeof item === 'string' ? item : (item.Task_Label || item.name || '')
-    ).filter(Boolean); // Filter out empty strings or nulls
-
-    renderL2Checklist(code, componentName, items);
-  } catch (e) {
-    console.error('Error loading L2:', e);
-    const l2ListEl = document.getElementById('s2-l2-list');
-    if (l2ListEl) {
-      l2ListEl.innerHTML = '<p style="color: red;">Error loading subtasks</p>';
-    }
-  }
-}
-
-// Render L2 checklist
-function renderL2Checklist(code, componentName, items) {
-  const listEl = document.getElementById('s2-l2-list');
-  if (!listEl) return;
-
-  if (items.length === 0) {
-    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L2 subtasks</p>';
-    return;
-  }
-
-  const key = `${code}::${componentName}`;
-
-  // Initialize selection for this key if it doesn't exist
-  if (!S2.selectedL2ByKey[key] || !(S2.selectedL2ByKey[key] instanceof Set)) {
-    S2.selectedL2ByKey[key] = new Set(items);
-  }
-  const selectedSet = S2.selectedL2ByKey[key];
-
-  // Render checkboxes
-  listEl.innerHTML = items.map(label => `
-    <label style="display: flex; align-items: start; gap: 8px; padding: 6px 8px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,.05);">
-      <input type="checkbox" class="l2-checkbox" data-key="${key}" data-label="${label}"
-             ${selectedSet.has(label) ? 'checked' : ''} style="margin-top: 3px; cursor: pointer;">
-      <div style="flex: 1;">
-        <span style="font-size: 0.9em;">${label}</span>
-      </div>
-    </label>
-  `).join('');
-
-  // Attach handlers
-  listEl.querySelectorAll('.l2-checkbox').forEach(cb => {
-    cb.addEventListener('change', e => {
-      const label = e.target.dataset.label;
-      const key = e.target.dataset.key;
-
-      // Ensure Set exists for the key
-      if (!S2.selectedL2ByKey[key]) {
-        S2.selectedL2ByKey[key] = new Set();
-      }
-
-      if (e.target.checked) {
-        S2.selectedL2ByKey[key].add(label);
-      } else {
-        S2.selectedL2ByKey[key].delete(label);
-      }
-
-      updateSummaryCounts();
-    });
-  });
-
-  updateSummaryCounts();
-}
-
-// Retainer toggle handler
-async function onToggleRetainers(e) {
-  const enabled = e.target.checked;
-  window.APP = window.APP || {};
-
-  if (!enabled) {
-    window.APP.retainers = [];
-    renderRetainerPanel([]);
-    return;
-  }
-
-  // Get current selection from S2
-  const selectedCodes = Array.from(S2.selectedCodes);
-
-  if (selectedCodes.length === 0) {
-    alert('Please select deliverables first before enabling retainers.');
-    e.target.checked = false;
-    return;
-  }
-
-  const payload = {
-    rfp_text: window.APP.rfpText || '',
-    deliverable_codes: selectedCodes
-  };
-
-  try {
-    const res = await fetch('/api/retainer_detect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify(payload)
-    });
-
-    const rec = await res.json(); // { retainers: [{deliverable_code, suggested_months, ...}] }
-
-    // Persist and render
-    window.APP.retainers = (rec.retainers || []).map(r => ({
-      deliverable_code: r.deliverable_code,
-      months: r.suggested_months || 12
-    }));
-
-    renderRetainerPanel(window.APP.retainers);
-  } catch (error) {
-    console.error('Error detecting retainers:', error);
-    alert(`Failed to detect retainers: ${error.message}`);
-    e.target.checked = false;
-  }
-}
-
-// Render the retainer configuration panel
-function renderRetainerPanel(retainers) {
-  const retainerConfig = document.getElementById('retainer-config');
-  const retainerListControls = document.getElementById('retainer-list-controls');
-
-  if (!retainerConfig || !retainerListControls) {
-    console.warn('Retainer config elements not found');
-    return;
-  }
-
-  if (!retainers || retainers.length === 0) {
-    retainerConfig.style.display = 'none';
-    retainerListControls.innerHTML = '';
-    return;
-  }
-
-  retainerConfig.style.display = 'block';
-
-  // Create input fields for each retainer using defensive labelFor() lookup
-  retainerListControls.innerHTML = retainers.map(r => {
-    const delivName = labelFor(r.deliverable_code);
-    return `
-      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
-        <label style="flex: 1; font-weight: 500;">${delivName}</label>
-        <input 
-          type="number" 
-          min="1" 
-          max="60" 
-          value="${r.months}" 
-          data-code="${r.deliverable_code}"
-          class="retainer-months-input"
-          style="width: 80px; padding: 6px; border: 1px solid var(--muted); border-radius: 4px; background: var(--bg); color: var(--fg);"
-        />
-        <span style="color: var(--muted); font-size: 0.9em;">months</span>
-      </div>
-    `;
-  }).join('');
-
-  // Update retainer months when inputs change
-  retainerListControls.querySelectorAll('.retainer-months-input').forEach(input => {
-    input.addEventListener('change', e => {
-      const code = e.target.dataset.code;
-      const months = parseInt(e.target.value) || 12;
-      const retainerIdx = window.APP.retainers.findIndex(r => r.deliverable_code === code);
-      if (retainerIdx >= 0) {
-        window.APP.retainers[retainerIdx].months = months;
-      }
-    });
-  });
-}
-
-async function onSuggest(){
-  // Updated to work with new Step 2 system
-  // Show Step 2 first
-  const step2 = document.querySelector("#step2");
-  if (step2) {
-    step2.style.display = "block";
-    step2.scrollIntoView({ behavior: "smooth" });
-  }
-
-  // Then run AI analysis
-  await onRunReconcile();
-}
 
 // ========== New Features: Import, Second Scenario, Final Ship ==========
 
