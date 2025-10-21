@@ -223,11 +223,52 @@
                   });
                 }
                 
+                // FIXED: Extract deliverables from the correct location in job result
+                console.log('[Unified Analyze] Job result structure:', JSON.stringify(Object.keys(data.result || {})));
+                
+                // Check multiple possible locations for deliverables
+                let deliverables = [];
+                if (data.result && data.result.plan && data.result.plan.suggestions_by_department) {
+                  // Extract from suggestions_by_department (standard format)
+                  const deptSuggestions = data.result.plan.suggestions_by_department;
+                  for (const dept in deptSuggestions) {
+                    if (Array.isArray(deptSuggestions[dept])) {
+                      deliverables = deliverables.concat(deptSuggestions[dept]);
+                    }
+                  }
+                  console.log('[Unified Analyze] Extracted deliverables from suggestions_by_department:', deliverables.length);
+                } else if (data.result && Array.isArray(data.result.deliverables)) {
+                  // Fallback: direct deliverables array
+                  deliverables = data.result.deliverables;
+                  console.log('[Unified Analyze] Extracted deliverables from direct array:', deliverables.length);
+                }
+                
                 if (deliverables.length === 0) {
+                  console.error('[Unified Analyze] No deliverables found in job result. Full result:', data.result);
                   alert('Analysis completed but no deliverables were found. The analysis job may have failed. Please try again.');
                   newBtn.disabled = false;
                   newBtn.textContent = 'Analyze with AI';
                   return;
+                }
+                
+                // CRITICAL: Update PRIMARY_SCENARIO with deliverables
+                if (window.PRIMARY_SCENARIO) {
+                  window.PRIMARY_SCENARIO.deliverables = deliverables.map(d => ({
+                    code: d.deliverable_code || d.code,
+                    name: d.deliverable_name || d.name || d.deliverable,
+                    category: d.category || d.department || 'General',
+                    confidence: d.confidence || 0.8,
+                    reasoning: d.reasoning || '',
+                    selected: true
+                  }));
+                  window.PRIMARY_SCENARIO.save();
+                  console.log('[Unified Analyze] PRIMARY_SCENARIO updated with', deliverables.length, 'deliverables');
+                }
+                
+                // CRITICAL: Update APB.step2.allDeliverables for rendering
+                if (window.APB && window.APB.step2) {
+                  window.APB.step2.allDeliverables = deliverables;
+                  console.log('[Unified Analyze] APB.step2.allDeliverables updated with', deliverables.length, 'deliverables');
                 }
               }
 
@@ -303,21 +344,24 @@
                 step1.style.display = 'none';
                 step2.style.display = 'block';
 
-                // Render deliverables - call the function that exists
-                if (typeof window.renderDeliverablesPanel === 'function') {
-                  console.log('[Unified Analyze] Calling renderDeliverablesPanel...');
-                  window.renderDeliverablesPanel();
-                } else {
-                  console.warn('[Unified Analyze] renderDeliverablesPanel function not found');
-                }
+                // CRITICAL: Wait a tick for state updates to propagate
+                setTimeout(() => {
+                  // Render deliverables - call the function that exists
+                  if (typeof window.renderDeliverablesPanel === 'function') {
+                    console.log('[Unified Analyze] Calling renderDeliverablesPanel...');
+                    window.renderDeliverablesPanel();
+                  } else {
+                    console.warn('[Unified Analyze] renderDeliverablesPanel function not found');
+                  }
 
-                // Initialize AI suggestions display
-                if (typeof window.initAISummaryAndSuggestions === 'function') {
-                  console.log('[Unified Analyze] Calling initAISummaryAndSuggestions...');
-                  window.initAISummaryAndSuggestions();
-                }
+                  // Initialize AI suggestions display
+                  if (typeof window.initAISummaryAndSuggestions === 'function') {
+                    console.log('[Unified Analyze] Calling initAISummaryAndSuggestions...');
+                    window.initAISummaryAndSuggestions();
+                  }
 
-                step2.scrollIntoView({ behavior: 'smooth' });
+                  step2.scrollIntoView({ behavior: 'smooth' });
+                }, 50);
               }
 
               // Hide progress bar
@@ -329,7 +373,7 @@
               newBtn.textContent = 'Analyze with AI';
 
               console.log('[Unified Analyze] Analysis complete! Found', deliverables.length, 'deliverables');
-              console.log('[Unified Analyze] Step 2 should now be populated with results');
+              console.log('[Unified Analyze] Step 2 should now be populated with deliverables');esults');
 
             } else if (status.status === 'failed') {
               clearInterval(pollInterval);
