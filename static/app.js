@@ -6241,6 +6241,8 @@ async function pollAIAnalysis(jobId) {
       console.log(`[POLLING] 🛑 Stopping AI analysis polling - job completed`);
       
       // Clear all polling protection and intervals
+      console.log('[AI PROTECT] Clearing protection flag - analysis completed');
+      window.AI_ANALYSIS_IN_PROGRESS = false;
       window.PROTECTED_AI_POLLING = false;
       
       if (aiAnalysisInterval) {
@@ -6493,6 +6495,8 @@ async function pollAIAnalysis(jobId) {
       console.log(`[POLLING] 🛑 Stopping AI analysis polling - job failed`);
       
       // Clear all polling protection and intervals
+      console.log('[AI PROTECT] Clearing protection flag - analysis failed');
+      window.AI_ANALYSIS_IN_PROGRESS = false;
       window.PROTECTED_AI_POLLING = false;
       
       if (aiAnalysisInterval) {
@@ -6764,6 +6768,13 @@ async function onRunReconcile() {
     
     console.log('[ANALYSIS] Proceeding with text analysis:', rfpText.length, 'characters');
 
+    // ============================================================================
+    // CRITICAL: Set protection flags to prevent ErrorRecovery interference
+    // ============================================================================
+    console.log('[AI PROTECT] Setting protection flag to prevent ErrorRecovery interference');
+    window.AI_ANALYSIS_IN_PROGRESS = true;
+    window.PROTECTED_AI_POLLING = true;
+    
     // Start AI analysis as background job
     if (btnAnalyze) {
       btnAnalyze.disabled = true;
