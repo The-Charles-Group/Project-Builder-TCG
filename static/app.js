@@ -6243,9 +6243,11 @@ async function onRunReconcile() {
   // Check for uploaded session ID (for GPT-5 Vision PDF processing) or text
   let rfpText = '';
   let uploadSessionId = null;
+  let hasStagedFiles = false;
+  let extractionErrors = [];
   
-  // PRIORITY 1: Check for staged files FIRST
-  const stagedSessionId = localStorage.getItem('apb.currentSession');
+  // PRIORITY 1: Check for staged files FIRST (using SessionManager for consistency)
+  const stagedSessionId = SessionManager.getCurrentSessionId();
   if (stagedSessionId) {
     try {
       console.log('[ANALYSIS] Checking for staged files in session:', stagedSessionId);
@@ -6261,20 +6263,38 @@ async function onRunReconcile() {
       
       if (extractRes.ok) {
         const extractData = await extractRes.json();
+        
+        // Track if we have staged files (even if extraction fails for some)
+        if (extractData.files_count > 0 || extractData.total_files > 0) {
+          hasStagedFiles = true;
+        }
+        
+        // Track any extraction errors (even if success is false)
+        if (extractData.errors && extractData.errors.length > 0) {
+          extractionErrors = extractData.errors;
+          console.warn('[ANALYSIS] File extraction errors:', extractData.errors);
+        }
+        
         if (extractData.success && extractData.text) {
-          rfpText = extractData.text;
-          console.log('[ANALYSIS] Using staged files text:', extractData.files_count, 'files,', rfpText.length, 'chars');
-          
-          // Also add textarea text if present
+          // Start with textarea text first (if present)
           const textareaText = (textEl?.value || '').trim();
           if (textareaText) {
-            rfpText = textareaText + '\n\n' + rfpText;
-            console.log('[ANALYSIS] Combined with textarea text, total:', rfpText.length, 'chars');
+            rfpText = textareaText + '\n\n=== UPLOADED FILES ===\n\n';
+            console.log('[ANALYSIS] Starting with textarea text:', textareaText.length, 'chars');
           }
+          
+          // Add staged files text
+          rfpText += extractData.text;
+          console.log('[ANALYSIS] Added staged files text:', extractData.files_count, 'files,', extractData.text.length, 'chars');
+          console.log('[ANALYSIS] Total combined text:', rfpText.length, 'chars');
         }
+      } else {
+        console.warn('[ANALYSIS] Extract endpoint returned error:', extractRes.status);
       }
     } catch (e) {
       console.warn('[ANALYSIS] Could not extract staged files:', e);
+      // Show user-friendly error
+      extractionErrors.push('Network error while extracting files: ' + e.message);
     }
   }
   
@@ -6302,13 +6322,13 @@ async function onRunReconcile() {
   console.log('[ANALYSIS] Starting analysis with mode:', analysisMode);
 
   // ============================================================================
-  // SESSION ISOLATION: Use existing session if we have uploaded files, otherwise start fresh
+  // SESSION ISOLATION: Use existing session if we have uploaded/staged files, otherwise start fresh
   // ============================================================================
   let sessionId;
-  if (uploadSessionId) {
-    // Keep existing session if we have uploaded files
+  if (uploadSessionId || hasStagedFiles) {
+    // Keep existing session if we have uploaded files or staged files
     sessionId = SessionManager.getCurrentSessionId();
-    console.log('[SESSION] Using existing session with uploaded files:', sessionId);
+    console.log('[SESSION] Using existing session with files:', sessionId);
   } else {
     // Start fresh session only if no files were uploaded
     sessionId = SessionManager.startNewSession();
@@ -6342,14 +6362,33 @@ async function onRunReconcile() {
     if (!rfpText) {
       hideAIProgressBar();
       
-      // Provide helpful message based on the situation
-      if (fileEl?.files?.length) {
+      // Show extraction errors if any
+      if (extractionErrors.length > 0) {
+        alert('File extraction errors:\n\n' + extractionErrors.join('\n') + '\n\nPlease check your files and try again.');
+      } else if (fileEl?.files?.length) {
         // Files are selected but text wasn't extracted
         alert('Please wait for the file to finish processing, then click Analyze again. If the problem persists, try re-uploading the file.');
       } else {
         alert('Please enter RFP text or upload a document first.');
       }
       return;
+    }
+    
+    // Warn about extraction errors but proceed with analysis
+    if (extractionErrors.length > 0) {
+      console.warn('[ANALYSIS] Proceeding with partial extraction. Errors:', extractionErrors);
+      // Optional: Show a non-blocking warning to the user
+      const warningMsg = `Note: Some files had extraction errors:\n${extractionErrors.join('\n')}\n\nProceeding with available text...`;
+      if (confirm(warningMsg + '\n\nContinue with analysis?')) {
+        console.log('[ANALYSIS] User chose to continue despite extraction errors');
+      } else {
+        hideAIProgressBar();
+        if (btnAnalyze) {
+          btnAnalyze.disabled = false;
+          btnAnalyze.textContent = 'Analyze with AI';
+        }
+        return;
+      }
     }
     
     console.log('[ANALYSIS] Proceeding with text analysis:', rfpText.length, 'characters');
