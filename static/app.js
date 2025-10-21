@@ -3439,10 +3439,38 @@ window.updatePeriods = updatePeriods;
 window.extractDeliverableTasks = extractDeliverableTasks;
 window.formatTasksList = formatTasksList;
 
+// Global timeline polling state for cancellation
+let timelinePollingIntervalId = null;
+
 // Export timeline error handling functions
 window.generateAITimeline = generateAITimeline;
 window.showUserFriendlyError = showUserFriendlyError;
 window.cancelTimelineGeneration = cancelTimelineGeneration;
+
+function cancelTimelineGeneration() {
+  log('[TIMELINE] Cancelling timeline generation');
+  
+  // Clear polling interval if active
+  if (timelinePollingIntervalId) {
+    clearInterval(timelinePollingIntervalId);
+    timelinePollingIntervalId = null;
+  }
+  
+  // Hide progress UI
+  const loading = document.getElementById('timeline-loading');
+  if (loading) {
+    loading.style.display = 'none';
+  }
+  
+  // Reset button state
+  const btn = document.getElementById('btn-generate-timeline');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '🤖 Generate AI Timeline';
+  }
+  
+  console.log('[TIMELINE] Timeline generation cancelled');
+}
 
 async function generateAITimeline(retryAttempt = 0) {
   const btn = document.getElementById('btn-generate-timeline');
@@ -3464,8 +3492,7 @@ async function generateAITimeline(retryAttempt = 0) {
   const POLLING_INTERVAL_MS = 2500; // Poll every 2.5 seconds
   const MAX_POLLING_TIME_MS = 600000; // 10 minutes timeout
 
-  // Polling state
-  let pollingIntervalId = null;
+  // Polling state (using global variable for cancellation support)
   let pollingStartTime = Date.now();
 
   // Show loading state with progress UI
@@ -3564,9 +3591,9 @@ async function generateAITimeline(retryAttempt = 0) {
 
   // Clean up function
   const cleanup = () => {
-    if (pollingIntervalId) {
-      clearInterval(pollingIntervalId);
-      pollingIntervalId = null;
+    if (timelinePollingIntervalId) {
+      clearInterval(timelinePollingIntervalId);
+      timelinePollingIntervalId = null;
     }
   };
 
@@ -3666,7 +3693,7 @@ async function generateAITimeline(retryAttempt = 0) {
     await pollJobStatus();
 
     // Continue polling at intervals
-    pollingIntervalId = setInterval(pollJobStatus, POLLING_INTERVAL_MS);
+    timelinePollingIntervalId = setInterval(pollJobStatus, POLLING_INTERVAL_MS);
   };
 
   // Helper function to update progress UI
@@ -4240,42 +4267,15 @@ window.addEventListener('unhandledrejection', function(event) {
   }
 });
 
-// Enhanced buildFromCurrentSelection wrapper with transition tracking
-const originalBuildFromCurrentSelection = buildFromCurrentSelection;
-window.buildFromCurrentSelection = async function() {
-  console.log('[TRANSITION] Starting monitored transition...');
-  transitionInProgress = true;
-  lastTransitionError = null;
-
-  try {
-    await originalBuildFromCurrentSelection();
-  } catch (error) {
-    console.error('[TRANSITION] Caught error in wrapper:', error);
-    lastTransitionError = error;
-
-    // Force Step 3 to show even on error
-    const step3 = document.querySelector("#step3");
-    if (step3) {
-      step3.style.display = 'block';
-      step3.style.visibility = 'visible';
-      step3.style.opacity = '1';
-      step3.scrollIntoView({ behavior: 'smooth' });
-    }
-
-    showUserFriendlyError('Failed to complete transition. Please try again.', true);
-  } finally {
-    transitionInProgress = false;
-    console.log('[TRANSITION] Transition monitoring ended');
-
-    // Final safety check - ensure Step 3 is visible
-    setTimeout(() => {
-      const step3 = document.querySelector("#step3");
-      if (step3 && step3.style.display === 'none') {
-        console.warn('[TRANSITION] Final safety check - Step 3 was hidden, forcing display');
-        step3.style.display = 'block';
-        step3.scrollIntoView({ behavior: 'smooth' });
-      }
-    }, 100);
+// Placeholder for buildFromCurrentSelection (referenced by retryTransition)
+// TODO: Implement proper scenario rebuild logic
+window.buildFromCurrentSelection = function() {
+  console.warn('[BUILD] buildFromCurrentSelection not yet implemented - using fallback');
+  // Fallback: just show Step 3
+  const step3 = document.querySelector("#step3");
+  if (step3) {
+    step3.style.display = 'block';
+    step3.scrollIntoView({ behavior: 'smooth' });
   }
 };
 
