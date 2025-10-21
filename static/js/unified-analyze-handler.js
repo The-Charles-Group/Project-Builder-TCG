@@ -11,12 +11,14 @@
       return;
     }
 
-    // Remove ALL existing listeners by replacing the element
-    const newBtn = btnAnalyze.cloneNode(true);
-    btnAnalyze.parentNode.replaceChild(newBtn, btnAnalyze);
+    // Check if already initialized to avoid duplicate listeners
+    if (btnAnalyze.dataset.unifiedAnalyzeInitialized === 'true') {
+      console.log('[Unified Analyze] Already initialized, skipping');
+      return;
+    }
 
-    // Add our single, working handler
-    newBtn.addEventListener('click', async function(e) {
+    // Add our handler (don't replace the element as that removes other listeners)
+    btnAnalyze.addEventListener('click', async function(e) {
       e.preventDefault();
       e.stopPropagation();
 
@@ -414,6 +416,8 @@
       }
     });
 
+    // Mark as initialized
+    btnAnalyze.dataset.unifiedAnalyzeInitialized = 'true';
     console.log('[Unified Analyze] ✅ Handler successfully attached to button');
   }
 
