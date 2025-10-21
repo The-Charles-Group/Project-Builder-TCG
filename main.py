@@ -1189,6 +1189,24 @@ async def get_ai_job_status_alias(job_id: str):
     """
     return await get_agencydb_job_status(job_id)
 
+@app.get("/api/ai/jobs/{job_id}/debug")
+async def debug_job_result(job_id: str):
+    """Debug endpoint to inspect raw job result structure"""
+    if job_id not in AI_JOB_STORE:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    
+    job = AI_JOB_STORE[job_id]
+    
+    return {
+        "job_id": job.job_id,
+        "status": job.status.value,
+        "has_result": job.result is not None,
+        "result_type": type(job.result).__name__ if job.result else None,
+        "result_keys": list(job.result.keys()) if isinstance(job.result, dict) else None,
+        "deliverables_count": len(job.result.get("plan", {}).get("suggestions_by_department", {})) if isinstance(job.result, dict) else 0,
+        "sample_department": list(job.result.get("plan", {}).get("suggestions_by_department", {}).keys())[:1] if isinstance(job.result, dict) else []
+    }
+
 # ---------- Industry Template System Import ----------
 from luxury_fashion_template import (
     get_industry_template,
