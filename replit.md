@@ -3,6 +3,22 @@
 ## Overview
 This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
+## Recent Changes
+
+### October 2025 - AI Analysis UI Bug Fix
+**Issue**: The "Analyze w AI" button in Step 1 appeared to do nothing when clicked, even though backend analysis was working correctly.
+
+**Root Cause**: The frontend was calling `window.renderDeliverablesPanel()` to display analysis results, but this function was never implemented in the codebase.
+
+**Fix**: Implemented the missing `renderDeliverablesPanel()` function in `static/app.js` (lines 7243-7382) with:
+- Proper rendering of deliverables from `APB.step2.allDeliverables` into `#s2-deliv-list` container
+- XSS-safe HTML generation using `escapeHtml()` for all user-controlled fields (code, name, department)
+- Checkbox event handlers for deliverable selection/deselection
+- Visual grouping with selected items displayed at the top
+- Integration with `ScenarioManager` for state synchronization
+
+**Security**: All user-controlled strings are sanitized via `escapeHtml()` before DOM insertion to prevent XSS attacks.
+
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
