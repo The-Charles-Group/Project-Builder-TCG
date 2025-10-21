@@ -144,7 +144,8 @@
             if (status.status === 'completed' || status.status === 'complete') {
               clearInterval(pollInterval);
 
-              console.log('[Unified Analyze] ✅ Job completed, processing results...', status);
+              console.log('[Unified Analyze] ✅ Job completed, processing results...');
+              console.log('[Unified Analyze] Full status object:', status);
 
               // Extract deliverables from the result structure
               let deliverables = [];
@@ -161,12 +162,12 @@
                     console.log(`[Unified Analyze] Processing ${deptDelivs.length} deliverables from ${dept}`);
                     deptDelivs.forEach(d => {
                       deliverables.push({
-                        deliverable_code: d.code || d.deliverable_code,
-                        deliverable_name: d.name || d.deliverable_name || d.title,
+                        deliverable_code: d.code || d.deliverable_code || '',
+                        deliverable_name: d.name || d.deliverable_name || d.title || 'Unknown',
                         department: dept,
                         category: dept,
-                        confidence: d.confidence || d.confidence_score || 0.5,
-                        relevance: d.relevance || d.relevance_score || 50,
+                        confidence: parseFloat(d.confidence || d.confidence_score || 0.5),
+                        relevance: parseFloat(d.relevance || d.relevance_score || 50),
                         why: d.why || d.reasoning || '',
                         risks: d.risks || '',
                         components: d.components || [],
@@ -179,12 +180,12 @@
                 // Handle flat structure (fallback)
                 console.log('[Unified Analyze] Found flat deliverables array with', status.result.deliverables.length, 'items');
                 deliverables = status.result.deliverables.map(d => ({
-                  deliverable_code: d.code || d.deliverable_code,
-                  deliverable_name: d.name || d.deliverable_name || d.title,
+                  deliverable_code: d.code || d.deliverable_code || '',
+                  deliverable_name: d.name || d.deliverable_name || d.title || 'Unknown',
                   department: d.department || d.category || 'General',
                   category: d.department || d.category || 'General',
-                  confidence: d.confidence || d.confidence_score || 0.5,
-                  relevance: d.relevance || d.relevance_score || 50,
+                  confidence: parseFloat(d.confidence || d.confidence_score || 0.5),
+                  relevance: parseFloat(d.relevance || d.relevance_score || 50),
                   why: d.why || d.reasoning || '',
                   risks: d.risks || '',
                   components: d.components || [],
@@ -192,15 +193,42 @@
                 }));
               }
               
-              console.log('[Unified Analyze] ✅ Extracted', deliverables.length, 'deliverables from', Object.keys(status.result?.plan?.suggestions_by_department || {}).length, 'departments');
+              console.log('[Unified Analyze] ✅ Extracted', deliverables.length, 'deliverables');
               
               if (deliverables.length === 0) {
                 console.error('[Unified Analyze] ❌ No deliverables found in result');
-                console.error('[Unified Analyze] Result structure:', JSON.stringify(status.result, null, 2));
-                alert('Analysis completed but no deliverables were found. Please check console for details.');
-                newBtn.disabled = false;
-                newBtn.textContent = 'Analyze with AI';
-                return;
+                console.error('[Unified Analyze] Full result object:', status.result);
+                
+                // Try one more time to extract from different path
+                if (status.data && status.data.plan && status.data.plan.suggestions_by_department) {
+                  console.log('[Unified Analyze] Trying alternate path: status.data.plan...');
+                  const altDeptSugg = status.data.plan.suggestions_by_department;
+                  Object.entries(altDeptSugg).forEach(([dept, deptDelivs]) => {
+                    if (Array.isArray(deptDelivs)) {
+                      deptDelivs.forEach(d => {
+                        deliverables.push({
+                          deliverable_code: d.code || d.deliverable_code || '',
+                          deliverable_name: d.name || d.deliverable_name || d.title || 'Unknown',
+                          department: dept,
+                          category: dept,
+                          confidence: parseFloat(d.confidence || d.confidence_score || 0.5),
+                          relevance: parseFloat(d.relevance || d.relevance_score || 50),
+                          why: d.why || d.reasoning || '',
+                          risks: d.risks || '',
+                          components: d.components || [],
+                          select: d.select !== false
+                        });
+                      });
+                    }
+                  });
+                }
+                
+                if (deliverables.length === 0) {
+                  alert('Analysis completed but no deliverables were found. The analysis job may have failed. Please try again.');
+                  newBtn.disabled = false;
+                  newBtn.textContent = 'Analyze with AI';
+                  return;
+                }
               }
 
               // Store results in PRIMARY_SCENARIO
