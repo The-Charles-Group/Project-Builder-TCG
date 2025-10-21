@@ -442,6 +442,71 @@ async function applyIndustryTemplate() {
   }
 }
 
+// Manual AI Polling Recovery - Can be called from console if polling gets stuck
+window.resumeAIPolling = function(jobId) {
+  if (!jobId && window.aiAnalysisJobId) {
+    jobId = window.aiAnalysisJobId;
+  }
+  
+  if (!jobId) {
+    console.error('[MANUAL RECOVERY] No job ID available. Cannot resume polling.');
+    return false;
+  }
+  
+  console.log('[MANUAL RECOVERY] 🚨 Manually resuming AI polling for job:', jobId);
+  
+  // Clear any existing intervals first
+  if (window.aiAnalysisInterval) {
+    clearInterval(window.aiAnalysisInterval);
+  }
+  if (window.PROTECTED_AI_INTERVAL) {
+    clearInterval(window.PROTECTED_AI_INTERVAL);
+  }
+  
+  // Set protection flags
+  window.PROTECTED_AI_POLLING = true;
+  
+  // Create new protected interval
+  window.aiAnalysisInterval = setInterval(() => {
+    console.log('[MANUAL RECOVERY] ⚡ Polling tick at', new Date().toLocaleTimeString());
+    pollAIAnalysis(jobId);
+  }, 2000);
+  
+  window.PROTECTED_AI_INTERVAL = window.aiAnalysisInterval;
+  
+  // Start polling immediately
+  pollAIAnalysis(jobId);
+  
+  console.log('[MANUAL RECOVERY] ✅ Polling resumed. Use window.stopAIPolling() to stop.');
+  return true;
+};
+
+// Stop AI Polling manually
+window.stopAIPolling = function() {
+  console.log('[MANUAL] 🛑 Manually stopping AI polling');
+  window.PROTECTED_AI_POLLING = false;
+  
+  if (window.aiAnalysisInterval) {
+    clearInterval(window.aiAnalysisInterval);
+    window.aiAnalysisInterval = null;
+  }
+  if (window.PROTECTED_AI_INTERVAL) {
+    clearInterval(window.PROTECTED_AI_INTERVAL);
+    window.PROTECTED_AI_INTERVAL = null;
+  }
+  
+  console.log('[MANUAL] ✅ AI polling stopped');
+  return true;
+};
+
+// Emergency polling override for AI analysis
+window.forceAllowPolling = function() {
+  if (window.GlobalPollingManager) {
+    window.GlobalPollingManager.isShuttingDown = false;
+    console.log('[POLLING] Force allowed all polling');
+  }
+};
+
 // Clear All Data with Confirmation Dialog
 async function clearAllDataWithConfirmation() {
   const confirmed = confirm(
@@ -4666,11 +4731,32 @@ async function boot() {
   console.log('[BOOT] ========= NUCLEAR CLEANUP ON PAGE LOAD =========');
   console.log('[BOOT] Timestamp:', new Date().toISOString());
   
-  // 1. Stop ALL polling globally using GlobalPollingManager
+  // 1. Stop ALL polling globally using GlobalPollingManager (temporarily for cleanup)
   if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
-    console.log('[BOOT] Calling GlobalPollingManager.stopAllPolling()...');
-    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[BOOT] Calling GlobalPollingManager.stopAllPolling() for cleanup...');
+    const result = window.GlobalPollingManager.stopAllPolling(false); // false = not permanent
     console.log('[BOOT] GlobalPollingManager stopped:', result);
+    
+    // CRITICAL: Force resume polling immediately after stopping
+    // The isShuttingDown flag MUST be reset or all polling will be blocked forever
+    console.log('[BOOT] Forcing GlobalPollingManager.isShuttingDown = false to resume polling...');
+    if (window.GlobalPollingManager) {
+      window.GlobalPollingManager.isShuttingDown = false;
+      console.log('[BOOT] ✅ Direct reset of isShuttingDown flag - polling is now allowed');
+    }
+    
+    // Also try to call resumePolling if it exists
+    if (window.GlobalPollingManager && window.GlobalPollingManager.resumePolling) {
+      console.log('[BOOT] Also calling resumePolling() for good measure...');
+      window.GlobalPollingManager.resumePolling();
+      console.log('[BOOT] ✅ GlobalPollingManager.resumePolling() called successfully');
+    } else if (window.resumePolling) {
+      console.log('[BOOT] Using window.resumePolling shortcut...');
+      window.resumePolling();
+      console.log('[BOOT] ✅ window.resumePolling() called successfully');
+    }
+  } else {
+    console.log('[BOOT] GlobalPollingManager not found, skipping cleanup');
   }
   
   // 2. Clear any existing intervals from previous sessions
@@ -6034,8 +6120,18 @@ function updateAIProgress(status) {
 }
 
 async function pollAIAnalysis(jobId) {
+  console.log(`[POLLING] pollAIAnalysis called for job ${jobId}`);
+  
+  // Force allow polling every time
+  if (window.GlobalPollingManager && window.GlobalPollingManager.isShuttingDown) {
+    console.log('[POLLING] Overriding shutdown mode to allow critical polling');
+    window.GlobalPollingManager.isShuttingDown = false;
+  }
+  
+  console.log(`[POLLING] ⏰ pollAIAnalysis STARTED for job ${jobId} at ${new Date().toISOString()}`);
+  
   try {
-    console.log(`[POLLING] Checking status for job ${jobId}`);
+    console.log(`[POLLING] Checking status for job ${jobId}...`);
     const res = await fetch(`/api/ai/jobs/${jobId}`);
     
     // Handle 410 Gone (zombie job blocked) or 404 - STOP IMMEDIATELY
@@ -6124,9 +6220,21 @@ async function pollAIAnalysis(jobId) {
     
     // Handle completion - check for result OR if status is complete with 100% progress
     if (isCompleted) {
-      console.log(`[ANALYSIS] Job complete, advancing to Step 2`, status);
-      clearInterval(aiAnalysisInterval);
-      aiAnalysisInterval = null;
+      console.log(`[ANALYSIS] ✅ Job complete, advancing to Step 2`, status);
+      console.log(`[POLLING] 🛑 Stopping AI analysis polling - job completed`);
+      
+      // Clear all polling protection and intervals
+      window.PROTECTED_AI_POLLING = false;
+      
+      if (aiAnalysisInterval) {
+        clearInterval(aiAnalysisInterval);
+        aiAnalysisInterval = null;
+      }
+      if (window.PROTECTED_AI_INTERVAL) {
+        clearInterval(window.PROTECTED_AI_INTERVAL);
+        window.PROTECTED_AI_INTERVAL = null;
+      }
+      
       hideAIProgressBar();
       
       // Handle completed analysis - result might be in status.result or status.data
@@ -6296,9 +6404,21 @@ async function pollAIAnalysis(jobId) {
         btnAnalyze.textContent = 'Analyze with AI';
       }
     } else if (isFailed) {
-      console.log(`[POLLING] Job ${jobId} failed, stopping polling`);
-      clearInterval(aiAnalysisInterval);
-      aiAnalysisInterval = null;
+      console.log(`[POLLING] ❌ Job ${jobId} failed, stopping polling`);
+      console.log(`[POLLING] 🛑 Stopping AI analysis polling - job failed`);
+      
+      // Clear all polling protection and intervals
+      window.PROTECTED_AI_POLLING = false;
+      
+      if (aiAnalysisInterval) {
+        clearInterval(aiAnalysisInterval);
+        aiAnalysisInterval = null;
+      }
+      if (window.PROTECTED_AI_INTERVAL) {
+        clearInterval(window.PROTECTED_AI_INTERVAL);
+        window.PROTECTED_AI_INTERVAL = null;
+      }
+      
       hideAIProgressBar();
       alert(`AI analysis failed: ${status.error || status.message || 'Unknown error'}`);
       
@@ -6622,7 +6742,31 @@ async function onRunReconcile() {
       
       // Start polling for job status (SSE not implemented for AI jobs yet)
       // Poll the correct endpoint for job status
-      aiAnalysisInterval = setInterval(() => pollAIAnalysis(jobInfo.job_id), 2000);
+      
+      // CRITICAL FIX: Force GlobalPollingManager to allow polling BEFORE starting
+      if (window.GlobalPollingManager) {
+        console.log('[POLLING FIX] Forcing GlobalPollingManager to allow polling...');
+        window.GlobalPollingManager.isShuttingDown = false;
+        if (window.GlobalPollingManager.resumePolling) {
+          window.GlobalPollingManager.resumePolling();
+        }
+      }
+      
+      // Set protection flag for AI polling
+      window.PROTECTED_AI_POLLING = true;
+      console.log('[POLLING] 🚀 Starting PROTECTED AI Analysis polling for job:', jobInfo.job_id);
+      
+      // Use both a protected interval and store it globally
+      aiAnalysisInterval = setInterval(() => {
+        console.log('[POLLING] Executing poll for job:', jobInfo.job_id);
+        pollAIAnalysis(jobInfo.job_id);
+      }, 2000);
+      
+      // Also store as protected interval in case the global manager tries to clear it
+      window.PROTECTED_AI_INTERVAL = aiAnalysisInterval;
+      
+      // Start the first poll immediately
+      console.log('[POLLING] 🎯 Triggering first poll immediately');
       pollAIAnalysis(jobInfo.job_id);
       
       // Old SSE code commented out for now
@@ -6708,7 +6852,10 @@ async function onRunReconcile() {
         
         // Fallback to polling if SSE fails
         if (!aiAnalysisInterval) {
+          window.PROTECTED_AI_POLLING = true;
+          console.log('[POLLING] 🚀 Starting PROTECTED fallback AI polling');
           aiAnalysisInterval = setInterval(() => pollAIAnalysis(aiAnalysisJobId), 2000);
+          window.PROTECTED_AI_INTERVAL = aiAnalysisInterval;
           pollAIAnalysis(aiAnalysisJobId);
         }
       };

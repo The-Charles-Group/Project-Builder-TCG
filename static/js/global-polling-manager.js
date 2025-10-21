@@ -107,9 +107,13 @@
     },
     
     // Stop ALL polling - Master kill switch
-    stopAllPolling() {
+    stopAllPolling(permanent = false) {
       console.warn('[PollingManager] 🛑 STOPPING ALL POLLING');
-      this.isShuttingDown = true;
+      
+      // Only permanently shutdown if explicitly requested
+      if (permanent) {
+        this.isShuttingDown = true;
+      }
       
       // Clear all intervals
       let clearedIntervals = 0;
@@ -182,9 +186,13 @@
         clearInterval(window.pollingIntervalId);
         window.pollingIntervalId = null;
       }
-      if (window.aiAnalysisInterval) {
+      // CRITICAL: Do NOT stop AI analysis polling if it's protected
+      if (window.aiAnalysisInterval && !window.PROTECTED_AI_POLLING) {
+        console.log('[PollingManager] Clearing aiAnalysisInterval (not protected)');
         clearInterval(window.aiAnalysisInterval);
         window.aiAnalysisInterval = null;
+      } else if (window.PROTECTED_AI_POLLING) {
+        console.log('[PollingManager] ⚠️ NOT clearing aiAnalysisInterval - it is PROTECTED');
       }
       if (window.progressInterval) {
         clearInterval(window.progressInterval);
@@ -224,6 +232,12 @@
       };
     },
     
+    // Resume polling after cleanup
+    resumePolling() {
+      this.isShuttingDown = false;
+      console.log('[PollingManager] ✅ Polling resumed - new intervals/timeouts allowed');
+    },
+    
     // Enable debug logging
     enableDebug() {
       this.debugMode = true;
@@ -247,10 +261,23 @@
       window.setInterval = (callback, delay, ...args) => {
         const stackTrace = new Error().stack;
         const caller = stackTrace.split('\n')[2] || 'unknown';
+        const callbackStr = callback.toString();
         
-        if (this.isShuttingDown) {
+        // CRITICAL: Always allow AI analysis polling, even during shutdown
+        const isAIAnalysisPolling = callbackStr.includes('pollAIAnalysis') || 
+                                     callbackStr.includes('job_id') ||
+                                     callbackStr.includes('jobId') ||
+                                     caller.includes('analyzeRFP') ||
+                                     caller.includes('AI') ||
+                                     window.PROTECTED_AI_POLLING === true;
+        
+        if (this.isShuttingDown && !isAIAnalysisPolling) {
           console.warn('[PollingManager] Blocked setInterval during shutdown from:', caller);
           return null;
+        }
+        
+        if (isAIAnalysisPolling) {
+          console.log('[PollingManager] ✅ Allowing AI Analysis polling (protected)');
         }
         
         const intervalId = originalSetInterval.call(window, callback, delay, ...args);
@@ -278,11 +305,31 @@
       
       // Track all timeouts globally
       window.setTimeout = (callback, delay, ...args) => {
-        if (this.isShuttingDown && delay > 100) { // Allow short timeouts for cleanup
-          const stackTrace = new Error().stack;
-          const caller = stackTrace.split('\n')[2] || 'unknown';
+        // CRITICAL: Check for protected AI polling FIRST
+        if (window.PROTECTED_AI_POLLING || (callback && callback.toString().includes('pollAIAnalysis'))) {
+          console.log('[PollingManager] Allowing protected AI polling');
+          return originalSetTimeout.call(window, callback, delay, ...args);
+        }
+        
+        const stackTrace = new Error().stack;
+        const caller = stackTrace.split('\n')[2] || 'unknown';
+        const callbackStr = callback.toString();
+        
+        // CRITICAL: Always allow AI analysis polling, even during shutdown
+        const isAIAnalysisPolling = callbackStr.includes('pollAIAnalysis') || 
+                                     callbackStr.includes('job_id') ||
+                                     callbackStr.includes('jobId') ||
+                                     caller.includes('analyzeRFP') ||
+                                     caller.includes('AI') ||
+                                     window.PROTECTED_AI_POLLING === true;
+        
+        if (this.isShuttingDown && delay > 100 && !isAIAnalysisPolling) { // Allow short timeouts for cleanup and AI polling
           console.warn('[PollingManager] Blocked setTimeout during shutdown from:', caller);
           return null;
+        }
+        
+        if (isAIAnalysisPolling) {
+          console.log('[PollingManager] ✅ Allowing AI Analysis timeout (protected)');
         }
         
         const timeoutId = originalSetTimeout.call(window, callback, delay, ...args);
@@ -359,6 +406,7 @@
       window.GlobalPollingManager = this;
       window.stopAllPolling = () => this.stopAllPolling();
       window.pollingStatus = () => this.getStatus();
+      window.resumePolling = () => this.resumePolling();  // CRITICAL: Expose resumePolling
       
       console.log('[PollingManager] Initialized - Use window.stopAllPolling() to stop everything');
     }

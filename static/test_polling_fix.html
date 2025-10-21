@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test AI Polling Fix</title>
+    <style>
+        body { font-family: Arial; padding: 20px; }
+        .status { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .success { background: #d4edda; }
+        .error { background: #f8d7da; }
+        .info { background: #d1ecf1; }
+        button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; }
+        #logs { height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-top: 20px; background: #f5f5f5; }
+        pre { margin: 0; }
+    </style>
+</head>
+<body>
+    <h1>Test AI Polling Fix</h1>
+    
+    <div class="status info">
+        <h3>Test Status</h3>
+        <div id="test-status">Ready to test...</div>
+    </div>
+    
+    <div>
+        <button onclick="checkPollingManager()">1. Check PollingManager Status</button>
+        <button onclick="testResume()">2. Test Resume Polling</button>
+        <button onclick="testProtectedPolling()">3. Test Protected AI Polling</button>
+        <button onclick="fullTest()">4. Full Test (Upload + Analyze)</button>
+    </div>
+    
+    <div id="logs">
+        <pre id="log-content">Logs will appear here...</pre>
+    </div>
+    
+    <script>
+        let logContent = document.getElementById('log-content');
+        let statusDiv = document.getElementById('test-status');
+        
+        function log(msg, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = `[${timestamp}] ${msg}\n`;
+            logContent.textContent += entry;
+            console.log(msg);
+            logContent.parentElement.scrollTop = logContent.parentElement.scrollHeight;
+        }
+        
+        function updateStatus(msg, className = 'info') {
+            statusDiv.textContent = msg;
+            statusDiv.parentElement.className = 'status ' + className;
+        }
+        
+        function checkPollingManager() {
+            log('Checking PollingManager status...');
+            
+            if (window.GlobalPollingManager) {
+                const isShuttingDown = window.GlobalPollingManager.isShuttingDown;
+                log(`GlobalPollingManager found! isShuttingDown = ${isShuttingDown}`);
+                
+                if (isShuttingDown) {
+                    updateStatus('⚠️ PollingManager is in shutdown mode - polling is blocked!', 'error');
+                } else {
+                    updateStatus('✅ PollingManager is active - polling allowed', 'success');
+                }
+                
+                // Check for resume function
+                if (window.GlobalPollingManager.resumePolling) {
+                    log('✅ resumePolling function is available');
+                } else if (window.resumePolling) {
+                    log('✅ window.resumePolling shortcut is available');
+                } else {
+                    log('⚠️ resumePolling function NOT found!');
+                }
+            } else {
+                log('GlobalPollingManager not found - loading scripts...');
+                updateStatus('Loading GlobalPollingManager...', 'info');
+                
+                // Load the script
+                const script = document.createElement('script');
+                script.src = '/static/js/global-polling-manager.js';
+                script.onload = () => {
+                    log('GlobalPollingManager script loaded');
+                    checkPollingManager(); // Check again
+                };
+                document.head.appendChild(script);
+            }
+        }
+        
+        function testResume() {
+            log('Testing resume polling functionality...');
+            
+            if (!window.GlobalPollingManager) {
+                log('ERROR: GlobalPollingManager not loaded!');
+                updateStatus('❌ GlobalPollingManager not loaded', 'error');
+                return;
+            }
+            
+            // First stop polling
+            log('Stopping all polling...');
+            window.GlobalPollingManager.stopAllPolling();
+            log(`isShuttingDown = ${window.GlobalPollingManager.isShuttingDown}`);
+            
+            // Try to resume
+            log('Attempting to resume polling...');
+            if (window.GlobalPollingManager.resumePolling) {
+                window.GlobalPollingManager.resumePolling();
+                log('Called GlobalPollingManager.resumePolling()');
+            } else if (window.resumePolling) {
+                window.resumePolling();
+                log('Called window.resumePolling()');
+            } else {
+                // Force reset
+                log('No resumePolling function found, forcing reset...');
+                window.GlobalPollingManager.isShuttingDown = false;
+                log('Forced isShuttingDown = false');
+            }
+            
+            log(`After resume: isShuttingDown = ${window.GlobalPollingManager.isShuttingDown}`);
+            
+            if (!window.GlobalPollingManager.isShuttingDown) {
+                updateStatus('✅ Successfully resumed polling!', 'success');
+            } else {
+                updateStatus('❌ Failed to resume polling', 'error');
+            }
+        }
+        
+        function testProtectedPolling() {
+            log('Testing protected AI polling...');
+            
+            // Set protection flag
+            window.PROTECTED_AI_POLLING = true;
+            log('Set PROTECTED_AI_POLLING = true');
+            
+            // Try to create an interval
+            let testCount = 0;
+            const testInterval = setInterval(() => {
+                testCount++;
+                log(`Protected interval tick ${testCount}`);
+                
+                if (testCount >= 3) {
+                    clearInterval(testInterval);
+                    log('Protected interval test complete');
+                    updateStatus('✅ Protected polling works!', 'success');
+                }
+            }, 1000);
+            
+            if (testInterval) {
+                log(`Created protected interval: ${testInterval}`);
+                updateStatus('Testing protected interval...', 'info');
+            } else {
+                log('Failed to create protected interval!');
+                updateStatus('❌ Protected interval blocked', 'error');
+            }
+        }
+        
+        async function fullTest() {
+            log('Starting full test with real AI analysis...');
+            updateStatus('Running full test...', 'info');
+            
+            try {
+                // First ensure polling is enabled
+                if (window.GlobalPollingManager && window.GlobalPollingManager.isShuttingDown) {
+                    log('Resetting PollingManager shutdown state...');
+                    window.GlobalPollingManager.isShuttingDown = false;
+                }
+                
+                // Create test RFP data
+                const testRFP = "Test RFP: We need a digital marketing campaign for our e-commerce launch.";
+                
+                // Trigger AI analysis
+                log('Triggering AI analysis...');
+                const response = await fetch('/api/ai/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        rfp_text: testRFP,
+                        mode: 'fast',
+                        strictness: 'balanced'
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.job_id) {
+                    log(`AI analysis started: Job ID ${result.job_id}`);
+                    
+                    // Monitor polling
+                    let pollCount = 0;
+                    const pollInterval = setInterval(async () => {
+                        pollCount++;
+                        log(`Polling attempt ${pollCount}...`);
+                        
+                        try {
+                            const jobResponse = await fetch(`/api/ai/jobs/${result.job_id}`);
+                            const jobData = await jobResponse.json();
+                            
+                            log(`Job status: ${jobData.status}, Progress: ${jobData.progress}%`);
+                            
+                            if (jobData.status === 'completed') {
+                                clearInterval(pollInterval);
+                                log('✅ Job completed successfully!');
+                                log(`Deliverables found: ${jobData.deliverables?.length || 0}`);
+                                updateStatus(`✅ Test complete! Found ${jobData.deliverables?.length || 0} deliverables`, 'success');
+                            } else if (jobData.status === 'error') {
+                                clearInterval(pollInterval);
+                                log('❌ Job failed with error');
+                                updateStatus('❌ Job failed', 'error');
+                            }
+                            
+                            if (pollCount > 30) { // 60 seconds timeout
+                                clearInterval(pollInterval);
+                                log('⚠️ Test timeout after 60 seconds');
+                                updateStatus('⚠️ Test timeout', 'error');
+                            }
+                        } catch (error) {
+                            log(`Polling error: ${error.message}`);
+                        }
+                    }, 2000);
+                    
+                } else {
+                    log('Failed to start AI analysis');
+                    updateStatus('❌ Failed to start analysis', 'error');
+                }
+            } catch (error) {
+                log(`Test error: ${error.message}`);
+                updateStatus(`❌ Test failed: ${error.message}`, 'error');
+            }
+        }
+        
+        // Auto-check on load
+        window.addEventListener('load', () => {
+            setTimeout(checkPollingManager, 1000);
+        });
+    </script>
+</body>
+</html>
