@@ -6136,21 +6136,58 @@ async function pollAIAnalysis(jobId) {
       sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
       
       // CRITICAL FIX: Update PRIMARY_SCENARIO with deliverables from AI analysis
+      console.log('[ANALYSIS DEBUG] AI Plan Response structure:', {
+        hasDeliverables: !!aiPlanResponse.deliverables,
+        hasPlan: !!aiPlanResponse.plan,
+        hasSuggestionsByDept: !!(aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department),
+        responseKeys: Object.keys(aiPlanResponse),
+        planKeys: aiPlanResponse.plan ? Object.keys(aiPlanResponse.plan) : []
+      });
+      
       if (window.PRIMARY_SCENARIO) {
         // Extract deliverables from response (may be nested in .plan or .deliverables or directly in response)
         let deliverables = [];
-        if (aiPlanResponse.deliverables) {
+        
+        // Try direct deliverables first
+        if (aiPlanResponse.deliverables && Array.isArray(aiPlanResponse.deliverables)) {
           deliverables = aiPlanResponse.deliverables;
-        } else if (aiPlanResponse.plan && aiPlanResponse.plan.deliverables) {
+          console.log('[ANALYSIS DEBUG] Found deliverables directly in response:', deliverables.length);
+        } 
+        // Try plan.deliverables
+        else if (aiPlanResponse.plan && aiPlanResponse.plan.deliverables && Array.isArray(aiPlanResponse.plan.deliverables)) {
           deliverables = aiPlanResponse.plan.deliverables;
-        } else if (aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department) {
-          // Extract deliverables from department suggestions
+          console.log('[ANALYSIS DEBUG] Found deliverables in plan.deliverables:', deliverables.length);
+        } 
+        // Try plan.suggestions_by_department
+        else if (aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department) {
           const suggestionsByDept = aiPlanResponse.plan.suggestions_by_department;
-          Object.values(suggestionsByDept).forEach(deptDeliverables => {
+          console.log('[ANALYSIS DEBUG] Extracting from suggestions_by_department. Departments:', Object.keys(suggestionsByDept));
+          
+          Object.entries(suggestionsByDept).forEach(([dept, deptDeliverables]) => {
+            console.log(`[ANALYSIS DEBUG] Department "${dept}" has ${Array.isArray(deptDeliverables) ? deptDeliverables.length : 0} deliverables`);
             if (Array.isArray(deptDeliverables)) {
-              deliverables = deliverables.concat(deptDeliverables);
+              // Map the backend format to our expected format
+              const mappedDeliverables = deptDeliverables.map(d => ({
+                deliverable_code: d.code || d.deliverable_code,
+                deliverable_name: d.name || d.deliverable_name || d.deliverable,
+                department: dept,
+                category: dept,
+                confidence: d.confidence_score || d.confidence || 0,
+                confidence_score: d.confidence_score || d.confidence || 0,
+                relevancy_tags: d.relevancy_tags || [],
+                evidence: d.evidence || '',
+                selected: d.selected || false
+              }));
+              deliverables = deliverables.concat(mappedDeliverables);
             }
           });
+          console.log('[ANALYSIS DEBUG] Total deliverables extracted from departments:', deliverables.length);
+        }
+        
+        // Log sample deliverable structure if we have any
+        if (deliverables.length > 0) {
+          console.log('[ANALYSIS DEBUG] Sample deliverable structure:', JSON.stringify(deliverables[0], null, 2));
+          console.log('[ANALYSIS DEBUG] All deliverable codes:', deliverables.map(d => d.deliverable_code || d.code || 'NO_CODE'));
         }
         
         console.log('[ANALYSIS] Found deliverables to load into PRIMARY_SCENARIO:', deliverables.length);
@@ -6189,11 +6226,68 @@ async function pollAIAnalysis(jobId) {
         step2.scrollIntoView({ behavior: 'smooth' });
       }
       
+      // CRITICAL: Ensure APB.step2.allDeliverables is populated from PRIMARY_SCENARIO
+      // This is needed for renderDeliverablesPanel to work correctly
+      if (window.PRIMARY_SCENARIO.deliverables && window.PRIMARY_SCENARIO.deliverables.length > 0) {
+        console.log('[ANALYSIS] Populating APB.step2.allDeliverables from PRIMARY_SCENARIO');
+        
+        // Ensure APB.step2 exists
+        if (!window.APB) {
+          window.APB = {};
+        }
+        if (!window.APB.step2) {
+          window.APB.step2 = {
+            selectedCodes: new Set(),
+            selectedComponentsByCode: {},
+            selectedL2ByKey: {},
+            allDeliverables: [],
+            aiSuggestedCodes: new Set(),
+            filters: { deliverables: '', components: '', l2: '' },
+            els: {}
+          };
+        }
+        
+        APB.step2.allDeliverables = window.PRIMARY_SCENARIO.deliverables.map(d => ({
+          Deliverable_Code: d.deliverable_code || d.Deliverable_Code || d.code || d.id,
+          Deliverable: d.deliverable_name || d.Deliverable || d.name || d.title,
+          Category: d.department || d.Category || d.category || '',
+          Service_Dept_for_PM: d.service_dept || d.Service_Dept_for_PM || '',
+          confidence: d.confidence || d.score || 0,
+          selected: d.selected || false,
+          // Preserve additional fields for AI suggestions
+          confidence_score: d.confidence_score,
+          relevancy_tags: d.relevancy_tags,
+          evidence: d.evidence
+        }));
+        
+        // Also populate DELIVERABLES for backward compatibility
+        window.DELIVERABLES = APB.step2.allDeliverables;
+        
+        // Build the indexes for fast lookup
+        window.DELIV_INDEX = {};
+        window.DELIV_INDEX_LO = {};
+        APB.step2.allDeliverables.forEach(d => {
+          const code = String(d.Deliverable_Code);
+          window.DELIV_INDEX[code] = d;
+          window.DELIV_INDEX_LO[code.toLowerCase()] = d;
+        });
+        
+        console.log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
+      }
+      
       // Only call renderAIPlan if we have a valid plan structure
       if (aiPlanResponse && (aiPlanResponse.plan || aiPlanResponse.deliverables)) {
         renderAIPlan(aiPlanResponse);
       } else {
         console.warn('[ANALYSIS] No valid plan structure found in response:', aiPlanResponse);
+      }
+      
+      // CRITICAL: Call renderDeliverablesPanel to populate Step 2 UI
+      if (typeof window.renderDeliverablesPanel === 'function') {
+        console.log('[ANALYSIS] Calling renderDeliverablesPanel to populate Step 2');
+        window.renderDeliverablesPanel();
+      } else {
+        console.warn('[ANALYSIS] renderDeliverablesPanel function not found!');
       }
       
       const btnAnalyze = document.querySelector('#btnAnalyze');
@@ -6417,22 +6511,26 @@ async function onRunReconcile() {
 
   let aiPlanResponse;
   try {
-    // FIXED: No longer need to extract text here since it's done on file selection
-    // Just check if we have text to analyze
+    // Check for staged files OR text before validation
+    // This prevents false "no file received" errors
+    const hasStagedContent = hasStagedFiles || uploadSessionId || rfpText;
     
-    if (!rfpText) {
+    if (!hasStagedContent) {
       hideAIProgressBar();
       
       // Show extraction errors if any
       if (extractionErrors.length > 0) {
         alert('File extraction errors:\n\n' + extractionErrors.join('\n') + '\n\nPlease check your files and try again.');
-      } else if (fileEl?.files?.length) {
-        // Files are selected but text wasn't extracted
-        alert('Please wait for the file to finish processing, then click Analyze again. If the problem persists, try re-uploading the file.');
       } else {
         alert('Please enter RFP text or upload a document first.');
       }
       return;
+    }
+    
+    // If we have staged files but no text yet, use placeholder
+    if (!rfpText && (hasStagedFiles || uploadSessionId)) {
+      console.log('[ANALYSIS] Using placeholder for staged files');
+      rfpText = "Analyzing uploaded files...";
     }
     
     // Warn about extraction errors but proceed with analysis
@@ -6662,14 +6760,28 @@ async function onRunReconcile() {
 
 // Render NEW AI Plan (GPT-5 Pro: Summary + Evidence-backed Suggestions)
 function renderAIPlan(aiPlan) {
+  console.log('[renderAIPlan DEBUG] Called with:', {
+    hasAIPlan: !!aiPlan,
+    hasPlan: !!(aiPlan?.plan),
+    planKeys: aiPlan ? Object.keys(aiPlan) : [],
+    planPlanKeys: aiPlan?.plan ? Object.keys(aiPlan.plan) : []
+  });
+  
   if (!aiPlan || !aiPlan.plan) {
-    console.warn('No AI plan to render');
+    console.warn('[renderAIPlan] No AI plan to render, received:', aiPlan);
     return;
   }
 
   const plan = aiPlan.plan;
   const summary = plan.summary || {};
   const suggestionsByDept = plan.suggestions_by_department || {};
+  
+  console.log('[renderAIPlan DEBUG] Departments found:', Object.keys(suggestionsByDept));
+  console.log('[renderAIPlan DEBUG] Total deliverables by dept:', 
+    Object.entries(suggestionsByDept).map(([dept, items]) => 
+      `${dept}: ${Array.isArray(items) ? items.length : 0}`
+    ).join(', ')
+  );
   
   // Render summary panel
   const summaryPanel = document.getElementById('ai-summary-panel');
@@ -7951,12 +8063,18 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
 
 // Render deliverables panel with Selected on top, then Other (Task 1.5: with search filter)
 function renderDeliverablesPanel() {
+  console.log('[RENDER DEBUG] Starting renderDeliverablesPanel');
+  console.log('[RENDER DEBUG] PRIMARY_SCENARIO exists:', !!window.PRIMARY_SCENARIO);
+  console.log('[RENDER DEBUG] PRIMARY_SCENARIO.deliverables:', window.PRIMARY_SCENARIO?.deliverables?.length || 0);
+  console.log('[RENDER DEBUG] APB.step2.allDeliverables:', APB.step2?.allDeliverables?.length || 0);
+  
   // CRITICAL FIX: Use PRIMARY_SCENARIO.deliverables if available (from AI analysis)
   // Otherwise fall back to APB.step2.allDeliverables (from OPTIONS)
-  let list = APB.step2.allDeliverables;
+  let list = APB.step2.allDeliverables || [];
   
   if (window.PRIMARY_SCENARIO && window.PRIMARY_SCENARIO.deliverables && window.PRIMARY_SCENARIO.deliverables.length > 0) {
     console.log('[RENDER] Using PRIMARY_SCENARIO.deliverables:', window.PRIMARY_SCENARIO.deliverables.length, 'items');
+    console.log('[RENDER DEBUG] Sample PRIMARY_SCENARIO deliverable:', window.PRIMARY_SCENARIO.deliverables[0]);
     // Convert PRIMARY_SCENARIO deliverables to the expected format if needed
     list = window.PRIMARY_SCENARIO.deliverables.map(d => {
       // Handle both formats: new AI format and old OPTIONS format
@@ -7998,8 +8116,17 @@ function renderDeliverablesPanel() {
     }
   });
   
+  // Try to find the host element if not already cached
+  if (!APB.step2.els.listRight) {
+    APB.step2.els.listRight = document.querySelector('#s2-deliv-list, #deliverableList, #deliverables-list, [data-step2-deliverables]');
+    console.log('[RENDER DEBUG] Searched for deliverables host element, found:', !!APB.step2.els.listRight);
+  }
+  
   const host = APB.step2.els.listRight;
-  if (!host) return;
+  if (!host) {
+    console.error('[RENDER ERROR] No deliverables list element found! Tried: #s2-deliv-list, #deliverableList, #deliverables-list');
+    return;
+  }
   
   let html = '';
   
