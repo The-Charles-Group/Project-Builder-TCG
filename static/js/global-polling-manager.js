@@ -1,8 +1,98 @@
-// Global Polling Manager
+// Global Polling Manager with SingleFlightPoller
 // Centralized management of all intervals and timeouts to prevent memory leaks and phantom polling
 
 (function() {
   'use strict';
+  
+  // SingleFlight Poller for job watching
+  const _watchers = new Map();
+  
+  class JobWatcher {
+    constructor(jobId, onUpdate, opts = {}) {
+      this.jobId = jobId;
+      this.onUpdate = onUpdate;
+      this.interval = Math.max(400, opts.intervalMs || 600);
+      this.maxInterval = Math.max(this.interval, opts.maxIntervalMs || 2000);
+      this.controller = new AbortController();
+      this._cancelled = false;
+      this._timer = null;
+      this._tick = this._tick.bind(this);
+      this._schedule = this._schedule.bind(this);
+      this._schedule(this.interval);
+    }
+
+    async _tick() {
+      if (this._cancelled) return;
+      const url = `/api/ai/jobs/${encodeURIComponent(this.jobId)}`;
+      try {
+        const res = await fetch(url, {
+          signal: this.controller.signal,
+          headers: { 'Accept': 'application/json' }
+        });
+        if (!res.ok) throw new Error(`Polling failed ${res.status}`);
+        const data = await res.json();
+        
+        // Normalize a few common "done" shapes
+        const done =
+          data.status?.toLowerCase?.() === 'complete' ||
+          data.completed === true ||
+          data.done === true ||
+          (Array.isArray(data.deliverables) && data.deliverables.length > 0 && data.progress === 100);
+        
+        this.onUpdate(data, done);
+        if (done) {
+          this.cancel();
+          return;
+        }
+      } catch (err) {
+        if (this._cancelled) return;
+        // Backoff on transient errors
+        this.interval = Math.min(this.maxInterval, Math.floor(this.interval * 1.5));
+      }
+      this._schedule(this.interval);
+    }
+
+    _schedule(ms) {
+      if (this._cancelled) return;
+      clearTimeout(this._timer);
+      this._timer = setTimeout(() => {
+        // ensure the tick runs after paint
+        if ('requestIdleCallback' in window) {
+          requestIdleCallback(() => this._tick(), { timeout: ms });
+        } else {
+          requestAnimationFrame(() => this._tick());
+        }
+      }, ms);
+    }
+
+    cancel() {
+      if (this._cancelled) return;
+      this._cancelled = true;
+      clearTimeout(this._timer);
+      try { this.controller.abort(); } catch {}
+      _watchers.delete(this.jobId);
+    }
+  }
+
+  // JobPoller API
+  window.JobPoller = {
+    watch(jobId, onUpdate, opts = {}) {
+      // cancel any existing watcher for this job
+      const existing = _watchers.get(jobId);
+      if (existing) existing.cancel();
+      const w = new JobWatcher(jobId, onUpdate, opts);
+      _watchers.set(jobId, w);
+      return w;
+    },
+    cancel(jobId) {
+      const w = _watchers.get(jobId);
+      if (w) w.cancel();
+    },
+    cancelAll() {
+      for (const [id, w] of _watchers.entries()) w.cancel();
+      _watchers.clear();
+    }
+  };
   
   const GlobalPollingManager = {
     intervals: new Map(),

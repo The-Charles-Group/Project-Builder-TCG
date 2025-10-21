@@ -9,9 +9,10 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
 from ai_weighted_matcher import score_rfp
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Body
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
@@ -1351,6 +1352,9 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 app.add_middleware(FileSizeMiddleware)
+
+# Add GZip middleware for smaller JSON responses
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -4430,7 +4434,7 @@ class ClearSessionPayload(BaseModel):
     session_id: str
 
 @app.post("/api/clear_session")
-async def clear_session(payload: ClearSessionPayload):
+async def clear_session(payload: ClearSessionPayload = Body(default=ClearSessionPayload(session_id=""))):
     """Clear all session-specific data including embedding cache"""
     session_id = payload.session_id
     
