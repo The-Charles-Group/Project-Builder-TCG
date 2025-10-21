@@ -6135,6 +6135,53 @@ async function pollAIAnalysis(jobId) {
       window.APP.aiPlan = aiPlanResponse;
       sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
       
+      // CRITICAL FIX: Update PRIMARY_SCENARIO with deliverables from AI analysis
+      if (window.PRIMARY_SCENARIO) {
+        // Extract deliverables from response (may be nested in .plan or .deliverables or directly in response)
+        let deliverables = [];
+        if (aiPlanResponse.deliverables) {
+          deliverables = aiPlanResponse.deliverables;
+        } else if (aiPlanResponse.plan && aiPlanResponse.plan.deliverables) {
+          deliverables = aiPlanResponse.plan.deliverables;
+        } else if (aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department) {
+          // Extract deliverables from department suggestions
+          const suggestionsByDept = aiPlanResponse.plan.suggestions_by_department;
+          Object.values(suggestionsByDept).forEach(deptDeliverables => {
+            if (Array.isArray(deptDeliverables)) {
+              deliverables = deliverables.concat(deptDeliverables);
+            }
+          });
+        }
+        
+        console.log('[ANALYSIS] Found deliverables to load into PRIMARY_SCENARIO:', deliverables.length);
+        
+        // Update PRIMARY_SCENARIO with deliverables and analysis results
+        window.PRIMARY_SCENARIO.deliverables = deliverables;
+        window.PRIMARY_SCENARIO.analysisResults = aiPlanResponse;
+        window.PRIMARY_SCENARIO.status = 'analyzed';
+        window.PRIMARY_SCENARIO.updatedAt = new Date().toISOString();
+        
+        // Also update DELIVERABLES global for backward compatibility
+        window.DELIVERABLES = deliverables;
+        
+        // If ScenarioManager exists, update it too
+        if (window.ScenarioManager && window.ScenarioManager.setState) {
+          window.ScenarioManager.setState({
+            deliverables: deliverables
+          });
+        }
+        
+        console.log('[ANALYSIS] Updated PRIMARY_SCENARIO with', deliverables.length, 'deliverables');
+      } else {
+        console.warn('[ANALYSIS] PRIMARY_SCENARIO not available, creating it now');
+        window.PRIMARY_SCENARIO = {
+          deliverables: aiPlanResponse.deliverables || [],
+          analysisResults: aiPlanResponse,
+          status: 'analyzed',
+          updatedAt: new Date().toISOString()
+        };
+      }
+      
       const step2 = document.getElementById('step2');
       if (step2) {
         console.log('[ANALYSIS] Showing Step 2');
