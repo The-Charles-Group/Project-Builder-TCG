@@ -1,3 +1,11 @@
+// ================================================================================
+// DEBUG MODE - Set to true to enable verbose logging (reduces browser CPU usage)
+// ================================================================================
+const DEBUG_MODE = false;  // Change to true for detailed debugging logs
+const log = (...args) => DEBUG_MODE && console.log(...args);
+const logGroup = (title) => DEBUG_MODE && console.group(title);
+const logGroupEnd = () => DEBUG_MODE && console.groupEnd();
+
 let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
@@ -4618,24 +4626,24 @@ function updateAIProgress(status) {
 }
 
 async function pollAIAnalysis(jobId) {
-  console.log(`[POLLING] pollAIAnalysis called for job ${jobId}`);
+  log(`[POLLING] pollAIAnalysis called for job ${jobId}`);
 
   // Force allow polling every time
   if (window.GlobalPollingManager && window.GlobalPollingManager.isShuttingDown) {
-    console.log('[POLLING] Overriding shutdown mode to allow critical polling');
+    log('[POLLING] Overriding shutdown mode to allow critical polling');
     window.GlobalPollingManager.isShuttingDown = false;
   }
 
-  console.log(`[POLLING] ⏰ pollAIAnalysis STARTED for job ${jobId} at ${new Date().toISOString()}`);
+  log(`[POLLING] ⏰ pollAIAnalysis STARTED for job ${jobId} at ${new Date().toISOString()}`);
 
   try {
-    console.log(`[POLLING] Checking status for job ${jobId}...`);
+    log(`[POLLING] Checking status for job ${jobId}...`);
     const res = await fetch(`/api/ai/jobs/${jobId}`);
 
     // Handle 410 Gone (zombie job blocked) or 404 - STOP IMMEDIATELY
     if (res.status === 410 || res.status === 404) {
       const statusText = res.status === 410 ? 'expired and blocked' : 'not found';
-      console.log(`[POLLING] Job ${jobId} ${statusText} (${res.status}), stopping polling permanently`);
+      log(`[POLLING] Job ${jobId} ${statusText} (${res.status}), stopping polling permanently`);
 
       // Clear the interval immediately
       if (aiAnalysisInterval) {
@@ -4668,7 +4676,7 @@ async function pollAIAnalysis(jobId) {
               });
             }
             localStorage.setItem('charles_agent_state', JSON.JSON.stringify(state));
-            console.log('[POLLING] Cleared job ID from charles_agent_state');
+            log('[POLLING] Cleared job ID from charles_agent_state');
           }
         } catch (e) {
           console.error('[POLLING] Failed to clear job from localStorage:', e);
@@ -4680,7 +4688,7 @@ async function pollAIAnalysis(jobId) {
         const key = localStorage.key(i);
         const value = localStorage.getItem(key);
         if (value && value.includes(jobId)) {
-          console.log(`[POLLING] Removing job ID from localStorage key: ${key}`);
+          log(`[POLLING] Removing job ID from localStorage key: ${key}`);
           localStorage.removeItem(key);
         }
       }
@@ -4704,7 +4712,7 @@ async function pollAIAnalysis(jobId) {
     consecutive404Count = 0;
 
     const status = await res.json();
-    console.log(`[POLLING] Job ${jobId} status:`, status);
+    log(`[POLLING] Job ${jobId} status:`, status);
     updateAIProgress(status);
 
     // Check for completion states (completed, complete, done, etc.)
@@ -4719,7 +4727,7 @@ async function pollAIAnalysis(jobId) {
     // Handle completion - check for result OR if status is complete with 100% progress
     if (isCompleted) {
       console.log('[ANALYSIS] ✅ Job complete, advancing to Step 2', status);
-      console.log('[POLLING] 🛑 Stopping AI analysis polling - job completed');
+      log('[POLLING] 🛑 Stopping AI analysis polling - job completed');
 
       // Clear all polling protection and intervals
       window.PROTECTED_AI_POLLING = false;
@@ -4742,7 +4750,7 @@ async function pollAIAnalysis(jobId) {
       sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
 
       // CRITICAL FIX: Update PRIMARY_SCENARIO with deliverables from AI analysis
-      console.log('[ANALYSIS DEBUG] AI Plan Response structure:', {
+      log('[ANALYSIS DEBUG] AI Plan Response structure:', {
         hasDeliverables: !!aiPlanResponse.deliverables,
         hasPlan: !!aiPlanResponse.plan,
         hasSuggestionsByDept: !!(aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department),
@@ -4757,20 +4765,20 @@ async function pollAIAnalysis(jobId) {
         // Try direct deliverables first
         if (aiPlanResponse.deliverables && Array.isArray(aiPlanResponse.deliverables)) {
           deliverables = aiPlanResponse.deliverables;
-          console.log('[ANALYSIS DEBUG] Found deliverables directly in response:', deliverables.length);
+          log('[ANALYSIS DEBUG] Found deliverables directly in response:', deliverables.length);
         } 
         // Try plan.deliverables
         else if (aiPlanResponse.plan && aiPlanResponse.plan.deliverables && Array.isArray(aiPlanResponse.plan.deliverables)) {
           deliverables = aiPlanResponse.plan.deliverables;
-          console.log('[ANALYSIS DEBUG] Found deliverables in plan.deliverables:', deliverables.length);
+          log('[ANALYSIS DEBUG] Found deliverables in plan.deliverables:', deliverables.length);
         } 
         // Try plan.suggestions_by_department
         else if (aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department) {
           const suggestionsByDept = aiPlanResponse.plan.suggestions_by_department;
-          console.log('[ANALYSIS DEBUG] Extracting from suggestions_by_department. Departments:', Object.keys(suggestionsByDept));
+          log('[ANALYSIS DEBUG] Extracting from suggestions_by_department. Departments:', Object.keys(suggestionsByDept));
 
           Object.entries(suggestionsByDept).forEach(([dept, deptDeliverables]) => {
-            console.log(`[ANALYSIS DEBUG] Department "${dept}" has ${Array.isArray(deptDeliverables) ? deptDeliverables.length : 0} deliverables`);
+            log(`[ANALYSIS DEBUG] Department "${dept}" has ${Array.isArray(deptDeliverables) ? deptDeliverables.length : 0} deliverables`);
             if (Array.isArray(deptDeliverables)) {
               // Map the backend format to our expected format
               const mappedDeliverables = deptDeliverables.map(d => ({
@@ -4787,13 +4795,13 @@ async function pollAIAnalysis(jobId) {
               deliverables = deliverables.concat(mappedDeliverables);
             }
           });
-          console.log('[ANALYSIS DEBUG] Total deliverables extracted from departments:', deliverables.length);
+          log('[ANALYSIS DEBUG] Total deliverables extracted from departments:', deliverables.length);
         }
 
         // Log sample deliverable structure if we have any
         if (deliverables.length > 0) {
-          console.log('[ANALYSIS DEBUG] Sample deliverable structure:', JSON.stringify(deliverables[0], null, 2));
-          console.log('[ANALYSIS DEBUG] All deliverable codes:', deliverables.map(d => d.deliverable_code || d.code || 'NO_CODE'));
+          log('[ANALYSIS DEBUG] Sample deliverable structure:', JSON.stringify(deliverables[0], null, 2));
+          log('[ANALYSIS DEBUG] All deliverable codes:', deliverables.map(d => d.deliverable_code || d.code || 'NO_CODE'));
         }
 
         console.log('[ANALYSIS] Found deliverables to load into PRIMARY_SCENARIO:', deliverables.length);
@@ -4814,7 +4822,7 @@ async function pollAIAnalysis(jobId) {
           });
         }
 
-        console.log('[ANALYSIS] Updated PRIMARY_SCENARIO with', deliverables.length, 'deliverables');
+        log('[ANALYSIS] Updated PRIMARY_SCENARIO with', deliverables.length, 'deliverables');
       } else {
         console.warn('[ANALYSIS] PRIMARY_SCENARIO not available, creating it now');
         window.PRIMARY_SCENARIO = {
@@ -4835,7 +4843,7 @@ async function pollAIAnalysis(jobId) {
       // CRITICAL: Ensure APB.step2.allDeliverables is populated from PRIMARY_SCENARIO
       // This is needed for renderDeliverablesPanel to work correctly
       if (window.PRIMARY_SCENARIO.deliverables && window.PRIMARY_SCENARIO.deliverables.length > 0) {
-        console.log('[ANALYSIS] Populating APB.step2.allDeliverables from PRIMARY_SCENARIO');
+        log('[ANALYSIS] Populating APB.step2.allDeliverables from PRIMARY_SCENARIO');
 
         // Ensure APB.step2 exists
         if (!window.APB) {
@@ -4878,7 +4886,7 @@ async function pollAIAnalysis(jobId) {
           window.DELIV_INDEX_LO[code.toLowerCase()] = d;
         });
 
-        console.log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
+        log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
       }
 
       // Only call renderAIPlan if we have a valid plan structure
@@ -4890,7 +4898,7 @@ async function pollAIAnalysis(jobId) {
 
       // CRITICAL: Call renderDeliverablesPanel to populate Step 2 UI
       if (typeof window.renderDeliverablesPanel === 'function') {
-        console.log('[ANALYSIS] Calling renderDeliverablesPanel to populate Step 2');
+        log('[ANALYSIS] Calling renderDeliverablesPanel to populate Step 2');
         window.renderDeliverablesPanel();
       } else {
         console.warn('[ANALYSIS] renderDeliverablesPanel function not found!');
@@ -4902,8 +4910,8 @@ async function pollAIAnalysis(jobId) {
         btnAnalyze.textContent = 'Analyze with AI';
       }
     } else if (isFailed) {
-      console.log(`[POLLING] ❌ Job ${jobId} failed, stopping polling`);
-      console.log(`[POLLING] 🛑 Stopping AI analysis polling - job failed`);
+      log(`[POLLING] ❌ Job ${jobId} failed, stopping polling`);
+      log(`[POLLING] 🛑 Stopping AI analysis polling - job failed`);
 
       // Clear all polling protection and intervals
       window.PROTECTED_AI_POLLING = false;
@@ -5007,32 +5015,32 @@ async function onRunReconcile() {
 
   // PRIORITY 1: Check for staged files FIRST (using SessionManager for consistency)
   const stagedSessionId = SessionManager.getCurrentSessionId();
-  console.log('[ANALYSIS DEBUG] Current session ID:', stagedSessionId);
+  log('[ANALYSIS DEBUG] Current session ID:', stagedSessionId);
 
   if (stagedSessionId) {
     try {
-      console.log('[ANALYSIS] Checking for staged files in session:', stagedSessionId);
+      log('[ANALYSIS] Checking for staged files in session:', stagedSessionId);
 
       // Call the extract endpoint to get text from staged files
       const extractFormData = new FormData();
       extractFormData.append('session_id', stagedSessionId);
 
-      console.log('[ANALYSIS DEBUG] Calling /api/stage/extract with session:', stagedSessionId);
+      log('[ANALYSIS DEBUG] Calling /api/stage/extract with session:', stagedSessionId);
       const extractRes = await fetch('/api/stage/extract', {
         method: 'POST',
         body: extractFormData
       });
 
-      console.log('[ANALYSIS DEBUG] Extract response status:', extractRes.status);
+      log('[ANALYSIS DEBUG] Extract response status:', extractRes.status);
 
       if (extractRes.ok) {
         const extractData = await extractRes.json();
-        console.log('[ANALYSIS DEBUG] Extract response data:', extractData);
+        log('[ANALYSIS DEBUG] Extract response data:', extractData);
 
         // Track if we have staged files (even if extraction fails for some)
         if (extractData.files_count > 0 || extractData.total_files > 0) {
           hasStagedFiles = true;
-          console.log('[ANALYSIS DEBUG] Staged files detected:', extractData.files_count || extractData.total_files);
+          log('[ANALYSIS DEBUG] Staged files detected:', extractData.files_count || extractData.total_files);
         }
 
         // Track any extraction errors (even if success is false)
@@ -5046,53 +5054,53 @@ async function onRunReconcile() {
           const textareaText = (textEl?.value || '').trim();
           if (textareaText) {
             rfpText = textareaText + '\n\n=== UPLOADED FILES ===\n\n';
-            console.log('[ANALYSIS] Starting with textarea text:', textareaText.length, 'chars');
+            log('[ANALYSIS] Starting with textarea text:', textareaText.length, 'chars');
           }
 
           // Add staged files text
           rfpText += extractData.text;
-          console.log('[ANALYSIS] Added staged files text:', extractData.files_count, 'files,', extractData.text.length, 'chars');
-          console.log('[ANALYSIS] Total combined text:', rfpText.length, 'chars');
+          log('[ANALYSIS] Added staged files text:', extractData.files_count, 'files,', extractData.text.length, 'chars');
+          log('[ANALYSIS] Total combined text:', rfpText.length, 'chars');
         } else {
-          console.warn('[ANALYSIS DEBUG] No text extracted. Success:', extractData.success, 'Text length:', extractData.text?.length);
+          log('[ANALYSIS DEBUG] No text extracted. Success:', extractData.success, 'Text length:', extractData.text?.length);
         }
       } else {
         console.warn('[ANALYSIS] Extract endpoint returned error:', extractRes.status);
         const errorText = await extractRes.text();
-        console.warn('[ANALYSIS DEBUG] Error response:', errorText);
+        log('[ANALYSIS DEBUG] Error response:', errorText);
       }
     } catch (e) {
       console.error('[ANALYSIS] Error extracting staged files:', e);
-      console.error('[ANALYSIS DEBUG] Full error:', e.stack);
+      log('[ANALYSIS DEBUG] Full error:', e.stack);
       // Show user-friendly error
       extractionErrors.push('Network error while extracting files: ' + e.message);
     }
   } else {
-    console.log('[ANALYSIS DEBUG] No session ID available for staged files');
+    log('[ANALYSIS DEBUG] No session ID available for staged files');
   }
 
   // PRIORITY 2: Check for old-style uploaded files (GPT-5 Vision PDF processing)
   if (!rfpText && window.APP?.uploadSessionId) {
-    console.log('[ANALYSIS] Using uploaded PDF session:', window.APP.uploadSessionId);
+    log('[ANALYSIS] Using uploaded PDF session:', window.APP.uploadSessionId);
     uploadSessionId = window.APP.uploadSessionId;
     rfpText = window.APP.uploadedFileText || "PDF files uploaded";
   } else if (!rfpText && window.uploadedFileText) {
-    console.log('[ANALYSIS] Using uploaded file text:', window.uploadedFileText.length, 'chars');
+    log('[ANALYSIS] Using uploaded file text:', window.uploadedFileText.length, 'chars');
     rfpText = window.uploadedFileText;
   } else if (!rfpText && window.APP?.uploadedFileText) {
-    console.log('[ANALYSIS] Using APP.uploadedFileText:', window.APP.uploadedFileText.length, 'chars');
+    log('[ANALYSIS] Using APP.uploadedFileText:', window.APP.uploadedFileText.length, 'chars');
     rfpText = window.APP.uploadedFileText;
   } else if (!rfpText) {
     // PRIORITY 3: Fall back to textarea only
     rfpText = (textEl?.value || '').trim();
     if (rfpText) {
-      console.log('[ANALYSIS] Using textarea text only:', rfpText.length, 'chars');
+      log('[ANALYSIS] Using textarea text only:', rfpText.length, 'chars');
     }
   }
 
   const btnAnalyze = document.querySelector('#btnAnalyze');
   const analysisMode = document.getElementById('analysis-mode')?.value || 'deep';
-  console.log('[ANALYSIS] Starting analysis with mode:', analysisMode);
+  log('[ANALYSIS] Starting analysis with mode:', analysisMode);
 
   // ============================================================================
   // SESSION ISOLATION: Use existing session if we have uploaded/staged files, otherwise start fresh
@@ -5101,11 +5109,11 @@ async function onRunReconcile() {
   if (uploadSessionId || hasStagedFiles) {
     // Keep existing session if we have uploaded files or staged files
     sessionId = SessionManager.getCurrentSessionId();
-    console.log('[SESSION] Using existing session with files:', sessionId);
+    log('[SESSION] Using existing session with files:', sessionId);
   } else {
     // Start fresh session only if no files were uploaded
     sessionId = SessionManager.startNewSession();
-    console.log('[SESSION] New analysis session:', sessionId);
+    log('[SESSION] New analysis session:', sessionId);
   }
 
   // Reset global state for fresh analysis
@@ -5147,14 +5155,14 @@ async function onRunReconcile() {
     }
 
     // Debug logging to help diagnose validation issues
-    console.log('[VALIDATION] RFP text length:', rfpText.trim().length);
-    console.log('[VALIDATION] Staged files:', hasStagedFilesCheck);
-    console.log('[VALIDATION] PRIMARY_SCENARIO.rfpText length:', window.PRIMARY_SCENARIO?.rfpText?.length || 0);
-    console.log('[VALIDATION] ✅ Validation passed, starting analysis');
+    log('[VALIDATION] RFP text length:', rfpText.trim().length);
+    log('[VALIDATION] Staged files:', hasStagedFilesCheck);
+    log('[VALIDATION] PRIMARY_SCENARIO.rfpText length:', window.PRIMARY_SCENARIO?.rfpText?.length || 0);
+    log('[VALIDATION] ✅ Validation passed, starting analysis');
 
     // If we have staged files but no text yet, use placeholder
     if (!rfpText && (hasStagedFilesCheck || uploadSessionId)) {
-      console.log('[ANALYSIS] Using placeholder for staged files');
+      log('[ANALYSIS] Using placeholder for staged files');
       rfpText = "Analyzing uploaded files...";
     }
 
@@ -5164,7 +5172,7 @@ async function onRunReconcile() {
       // Optional: Show a non-blocking warning to the user
       const warningMsg = `Note: Some files had extraction errors:\n${extractionErrors.join('\n')}\n\nProceeding with available text...`;
       if (confirm(warningMsg + '\n\nContinue with analysis?')) {
-        console.log('[ANALYSIS] User chose to continue despite extraction errors');
+        log('[ANALYSIS] User chose to continue despite extraction errors');
       } else {
         hideAIProgressBar();
         if (btnAnalyze) {
@@ -5175,7 +5183,7 @@ async function onRunReconcile() {
       }
     }
 
-    console.log('[ANALYSIS] Proceeding with text analysis:', rfpText.length, 'characters');
+    log('[ANALYSIS] Proceeding with text analysis:', rfpText.length, 'characters');
 
     // Start AI analysis as background job
     if (btnAnalyze) {
@@ -5195,7 +5203,7 @@ async function onRunReconcile() {
     // Get selected mode (Fast or Deep) - use analysisMode variable
     const selectedMode = analysisMode || 'deep';
 
-    console.log('[ANALYSIS] Sending API request with:', {
+    log('[ANALYSIS] Sending API request with:', {
       mode: selectedMode,
       tier: tier,
       textLength: rfpText.length,
