@@ -7951,7 +7951,33 @@ async function toggleSuggestedDeliverable(rowEl, code, add) {
 
 // Render deliverables panel with Selected on top, then Other (Task 1.5: with search filter)
 function renderDeliverablesPanel() {
-  const list = APB.step2.allDeliverables;
+  // CRITICAL FIX: Use PRIMARY_SCENARIO.deliverables if available (from AI analysis)
+  // Otherwise fall back to APB.step2.allDeliverables (from OPTIONS)
+  let list = APB.step2.allDeliverables;
+  
+  if (window.PRIMARY_SCENARIO && window.PRIMARY_SCENARIO.deliverables && window.PRIMARY_SCENARIO.deliverables.length > 0) {
+    console.log('[RENDER] Using PRIMARY_SCENARIO.deliverables:', window.PRIMARY_SCENARIO.deliverables.length, 'items');
+    // Convert PRIMARY_SCENARIO deliverables to the expected format if needed
+    list = window.PRIMARY_SCENARIO.deliverables.map(d => {
+      // Handle both formats: new AI format and old OPTIONS format
+      if (d.deliverable_code || d.Deliverable_Code) {
+        return {
+          Deliverable_Code: d.deliverable_code || d.Deliverable_Code || d.code,
+          Deliverable: d.deliverable_name || d.Deliverable || d.name,
+          Category: d.department || d.Category || d.category || '',
+          Service_Dept_for_PM: d.service_dept || d.Service_Dept_for_PM || '',
+          confidence: d.confidence || d.score || 0,
+          selected: d.selected || false
+        };
+      }
+      return d;
+    });
+    // Also update APB.step2.allDeliverables to keep consistency
+    APB.step2.allDeliverables = list;
+  } else {
+    console.log('[RENDER] Using APB.step2.allDeliverables (no PRIMARY_SCENARIO deliverables)');
+  }
+  
   const filter = (APB.step2.filters.deliverables || '').toLowerCase();
   const selected = [], other = [];
   
