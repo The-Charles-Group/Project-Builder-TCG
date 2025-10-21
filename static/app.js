@@ -5291,7 +5291,7 @@ async function onRunReconcile() {
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({ 
+      body: JSON.stringify({ 
         request_text: rfpText,
         strictness: 'balanced',
         tier: tier,
