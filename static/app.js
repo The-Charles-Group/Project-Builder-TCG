@@ -420,7 +420,7 @@ async function applyIndustryTemplate() {
     const response = await fetch('/api/industry/suggest-deliverables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         industry: selectedIndustry,
         rfp_text: rfpText
       })
@@ -437,7 +437,7 @@ async function applyIndustryTemplate() {
 
       // Store for use during analysis
       sessionStorage.setItem('industry_template', selectedIndustry);
-      sessionStorage.setItem('industry_deliverables', JSON.stringify(industryDeliverables));
+      sessionStorage.setItem('industry_deliverables', JSON.JSON.stringify(industryDeliverables));
     } else {
       alert('No specific deliverables found for this industry template.');
     }
@@ -664,7 +664,7 @@ document.addEventListener('task:dragging', (event) => {
   }
 });
 
-// NEW: Listen for Gantt task updates (drag/resize) and sync with SCENARIO_STORE
+// NEW: Gantt task updates sync with SCENARIO_STORE
 document.addEventListener('gantt:task_updated', async (event) => {
   const {task, wbs_id, start_date, duration_days } = event.detail || {};
   if (!wbs_id) return;
@@ -2668,8 +2668,8 @@ async function updatePricing() {
 
 // Re-build scenario with current pricing settings
 async function rebuildScenario() {
-  if (!window.ScenarioStore) {
-    alert('ScenarioStore not available. Please ensure the unified pricing system is loaded.');
+  if (!window.ScenarioManager) {
+    alert('ScenarioManager not available. Please ensure the unified pricing system is loaded.');
     return;
   }
 
@@ -2682,9 +2682,9 @@ async function rebuildScenario() {
   }
 
   try {
-    // Simply save the current scenario state via ScenarioStore
-    await ScenarioStore.save();
-    console.log('[REBUILD] Scenario saved successfully via ScenarioStore');
+    // Simply save the current scenario state via ScenarioManager
+    await ScenarioManager.save();
+    console.log('[REBUILD] Scenario saved successfully via ScenarioManager');
 
     // Trigger scenarios:updated event to refresh UI
     window.dispatchEvent(new Event('scenarios:updated'));
@@ -2939,11 +2939,11 @@ function saveRowEdit(code) {
 
   if (periodsInput) {
     const periods = parseInt(periodsInput.value) || 1;
-    pricingDataEnhanced.periodsCount.set(code, periods);
+    pricingDataEnhanced.periodsCount.set(code, Math.max(1, Math.min(36, periods)));
 
     // Store retainer months if it's a retainer
     if (pricingData.deliverableTypes.get(code) === 'RETAINER') {
-      pricingData.retainers.set(code, periods);
+      pricingData.retainers.set(code, pricingDataEnhanced.periodsCount.get(code));
     }
   }
 
@@ -3790,6 +3790,11 @@ async function generateAITimeline(retryAttempt = 0) {
         errorMessage = 'Some selected deliverables have invalid data. Please review your selection.';
       } else if (errorLower.includes('api') || errorLower.includes('gpt') || errorLower.includes('openai')) {
         errorMessage = 'The AI service is temporarily unavailable. Please try again in a moment.';
+      } else if (errorLower.includes('gateway timeout') || errorLower.includes('504')) {
+        errorMessage = 'The request took too long. Try selecting fewer deliverables.';
+      } else {
+        // Use a simplified version of the error if it's not too technical
+        errorMessage = error.length < 100 ? error : 'An unexpected error occurred. Please try again.';
       }
     }
 
@@ -4630,7 +4635,7 @@ async function pollAIAnalysis(jobId) {
       const aiPlanResponse = status.result || status.data || status;
       window.APP = window.APP || {};
       window.APP.aiPlan = aiPlanResponse;
-      sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
+      sessionStorage.setItem('apb:aiPlan', JSON.JSON.stringify(aiPlanResponse));
 
       // CRITICAL: Update PRIMARY_SCENARIO with deliverables from AI analysis
       log('[ANALYSIS DEBUG] AI Plan Response structure:', {
@@ -4665,15 +4670,16 @@ async function pollAIAnalysis(jobId) {
             if (Array.isArray(deptDeliverables)) {
               // Map the backend format to our expected format
               const mappedDeliverables = deptDeliverables.map(d => ({
-                deliverable_code: d.code || d.deliverable_code,
-                deliverable_name: d.name || d.deliverable_name || d.deliverable,
+                deliverable_code: d.code || d.deliverable_code || d.deliverable_code,
+                deliverable_name: d.name || d.deliverable_name || d.deliverable || d.title,
                 department: dept,
                 category: dept,
                 confidence: d.confidence_score || d.confidence || 0,
-                confidence_score: d.confidence_score || d.confidence || 0,
+                selected: d.selected || false,
+                // Preserve additional fields for AI suggestions
+                confidence_score: d.confidence_score,
                 relevancy_tags: d.relevancy_tags,
-                evidence: d.evidence,
-                selected: d.selected || false
+                evidence: d.evidence
               }));
               deliverables = deliverables.concat(mappedDeliverables);
             }
@@ -4683,7 +4689,7 @@ async function pollAIAnalysis(jobId) {
 
         // Log sample deliverable structure if we have any
         if (deliverables.length > 0) {
-          log('[ANALYSIS DEBUG] Sample deliverable structure:', JSON.stringify(deliverables[0], null, 2));
+          log('[ANALYSIS DEBUG] Sample deliverable structure:', JSON.JSON.stringify(deliverables[0], null, 2));
           log('[ANALYSIS DEBUG] All deliverable codes:', deliverables.map(d => d.deliverable_code || d.code || 'NO_CODE'));
         }
 
@@ -4691,7 +4697,6 @@ async function pollAIAnalysis(jobId) {
 
         // Update PRIMARY_SCENARIO with deliverables and analysis results
         window.PRIMARY_SCENARIO.deliverables = deliverables;
-        window.PRIMARY_SCENARIO.analysisResults = aiPlanResponse;
         window.PRIMARY_SCENARIO.status = 'analyzed';
         window.PRIMARY_SCENARIO.updatedAt = new Date().toISOString();
 
@@ -4716,6 +4721,7 @@ async function pollAIAnalysis(jobId) {
         };
       }
 
+      // Show Step 2
       const step2 = document.getElementById('step2');
       if (step2) {
         console.log('[ANALYSIS] Showing Step 2');
@@ -4789,6 +4795,18 @@ async function pollAIAnalysis(jobId) {
       if (typeof window.renderDeliverablesPanel === 'function') {
         log('[ANALYSIS] Calling renderDeliverablesPanel to populate Step 2');
         window.renderDeliverablesPanel();
+
+        // Verify rendering worked
+        setTimeout(() => {
+          const delivRows = document.querySelectorAll('.deliv-row');
+          console.log('[ANALYSIS] Verification: Found', delivRows.length, 'deliverable rows in DOM');
+          if (delivRows.length === 0) {
+            console.error('[ANALYSIS] ❌ Deliverables did not render! Force re-render...');
+            window.renderDeliverablesPanel();
+          } else {
+            console.log('[ANALYSIS] ✅ Deliverables rendered successfully');
+          }
+        }, 100);
       } else {
         console.warn('[ANALYSIS] renderDeliverablesPanel function not found!');
       }
@@ -5231,7 +5249,6 @@ async function onRunReconcile() {
           // Handle errors
           if (data.status === 'failed') {
             eventSource.close();
-            hideAIProgressBar();
             alert(`AI analysis failed: ${data.error || 'Unknown error'}`);
 
             const btnAnalyze = document.querySelector('#btnAnalyze');
@@ -5484,7 +5501,7 @@ function renderAIPlan(aiPlan) {
                 <span style="font-size: 0.85em; color: #6b7280;">${deliv.planned_hours || 0}h</span>
                 <button class="btn-small" 
                         onclick="addAIDeliverableToSelection('${delivCode}', this)"
-                        style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">
                   Add to Selection
                 </button>
               </div>
@@ -5927,7 +5944,7 @@ async function applyAllSelectedFromAI() {
 
       try {
         // Fetch L2 tasks in bulk for all selected components of this deliverable
-        const res = await fetch('/api/step2/l2/bulk', {
+        const res = await fetch('/api/l2/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.JSON.stringify({
@@ -6517,11 +6534,6 @@ function s2onAdd(code) {
   s2RenderRight(S2.els.search?.value || '');
 
   // Sync with new Step 2 UI state
-  if (window.step2PickerState) {
-    window.step2PickerState.selected.add(code);
-  }
-
-  // Update new Step 2 UI
   if (window.step2State) {
     window.step2State.currentDeliverable = code;
     if (window.populateComponentsDeliverableDropdown) {
@@ -6548,11 +6560,6 @@ function s2onRemove(code) {
   s2RenderRight(S2.els.search?.value || '');
 
   // Sync with new Step 2 UI state
-  if (window.step2PickerState) {
-    window.step2PickerState.selected.delete(code);
-  }
-
-  // Update new Step 2 UI
   if (window.step2State) {
     if (window.step2State.currentDeliverable === code) {
       window.step2State.currentDeliverable = null;
@@ -6829,7 +6836,7 @@ function renderScenarios(data){
           <h4>${d.deliverable} <span class="badge">${d.category}</span> <span class="badge">${d.complexity}×${d.tier}</span></h4>
           <div class="inline">${tgPills}</div>
           <table class="tbl"><thead><tr><th>Role</th><th>Hours</th></tr></thead><tbody>${rows || '<tr><td colspan="2">No hours</td></tr>'}</tbody></table>
-          <div class="inline"><strong>Deliverable Total Hours:</strong> ${Number(d.total_hours).toFixed(2)} &nbsp; <strong>Price:</strong> ${currency(d.price)}</div>
+          <div class="inline">${currency(d.total_hours)} hrs &nbsp; <strong>Price:</strong> ${currency(d.price)}</div>
           <details>
             <summary>Timeline (auto)</summary>
             <table class="tbl"><thead><tr><th>Task Group</th><th>Start</th><th>End</th><th>Days</th></tr></thead><tbody>${sched || '<tr><td colspan="4">No schedule</td></tr>'}</tbody></table>
@@ -6880,17 +6887,18 @@ async function openComponentPicker(code, name) {
 
     // Check if this deliverable has been customized before
     // If not, initialize with undefined (not an empty Set) to indicate "use all defaults"
-    const currentSelection = APB.step2.selectedComponentsByCode[code];
-    let current;
-    if (!currentSelection || currentSelection === '__ALL__') {
+    let current = APB.step2.selectedComponentsByCode[code];
+    if (!current || current === '__ALL__' || current === 'ALL') {
       // Default to all selected if no custom selection exists
       current = new Set(components.map(c => c.name));
-    } else if (currentSelection instanceof Set) {
-      current = currentSelection;
-    } else if (Array.isArray(currentSelection)) {
-      current = new Set(currentSelection);
-    } else if (typeof currentSelection === 'object' && currentSelection !== null) {
-      current = new Set(Object.keys(currentSelection));
+    } else if (current instanceof Set) {
+      // Already a Set
+    } else if (Array.isArray(current)) {
+      // Convert array to Set
+      current = new Set(current);
+    } else if (typeof current === 'object' && current !== null) {
+      // Convert object keys to Set
+      current = new Set(Object.keys(current));
     } else {
       // Fallback if state is corrupted - default to all selected
       current = new Set(components.map(c => c.name));
@@ -6910,7 +6918,7 @@ async function openComponentPicker(code, name) {
           <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
           <div id="component-list"></div>
           <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
-            <button onclick="closeComponentPicker()" class="btn-primary">Done</button>
+            <button onclick="saveComponentSelection('${code}')" class="btn-primary">Done</button>
           </div>
         </div>
       </div>
@@ -6995,7 +7003,7 @@ async function s2ApplyAndBuild() {
   // Convert component selections to proper format (handle "__ALL__" sentinel)
   const compMap = {};
   codes.forEach(code => {
-    const compSet = S2.selectedComponentsMap[code];
+    const compSet = S2.selectedComponentsByCode[code];
 
     if (compSet instanceof Set && compSet.size > 0) {
       // User has selected specific components - convert Set to object
@@ -7128,193 +7136,6 @@ function updateStep2Summary() {
       statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
       statusEl.style.color = 'var(--accent)';
     }
-  }
-}
-
-
-// Render Components panel - aggregates ALL components from ALL selected deliverables
-async function renderComponentsPanel() {
-  const listEl = document.getElementById('s2-comp-list');
-  const btnAll = document.getElementById('s2-comp-selectall');
-  const btnClear = document.getElementById('s2-comp-clear');
-
-  if (!listEl) return;
-
-  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
-  if (!code) {
-    renderComponentsEmptyState();
-    if (btnAll) btnAll.disabled = true;
-    if (btnClear) btnClear.disabled = true;
-    return;
-  }
-
-  // Ensure components are hydrated if not already
-  if (!selectionStore.componentsByDeliv.has(code)) {
-    await hydrateComponentsFor(code);
-  }
-
-  const components = selectionStore.componentsByDeliv.get(code) || new Set();
-
-  // Apply search filter
-  const searchFilter = (APB.step2.filters.components || '').toLowerCase();
-  const filteredComponents = Array.from(components).filter(compName =>
-    !searchFilter || compName.toLowerCase().includes(searchFilter)
-  );
-
-  if (btnAll) btnAll.disabled = filteredComponents.length === 0;
-  if (btnClear) btnClear.disabled = filteredComponents.length === 0;
-
-  // Render checkboxes with deliverable badges
-  const activeKey = `${code}::${APB.step2.activeComponentName}`;
-
-  listEl.innerHTML = filteredComponents.map(compName => {
-    const key = `${code}::${compName}`;
-    const isSelected = S2.selectedComponentsByCode[code]?.has?.(compName);
-    const isActive = key === activeKey;
-    const compData = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === code)?.components?.find(c => c.name === compName);
-    const hours = compData?.hours || 0;
-
-    return `
-      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px; ${isActive ? 'background:rgba(139,92,246,0.2); border:1px solid var(--accent);' : ''}" 
-             class="comp-checkbox-label"
-             data-deliv="${code}" 
-             data-comp="${compName}">
-        <input type="checkbox" 
-               data-deliv="${code}" 
-               data-comp="${compName}"
-               ${isSelected ? 'checked' : ''}
-               style="cursor:pointer;"/>
-        <span style="font-size:0.9em; ${isActive ? 'color:var(--accent);' : ''}">${compName}</span>
-        <span style="margin-left:auto; opacity:.6; font-size:0.75em; padding:2px 6px; background:rgba(255,255,255,.1); border-radius:3px;">${Math.round(hours)}h</span>
-      </label>
-    `;
-  }).join('');
-
-  // Add click listeners for component selection (sets active component)
-  listEl.querySelectorAll('.comp-checkbox-label').forEach(label => {
-    label.addEventListener('click', async e => {
-      if (e.target.type === 'checkbox') return; // Let checkbox handle its own click
-
-      const delivCode = label.getAttribute('data-deliv');
-      const compName = label.getAttribute('data-comp');
-
-      // Set as active component
-      APB.step2.activeDeliverableCode = delivCode;
-      APB.step2.activeComponentName = compName;
-
-      // Re-render components to show active state
-      renderComponentsPanel();
-
-      // Update L2 tasks panel - use onComponentClicked to fetch and display L2 tasks
-      if (window.onComponentClicked) {
-        await onComponentClicked(compName);
-      } else if (window.renderL2Panel) {
-        await renderL2Panel();
-      }
-    });
-  });
-
-  // Add change listeners for checkboxes
-  listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-    cb.addEventListener('change', e => {
-      e.stopPropagation(); // Don't trigger the label click
-      const delivCode = e.target.getAttribute('data-deliv');
-      const compName = e.target.getAttribute('data-comp');
-
-      // Ensure the deliverable has a Set in selectedComponentsByCode
-      if (!S2.selectedComponentsByCode[delivCode]) {
-        S2.selectedComponentsByCode[delivCode] = new Set();
-      } else if (!(S2.selectedComponentsByCode[delivCode] instanceof Set)) {
-        // Convert legacy format (object or array) to Set
-        S2.selectedComponentsByCode[delivCode] = new Set(
-          Array.isArray(S2.selectedComponentsByCode[delivCode]) 
-            ? S2.selectedComponentsByCode[delivCode]
-            : Object.keys(S2.selectedComponentsByCode[delivCode] || {})
-        );
-      }
-
-      if (e.target.checked) {
-        S2.selectedComponentsByCode[delivCode].add(compName);
-      } else {
-        S2.selectedComponentsByCode[delivCode].delete(compName);
-      }
-
-      // Update summary and L2 panel
-      if (window.updateStep2Summary) updateStep2Summary();
-      if (window.renderL2Panel) renderL2Panel();
-    });
-  });
-}
-
-// Render empty state for components
-function renderComponentsEmptyState(message = 'Select a deliverable to view components') {
-  const listEl = document.getElementById('s2-comp-list');
-  if (listEl) {
-    listEl.innerHTML = `<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">${message}</p>`;
-  }
-}
-
-// Update summary counts and render chips with remove buttons
-function updateSummaryCounts() {
-  const delivCount = APB.step2.selectedCodes.size;
-
-  // Count components
-  let compCount = 0;
-  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSet]) => {
-    if (APB.step2.selectedCodes.has(code)) {
-      // Handle '__ALL__' sentinel
-      if (compSet === '__ALL__' || compSet === 'ALL') {
-        // Count all available components for this deliverable
-        const comps = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === code)?.components || [];
-        compCount += comps.length;
-      } else if (compSet instanceof Set) {
-        compCount += compSet.size;
-      } else if (Array.isArray(compSet)) {
-        compCount += compSet.length;
-      } else if (typeof compSet === 'object') {
-        compCount += Object.keys(compSet).length;
-      }
-    }
-  });
-
-  // Count L2 - only for selected components (fixes Task 4)
-  let l2Count = 0;
-  Object.entries(APB.step2.selectedL2ByKey).forEach(([key, l2Set]) => {
-    const [code, compName] = key.split('::');
-    // Only count if deliverable is selected AND component is selected
-    if (APB.step2.selectedCodes.has(code)) {
-      const compSet = APB.step2.selectedComponentsByCode[code];
-      // Check if selectedComponentsByCode[code] is NOT '__ALL__' or 'ALL'
-      // And if the component set actually contains the component for this key
-      if (compSet && compSet !== '__ALL__' && compSet !== 'ALL' && compSet instanceof Set && compSet.has(compName)) {
-        if (l2Set instanceof Set) l2Count += l2Set.size;
-        else if (Array.isArray(l2Set)) l2Count += l2Set.length;
-      } else if (compSet === '__ALL__' || compSet === 'ALL') {
-        // If all components are selected, count all L2 tasks for this component
-        // This requires fetching L2 tasks again or assuming they are available
-        // For simplicity, we assume they are counted if the deliverable is selected and component is implicitly selected
-        // A more robust solution would require fetching/storing all L2s initially
-        // For now, we'll skip counting L2 if compSet is '__ALL__' and rely on explicit selections.
-      }
-    }
-  });
-
-  // Update counts
-  const delivEl = document.getElementById('s2-summary-deliverables');
-  const compEl = document.getElementById('s2-summary-components');
-  const l2El = document.getElementById('s2-summary-l2');
-
-  if (delivEl) delivEl.textContent = delivCount;
-  if (compEl) compEl.textContent = compCount;
-  if (l2El) l2El.textContent = l2Count;
-
-  // Render detailed chips below counts
-  renderSummaryChips();
-
-  // Enable/disable Proceed to Pricing button
-  const proceedBtn = document.querySelector('#btnProceedPricing, [data-proceed-pricing]');
-  if (proceedBtn) {
-    proceedBtn.disabled = delivCount === 0;
   }
 }
 
@@ -7457,40 +7278,6 @@ window.removeComponentFromSummary = function(delivCode, compName) {
   updateSummaryCounts();
 }
 
-// Remove single L2 from summary - with cleanup
-window.removeL2FromSummary = function(key, l2Name) {
-  const l2Set = APB.step2.selectedL2ByKey[key];
-  if (!l2Set) return;
-
-  // Remove the L2 item
-  l2Set.delete(l2Name);
-
-  const [delivCode, compName] = key.split('::');
-
-  // If no L2 left for this component, remove the component
-  if (l2Set.size === 0) {
-    delete APB.step2.selectedL2ByKey[key];
-
-    const compSet = APB.step2.selectedComponentsByCode[delivCode];
-    if (compSet instanceof Set) {
-      compSet.delete(compName);
-
-      // If no components left, remove deliverable
-      if (compSet.size === 0) {
-        APB.step2.selectedCodes.delete(delivCode);
-        delete APB.step2.selectedComponentsByCode[delivCode];
-      }
-    }
-  }
-
-  // Re-render panels
-  renderDeliverablesPanel();
-  if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
-    renderL2Panel(delivCode, compName); // Re-render L2 panel for active component
-  }
-  updateSummaryCounts();
-}
-
 // Reset L2 subtasks for a component - refetches all from server
 window.resetL2ForComponent = async function(delivCode, compName) {
   const key = `${delivCode}::${compName}`;
@@ -7585,9 +7372,12 @@ function renderL2Checklist(code, componentName, items) {
       } else {
         S2.selectedL2ByKey[key].delete(label);
       }
+
       updateSummaryCounts();
     });
   });
+
+  updateSummaryCounts();
 }
 
 // Retainer toggle handler
