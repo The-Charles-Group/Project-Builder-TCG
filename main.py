@@ -824,9 +824,13 @@ async def stage_extract_endpoint(session_id: str = Form(...)):
     Extract and return text from all staged files for a session.
     This is used by the main "Analyze with AI" button to get text from staged files.
     """
-    print(f"[STAGE EXTRACT DEBUG] Received request for session: {session_id}")
-    print(f"[STAGE EXTRACT DEBUG] Available sessions: {list(STAGED_FILES.keys())}")
-    print(f"[STAGE EXTRACT DEBUG] Session exists: {session_id in STAGED_FILES}")
+    # Handle both form-encoded and JSON requests
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    
+    print(f"[STAGE EXTRACT] Received request for session: {session_id}")
+    print(f"[STAGE EXTRACT] Available sessions: {list(STAGED_FILES.keys())}")
+    print(f"[STAGE EXTRACT] Session exists: {session_id in STAGED_FILES}")
     
     if session_id not in STAGED_FILES or not STAGED_FILES[session_id]:
         print(f"[STAGE EXTRACT DEBUG] No files found for session {session_id}")
