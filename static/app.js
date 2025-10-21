@@ -6206,7 +6206,23 @@ async function pollAIAnalysis(jobId) {
     consecutive404Count = 0;
     
     const status = await res.json();
-    console.log(`[POLLING] Job ${jobId} status:`, status);
+    
+    // COMPREHENSIVE LOGGING: Log raw API response structure
+    console.log(`[POLLING] ======== RAW API RESPONSE FOR JOB ${jobId} ========`);
+    console.log(`[POLLING] Job status:`, status.status);
+    console.log(`[POLLING] Progress:`, status.progress);
+    console.log(`[POLLING] Has result?`, !!status.result);
+    console.log(`[POLLING] Has data?`, !!status.data);
+    console.log(`[POLLING] Response keys:`, Object.keys(status));
+    
+    // Log the result structure if it exists
+    if (status.result) {
+      console.log(`[POLLING] Result keys:`, Object.keys(status.result));
+      console.log(`[POLLING] Result.deliverables exists?`, !!status.result.deliverables);
+      console.log(`[POLLING] Result.deliverables is array?`, Array.isArray(status.result.deliverables));
+      console.log(`[POLLING] Result.deliverables length:`, status.result.deliverables?.length || 0);
+    }
+    
     updateAIProgress(status);
     
     // Check for completion states (completed, complete, done, etc.)
@@ -6220,7 +6236,8 @@ async function pollAIAnalysis(jobId) {
     
     // Handle completion - check for result OR if status is complete with 100% progress
     if (isCompleted) {
-      console.log(`[ANALYSIS] ✅ Job complete, advancing to Step 2`, status);
+      console.log(`[POLLING] ======== JOB COMPLETE - PROCESSING RESULTS ========`);
+      console.log(`[POLLING] Job ${jobId} completed successfully`);
       console.log(`[POLLING] 🛑 Stopping AI analysis polling - job completed`);
       
       // Clear all polling protection and intervals
@@ -6239,12 +6256,19 @@ async function pollAIAnalysis(jobId) {
       
       // Handle completed analysis - result might be in status.result or status.data
       const aiPlanResponse = status.result || status.data || status;
+      
+      console.log(`[POLLING] Extracted aiPlanResponse from:`, 
+        status.result ? 'status.result' : status.data ? 'status.data' : 'status');
+      console.log(`[POLLING] aiPlanResponse keys:`, Object.keys(aiPlanResponse));
+      console.log(`[POLLING] aiPlanResponse.deliverables length:`, aiPlanResponse.deliverables?.length || 0);
+      
       window.APP = window.APP || {};
       window.APP.aiPlan = aiPlanResponse;
       sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
       
       // CRITICAL FIX: Update PRIMARY_SCENARIO with deliverables from AI analysis
-      console.log('[ANALYSIS DEBUG] AI Plan Response structure:', {
+      console.log('[POLLING] ======== EXTRACTING DELIVERABLES ========');
+      console.log('[POLLING] AI Plan Response structure:', {
         hasDeliverables: !!aiPlanResponse.deliverables,
         hasPlan: !!aiPlanResponse.plan,
         hasSuggestionsByDept: !!(aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department),
@@ -6252,96 +6276,125 @@ async function pollAIAnalysis(jobId) {
         planKeys: aiPlanResponse.plan ? Object.keys(aiPlanResponse.plan) : []
       });
       
-      if (window.PRIMARY_SCENARIO) {
-        // Extract deliverables from response (may be nested in .plan or .deliverables or directly in response)
-        let deliverables = [];
-        
-        // Try direct deliverables first
-        if (aiPlanResponse.deliverables && Array.isArray(aiPlanResponse.deliverables)) {
-          deliverables = aiPlanResponse.deliverables;
-          console.log('[ANALYSIS DEBUG] Found deliverables directly in response:', deliverables.length);
-        } 
-        // Try plan.deliverables
-        else if (aiPlanResponse.plan && aiPlanResponse.plan.deliverables && Array.isArray(aiPlanResponse.plan.deliverables)) {
-          deliverables = aiPlanResponse.plan.deliverables;
-          console.log('[ANALYSIS DEBUG] Found deliverables in plan.deliverables:', deliverables.length);
-        } 
-        // Try plan.suggestions_by_department
-        else if (aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department) {
-          const suggestionsByDept = aiPlanResponse.plan.suggestions_by_department;
-          console.log('[ANALYSIS DEBUG] Extracting from suggestions_by_department. Departments:', Object.keys(suggestionsByDept));
-          
-          Object.entries(suggestionsByDept).forEach(([dept, deptDeliverables]) => {
-            console.log(`[ANALYSIS DEBUG] Department "${dept}" has ${Array.isArray(deptDeliverables) ? deptDeliverables.length : 0} deliverables`);
-            if (Array.isArray(deptDeliverables)) {
-              // Map the backend format to our expected format
-              const mappedDeliverables = deptDeliverables.map(d => ({
-                deliverable_code: d.code || d.deliverable_code,
-                deliverable_name: d.name || d.deliverable_name || d.deliverable,
-                department: dept,
-                category: dept,
-                confidence: d.confidence_score || d.confidence || 0,
-                confidence_score: d.confidence_score || d.confidence || 0,
-                relevancy_tags: d.relevancy_tags || [],
-                evidence: d.evidence || '',
-                selected: d.selected || false
-              }));
-              deliverables = deliverables.concat(mappedDeliverables);
-            }
-          });
-          console.log('[ANALYSIS DEBUG] Total deliverables extracted from departments:', deliverables.length);
-        }
-        
-        // Log sample deliverable structure if we have any
-        if (deliverables.length > 0) {
-          console.log('[ANALYSIS DEBUG] Sample deliverable structure:', JSON.stringify(deliverables[0], null, 2));
-          console.log('[ANALYSIS DEBUG] All deliverable codes:', deliverables.map(d => d.deliverable_code || d.code || 'NO_CODE'));
-        }
-        
-        console.log('[ANALYSIS] Found deliverables to load into PRIMARY_SCENARIO:', deliverables.length);
-        
-        // Update PRIMARY_SCENARIO with deliverables and analysis results
-        window.PRIMARY_SCENARIO.deliverables = deliverables;
-        window.PRIMARY_SCENARIO.analysisResults = aiPlanResponse;
-        window.PRIMARY_SCENARIO.status = 'analyzed';
-        window.PRIMARY_SCENARIO.updatedAt = new Date().toISOString();
-        
-        // Also update DELIVERABLES global for backward compatibility
-        window.DELIVERABLES = deliverables;
-        
-        // If ScenarioManager exists, update it too
-        if (window.ScenarioManager && window.ScenarioManager.setState) {
-          window.ScenarioManager.setState({
-            deliverables: deliverables
-          });
-        }
-        
-        console.log('[ANALYSIS] Updated PRIMARY_SCENARIO with', deliverables.length, 'deliverables');
-      } else {
-        console.warn('[ANALYSIS] PRIMARY_SCENARIO not available, creating it now');
+      // Initialize PRIMARY_SCENARIO if it doesn't exist
+      if (!window.PRIMARY_SCENARIO) {
+        console.log('[POLLING] PRIMARY_SCENARIO not available, creating it now');
         window.PRIMARY_SCENARIO = {
-          deliverables: aiPlanResponse.deliverables || [],
-          analysisResults: aiPlanResponse,
-          status: 'analyzed',
+          deliverables: [],
+          analysisResults: null,
+          status: 'pending',
           updatedAt: new Date().toISOString()
         };
       }
       
+      // Extract deliverables from response (may be nested in .plan or .deliverables or directly in response)
+      let deliverables = [];
+      
+      console.log('[POLLING] Attempting to extract deliverables...');
+      
+      // Try direct deliverables first (MOST COMMON PATH)
+      if (aiPlanResponse.deliverables && Array.isArray(aiPlanResponse.deliverables)) {
+        deliverables = aiPlanResponse.deliverables;
+        console.log('[POLLING] ✅ Found deliverables directly in aiPlanResponse.deliverables:', deliverables.length);
+      } 
+      // Try plan.deliverables
+      else if (aiPlanResponse.plan && aiPlanResponse.plan.deliverables && Array.isArray(aiPlanResponse.plan.deliverables)) {
+        deliverables = aiPlanResponse.plan.deliverables;
+        console.log('[POLLING] ✅ Found deliverables in aiPlanResponse.plan.deliverables:', deliverables.length);
+      } 
+      // Try plan.suggestions_by_department
+      else if (aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department) {
+        const suggestionsByDept = aiPlanResponse.plan.suggestions_by_department;
+        console.log('[POLLING] Extracting from suggestions_by_department. Departments:', Object.keys(suggestionsByDept));
+        
+        Object.entries(suggestionsByDept).forEach(([dept, deptDeliverables]) => {
+          console.log(`[POLLING] Department "${dept}" has ${Array.isArray(deptDeliverables) ? deptDeliverables.length : 0} deliverables`);
+          if (Array.isArray(deptDeliverables)) {
+            // Map the backend format to our expected format
+            const mappedDeliverables = deptDeliverables.map(d => ({
+              deliverable_code: d.code || d.deliverable_code,
+              deliverable_name: d.name || d.deliverable_name || d.deliverable,
+              department: dept,
+              category: dept,
+              confidence: d.confidence_score || d.confidence || 0,
+              confidence_score: d.confidence_score || d.confidence || 0,
+              relevancy_tags: d.relevancy_tags || [],
+              evidence: d.evidence || '',
+              selected: d.selected || false
+            }));
+            deliverables = deliverables.concat(mappedDeliverables);
+          }
+        });
+        console.log('[POLLING] ✅ Total deliverables extracted from departments:', deliverables.length);
+      }
+      else {
+        console.error('[POLLING] ❌ Could not find deliverables in any expected location!');
+        console.error('[POLLING] aiPlanResponse structure:', JSON.stringify(aiPlanResponse, null, 2).substring(0, 500));
+      }
+      
+      // Log sample deliverable structure if we have any
+      if (deliverables.length > 0) {
+        console.log('[POLLING] Sample deliverable (first):', JSON.stringify(deliverables[0], null, 2));
+        console.log('[POLLING] Sample deliverable (last):', JSON.stringify(deliverables[deliverables.length - 1], null, 2));
+        console.log('[POLLING] All deliverable codes:', deliverables.map(d => d.deliverable_code || d.code || 'NO_CODE'));
+      } else {
+        console.error('[POLLING] ❌ NO DELIVERABLES EXTRACTED! This is the problem!');
+      }
+      
+      console.log('[POLLING] ======== LOADING DELIVERABLES INTO PRIMARY_SCENARIO ========');
+      console.log('[POLLING] Total deliverables to load:', deliverables.length);
+      
+      // CRITICAL: Update PRIMARY_SCENARIO with ALL deliverables
+      window.PRIMARY_SCENARIO.deliverables = deliverables;
+      window.PRIMARY_SCENARIO.analysisResults = aiPlanResponse;
+      window.PRIMARY_SCENARIO.status = 'analyzed';
+      window.PRIMARY_SCENARIO.updatedAt = new Date().toISOString();
+      
+      console.log('[POLLING] ✅ PRIMARY_SCENARIO.deliverables updated with', window.PRIMARY_SCENARIO.deliverables.length, 'items');
+      
+      // Also update DELIVERABLES global for backward compatibility
+      window.DELIVERABLES = deliverables;
+      console.log('[POLLING] ✅ window.DELIVERABLES updated with', window.DELIVERABLES.length, 'items');
+      
+      // If ScenarioManager exists, update it too
+      if (window.ScenarioManager && window.ScenarioManager.setState) {
+        window.ScenarioManager.setState({
+          deliverables: deliverables
+        });
+        console.log('[POLLING] ✅ ScenarioManager updated with', deliverables.length, 'deliverables');
+      }
+      
+      // Save PRIMARY_SCENARIO to localStorage for persistence
+      try {
+        localStorage.setItem('PRIMARY_SCENARIO', JSON.stringify(window.PRIMARY_SCENARIO));
+        console.log('[POLLING] ✅ PRIMARY_SCENARIO saved to localStorage');
+      } catch (err) {
+        console.error('[POLLING] Failed to save PRIMARY_SCENARIO to localStorage:', err);
+      }
+      
+      console.log('[POLLING] ======== DELIVERABLES LOADED SUCCESSFULLY ========');
+      console.log('[POLLING] ✅ Loaded', deliverables.length, 'deliverables into PRIMARY_SCENARIO');
+      console.log('[POLLING] ✅ Analysis complete! Found', deliverables.length, 'deliverables');
+      
       const step2 = document.getElementById('step2');
       if (step2) {
-        console.log('[ANALYSIS] Showing Step 2');
+        console.log('[POLLING] Showing Step 2');
         step2.style.display = 'block';
         step2.scrollIntoView({ behavior: 'smooth' });
       }
       
       // CRITICAL: Ensure APB.step2.allDeliverables is populated from PRIMARY_SCENARIO
       // This is needed for renderDeliverablesPanel to work correctly
+      console.log('[POLLING] ======== POPULATING APB.step2.allDeliverables ========');
+      console.log('[POLLING] PRIMARY_SCENARIO.deliverables length:', window.PRIMARY_SCENARIO.deliverables?.length || 0);
+      
       if (window.PRIMARY_SCENARIO.deliverables && window.PRIMARY_SCENARIO.deliverables.length > 0) {
-        console.log('[ANALYSIS] Populating APB.step2.allDeliverables from PRIMARY_SCENARIO');
+        console.log('[POLLING] Populating APB.step2.allDeliverables from PRIMARY_SCENARIO with', window.PRIMARY_SCENARIO.deliverables.length, 'items');
         
         // Ensure APB.step2 exists
         if (!window.APB) {
           window.APB = {};
+          console.log('[POLLING] Created window.APB');
         }
         if (!window.APB.step2) {
           window.APB.step2 = {
@@ -6353,8 +6406,10 @@ async function pollAIAnalysis(jobId) {
             filters: { deliverables: '', components: '', l2: '' },
             els: {}
           };
+          console.log('[POLLING] Created window.APB.step2');
         }
         
+        // Map deliverables to APB format
         APB.step2.allDeliverables = window.PRIMARY_SCENARIO.deliverables.map(d => ({
           Deliverable_Code: d.deliverable_code || d.Deliverable_Code || d.code || d.id,
           Deliverable: d.deliverable_name || d.Deliverable || d.name || d.title,
@@ -6368,8 +6423,11 @@ async function pollAIAnalysis(jobId) {
           evidence: d.evidence
         }));
         
+        console.log('[POLLING] ✅ APB.step2.allDeliverables populated with', APB.step2.allDeliverables.length, 'items');
+        
         // Also populate DELIVERABLES for backward compatibility
         window.DELIVERABLES = APB.step2.allDeliverables;
+        console.log('[POLLING] ✅ window.DELIVERABLES updated with', window.DELIVERABLES.length, 'items');
         
         // Build the indexes for fast lookup
         window.DELIV_INDEX = {};
@@ -6380,22 +6438,47 @@ async function pollAIAnalysis(jobId) {
           window.DELIV_INDEX_LO[code.toLowerCase()] = d;
         });
         
-        console.log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
+        console.log('[POLLING] ✅ Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
+        console.log('[POLLING] Sample index keys:', Object.keys(window.DELIV_INDEX).slice(0, 5));
+      } else {
+        console.error('[POLLING] ❌ PRIMARY_SCENARIO.deliverables is empty or undefined!');
+        console.error('[POLLING] Cannot populate APB.step2.allDeliverables');
       }
       
       // Only call renderAIPlan if we have a valid plan structure
       if (aiPlanResponse && (aiPlanResponse.plan || aiPlanResponse.deliverables)) {
+        console.log('[POLLING] Calling renderAIPlan with plan data');
         renderAIPlan(aiPlanResponse);
       } else {
-        console.warn('[ANALYSIS] No valid plan structure found in response:', aiPlanResponse);
+        console.warn('[POLLING] No valid plan structure found in response:', aiPlanResponse);
+      }
+      
+      // FINAL COMPREHENSIVE SUMMARY
+      console.log('[POLLING] ======== FINAL DATA SUMMARY ========');
+      console.log('[POLLING] PRIMARY_SCENARIO.deliverables:', window.PRIMARY_SCENARIO.deliverables?.length || 0);
+      console.log('[POLLING] APB.step2.allDeliverables:', window.APB?.step2?.allDeliverables?.length || 0);
+      console.log('[POLLING] window.DELIVERABLES:', window.DELIVERABLES?.length || 0);
+      console.log('[POLLING] DELIV_INDEX keys:', Object.keys(window.DELIV_INDEX || {}).length);
+      console.log('[POLLING] ======== END SUMMARY ========');
+      
+      // Verify data is actually loaded before calling render
+      if (!window.PRIMARY_SCENARIO.deliverables || window.PRIMARY_SCENARIO.deliverables.length === 0) {
+        console.error('[POLLING] ❌❌❌ CRITICAL ERROR: PRIMARY_SCENARIO.deliverables is empty after load!');
+        console.error('[POLLING] This means the deliverables were not properly extracted from the API response');
+        console.error('[POLLING] Check the API response structure above');
+      } else {
+        console.log('[POLLING] ✅✅✅ SUCCESS: Deliverables loaded successfully!');
       }
       
       // CRITICAL: Call renderDeliverablesPanel to populate Step 2 UI
       if (typeof window.renderDeliverablesPanel === 'function') {
-        console.log('[ANALYSIS] Calling renderDeliverablesPanel to populate Step 2');
+        console.log('[POLLING] ======== CALLING renderDeliverablesPanel ========');
+        console.log('[POLLING] Calling renderDeliverablesPanel to populate Step 2 UI with', 
+                    window.PRIMARY_SCENARIO.deliverables?.length || 0, 'deliverables');
         window.renderDeliverablesPanel();
+        console.log('[POLLING] renderDeliverablesPanel completed');
       } else {
-        console.warn('[ANALYSIS] renderDeliverablesPanel function not found!');
+        console.error('[POLLING] ❌ renderDeliverablesPanel function not found!');
       }
       
       const btnAnalyze = document.querySelector('#btnAnalyze');
@@ -6403,6 +6486,8 @@ async function pollAIAnalysis(jobId) {
         btnAnalyze.disabled = false;
         btnAnalyze.textContent = 'Analyze with AI';
       }
+      
+      console.log('[POLLING] ======== POLLING COMPLETE - JOB PROCESSED ========');
     } else if (isFailed) {
       console.log(`[POLLING] ❌ Job ${jobId} failed, stopping polling`);
       console.log(`[POLLING] 🛑 Stopping AI analysis polling - job failed`);
