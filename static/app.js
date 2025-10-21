@@ -4637,66 +4637,100 @@ async function pollAIAnalysis(jobId) {
         step2.scrollIntoView({ behavior: 'smooth' });
       }
 
-      // CRITICAL: Ensure APB.step2.allDeliverables is populated from PRIMARY_SCENARIO
-      // This is needed for renderDeliverablesPanel to work correctly
-      if (window.PRIMARY_SCENARIO.deliverables && window.PRIMARY_SCENARIO.deliverables.length > 0) {
-        log('[ANALYSIS] Populating APB.step2.allDeliverables from PRIMARY_SCENARIO');
+      // This block is now handled after normalization - removed to avoid duplication
 
-        // Ensure APB.step2 exists
-        if (!window.APB) {
-          window.APB = {};
+      // Normalize the AI response to expected format
+      const normalizedPlan = normalizeAIResponse(aiPlanResponse);
+      
+      if (normalizedPlan) {
+        // Store normalized plan in window.lastAIPlan for renderAIPlan
+        window.lastAIPlan = normalizedPlan;
+        console.log('[ANALYSIS] Normalized AI plan stored in window.lastAIPlan:', {
+          hasSummary: !!normalizedPlan.summary,
+          departments: Object.keys(normalizedPlan.suggestions_by_department || {}),
+          totals: normalizedPlan.totals
+        });
+        
+        // CRITICAL: Populate PRIMARY_SCENARIO.deliverables from normalized plan
+        // This enables the deliverables to render in Step 2
+        const allDeliverables = [];
+        for (const dept in normalizedPlan.suggestions_by_department) {
+          const deptDeliverables = normalizedPlan.suggestions_by_department[dept] || [];
+          deptDeliverables.forEach(d => {
+            allDeliverables.push({
+              deliverable_code: d.deliverable_code || d.code,
+              deliverable_name: d.name || d.title,
+              department: dept,
+              confidence: d.calibrated_confidence || 0,
+              confidence_score: d.confidence_score || 0,
+              relevancy_tags: d.relevancy_tags || [],
+              evidence: d.evidence || '',
+              risk: d.risk || '',
+              components: d.components || [],
+              selected: false
+            });
+          });
         }
-        if (!window.APB.step2) {
-          window.APB.step2 = {
-            selectedCodes: new Set(),
-            selectedComponentsByCode: {},
-            selectedL2ByKey: {},
-            allDeliverables: [],
-            aiSuggestedCodes: new Set(),
-            filters: { deliverables: '', components: '', l2: '' },
-            els: {}
-          };
-        }
-
-        APB.step2.allDeliverables = window.PRIMARY_SCENARIO.deliverables.map(d => {
-          // Handle both formats: new AI format and old OPTIONS format
-          if (d.deliverable_code || d.Deliverable_Code) {
-            return {
-              Deliverable_Code: d.deliverable_code || d.Deliverable_Code || d.code || d.id,
-              Deliverable: d.deliverable_name || d.Deliverable || d.name || d.title,
-              Category: d.department || d.Category || d.category || '',
-              Service_Dept_for_PM: d.service_dept || d.Service_Dept_for_PM || '',
-              confidence: d.confidence || d.score || 0,
-              selected: d.selected || false,
-              // Preserve additional fields for AI suggestions
-              confidence_score: d.confidence_score,
-              relevancy_tags: d.relevancy_tags,
-              evidence: d.evidence
+        
+        // Store in PRIMARY_SCENARIO for Step 2 to access
+        window.PRIMARY_SCENARIO.deliverables = allDeliverables;
+        console.log('[ANALYSIS] Stored', allDeliverables.length, 'deliverables in PRIMARY_SCENARIO');
+        
+        // Now populate APB.step2.allDeliverables from PRIMARY_SCENARIO
+        // This triggers the code at line 4642 to work properly
+        if (allDeliverables.length > 0) {
+          // Ensure APB.step2 exists
+          if (!window.APB) {
+            window.APB = {};
+          }
+          if (!window.APB.step2) {
+            window.APB.step2 = {
+              selectedCodes: new Set(),
+              selectedComponentsByCode: {},
+              selectedL2ByKey: {},
+              allDeliverables: [],
+              aiSuggestedCodes: new Set(),
+              filters: { deliverables: '', components: '', l2: '' },
+              els: {}
             };
           }
-          return d; // Return as-is if format is unknown
-        });
-
-        // Also populate DELIVERABLES for backward compatibility
-        window.DELIVERABLES = APB.step2.allDeliverables;
-
-        // Build the indexes for fast lookup
-        window.DELIV_INDEX = {};
-        window.DELIV_INDEX_LO = {};
-        APB.step2.allDeliverables.forEach(d =>{
-          const code = String(d.Deliverable_Code);
-          window.DELIV_INDEX[code] = d;
-          window.DELIV_INDEX_LO[code.toLowerCase()] = d;
-        });
-
-        log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
-      }
-
-      // Only call renderAIPlan if we have a valid plan structure
-      if (aiPlanResponse && (aiPlanResponse.plan || aiPlanResponse.deliverables)) {
-        renderAIPlan(aiPlanResponse);
+          
+          APB.step2.allDeliverables = allDeliverables.map(d => ({
+            Deliverable_Code: d.deliverable_code || d.code,
+            Deliverable: d.deliverable_name || d.name,
+            Category: d.department || '',
+            Service_Dept_for_PM: d.department || '',
+            confidence: d.confidence || 0,
+            selected: d.selected || false,
+            confidence_score: d.confidence_score,
+            relevancy_tags: d.relevancy_tags,
+            evidence: d.evidence
+          }));
+          
+          // Also populate DELIVERABLES for backward compatibility
+          window.DELIVERABLES = APB.step2.allDeliverables;
+          
+          // Build the indexes for fast lookup
+          window.DELIV_INDEX = {};
+          window.DELIV_INDEX_LO = {};
+          APB.step2.allDeliverables.forEach(d => {
+            const code = String(d.Deliverable_Code);
+            window.DELIV_INDEX[code] = d;
+            window.DELIV_INDEX_LO[code.toLowerCase()] = d;
+          });
+          
+          log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
+        }
+        
+        // Create wrapper for renderAIPlan which expects {plan: ...}
+        const planWrapper = {
+          plan: normalizedPlan
+        };
+        
+        // Call renderAIPlan with normalized structure
+        renderAIPlan(planWrapper);
       } else {
-        console.warn('[ANALYSIS] No valid plan structure found in response:', aiPlanResponse);
+        console.warn('[ANALYSIS] Could not normalize AI response, skipping renderAIPlan');
       }
 
       // CRITICAL: Call renderDeliverablesPanel to populate Step 2 UI
@@ -4815,6 +4849,132 @@ window.setAnalysisMode = function(mode) {
   }
 
   console.log('Analysis mode set to:', mode);
+}
+
+// Normalize AI response to expected format for renderAIPlan
+function normalizeAIResponse(response) {
+  console.log('[NORMALIZE] Input response:', response);
+  
+  // Handle different response structures
+  let plan = null;
+  
+  // Case 1: Response has plan.suggestions_by_department
+  if (response?.plan?.suggestions_by_department) {
+    plan = response.plan;
+  }
+  // Case 2: Response has suggestions_by_department directly
+  else if (response?.suggestions_by_department) {
+    plan = response;
+  }
+  // Case 3: Response has deliverables array that needs to be grouped
+  else if (response?.deliverables && Array.isArray(response.deliverables)) {
+    // Group deliverables by department
+    const byDept = {};
+    response.deliverables.forEach(d => {
+      const dept = d.department || d.category || d.dept || 'Strategy';
+      if (!byDept[dept]) byDept[dept] = [];
+      byDept[dept].push(d);
+    });
+    
+    plan = {
+      suggestions_by_department: byDept,
+      summary: response.summary || {}
+    };
+  }
+  // Case 4: Try to use the response as-is if it has the right structure
+  else {
+    console.warn('[NORMALIZE] Unknown response structure, attempting to use as-is');
+    plan = response;
+  }
+  
+  // Ensure plan has proper structure
+  if (!plan) {
+    console.error('[NORMALIZE] Could not normalize response - no valid plan structure found');
+    return null;
+  }
+  
+  // Normalize the plan structure
+  const normalized = {
+    summary: plan.summary || {
+      goals: [],
+      channels: [],
+      markets: [],
+      complexity: 'Medium',
+      text: ''
+    },
+    suggestions_by_department: {},
+    totals: {
+      deliverables: 0,
+      components: 0,
+      tasks: 0
+    }
+  };
+  
+  // Process each department's deliverables
+  const depts = plan.suggestions_by_department || {};
+  Object.keys(depts).forEach(dept => {
+    const deliverables = depts[dept] || [];
+    normalized.suggestions_by_department[dept] = [];
+    
+    deliverables.forEach(deliv => {
+      // Normalize deliverable structure
+      const normalizedDeliv = {
+        deliverable_code: deliv.deliverable_code || deliv.code || deliv.id || `DEL-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
+        deliverable_name: deliv.deliverable_name || deliv.name || deliv.title || deliv.deliverable || 'Unnamed Deliverable',
+        department: dept,
+        calibrated_confidence: deliv.calibrated_confidence || deliv.confidence || deliv.confidence_score || 0,
+        risk_notes: deliv.risk_notes || deliv.risks || '',
+        evidence: deliv.evidence || deliv.why || deliv.rationale || '',
+        components: [],
+        // Additional fields for UI
+        selected: deliv.selected || deliv.select || false,
+        ai_selected: deliv.ai_selected !== false, // Default to true
+        hours: deliv.hours || deliv.base_hours || 0
+      };
+      
+      // Normalize components if they exist
+      if (deliv.components && Array.isArray(deliv.components)) {
+        deliv.components.forEach(comp => {
+          const normalizedComp = {
+            id: `${normalizedDeliv.deliverable_code}::${comp.title || comp.name || 'Component'}`,
+            title: comp.title || comp.name || 'Component',
+            hours: comp.hours || 0,
+            ai_selected: comp.ai_selected !== false,
+            tasks: []
+          };
+          
+          // Normalize tasks if they exist
+          if (comp.tasks && Array.isArray(comp.tasks)) {
+            comp.tasks.forEach(task => {
+              const normalizedTask = {
+                id: `${normalizedComp.id}::${task.title || task.name || 'Task'}`,
+                title: task.title || task.name || 'Task',
+                planned_hours: task.planned_hours || task.hours || 0,
+                ai_selected: task.ai_selected !== false,
+                why: task.why || task.rationale || ''
+              };
+              normalizedComp.tasks.push(normalizedTask);
+              normalized.totals.tasks++;
+            });
+          }
+          
+          normalizedDeliv.components.push(normalizedComp);
+          normalized.totals.components++;
+        });
+      }
+      
+      normalized.suggestions_by_department[dept].push(normalizedDeliv);
+      normalized.totals.deliverables++;
+    });
+  });
+  
+  console.log('[NORMALIZE] Output structure:', {
+    hasSummary: !!normalized.summary,
+    departments: Object.keys(normalized.suggestions_by_department),
+    totals: normalized.totals
+  });
+  
+  return normalized;
 }
 
 // Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
@@ -6974,10 +7134,158 @@ const step2State = {
 };
 window.step2State = step2State;
 
+// Function to render deliverables panel in Step 2 from AI suggestions
+function renderDeliverablesPanel() {
+  console.log('[renderDeliverablesPanel] Starting render');
+  
+  // Check if we have the necessary container
+  const delivContainer = document.querySelector('#deliverables-list, .deliverables-container, #step2-deliverables');
+  if (!delivContainer) {
+    console.warn('[renderDeliverablesPanel] No deliverables container found in DOM');
+    return;
+  }
+  
+  // Check if we have deliverables to render
+  if (!APB.step2 || !APB.step2.allDeliverables || APB.step2.allDeliverables.length === 0) {
+    console.warn('[renderDeliverablesPanel] No deliverables data available');
+    delivContainer.innerHTML = '<div style="padding: 20px; text-align: center; color: #999;">No deliverables available. Please run AI analysis first.</div>';
+    return;
+  }
+  
+  // Group deliverables by category/department
+  const deliverablesByDept = {};
+  APB.step2.allDeliverables.forEach(deliv => {
+    const dept = deliv.Category || deliv.department || 'General';
+    if (!deliverablesByDept[dept]) {
+      deliverablesByDept[dept] = [];
+    }
+    deliverablesByDept[dept].push(deliv);
+  });
+  
+  // Build HTML for deliverables
+  let html = '<div class="deliverables-panel">';
+  
+  // Add header with counts
+  const totalDelivs = APB.step2.allDeliverables.length;
+  const selectedDelivs = APB.step2.selectedCodes?.size || 0;
+  html += `
+    <div style="padding: 10px; background: rgba(0,0,0,0.2); margin-bottom: 10px; border-radius: 4px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 1.1em; font-weight: 600;">Deliverables</span>
+        <span style="color: #10b981;">${selectedDelivs} / ${totalDelivs} selected</span>
+      </div>
+    </div>
+  `;
+  
+  // Render each department's deliverables
+  Object.keys(deliverablesByDept).sort().forEach(dept => {
+    const deliverables = deliverablesByDept[dept];
+    
+    html += `
+      <details open style="margin-bottom: 10px;">
+        <summary style="cursor: pointer; padding: 8px; background: rgba(99,102,241,0.1); border-radius: 4px; font-weight: 600;">
+          ${dept} (${deliverables.length})
+        </summary>
+        <div style="padding: 8px;">
+    `;
+    
+    deliverables.forEach(deliv => {
+      const code = deliv.Deliverable_Code || deliv.deliverable_code;
+      const name = deliv.Deliverable || deliv.deliverable_name;
+      const isSelected = APB.step2.selectedCodes?.has(String(code)) || false;
+      const confidence = deliv.confidence || deliv.confidence_score || 0;
+      
+      html += `
+        <div class="deliv-row" data-code="${code}" style="display: flex; align-items: center; padding: 6px; margin-bottom: 4px; background: rgba(0,0,0,0.1); border-radius: 4px;">
+          <input type="checkbox" 
+                 class="deliv-checkbox" 
+                 data-deliverable="${code}" 
+                 data-deliverable-code="${code}"
+                 ${isSelected ? 'checked' : ''}
+                 onchange="if(window.selectDeliverable) { this.checked ? selectDeliverable('${code}') : unselectDeliverable('${code}'); }"
+                 style="margin-right: 8px;">
+          <div style="flex: 1;">
+            <div style="font-weight: 500;">${code}: ${name}</div>
+            ${confidence > 0 ? `<div style="font-size: 0.85em; color: #10b981;">Confidence: ${Math.round(confidence * 100)}%</div>` : ''}
+          </div>
+        </div>
+      `;
+    });
+    
+    html += `
+        </div>
+      </details>
+    `;
+  });
+  
+  // Add select all/none buttons
+  html += `
+    <div style="display: flex; gap: 10px; padding: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
+      <button onclick="selectAllDeliverables()" style="padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer;">
+        Select All
+      </button>
+      <button onclick="clearAllDeliverables()" style="padding: 6px 12px; background: #ef4444; color: white; border: none; border-radius: 4px; cursor: pointer;">
+        Clear All
+      </button>
+    </div>
+  `;
+  
+  html += '</div>';
+  
+  delivContainer.innerHTML = html;
+  console.log('[renderDeliverablesPanel] Rendered', totalDelivs, 'deliverables');
+}
+
+// Helper functions for select all/clear all
+function selectAllDeliverables() {
+  const checkboxes = document.querySelectorAll('.deliv-checkbox');
+  checkboxes.forEach(cb => {
+    if (!cb.checked) {
+      cb.checked = true;
+      const code = cb.dataset.deliverable;
+      if (code && window.selectDeliverable) {
+        selectDeliverable(code);
+      }
+    }
+  });
+  updateStep2Summary();
+}
+
+function clearAllDeliverables() {
+  const checkboxes = document.querySelectorAll('.deliv-checkbox');
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      cb.checked = false;
+      const code = cb.dataset.deliverable;
+      if (code && window.unselectDeliverable) {
+        unselectDeliverable(code);
+      }
+    }
+  });
+  updateStep2Summary();
+}
+
+// Function to render components panel (placeholder for now)
+function renderComponentsPanel(deliverableCode) {
+  console.log('[renderComponentsPanel] Called with deliverable:', deliverableCode);
+  // This function will be implemented when components UI is needed
+  // For now, it's a placeholder to prevent errors
+}
+
+// Function to render L2 panel (placeholder for now)
+function renderL2Panel() {
+  console.log('[renderL2Panel] Called');
+  // This function will be implemented when L2 tasks UI is needed
+  // For now, it's a placeholder to prevent errors
+}
+
 // Expose functions globally
 window.updateStep2Summary = updateStep2Summary;
 window.renderComponentsPanel = renderComponentsPanel;
 window.renderL2Panel = renderL2Panel;
+window.renderDeliverablesPanel = renderDeliverablesPanel;
+window.selectAllDeliverables = selectAllDeliverables;
+window.clearAllDeliverables = clearAllDeliverables;
 
 // Update summary panel with current selection counts
 function updateStep2Summary() {
@@ -7685,7 +7993,8 @@ window.toggleSessionInfo = toggleSessionInfo;
 window.startNewSession = startNewSession;
 window.clearAllData = clearAllData;
 
-window.addEventListener("load", boot);
+// Commented out because boot function doesn't exist
+// window.addEventListener("load", boot);
 
 // LEARN button functionality (Learning Brain integration)
 (function attachLearn(){
