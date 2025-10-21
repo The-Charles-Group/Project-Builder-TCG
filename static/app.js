@@ -466,6 +466,7 @@ window.resumeAIPolling = function(jobId) {
   // Clear any existing intervals first
   if (window.aiAnalysisInterval) {
     clearInterval(window.aiAnalysisInterval);
+    window.aiAnalysisInterval = null;
   }
   if (window.PROTECTED_AI_INTERVAL) {
     clearInterval(window.PROTECTED_AI_INTERVAL);
@@ -665,7 +666,7 @@ document.addEventListener('task:dragging', (event) => {
 
 // NEW: Listen for Gantt task updates (drag/resize) and sync with SCENARIO_STORE
 document.addEventListener('gantt:task_updated', async (event) => {
-  const { task, wbs_id, start_date, duration_days } = event.detail || {};
+  const {task, wbs_id, start_date, duration_days } = event.detail || {};
   if (!wbs_id) return;
 
   console.log('[GANTT SYNC] Task updated:', { wbs_id, start_date, duration_days });
@@ -678,7 +679,7 @@ document.addEventListener('gantt:task_updated', async (event) => {
     const response = await fetch('/api/timeline/update_task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         session_id: sessionId,
         wbs_id: wbs_id,
         start_date: start_date,
@@ -786,7 +787,7 @@ async function askAIForRetainerSuggestions(monthlyBudget = null) {
     const res = await fetch('/api/pricing/retainer_suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         session_id: sessionId,
         monthly_budget: monthlyBudget,
         scenario: currentScenario  // Send the full scenario for analysis
@@ -1097,7 +1098,7 @@ async function suggestRetainerConfig(code) {
     const analyzeRes = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         rfp_text: rfpText,
         deliverables: [{ code, name: labelFor(code) || code }]
       })
@@ -1121,7 +1122,7 @@ async function suggestRetainerConfig(code) {
           const monthsRes = await fetch('/api/pricing/retainer_suggest', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            body: JSON.JSON.stringify({
               deliverables: [{ 
                 code, 
                 name: labelFor(code) || code,
@@ -1175,7 +1176,7 @@ async function autoDetectRetainers() {
     const res = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         rfp_text: rfpText,
         deliverables
       })
@@ -1555,7 +1556,7 @@ async function redistributeHours(deliverableCode, newTotalHours, level) {
     const response = await fetch('/api/pricing/redistribute-hours', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         deliverable_code: deliverableCode,
         new_total_hours: newTotalHours,
         level: level // 'deliverable' or 'component'
@@ -1787,7 +1788,7 @@ async function aiSuggestMonthlyDistribution() {
     const response = await fetch('/api/pricing/suggest-monthly-distribution', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         item_id: pricingData.currentMonthlyItem,
         total_hours: 100, // Default or calculated from current values
         seasonality: 'balanced' // Could be 'front-loaded', 'back-loaded', 'seasonal'
@@ -1852,7 +1853,7 @@ function updatePricingTable() {
 
   // Store original scenario on first load
   if (!pricingData.originalScenario) {
-    pricingData.originalScenario = JSON.parse(JSON.stringify(scenario));
+    pricingData.originalScenario = JSON.parse(JSON.JSON.stringify(scenario));
   }
 
   // Create comprehensive table HTML structure
@@ -1999,8 +2000,7 @@ function updatePricingTable() {
                       min="1" max="36" step="1"
                       onchange="updatePeriods('${item.deliverable_code}', this.value)"
                       style="width: 70px; padding: 6px; border: 1px solid rgba(139,92,246,0.3); 
-                             border-radius: 4px; background: rgba(139,92,246,0.05); 
-                             color: var(--text); text-align: center; font-weight: 500;" />` :
+                             border-radius: 4px; font-size: 0.85em;" />` :
               `<span style="font-weight: 500; color: var(--accent2);">${periods}</span>`) :
             '<span style="color: var(--muted);">-</span>'}
         </td>
@@ -2480,21 +2480,6 @@ function toggleDeliverableExpand(deliverableCode) {
   }
 }
 
-// Toggle component expansion to show/hide tasks
-function toggleComponentExpand(deliverableCode, componentName) {
-  const safeCompName = componentName.replace(/\s+/g, '_');
-  const expandIcon = document.getElementById(`expand-comp-${deliverableCode}-${safeCompName}`);
-  const taskRows = document.querySelectorAll(`.task-row-comp-${deliverableCode}-${safeCompName}`);
-
-  if (expandIcon.textContent === '▶') {
-    expandIcon.textContent = '▼';
-    taskRows.forEach(row => row.style.display = '');
-  } else {
-    expandIcon.textContent = '▶';
-    taskRows.forEach(row => row.style.display = 'none');
-  }
-}
-
 // Update deliverable type (PROJECT/RETAINER)
 function updateDeliverableType(deliverableCode, type) {
   pricingData.deliverableTypes.set(deliverableCode, type);
@@ -2555,7 +2540,7 @@ async function analyzeProjectRetainer() {
     const response = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         rfp_text: rfpText,
         deliverables: deliverables
       })
@@ -3112,7 +3097,7 @@ async function optimizeAllPricing() {
         const response = await fetch('/api/pricing/redistribute-hours', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: JSON.JSON.stringify({
             deliverable_code: code,
             deliverable_name: deliv.name,
             new_total_hours: deliv.total_hours,
@@ -3230,7 +3215,7 @@ function performSmartOptimization(scenario, clientBudget) {
     const reduction = ((1 - scaleFactor) * 100).toFixed(1);
     message += `📉 Reduced all deliverables by ${reduction}% to fit within budget\n`;
     message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
-  } else if (scaleFactor > 1) {
+  } else if (scaleFactor > 1.2) {
     const increase = ((scaleFactor - 1) * 100).toFixed(1);
     message += `📈 Increased all deliverables by ${increase}% to maximize budget utilization\n`;
     message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
@@ -3377,7 +3362,7 @@ async function exportPricingDetails() {
     const response = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         scenario: scenario,
         file_format: fileFormat
       })
@@ -3390,10 +3375,8 @@ async function exportPricingDetails() {
       a.href = url;
       const ext = fileFormat === 'xlsx' ? 'xlsx' : 'csv';
       a.download = `${exportData.project_name}_pricing_${new Date().toISOString().split('T')[0]}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
     } else {
       const errorText = await response.text();
       console.error('Export failed:', errorText);
@@ -3449,26 +3432,26 @@ window.cancelTimelineGeneration = cancelTimelineGeneration;
 
 function cancelTimelineGeneration() {
   log('[TIMELINE] Cancelling timeline generation');
-  
+
   // Clear polling interval if active
   if (timelinePollingIntervalId) {
     clearInterval(timelinePollingIntervalId);
     timelinePollingIntervalId = null;
   }
-  
+
   // Hide progress UI
   const loading = document.getElementById('timeline-loading');
   if (loading) {
     loading.style.display = 'none';
   }
-  
+
   // Reset button state
   const btn = document.getElementById('btn-generate-timeline');
   if (btn) {
     btn.disabled = false;
     btn.textContent = '🤖 Generate AI Timeline';
   }
-  
+
   console.log('[TIMELINE] Timeline generation cancelled');
 }
 
@@ -3823,7 +3806,7 @@ async function generateAITimeline(retryAttempt = 0) {
     // Get RFP text for context
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
 
-    // ISSUE FIX 4: Ensure timeline gets proper scenario items with actual count
+    // ISSUE 3: Ensure timeline gets proper scenario items with actual count
     // First check if SCENARIOS exists in memory, if not, try to load from localStorage
     let SCENARIOS = window.SCENARIOS;
 
@@ -3879,7 +3862,7 @@ async function generateAITimeline(retryAttempt = 0) {
 
     if (!scenario.items) {
       console.error('[TIMELINE] Scenario A exists but has no items:', scenario);
-      alert('Error: Scenario has no deliverables list. Please rebuild in Step 3.');
+      alert('Error: Scenario has no deliverables list. Please select deliverables in Step 2 and rebuild.');
       btn.disabled = false;
       btn.textContent = '🤖 Generate AI Timeline';
       loading.style.display = 'none';
@@ -3929,7 +3912,7 @@ async function generateAITimeline(retryAttempt = 0) {
       response = await fetch('/api/ai/generate_timeline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.JSON.stringify({
           deliverables: deliverables,
           rfp_text: rfpText,
           project_start: projectStart,
@@ -4113,94 +4096,6 @@ function showRecoverableWarning(message) {
   }, 5000);
 }
 
-// Helper: Show Step 3 with fallback data
-function showStep3WithFallback(codes) {
-  console.warn('[BUILD] Using fallback to show Step 3');
-
-  try {
-    const step3 = document.querySelector("#step3");
-    if (step3) {
-      step3.style.display = "block";
-      step3.scrollIntoView({ behavior: "smooth" });
-
-      // Show warning message
-      showRecoverableWarning('Simplified pricing view. Some features may be limited.');
-
-      // Create minimal scenario for UI
-      const fallbackScenario = {
-        A: {
-          items: codes.map(code => ({
-            deliverable_code: code,
-            deliverable_name: code,
-            category: 'General',
-            hours: 40,
-            rate: 195,
-            price: 7800
-          }))
-        }
-      };
-
-      window.SCENARIOS = fallbackScenario;
-      window.APP_STATE = window.APP_STATE || {};
-      window.APP_STATE.scenarios = fallbackScenario;
-    }
-  } catch (error) {
-    console.error('[BUILD] Error in fallback:', error);
-    createStep3Fallback();
-  }
-}
-
-// Helper: Create Step 3 dynamically as last resort
-function createStep3Fallback() {
-  console.error('[BUILD] Creating Step 3 dynamically as last resort');
-
-  try {
-    // Find where to insert Step 3
-    const step2 = document.querySelector("#step2");
-    if (!step2) {
-      console.error('[BUILD] Cannot find Step 2 to insert after');
-      return;
-    }
-
-    // Create minimal Step 3
-    const step3 = document.createElement('section');
-    step3.id = 'step3';
-    step3.className = 'card';
-    step3.innerHTML = `
-      <h2>Step 3 — Configure Pricing</h2>
-      <div style="padding: 20px; background: rgba(220, 53, 69, 0.1); border: 1px solid rgba(220, 53, 69, 0.3); border-radius: 8px; margin: 20px 0;">
-        <h3 style="color: #dc3545;">⚠️ Recovery Mode</h3>
-        <p>We encountered an issue loading the pricing configuration.</p>
-        <p>You can:</p>
-        <ul>
-          <li>Refresh the page and try again</li>
-          <li>Contact support if the issue persists</li>
-        </ul>
-        <button onclick="window.location.reload()" style="
-          background: #dc3545;
-          color: white;
-          border: none;
-          padding: 10px 20px;
-          border-radius: 6px;
-          cursor: pointer;
-          font-weight: 600;
-          margin-top: 10px;
-        ">Refresh Page</button>
-      </div>
-    `;
-
-    // Insert after Step 2
-    step2.parentNode.insertBefore(step3, step2.nextSibling);
-    step3.style.display = 'block';
-    step3.scrollIntoView({ behavior: 'smooth' });
-
-    console.log('[BUILD] Emergency Step 3 created and displayed');
-  } catch (error) {
-    console.error('[BUILD] Failed to create emergency Step 3:', error);
-    alert('Critical error: Unable to proceed to pricing. Please refresh the page.');
-  }
-}
-
 // Helper: Retry transition
 window.retryTransition = function() {
   console.log('[BUILD] Retrying transition...');
@@ -4234,7 +4129,6 @@ window.addEventListener('error', function(event) {
       step3.style.display = 'block';
       step3.style.visibility = 'visible';
       step3.style.opacity = '1';
-      step3.classList.remove('hidden', 'error', 'loading');
       // No scrollIntoView here, let the user decide where to look
 
       // Show error message
@@ -4550,7 +4444,7 @@ function cleanupPolling() {
     clearInterval(progressInterval);
     progressInterval = null;
   }
-  // Note: pollingIntervalId is managed within generateAITimeline function scope
+  // Note: timelinePollingIntervalId is managed within generateAITimeline function scope
 }
 
 // Expose cleanup function globally
@@ -4674,7 +4568,7 @@ async function pollAIAnalysis(jobId) {
                 }
               });
             }
-            localStorage.setItem('charles_agent_state', JSON.stringify(state));
+            localStorage.setItem('charles_agent_state', JSON.JSON.stringify(state));
             log('[POLLING] Cleared job ID from charles_agent_state');
           }
         }
@@ -4738,7 +4632,7 @@ async function pollAIAnalysis(jobId) {
       window.APP.aiPlan = aiPlanResponse;
       sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
 
-      // CRITICAL FIX: Update PRIMARY_SCENARIO with deliverables from AI analysis
+      // CRITICAL: Update PRIMARY_SCENARIO with deliverables from AI analysis
       log('[ANALYSIS DEBUG] AI Plan Response structure:', {
         hasDeliverables: !!aiPlanResponse.deliverables,
         hasPlan: !!aiPlanResponse.plan,
@@ -4850,18 +4744,24 @@ async function pollAIAnalysis(jobId) {
           };
         }
 
-        APB.step2.allDeliverables = window.PRIMARY_SCENARIO.deliverables.map(d => ({
-          Deliverable_Code: d.deliverable_code || d.Deliverable_Code || d.code || d.id,
-          Deliverable: d.deliverable_name || d.Deliverable || d.name || d.title,
-          Category: d.department || d.Category || d.category || '',
-          Service_Dept_for_PM: d.service_dept || d.Service_Dept_for_PM || '',
-          confidence: d.confidence || d.score || 0,
-          selected: d.selected || false,
-          // Preserve additional fields for AI suggestions
-          confidence_score: d.confidence_score,
-          relevancy_tags: d.relevancy_tags,
-          evidence: d.evidence
-        }));
+        APB.step2.allDeliverables = window.PRIMARY_SCENARIO.deliverables.map(d => {
+          // Handle both formats: new AI format and old OPTIONS format
+          if (d.deliverable_code || d.Deliverable_Code) {
+            return {
+              Deliverable_Code: d.deliverable_code || d.Deliverable_Code || d.code || d.id,
+              Deliverable: d.deliverable_name || d.Deliverable || d.name || d.title,
+              Category: d.department || d.Category || d.category || '',
+              Service_Dept_for_PM: d.service_dept || d.Service_Dept_for_PM || '',
+              confidence: d.confidence || d.score || 0,
+              selected: d.selected || false,
+              // Preserve additional fields for AI suggestions
+              confidence_score: d.confidence_score,
+              relevancy_tags: d.relevancy_tags,
+              evidence: d.evidence
+            };
+          }
+          return d; // Return as-is if format is unknown
+        });
 
         // Also populate DELIVERABLES for backward compatibility
         window.DELIVERABLES = APB.step2.allDeliverables;
@@ -4869,7 +4769,7 @@ async function pollAIAnalysis(jobId) {
         // Build the indexes for fast lookup
         window.DELIV_INDEX = {};
         window.DELIV_INDEX_LO = {};
-        APB.step2.allDeliverables.forEach(d => {
+        APB.step2.allDeliverables.forEach(d =>{
           const code = String(d.Deliverable_Code);
           window.DELIV_INDEX[code] = d;
           window.DELIV_INDEX_LO[code.toLowerCase()] = d;
@@ -4925,7 +4825,7 @@ async function pollAIAnalysis(jobId) {
     }
   } catch (error) {
     console.error('[POLLING] Error polling AI analysis:', error);
-    // Don't stop polling on network errors, let it retry
+    // Don't stop polling on transient errors - retry
   }
 }
 
@@ -5202,7 +5102,7 @@ async function onRunReconcile() {
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
+      body: JSON.JSON.stringify({ 
         request_text: rfpText,
         strictness: 'balanced',
         tier: tier,
@@ -5245,7 +5145,7 @@ async function onRunReconcile() {
       // Start polling for job status (SSE not implemented for AI jobs yet)
       // Poll the correct endpoint for job status
 
-      // CRITICAL FIX: Force GlobalPollingManager to allow polling BEFORE starting
+      // CRITICAL: Force GlobalPollingManager to allow polling BEFORE starting
       if (window.GlobalPollingManager) {
         console.log('[POLLING FIX] Forcing GlobalPollingManager to allow polling...');
         window.GlobalPollingManager.isShuttingDown = false;
@@ -5311,7 +5211,7 @@ async function onRunReconcile() {
             const aiPlanResponse = data.result;
             window.APP = window.APP || {};
             window.APP.aiPlan = aiPlanResponse;
-            sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
+            sessionStorage.setItem('apb:aiPlan', JSON.JSON.stringify(aiPlanResponse));
 
             const step2 = document.getElementById('step2');
             if (step2) {
@@ -5534,8 +5434,6 @@ function renderAIPlan(aiPlan) {
         </p>
       </div>
     `;
-
-    const deptOrder = ['Strategy', 'Creative', 'Content', 'Paid Media', 'Technology', 'Integrated Marketing Management'];
 
     for (const dept of deptOrder) {
       const deliverables = suggestionsByDept[dept] || [];
@@ -5948,7 +5846,7 @@ async function applyAllSelectedFromAI() {
       console.log('[APPLY-AI] Clearing CHARLES jobId:', charlesState.jobId);
       charlesState.jobId = null;
       charlesState.jobIdTimestamp = null;
-      localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
+      localStorage.setItem('charles_agent_state', JSON.JSON.stringify(charlesState));
     }
   } catch (e) {
     console.error('[APPLY-AI] Error clearing localStorage:', e);
@@ -6032,7 +5930,7 @@ async function applyAllSelectedFromAI() {
         const res = await fetch('/api/step2/l2/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: JSON.JSON.stringify({
             deliverable: delivCode,
             components: componentArray
           })
@@ -6473,7 +6371,8 @@ function renderAISuggestionsPanel(dCode, ai) {
           if (!selectionStore.l2ByComponent.has(key)) {
             selectionStore.l2ByComponent.set(key, new Set());
           }
-          items.forEach(t => selectionStore.l2ByComponent.get(key).add(t.label));
+          const existingTasks = selectionStore.l2ByComponent.get(key);
+          items.forEach(t => existingTasks.add(t.label));
         }
       }
 
@@ -6521,7 +6420,7 @@ async function reconcileAndRender(aiLabels, selectedCodes) {
     const res = await fetch('/api/reconcile', {
       method: 'POST', 
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.JSON.stringify({
         summary_deliverables: aiLabels,
         db_selected_deliverable_codes: selectedCodes,
         rfp_text: window.APP?.rfpText || ''
@@ -6611,8 +6510,8 @@ function s2onAdd(code) {
   if (!code) return;
   S2.selectedCodes.add(code);
   // AI-suggested deliverables default to ALL components unless user manually edits
-  if (!S2.selectedComponentsMap[code]) {
-    S2.selectedComponentsMap[code] = 'ALL';
+  if (!S2.selectedComponentsByCode[code]) {
+    S2.selectedComponentsByCode[code] = 'ALL';
   }
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
@@ -6644,7 +6543,7 @@ function s2onAdd(code) {
 function s2onRemove(code) {
   if (!code) return;
   S2.selectedCodes.delete(code);
-  S2.selectedComponentsMap[code] = undefined; // Remove custom component selection
+  S2.selectedComponentsByCode[code] = undefined; // Remove custom component selection
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
 
@@ -6770,7 +6669,7 @@ function s2onRemove(code) {
     const r = await fetch('/api/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.JSON.stringify(payload)
     });
     const scenarios = await r.json();
     // keep for future edits
@@ -6952,7 +6851,7 @@ async function onExport(which){
   const res = await fetch("/api/export", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({scenario: SCENARIOS[which]})
+    body: JSON.JSON.stringify({scenario: SCENARIOS[which]})
   });
   if(!res.ok){ alert("Export failed"); return; }
   const blob = await res.blob();
@@ -6965,1237 +6864,6 @@ async function onExport(which){
 }
 
 // Component Selection Functionality
-async function openComponentPicker(code, name) {
-  try {
-    const complexity = document.querySelector('#complexity')?.value || 'Advanced';
-    const tier = document.querySelector('#tier')?.value || 'T2_MediumVolume';
-
-    const response = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${encodeURIComponent(complexity)}&tier=${encodeURIComponent(tier)}`);
-    const data = await response.json();
-    const components = data.items || [];
-
-    if (components.length === 0) {
-      alert(`No components found for ${name}`);
-      return;
-    }
-
-    // Check if this deliverable has been customized before
-    // If not, initialize with undefined (not an empty Set) to indicate "use all defaults"
-    const currentSelection = APB.step2.selectedComponentsByCode[code];
-    let current;
-    if (!currentSelection || currentSelection === '__ALL__') {
-      // Default to all selected if no custom selection exists
-      current = new Set(components.map(c => c.name));
-    } else if (currentSelection instanceof Set) {
-      current = currentSelection;
-    } else if (Array.isArray(currentSelection)) {
-      current = new Set(currentSelection);
-    } else if (typeof currentSelection === 'object' && currentSelection !== null) {
-      current = new Set(Object.keys(currentSelection));
-    } else {
-      // Fallback if state is corrupted - default to all selected
-      current = new Set(components.map(c => c.name));
-    }
-
-    // Ensure the current selection is stored back in the correct format
-    APB.step2.selectedComponentsByCode[code] = current;
-
-    // Create modal
-    const modal = el(`
-      <div id="component-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
-        <div style="background: var(--card); padding: 24px; border-radius: 8px; max-width: 500px; width: 90%; max-height: 80%; overflow-y: auto;">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <h3 style="margin: 0;">Components for ${name}</h3>
-            <button onclick="closeComponentPicker()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
-          </div>
-          <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
-          <div id="component-list"></div>
-          <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
-            <button onclick="closeComponentPicker()" class="btn-primary">Done</button>
-          </div>
-        </div>
-      </div>
-    `);
-
-    document.body.appendChild(modal);
-
-    // Populate component list with auto-apply on change
-    const list = document.getElementById('component-list');
-    components.forEach(comp => {
-      const item = el(`
-        <label style="display: block; margin: 8px 0; cursor: pointer;">
-          <input type="checkbox" data-component="${comp.name}" ${current.has(comp.name) ? 'checked' : ''}>
-          ${comp.name} <small style="color: var(--muted);">(${Math.round(comp.hours)} h)</small>
-        </label>
-      `);
-
-      // Auto-apply changes when checkbox changes
-      const checkbox = item.querySelector('input[type="checkbox"]');
-      checkbox.addEventListener('change', (e) => {
-        // Ensure we are working with a Set
-        if (!(current instanceof Set)) {
-          current = new Set(Array.from(current || []));
-          APB.step2.selectedComponentsByCode[code] = current;
-        }
-
-        if (e.target.checked) {
-          current.add(comp.name);
-        } else {
-          current.delete(comp.name);
-        }
-
-        // Update the global S2 state as well for consistency
-        S2.selectedComponentsByCode[code] = current;
-      });
-
-      list.appendChild(item);
-    });
-
-  } catch (error) {
-    console.error('Error loading components:', error);
-    alert('Error loading components. Please try again.');
-  }
-}
-
-function closeComponentPicker() {
-  const modal = document.getElementById('component-modal');
-  if (modal) modal.remove();
-}
-
-function saveComponentSelection(code) {
-  const modal = document.getElementById('component-modal');
-  const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
-
-  selectedComponentsMap[code] = new Set();
-  checkboxes.forEach(cb => {
-    if (cb.checked) {
-      selectedComponentsMap[code].add(cb.dataset.component);
-    }
-  });
-
-  closeComponentPicker();
-  renderYourSelection(); // Refresh the display to show component count
-}
-
-// Timeline functionality
-function getScenario(letter) {
-  return window.appState?.scenarios?.[letter];
-}
-
-// Timeline rendering function removed - using the one in index.html to avoid conflicts
-
-function enableTimelineDnD(letter) {
-  const body = document.getElementById('tl-body');
-  if (!body) {
-    console.log("Timeline body not available for DnD setup");
-    return;
-  }
-  let dragEl = null;
-
-  body.querySelectorAll('.tl-row').forEach(row => {
-    row.addEventListener('dragstart', e => {
-      dragEl = row;
-      e.dataTransfer.effectAllowed = 'move';
-      row.classList.add('dragging');
-    });
-    row.addEventListener('dragend', () => row.classList.remove('dragging'));
-    row.addEventListener('dragover', e => {
-      e.preventDefault();
-      const after = getDragAfterElement(body, e.clientY);
-      if (!after) body.appendChild(dragEl);
-      else body.insertBefore(dragEl, after);
-    });
-  });
-
-  function getDragAfterElement(container, y) {
-    const els = [...container.querySelectorAll('.tl-row:not(.dragging)')];
-    return els.reduce((closest, child) => {
-      const box = child.getBoundingClientRect();
-      const offset = y - box.top - box.height / 2;
-      return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
-    }, { offset: Number.NEGATIVE_INFINITY }).element;
-  }
-
-  // Save + recompute schedule
-  document.getElementById('timeline-controls')?.querySelector('#tl-save')?.remove();
-  const btn = document.createElement('button');
-  btn.id = 'tl-save'; btn.textContent = 'Save Order';
-  btn.onclick = async () => {
-    try {
-      const scenario = getScenario(letter);
-      if (!scenario) return;
-
-      // Get ordered deliverable codes from UI
-      const rows = [...body.querySelectorAll('.tl-row')];
-      const codes = rows.map(tr => tr.dataset.dcode);
-
-      // Build included_map from current scenario items
-      const includedMap = Object.fromEntries(
-        scenario.items.map(item => [item.deliverable_code, item.included_task_groups ?? []])
-      );
-
-      // Get knobs from current scenario (these are the authoritative values)
-      const knobs = {
-        project_start: scenario.project_start,
-        complexity: scenario.items[0]?.complexity,  // Use first item's complexity as default
-        tier: scenario.items[0]?.tier,  // Use first item's tier as default
-        use_slack: scenario.use_slack,
-        slack_after_internal: scenario.slack_after_internal,
-        slack_after_client: scenario.slack_after_client,
-        slack_global_pct: scenario.slack_global_pct
-      };
-
-      const payload = {
-        scenario_letter: letter,
-        deliverable_codes: codes,
-        included_map: includedMap,
-        project_start: knobs.project_start,
-        complexity: knobs.complexity,
-        tier: knobs.tier,
-        use_slack: knobs.use_slack,
-        slack_after_internal: knobs.slack_after_internal,
-        slack_after_client: knobs.slack_after_client,
-        slack_global_pct: knobs.slack_global_pct
-      };
-
-      const res = await fetch('/api/reorder_timeline', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
-      }).then(r => r.json());
-
-      // Replace local items with server-persisted order + dates
-      if (res.items && window.appState.scenarios[letter]) {
-        window.appState.scenarios[letter] = {
-          ...window.appState.scenarios[letter],
-          items: res.items,
-          user_order: codes,
-          manual_order_locked: true
-        };
-      }
-      renderTimeline(letter);
-    } catch (error) {
-      console.error('[TIMELINE] Error saving timeline order (app.js):', error);
-      alert(`An error occurred while saving the timeline order. Please try again.`);
-    }
-  };
-  document.getElementById('timeline-controls')?.appendChild(btn);
-}
-
-function renderTimelineStatus(letter) {
-  const scen = getScenario(letter);
-  const box = document.getElementById('timeline-status');
-  if (!box) {
-    console.log("Timeline status element not available");
-    return;
-  }
-  if (!scen) { box.innerHTML = ''; return; }
-
-  // Sum days by deliverable
-  const stats = (scen.items || []).map(d => {
-    const days = (d.schedule || []).reduce((n,s)=>n+(s.duration_days||0),0);
-    return { label: d.deliverable, days };
-  });
-  const total = stats.reduce((n,s)=>n+s.days,0) || 1;
-  const rows = stats
-    .sort((a,b)=>b.days-a.days)
-    .map(s => {
-      const pct = Math.round((100*s.days)/total);
-      return `<div class="stat">
-        <div class="label">${s.label}</div>
-        <div class="bar"><span style="width:${pct}%"></span></div>
-        <div class="pct">${pct}%</div>
-      </div>`;
-    }).join('');
-  box.innerHTML = `<h4>Time Allocation (Scenario ${letter})</h4>${rows}`;
-}
-
-function selectTimeline(letter) {
-  // Call the timeline rendering function from index.html
-  if (window.renderTimeline) {
-    window.renderTimeline(letter);
-  }
-  document.querySelectorAll('[data-timeline-sel]')
-    .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
-}
-
-// Event delegation for timeline controls
-document.addEventListener('click', e => {
-  const btn = e.target.closest('[data-timeline-sel]');
-  if (!btn) return;
-  selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
-});
-
-// ---- S2 Functions (GPT 5 Pro Implementation) ----
-
-// ---- Load options and render deliverables panel ----
-async function s2LoadDeliverables() {
-  const r = await fetch('/api/options');   // server returns deliverables + templates
-  const data = await r.json();
-  APB.step2.allDeliverables = data.deliverables || [];
-  S2.allDeliverables = data.deliverables || [];
-
-  // Build code→deliverable index for fast lookups
-  DELIV_INDEX = {};
-  DELIV_INDEX_LO = {};
-  for (const d of (data.deliverables || [])) {
-    const code = String(d.Deliverable_Code).trim();
-    DELIV_INDEX[code] = d;
-    DELIV_INDEX_LO[key(code)] = d;
-  }
-
-  // Render with centralized state
-  renderDeliverablesPanel();
-  updateSummaryCounts();
-
-  // Wire Select All button
-  const btnSelectAll = APB.step2.els.btnSelectAll;
-  if (btnSelectAll) {
-    btnSelectAll.onclick = () => {
-      APB.step2.allDeliverables.forEach(d => {
-        APB.step2.selectedCodes.add(String(d.Deliverable_Code));
-      });
-      renderDeliverablesPanel();
-      refreshComponentsPanel();
-      updateSummaryCounts();
-    };
-  }
-
-  // Wire Clear button
-  const btnClear = APB.step2.els.btnClear;
-  if (btnClear) {
-    btnClear.onclick = () => {
-      APB.step2.selectedCodes.clear();
-      APB.step2.selectedComponentsByCode = {};
-      APB.step2.selectedL2ByKey = {};
-      APB.step2.activeDeliverableCode = null;
-      APB.step2.activeComponentName = null;
-      renderDeliverablesPanel();
-      renderComponentsEmptyState();
-      updateSummaryCounts();
-    };
-  }
-}
-
-// Render deliverables panel with Selected on top, then Other (Task 1.5: with search filter)
-function renderDeliverablesPanel() {
-  console.log('[RENDER DEBUG] Starting renderDeliverablesPanel');
-  console.log('[RENDER DEBUG] PRIMARY_SCENARIO exists:', !!window.PRIMARY_SCENARIO);
-  console.log('[RENDER DEBUG] PRIMARY_SCENARIO.deliverables:', window.PRIMARY_SCENARIO?.deliverables?.length || 0);
-  console.log('[RENDER DEBUG] APB.step2.allDeliverables:', APB.step2?.allDeliverables?.length || 0);
-
-  // CRITICAL FIX: Use PRIMARY_SCENARIO.deliverables if available (from AI analysis)
-  // Otherwise fall back to APB.step2.allDeliverables (from OPTIONS)
-  let list = APB.step2.allDeliverables || [];
-
-  if (window.PRIMARY_SCENARIO && window.PRIMARY_SCENARIO.deliverables && window.PRIMARY_SCENARIO.deliverables.length > 0) {
-    console.log('[RENDER] Using PRIMARY_SCENARIO.deliverables:', window.PRIMARY_SCENARIO.deliverables.length, 'items');
-    console.log('[RENDER DEBUG] Sample PRIMARY_SCENARIO deliverable:', window.PRIMARY_SCENARIO.deliverables[0]);
-    // Convert PRIMARY_SCENARIO deliverables to the expected format if needed
-    list = window.PRIMARY_SCENARIO.deliverables.map(d => {
-      // Handle both formats: new AI format and old OPTIONS format
-      if (d.deliverable_code || d.Deliverable_Code) {
-        return {
-          Deliverable_Code: d.deliverable_code || d.Deliverable_Code || d.code || d.id,
-          Deliverable: d.deliverable_name || d.Deliverable || d.name || d.title,
-          Category: d.department || d.Category || d.category || '',
-          Service_Dept_for_PM: d.service_dept || d.Service_Dept_for_PM || '',
-          confidence: d.confidence || d.score || 0,
-          selected: d.selected || false,
-          // Preserve additional fields for AI suggestions
-          confidence_score: d.confidence_score,
-          relevancy_tags: d.relevancy_tags,
-          evidence: d.evidence
-        };
-      }
-      return d;
-    });
-    // Also update APB.step2.allDeliverables to keep consistency
-    APB.step2.allDeliverables = list;
-  } else {
-    console.log('[RENDER] Using APB.step2.allDeliverables (no PRIMARY_SCENARIO deliverables)');
-  }
-
-  const filter = (APB.step2.filters.deliverables || '').toLowerCase();
-  const selected = [], other = [];
-
-  list.forEach(d => {
-    const code = String(d.Deliverable_Code);
-    const name = (d.Deliverable || '').toLowerCase();
-    const category = (d.Category || '').toLowerCase();
-
-    // Apply search filter
-    if (filter && !name.includes(filter) && !category.includes(filter) && !code.toLowerCase().includes(filter)) {
-      return; // Skip items that don't match filter
-    }
-
-    if (APB.step2.selectedCodes.has(code)) {
-      selected.push(d);
-    } else {
-      other.push(d);
-    }
-  });
-
-  // Try to find the host element if not already cached
-  if (!APB.step2.els.listRight) {
-    APB.step2.els.listRight = document.querySelector('#s2-deliv-list, #deliverableList, #deliverables-list, [data-step2-deliverables]');
-    console.log('[RENDER DEBUG] Searched for deliverables host element, found:', !!APB.step2.els.listRight);
-  }
-
-  const host = APB.step2.els.listRight;
-  if (!host) {
-    console.error('[RENDER ERROR] No deliverables list element found! Tried: #s2-deliv-list, #deliverableList, #deliverables-list');
-    return;
-  }
-
-  let html = '';
-
-  // Render Selected group
-  if (selected.length > 0) {
-    html += '<div style="font-weight:600;padding:8px;color:#ffffff;background:rgba(139,92,246,0.15);border-bottom:1px solid rgba(255,255,255,0.1);">Selected</div>';
-    selected.forEach(d => {
-      const code = String(d.Deliverable_Code);
-      const isActive = APB.step2.activeDeliverableCode === code;
-      const isRetainer = pricingData.deliverableTypes.get(code) === 'RETAINER';
-      const retainerMonths = pricingData.retainers.get(code) || 12;
-
-      html += `
-        <div class="deliv-row" data-code="${code}" style="background:${isActive ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.03)'};border-left:${isActive ? '3px solid var(--accent)' : '3px solid transparent'};">
-          <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
-            <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked data-visible="1" />
-            <span>${d.Deliverable}</span>
-            ${isRetainer ? '<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER</span>' : ''}
-            <button onclick="event.stopPropagation(); removeDeliverableX('${code}')" style="margin-left:auto;background:none;border:none;color:var(--danger);cursor:pointer;font-size:1.2em;padding:0 8px;">×</button>
-            <small style="opacity:.75">${d.Category || ''}</small>
-          </label>
-
-          <!-- ISSUE 3 FIX: Retainer Options -->
-          <div style="display:flex;gap:12px;align-items:center;padding:4px 8px 8px 32px;background:rgba(0,0,0,0.1);border-top:1px solid rgba(255,255,255,0.05);">
-            <label style="display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;">
-              <input type="checkbox" 
-                     class="retainer-toggle" 
-                     data-code="${code}" 
-                     ${isRetainer ? 'checked' : ''}
-                     onchange="toggleRetainerType('${code}', this.checked)"
-                     style="cursor:pointer;">
-              <span style="color:${isRetainer ? '#10b981' : 'var(--muted)'};">Retainer</span>
-            </label>
-
-            <div class="retainer-months-wrap" data-code="${code}" style="display:${isRetainer ? 'flex' : 'none'};align-items:center;gap:4px;">
-              <span style="font-size:0.85em;color:var(--muted);">Months:</span>
-              <input type="number" 
-                     class="retainer-months" 
-                     data-code="${code}"
-                     value="${retainerMonths}"
-                     min="1" 
-                     max="24"
-                     onchange="updateRetainerMonths('${code}', this.value)"
-                     style="width:50px;padding:2px 4px;border:1px solid rgba(255,255,255,0.2);border-radius:3px;background:rgba(0,0,0,0.2);">
-            </div>
-
-            <button onclick="event.stopPropagation(); suggestRetainerConfig('${code}')" 
-                    style="margin-left:auto;background:#3b82f6;color:white;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:0.8em;">
-              AI Suggest
-            </button>
-          </div>
-        </div>
-      `;
-    });
-  }
-
-  // Render Other group
-  if (other.length > 0) {
-    html += '<div style="font-weight:600;padding:8px;color:var(--muted);margin-top:8px;">Other</div>';
-    other.forEach(d => {
-      const code = String(d.Deliverable_Code);
-      html += `
-        <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
-          <input type="checkbox" class="deliv-checkbox" data-code="${code}" data-visible="1" />
-          <span>${d.Deliverable}</span>
-          <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
-        </label>
-      `;
-    });
-  }
-
-  if (!html) {
-    html = '<div style="opacity:.7;padding:8px;text-align:center;">No deliverables match your search</div>';
-  }
-
-  host.innerHTML = html;
-
-  // Attach checkbox handlers
-  host.querySelectorAll('.deliv-checkbox').forEach(cb => {
-    cb.addEventListener('change', e => {
-      e.stopPropagation(); // Prevent row click from triggering
-      onDeliverableToggle(e.target.dataset.code, e.target.checked);
-    });
-  });
-
-  // Attach row click handlers to set active deliverable (preview only)
-  host.querySelectorAll('.deliv-row').forEach(row => {
-    row.addEventListener('click', async (e) => {
-      // Only trigger if clicking the row itself, not the checkbox or button
-      if (e.target.classList.contains('deliv-checkbox')) return;
-      if (e.target.tagName === 'BUTTON') return;
-
-      const code = row.dataset.code;
-      const checkbox = row.querySelector('.deliv-checkbox');
-
-      // Row click = preview only (do not change selection)
-      // Only show components if the deliverable is actually selected
-      if (checkbox.checked) {
-        APB.step2.activeDeliverableCode = code;
-        renderDeliverablesPanel(); // Re-render to update active highlight
-        await refreshComponentsPanel();
-      }
-      // If not selected, row click does nothing (checkbox is the only way to select)
-    });
-  });
-}
-
-// Deliverable checkbox toggle handler
-async function onDeliverableToggle(code, checked) {
-  if (checked) {
-    await selectDeliverable(code);
-
-    const hasComponents = S2.selectedComponentsByCode[code] && S2.selectedComponentsByCode[code].size > 0;
-
-    if (AUTO_SUGGEST_ON_SELECT && !hasComponents) {
-      if (USE_GPT_FOR_AUTOSUGGEST) {
-        try {
-          // STEP 1: Get weighted rule matches as pre-filter context
-          const rfpText = APB.step2.rfpText || document.getElementById('rfpText')?.value || '';
-          let weightedContext = null;
-
-          if (rfpText) {
-            try {
-              const weightsRes = await fetch('/api/step2/ai/weights', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ rfp_text: rfpText })
-              });
-              if (weightsRes.ok) {
-                weightedContext = await weightsRes.json();
-              }
-            } catch (err) {
-              console.warn('Weighted pre-filter unavailable, proceeding without:', err);
-            }
-          }
-
-          // STEP 2: Call GPT-5 with weighted context for smarter suggestions
-          const exclude = [];
-          const requestBody = {
-            deliverable_code: code,
-            include_l3: true,
-            top_components: 6,
-            top_l3_per_component: 20,
-            exclude_labels: exclude
-          };
-
-          // Include weighted matches as context for GPT-5
-          if (weightedContext && weightedContext.deliverables) {
-            requestBody.weighted_context = weightedContext.deliverables
-              .filter(d => d.deliverable_code === code)
-              .map(d => ({
-                match_percent: d.match_percent,
-                top_components: (weightedContext.components && weightedContext.components[code]) || [],
-                top_tasks: (weightedContext.tasks && weightedContext.tasks[code]) || []
-              }))[0] || null;
-          }
-
-          const res = await fetch("/api/step2/ai/suggest", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(requestBody)
-          });
-          const ai = await res.json();
-
-          renderAISuggestionsPanel(code, ai);
-
-          if (!S2.selectedComponentsByCode[code]) {
-            S2.selectedComponentsByCode[code] = new Set();
-          }
-
-          for (const c of (ai.components || [])) {
-            S2.selectedComponentsByCode[code].add(c.name);
-            await hydrateL2For(code, c.name);
-          }
-        } catch (error) {
-          console.error('GPT auto-suggest error:', error);
-        }
-      } else {
-        try {
-          const response = await fetch('/api/step2/suggest/components', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deliverable_code: code, limit: 6 })
-          });
-
-          const suggested = await response.json();
-
-          if (suggested && suggested.length > 0) {
-            if (!S2.selectedComponentsByCode[code]) {
-              S2.selectedComponentsByCode[code] = new Set();
-            }
-
-            suggested.forEach(comp => {
-              S2.selectedComponentsByCode[code].add(comp);
-            });
-
-            await Promise.all(suggested.map(comp => hydrateL2For(code, comp)));
-          }
-        } catch (error) {
-          console.error('Auto-suggest components error:', error);
-        }
-      }
-    }
-  } else {
-    await deselectDeliverable(code);
-  }
-
-  renderDeliverablesPanel();
-  await refreshComponentsPanel();
-  updateSummaryCounts();
-
-  initAISummaryAndSuggestions();
-}
-
-// Task 1.5: Remove deliverable via X button
-window.removeDeliverableX = async function(code) {
-  await deselectDeliverable(code);
-  renderDeliverablesPanel();
-  await refreshComponentsPanel();
-  updateSummaryCounts();
-  initAISummaryAndSuggestions();
-}
-
-// Render components panel for active deliverable
-async function renderComponentsPanel() {
-  const listEl = document.getElementById('s2-comp-list');
-  const btnAll = document.getElementById('s2-comp-selectall');
-  const btnClear = document.getElementById('s2-comp-clear');
-
-  if (!listEl) return;
-
-  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
-  if (!code) {
-    renderComponentsEmptyState();
-    if (btnAll) btnAll.disabled = true;
-    if (btnClear) btnClear.disabled = true;
-    return;
-  }
-
-  // Ensure components are hydrated if not already
-  if (!selectionStore.componentsByDeliv.has(code)) {
-    await hydrateComponentsFor(code);
-  }
-
-  const components = selectionStore.componentsByDeliv.get(code) || new Set();
-
-  // Apply search filter
-  const searchFilter = (APB.step2.filters.components || '').toLowerCase();
-  const filteredComponents = Array.from(components).filter(compName =>
-    !searchFilter || compName.toLowerCase().includes(searchFilter)
-  );
-
-  if (btnAll) btnAll.disabled = filteredComponents.length === 0;
-  if (btnClear) btnClear.disabled = filteredComponents.length === 0;
-
-  // Render checkboxes with deliverable badges
-  const activeKey = `${code}::${APB.step2.activeComponentName}`;
-
-  listEl.innerHTML = filteredComponents.map(compName => {
-    const isSelected = S2.selectedComponentsByCode[code]?.has?.(compName);
-    const isActive = `${code}::${compName}` === activeKey;
-
-    return `
-      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px; ${isActive ? 'background:rgba(139,92,246,0.2); border:1px solid var(--accent);' : ''}" 
-             class="comp-checkbox-label"
-             data-deliv="${code}" 
-             data-comp="${compName}">
-        <input type="checkbox" 
-               data-deliv="${code}" 
-               data-comp="${compName}"
-               ${isSelected ? 'checked' : ''}
-               style="cursor:pointer;"/>
-        <span style="font-size:0.9em; ${isActive ? 'color:var(--accent);' : ''}">${compName}</span>
-      </label>
-    `;
-  }).join('');
-
-  // Add click listeners for component selection (sets active component)
-  listEl.querySelectorAll('.comp-checkbox-label').forEach(label => {
-    label.addEventListener('click', async e => {
-      if (e.target.type === 'checkbox') return; // Let checkbox handle its own click
-
-      const delivCode = label.getAttribute('data-deliv');
-      const compName = label.getAttribute('data-comp');
-
-      // Set as active component
-      APB.step2.activeDeliverableCode = delivCode;
-      APB.step2.activeComponentName = compName;
-
-      // Update L2 tasks panel - use onComponentClicked to fetch and display L2 tasks
-      if (window.onComponentClicked) {
-        await onComponentClicked(compName);
-      } else if (window.renderL2Panel) {
-        await renderL2Panel();
-      }
-    });
-  });
-
-  // Add change listeners for checkboxes
-  listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-    cb.addEventListener('change', e => {
-      e.stopPropagation(); // Don't trigger the label click
-      const delivCode = e.target.getAttribute('data-deliv');
-      const compName = e.target.getAttribute('data-comp');
-
-      // Ensure the deliverable has a Set in selectedComponentsByCode
-      if (!S2.selectedComponentsByCode[delivCode]) {
-        S2.selectedComponentsByCode[delivCode] = new Set();
-      } else if (!(S2.selectedComponentsByCode[delivCode] instanceof Set)) {
-        // Convert legacy format (object or array) to Set
-        S2.selectedComponentsByCode[delivCode] = new Set(
-          Array.isArray(S2.selectedComponentsByCode[delivCode]) 
-            ? S2.selectedComponentsByCode[delivCode]
-            : Object.keys(S2.selectedComponentsByCode[delivCode] || {})
-        );
-      }
-
-      if (e.target.checked) {
-        S2.selectedComponentsByCode[delivCode].add(compName);
-      } else {
-        S2.selectedComponentsByCode[delivCode].delete(compName);
-      }
-
-      // Update summary and L2 panel
-      if (window.updateStep2Summary) updateStep2Summary();
-      if (window.renderL2Panel) renderL2Panel();
-    });
-  });
-}
-
-// Render empty state for components
-function renderComponentsEmptyState(message = 'Select a deliverable to view components') {
-  const listEl = document.getElementById('s2-comp-list');
-  if (listEl) {
-    listEl.innerHTML = `<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">${message}</p>`;
-  }
-}
-
-// Update summary counts and render chips with remove buttons
-function updateSummaryCounts() {
-  const delivCount = APB.step2.selectedCodes.size;
-
-  // Count components
-  let compCount = 0;
-  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSet]) => {
-    if (APB.step2.selectedCodes.has(code)) {
-      // Handle '__ALL__' sentinel
-      if (compSet === '__ALL__') {
-        // Count all available components for this deliverable
-        const comps = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === code)?.components || [];
-        compCount += comps.length;
-      } else if (compSet instanceof Set) {
-        compCount += compSet.size;
-      } else if (Array.isArray(compSet)) {
-        compCount += compSet.length;
-      } else if (typeof compSet === 'object') {
-        compCount += Object.keys(compSet).length;
-      }
-    }
-  });
-
-  // Count L2 - only for selected components (fixes Task 4)
-  let l2Count = 0;
-  Object.entries(APB.step2.selectedL2ByKey).forEach(([key, l2Set]) => {
-    const [code, compName] = key.split('::');
-    // Only count if deliverable is selected AND component is selected
-    if (APB.step2.selectedCodes.has(code)) {
-      const compSet = APB.step2.selectedComponentsByCode[code];
-      // Check if selectedComponentsByCode[code] is NOT '__ALL__' or 'ALL'
-      // And if the component set actually contains the component for this key
-      if (compSet && compSet !== '__ALL__' && compSet !== 'ALL' && compSet instanceof Set && compSet.has(compName)) {
-        if (l2Set instanceof Set) l2Count += l2Set.size;
-        else if (Array.isArray(l2Set)) l2Count += l2Set.length;
-      } else if (compSet === '__ALL__' || compSet === 'ALL') {
-        // If all components are selected, count all L2 tasks for this component
-        // This requires fetching L2 tasks again or assuming they are available
-        // For simplicity, we assume they are counted if the deliverable is selected and component is implicitly selected
-        // A more robust solution would require fetching/storing all L2s initially
-        // For now, we rely on the fact that if compSet is ALL, then we count it if the deliverable is selected.
-        // This part needs refinement based on exact behavior of '__ALL__' sentinel.
-        // A simpler approach for now: count if deliverable is selected and component is implicitly selected.
-        // If compSet is ALL, we assume all tasks for this comp are implicitly selected.
-        // We need to re-fetch or use cached L2 data to count accurately.
-        // For now, we'll skip counting L2 if compSet is '__ALL__' and rely on explicit selections.
-      }
-    }
-  });
-
-  // Update DOM with counts
-  const delivEl = document.getElementById('s2-summary-deliverables');
-  const compEl = document.getElementById('s2-summary-components');
-  const l2El = document.getElementById('s2-summary-l2');
-
-  if (delivEl) delivEl.textContent = delivCount;
-  if (compEl) compEl.textContent = compCount;
-  if (l2El) l2El.textContent = l2Count;
-
-  // Render detailed chips below counts
-  renderSummaryChips();
-
-  // Enable/disable Proceed to Pricing button
-  const proceedBtn = document.querySelector('#btnProceedPricing, [data-proceed-pricing]');
-  if (proceedBtn) {
-    proceedBtn.disabled = delivCount === 0;
-  }
-}
-
-// Render summary chips with hierarchical display: Deliverable → Component → L2
-function renderSummaryChips() {
-  const container = document.getElementById('s2-summary-status');
-  if (!container) return;
-
-  let html = '';
-
-  // Group by Deliverable → Component → L2
-  Array.from(APB.step2.selectedCodes).forEach(delivCode => {
-    const deliv = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === delivCode);
-    const delivName = deliv ? (deliv.Deliverable || delivCode) : delivCode;
-    const deptColor = getDepartmentColor(deliv?.Category); // Use helper for color
-
-    // Get components for this deliverable
-    const compSelection = APB.step2.selectedComponentsByCode[delivCode];
-    let compSet;
-
-    // Normalize component selection to Set
-    if (compSelection === '__ALL__' || compSelection === 'ALL') {
-      // If all components are selected, render a single chip for the deliverable
-      compSet = new Set(['All Components']); // Sentinel value
-    } else if (compSelection instanceof Set) {
-      compSet = compSelection;
-    } else if (Array.isArray(compSelection)) {
-      compSet = new Set(compSelection);
-    } else if (typeof compSelection === 'object' && compSelection !== null) {
-      compSet = new Set(Object.keys(compSelection));
-    } else {
-      compSet = new Set(); // Default to empty if undefined or null
-    }
-
-    // Start deliverable group
-    html += `<div style="margin-bottom:16px;padding:8px;border-left:3px solid ${deptColor};background:rgba(139,92,246,0.05);border-radius:4px;">`;
-
-    // Deliverable header with remove button
-    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <strong style="font-size:0.9em;color:var(--accent);">${delivName}</strong>
-      <button onclick="removeDeliverableFromSummary('${delivCode}')" 
-              style="background:rgba(239,68,68,0.2);border:none;color:var(--danger);cursor:pointer;padding:4px 8px;border-radius:4px;font-size:0.75em;">
-        Remove All
-      </button>
-    </div>`;
-
-    // Render each component and its L2 items
-    if (compSet.size > 0) {
-      compSet.forEach(compName => {
-        const key = `${delivCode}::${compName}`;
-        const l2Set = APB.step2.selectedL2ByKey[key] || new Set();
-
-        // Render component chips
-        html += `<div style="margin-top:8px;padding-left:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-            <span style="font-size:0.8em;color:var(--muted);">${compName}</span>
-            <div style="display:flex;gap:6px;">
-              <button onclick="resetL2ForComponent('${delivCode}', '${compName}')" 
-                      style="background:rgba(139,92,246,0.15);border:none;color:var(--accent);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:0.7em;"
-                      title="Restore all L2 subtasks for this component">
-                ↻ Reset
-              </button>
-              <button onclick="removeComponentFromSummary('${delivCode}', '${compName}')" 
-                      style="background:none;border:none;color:var(--danger);cursor:pointer;padding:2px 6px;font-size:0.7em;">
-                Remove
-              </button>
-            </div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:8px;">`;
-
-          // L2 chips for this component
-          if (l2Set.size > 0) {
-            l2Set.forEach(l2Name => {
-              const escapedKey = key.replace(/'/g, "\\'"); // Escape single quotes for inline JS
-              const escapedL2 = l2Name.replace(/'/g, "\\'");
-              html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(16,185,129,0.2);border-radius:12px;font-size:0.7em;">
-                ${l2Name}
-                <button onclick="removeL2FromSummary('${escapedKey}', '${escapedL2}')" 
-                        style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.2em;line-height:1;">×</button>
-              </span>`;
-            });
-          } else {
-            html += `<span style="font-size:0.7em;color:var(--muted);font-style:italic;">No L2 tasks selected</span>`;
-          }
-
-          html += `</div></div>`;
-      });
-    } else {
-      // Case where "__ALL__" or "ALL" was selected for components
-      html += `<div style="margin-top:8px;padding-left:8px;">
-        <span style="font-size:0.8em;color:var(--accent);font-style:italic;">All components included</span>
-      </div>`;
-    }
-
-    html += `</div>`;
-  });
-
-  if (html === '') {
-    html = '<div style="text-align:center;color:var(--muted);font-size:0.85em;padding:20px;">No deliverables selected</div>';
-  }
-
-  container.innerHTML = html;
-}
-
-// Cascading Remove Handlers (Task 2)
-
-// Remove deliverable from summary - cascades to all components and L2
-window.removeDeliverableFromSummary = async function(code) {
-  await deselectDeliverable(code);
-  renderDeliverablesPanel();
-  await refreshComponentsPanel();
-  updateSummaryCounts();
-  initAISummaryAndSuggestions();
-}
-
-// Remove component from summary - cascades to its L2 items
-window.removeComponentFromSummary = function(delivCode, compName) {
-  const key = `${delivCode}::${compName}`;
-
-  // Remove L2 for this component
-  if (APB.step2.selectedL2ByKey[key]) {
-    delete APB.step2.selectedL2ByKey[key];
-  }
-
-  // Remove component from selection
-  const compSet = APB.step2.selectedComponentsByCode[delivCode];
-  if (compSet instanceof Set) {
-    compSet.delete(compName);
-
-    // If no components left, remove deliverable
-    if (compSet.size === 0) {
-      APB.step2.selectedCodes.delete(delivCode);
-      delete APB.step2.selectedComponentsByCode[delivCode];
-    }
-  }
-
-  // Re-render panels
-  renderDeliverablesPanel();
-  if (APB.step2.activeDeliverableCode === delivCode) {
-    refreshComponentsPanel();
-  }
-  updateSummaryCounts();
-}
-
-// Remove single L2 from summary - with cleanup
-window.removeL2FromSummary = function(key, l2Name) {
-  const l2Set = APB.step2.selectedL2ByKey[key];
-  if (!l2Set) return;
-
-  // Remove the L2 item
-  l2Set.delete(l2Name);
-
-  const [delivCode, compName] = key.split('::');
-
-  // If no L2 left for this component, remove the component
-  if (l2Set.size === 0) {
-    delete APB.step2.selectedL2ByKey[key];
-
-    const compSet = APB.step2.selectedComponentsByCode[delivCode];
-    if (compSet instanceof Set) {
-      compSet.delete(compName);
-
-      // If no components left, remove deliverable
-      if (compSet.size === 0) {
-        APB.step2.selectedCodes.delete(delivCode);
-        delete APB.step2.selectedComponentsByCode[delivCode];
-      }
-    }
-  }
-
-  // Re-render panels
-  renderDeliverablesPanel();
-  if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
-    renderL2Panel(delivCode, compName); // Re-render L2 panel for active component
-  }
-  updateSummaryCounts();
-}
-
-// Reset L2 subtasks for a component - refetches all from server
-window.resetL2ForComponent = async function(delivCode, compName) {
-  const key = `${delivCode}::${compName}`;
-
-  // Clear the cached L2 for this component
-  selectionStore.l2ByComponent.delete(key);
-  // Clear from proxy as well
-  delete APB.step2.selectedL2ByKey[key];
-
-  // Refetch L2 from server
-  await hydrateL2For(delivCode, compName);
-
-  // Update the summary display
-  updateSummaryCounts();
-
-  // If this component is the active one, re-render L2 panel
-  if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
-    if (window.renderL2Panel) {
-      renderL2Panel();
-    } else if (window.renderTasksPanel) {
-      await renderTasksPanel(key); // Fallback
-    }
-  }
-}
-
-// Component clicked - load L2 panel
-window.onComponentClicked = async function onComponentClicked(componentName) {
-  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
-  if (!code) return;
-
-  APB.step2.activeComponentName = componentName;
-
-  try {
-    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component_name=${encodeURIComponent(componentName)}`);
-    const json = await res.json();
-    const items = (json.items || json.l2 || []).map(item => 
-      typeof item === 'string' ? item : (item.Task_Label || item.name || '')
-    ).filter(Boolean); // Filter out empty strings or nulls
-
-    renderL2Checklist(code, componentName, items);
-  } catch (e) {
-    console.error('Error loading L2:', e);
-    const l2ListEl = document.getElementById('s2-l2-list');
-    if (l2ListEl) {
-      l2ListEl.innerHTML = '<p style="color: red;">Error loading subtasks</p>';
-    }
-  }
-}
-
-// Render L2 checklist
-function renderL2Checklist(code, componentName, items) {
-  const listEl = document.getElementById('s2-l2-list');
-  if (!listEl) return;
-
-  if (items.length === 0) {
-    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L2 subtasks</p>';
-    return;
-  }
-
-  const key = `${code}::${componentName}`;
-
-  // Initialize selection for this key if it doesn't exist
-  if (!S2.selectedL2ByKey[key] || !(S2.selectedL2ByKey[key] instanceof Set)) {
-    S2.selectedL2ByKey[key] = new Set(items);
-  }
-  const selectedSet = S2.selectedL2ByKey[key];
-
-  // Render checkboxes
-  listEl.innerHTML = items.map(label => `
-    <label style="display: flex; align-items: start; gap: 8px; padding: 6px 8px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,.05);">
-      <input type="checkbox" class="l2-checkbox" data-key="${key}" data-label="${label}"
-             ${selectedSet.has(label) ? 'checked' : ''} style="margin-top: 3px; cursor: pointer;">
-      <div style="flex: 1;">
-        <span style="font-size: 0.9em;">${label}</span>
-      </div>
-    </label>
-  `).join('');
-
-  // Attach handlers
-  listEl.querySelectorAll('.l2-checkbox').forEach(cb => {
-    cb.addEventListener('change', e => {
-      const label = e.target.dataset.label;
-      const key = e.target.dataset.key;
-
-      // Ensure Set exists for the key
-      if (!S2.selectedL2ByKey[key]) {
-        S2.selectedL2ByKey[key] = new Set();
-      }
-
-      if (e.target.checked) {
-        S2.selectedL2ByKey[key].add(label);
-      } else {
-        S2.selectedL2ByKey[key].delete(label);
-      }
-      updateSummaryCounts();
-    });
-  });
-}
-
-// Retainer toggle handler
-async function onToggleRetainers(e) {
-  const enabled = e.target.checked;
-  window.APP = window.APP || {};
-
-  if (!enabled) {
-    window.APP.retainers = [];
-    renderRetainerPanel([]);
-    return;
-  }
-
-  // Get current selection from S2
-  const selectedCodes = Array.from(S2.selectedCodes);
-
-  if (selectedCodes.length === 0) {
-    alert('Please select deliverables first before enabling retainers.');
-    e.target.checked = false;
-    return;
-  }
-
-  const payload = {
-    rfp_text: window.APP.rfpText || '',
-    deliverable_codes: selectedCodes
-  };
-
-  try {
-    const res = await fetch('/api/retainer_detect', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    const rec = await res.json(); // { retainers: [{deliverable_code, suggested_months, ...}] }
-
-    // Persist and render
-    window.APP.retainers = (rec.retainers || []).map(r => ({
-      deliverable_code: r.deliverable_code,
-      months: r.suggested_months || 12
-    }));
-
-    renderRetainerPanel(window.APP.retainers);
-  } catch (error) {
-    console.error('Error detecting retainers:', error);
-    alert(`Failed to detect retainers: ${error.message}`);
-    e.target.checked = false;
-  }
-}
-
-// Render the retainer configuration panel
-function renderRetainerPanel(retainers) {
-  const retainerConfig = document.getElementById('retainer-config');
-  const retainerListControls = document.getElementById('retainer-list-controls');
-
-  if (!retainerConfig || !retainerListControls) {
-    console.warn('Retainer config elements not found');
-    return;
-  }
-
-  if (!retainers || retainers.length === 0) {
-    retainerConfig.style.display = 'none';
-    retainerListControls.innerHTML = '';
-    return;
-  }
-
-  retainerConfig.style.display = 'block';
-
-  // Create input fields for each retainer using defensive labelFor() lookup
-  retainerListControls.innerHTML = retainers.map(r => {
-    const delivName = labelFor(r.deliverable_code);
-    return `
-      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
-        <label style="flex: 1; font-weight: 500;">${delivName}</label>
-        <input 
-          type="number" 
-          min="1" 
-          max="60" 
-          value="${r.months}" 
-          data-code="${r.deliverable_code}"
-          class="retainer-months-input"
-          style="width: 80px; padding: 6px; border: 1px solid var(--muted); border-radius: 4px; background: var(--bg); color: var(--fg);"
-        />
-        <span style="color: var(--muted); font-size: 0.9em;">months</span>
-      </div>
-    `;
-  }).join('');
-
-  // Update retainer months when inputs change
-  retainerListControls.querySelectorAll('.retainer-months-input').forEach(input => {
-    input.addEventListener('change', e => {
-      const code = e.target.dataset.code;
-      const months = parseInt(e.target.value) || 12;
-      const retainerIdx = window.APP.retainers.findIndex(r => r.deliverable_code === code);
-      if (retainerIdx >= 0) {
-        window.APP.retainers[retainerIdx].months = months;
-      }
-    });
-  });
-}
-
-async function onSuggest(){
-  // Updated to work with new Step 2 system
-  // Show Step 2 first
-  const step2 = document.querySelector("#step2");
-  if (step2) {
-    step2.style.display = "block";
-    step2.scrollIntoView({ behavior: "smooth" });
-  }
-
-  // Then run AI analysis
-  await onRunReconcile();
-}
-
-// UI behaviors from blueprint
-// Legacy functions (still used in some templates - bridge to centralized state)
-function onRemove(code) {
-  selectedCodes = selectedCodes.filter(c => c !== code);
-  if (!removedCodes.includes(code)) {
-    removedCodes = [...removedCodes, code];
-  }
-  // Sync to centralized state and re-render
-  APB.step2.selectedCodes.delete(code);
-  delete APB.step2.selectedComponentsByCode[code];
-  if (APB.step2.activeDeliverableCode === code) {
-    APB.step2.activeDeliverableCode = null;
-  }
-  renderDeliverablesPanel();
-  refreshComponentsPanel();
-  updateSummaryCounts();
-  initAISummaryAndSuggestions();
-}
-
-function onRestore(code) {
-  removedCodes = removedCodes.filter(c => c !== code); // un-soft-delete if needed
-  if (!selectedCodes.includes(code)) {
-    selectedCodes = [...selectedCodes, code];
-  }
-  // Sync to centralized state and re-render
-  APB.step2.selectedCodes.add(code);
-  APB.step2.activeDeliverableCode = code;
-  renderDeliverablesPanel();
-  refreshComponentsPanel();
-  updateSummaryCounts();
-  initAISummaryAndSuggestions();
-}
-
-function onAdd(code) {
-  removedCodes = removedCodes.filter(c => c !== code); // un-soft-delete if needed
-  if (!selectedCodes.includes(code)) {
-    selectedCodes = [...selectedCodes, code];
-  }
-  if (!addedCodes.includes(code)) {
-    addedCodes = [...addedCodes, code];
-  }
-  // Sync to centralized state and re-render
-  APB.step2.selectedCodes.add(code);
-  APB.step2.activeDeliverableCode = code;
-  renderDeliverablesPanel();
-  refreshComponentsPanel();
-  updateSummaryCounts();
-  initAISummaryAndSuggestions();
-}
-
-function selectedDeliverables(){
-  // Updated to use new state model
-  return selectedCodes;
-}
-
-// Open components bubble dialog for a deliverable
 async function openComponentPicker(code, name) {
   try {
     const complexity = document.querySelector('#complexity')?.value || 'Advanced';
@@ -8361,7 +7029,7 @@ async function s2ApplyAndBuild() {
   const res = await fetch('/api/build', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.JSON.stringify(payload)
   });
   const scenarios = await res.json();
   // keep for future edits
@@ -8444,8 +7112,6 @@ function updateStep2Summary() {
         // For simplicity, we assume they are counted if the deliverable is selected and component is implicitly selected
         // A more robust solution would require fetching/storing all L2s initially
         // For now, we'll skip counting L2 if compSet is '__ALL__' and rely on explicit selections.
-        // We need to re-fetch or use cached L2 data to count accurately.
-        // For now, we'll skip counting L2 if compSet is '__ALL__' and rely on explicit selections.
       }
     }
   });
@@ -8505,7 +7171,7 @@ async function renderComponentsPanel() {
     const key = `${code}::${compName}`;
     const isSelected = S2.selectedComponentsByCode[code]?.has?.(compName);
     const isActive = key === activeKey;
-    const compData = APB.step2.allDeliverables.find(d => d.Deliverable_Code === code)?.components?.find(c => c.name === compName);
+    const compData = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === code)?.components?.find(c => c.name === compName);
     const hours = compData?.hours || 0;
 
     return `
@@ -8633,7 +7299,7 @@ function updateSummaryCounts() {
     }
   });
 
-  // Update DOM with counts
+  // Update counts
   const delivEl = document.getElementById('s2-summary-deliverables');
   const compEl = document.getElementById('s2-summary-components');
   const l2El = document.getElementById('s2-summary-l2');
@@ -8953,7 +7619,7 @@ async function onToggleRetainers(e) {
     const res = await fetch('/api/retainer_detect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.JSON.stringify(payload)
     });
 
     const rec = await res.json(); // { retainers: [{deliverable_code, suggested_months, ...}] }
@@ -9123,7 +7789,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const response = await fetch('/api/scenario/duplicate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: JSON.JSON.stringify({
             scenario_id: 'scenario_a',
             scenario_data: window.SCENARIOS.A,
             version_name: 'Version 2 - Alternative'
@@ -9214,7 +7880,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const response = await fetch('/api/project/final_ship', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.JSON.stringify(payload)
         });
 
         const result = await response.json();
@@ -9340,7 +8006,7 @@ window.addEventListener("load", boot);
       const res = await fetch("/api/brain/learn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.JSON.stringify({
           rfp_text: rfpText,
           selected_deliverables: selected,
           components_by_deliv: components,

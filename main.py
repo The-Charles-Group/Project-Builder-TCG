@@ -1169,6 +1169,10 @@ async def get_agencydb_job_status(job_id: str):
                     if isinstance(delivs, list):
                         delivs_count += len(delivs)
         response["deliverables_count"] = delivs_count
+        
+        # LOG for debugging
+        if delivs_count > 0:
+            print(f"[JOB STATUS] Returning completed job with {delivs_count} deliverables in {len(job.result.get('plan', {}).get('suggestions_by_department', {}))} departments")
     
     # Add error if job failed
     if job.status == AIJobStatus.FAILED and job.error:

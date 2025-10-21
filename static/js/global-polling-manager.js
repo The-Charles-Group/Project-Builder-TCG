@@ -282,17 +282,39 @@
         
         const intervalId = originalSetInterval.call(window, callback, delay, ...args);
         
-        // Store in a global tracking array
+        // Store in a global tracking array (but mark protected ones)
         if (!window.__allIntervals) {
           window.__allIntervals = new Set();
         }
+        if (!window.__protectedIntervals) {
+          window.__protectedIntervals = new Set();
+        }
+        
         window.__allIntervals.add(intervalId);
+        if (isAIAnalysisPolling) {
+          window.__protectedIntervals.add(intervalId);
+        }
         
         if (this.debugMode) {
-          console.log('[PollingManager] Native interval created:', intervalId, 'from:', caller);
+          console.log('[PollingManager] Native interval created:', intervalId, 'from:', caller, 'protected:', isAIAnalysisPolling);
         }
         
         return intervalId;
+      };
+      
+      // CRITICAL: Override clearInterval to never clear protected intervals
+      window.clearInterval = (intervalId) => {
+        if (window.__protectedIntervals && window.__protectedIntervals.has(intervalId) && window.PROTECTED_AI_POLLING) {
+          console.warn('[PollingManager] ⚠️ Blocked attempt to clear protected AI polling interval:', intervalId);
+          return; // Don't clear it
+        }
+        if (window.__allIntervals) {
+          window.__allIntervals.delete(intervalId);
+        }
+        if (window.__protectedIntervals) {
+          window.__protectedIntervals.delete(intervalId);
+        }
+        return originalClearInterval.call(window, intervalId);
       };
       
       // Track interval clearing
