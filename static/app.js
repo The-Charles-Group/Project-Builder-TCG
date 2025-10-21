@@ -473,6 +473,9 @@ window.resumeAIPolling = function(jobId) {
     window.PROTECTED_AI_INTERVAL = null;
   }
 
+  // Reset polling state for fresh start
+  window.aiPollingState = null;
+  
   // Set protection flags
   window.PROTECTED_AI_POLLING = true;
 
@@ -4473,8 +4476,60 @@ function updateAIProgress(status) {
   }
 }
 
+// Helper function to stop polling and clean up
+function stopPollingWithCleanup(message) {
+  console.log(`[POLLING] 🛑 Stopping polling: ${message}`);
+  
+  // Clear polling state
+  window.aiPollingState = null;
+  window.PROTECTED_AI_POLLING = false;
+  
+  // Clear all intervals
+  if (window.aiAnalysisInterval) {
+    clearInterval(window.aiAnalysisInterval);
+    window.aiAnalysisInterval = null;
+  }
+  if (window.PROTECTED_AI_INTERVAL) {
+    clearInterval(window.PROTECTED_AI_INTERVAL);
+    window.PROTECTED_AI_INTERVAL = null;
+  }
+  
+  // Show alert if there's a message
+  if (message) {
+    alert(message);
+  }
+}
+
+// Helper function to apply exponential backoff
+function applyBackoff(state) {
+  // Calculate backoff delay: min 2s, max 30s
+  state.backoffDelay = Math.min(30000, Math.max(2000, state.backoffDelay * 2 || 2000));
+  const seconds = Math.round(state.backoffDelay / 1000);
+  console.log(`[POLLING] ⏱️ Applying backoff: waiting ${seconds}s before next attempt`);
+}
+
 async function pollAIAnalysis(jobId) {
   log(`[POLLING] pollAIAnalysis called for job ${jobId}`);
+
+  // Initialize polling state if not exists
+  if (!window.aiPollingState) {
+    window.aiPollingState = {
+      consecutive404Count: 0,
+      consecutiveErrorCount: 0,
+      totalPollingTime: 0,
+      startTime: Date.now(),
+      lastSuccessTime: Date.now(),
+      backoffDelay: 0,
+      maxConsecutive404s: 3,  // Stop after 3 consecutive 404s
+      maxConsecutiveErrors: 10, // Stop after 10 consecutive errors
+      maxPollingTime: 600000,  // Maximum 10 minutes (600 seconds)
+      retryCount: 0
+    };
+    console.log(`[POLLING] 🚀 Initialized polling state for job ${jobId}`);
+  }
+
+  const state = window.aiPollingState;
+  state.totalPollingTime = Date.now() - state.startTime;
 
   // Force allow polling every time
   if (window.GlobalPollingManager && window.GlobalPollingManager.isShuttingDown) {
@@ -4483,30 +4538,90 @@ async function pollAIAnalysis(jobId) {
   }
 
   log(`[POLLING] ⏰ pollAIAnalysis STARTED for job ${jobId} at ${new Date().toISOString()}`);
+  console.log(`[POLLING] State: 404s=${state.consecutive404Count}, errors=${state.consecutiveErrorCount}, time=${Math.round(state.totalPollingTime/1000)}s`);
+
+  // Check max polling time (10 minutes default)
+  if (state.totalPollingTime > state.maxPollingTime) {
+    console.error(`[POLLING] ⏱️ Maximum polling time exceeded (${state.maxPollingTime/1000}s). Stopping.`);
+    stopPollingWithCleanup('Maximum polling time exceeded. The job may still be running on the server.');
+    return;
+  }
 
   try {
     log(`[POLLING] Checking status for job ${jobId}...`);
     const res = await fetch(`/api/ai/jobs/${jobId}`);
 
-    // Handle 404 (job expired/not found) gracefully
+    // Handle 404 (job not found)
     if (res.status === 404) {
-      console.warn(`[POLLING] Job ${jobId} not found - stopping polling.`);
-      clearInterval(window.aiAnalysisInterval);
-      window.aiAnalysisInterval = null;
-      window.PROTECTED_AI_POLLING = false;
-      alert(`Analysis job ${jobId} not found. It may have expired or been deleted. Please start a new analysis.`);
+      state.consecutive404Count++;
+      state.consecutiveErrorCount++;
+      
+      console.warn(`[POLLING] 404 for job ${jobId} - consecutive 404s: ${state.consecutive404Count}/${state.maxConsecutive404s}`);
+      
+      // Only stop after multiple consecutive 404s
+      if (state.consecutive404Count >= state.maxConsecutive404s) {
+        console.error(`[POLLING] Job ${jobId} not found after ${state.maxConsecutive404s} attempts - stopping polling.`);
+        stopPollingWithCleanup(`Analysis job ${jobId} not found after multiple attempts. It may have expired or been deleted.`);
+        return;
+      }
+      
+      // Continue polling with backoff
+      console.log(`[POLLING] 404 error ${state.consecutive404Count}/${state.maxConsecutive404s} - will retry...`);
+      applyBackoff(state);
       return;
     }
 
-    if (!res.ok) {
-      console.error(`[POLLING] Error fetching job status: ${res.status}`);
-      // Do not stop polling here, let it retry on next interval unless it's a permanent error
-      return; // Exit function, allow next interval to retry
+    // Handle 410 Gone (permanent deletion)
+    if (res.status === 410) {
+      console.error(`[POLLING] Job ${jobId} permanently deleted (410 Gone) - stopping polling.`);
+      stopPollingWithCleanup(`Analysis job ${jobId} has been permanently deleted.`);
+      return;
     }
 
+    // Handle other errors (500, 502, 503, etc.)
+    if (!res.ok) {
+      state.consecutiveErrorCount++;
+      
+      console.error(`[POLLING] HTTP ${res.status} error for job ${jobId} - consecutive errors: ${state.consecutiveErrorCount}/${state.maxConsecutiveErrors}`);
+      
+      // Stop after too many consecutive errors
+      if (state.consecutiveErrorCount >= state.maxConsecutiveErrors) {
+        console.error(`[POLLING] Too many consecutive errors (${state.consecutiveErrorCount}) - stopping polling.`);
+        stopPollingWithCleanup(`Unable to check job status after ${state.consecutiveErrorCount} attempts. Please try again.`);
+        return;
+      }
+      
+      // Continue polling with backoff for temporary errors
+      console.log(`[POLLING] HTTP ${res.status} error ${state.consecutiveErrorCount}/${state.maxConsecutiveErrors} - will retry with backoff...`);
+      applyBackoff(state);
+      return;
+    }
+
+    // Success - reset error counters
+    state.consecutive404Count = 0;
+    state.consecutiveErrorCount = 0;
+    state.lastSuccessTime = Date.now();
+    state.backoffDelay = 0;
+
     const status = await res.json();
-    log(`[POLLING] Job ${jobId} status:`, status);
+    console.log(`[POLLING] ✅ Job ${jobId} status: ${status.status}, progress: ${status.progress}%`);
     updateAIProgress(status);
+
+    // CRITICAL: Continue polling for queued or running states
+    const isQueued = status.status === 'queued' || 
+                     status.status === 'pending' || 
+                     status.status === 'waiting';
+    
+    const isRunning = status.status === 'running' || 
+                      status.status === 'processing' || 
+                      status.status === 'in_progress';
+
+    if (isQueued || isRunning) {
+      const timeSinceStart = Math.round((Date.now() - state.startTime) / 1000);
+      console.log(`[POLLING] 🔄 Job ${jobId} is ${status.status} (${status.progress || 0}% complete, ${timeSinceStart}s elapsed) - continuing to poll...`);
+      // Don't stop polling for active jobs!
+      return;
+    }
 
     // Check for completion states (completed, complete, done, etc.)
     const isCompleted = status.status === 'completed' || 
@@ -4522,18 +4637,9 @@ async function pollAIAnalysis(jobId) {
       console.log('[ANALYSIS] ✅ Job complete, advancing to Step 2', status);
       log('[POLLING] 🛑 Stopping AI analysis polling - job completed');
 
-      // Clear all polling protection and intervals
-      window.PROTECTED_AI_POLLING = false;
-
-      if (aiAnalysisInterval) {
-        clearInterval(aiAnalysisInterval);
-        aiAnalysisInterval = null;
-      }
-      if (window.PROTECTED_AI_INTERVAL) {
-        clearInterval(window.PROTECTED_AI_INTERVAL);
-        window.PROTECTED_AI_INTERVAL = null;
-      }
-
+      // Clean up polling state and intervals
+      stopPollingWithCleanup(null); // null message = no alert
+      
       hideAIProgressBar();
 
       // Handle completed analysis - result might be in status.result or status.data
@@ -4762,20 +4868,11 @@ async function pollAIAnalysis(jobId) {
       log(`[POLLING] ❌ Job ${jobId} failed, stopping polling`);
       log(`[POLLING] 🛑 Stopping AI analysis polling - job failed`);
 
-      // Clear all polling protection and intervals
-      window.PROTECTED_AI_POLLING = false;
-
-      if (aiAnalysisInterval) {
-        clearInterval(aiAnalysisInterval);
-        aiAnalysisInterval = null;
-      }
-      if (window.PROTECTED_AI_INTERVAL) {
-        clearInterval(window.PROTECTED_AI_INTERVAL);
-        window.PROTECTED_AI_INTERVAL = null;
-      }
-
+      // Clean up polling state and show error message
+      const errorMessage = `AI analysis failed: ${status.error || status.message || 'Unknown error'}`;
+      stopPollingWithCleanup(errorMessage);
+      
       hideAIProgressBar();
-      alert(`AI analysis failed: ${status.error || status.message || 'Unknown error'}`);
 
       const btnAnalyze = document.querySelector('#btnAnalyze');
       if (btnAnalyze) {
