@@ -6244,20 +6244,56 @@ async function onRunReconcile() {
   let rfpText = '';
   let uploadSessionId = null;
   
-  if (window.APP?.uploadSessionId) {
+  // PRIORITY 1: Check for staged files FIRST
+  const stagedSessionId = localStorage.getItem('apb.currentSession');
+  if (stagedSessionId) {
+    try {
+      console.log('[ANALYSIS] Checking for staged files in session:', stagedSessionId);
+      
+      // Call the extract endpoint to get text from staged files
+      const extractFormData = new FormData();
+      extractFormData.append('session_id', stagedSessionId);
+      
+      const extractRes = await fetch('/api/stage/extract', {
+        method: 'POST',
+        body: extractFormData
+      });
+      
+      if (extractRes.ok) {
+        const extractData = await extractRes.json();
+        if (extractData.success && extractData.text) {
+          rfpText = extractData.text;
+          console.log('[ANALYSIS] Using staged files text:', extractData.files_count, 'files,', rfpText.length, 'chars');
+          
+          // Also add textarea text if present
+          const textareaText = (textEl?.value || '').trim();
+          if (textareaText) {
+            rfpText = textareaText + '\n\n' + rfpText;
+            console.log('[ANALYSIS] Combined with textarea text, total:', rfpText.length, 'chars');
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ANALYSIS] Could not extract staged files:', e);
+    }
+  }
+  
+  // PRIORITY 2: Check for old-style uploaded files (GPT-5 Vision PDF processing)
+  if (!rfpText && window.APP?.uploadSessionId) {
     console.log('[ANALYSIS] Using uploaded PDF session:', window.APP.uploadSessionId);
     uploadSessionId = window.APP.uploadSessionId;
     rfpText = window.APP.uploadedFileText || "PDF files uploaded";
-  } else if (window.uploadedFileText) {
+  } else if (!rfpText && window.uploadedFileText) {
     console.log('[ANALYSIS] Using uploaded file text:', window.uploadedFileText.length, 'chars');
     rfpText = window.uploadedFileText;
-  } else if (window.APP?.uploadedFileText) {
+  } else if (!rfpText && window.APP?.uploadedFileText) {
     console.log('[ANALYSIS] Using APP.uploadedFileText:', window.APP.uploadedFileText.length, 'chars');
     rfpText = window.APP.uploadedFileText;
-  } else {
+  } else if (!rfpText) {
+    // PRIORITY 3: Fall back to textarea only
     rfpText = (textEl?.value || '').trim();
     if (rfpText) {
-      console.log('[ANALYSIS] Using textarea text:', rfpText.length, 'chars');
+      console.log('[ANALYSIS] Using textarea text only:', rfpText.length, 'chars');
     }
   }
   

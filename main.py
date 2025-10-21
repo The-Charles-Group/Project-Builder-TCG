@@ -817,6 +817,50 @@ async def stage_clear_endpoint(session_id: str):
         "files_deleted": files_deleted
     }
 
+@app.post("/api/stage/extract")
+async def stage_extract_endpoint(session_id: str = Form(...)):
+    """
+    Extract and return text from all staged files for a session.
+    This is used by the main "Analyze with AI" button to get text from staged files.
+    """
+    if session_id not in STAGED_FILES or not STAGED_FILES[session_id]:
+        return {
+            "success": False,
+            "text": "",
+            "files_count": 0,
+            "message": "No staged files found"
+        }
+    
+    combined_text = ""
+    extraction_errors = []
+    files_processed = 0
+    
+    for file_meta in STAGED_FILES[session_id]:
+        try:
+            # Read file from disk
+            with open(file_meta.file_path, 'rb') as f:
+                content = f.read()
+            
+            # Extract text using the existing helper function
+            text = _extract_text_from_upload(content, file_meta.filename)
+            
+            if text.strip():
+                combined_text += f"\n\n=== {file_meta.filename} ===\n\n{text}"
+                files_processed += 1
+                print(f"[STAGE EXTRACT] Extracted {len(text)} chars from {file_meta.filename}")
+            
+        except Exception as e:
+            extraction_errors.append(f"Error extracting {file_meta.filename}: {str(e)}")
+            print(f"[STAGE EXTRACT] Error for {file_meta.filename}: {e}")
+    
+    return {
+        "success": True,
+        "text": combined_text.strip(),
+        "files_count": files_processed,
+        "total_files": len(STAGED_FILES[session_id]),
+        "errors": extraction_errors if extraction_errors else None
+    }
+
 @app.post("/api/analysis/start")
 async def analysis_start_endpoint(
     background_tasks: BackgroundTasks,
