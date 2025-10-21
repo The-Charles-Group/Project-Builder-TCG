@@ -823,7 +823,12 @@ async def stage_extract_endpoint(session_id: str = Form(...)):
     Extract and return text from all staged files for a session.
     This is used by the main "Analyze with AI" button to get text from staged files.
     """
+    print(f"[STAGE EXTRACT DEBUG] Received request for session: {session_id}")
+    print(f"[STAGE EXTRACT DEBUG] Available sessions: {list(STAGED_FILES.keys())}")
+    print(f"[STAGE EXTRACT DEBUG] Session exists: {session_id in STAGED_FILES}")
+    
     if session_id not in STAGED_FILES or not STAGED_FILES[session_id]:
+        print(f"[STAGE EXTRACT DEBUG] No files found for session {session_id}")
         return {
             "success": False,
             "text": "",
@@ -831,35 +836,51 @@ async def stage_extract_endpoint(session_id: str = Form(...)):
             "message": "No staged files found"
         }
     
+    print(f"[STAGE EXTRACT DEBUG] Found {len(STAGED_FILES[session_id])} files in session")
+    
     combined_text = ""
     extraction_errors = []
     files_processed = 0
     
     for file_meta in STAGED_FILES[session_id]:
         try:
+            print(f"[STAGE EXTRACT DEBUG] Processing file: {file_meta.filename}, path: {file_meta.file_path}")
+            
             # Read file from disk
             with open(file_meta.file_path, 'rb') as f:
                 content = f.read()
             
+            print(f"[STAGE EXTRACT DEBUG] Read {len(content)} bytes from {file_meta.filename}")
+            
             # Extract text using the existing helper function
             text = _extract_text_from_upload(content, file_meta.filename)
+            
+            print(f"[STAGE EXTRACT DEBUG] Extracted {len(text)} chars from {file_meta.filename}")
             
             if text.strip():
                 combined_text += f"\n\n=== {file_meta.filename} ===\n\n{text}"
                 files_processed += 1
                 print(f"[STAGE EXTRACT] Extracted {len(text)} chars from {file_meta.filename}")
+            else:
+                print(f"[STAGE EXTRACT DEBUG] Warning: Empty text extracted from {file_meta.filename}")
             
         except Exception as e:
             extraction_errors.append(f"Error extracting {file_meta.filename}: {str(e)}")
             print(f"[STAGE EXTRACT] Error for {file_meta.filename}: {e}")
+            import traceback
+            traceback.print_exc()
     
-    return {
+    result = {
         "success": True,
         "text": combined_text.strip(),
         "files_count": files_processed,
         "total_files": len(STAGED_FILES[session_id]),
         "errors": extraction_errors if extraction_errors else None
     }
+    
+    print(f"[STAGE EXTRACT DEBUG] Returning result: success={result['success']}, files_count={result['files_count']}, text_length={len(result['text'])}")
+    
+    return result
 
 @app.post("/api/analysis/start")
 async def analysis_start_endpoint(

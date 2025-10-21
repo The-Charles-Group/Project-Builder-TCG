@@ -6248,6 +6248,8 @@ async function onRunReconcile() {
   
   // PRIORITY 1: Check for staged files FIRST (using SessionManager for consistency)
   const stagedSessionId = SessionManager.getCurrentSessionId();
+  console.log('[ANALYSIS DEBUG] Current session ID:', stagedSessionId);
+  
   if (stagedSessionId) {
     try {
       console.log('[ANALYSIS] Checking for staged files in session:', stagedSessionId);
@@ -6256,17 +6258,22 @@ async function onRunReconcile() {
       const extractFormData = new FormData();
       extractFormData.append('session_id', stagedSessionId);
       
+      console.log('[ANALYSIS DEBUG] Calling /api/stage/extract with session:', stagedSessionId);
       const extractRes = await fetch('/api/stage/extract', {
         method: 'POST',
         body: extractFormData
       });
       
+      console.log('[ANALYSIS DEBUG] Extract response status:', extractRes.status);
+      
       if (extractRes.ok) {
         const extractData = await extractRes.json();
+        console.log('[ANALYSIS DEBUG] Extract response data:', extractData);
         
         // Track if we have staged files (even if extraction fails for some)
         if (extractData.files_count > 0 || extractData.total_files > 0) {
           hasStagedFiles = true;
+          console.log('[ANALYSIS DEBUG] Staged files detected:', extractData.files_count || extractData.total_files);
         }
         
         // Track any extraction errors (even if success is false)
@@ -6287,15 +6294,22 @@ async function onRunReconcile() {
           rfpText += extractData.text;
           console.log('[ANALYSIS] Added staged files text:', extractData.files_count, 'files,', extractData.text.length, 'chars');
           console.log('[ANALYSIS] Total combined text:', rfpText.length, 'chars');
+        } else {
+          console.warn('[ANALYSIS DEBUG] No text extracted. Success:', extractData.success, 'Text length:', extractData.text?.length);
         }
       } else {
         console.warn('[ANALYSIS] Extract endpoint returned error:', extractRes.status);
+        const errorText = await extractRes.text();
+        console.warn('[ANALYSIS DEBUG] Error response:', errorText);
       }
     } catch (e) {
-      console.warn('[ANALYSIS] Could not extract staged files:', e);
+      console.error('[ANALYSIS] Error extracting staged files:', e);
+      console.error('[ANALYSIS DEBUG] Full error:', e.stack);
       // Show user-friendly error
       extractionErrors.push('Network error while extracting files: ' + e.message);
     }
+  } else {
+    console.log('[ANALYSIS DEBUG] No session ID available for staged files');
   }
   
   // PRIORITY 2: Check for old-style uploaded files (GPT-5 Vision PDF processing)
