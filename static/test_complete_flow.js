@@ -4,7 +4,7 @@
 async function testCompleteUserFlow() {
     console.log('🚀 Starting Complete User Flow Test');
     console.log('=====================================');
-    
+
     const testRFP = `REQUEST FOR PROPOSAL
 Digital Marketing Campaign for E-Commerce Launch
 
@@ -70,13 +70,13 @@ Success Metrics
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: window.currentSessionId })
         });
-        
+
         const rfpTextarea = document.getElementById('rfp-text');
         if (rfpTextarea) {
             rfpTextarea.value = testRFP;
             console.log('   - RFP content pasted');
         }
-        
+
         // Step 2: Select Fast Mode and trigger analysis
         console.log('\n✅ Step 2: Triggering AI Analysis (Fast Mode)');
         const fastModeBtn = document.querySelector('.analysis-mode-btn.fast');
@@ -84,7 +84,7 @@ Success Metrics
             fastModeBtn.click();
             console.log('   - Fast mode selected');
         }
-        
+
         // Trigger analysis
         const response = await fetch('/api/ai/analyze', {
             method: 'POST',
@@ -96,33 +96,70 @@ Success Metrics
                 session_id: window.currentSessionId
             })
         });
-        
+
         const { job_id } = await response.json();
         console.log(`   - Analysis started: Job ID ${job_id}`);
-        
+
         // Step 3: Wait for analysis to complete
         console.log('\n✅ Step 3: Waiting for analysis completion...');
         let completed = false;
         let attempts = 0;
-        
-        while (!completed && attempts < 30) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-            const statusResp = await fetch(`/api/ai/jobs/${job_id}`);
-            const status = await statusResp.json();
-            
-            if (status.status === 'completed') {
-                completed = true;
-                console.log(`   - Analysis completed! Found ${status.data?.deliverables?.length || 0} deliverables`);
-            } else if (status.status === 'failed') {
-                throw new Error('Analysis failed: ' + status.message);
+
+        // IMPORTANT: Set up polling and a flag to prevent repeated polling
+        window.aiAnalysisInterval = setInterval(async () => {
+            if (window.PROTECTED_AI_POLLING === true) {
+                return; // Already polling or in progress
             }
+            window.PROTECTED_AI_POLLING = true;
+
+            try {
+                const statusResp = await fetch(`/api/ai/jobs/${job_id}`);
+                const { status, data } = await statusResp.json();
+
+                if (status === 'completed') {
+                    console.log('   - Analysis completed successfully!');
+                    console.log('   - Progress:', data.progress + '%');
+                    console.log('   - Deliverables found:', data.deliverables_count || 0);
+
+                    // IMPORTANT: Stop polling to prevent 404 errors
+                    if (window.aiAnalysisInterval) {
+                        clearInterval(window.aiAnalysisInterval);
+                        window.aiAnalysisInterval = null;
+                    }
+                    window.PROTECTED_AI_POLLING = false;
+                    completed = true;
+                    throw new Error('Analysis complete'); // Break loop
+                } else if (status === 'failed') {
+                    throw new Error('Analysis failed: ' + data.message);
+                }
+            } catch (error) {
+                if (error.message === 'Analysis complete') {
+                    // Exit interval
+                    return;
+                }
+                console.error('   - Polling error:', error);
+                // Consider clearing interval here if polling persistently fails
+            } finally {
+                window.PROTECTED_AI_POLLING = false;
+            }
+        }, 500); // Poll every 500ms
+
+        // Wait for the interval to complete the analysis
+        while (!completed && attempts < 30) { // 30 attempts * 0.5s = 15s timeout
+            await new Promise(resolve => setTimeout(resolve, 500));
             attempts++;
         }
-        
+
         if (!completed) {
+            // Clear interval if timeout occurs
+            if (window.aiAnalysisInterval) {
+                clearInterval(window.aiAnalysisInterval);
+                window.aiAnalysisInterval = null;
+            }
             throw new Error('Analysis timed out after 15 seconds');
         }
-        
+
+
         // Step 4: Proceed to Step 2 (Deliverables)
         console.log('\n✅ Step 4: Moving to Step 2 - Select Deliverables');
         const continueBtn = document.querySelector('#ai-results button[onclick*="continueWithAI"]');
@@ -131,12 +168,12 @@ Success Metrics
             await new Promise(resolve => setTimeout(resolve, 1000));
             console.log('   - Moved to deliverables selection');
         }
-        
+
         // Step 5: Check deliverables are loaded
         console.log('\n✅ Step 5: Verifying deliverables loaded');
         const deliverableCheckboxes = document.querySelectorAll('#deliverables-list input[type="checkbox"]');
         console.log(`   - Found ${deliverableCheckboxes.length} deliverables`);
-        
+
         // Select first 10 deliverables if not already selected
         let selectedCount = 0;
         deliverableCheckboxes.forEach((cb, idx) => {
@@ -146,7 +183,7 @@ Success Metrics
             }
         });
         console.log(`   - Selected ${selectedCount} additional deliverables`);
-        
+
         // Step 6: Proceed to Step 3 (Pricing)
         console.log('\n✅ Step 6: Moving to Step 3 - Pricing');
         const step3Btn = document.querySelector('button[onclick*="proceedToStep3"]');
@@ -155,19 +192,19 @@ Success Metrics
             await new Promise(resolve => setTimeout(resolve, 1000));
             console.log('   - Moved to pricing step');
         }
-        
+
         // Step 7: Verify pricing data
         console.log('\n✅ Step 7: Verifying pricing data');
         const pricingRows = document.querySelectorAll('#pricing-table tbody tr');
         console.log(`   - Found ${pricingRows.length} pricing rows`);
-        
+
         const totalHours = document.querySelector('#total-hours');
         const totalPrice = document.querySelector('#total-price');
         if (totalHours && totalPrice) {
             console.log(`   - Total Hours: ${totalHours.textContent}`);
             console.log(`   - Total Price: ${totalPrice.textContent}`);
         }
-        
+
         // Step 8: Proceed to Step 4 (Timeline)
         console.log('\n✅ Step 8: Moving to Step 4 - Timeline');
         const step4Btn = document.querySelector('button[onclick*="proceedToStep4"]');
@@ -176,19 +213,19 @@ Success Metrics
             await new Promise(resolve => setTimeout(resolve, 1000));
             console.log('   - Moved to timeline step');
         }
-        
+
         // Step 9: Verify timeline data
         console.log('\n✅ Step 9: Verifying timeline data');
         const timelineRows = document.querySelectorAll('#timeline-table tbody tr');
         console.log(`   - Found ${timelineRows.length} timeline entries`);
-        
+
         // Step 10: Test XML Export
         console.log('\n✅ Step 10: Testing XML Export');
         const exportBtn = document.querySelector('button[onclick*="exportToXML"]');
         if (exportBtn) {
             // Note: We won't actually click this as it triggers a download
             console.log('   - XML Export button found and ready');
-            
+
             // Test the export endpoint directly
             const scenarioId = window.currentScenarioId || localStorage.getItem('scenario_id');
             if (scenarioId) {
@@ -200,7 +237,7 @@ Success Metrics
                 }
             }
         }
-        
+
         // Final Summary
         console.log('\n' + '='.repeat(50));
         console.log('✅ COMPLETE USER FLOW TEST SUCCESSFUL!');
@@ -213,17 +250,25 @@ Success Metrics
         console.log('5. ✅ Timeline generation');
         console.log('6. ✅ XML export ready');
         console.log('\n🎉 Application is fully functional!');
-        
+
         return { success: true, message: 'All tests passed!' };
-        
+
     } catch (error) {
         console.error('\n❌ Test failed:', error);
+        // Ensure interval is cleared on any error
+        if (window.aiAnalysisInterval) {
+            clearInterval(window.aiAnalysisInterval);
+            window.aiAnalysisInterval = null;
+        }
+        window.PROTECTED_AI_POLLING = false;
         return { success: false, error: error.message };
     }
 }
 
 // Auto-run the test
 console.log('Test script loaded. Running complete flow test...');
+// Initialize global flag
+window.PROTECTED_AI_POLLING = false;
 testCompleteUserFlow().then(result => {
     if (result.success) {
         console.log('\n✅ Test completed successfully!');

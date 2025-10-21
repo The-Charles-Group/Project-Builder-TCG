@@ -245,7 +245,7 @@ const SessionManager = {
       await fetch('/api/clear_session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId })
+        body: JSON.JSON.stringify({ session_id: sessionId })
       });
       console.log('[CLEAR] Server cache cleared for session:', sessionId);
     } catch (err) {
@@ -3175,57 +3175,6 @@ async function optimizeAllPricing() {
   }
 }
 
-// Smart optimization fallback
-function performSmartOptimization(scenario, clientBudget) {
-  if (!clientBudget || clientBudget <= 0) {
-    alert('Please enter a client budget for optimization');
-    return;
-  }
-
-  const currentTotal = scenario.totals.price;
-  const scaleFactor = clientBudget / currentTotal;
-
-  // Apply scaling to all items
-  scenario.items.forEach(item => {
-    // Scale hours and price proportionally
-    const originalHours = item.total_hours;
-    const originalPrice = item.price;
-
-    item.total_hours = Math.round(originalHours * scaleFactor);
-    item.price = Math.round(originalPrice * scaleFactor);
-
-    // Maintain effective rate
-    if (item.total_hours > 0) {
-      item.effective_rate = item.price / item.total_hours;
-    }
-  });
-
-  // Update totals
-  scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
-  scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
-
-  // Re-render scenario
-  if (window.renderScenario) {
-    window.renderScenario('scenarioA', scenario);
-  }
-
-  // Show results
-  let message = '✅ Pricing Optimized!\n\n';
-  if (scaleFactor < 1) {
-    const reduction = ((1 - scaleFactor) * 100).toFixed(1);
-    message += `📉 Reduced all deliverables by ${reduction}% to fit within budget\n`;
-    message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
-  } else if (scaleFactor > 1.2) {
-    const increase = ((scaleFactor - 1) * 100).toFixed(1);
-    message += `📈 Increased all deliverables by ${increase}% to maximize budget utilization\n`;
-    message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
-  } else {
-    message += `✨ Pricing is already optimized for the budget`;
-  }
-
-  alert(message);
-}
-
 // Show optimization success message
 function showOptimizationSuccess(result, clientBudget) {
   let message = '🎯 AI Pricing Optimization Complete!\n\n';
@@ -4539,65 +4488,21 @@ async function pollAIAnalysis(jobId) {
     log(`[POLLING] Checking status for job ${jobId}...`);
     const res = await fetch(`/api/ai/jobs/${jobId}`);
 
-    // Handle 410 Gone (zombie job blocked) or 404 - STOP IMMEDIATELY
-    if (res.status === 410 || res.status === 404) {
-      const statusText = res.status === 410 ? 'expired and blocked' : 'not found';
-      log(`[POLLING] Job ${jobId} ${statusText} (${res.status}), stopping polling permanently`);
-
-      // Clear the interval immediately
-      if (aiAnalysisInterval) {
-        clearInterval(aiAnalysisInterval);
-        aiAnalysisInterval = null;
-      }
-
-      // Clear the job ID from memory
-      aiAnalysisJobId = null;
-
-      // Hide progress bar
-      hideAIProgressBar();
-
-      // Clear job ID from specific localStorage keys only (avoid scanning all storage)
-      try {
-        const savedState = localStorage.getItem('charles_agent_state');
-        if (savedState) {
-          const state = JSON.parse(savedState);
-          if (state && state.jobId === jobId) {
-            state.jobId = null;
-            state.jobIdTimestamp = null;
-            // Also clear from stateHistory
-            if (state.stateHistory && Array.isArray(state.stateHistory)) {
-              state.stateHistory.forEach(historyState => {
-                if (historyState.jobId === jobId) {
-                  historyState.jobId = null;
-                  historyState.jobIdTimestamp = null;
-                }
-              });
-            }
-            localStorage.setItem('charles_agent_state', JSON.JSON.stringify(state));
-            log('[POLLING] Cleared job ID from charles_agent_state');
-          }
-        }
-      } catch (e) {
-        console.error('[POLLING] Failed to clear job from localStorage:', e);
-      }
-
-      // Show error message to user
-      const errorMsg = res.status === 410 
-        ? `Analysis job ${jobId} has expired. Please start a new analysis.`
-        : `Analysis job ${jobId} not found. It may have expired or been deleted.`;
-      console.error('[POLLING]', errorMsg);
-
-      // Don't continue polling
+    // Handle 404 (job expired/not found) gracefully
+    if (res.status === 404) {
+      console.warn(`[POLLING] Job ${jobId} not found - stopping polling.`);
+      clearInterval(window.aiAnalysisInterval);
+      window.aiAnalysisInterval = null;
+      window.PROTECTED_AI_POLLING = false;
+      alert(`Analysis job ${jobId} not found. It may have expired or been deleted. Please start a new analysis.`);
       return;
     }
 
     if (!res.ok) {
       console.error(`[POLLING] Error fetching job status: ${res.status}`);
-      return;
+      // Do not stop polling here, let it retry on next interval unless it's a permanent error
+      return; // Exit function, allow next interval to retry
     }
-
-    // Reset counter on successful response
-    consecutive404Count = 0;
 
     const status = await res.json();
     log(`[POLLING] Job ${jobId} status:`, status);
@@ -4696,11 +4601,13 @@ async function pollAIAnalysis(jobId) {
         console.log('[ANALYSIS] Found deliverables to load into PRIMARY_SCENARIO:', deliverables.length);
 
         // Update PRIMARY_SCENARIO with deliverables and analysis results
+        window.PRIMARY_SCENARIO = window.PRIMARY_SCENARIO || {}; // Ensure it exists
         window.PRIMARY_SCENARIO.deliverables = deliverables;
         window.PRIMARY_SCENARIO.status = 'analyzed';
         window.PRIMARY_SCENARIO.updatedAt = new Date().toISOString();
+        window.PRIMARY_SCENARIO.rfpText = rfpText; // Store RFP text for Step 2
 
-        // Also update DELIVERABLES global for backward compatibility
+        // Also update DELIVERABLES for backward compatibility
         window.DELIVERABLES = deliverables;
 
         // If ScenarioManager exists, update it too
@@ -4717,7 +4624,8 @@ async function pollAIAnalysis(jobId) {
           deliverables: aiPlanResponse.deliverables || [],
           analysisResults: aiPlanResponse,
           status: 'analyzed',
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
+          rfpText: rfpText // Store RFP text for Step 2
         };
       }
 
@@ -5190,8 +5098,6 @@ async function onRunReconcile() {
       pollAIAnalysis(jobInfo.job_id);
 
       // Old SSE code commented out for now
-      // const eventSource = new EventSource(`/api/stream/${jobInfo.job_id}`);
-
       /* SSE event handler disabled for now - using polling instead
       eventSource.onmessage = (event) => {
         try {
@@ -5221,7 +5127,7 @@ async function onRunReconcile() {
           updateAIProgress(progressUpdate);
 
           // Handle completion
-          if (data.status === 'completed' && data.result) {
+          if (data.status === 'completed' &&data.result) {
             eventSource.close();
             hideAIProgressBar();
 
@@ -5971,10 +5877,8 @@ async function applyAllSelectedFromAI() {
             if (Array.isArray(tasks)) {
               tasks.forEach(task => {
                 // Ensure we always get a string value, not an object
-                let taskName;
-                if (typeof task === 'string') {
-                  taskName = task;
-                } else if (task && typeof task === 'object') {
+                let taskName = task;
+                if (typeof task === 'object' && task) {
                   // Extract string from object - check all possible property names
                   taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
                   // If still no valid string, try converting to string
