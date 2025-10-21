@@ -49,6 +49,12 @@
     document.addEventListener('DOMContentLoaded', function() {
       document.body.classList.add('js-loaded');
       console.log('[Main] JavaScript loaded successfully');
+      
+      // Manually initialize file staging to bypass listener interference
+      if (window.FileStagingModule && window.FileStagingModule.init) {
+        console.log('[Main] Manually initializing FileStagingModule');
+        window.FileStagingModule.init();
+      }
     });
   </script>
 </head>
@@ -3309,6 +3315,32 @@
         });
       }
     });
+  </script>
+  
+  <!-- Event-independent file staging bootstrap -->
+  <script>
+    // Manual bootstrap that doesn't rely on DOM events
+    // This bypasses any listener interference from other scripts
+    (function() {
+      console.log('[FILE STAGING BOOTSTRAP] Attempting manual init...');
+      
+      // Retry with immediate callback to allow module to load
+      function attemptInit() {
+        if (window.FileStagingModule && typeof window.FileStagingModule.init === 'function') {
+          console.log('[FILE STAGING BOOTSTRAP] FileStagingModule found, calling init()');
+          window.FileStagingModule.init();
+        } else {
+          console.log('[FILE STAGING BOOTSTRAP] FileStagingModule not yet available, will retry');
+        }
+      }
+      
+      // Try immediately (module should be loaded by now)
+      attemptInit();
+      
+      // Backup: retry after short delay if module wasn't ready
+      setTimeout(attemptInit, 100);
+      setTimeout(attemptInit, 500);
+    })();
   </script>
 </body>
 </html><script src="/static/test_complete_flow.js" defer></script>

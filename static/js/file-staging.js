@@ -36,6 +36,12 @@
      * Initialize the file staging module
      */
     function init() {
+        // Idempotent guard - prevent double initialization
+        if (window.__fileStagingInitDone) {
+            console.log('[FILE STAGING] Already initialized, skipping');
+            return;
+        }
+
         console.log('[FILE STAGING] Initializing...');
 
         // Get or create session ID
@@ -51,12 +57,12 @@
         elements.progressText = document.querySelector('#analysis-progress .progress-text');
 
         if (!elements.fileInput) {
-            console.error('[FILE STAGING] File input #rfpFile not found');
+            console.error('[FILE STAGING] File input #rfpFile not found - will retry');
             return;
         }
 
         if (!elements.fileCardsContainer) {
-            console.error('[FILE STAGING] File cards container #file-cards-container not found');
+            console.error('[FILE STAGING] File cards container #file-cards-container not found - will retry');
             return;
         }
 
@@ -66,6 +72,8 @@
         // Load any previously staged files for this session
         loadStagedFiles();
 
+        // Mark as initialized
+        window.__fileStagingInitDone = true;
         console.log('[FILE STAGING] Initialized successfully');
     }
 
@@ -555,15 +563,73 @@
         return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     }
 
-    // Initialize on DOM ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
+    // Multi-strategy initialization to bypass listener interference
+    function tryInit() {
+        const readyState = document.readyState;
+        console.log('[FILE STAGING] tryInit called, readyState:', readyState);
+        
+        if (window.__fileStagingInitDone) {
+            console.log('[FILE STAGING] Already initialized, skipping');
+            return;
+        }
+        
+        // Check if DOM is ready AND required elements exist
+        if (readyState === 'complete' || readyState === 'interactive') {
+            const hasElements = document.getElementById('rfpFile') && document.getElementById('file-cards-container');
+            console.log('[FILE STAGING] DOM ready, elements exist:', hasElements);
+            
+            if (hasElements) {
+                init();
+            }
+        }
     }
 
-    // Export public API
+    // Strategy 1: Immediate if DOM is ready
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        console.log('[FILE STAGING] DOM already ready, initializing immediately');
+        tryInit();
+    } else {
+        console.log('[FILE STAGING] DOM not ready, starting watchdog');
+        
+        // Strategy 2: Bounded polling watchdog (every 250ms, max 10s)
+        let watchdogAttempts = 0;
+        const maxAttempts = 40; // 10 seconds / 250ms
+        const watchdog = setInterval(() => {
+            watchdogAttempts++;
+            console.log('[FILE STAGING] Watchdog attempt', watchdogAttempts, '/', maxAttempts);
+            
+            if (window.__fileStagingInitDone) {
+                console.log('[FILE STAGING] Initialized by other strategy, stopping watchdog');
+                clearInterval(watchdog);
+                return;
+            }
+            
+            tryInit();
+            
+            if (window.__fileStagingInitDone || watchdogAttempts >= maxAttempts) {
+                if (watchdogAttempts >= maxAttempts) {
+                    console.error('[FILE STAGING] Watchdog timeout - initialization failed');
+                }
+                clearInterval(watchdog);
+            }
+        }, 250);
+        
+        // Strategy 3: readystatechange listener
+        document.addEventListener('readystatechange', () => {
+            console.log('[FILE STAGING] readystatechange:', document.readyState);
+            tryInit();
+        });
+        
+        // Strategy 4: DOMContentLoaded on document (may be intercepted)
+        document.addEventListener('DOMContentLoaded', tryInit);
+        
+        // Strategy 5: window.load (last resort)
+        window.addEventListener('load', tryInit);
+    }
+
+    // Export public API with init exposed for manual activation
     window.FileStagingModule = {
+        init: init,  // Expose init for manual calls
         removeFile: removeFile,
         getState: () => ({ ...state })
     };
