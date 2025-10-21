@@ -32,7 +32,7 @@
   async function startAnalyze(rfpText, opts = {}) {
     const controller = new AbortController();
     const payload = {
-      text: rfpText,
+      request_text: rfpText,  // Changed from 'text' to 'request_text' to match API
       mode: opts.mode || 'fast',
       strictness: opts.strictness || 'balanced',
       gpt5_tier: opts.tier || 'mini',
