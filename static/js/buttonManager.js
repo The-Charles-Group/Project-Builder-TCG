@@ -233,7 +233,7 @@
       console.log('[ButtonHandlers] Analysis mode set successfully');
     },
     
-    runAnalysis() {
+    async runAnalysis() {
       console.log('[ButtonHandlers] Running RFP analysis...');
       
       // Get RFP text from multiple sources
@@ -256,24 +256,39 @@
       console.log('[VALIDATION] PRIMARY_SCENARIO.rfpText length:', window.PRIMARY_SCENARIO?.rfpText?.length || 0);
       console.log('[VALIDATION] ✅ Validation passed, starting analysis');
       
-      // Initialize PRIMARY_SCENARIO
-      window.PRIMARY_SCENARIO = {
-        ...window.PRIMARY_SCENARIO,
-        rfpText: rfpText,
-        analysisMode: window.PRIMARY_SCENARIO?.analysisMode || 'fast',
-        sessionId: window.SessionManager?.getCurrentSessionId() || generateSessionId(),
-        createdAt: new Date().toISOString(),
-        status: 'analyzing'
-      };
-      
-      // Call the analysis function
-      if (typeof window.onRunReconcile === 'function') {
-        window.onRunReconcile();
-      } else {
-        console.error('[ButtonHandlers] onRunReconcile function not found');
-        // Fallback: trigger analysis directly
-        this.triggerAnalysis();
-      }
+      // Defer heavy operations to next tick to avoid blocking
+      setTimeout(() => {
+        try {
+          // Initialize PRIMARY_SCENARIO safely without spreading huge objects
+          if (!window.PRIMARY_SCENARIO) {
+            window.PRIMARY_SCENARIO = {};
+          }
+          window.PRIMARY_SCENARIO.rfpText = rfpText;
+          window.PRIMARY_SCENARIO.analysisMode = window.PRIMARY_SCENARIO?.analysisMode || 'fast';
+          window.PRIMARY_SCENARIO.sessionId = window.SessionManager?.getCurrentSessionId() || generateSessionId();
+          window.PRIMARY_SCENARIO.createdAt = new Date().toISOString();
+          window.PRIMARY_SCENARIO.status = 'analyzing';
+          
+          // Call the analysis function
+          if (typeof window.onRunReconcile === 'function') {
+            window.onRunReconcile();
+          } else {
+            console.error('[ButtonHandlers] onRunReconcile function not found');
+            // Fallback: trigger analysis directly
+            this.triggerAnalysis();
+          }
+        } catch (error) {
+          console.error('[ButtonHandlers] Error during analysis:', error);
+          alert('Error starting analysis. Please refresh and try again.');
+          
+          // Reset button state
+          const button = document.querySelector('#btnAnalyze');
+          if (button) {
+            button.disabled = false;
+            button.textContent = 'Analyze with AI';
+          }
+        }
+      }, 10);
     },
     
     triggerAnalysis() {

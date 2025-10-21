@@ -5188,18 +5188,24 @@ async function onRunReconcile() {
     log('[SESSION] New analysis session:', sessionId);
   }
 
-  // Reset global state for fresh analysis
-  SCENARIOS = null;
-  DELIVERABLES = [];
-  DELIV_INDEX = {};
-  DELIV_INDEX_LO = {};
+  // Reset global state for fresh analysis - done async to avoid blocking
+  requestAnimationFrame(() => {
+    SCENARIOS = null;
+    DELIVERABLES = [];
+    DELIV_INDEX = {};
+    DELIV_INDEX_LO = {};
 
-  // Reset Step 2 state
-  selectionStore.deliverables.clear();
-  selectionStore.componentsByDeliv.clear();
-  selectionStore.l2ByComponent.clear();
-  S2.selectedComponentsByCode = {};
-  S2.aiSuggestedCodes = new Set();
+    // Reset Step 2 state - check if they exist first to avoid errors
+    if (selectionStore) {
+      if (selectionStore.deliverables) selectionStore.deliverables.clear();
+      if (selectionStore.componentsByDeliv) selectionStore.componentsByDeliv.clear();
+      if (selectionStore.l2ByComponent) selectionStore.l2ByComponent.clear();
+    }
+    if (S2) {
+      S2.selectedComponentsByCode = {};
+      S2.aiSuggestedCodes = new Set();
+    }
+  });
   S2.activeDeliverableCode = null;
   S2.activeComponentName = null;
 
