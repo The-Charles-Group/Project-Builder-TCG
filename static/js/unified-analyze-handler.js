@@ -133,7 +133,12 @@
             const statusRes = await fetch(`/api/ai/jobs/${jobId}`);
             const status = await statusRes.json();
 
-            console.log('[Unified Analyze] Job status:', status.status);
+            console.log('[Unified Analyze] Poll #' + pollCount + ' - Status:', status.status, 'Progress:', status.progress + '%');
+            
+            // Debug log full status on first and completion polls
+            if (pollCount === 1 || status.status === 'completed') {
+              console.log('[Unified Analyze] Full status object:', JSON.stringify(status, null, 2));
+            }
 
             if (status.status === 'completed') {
               clearInterval(pollInterval);
@@ -143,32 +148,56 @@
               // Extract deliverables from the result structure
               let deliverables = [];
               
-              // The result has a nested structure: result.plan.suggestions_by_department
-              if (status.result && status.result.plan && status.result.plan.suggestions_by_department) {
-                const deptSuggestions = status.result.plan.suggestions_by_department;
-                console.log('[Unified Analyze] Found suggestions_by_department:', Object.keys(deptSuggestions));
-                
-                // Flatten all department suggestions into a single array
-                Object.entries(deptSuggestions).forEach(([dept, deptDelivs]) => {
-                  if (Array.isArray(deptDelivs)) {
-                    deptDelivs.forEach(d => {
-                      deliverables.push({
-                        deliverable_code: d.code || d.deliverable_code,
-                        deliverable_name: d.name || d.deliverable_name || d.title,
-                        department: dept,
-                        category: dept,
-                        confidence: d.confidence_score || d.confidence || 0,
-                        relevance: d.relevance_score || d.relevance || 0,
-                        why: d.why || d.reasoning || '',
-                        risks: d.risks || '',
-                        components: d.components || [],
-                        select: d.select !== false
+              // Handle both nested (result.plan.suggestions_by_department) and flat (result.deliverables) structures
+              if (status.result) {
+                if (status.result.plan && status.result.plan.suggestions_by_department) {
+                  const deptSuggestions = status.result.plan.suggestions_by_department;
+                  console.log('[Unified Analyze] Found suggestions_by_department:', Object.keys(deptSuggestions));
+                  
+                  // Flatten all department suggestions into a single array
+                  Object.entries(deptSuggestions).forEach(([dept, deptDelivs]) => {
+                    if (Array.isArray(deptDelivs)) {
+                      deptDelivs.forEach(d => {
+                        deliverables.push({
+                          deliverable_code: d.code || d.deliverable_code,
+                          deliverable_name: d.name || d.deliverable_name || d.title,
+                          department: dept,
+                          category: dept,
+                          confidence: d.confidence_score || d.confidence || 0,
+                          relevance: d.relevance_score || d.relevance || 0,
+                          why: d.why || d.reasoning || '',
+                          risks: d.risks || '',
+                          components: d.components || [],
+                          select: d.select !== false
+                        });
                       });
-                    });
-                  }
-                });
+                    }
+                  });
+                } else if (status.result.deliverables && Array.isArray(status.result.deliverables)) {
+                  // Handle flat structure
+                  deliverables = status.result.deliverables.map(d => ({
+                    deliverable_code: d.code || d.deliverable_code,
+                    deliverable_name: d.name || d.deliverable_name || d.title,
+                    department: d.department || d.category || 'General',
+                    category: d.department || d.category || 'General',
+                    confidence: d.confidence_score || d.confidence || 0,
+                    relevance: d.relevance_score || d.relevance || 0,
+                    why: d.why || d.reasoning || '',
+                    risks: d.risks || '',
+                    components: d.components || [],
+                    select: d.select !== false
+                  }));
+                }
                 
-                console.log('[Unified Analyze] Extracted', deliverables.length, 'deliverables from departments');
+                console.log('[Unified Analyze] Extracted', deliverables.length, 'deliverables');
+              }
+              
+              if (deliverables.length === 0) {
+                console.error('[Unified Analyze] No deliverables found in result:', status.result);
+                alert('Analysis completed but no deliverables were found. Please try again.');
+                newBtn.disabled = false;
+                newBtn.textContent = 'Analyze with AI';
+                return;
               }
 
               // Store results in PRIMARY_SCENARIO
