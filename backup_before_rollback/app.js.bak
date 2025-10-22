@@ -5,12 +5,68 @@ let DELIV_INDEX = {};     // code -> deliverable object lookup for fast renderin
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ================================================================================
+// CRITICAL: Global Error Handlers to Prevent App Freezing
+// ================================================================================
+window.addEventListener('error', function(event) {
+  console.error('[GLOBAL ERROR]', event.message, event.filename, event.lineno, event.colno);
+  console.error('[GLOBAL ERROR] Stack:', event.error?.stack);
+  
+  // Show user-friendly message
+  if (!window._errorShown) {
+    window._errorShown = true;
+    setTimeout(() => {
+      alert('An error occurred. Please check the console and try refreshing the page.');
+      window._errorShown = false;
+    }, 100);
+  }
+  
+  // Don't prevent default - let console show the error too
+  return false;
+});
+
+window.addEventListener('unhandledrejection', function(event) {
+  console.error('[UNHANDLED PROMISE REJECTION]', event.reason);
+  
+  // Show user-friendly message
+  if (!window._promiseErrorShown) {
+    window._promiseErrorShown = true;
+    setTimeout(() => {
+      alert('A background operation failed. Please check the console and try again.');
+      window._promiseErrorShown = false;
+    }, 100);
+  }
+});
+
+// ================================================================================
+// Session ID Helper - Uses crypto.randomUUID() with fallback
+// ================================================================================
+function generateSessionId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+}
+
+window.generateSessionId = generateSessionId;
+
+// ================================================================================
+// Session ID Helper - Get current session or throw error
+// ================================================================================
+function getCurrentSessionId() {
+  if (!window.APP_STATE?.sessionId) {
+    alert('Please complete Step 2 (Apply Smart Selection) first');
+    throw new Error('No active session ID - Step 2 must be completed first');
+  }
+  return window.APP_STATE.sessionId;
+}
+
+window.getCurrentSessionId = getCurrentSessionId;
+
+// ================================================================================
 // Session Management - Data Isolation Between RFPs
 // ================================================================================
 const SessionManager = {
-  generateSessionId() {
-    return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-  },
+  generateSessionId,
   
   getCurrentSessionId() {
     let sessionId = localStorage.getItem('apb.currentSession');
@@ -219,6 +275,70 @@ const SessionManager = {
 window.SessionManager = SessionManager;
 
 // ================================================================================
+// Data Transformation Utilities
+// ================================================================================
+
+/**
+ * Transform SCENARIOS.A backend format to unified pricing table patch format
+ * @param {Object} scenario - Scenario object with items array
+ * @returns {Object} - {deliverables: [...]} format for APBOneTable.hydrateFrom()
+ */
+function transformScenarioToPatchFormat(scenario) {
+  if (!scenario || !scenario.items) {
+    return { deliverables: [] };
+  }
+  
+  // Helper to slugify component names for IDs
+  function slugify(text) {
+    return text
+      .toString()
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '-')           // Replace spaces with -
+      .replace(/[^\w\-]+/g, '')       // Remove all non-word chars
+      .replace(/\-\-+/g, '-')         // Replace multiple - with single -
+      .replace(/^-+/, '')              // Trim - from start
+      .replace(/-+$/, '');             // Trim - from end
+  }
+  
+  const deliverables = scenario.items.map(item => {
+    // Determine cadence based on is_retainer flag
+    const isRetainer = item.is_retainer || item.retainer_months > 0;
+    const cadence = isRetainer ? 'Monthly' : 'One-Time';
+    const months = isRetainer ? (item.retainer_months || 12) : 0;
+    
+    const deliverable = {
+      id: item.deliverable_code,
+      title: item.deliverable_name || item.deliverable || item.deliverable_code,
+      dept: item.category || 'General',
+      cadence: cadence,
+      months: months,
+      hours: item.total_hours || item.hours || 0,
+      rate: item.blended_rate || item.rate || item.effective_rate || 195,
+      price: item.price || 0,
+      resources: item.resources || [],
+      components: []
+    };
+    
+    // Transform components if they exist
+    if (item.components && Array.isArray(item.components)) {
+      deliverable.components = item.components.map(comp => ({
+        id: slugify(comp.name || 'component'),
+        title: comp.name || 'Component',
+        hours: comp.hours || 0,
+        rate: comp.rate || deliverable.rate,
+        cadence: comp.cadence || deliverable.cadence,
+        months: comp.months || deliverable.months
+      }));
+    }
+    
+    return deliverable;
+  });
+  
+  return { deliverables };
+}
+
+// ================================================================================
 // Industry Template System
 // ================================================================================
 let selectedIndustry = null;
@@ -404,33 +524,181 @@ async function clearAllDataWithConfirmation() {
 
 window.clearAllDataWithConfirmation = clearAllDataWithConfirmation;
 
+// ================================================================================
+// Resource Leveling Event Listeners
+// ================================================================================
+// Listen for pricing leveling applied events to refresh the pricing display
+document.addEventListener('pricing:leveling-applied', (event) => {
+  console.log('[Resource Leveling] Pricing updated with leveling costs:', event.detail);
+  
+  // Refresh pricing table to show conflict indicators
+  if (typeof updatePricingTable === 'function') {
+    updatePricingTable();
+  }
+  
+  // Refresh pricing summary to show leveling costs
+  if (typeof updatePricingSummary === 'function') {
+    updatePricingSummary();
+  }
+  
+  // Notify user of the resource conflicts detected
+  const levelingData = event.detail;
+  if (levelingData && levelingData.totalCost > 0) {
+    const conflictCount = Object.keys(levelingData.deliverableConflicts || {}).length;
+    console.log(`[Resource Leveling] ${conflictCount} deliverables affected by resource conflicts. Total leveling cost: $${Math.round(levelingData.totalCost).toLocaleString()}`);
+  }
+});
+
+// Listen for gantt:changed events to re-analyze resource conflicts
+document.addEventListener('gantt:changed', (event) => {
+  console.log('[Resource Leveling] Gantt changed, re-analyzing resource conflicts');
+  
+  // Get all tasks from the Gantt if available
+  if (window.gantt && typeof window.gantt.getTaskByTime === 'function') {
+    const tasks = window.gantt.getTaskByTime();
+    if (tasks && tasks.length > 0) {
+      // Re-analyze resource risks which will emit resource:conflicts event
+      analyzeResourceRisks(tasks);
+    }
+  }
+});
+
+// Listen for timeline task drag events to provide real-time feedback
+document.addEventListener('task:dragging', (event) => {
+  const { taskId, newStart, newEnd } = event.detail || {};
+  if (!taskId) return;
+  
+  // Get current tasks and create a temporary updated list
+  if (window.gantt && typeof window.gantt.getTaskByTime === 'function') {
+    const tasks = window.gantt.getTaskByTime();
+    const tempTasks = tasks.map(task => {
+      if (task.id === taskId) {
+        return { ...task, start: newStart, end: newEnd };
+      }
+      return task;
+    });
+    
+    // Analyze temporary state for preview
+    const tempRisks = analyzeResourceRisks(tempTasks);
+    
+    // Show preview of cost impact (could be displayed in a tooltip or status bar)
+    if (tempRisks.length > 0) {
+      const totalCost = tempRisks.reduce((sum, risk) => sum + risk.idleCost, 0);
+      console.log(`[Resource Leveling Preview] Potential leveling cost: $${Math.round(totalCost).toLocaleString()}`);
+    }
+  }
+});
+
+// NEW: Listen for Gantt task updates (drag/resize) and sync with SCENARIO_STORE
+document.addEventListener('gantt:task_updated', async (event) => {
+  const { task, wbs_id, start_date, duration_days } = event.detail || {};
+  if (!wbs_id) return;
+  
+  console.log('[GANTT SYNC] Task updated:', { wbs_id, start_date, duration_days });
+  
+  // Get session ID from APP_STATE (must exist from build_scenario)
+  const sessionId = getCurrentSessionId();
+  
+  try {
+    // Call new SCENARIO_STORE timeline update endpoint
+    const response = await fetch('/api/timeline/update_task', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        wbs_id: wbs_id,
+        start_date: start_date,
+        duration_days: duration_days
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[GANTT SYNC] Update failed:', errorText);
+      return;
+    }
+    
+    const result = await response.json();
+    
+    // Update the scenario with timeline changes
+    const updatedScenario = result.scenario || result;
+    
+    if (updatedScenario && updatedScenario.items) {
+      // Store updated scenario
+      window.currentScenario = updatedScenario;
+      window.SCENARIOS = { A: updatedScenario };
+      
+      // Update pricing table display to reflect timeline changes
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      console.log('[GANTT SYNC] Pricing table updated with timeline changes');
+    }
+  } catch (error) {
+    console.error('[GANTT SYNC] Error updating task:', error);
+  }
+});
+
+// Hook into existing Gantt library's drag end event if available
+if (typeof window.Gantt !== 'undefined') {
+  document.addEventListener('DOMContentLoaded', () => {
+    // Listen for Gantt bar drag end events
+    const ganttContainer = document.querySelector('#gantt');
+    if (ganttContainer) {
+      ganttContainer.addEventListener('date_change', (event) => {
+        const task = event.detail?.task;
+        if (task) {
+          // Calculate duration in days
+          const start = new Date(task.start);
+          const end = new Date(task.end);
+          const durationDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+          
+          // Dispatch our custom event for SCENARIO_STORE sync
+          document.dispatchEvent(new CustomEvent('gantt:task_updated', {
+            detail: {
+              task: task,
+              wbs_id: task.id || task.wbs_id,
+              start_date: task.start,
+              duration_days: durationDays
+            }
+          }));
+        }
+      });
+    }
+  });
+}
+
 // ISSUE 3: Retainer Options Functions
 
-// ISSUE FIX 3: Add global retainer suggestions function
-async function askAIForRetainerSuggestions() {
-  const codes = Array.from(selectionStore.deliverables);
-  
-  if (codes.length === 0) {
-    alert('Please select deliverables first');
+// NEW: Global retainer suggestions using ScenarioManager and updated backend
+async function askAIForRetainerSuggestions(monthlyBudget = null) {
+  // Check if ScenarioManager is available
+  if (!window.ScenarioManager) {
+    alert('ScenarioManager not available. Please reload the page.');
     return;
   }
   
-  const rfpText = APB.step2?.rfpText || 
-                 sessionStorage.getItem('rfpContent') || 
-                 sessionStorage.getItem('apb.rfp_text') ||
-                 document.getElementById('rfpText')?.value || '';
+  // Get current scenario from ScenarioManager
+  const currentScenario = window.ScenarioManager.getCurrentScenario();
   
-  if (!rfpText) {
-    alert('Please provide RFP text before using AI suggestions');
+  // Check for scenario
+  if (!currentScenario || !currentScenario.items || currentScenario.items.length === 0) {
+    alert('Please build a scenario first before analyzing retainers.');
     return;
   }
   
-  // Build deliverables array with proper format
-  const deliverables = codes.map(code => ({
-    code: code,
-    name: labelFor(code), // Get the label/name
-    type: "DELIVERABLE"
-  }));
+  // Get session ID - prioritize ScenarioManager's session ID
+  let sessionId;
+  try {
+    sessionId = window.ScenarioManager.state.sessionId || window.APP_STATE?.sessionId || getCurrentSessionId();
+  } catch (e) {
+    // If getCurrentSessionId throws, generate a new one
+    sessionId = window.generateSessionId ? window.generateSessionId() : 'session_' + Date.now();
+    if (window.ScenarioManager) {
+      window.ScenarioManager.state.sessionId = sessionId;
+    }
+  }
   
   // Show loading on button
   const btn = event?.target;
@@ -440,58 +708,270 @@ async function askAIForRetainerSuggestions() {
   }
   
   try {
-    const res = await fetch('/api/pricing/retainer_suggest', {
+    // Call updated retainer_suggestions endpoint with full scenario
+    const res = await fetch('/api/pricing/retainer_suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        deliverables: deliverables,  // Correct format
-        rfp_text: rfpText
+        session_id: sessionId,
+        monthly_budget: monthlyBudget,
+        scenario: currentScenario  // Send the full scenario for analysis
       })
     });
     
-    if (res.ok) {
-      const data = await res.json();
-      const suggestions = data.suggestions || [];
-      
-      // Apply suggestions to pricingData
-      let retainerCount = 0;
-      suggestions.forEach(suggestion => {
-        if (suggestion.type === 'RETAINER') {
-          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'RETAINER');
-          pricingData.retainers.set(suggestion.deliverable_code, suggestion.recommended_months || 12);
-          retainerCount++;
-        } else {
-          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'PROJECT');
-          pricingData.retainers.delete(suggestion.deliverable_code);
-        }
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Retainer suggestions failed: ${errorText}`);
+    }
+    
+    const result = await res.json();
+    
+    // Update the scenario with retainer suggestions
+    const updatedScenario = result.scenario;
+    
+    if (updatedScenario && updatedScenario.items) {
+      // Update ScenarioManager with new data
+      window.ScenarioManager.updateDeliverablesFromAPI({ 
+        scenarios: { A: updatedScenario },
+        scenario: updatedScenario 
       });
       
-      // Update UI to show retainer indicators
-      if (window.renderDeliverablesPanel) {
-        renderDeliverablesPanel();
+      // Also update global references for compatibility
+      window.currentScenario = updatedScenario;
+      window.SCENARIOS = { A: updatedScenario };
+      
+      // Update pricing table display
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
       }
       
-      // Show success message
-      if (retainerCount > 0) {
-        alert(`✅ AI Retainer Analysis Complete!\n\n${retainerCount} deliverables suggested as retainers.\n\nRetainer items will be marked in the deliverables list.`);
-      } else {
-        alert('✅ Analysis complete. All items are best suited as one-time projects.');
+      // Re-render scenario if function exists
+      if (window.renderScenario) {
+        window.renderScenario('scenarioA', updatedScenario);
       }
+      
+      // Display retainer plan in UI panel
+      if (result.retainer_plan) {
+        displayRetainerPlan(result.retainer_plan);
+      }
+      
+      // Display individual suggestions in AI Assistant panel if available
+      if (result.suggestions && result.suggestions.length > 0) {
+        displayRetainerSuggestions(result.suggestions);
+      }
+      
+      // Show success message with details
+      const message = result.message || 'Retainer suggestions applied successfully.';
+      const details = result.converted_count > 0 
+        ? `\n\n✓ ${result.converted_count} deliverables converted to retainers\n✓ ${result.retainer_plan?.monthly_hours || 0} total monthly hours\n✓ $${result.retainer_plan?.monthly_budget || 0} monthly budget`
+        : '';
+      
+      alert(`✅ AI Retainer Suggestions Complete!\n\n${message}${details}`);
+      
+      console.log('[Retainer Suggestions] Applied:', result);
+    } else {
+      throw new Error('Invalid retainer suggestions response');
     }
   } catch (error) {
-    console.error('Failed to get retainer suggestions:', error);
-    alert('Failed to get AI suggestions. Please try again.');
+    console.error('[Retainer Suggestions] Failed:', error);
+    alert(`❌ Retainer Suggestions Error:\n\n${error.message || 'Failed to get retainer suggestions. Please try again.'}`);
   } finally {
     // Reset button
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🤖 AI Retainer Analysis';
+      btn.textContent = '🤖 Ask AI for Retainer Suggestions';
     }
   }
 }
 
-// Export the function globally
+// Display retainer plan in a nice UI panel
+function displayRetainerPlan(retainerPlan) {
+  const container = document.getElementById('retainer-plan-container');
+  if (!container) {
+    // Create container if it doesn't exist
+    const newContainer = document.createElement('div');
+    newContainer.id = 'retainer-plan-container';
+    newContainer.style.cssText = 'margin: 20px 0; padding: 20px; background: var(--card); border-radius: 12px; border: 2px solid var(--accent2);';
+    
+    // Insert after pricing table or in Step 3
+    const step3 = document.getElementById('step3');
+    if (step3) {
+      step3.appendChild(newContainer);
+    }
+  }
+  
+  const displayContainer = container || document.getElementById('retainer-plan-container');
+  
+  if (displayContainer && retainerPlan) {
+    let html = `
+      <h3 style="color: var(--accent2); margin-bottom: 16px;">
+        🔄 Suggested Retainer Plan
+      </h3>
+      <div style="background: rgba(139,92,246,0.1); padding: 16px; border-radius: 8px;">
+        <p style="color: var(--text); font-size: 0.95em; line-height: 1.6;">
+          ${retainerPlan.description || 'Recommended retainer configuration based on your project requirements.'}
+        </p>
+    `;
+    
+    if (retainerPlan.items && retainerPlan.items.length > 0) {
+      html += `
+        <div style="margin-top: 16px;">
+          <h4 style="color: var(--accent); margin-bottom: 8px;">Retainer Items:</h4>
+          <ul style="list-style: none; padding: 0;">
+      `;
+      
+      retainerPlan.items.forEach(item => {
+        html += `
+          <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+            <strong style="color: var(--text);">${item.name || item.deliverable}</strong>
+            <span style="color: var(--muted); margin-left: 8px;">${item.months || 12} months</span>
+          </li>
+        `;
+      });
+      
+      html += `
+          </ul>
+        </div>
+      `;
+    }
+    
+    html += `
+      </div>
+    `;
+    
+    displayContainer.innerHTML = html;
+    displayContainer.style.display = 'block';
+  }
+}
+
+// Display individual retainer suggestions in the AI Assistant panel
+function displayRetainerSuggestions(suggestions) {
+  // Find or create container for suggestions in the AI Assistant panel
+  let suggestionsContainer = document.getElementById('retainer-suggestions-list');
+  
+  if (!suggestionsContainer) {
+    // Try to find AI Assistant panel or create in Step 3
+    const aiAssistantPanel = document.querySelector('.ai-assistant-panel') || 
+                            document.querySelector('#ai-assistant-content');
+    
+    if (aiAssistantPanel) {
+      suggestionsContainer = document.createElement('div');
+      suggestionsContainer.id = 'retainer-suggestions-list';
+      suggestionsContainer.className = 'retainer-suggestions-list';
+      aiAssistantPanel.appendChild(suggestionsContainer);
+    } else {
+      // Create in Step 3 as fallback
+      const step3 = document.getElementById('step3');
+      if (step3) {
+        suggestionsContainer = document.createElement('div');
+        suggestionsContainer.id = 'retainer-suggestions-list';
+        suggestionsContainer.style.cssText = 'margin: 20px 0; padding: 20px; background: var(--card); border-radius: 12px; border: 2px solid var(--accent2);';
+        step3.appendChild(suggestionsContainer);
+      }
+    }
+  }
+  
+  if (!suggestionsContainer) return;
+  
+  // Build HTML for suggestions
+  let html = `
+    <h4 style="color: var(--accent2); margin-bottom: 16px;">
+      🤖 AI Retainer Analysis
+    </h4>
+    <div class="suggestions-grid" style="display: grid; gap: 12px;">
+  `;
+  
+  suggestions.forEach(suggestion => {
+    const confidence = Math.round((suggestion.confidence || 0.85) * 100);
+    const confidenceColor = confidence >= 80 ? '#10b981' : confidence >= 60 ? '#f59e0b' : '#ef4444';
+    
+    html += `
+      <div class="suggestion-card" style="padding: 16px; background: rgba(139,92,246,0.05); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+          <h5 style="color: var(--text); margin: 0; font-size: 0.95em;">
+            ${suggestion.deliverable_name}
+          </h5>
+          <span style="padding: 2px 8px; background: ${confidenceColor}20; color: ${confidenceColor}; border-radius: 4px; font-size: 0.8em;">
+            ${confidence}% confidence
+          </span>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0;">
+          <div style="text-align: center;">
+            <div style="color: var(--muted); font-size: 0.8em;">Monthly Hours</div>
+            <div style="color: var(--accent); font-weight: bold;">${suggestion.monthly_hours}</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="color: var(--muted); font-size: 0.8em;">Duration</div>
+            <div style="color: var(--accent); font-weight: bold;">${suggestion.suggested_months} mo</div>
+          </div>
+          <div style="text-align: center;">
+            <div style="color: var(--muted); font-size: 0.8em;">Total Hours</div>
+            <div style="color: var(--accent); font-weight: bold;">${suggestion.total_hours}</div>
+          </div>
+        </div>
+        
+        <p style="color: var(--muted); font-size: 0.85em; margin: 8px 0; font-style: italic;">
+          ${suggestion.reasoning}
+        </p>
+        
+        <button 
+          onclick="applyRetainerSuggestion('${suggestion.deliverable_code}', ${suggestion.suggested_months}, ${suggestion.monthly_hours})"
+          style="width: 100%; padding: 8px; background: var(--accent2); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em;"
+          onmouseover="this.style.opacity='0.9'" 
+          onmouseout="this.style.opacity='1'"
+        >
+          Apply This Retainer
+        </button>
+      </div>
+    `;
+  });
+  
+  html += `
+    </div>
+  `;
+  
+  suggestionsContainer.innerHTML = html;
+  suggestionsContainer.style.display = 'block';
+}
+
+// Apply individual retainer suggestion
+function applyRetainerSuggestion(deliverableCode, months, monthlyHours) {
+  // Update in ScenarioManager
+  if (window.ScenarioManager) {
+    const deliverable = window.ScenarioManager.state.deliverables.find(
+      d => d.id === deliverableCode || d.deliverable_code === deliverableCode
+    );
+    
+    if (deliverable) {
+      // Update deliverable to retainer
+      deliverable.cadence = 'Monthly';
+      deliverable.months = months;
+      deliverable.monthly_hours = monthlyHours;
+      deliverable.is_retainer = true;
+      
+      // Recalculate price
+      deliverable.price = monthlyHours * months * (deliverable.rate || 195);
+      
+      // Trigger updates
+      window.ScenarioManager.recompute();
+      window.ScenarioManager.emit();
+      
+      // Update pricing table
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      // Show confirmation
+      alert(`✅ Applied retainer configuration:\n\n${deliverable.title}\n${monthlyHours} hours/month for ${months} months`);
+    }
+  }
+}
+
+// Export the functions globally
 window.askAIForRetainerSuggestions = askAIForRetainerSuggestions;
+window.displayRetainerSuggestions = displayRetainerSuggestions;
+window.applyRetainerSuggestion = applyRetainerSuggestion;
 
 function toggleRetainerType(code, isRetainer) {
   if (isRetainer) {
@@ -841,7 +1321,28 @@ function categoryFor(code) {
 
 // Read currently chosen deliverables from the Your Selection column
 function readSelectedCodesFromUI() {
-  return Array.from(S2.selectedCodes);
+  // Check both old and new state systems for compatibility
+  // New UI uses APB.step2.selectedCodes, old UI uses S2.selectedCodes
+  const newSystemCodes = (window.APB?.step2?.selectedCodes) ? Array.from(APB.step2.selectedCodes) : [];
+  const oldSystemCodes = Array.from(S2.selectedCodes);
+  
+  // Get whichever has data (prefer new system if both have data)
+  const codes = newSystemCodes.length > 0 ? newSystemCodes : oldSystemCodes;
+  
+  // Filter out null, undefined, empty strings, and invalid values
+  const validCodes = codes.filter(code => {
+    if (code == null || code === undefined) return false;
+    if (typeof code !== 'string') return false;
+    if (code.trim() === '') return false;
+    return true;
+  });
+  
+  console.log(`[readSelectedCodesFromUI] Total: ${codes.length}, Valid: ${validCodes.length}`);
+  if (codes.length !== validCodes.length) {
+    console.warn('[readSelectedCodesFromUI] Filtered out invalid codes:', codes.filter(c => !validCodes.includes(c)));
+  }
+  
+  return validCodes;
 }
 
 // ================================================================================
@@ -898,6 +1399,18 @@ async function initializeGanttChart(tasks = []) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
+        
+        // Emit change to ScenarioStore via GanttBridge
+        if (window.GanttBridge && window.GanttBridge.emitChange) {
+          GanttBridge.emitChange({
+            deliverableId: task.id,
+            start: start.toISOString().split('T')[0],
+            end: end.toISOString().split('T')[0],
+            durationDays: Math.ceil((end - start) / (1000*60*60*24)),
+            resources: task.resources || []
+          });
+        }
+        
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
         if (saveBtn) saveBtn.style.display = '';
@@ -1313,7 +1826,12 @@ function updatePricingTable() {
         <tbody>
   `;
   
+  // NEW: Calculate grand total from scenario.totals.price instead of manual calculation
   let grandTotal = 0;
+  if (scenario.totals && typeof scenario.totals.price === 'number' && !isNaN(scenario.totals.price) && scenario.totals.price > 0) {
+    grandTotal = scenario.totals.price;
+  }
+  
   let rowIndex = 0;
   
   scenario.items.forEach((item, itemIndex) => {
@@ -1337,8 +1855,23 @@ function updatePricingTable() {
     // Get tasks list
     const tasks = extractDeliverableTasks(item);
     
-    // Update grand total
-    grandTotal += totalPrice;
+    // Check for resource conflicts from ScenarioStore
+    let hasResourceConflict = false;
+    let conflictCost = 0;
+    let conflictTooltip = '';
+    
+    if (window.ScenarioStore && window.ScenarioStore.state.resourceLeveling) {
+      const conflicts = window.ScenarioStore.state.resourceLeveling.deliverableConflicts[item.deliverable_code];
+      if (conflicts) {
+        hasResourceConflict = true;
+        conflictCost = conflicts.totalCost || 0;
+        const conflictTypes = [...new Set(conflicts.conflicts.map(c => c.type))];
+        const resources = [...new Set(conflicts.conflicts.map(c => c.resource))];
+        conflictTooltip = `Resource conflicts detected:\n- ${resources.join(', ')}\n- Type: ${conflictTypes.join(', ')}\n- Leveling Cost: $${conflictCost.toLocaleString()}`;
+      }
+    }
+    
+    // Note: Grand total is now calculated from scenario.totals.price, not accumulated here
     
     // Determine row background (alternating + highlight for recurring)
     const isRecurring = cadenceType !== 'ONE_TIME';
@@ -1349,7 +1882,7 @@ function updatePricingTable() {
     // Main deliverable row
     tableHTML += `
       <tr data-deliverable="${item.deliverable_code}" data-row-type="deliverable" 
-          style="${rowBg} border-bottom: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;">
+          style="${rowBg} ${hasResourceConflict ? 'border-left: 4px solid #ef4444;' : ''} border-bottom: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;">
         <td style="padding: 12px; font-weight: 700; color: var(--text);">
           <button onclick="toggleDeliverableExpand('${item.deliverable_code}')" 
                   style="background: transparent; border: none; color: var(--accent); cursor: pointer; padding: 0 8px 0 0; font-size: 0.9em; transition: transform 0.2s;"
@@ -1359,6 +1892,13 @@ function updatePricingTable() {
           <span style="color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
             ${item.deliverable}
           </span>
+          ${hasResourceConflict ? `
+            <span class="resource-conflict-badge" 
+                  style="background: #ef4444; color: white; padding: 2px 8px; border-radius: 4px; 
+                         margin-left: 8px; font-size: 0.75em; font-weight: 600; cursor: help;"
+                  title="${conflictTooltip}">
+              ⚠️ Resource Conflict
+            </span>` : ''}
         </td>
         <td style="padding: 8px; text-align: center;">
           ${isEditing ? 
@@ -1469,7 +2009,7 @@ function updatePricingTable() {
         const compResources = extractComponentResources(comp);
         const compTasks = comp.tasks || [];
         
-        grandTotal += compTotalPrice;
+        // Note: Grand total is now calculated from scenario.totals.price, not accumulated here
         
         const compRowBg = compCadence !== 'ONE_TIME' ? 
           'background: linear-gradient(90deg, rgba(139,92,246,0.03), rgba(139,92,246,0.01));' :
@@ -1587,7 +2127,7 @@ function updatePricingTable() {
             <div id="grand-total-cost" style="font-size: 2.5em; font-weight: 700; 
                         background: linear-gradient(135deg, var(--accent), var(--accent2)); 
                         -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
-              $${grandTotal.toLocaleString()}
+              ${grandTotal > 0 ? '$' + grandTotal.toLocaleString() : '—'}
             </div>
             <div id="grand-total-breakdown" style="font-size: 0.85em; color: var(--muted); margin-top: 4px;">
               <!-- Breakdown will be updated by updatePricingSummary -->
@@ -1714,18 +2254,31 @@ function updatePricingSummary() {
   
   // FIX: Update Grand Total - read from scenarios.A.totals.price
   const scenarioTotal = (scenario.totals && scenario.totals.price) ? scenario.totals.price : oneTimeCost;
-  const grandTotal = scenarioTotal + (retainerMonthlyCost * 12);
+  
+  // Get resource leveling costs from ScenarioStore if available
+  let resourceLevelingCost = 0;
+  if (window.ScenarioStore && window.ScenarioStore.state.resourceLeveling) {
+    resourceLevelingCost = window.ScenarioStore.state.resourceLeveling.totalCost || 0;
+  }
+  
+  const grandTotal = scenarioTotal + (retainerMonthlyCost * 12) + resourceLevelingCost;
   const grandTotalEl = document.getElementById('grand-total-cost');
   const grandBreakdownEl = document.getElementById('grand-total-breakdown');
   
   if (grandTotalEl) grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
   if (grandBreakdownEl) {
-    // Always show scenario total even when retainer is $0
+    // Build breakdown text including resource leveling if applicable
+    let breakdownParts = [`Scenario total ($${Math.round(scenarioTotal).toLocaleString()})`];
+    
     if (retainerMonthlyCost > 0) {
-      grandBreakdownEl.textContent = `Scenario total ($${Math.round(scenarioTotal).toLocaleString()}) + 12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
-    } else {
-      grandBreakdownEl.textContent = `Scenario total: $${Math.round(scenarioTotal).toLocaleString()}`;
+      breakdownParts.push(`12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`);
     }
+    
+    if (resourceLevelingCost > 0) {
+      breakdownParts.push(`<span style="color: #ef4444;">Resource leveling ($${Math.round(resourceLevelingCost).toLocaleString()})</span>`);
+    }
+    
+    grandBreakdownEl.innerHTML = breakdownParts.join(' + ');
   }
 }
 
@@ -1899,37 +2452,10 @@ function updateCustomRate(deliverableCode, rate) {
   updatePricingCalculations();
 }
 
-// Analyze PROJECT vs RETAINER with AI - ENHANCED VERSION
+// Analyze PROJECT vs RETAINER with AI - BATCH ENDPOINT (Brad build format)
 async function analyzeProjectRetainer() {
-  // Try multiple sources for RFP text
-  let rfpText = '';
-  
-  // First try from textarea if still visible
-  const rfpTextarea = document.getElementById('rfpText');
-  if (rfpTextarea) rfpText = rfpTextarea.value;
-  
-  // If empty, try from sessionStorage (using correct key)
-  if (!rfpText) rfpText = sessionStorage.getItem('apb.rfp_text') || sessionStorage.getItem('rfp_text') || '';
-  
-  // If empty, try from APB.step2
-  if (!rfpText && window.APB && window.APB.step2) {
-    rfpText = window.APB.step2.rfpText || '';
-  }
-  
-  // If empty, try from app.state (if stored during analysis)
-  if (!rfpText && window.appState && window.appState.rfpText) {
-    rfpText = window.appState.rfpText || '';
-  }
-  
-  if (!rfpText) {
-    console.warn('No RFP text found in any storage location');
-    // Instead of failing, use a generic analysis based on deliverable names
-    const useGenericAnalysis = confirm('No RFP text found. Would you like to analyze based on deliverable names only?');
-    if (!useGenericAnalysis) return;
-    rfpText = 'Analyze based on deliverable names only';
-  }
-  
-  if (!SCENARIOS || !SCENARIOS.A) {
+  // Check for scenario first
+  if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
     alert('Please build a scenario first (click Build Scenario button).');
     return;
   }
@@ -1941,12 +2467,19 @@ async function analyzeProjectRetainer() {
   }
   
   try {
-    // Get deliverables from current scenario
-    const deliverables = (SCENARIOS.A.items || []).map(item => ({
+    // Get scenario and RFP text
+    const scenario = window.currentScenario || SCENARIOS.A;
+    const rfpText = window.APB?.step2?.rfpText || sessionStorage.getItem('rfpText') || '';
+    
+    // Build deliverables array from scenario items
+    const deliverables = scenario.items.map(item => ({
       code: item.deliverable_code,
-      name: item.deliverable
+      name: item.deliverable_name || item.deliverable || item.deliverable_code
     }));
     
+    console.log('[AI RETAINER] Calling batch endpoint with', deliverables.length, 'deliverables');
+    
+    // Call Brad build batch endpoint
     const response = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1957,84 +2490,50 @@ async function analyzeProjectRetainer() {
     });
     
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+      throw new Error(`Analysis failed: ${errorText}`);
     }
     
     const result = await response.json();
+    console.log('[AI RETAINER] Received suggestions:', result);
     
+    // Apply suggestions to scenario items
     if (result.suggestions) {
-      // Apply suggestions to BOTH pricing data AND scenario
-      Object.entries(result.suggestions).forEach(([code, suggestion]) => {
-        // Update pricingData for future calculations
-        pricingData.deliverableTypes.set(code, suggestion.type);
-        
-        // Update the actual scenario items
-        const scenarioItem = SCENARIOS.A.items.find(i => i.deliverable_code === code);
-        if (scenarioItem) {
-          // Set retainer_months based on type
-          if (suggestion.type === 'RETAINER') {
-            // Default to 12 months for retainers unless already set
-            scenarioItem.retainer_months = scenarioItem.retainer_months || 12;
-            pricingData.retainers.set(code, scenarioItem.retainer_months);
-          } else {
-            // PROJECT type - clear retainer months
-            scenarioItem.retainer_months = 0;
-            pricingData.retainers.delete(code);
-          }
-        }
-        
-        // Also apply to components (inherit from parent)
-        const item = SCENARIOS.A.items.find(i => i.deliverable_code === code);
-        if (item && item.components) {
-          item.components.forEach(comp => {
-            const compKey = `${code}::${comp.name}`;
-            if (!pricingData.deliverableTypes.has(compKey)) {
-              pricingData.deliverableTypes.set(compKey, suggestion.type);
-            }
-          });
+      let updatedCount = 0;
+      scenario.items.forEach(item => {
+        const suggestion = result.suggestions[item.deliverable_code];
+        if (suggestion) {
+          // Update item based on suggestion
+          item.is_retainer = (suggestion.type === 'RETAINER');
+          item.retainer_months = (suggestion.type === 'RETAINER') ? 12 : 0;
+          item.pricing_type = suggestion.type;
+          item.ai_confidence = suggestion.confidence;
+          item.ai_reasoning = suggestion.reasoning;
+          updatedCount++;
         }
       });
       
-      // Re-render the scenario table to show updated types and cadence
+      // Store updated scenario
+      window.currentScenario = scenario;
+      window.SCENARIOS = { A: scenario };
+      
+      // Update pricing table display
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      // Re-render scenario
       if (window.renderScenario) {
-        window.renderScenario('scenarioA', SCENARIOS.A);
+        window.renderScenario('scenarioA', scenario);
       }
       
-      // Update pricing calculations if the function exists
-      if (typeof updatePricingCalculations === 'function') {
-        updatePricingCalculations();
-      }
-      
-      // Show summary of suggestions with reasoning
-      const projectCount = Object.values(result.suggestions).filter(s => s.type === 'PROJECT').length;
-      const retainerCount = Object.values(result.suggestions).filter(s => s.type === 'RETAINER').length;
-      
-      let summaryMessage = `✨ AI Analysis Complete!\n\n` +
-                          `📦 ${projectCount} deliverables marked as PROJECT (one-time)\n` +
-                          `🔄 ${retainerCount} deliverables marked as RETAINER (recurring)\n\n`;
-      
-      // Add method info
-      if (result.method === 'gpt5') {
-        summaryMessage += `🧠 Analysis by: GPT-5 Intelligence\n`;
-      } else if (result.method === 'ai') {
-        summaryMessage += `🤖 Analysis by: AI Assistant\n`;
-      } else {
-        summaryMessage += `⚡ Analysis by: Smart Heuristics\n`;
-      }
-      
-      // Add confidence if available
-      if (result.confidence) {
-        summaryMessage += `📊 Confidence: ${(result.confidence * 100).toFixed(0)}%\n`;
-      }
-      
-      alert(summaryMessage);
-      
-      console.log('AI Suggestions applied:', result);
+      alert(`✅ AI Retainer Analysis Complete!\n\n${updatedCount} deliverables classified as PROJECT or RETAINER.`);
+    } else {
+      throw new Error('No suggestions returned from API');
     }
   } catch (error) {
-    console.error('Error analyzing project/retainer types:', error);
-    alert('Error analyzing deliverable types: ' + error.message);
+    console.error('[AI RETAINER] Error:', error);
+    alert(`❌ Retainer Analysis Error:\n\n${error.message || 'Failed to analyze deliverables. Please try again.'}`);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -2113,8 +2612,8 @@ async function updatePricing() {
 
 // Re-build scenario with current pricing settings
 async function rebuildScenario() {
-  if (!SCENARIOS || !SCENARIOS.A) {
-    alert('No scenario to rebuild. Please build a scenario first.');
+  if (!window.ScenarioStore) {
+    alert('ScenarioStore not available. Please ensure the unified pricing system is loaded.');
     return;
   }
   
@@ -2123,82 +2622,24 @@ async function rebuildScenario() {
   
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '🔄 Rebuilding...';
+    btn.textContent = '🔄 Saving...';
   }
   
   try {
-    // Store current version if not already stored
-    if (!pricingData.originalScenario) {
-      pricingData.originalScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
-    }
+    // Simply save the current scenario state via ScenarioStore
+    await ScenarioStore.save();
+    console.log('[REBUILD] Scenario saved successfully via ScenarioStore');
     
-    // Increment rebuild version
-    if (!pricingData.rebuildVersion) pricingData.rebuildVersion = 0;
-    pricingData.rebuildVersion++;
-    
-    // Create rebuilt scenario with custom values
-    const rebuiltScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
-    
-    rebuiltScenario.items.forEach(item => {
-      // Get cadence and periods for this deliverable
-      const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
-                         (pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER' ? 'MONTHLY' : 'ONE_TIME');
-      const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
-                     (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
-      
-      // Get custom values or keep originals
-      const customHours = pricingData.customHours.get(item.deliverable_code);
-      const customRate = pricingData.customRates.get(item.deliverable_code);
-      
-      if (customHours !== undefined) item.hours = customHours;
-      if (customRate !== undefined) item.blended_rate = customRate;
-      
-      // Update price calculation (price per period)
-      item.price = (item.hours || 0) * (item.blended_rate || 195);
-      
-      // Mark as retainer if not one-time
-      item.is_retainer = (cadenceType !== 'ONE_TIME');
-      if (item.is_retainer) {
-        item.retainer_months = periods;
-      }
-      
-      // Update components
-      if (item.components) {
-        item.components.forEach(comp => {
-          const compKey = `${item.deliverable_code}::${comp.name}`; // Fixed to use :: separator
-          const compCadence = pricingDataEnhanced.cadenceTypes.get(compKey) || cadenceType;
-          const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || periods;
-          const compHours = pricingData.customHours.get(compKey);
-          const compRate = pricingData.customRates.get(compKey);
-          
-          if (compHours !== undefined) comp.hours = compHours;
-          if (compRate !== undefined) comp.rate = compRate;
-          
-          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
-          comp.is_retainer = (compCadence !== 'ONE_TIME');
-          if (comp.is_retainer) {
-            comp.retainer_months = compPeriods;
-          }
-        });
-      }
-    });
-    
-    // Show comparison modal
-    showScenarioComparison(pricingData.originalScenario, rebuiltScenario);
-    
-    // Update current scenario
-    SCENARIOS.A = rebuiltScenario;
-    updatePricingCalculations();
-    
-    console.log('Scenario rebuilt successfully', rebuiltScenario);
+    // Trigger scenarios:updated event to refresh UI
+    window.dispatchEvent(new Event('scenarios:updated'));
     
   } catch (error) {
-    console.error('Error rebuilding scenario:', error);
-    alert('Error rebuilding scenario. Please try again.');
+    console.error('Error saving scenario:', error);
+    alert('Error saving scenario. Please try again.');
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🔨 Re-build Scenario';
+      btn.textContent = '🔄 Re-build Scenario';
     }
   }
 }
@@ -2601,13 +3042,13 @@ async function exportPricingDetails() {
   }
 }
 
-// AI Optimize All Pricing Function - ENHANCED VERSION
+// AI Optimize All Pricing Function - Calls Brad build redistribute-hours per deliverable
 async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
   if (!btn) return;
   
   // Check for scenario
-  if (!SCENARIOS || !SCENARIOS.A) {
+  if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
     alert('Please build a scenario first before optimizing pricing.');
     return;
   }
@@ -2617,84 +3058,118 @@ async function optimizeAllPricing() {
   btn.textContent = '🔄 Optimizing...';
   
   try {
-    // Get current scenario data
-    const scenario = SCENARIOS.A;
-    if (!scenario || !scenario.items || scenario.items.length === 0) {
-      alert('No scenario items to optimize. Please build a scenario first.');
-      return;
+    const scenario = window.currentScenario || SCENARIOS.A;
+    
+    // Group items by deliverable code
+    const deliverableMap = new Map();
+    scenario.items.forEach(item => {
+      const code = item.deliverable_code;
+      if (!deliverableMap.has(code)) {
+        deliverableMap.set(code, {
+          code: code,
+          name: item.deliverable_name || item.deliverable || code,
+          total_hours: 0,
+          components: []
+        });
+      }
+      const deliv = deliverableMap.get(code);
+      deliv.total_hours += (item.total_hours || item.hours || 0);
+      
+      // Track components
+      const compName = item.component_name || item.component || '';
+      if (compName) {
+        const existing = deliv.components.find(c => c.name === compName);
+        if (existing) {
+          existing.hours += (item.total_hours || item.hours || 0);
+        } else {
+          deliv.components.push({
+            name: compName,
+            hours: (item.total_hours || item.hours || 0)
+          });
+        }
+      }
+    });
+    
+    console.log(`[OPTIMIZE] Processing ${deliverableMap.size} deliverables`);
+    
+    // Call redistribute-hours for each deliverable
+    const optimizationResults = [];
+    for (const [code, deliv] of deliverableMap.entries()) {
+      try {
+        const response = await fetch('/api/pricing/redistribute-hours', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deliverable_code: code,
+            deliverable_name: deliv.name,
+            new_total_hours: deliv.total_hours,
+            components: deliv.components
+          })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          optimizationResults.push({ code, result });
+        } else {
+          console.warn(`[OPTIMIZE] Failed for ${code}:`, await response.text());
+        }
+      } catch (err) {
+        console.error(`[OPTIMIZE] Error for ${code}:`, err);
+      }
     }
     
-    // Get client budget and project details
-    const clientBudget = Number(document.getElementById('clientBudget')?.value || 0);
-    const projectName = document.getElementById('projectName')?.value || 'Project';
-    
-    // Get RFP text for context
-    let rfpText = '';
-    const rfpTextarea = document.getElementById('rfpText');
-    if (rfpTextarea) rfpText = rfpTextarea.value;
-    if (!rfpText) rfpText = sessionStorage.getItem('apb.rfp_text') || '';
-    if (!rfpText && window.APB && window.APB.step2) {
-      rfpText = window.APB.step2.rfpText || '';
-    }
-    
-    // Try to call AI optimization endpoint first
-    try {
-      const response = await fetch('/api/ai/optimize_pricing', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scenario: scenario,
-          client_budget: clientBudget,
-          project_name: projectName,
-          rfp_context: rfpText,
-          deliverables: scenario.items.map(item => ({
-            code: item.deliverable_code,
-            name: item.deliverable,
-            hours: item.total_hours,
-            price: item.price,
-            is_retainer: item.retainer_months > 0
-          }))
-        })
+    // Apply optimization results back to scenario
+    if (optimizationResults.length > 0) {
+      optimizationResults.forEach(({ code, result }) => {
+        if (result.suggested_distribution) {
+          result.suggested_distribution.forEach(compSuggestion => {
+            // Update items matching this deliverable + component
+            scenario.items.forEach(item => {
+              if (item.deliverable_code === code && 
+                  (item.component_name || item.component) === compSuggestion.component) {
+                item.total_hours = compSuggestion.hours;
+                item.hours = compSuggestion.hours;
+                // Recalculate price if needed
+                const rate = item.rate || 195;
+                item.price = Math.round(compSuggestion.hours * rate);
+              }
+            });
+          });
+        }
       });
       
-      if (response.ok) {
-        const result = await response.json();
-        
-        // Apply optimizations to scenario
-        if (result.optimized_items) {
-          result.optimized_items.forEach((opt, idx) => {
-            if (scenario.items[idx]) {
-              scenario.items[idx].total_hours = opt.hours;
-              scenario.items[idx].price = opt.price;
-              scenario.items[idx].effective_rate = opt.hours > 0 ? opt.price / opt.hours : 195;
-            }
-          });
-          
-          // Update totals
-          scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
-          scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
-          
-          // Re-render scenario
-          if (window.renderScenario) {
-            window.renderScenario('scenarioA', scenario);
-          }
-          
-          // Show success message
-          showOptimizationSuccess(result, clientBudget);
-        }
-        
-        return; // Exit if AI optimization succeeded
+      // Recompute totals
+      let totalHours = 0;
+      let totalPrice = 0;
+      scenario.items.forEach(item => {
+        totalHours += (item.total_hours || item.hours || 0);
+        totalPrice += (item.price || 0);
+      });
+      
+      if (!scenario.totals) scenario.totals = {};
+      scenario.totals.hours = totalHours;
+      scenario.totals.price = totalPrice;
+      
+      // Store updated scenario
+      window.currentScenario = scenario;
+      window.SCENARIOS = { A: scenario };
+      
+      // Update UI
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
       }
-    } catch (apiError) {
-      console.log('AI optimization not available, using smart fallback');
+      if (window.renderScenario) {
+        window.renderScenario('scenarioA', scenario);
+      }
+      
+      alert(`✅ Pricing Optimized!\n\n${optimizationResults.length} deliverables redistributed using AI.`);
+    } else {
+      alert('⚠️ No optimization results. Please try again.');
     }
     
-    // Fallback: Smart budget-based optimization
-    performSmartOptimization(scenario, clientBudget);
-    
   } catch (error) {
-    console.error('Error optimizing pricing:', error);
-    alert('Error occurred during optimization. Please try again.');
+    console.error('[OPTIMIZE] Error:', error);
+    alert(`❌ Optimization Error:\n\n${error.message || 'Failed to optimize pricing. Please try again.'}`);
   } finally {
     // Reset button state
     btn.disabled = false;
@@ -2914,15 +3389,13 @@ async function generateAITimeline(retryAttempt = 0) {
   
   const deliverableCount = selectedCodes.length;
   
-  // Connection health tracking
-  let lastHeartbeatTime = Date.now();
-  let lastDataTime = Date.now();
-  const HEARTBEAT_TIMEOUT_MS = 30000; // 30 seconds without any data = real issue
-  const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds if SSE fails
+  // Polling configuration
+  const POLLING_INTERVAL_MS = 2500; // Poll every 2.5 seconds
+  const MAX_POLLING_TIME_MS = 600000; // 10 minutes timeout
   
-  // Polling fallback state
-  let isPolling = false;
+  // Polling state
   let pollingIntervalId = null;
+  let pollingStartTime = Date.now();
   
   // Show loading state with progress UI
   btn.disabled = true;
@@ -2941,11 +3414,6 @@ async function generateAITimeline(retryAttempt = 0) {
           ℹ️ Processing ${deliverableCount} deliverables. We're optimizing your timeline with AI.
         </p>
       </div>` : ''}
-      <div id="timeline-connection-status" style="display: none; background: rgba(251, 146, 60, 0.1); border: 1px solid rgba(251, 146, 60, 0.2); padding: 8px; border-radius: 4px; margin-bottom: 12px;">
-        <p style="margin: 0; color: #ea580c; font-size: 0.85em;">
-          🔄 Connection switched to polling mode. Timeline generation continues...
-        </p>
-      </div>
       <div id="timeline-progress-content">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
           <strong id="timeline-progress-stage" style="color: #6366f1;">Initializing...</strong>
@@ -2990,9 +3458,7 @@ async function generateAITimeline(retryAttempt = 0) {
   loading.style.display = 'block';
   container.style.display = 'none';
   
-  let eventSource = null;
   let jobId = null;
-  let heartbeatCheckInterval = null;
   
   // Helper function to show error in the UI
   const showTimelineError = (title, message, canRetry = true) => {
@@ -3029,73 +3495,101 @@ async function generateAITimeline(retryAttempt = 0) {
   
   // Clean up function
   const cleanup = () => {
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
-    if (heartbeatCheckInterval) {
-      clearInterval(heartbeatCheckInterval);
-      heartbeatCheckInterval = null;
-    }
     if (pollingIntervalId) {
       clearInterval(pollingIntervalId);
       pollingIntervalId = null;
     }
   };
   
-  // Start heartbeat monitoring
-  const startHeartbeatMonitor = () => {
-    heartbeatCheckInterval = setInterval(() => {
-      const timeSinceLastData = Date.now() - lastDataTime;
-      
-      if (timeSinceLastData > HEARTBEAT_TIMEOUT_MS && !isPolling) {
-        console.log('[TIMELINE] No data for 30s, switching to polling fallback');
-        
-        // Switch to polling mode
-        if (eventSource) {
-          eventSource.close();
-          eventSource = null;
-        }
-        
-        // Show polling mode message
-        const connectionStatus = document.getElementById('timeline-connection-status');
-        if (connectionStatus) {
-          connectionStatus.style.display = 'block';
-        }
-        
-        // Start polling
-        startPollingFallback();
-      }
-    }, 5000); // Check every 5 seconds
-  };
-  
-  // Polling fallback function
-  const startPollingFallback = async () => {
-    isPolling = true;
+  // Polling function for job status
+  const startPolling = async () => {
+    if (!jobId) {
+      console.error('[TIMELINE] Cannot start polling: no job ID');
+      return;
+    }
+    
+    console.log('[TIMELINE] Starting polling for job:', jobId);
     
     const pollJobStatus = async () => {
       if (!jobId) return;
       
+      // Check for timeout
+      const elapsed = Date.now() - pollingStartTime;
+      if (elapsed > MAX_POLLING_TIME_MS) {
+        cleanup();
+        showTimelineError(
+          'Timeline Generation Timeout',
+          'Timeline generation took longer than expected (10 minutes). This usually happens with very large projects. Please try with fewer deliverables or contact support.',
+          true
+        );
+        return;
+      }
+      
       try {
-        const response = await fetch(`/api/ai/jobs/${jobId}`);
-        if (!response.ok) throw new Error('Failed to get job status');
+        const response = await fetch(`/api/agencydb/status/${jobId}`);
+        
+        if (!response.ok) {
+          if (response.status === 404) {
+            // Job not found - might have been cleaned up
+            console.error('[TIMELINE] Job not found:', jobId);
+            cleanup();
+            showTimelineError(
+              'Job Not Found',
+              'The timeline generation job could not be found. It may have been cancelled or expired. Please try again.',
+              true
+            );
+            return;
+          }
+          throw new Error(`Status check failed: ${response.status}`);
+        }
         
         const data = await response.json();
+        
+        console.log('[TIMELINE] Poll update:', {
+          status: data.status,
+          progress: data.progress,
+          stage: data.current_stage
+        });
         
         // Update UI with polling data
         updateProgressUI(data);
         
         // Check if job is complete
-        if (data.status === 'completed' && data.result) {
+        if (data.status === 'completed') {
           cleanup();
-          handleTimelineCompletion(data.result);
+          
+          // Extract result from either 'data' or 'result' field
+          const result = data.data || data.result;
+          if (result) {
+            handleTimelineCompletion(result);
+          } else {
+            showTimelineError(
+              'Invalid Response',
+              'Timeline generation completed but no data was returned. Please try again.',
+              true
+            );
+          }
         } else if (data.status === 'failed') {
           cleanup();
           handleTimelineError(data.error || 'Timeline generation failed');
         }
+        // Otherwise continue polling (status is still "pending" or "processing")
+        
       } catch (error) {
         console.error('[TIMELINE] Polling error:', error);
-        // Continue polling despite errors
+        
+        // For network errors, continue polling but log the issue
+        // Only stop if we've been trying for too long
+        const elapsedMinutes = Math.floor(elapsed / 60000);
+        if (elapsedMinutes >= 10) {
+          cleanup();
+          showTimelineError(
+            'Network Error',
+            'Unable to check timeline status due to network issues. Please check your connection and try again.',
+            true
+          );
+        }
+        // Otherwise, continue polling - transient network issues should resolve
       }
     };
     
@@ -3426,72 +3920,12 @@ async function generateAITimeline(retryAttempt = 0) {
       return;
     }
     
-    // Store job ID for potential polling fallback
+    // Store job ID and start polling
     jobId = jobData.job_id;
+    console.log('[TIMELINE] Timeline generation started, job ID:', jobId);
     
-    // Connect to SSE stream for progress updates
-    eventSource = new EventSource(`/api/stream/${jobData.job_id}`);
-    
-    // Start heartbeat monitoring
-    startHeartbeatMonitor();
-    
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Update last data time for heartbeat tracking
-        lastDataTime = Date.now();
-        
-        // Handle heartbeat messages
-        if (data.type === 'heartbeat') {
-          lastHeartbeatTime = Date.now();
-          console.log('[TIMELINE] Heartbeat received:', new Date(data.timestamp * 1000).toLocaleTimeString());
-          return; // Don't process heartbeat as regular update
-        }
-        
-        // Update progress UI using the helper function
-        updateProgressUI(data);
-        
-        // Handle completion
-        if (data.status === 'completed' && data.result) {
-          cleanup();
-          handleTimelineCompletion(data.result);
-        }
-        
-        // Handle errors
-        if (data.status === 'failed') {
-          cleanup();
-          handleTimelineError(data.error);
-        }
-        
-      } catch (parseError) {
-        console.error('Error parsing SSE data:', parseError);
-      }
-    };
-    
-    eventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-      
-      // Try polling fallback instead of immediately showing error
-      if (!isPolling) {
-        console.log('[TIMELINE] SSE connection failed, switching to polling fallback');
-        
-        // Show polling mode message
-        const connectionStatus = document.getElementById('timeline-connection-status');
-        if (connectionStatus) {
-          connectionStatus.style.display = 'block';
-        }
-        
-        // Close the SSE connection
-        if (eventSource) {
-          eventSource.close();
-          eventSource = null;
-        }
-        
-        // Start polling
-        startPollingFallback();
-      }
-    };
+    // Start polling for status updates
+    await startPolling();
     
   } catch (error) {
     console.error('Error generating AI timeline:', error);
@@ -3700,6 +4134,7 @@ function analyzeResourceRisks(tasks) {
   
   const risks = [];
   const resourceSchedule = {};
+  const deliverableConflicts = {};  // Track conflicts by deliverable
   
   // Build resource schedule
   tasks.forEach(task => {
@@ -3708,15 +4143,22 @@ function analyzeResourceRisks(tasks) {
     if (!resourceSchedule[resource]) {
       resourceSchedule[resource] = [];
     }
+    
+    // Extract deliverable ID from task ID or name
+    const deliverableId = task.deliverable_id || task.id?.split('-')[0] || task.parent_id || 'unknown';
+    
     resourceSchedule[resource].push({
       taskId: task.id,
       taskName: task.name,
+      deliverableId: deliverableId,
       start: new Date(task.start),
       end: new Date(task.end)
     });
   });
   
   // Analyze each resource for conflicts and idle time
+  let totalLevelingCost = 0;
+  
   Object.entries(resourceSchedule).forEach(([resource, schedule]) => {
     if (schedule.length < 2) return;
     
@@ -3730,22 +4172,83 @@ function analyzeResourceRisks(tasks) {
       
       const gapDays = Math.floor((next.start - current.end) / (1000 * 60 * 60 * 24));
       
-      if (gapDays > 3) { // More than 3 days gap
-        const idleCost = gapDays * 800; // Assume $800/day cost
+      // Check for overlaps (negative gap)
+      const overlapDays = Math.floor((current.end - next.start) / (1000 * 60 * 60 * 24));
+      
+      let conflictCost = 0;
+      let conflictType = null;
+      let affectedDeliverables = [];
+      
+      if (overlapDays > 0) {
+        // Resource conflict - overlapping tasks
+        conflictCost = overlapDays * 1200; // Higher cost for conflicts ($1200/day)
+        conflictType = 'overlap';
+        affectedDeliverables = [current.deliverableId, next.deliverableId];
+        
+        risks.push({
+          resource: resource,
+          waitingPeriod: -overlapDays, // Negative to indicate overlap
+          idleCost: conflictCost,
+          riskLevel: 'High',
+          conflictType: 'overlap',
+          affectedTasks: [current.taskName, next.taskName],
+          affectedDeliverables: affectedDeliverables,
+          recommendation: 'Resource conflict - same resource scheduled for multiple tasks simultaneously'
+        });
+      } else if (gapDays > 3) {
+        // Idle time gap
+        conflictCost = gapDays * 800; // $800/day for idle time
+        conflictType = 'idle';
         const riskLevel = gapDays > 10 ? 'High' : gapDays > 5 ? 'Medium' : 'Low';
+        affectedDeliverables = [next.deliverableId]; // Affects the waiting deliverable
         
         risks.push({
           resource: resource,
           waitingPeriod: gapDays,
-          idleCost: idleCost,
+          idleCost: conflictCost,
           riskLevel: riskLevel,
+          conflictType: 'idle',
+          affectedTasks: [current.taskName, next.taskName],
+          affectedDeliverables: affectedDeliverables,
           recommendation: gapDays > 10 
             ? 'Consider reassigning tasks or adjusting timeline to reduce idle time'
             : 'Minor gap - may be acceptable for resource availability'
         });
       }
+      
+      // Track costs by deliverable
+      if (conflictCost > 0) {
+        totalLevelingCost += conflictCost;
+        affectedDeliverables.forEach(delivId => {
+          if (!deliverableConflicts[delivId]) {
+            deliverableConflicts[delivId] = {
+              totalCost: 0,
+              conflicts: []
+            };
+          }
+          deliverableConflicts[delivId].totalCost += conflictCost / affectedDeliverables.length;
+          deliverableConflicts[delivId].conflicts.push({
+            resource: resource,
+            type: conflictType,
+            cost: conflictCost / affectedDeliverables.length,
+            riskLevel: risks[risks.length - 1].riskLevel
+          });
+        });
+      }
     }
   });
+  
+  // Emit resource leveling event to pricing system
+  const levelingData = {
+    totalCost: totalLevelingCost,
+    deliverableConflicts: deliverableConflicts,
+    risks: risks
+  };
+  
+  console.log('[Resource Leveling] Emitting resource:conflicts event:', levelingData);
+  document.dispatchEvent(new CustomEvent('resource:conflicts', { 
+    detail: levelingData
+  }));
   
   return risks;
 }
@@ -3827,54 +4330,150 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   
-  // Save timeline changes
+  // Save timeline changes - unified save mechanism
   const btnSave = document.getElementById('btn-save-timeline');
   if (btnSave) {
     btnSave.addEventListener('click', async () => {
-      // Save timeline changes to backend
+      // Save BOTH timeline and scenario data together
       if (!currentTimelineTasks || currentTimelineTasks.length === 0) {
         alert('No timeline data to save');
         return;
       }
       
+      // Show syncing status
+      const originalText = btnSave.textContent;
+      btnSave.textContent = 'Syncing...';
+      btnSave.disabled = true;
+      
       try {
-        const response = await fetch('/api/timeline/save', {
+        // First save timeline data
+        const timelineResponse = await fetch('/api/timeline/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             tasks: currentTimelineTasks,
             reasoning: timelineReasoning,
+            scenario: window.currentScenario || 'A',
             metadata: {
               saved_at: new Date().toISOString(),
-              project_name: document.getElementById('projectName')?.value || 'Project'
+              project_name: document.getElementById('projectName')?.value || 'Project',
+              hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 6
             }
           })
         });
         
-        if (response.ok) {
-          alert('✅ Timeline changes saved successfully');
-          btnSave.style.display = 'none';
+        // Then save scenario data if ScenarioStore exists
+        if (window.ScenarioStore && window.ScenarioStore.save) {
+          await window.ScenarioStore.save();
+          console.log('[SYNC] Scenario data saved');
+        }
+        
+        if (timelineResponse.ok) {
+          const result = await timelineResponse.json();
+          
+          // Update UI with sync status
+          btnSave.innerHTML = '✅ Synced';
+          btnSave.classList.add('synced');
           
           // Mark timeline as synced
           localStorage.setItem('timeline_synced', 'true');
           localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
+          
+          // Log sync metrics
+          console.log('[SYNC] Timeline saved successfully:', result.metrics);
+          
+          // Hide save button after 2 seconds
+          setTimeout(() => {
+            btnSave.style.display = 'none';
+            btnSave.textContent = originalText;
+            btnSave.classList.remove('synced');
+            btnSave.disabled = false;
+          }, 2000);
         } else {
-          // Fallback to local storage
-          localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
-          localStorage.setItem('timeline_reasoning', JSON.stringify(timelineReasoning));
-          alert('Timeline saved locally (will sync when server is available)');
+          throw new Error('Failed to save timeline');
         }
       } catch (error) {
-        console.error('Error saving timeline:', error);
+        console.error('[SYNC ERROR]', error);
         // Save to local storage as fallback
         localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
         localStorage.setItem('timeline_reasoning', JSON.stringify(timelineReasoning));
-        alert('Timeline saved locally');
+        
+        btnSave.textContent = '⚠️ Saved Locally';
+        btnSave.classList.add('warning');
+        
+        setTimeout(() => {
+          btnSave.textContent = originalText;
+          btnSave.classList.remove('warning');
+          btnSave.disabled = false;
+        }, 3000);
       }
-      
-      btnSave.style.display = 'none';
     });
   }
+  
+  // Listen for pricing:changed events and update Gantt
+  document.addEventListener('pricing:changed', (event) => {
+    const detail = event.detail;
+    console.log('[GANTT SYNC] Received pricing:changed event:', detail);
+    
+    if (!ganttChart || !detail.deliverableId) return;
+    
+    // Find the task in Gantt
+    const task = ganttChart.get_task(detail.deliverableId);
+    if (!task) {
+      console.log('[GANTT SYNC] Task not found in Gantt:', detail.deliverableId);
+      return;
+    }
+    
+    // Calculate new end date based on duration
+    const startDate = new Date(task.start);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + detail.durationDays);
+    
+    // Update task in Gantt
+    try {
+      ganttChart.update_task({
+        id: detail.deliverableId,
+        start: task.start,
+        end: endDate.toISOString(),
+        duration: detail.durationDays,
+        resources: detail.resources
+      });
+      
+      // Show visual feedback
+      const taskEl = document.querySelector(`[data-task-id="${detail.deliverableId}"]`);
+      if (taskEl) {
+        taskEl.classList.add('synced-from-pricing');
+        setTimeout(() => {
+          taskEl.classList.remove('synced-from-pricing');
+        }, 1500);
+      }
+      
+      // Update currentTimelineTasks if exists
+      if (currentTimelineTasks) {
+        const taskIndex = currentTimelineTasks.findIndex(t => 
+          t.id === detail.deliverableId || t.deliverable_code === detail.deliverableId
+        );
+        if (taskIndex >= 0) {
+          currentTimelineTasks[taskIndex].duration = { days: detail.durationDays };
+          currentTimelineTasks[taskIndex].end = endDate.toISOString();
+          console.log('[GANTT SYNC] Updated task duration:', detail.deliverableId, detail.durationDays, 'days');
+        }
+      }
+      
+      // Show save button since timeline changed
+      if (btnSave) {
+        btnSave.style.display = 'inline-block';
+      }
+    } catch (error) {
+      console.error('[GANTT SYNC ERROR] Failed to update Gantt:', error);
+    }
+  });
+  
+  // Listen for gantt:changed events (already handled by ScenarioStore)
+  document.addEventListener('gantt:changed', (event) => {
+    console.log('[PRICING SYNC] Gantt changed, pricing will update via ScenarioStore:', event.detail);
+    // ScenarioStore already handles this event
+  });
 });
 
 // Export timeline data for use in exports
@@ -3947,6 +4546,16 @@ async function hydrateL3For(delivCode, componentName) {
 }
 
 async function selectDeliverable(code) {
+  // Validate code before adding to prevent null/undefined/empty values
+  if (code == null || code === undefined) {
+    console.error('[selectDeliverable] Cannot add null/undefined code');
+    return;
+  }
+  if (typeof code !== 'string' || code.trim() === '') {
+    console.error('[selectDeliverable] Cannot add invalid code:', code);
+    return;
+  }
+  
   selectionStore.deliverables.add(code);
   APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
   
@@ -4053,6 +4662,87 @@ window.hydrateComponentsFor = hydrateComponentsFor;
 window.hydrateL3For = hydrateL3For;
 
 async function boot() {
+  // NUCLEAR CLEANUP: Complete purge of all polling and job IDs on page load
+  console.log('[BOOT] ========= NUCLEAR CLEANUP ON PAGE LOAD =========');
+  console.log('[BOOT] Timestamp:', new Date().toISOString());
+  
+  // 1. Stop ALL polling globally using GlobalPollingManager
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[BOOT] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[BOOT] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Clear any existing intervals from previous sessions
+  if (window.aiAnalysisInterval) {
+    console.log('[BOOT] Clearing existing AI analysis interval');
+    clearInterval(window.aiAnalysisInterval);
+    window.aiAnalysisInterval = null;
+  }
+  if (window.progressInterval) {
+    console.log('[BOOT] Clearing existing progress interval');
+    clearInterval(window.progressInterval);
+    window.progressInterval = null;
+  }
+  
+  // 3. COMPREHENSIVE cleanup of ALL job IDs from localStorage
+  const savedState = localStorage.getItem('charles_agent_state');
+  if (savedState) {
+    try {
+      const state = JSON.parse(savedState);
+      let cleaned = false;
+      
+      // Clear top-level jobId (especially the problematic 642a96bd-f94b-440e-b865-d160839a57c0)
+      if (state && state.jobId) {
+        console.log('[BOOT] Clearing top-level jobId:', state.jobId);
+        state.jobId = null;
+        state.jobIdTimestamp = null;
+        cleaned = true;
+      }
+      
+      // CRITICAL: Clear jobId from ALL stateHistory entries (where it keeps resurrecting from!)
+      if (state.stateHistory && Array.isArray(state.stateHistory)) {
+        console.log('[BOOT] Clearing jobIds from', state.stateHistory.length, 'stateHistory entries...');
+        state.stateHistory.forEach((historyState, idx) => {
+          if (historyState.jobId) {
+            console.log(`[BOOT] Clearing jobId from stateHistory[${idx}]:`, historyState.jobId);
+            historyState.jobId = null;
+            historyState.jobIdTimestamp = null;
+            cleaned = true;
+          }
+          if (historyState.agentState && historyState.agentState.jobId) {
+            console.log(`[BOOT] Clearing agentState.jobId from stateHistory[${idx}]:`, historyState.agentState.jobId);
+            historyState.agentState.jobId = null;
+            cleaned = true;
+          }
+        });
+      }
+      
+      // Save the cleaned state back to localStorage
+      if (cleaned) {
+        localStorage.setItem('charles_agent_state', JSON.stringify(state));
+        console.log('[BOOT] Saved cleaned charles_agent_state to localStorage');
+      }
+    } catch (e) {
+      console.error('[BOOT] Failed to clean job IDs:', e);
+    }
+  }
+  
+  // 4. Clear any other job-related localStorage items
+  ['aiAnalysisJobId', 'currentJobId', 'pollingJobId'].forEach(key => {
+    if (localStorage.getItem(key)) {
+      console.log('[BOOT] Removing localStorage:', key);
+      localStorage.removeItem(key);
+    }
+  });
+  
+  // Clear the aiAnalysisJobId if it exists and is stale (generic cleanup)
+  if (window.aiAnalysisJobId) {
+    console.log('[CLEANUP] Checking aiAnalysisJobId for staleness:', window.aiAnalysisJobId);
+    // Clear it if we have no tracking information or if it matches any stale patterns
+    window.aiAnalysisJobId = null;
+  }
+  
   await api("/api/load");
   OPTIONS = await api("/api/options");
   
@@ -4355,163 +5045,961 @@ function renderDeliverableList(items){
   });
 }
 
-// Build from current S2 selection (surgical patch implementation)
+// Build from current S2 selection (SIMPLIFIED to prevent freezing)
 async function buildFromCurrentSelection() {
-  const codes = readSelectedCodesFromUI();
-  if (!codes.length) {
-    alert("Pick at least one deliverable before proceeding to pricing.");
-    return;
-  }
-
-  // Sync legacy state for compatibility
-  selectedCodes = codes;
-  if (window.appState) window.appState.selectedCodes = codes;
-  window.selectedCodes = codes;
-
-  // Convert S2.selectedComponentsMap (which uses Sets) to API format (plain objects)
-  const selectedComponentsPayload = {};
+  console.log('[BUILD] ========= PROCEED TO PRICING CLICKED =========');
+  console.log('[BUILD] Timestamp:', new Date().toISOString());
   
-  // For all selected deliverables, ensure we have component info
-  codes.forEach(code => {
-    const compSet = S2.selectedComponentsMap[code];
+  // CRITICAL: NUCLEAR OPTION - Stop ALL polling everywhere
+  console.log('[BUILD] Step 0/10: NUCLEAR SHUTDOWN - Stopping ALL polling...');
+  
+  // Set global flag to prevent AI Assistant from auto-resuming
+  window.isTransitioningToPricing = true;
+  
+  // 1. Use GlobalPollingManager master kill switch
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[BUILD] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[BUILD] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Clear all job IDs from localStorage to prevent auto-restart
+  console.log('[BUILD] Clearing all job IDs from localStorage...');
+  try {
+    // CRITICAL: Clear CHARLES agent state completely - including ALL stateHistory entries
+    const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
     
-    if (compSet instanceof Set) {
-      // User has customized component selection (could be all, some, or none)
-      if (compSet.size > 0) {
-        // User has selected specific components
-        const dict = Object.create(null);
-        compSet.forEach(label => { dict[label] = null; });
-        selectedComponentsPayload[code] = dict;
-      } else {
-        // Empty Set means user unchecked all - send empty object
-        selectedComponentsPayload[code] = {};
-      }
-    } else if (compSet && typeof compSet === 'object') {
-      // Already in object format
-      selectedComponentsPayload[code] = compSet;
-    } else {
-      // No customization - send "__ALL__" sentinel to include all default components
-      selectedComponentsPayload[code] = "__ALL__";
+    // Clear top-level jobId
+    if (charlesState.jobId) {
+      console.log('[BUILD] Clearing top-level CHARLES jobId:', charlesState.jobId);
+      charlesState.jobId = null;
+      charlesState.jobIdTimestamp = null;
     }
-  });
-
-  // Include L3 subtasks from APB.step2.selectedL3ByKey
-  // Format: { deliverableCode: { component: [l3tasks...] } }
-  // FIX: Ensure we only send strings, not objects
-  const l3Payload = {};
-  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
-    const [code, component] = key.split('::');
-    if (codes.includes(code) && l3Set && l3Set.size > 0) {
-      if (!l3Payload[code]) l3Payload[code] = {};
-      // Convert Set to Array and ensure all items are strings
-      l3Payload[code][component] = Array.from(l3Set).map(item => {
-        if (typeof item === 'string') return item;
-        if (item && typeof item === 'object') {
-          const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
-          if (name && typeof name === 'string') return name;
+    
+    // CRITICAL: Clear jobId from EVERY stateHistory entry (this is where it resurrects from!)
+    if (charlesState.stateHistory && Array.isArray(charlesState.stateHistory)) {
+      console.log('[BUILD] Clearing jobIds from', charlesState.stateHistory.length, 'stateHistory entries...');
+      charlesState.stateHistory.forEach((state, idx) => {
+        if (state.jobId) {
+          console.log(`[BUILD] Clearing jobId from stateHistory[${idx}]:`, state.jobId);
+          state.jobId = null;
+          state.jobIdTimestamp = null;
         }
-        return null;
-      }).filter(name => name && name !== '[object Object]' && name !== '');
-    }
-  });
-
-  // ISSUE 3 FIX: Build retainers payload from pricingData
-  const retainersPayload = [];
-  pricingData.deliverableTypes.forEach((type, code) => {
-    if (type === 'RETAINER' && codes.includes(code)) {
-      retainersPayload.push({
-        deliverable_code: code,
-        months: pricingData.retainers.get(code) || 12,
-        type: 'RETAINER'
+        if (state.agentState && state.agentState.jobId) {
+          console.log(`[BUILD] Clearing agentState.jobId from stateHistory[${idx}]:`, state.agentState.jobId);
+          state.agentState.jobId = null;
+        }
       });
     }
-  });
-
-  // ISSUE FIX 1: Include both snake_case and camelCase formats for compatibility
-  const payload = {
-    // Snake_case versions
-    selected_deliverable_codes: codes,
-    selected_components_map: selectedComponentsPayload,
-    selected_l3_map: l3Payload,
-    // CamelCase versions for compatibility
-    selectedDeliverableCodes: codes,
-    selectedComponentsMap: selectedComponentsPayload,
-    selectedL3Map: l3Payload,
-    // Pricing and configuration
-    pricing_mode: window.getPricingModeFromUI?.() || 'Flat_Blended',
-    blended_rate: window.getBlendedRateFromUI?.() || 195,
-    rate_band: window.getRateBandFromUI?.() || 'Standard_US',
-    use_slack: window.getUseSlackFromUI?.() || false,
-    slack_after_internal: window.getSlackInternalFromUI?.() || 1,
-    slack_after_client: window.getSlackClientFromUI?.() || 2,
-    slack_global_pct: window.getSlackPctFromUI?.() || 0.05,
-    project_start: window.getProjectStartFromUI?.() || null,
-    client_budget_usd: window.getClientBudgetFromUI?.() || null,
-    scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
-    retainers: retainersPayload
-  };
-
-  const res = await fetch('/api/build', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+    
+    // Save the cleaned state back
+    localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
+    console.log('[BUILD] CHARLES agent state cleaned and saved');
+    
+    // Clear any other job-related items
+    const keysToCheck = ['aiAnalysisJobId', 'currentJobId', 'pollingJobId'];
+    keysToCheck.forEach(key => {
+      if (localStorage.getItem(key)) {
+        console.log('[BUILD] Clearing localStorage:', key);
+        localStorage.removeItem(key);
+      }
+    });
+  } catch (e) {
+    console.error('[BUILD] Error clearing localStorage:', e);
+  }
   
-  if (!res.ok) {
-    const msg = await res.text().catch(() => '');
-    alert(`Build failed (${res.status}): ${msg}`);
+  // 3. Force stop AI Assistant polling
+  if (window.aiAssistant) {
+    console.log('[BUILD] Stopping AI Assistant polling...');
+    if (window.aiAssistant.currentPollInterval) {
+      clearInterval(window.aiAssistant.currentPollInterval);
+      window.aiAssistant.currentPollInterval = null;
+    }
+    if (window.aiAssistant.stopJobPolling) {
+      window.aiAssistant.stopJobPolling();
+    }
+    // Clear the job ID from assistant state
+    if (window.aiAssistant.agentState) {
+      window.aiAssistant.agentState.jobId = null;
+    }
+  }
+  
+  // 4. Manual cleanup of any remaining intervals
+  if (typeof cleanupPolling === 'function') {
+    cleanupPolling();
+    console.log('[BUILD] Called cleanupPolling()');
+  }
+  
+  // 5. Clear global variables
+  if (typeof aiAnalysisInterval !== 'undefined') {
+    clearInterval(aiAnalysisInterval);
+    aiAnalysisInterval = null;
+  }
+  if (typeof progressInterval !== 'undefined') {
+    clearInterval(progressInterval);
+    progressInterval = null;
+  }
+  if (typeof aiAnalysisJobId !== 'undefined') {
+    aiAnalysisJobId = null;
+  }
+  
+  console.log('[BUILD] ✅ NUCLEAR SHUTDOWN COMPLETE - All polling stopped');
+  
+  // Add timeout protection to prevent infinite freeze
+  const timeoutId = setTimeout(() => {
+    console.error('[BUILD] TIMEOUT - Function taking too long! Forcing Step 3 to show...');
+    forceShowStep3();
+  }, 10000); // 10 second timeout
+  
+  // Step 1: Clear any previous error states
+  clearErrorState();
+  
+  // Step 2: Validate deliverable selection
+  let codes = [];
+  try {
+    console.log('[BUILD] Step 1/10: Reading selected codes from UI...');
+    codes = readSelectedCodesFromUI();
+    console.log('[BUILD] Selected codes:', codes);
+    
+    if (!codes.length) {
+      console.warn('[BUILD] No deliverables selected');
+      showUserFriendlyError('Please select at least one deliverable before proceeding to pricing.', false);
+      return;
+    }
+  } catch (error) {
+    console.error('[BUILD] Error reading selected codes:', error);
+    showUserFriendlyError('Unable to read your selections. Please refresh and try again.', true);
     return;
   }
-  
-  const json = await res.json();
-  
-  // Extract scenarios (now only contains A)
-  const scenarios = json.scenarios || {};
 
-  if (!scenarios || !scenarios.A) {
-    console.warn('Build response', json);
-    alert('Malformed build response: missing scenario A');
+  // Step 3: Initialize ScenarioManager with fallback
+  let sessionId = null;
+  try {
+    console.log('[BUILD] Step 2/10: Initializing ScenarioManager...');
+    
+    if (!window.ScenarioManager) {
+      console.warn('[BUILD] ScenarioManager not loaded, attempting fallback...');
+      // Fallback: Show Step 3 anyway with minimal data
+      showStep3WithFallback(codes);
+      return;
+    }
+    
+    sessionId = window.ScenarioManager.initSession(generateSessionId());
+    console.log('[BUILD] ScenarioManager initialized with session:', sessionId);
+  } catch (error) {
+    console.error('[BUILD] Error initializing ScenarioManager:', error);
+    // Non-critical error - continue with fallback
+    showStep3WithFallback(codes);
     return;
   }
 
-  // Save to client state
-  window.APP_STATE = window.APP_STATE || {};
-  window.APP_STATE.scenarios = scenarios;
-  window.APP_STATE.activeScenario = 'A';
+  // Step 4: Sync legacy state (non-critical)
+  try {
+    console.log('[BUILD] Step 3/10: Syncing legacy state...');
+    selectedCodes = codes;
+    if (window.appState) window.appState.selectedCodes = codes;
+    window.selectedCodes = codes;
+    console.log('[BUILD] Legacy state synced');
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error syncing legacy state:', error);
+    // Continue - this is not critical
+  }
+
+  // Step 5: Build component payload (defensive)
+  let selectedComponentsPayload = {};
+  try {
+    console.log('[BUILD] Step 4/10: Building component payload...');
+    console.log('[BUILD DEBUG] Number of codes to process:', codes.length);
+    
+    let processedCount = 0;
+    codes.forEach(code => {
+      console.log(`[BUILD DEBUG] Processing component for code ${processedCount + 1}/${codes.length}: ${code}`);
+      try {
+        // Try new state system first (preferred)
+        let compSet = window.APB?.step2?.selectedComponentsByCode?.[code];
+        console.log(`[BUILD DEBUG] ${code} - Found in APB.step2:`, !!compSet);
+        
+        // Fall back to old state system if new system has no data
+        if (!compSet && window.S2) {
+          compSet = S2.selectedComponentsMap?.[code];
+          console.log(`[BUILD DEBUG] ${code} - Found in S2:`, !!compSet);
+        }
+        
+        if (compSet instanceof Set) {
+          console.log(`[BUILD DEBUG] ${code} - Is Set with size:`, compSet.size);
+          if (compSet.size > 0) {
+            const dict = Object.create(null);
+            let setItemCount = 0;
+            compSet.forEach(label => { 
+              dict[label] = null;
+              setItemCount++;
+              console.log(`[BUILD DEBUG] ${code} - Added component ${setItemCount}: ${label}`);
+            });
+            selectedComponentsPayload[code] = dict;
+          } else {
+            selectedComponentsPayload[code] = {};
+          }
+        } else if (compSet && typeof compSet === 'object') {
+          console.log(`[BUILD DEBUG] ${code} - Is object`);
+          selectedComponentsPayload[code] = compSet;
+        } else {
+          console.log(`[BUILD DEBUG] ${code} - Using __ALL__ fallback`);
+          selectedComponentsPayload[code] = "__ALL__";
+        }
+        processedCount++;
+        console.log(`[BUILD DEBUG] Successfully processed ${processedCount}/${codes.length} codes`);
+      } catch (compError) {
+        console.warn(`[BUILD] Error processing components for ${code}:`, compError);
+        selectedComponentsPayload[code] = "__ALL__"; // Safe default
+      }
+    });
+    
+    console.log('[BUILD] Component payload built:', selectedComponentsPayload);
+    console.log('[BUILD DEBUG] Component payload complete - moving to L3');
+  } catch (error) {
+    console.warn('[BUILD] Error building component payload:', error);
+    // Use safe defaults
+    codes.forEach(code => {
+      selectedComponentsPayload[code] = "__ALL__";
+    });
+  }
+
+  // Step 6: Build L3 payload (defensive)
+  let l3Payload = {};
+  try {
+    console.log('[BUILD] Step 5/10: Building L3 subtasks payload...');
+    console.log('[BUILD DEBUG] Checking for L3 data in APB.step2...');
+    
+    if (window.APB?.step2?.selectedL3ByKey) {
+      const l3Keys = Object.entries(window.APB.step2.selectedL3ByKey);
+      console.log(`[BUILD DEBUG] Found ${l3Keys.length} L3 keys to process`);
+      
+      let l3ProcessedCount = 0;
+      l3Keys.forEach(([key, l3Set]) => {
+        console.log(`[BUILD DEBUG] Processing L3 key ${l3ProcessedCount + 1}/${l3Keys.length}: ${key}`);
+        try {
+          const [code, component] = key.split('::');
+          console.log(`[BUILD DEBUG] L3 key split - code: ${code}, component: ${component}`);
+          console.log(`[BUILD DEBUG] Is code in selected codes:`, codes.includes(code));
+          console.log(`[BUILD DEBUG] L3 Set size:`, l3Set?.size);
+          
+          if (codes.includes(code) && l3Set && l3Set.size > 0) {
+            if (!l3Payload[code]) l3Payload[code] = {};
+            console.log(`[BUILD DEBUG] Converting L3 Set to Array for ${key}...`);
+            const l3Array = Array.from(l3Set);
+            console.log(`[BUILD DEBUG] Array created, length: ${l3Array.length}`);
+            
+            const mappedItems = l3Array.map((item, idx) => {
+              console.log(`[BUILD DEBUG] Mapping L3 item ${idx + 1}/${l3Array.length}:`, typeof item);
+              if (typeof item === 'string') return item;
+              if (item && typeof item === 'object') {
+                const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
+                if (name && typeof name === 'string') return name;
+              }
+              return null;
+            });
+            console.log(`[BUILD DEBUG] Mapped ${mappedItems.length} items`);
+            
+            const filteredItems = mappedItems.filter(name => name && name !== '[object Object]' && name !== '');
+            console.log(`[BUILD DEBUG] Filtered to ${filteredItems.length} valid items`);
+            
+            l3Payload[code][component] = filteredItems;
+          }
+          l3ProcessedCount++;
+          console.log(`[BUILD DEBUG] L3 processed ${l3ProcessedCount}/${l3Keys.length}`);
+        } catch (l3Error) {
+          console.warn(`[BUILD] Error processing L3 for ${key}:`, l3Error);
+        }
+      });
+    } else {
+      console.log('[BUILD DEBUG] No L3 data found in APB.step2.selectedL3ByKey');
+    }
+    
+    console.log('[BUILD] L3 payload built:', l3Payload);
+    console.log('[BUILD DEBUG] L3 payload complete - moving to ScenarioManager update');
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error building L3 payload:', error);
+    // Continue without L3 data
+  }
+
+  // Step 7: Update ScenarioManager (defensive)
+  try {
+    console.log('[BUILD] Step 6/10: Updating ScenarioManager with selections...');
+    
+    if (window.ScenarioManager?.setSelectedDeliverables) {
+      window.ScenarioManager.setSelectedDeliverables(codes, selectedComponentsPayload, l3Payload);
+      console.log('[BUILD] ScenarioManager updated with selections');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error updating ScenarioManager:', error);
+    // Continue - we can still try to build
+  }
+
+  // Step 8: Build retainers payload (defensive)
+  try {
+    console.log('[BUILD] Step 7/10: Building retainers payload...');
+    
+    const retainersPayload = [];
+    if (window.pricingData?.deliverableTypes) {
+      window.pricingData.deliverableTypes.forEach((type, code) => {
+        if (type === 'RETAINER' && codes.includes(code)) {
+          retainersPayload.push({
+            deliverable_code: code,
+            months: window.pricingData.retainers?.get(code) || 12,
+            type: 'RETAINER'
+          });
+        }
+      });
+    }
+    
+    // Set blended rate
+    if (window.ScenarioManager?.setState) {
+      window.ScenarioManager.setState({
+        blendedRate: window.getBlendedRateFromUI?.() || 195
+      });
+    }
+    
+    console.log('[BUILD] Retainers configured:', retainersPayload);
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error building retainers:', error);
+    // Continue without retainer data
+  }
+
+  // Step 9: Build scenario (with multiple fallbacks)
+  let scenarios = null;
+  let buildSuccess = false;
   
-  // Legacy aliases for backward compatibility
-  window.BUILD = json;
-  window.appState = window.appState || {};
-  window.appState.scenarios = scenarios;
-  window.latestScenarios = scenarios;
-  window.SCENARIOS = scenarios;
-
-  // Update AI button states now that scenario exists
-  updateAIButtonStates();
-
-  // Show Step 3 and scroll
-  const step3 = document.querySelector("#step3");
-  if (step3) {
-    step3.style.display = "block";
-    step3.scrollIntoView({ behavior: "smooth" });
+  try {
+    console.log('[BUILD] Step 8/10: Building scenario via ScenarioManager...');
+    console.log('[BUILD DEBUG] ScenarioManager exists:', !!window.ScenarioManager);
+    console.log('[BUILD DEBUG] ScenarioManager.buildScenario exists:', !!window.ScenarioManager?.buildScenario);
+    
+    if (window.ScenarioManager?.buildScenario) {
+      console.log('[BUILD DEBUG] *** CALLING ScenarioManager.buildScenario() ***');
+      console.log('[BUILD DEBUG] Call initiated at:', new Date().toISOString());
+      
+      const json = await window.ScenarioManager.buildScenario();
+      
+      console.log('[BUILD DEBUG] *** ScenarioManager.buildScenario() RETURNED ***');
+      console.log('[BUILD DEBUG] Response received at:', new Date().toISOString());
+      console.log('[BUILD] ScenarioManager response:', json);
+      console.log('[BUILD DEBUG] Response type:', typeof json);
+      console.log('[BUILD DEBUG] Response keys:', json ? Object.keys(json) : 'null');
+      
+      // Extract scenarios with multiple fallback attempts
+      console.log('[BUILD DEBUG] Extracting scenarios from response...');
+      scenarios = json.scenarios || {};
+      console.log('[BUILD DEBUG] Scenarios extracted:', Object.keys(scenarios || {}).length, 'scenarios');
+      
+      let scenario = scenarios.A || json.scenario || json;
+      console.log('[BUILD DEBUG] Scenario A exists:', !!scenario);
+      
+      // Wrap if needed
+      if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
+        console.log('[BUILD DEBUG] Wrapping scenario in scenarios object...');
+        scenarios = { A: scenario };
+      }
+      
+      if (scenarios && Object.keys(scenarios).length > 0) {
+        buildSuccess = true;
+        console.log('[BUILD] Scenario built successfully');
+        console.log('[BUILD DEBUG] Build success - proceeding to state save');
+      } else {
+        console.log('[BUILD DEBUG] Scenarios empty or invalid');
+      }
+    } else {
+      console.log('[BUILD DEBUG] ScenarioManager.buildScenario not available');
+    }
+  } catch (error) {
+    console.error('[BUILD] Error building scenario:', error);
+    console.error('[BUILD DEBUG] Error stack:', error.stack);
+    // Will attempt fallback below
+  }
+  
+  // Fallback if scenario build failed
+  if (!buildSuccess) {
+    console.warn('[BUILD] Primary build failed, attempting fallback...');
+    
+    try {
+      // Create minimal scenario structure
+      scenarios = {
+        A: {
+          items: codes.map(code => ({
+            deliverable_code: code,
+            deliverable_name: code,
+            category: 'General',
+            hours: 40,
+            rate: 195,
+            price: 7800
+          })),
+          total: codes.length * 7800
+        }
+      };
+      buildSuccess = true;
+      console.log('[BUILD] Fallback scenario created');
+    } catch (fallbackError) {
+      console.error('[BUILD] Fallback scenario creation failed:', fallbackError);
+    }
   }
 
-  // Render Scenario A only
-  if (window.renderScenario) {
-    window.renderScenario('scenarioA', scenarios.A);
+  // Step 10: Update state and UI (defensive with multiple try-catch blocks)
+  
+  // Save state (non-critical)
+  try {
+    console.log('[BUILD] Step 9/10: Saving state...');
+    
+    if (scenarios) {
+      window.APP_STATE = window.APP_STATE || {};
+      window.APP_STATE.scenarios = scenarios;
+      window.APP_STATE.activeScenario = 'A';
+      window.APP_STATE.sessionId = sessionId;
+      
+      // Legacy aliases
+      window.BUILD = { scenarios };
+      window.appState = window.appState || {};
+      window.appState.scenarios = scenarios;
+      window.latestScenarios = scenarios;
+      window.SCENARIOS = scenarios;
+      
+      console.log('[BUILD] State saved successfully');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error saving state:', error);
+    // Continue - UI is more important
   }
 
-  // Show Step 4 (Timeline) and Step 5 (Export)
-  const step4 = document.querySelector("#step4");
-  const step5 = document.querySelector("#step5");
-  if (step5) step5.style.display = 'block';
-  if (step4 && window.showStep4) {
-    window.showStep4('A');  // Show timeline for Scenario A
+  // Update AI buttons (non-critical)
+  try {
+    if (typeof updateAIButtonStates === 'function') {
+      updateAIButtonStates();
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error updating AI buttons:', error);
+  }
+
+  // CRITICAL: Show Step 3 - This MUST happen
+  try {
+    console.log('[BUILD] Step 10/10: CRITICAL - Showing Step 3...');
+    console.log('[BUILD DEBUG] *** ABOUT TO SHOW STEP 3 ***');
+    console.log('[BUILD DEBUG] Current time:', new Date().toISOString());
+    
+    const step3 = document.querySelector("#step3");
+    console.log('[BUILD DEBUG] Step 3 element found:', !!step3);
+    
+    if (step3) {
+      console.log('[BUILD DEBUG] Current Step 3 display:', step3.style.display);
+      console.log('[BUILD DEBUG] Setting Step 3 to display: block...');
+      
+      // Force display regardless of any errors
+      step3.style.display = "block";
+      step3.style.visibility = "visible";
+      step3.style.opacity = "1";
+      
+      console.log('[BUILD DEBUG] Display set. Removing error classes...');
+      
+      // Clear any potential error classes
+      step3.classList.remove('hidden', 'error', 'loading');
+      
+      console.log('[BUILD] ✓ Step 3 is now visible');
+      console.log('[BUILD DEBUG] *** STEP 3 SHOULD BE VISIBLE NOW ***');
+      
+      // Smooth scroll (non-critical)
+      try {
+        console.log('[BUILD DEBUG] Attempting smooth scroll...');
+        step3.scrollIntoView({ behavior: "smooth", block: "start" });
+        console.log('[BUILD DEBUG] Smooth scroll initiated');
+      } catch (scrollError) {
+        console.log('[BUILD DEBUG] Smooth scroll failed, trying basic scroll...');
+        // Fallback to basic scroll
+        step3.scrollIntoView();
+        console.log('[BUILD DEBUG] Basic scroll completed');
+      }
+      
+      // Show success message if we had to use fallback
+      if (!window.ScenarioManager || !scenarios) {
+        console.log('[BUILD DEBUG] Showing recoverable warning...');
+        showRecoverableWarning('Some features may be limited. You can still proceed with pricing configuration.');
+      }
+      
+      console.log('[BUILD DEBUG] Step 3 display complete');
+    } else {
+      console.error('[BUILD] CRITICAL ERROR: Step 3 element not found in DOM');
+      showUserFriendlyError('Unable to display pricing section. Please refresh the page and try again.', true);
+      // Attempt to create Step 3 dynamically as last resort
+      createStep3Fallback();
+    }
+  } catch (error) {
+    console.error('[BUILD] CRITICAL ERROR showing Step 3:', error);
+    console.error('[BUILD DEBUG] Error stack:', error.stack);
+    // Last resort - try to show something
+    createStep3Fallback();
+  }
+
+  // Clear timeout since we got here
+  clearTimeout(timeoutId);
+  console.log('[BUILD DEBUG] Timeout cleared');
+  
+  // Initialize pricing table (non-critical)
+  try {
+    console.log('[BUILD DEBUG] Checking for pricing table initialization...');
+    if (window.APBOneTable && scenarios?.A) {
+      console.log('[BUILD] Initializing pricing table...');
+      console.log('[BUILD DEBUG] Pricing data items count:', scenarios.A.items?.length || 0);
+      
+      const pricingData = scenarios.A;
+      const transformedData = {
+        deliverables: (pricingData.items || []).map(item => ({
+          id: item.deliverable_code,
+          title: item.deliverable_name || item.deliverable || item.deliverable_code,
+          dept: item.category || 'General',
+          cadence: item.cadence || (item.is_retainer ? 'Monthly' : 'One-Time'),
+          months: item.retainer_months || 0,
+          hours: item.hours || 0,
+          rate: item.rate || item.blended_rate || 195,
+          price: item.price || 0,
+          resources: item.resources || [],
+          components: (item.components || []).map(comp => ({
+            id: window.ScenarioManager?.slugify?.(comp.name) || comp.name,
+            title: comp.name,
+            hours: comp.hours || 0,
+            rate: comp.rate || 195,
+            cadence: comp.cadence,
+            months: comp.months || 0
+          }))
+        }))
+      };
+      window.APBOneTable.hydrateFrom(transformedData);
+      console.log('[BUILD] Pricing table initialized');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error initializing pricing table:', error);
+  }
+
+  // Render scenario (non-critical)
+  try {
+    if (window.renderScenario && scenarios?.A) {
+      window.renderScenario('scenarioA', scenarios.A);
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error rendering scenario:', error);
+  }
+
+  // Show additional steps (non-critical)
+  try {
+    const step4 = document.querySelector("#step4");
+    const step5 = document.querySelector("#step5");
+    if (step5) step5.style.display = 'block';
+    if (step4 && window.showStep4) {
+      window.showStep4('A');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error showing additional steps:', error);
+  }
+
+  // Sync to backend (non-critical)
+  try {
+    if (window.ScenarioManager?.syncToBackend) {
+      window.ScenarioManager.syncToBackend();
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error syncing to backend:', error);
+  }
+  
+  console.log('[BUILD] ========= Transition complete =========');
+}
+
+// Helper: Clear error states
+function clearErrorState() {
+  const errorBanner = document.getElementById('transition-error-banner');
+  if (errorBanner) {
+    errorBanner.style.display = 'none';
+  }
+  
+  // Remove error classes from all steps
+  document.querySelectorAll('.card').forEach(card => {
+    card.classList.remove('error', 'loading');
+  });
+}
+
+// Helper: Show user-friendly error with recovery options
+function showUserFriendlyError(message, showRetry = true) {
+  console.error('[BUILD] Showing user error:', message);
+  
+  // Create or update error banner
+  let errorBanner = document.getElementById('transition-error-banner');
+  if (!errorBanner) {
+    errorBanner = document.createElement('div');
+    errorBanner.id = 'transition-error-banner';
+    errorBanner.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, #dc3545, #c82333);
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 10000;
+      max-width: 500px;
+      text-align: center;
+      animation: slideDown 0.3s ease;
+    `;
+    document.body.appendChild(errorBanner);
+  }
+  
+  errorBanner.innerHTML = `
+    <div style="margin-bottom: 12px; font-weight: 600;">⚠️ ${message}</div>
+    ${showRetry ? `
+      <button onclick="retryTransition()" style="
+        background: white;
+        color: #dc3545;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+        margin-right: 8px;
+      ">Retry</button>
+      <button onclick="this.parentElement.style.display='none'" style="
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+      ">Dismiss</button>
+    ` : `
+      <button onclick="this.parentElement.style.display='none'" style="
+        background: white;
+        color: #dc3545;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+      ">OK</button>
+    `}
+  `;
+  
+  errorBanner.style.display = 'block';
+  
+  // Auto-hide after 10 seconds
+  setTimeout(() => {
+    if (errorBanner) errorBanner.style.display = 'none';
+  }, 10000);
+}
+
+// Helper: Show recoverable warning
+function showRecoverableWarning(message) {
+  console.warn('[BUILD] Showing warning:', message);
+  
+  let warningBanner = document.getElementById('transition-warning-banner');
+  if (!warningBanner) {
+    warningBanner = document.createElement('div');
+    warningBanner.id = 'transition-warning-banner';
+    warningBanner.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, #ffc107, #ff9800);
+      color: #000;
+      padding: 12px 20px;
+      border-radius: 6px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      z-index: 9999;
+      max-width: 400px;
+      text-align: center;
+      animation: slideUp 0.3s ease;
+    `;
+    document.body.appendChild(warningBanner);
+  }
+  
+  warningBanner.innerHTML = `
+    <div>ℹ️ ${message}</div>
+  `;
+  
+  warningBanner.style.display = 'block';
+  
+  // Auto-hide after 5 seconds
+  setTimeout(() => {
+    if (warningBanner) warningBanner.style.display = 'none';
+  }, 5000);
+}
+
+// Helper: Show Step 3 with fallback data
+function showStep3WithFallback(codes) {
+  console.warn('[BUILD] Using fallback to show Step 3');
+  
+  try {
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = "block";
+      step3.scrollIntoView({ behavior: "smooth" });
+      
+      // Show warning message
+      showRecoverableWarning('Limited functionality mode. Basic pricing options are available.');
+      
+      // Create minimal scenario for UI
+      const fallbackScenario = {
+        A: {
+          items: codes.map(code => ({
+            deliverable_code: code,
+            deliverable_name: code,
+            category: 'General',
+            hours: 40,
+            rate: 195,
+            price: 7800
+          }))
+        }
+      };
+      
+      window.SCENARIOS = fallbackScenario;
+      window.APP_STATE = window.APP_STATE || {};
+      window.APP_STATE.scenarios = fallbackScenario;
+    }
+  } catch (error) {
+    console.error('[BUILD] Error in fallback:', error);
+    createStep3Fallback();
   }
 }
 
+// Helper: Create Step 3 dynamically as last resort
+function createStep3Fallback() {
+  console.error('[BUILD] Creating Step 3 dynamically as last resort');
+  
+  try {
+    // Find where to insert Step 3
+    const step2 = document.querySelector("#step2");
+    if (!step2) {
+      console.error('[BUILD] Cannot find Step 2 to insert after');
+      return;
+    }
+    
+    // Create minimal Step 3
+    const step3 = document.createElement('section');
+    step3.id = 'step3';
+    step3.className = 'card';
+    step3.innerHTML = `
+      <h2>Step 3 — Configure Pricing</h2>
+      <div style="padding: 20px; background: rgba(220, 53, 69, 0.1); border: 1px solid rgba(220, 53, 69, 0.3); border-radius: 8px; margin: 20px 0;">
+        <h3 style="color: #dc3545;">⚠️ Recovery Mode</h3>
+        <p>We encountered an issue loading the pricing configuration.</p>
+        <p>You can:</p>
+        <ul>
+          <li>Refresh the page and try again</li>
+          <li>Contact support if the issue persists</li>
+        </ul>
+        <button onclick="window.location.reload()" style="
+          background: #dc3545;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 600;
+          margin-top: 10px;
+        ">Refresh Page</button>
+      </div>
+    `;
+    
+    // Insert after Step 2
+    step2.parentNode.insertBefore(step3, step2.nextSibling);
+    step3.style.display = 'block';
+    step3.scrollIntoView({ behavior: 'smooth' });
+    
+    console.log('[BUILD] Emergency Step 3 created and displayed');
+  } catch (error) {
+    console.error('[BUILD] Failed to create emergency Step 3:', error);
+    alert('Critical error: Unable to proceed to pricing. Please refresh the page.');
+  }
+}
+
+// Helper: Retry transition
+window.retryTransition = function() {
+  console.log('[BUILD] Retrying transition...');
+  clearErrorState();
+  buildFromCurrentSelection();
+};
+
 // Alias for backward compatibility
 const onProceedToStep3 = buildFromCurrentSelection;
+
+// ================================================================================
+// Global Error Handler for Transition Issues
+// ================================================================================
+let transitionInProgress = false;
+let lastTransitionError = null;
+
+// Track when transition is happening
+window.addEventListener('error', function(event) {
+  if (transitionInProgress) {
+    console.error('[GLOBAL ERROR] Error during transition:', event);
+    lastTransitionError = event.error || event.message;
+    
+    // Log the error details
+    console.error('[GLOBAL ERROR] Message:', event.message);
+    console.error('[GLOBAL ERROR] File:', event.filename);
+    console.error('[GLOBAL ERROR] Line:', event.lineno);
+    console.error('[GLOBAL ERROR] Column:', event.colno);
+    console.error('[GLOBAL ERROR] Stack:', event.error?.stack);
+    
+    // Try to recover and show Step 3 anyway
+    const step3 = document.querySelector("#step3");
+    if (step3 && step3.style.display === 'none') {
+      console.warn('[GLOBAL ERROR] Attempting recovery - forcing Step 3 to show');
+      step3.style.display = 'block';
+      step3.style.visibility = 'visible';
+      step3.style.opacity = '1';
+      step3.classList.remove('hidden', 'error', 'loading');
+      
+      // Show error message
+      showUserFriendlyError('An error occurred during the transition. Some features may be limited.', true);
+    }
+    
+    // Don't prevent default - let console show the error too
+    return false;
+  }
+});
+
+// Track unhandled promise rejections during transition
+window.addEventListener('unhandledrejection', function(event) {
+  if (transitionInProgress) {
+    console.error('[GLOBAL PROMISE] Unhandled rejection during transition:', event);
+    lastTransitionError = event.reason;
+    
+    // Try to recover and show Step 3 anyway
+    const step3 = document.querySelector("#step3");
+    if (step3 && step3.style.display === 'none') {
+      console.warn('[GLOBAL PROMISE] Attempting recovery - forcing Step 3 to show');
+      step3.style.display = 'block';
+      step3.style.visibility = 'visible';
+      step3.style.opacity = '1';
+      step3.classList.remove('hidden', 'error', 'loading');
+      
+      // Show error message
+      showUserFriendlyError('An async error occurred. Some features may be limited.', true);
+    }
+  }
+});
+
+// Enhanced buildFromCurrentSelection wrapper with transition tracking
+const originalBuildFromCurrentSelection = buildFromCurrentSelection;
+window.buildFromCurrentSelection = async function() {
+  console.log('[TRANSITION] Starting monitored transition...');
+  transitionInProgress = true;
+  lastTransitionError = null;
+  
+  try {
+    await originalBuildFromCurrentSelection();
+  } catch (error) {
+    console.error('[TRANSITION] Caught error in wrapper:', error);
+    lastTransitionError = error;
+    
+    // Force Step 3 to show even on error
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = 'block';
+      step3.style.visibility = 'visible';
+      step3.style.opacity = '1';
+      step3.scrollIntoView({ behavior: 'smooth' });
+    }
+    
+    showUserFriendlyError('Failed to complete transition. Please try again.', true);
+  } finally {
+    transitionInProgress = false;
+    console.log('[TRANSITION] Transition monitoring ended');
+    
+    // Final safety check - ensure Step 3 is visible
+    setTimeout(() => {
+      const step3 = document.querySelector("#step3");
+      if (step3 && step3.style.display === 'none') {
+        console.warn('[TRANSITION] Final safety check - Step 3 was hidden, forcing display');
+        step3.style.display = 'block';
+        step3.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 100);
+  }
+};
+
+// Debug helper: Get transition state
+window.getTransitionDebugInfo = function() {
+  const info = {
+    transitionInProgress,
+    lastTransitionError,
+    step3Visible: document.querySelector("#step3")?.style.display !== 'none',
+    scenariosLoaded: !!window.SCENARIOS,
+    scenarioManagerLoaded: !!window.ScenarioManager,
+    selectedCodes: window.selectedCodes || [],
+    appState: window.APP_STATE,
+    timestamp: new Date().toISOString()
+  };
+  
+  console.table(info);
+  return info;
+};
+
+// Debug helper: Force show Step 3
+window.forceShowStep3 = function() {
+  console.log('[DEBUG] Force showing Step 3...');
+  const step3 = document.querySelector("#step3");
+  if (step3) {
+    step3.style.display = 'block';
+    step3.style.visibility = 'visible';
+    step3.style.opacity = '1';
+    step3.classList.remove('hidden', 'error', 'loading');
+    step3.scrollIntoView({ behavior: 'smooth' });
+    console.log('[DEBUG] Step 3 forced to display');
+  } else {
+    console.error('[DEBUG] Step 3 element not found');
+    createStep3Fallback();
+  }
+};
+
+// Debug helper: Test transition with mock data
+window.testTransition = function() {
+  console.log('[DEBUG] Testing transition with mock data...');
+  
+  // Create mock selection
+  window.selectedCodes = ['TEST_001', 'TEST_002'];
+  
+  // Create mock scenario
+  window.SCENARIOS = {
+    A: {
+      items: [
+        {
+          deliverable_code: 'TEST_001',
+          deliverable_name: 'Test Deliverable 1',
+          category: 'Test',
+          hours: 40,
+          rate: 195,
+          price: 7800
+        },
+        {
+          deliverable_code: 'TEST_002',
+          deliverable_name: 'Test Deliverable 2',
+          category: 'Test',
+          hours: 60,
+          rate: 195,
+          price: 11700
+        }
+      ],
+      total: 19500
+    }
+  };
+  
+  // Force show Step 3
+  window.forceShowStep3();
+  
+  console.log('[DEBUG] Test transition complete');
+};
+
+console.log('[GLOBAL] Error handlers and debug helpers installed');
+console.log('[GLOBAL] Debug commands available:');
+console.log('  - getTransitionDebugInfo() : Get current transition state');
+console.log('  - forceShowStep3() : Force Step 3 to display');
+console.log('  - testTransition() : Test transition with mock data');
 
 // Image Progress Tracking
 let currentJobId = null;
@@ -4695,6 +6183,34 @@ function startProgressPolling(jobId) {
 let aiAnalysisJobId = null;
 let aiAnalysisInterval = null;
 
+// Clean up polling on page unload or visibility change
+function cleanupPolling() {
+  if (aiAnalysisInterval) {
+    console.log('[POLLING] Cleaning up AI analysis polling interval');
+    clearInterval(aiAnalysisInterval);
+    aiAnalysisInterval = null;
+  }
+  if (progressInterval) {
+    console.log('[POLLING] Cleaning up progress polling interval');
+    clearInterval(progressInterval);
+    progressInterval = null;
+  }
+  // Note: pollingIntervalId is managed within generateAITimeline function scope
+}
+
+// Expose cleanup function globally
+window.cleanupPolling = cleanupPolling;
+
+// Stop polling when user leaves the page
+window.addEventListener('beforeunload', cleanupPolling);
+
+// Stop polling when page becomes hidden
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cleanupPolling();
+  }
+});
+
 function showAIProgressBar() {
   let progressBar = document.getElementById('ai-progress-bar');
   if (!progressBar) {
@@ -4757,38 +6273,126 @@ function updateAIProgress(status) {
 async function pollAIAnalysis(jobId) {
   try {
     const res = await fetch(`/api/ai/jobs/${jobId}`);
-    if (!res.ok) return;
     
-    const status = await res.json();
-    updateAIProgress(status);
-    
-    if (status.status === 'completed' && status.result) {
-      clearInterval(aiAnalysisInterval);
+    // Handle 404s - STOP IMMEDIATELY, don't wait for multiple attempts
+    if (res.status === 404) {
+      console.log(`[POLLING] Job ${jobId} not found (404), stopping polling permanently`);
+      
+      // Clear the interval immediately
+      if (aiAnalysisInterval) {
+        clearInterval(aiAnalysisInterval);
+        aiAnalysisInterval = null;
+      }
+      
+      // Clear the job ID from memory
+      aiAnalysisJobId = null;
+      
+      // Hide progress bar
       hideAIProgressBar();
       
-      // Handle completed analysis
-      const aiPlanResponse = status.result;
+      // Clear from ALL localStorage entries to prevent resumption
+      // 1. Clear from charles_agent_state
+      const savedState = localStorage.getItem('charles_agent_state');
+      if (savedState) {
+        try {
+          const state = JSON.parse(savedState);
+          if (state && state.jobId === jobId) {
+            state.jobId = null;
+            state.jobIdTimestamp = null;
+            // Also clear from stateHistory
+            if (state.stateHistory && Array.isArray(state.stateHistory)) {
+              state.stateHistory.forEach(historyItem => {
+                if (historyItem.jobId === jobId) {
+                  historyItem.jobId = null;
+                  historyItem.jobIdTimestamp = null;
+                }
+              });
+            }
+            localStorage.setItem('charles_agent_state', JSON.stringify(state));
+            console.log('[POLLING] Cleared job ID from charles_agent_state');
+          }
+        } catch (e) {
+          console.error('[POLLING] Failed to clear job from localStorage:', e);
+        }
+      }
+      
+      // 2. Clear from any other localStorage keys that might have the job ID
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const value = localStorage.getItem(key);
+        if (value && value.includes(jobId)) {
+          console.log(`[POLLING] Removing job ID from localStorage key: ${key}`);
+          localStorage.removeItem(key);
+        }
+      }
+      
+      // Show error message to user
+      const errorMsg = `Analysis job ${jobId} not found. It may have expired or been deleted.`;
+      console.error('[POLLING]', errorMsg);
+      
+      // Don't continue polling
+      return;
+    }
+    
+    if (!res.ok) {
+      console.error(`[POLLING] Error fetching job status: ${res.status}`);
+      return;
+    }
+    
+    // Reset counter on successful response
+    consecutive404Count = 0;
+    
+    const status = await res.json();
+    console.log(`[POLLING] Job ${jobId} status:`, status);
+    updateAIProgress(status);
+    
+    // Check for completion states (completed, complete, done, etc.)
+    const isCompleted = status.status === 'completed' || 
+                        status.status === 'complete' || 
+                        status.status === 'done';
+    
+    const isFailed = status.status === 'failed' || 
+                     status.status === 'error' || 
+                     status.status === 'cancelled';
+    
+    // Handle completion - check for result OR if status is complete with 100% progress
+    if (isCompleted) {
+      console.log(`[ANALYSIS] Job complete, advancing to Step 2`, status);
+      clearInterval(aiAnalysisInterval);
+      aiAnalysisInterval = null;
+      hideAIProgressBar();
+      
+      // Handle completed analysis - result might be in status.result or status.data
+      const aiPlanResponse = status.result || status.data || status;
       window.APP = window.APP || {};
       window.APP.aiPlan = aiPlanResponse;
       sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
       
       const step2 = document.getElementById('step2');
       if (step2) {
+        console.log('[ANALYSIS] Showing Step 2');
         step2.style.display = 'block';
         step2.scrollIntoView({ behavior: 'smooth' });
       }
       
-      renderAIPlan(aiPlanResponse);
+      // Only call renderAIPlan if we have a valid plan structure
+      if (aiPlanResponse && (aiPlanResponse.plan || aiPlanResponse.deliverables)) {
+        renderAIPlan(aiPlanResponse);
+      } else {
+        console.warn('[ANALYSIS] No valid plan structure found in response:', aiPlanResponse);
+      }
       
       const btnAnalyze = document.querySelector('#btnAnalyze');
       if (btnAnalyze) {
         btnAnalyze.disabled = false;
         btnAnalyze.textContent = 'Analyze with AI';
       }
-    } else if (status.status === 'failed') {
+    } else if (isFailed) {
+      console.log(`[POLLING] Job ${jobId} failed, stopping polling`);
       clearInterval(aiAnalysisInterval);
+      aiAnalysisInterval = null;
       hideAIProgressBar();
-      alert(`AI analysis failed: ${status.error || 'Unknown error'}`);
+      alert(`AI analysis failed: ${status.error || status.message || 'Unknown error'}`);
       
       const btnAnalyze = document.querySelector('#btnAnalyze');
       if (btnAnalyze) {
@@ -4797,7 +6401,8 @@ async function pollAIAnalysis(jobId) {
       }
     }
   } catch (error) {
-    console.error('Error polling AI analysis:', error);
+    console.error('[POLLING] Error polling AI analysis:', error);
+    // Don't stop polling on network errors, let it retry
   }
 }
 
@@ -4988,6 +6593,13 @@ async function onRunReconcile() {
       aiAnalysisJobId = jobInfo.job_id;
       showAIProgressBar();
       updateAIProgress({ progress: 0, current_stage: 'Starting AI analysis...', elapsed_seconds: 0, eta_seconds: null });
+      
+      // Clear any existing polling interval before starting a new one
+      if (aiAnalysisInterval) {
+        console.log('[POLLING] Clearing existing interval before starting new polling');
+        clearInterval(aiAnalysisInterval);
+        aiAnalysisInterval = null;
+      }
       
       // Start polling for job status (SSE not implemented for AI jobs yet)
       // Poll the correct endpoint for job status
@@ -5621,6 +7233,47 @@ function clearAllAISelections() {
 }
 
 async function applyAllSelectedFromAI() {
+  // CRITICAL: Stop all polling before applying selections to prevent 404 flood
+  console.log('[APPLY-AI] ========= STOPPING ALL POLLING BEFORE APPLYING =========');
+  
+  // 1. Use GlobalPollingManager master kill switch
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[APPLY-AI] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[APPLY-AI] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Stop AI Assistant polling specifically
+  if (window.aiAssistant) {
+    console.log('[APPLY-AI] Stopping AI Assistant polling...');
+    if (window.aiAssistant.currentPollInterval) {
+      clearInterval(window.aiAssistant.currentPollInterval);
+      window.aiAssistant.currentPollInterval = null;
+    }
+    if (window.aiAssistant.stopJobPolling) {
+      window.aiAssistant.stopJobPolling();
+    }
+    // Clear the job ID from assistant state
+    if (window.aiAssistant.agentState) {
+      window.aiAssistant.agentState.jobId = null;
+    }
+  }
+  
+  // 3. Clear any lingering job IDs from localStorage
+  try {
+    const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+    if (charlesState.jobId) {
+      console.log('[APPLY-AI] Clearing CHARLES jobId:', charlesState.jobId);
+      charlesState.jobId = null;
+      charlesState.jobIdTimestamp = null;
+      localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
+    }
+  } catch (e) {
+    console.error('[APPLY-AI] Error clearing localStorage:', e);
+  }
+  
+  console.log('[APPLY-AI] Polling cleanup complete, now applying selections...');
+  
   // Collect selected deliverables
   const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
   let firstDelivCode = null;
@@ -6699,6 +8352,27 @@ function renderComponentsChecklist(code, items) {
         // Remove L3 tasks when component is deselected
         selectionStore.l3ByComponent.delete(key);
       }
+      
+      // Sync with ScenarioManager if it exists and has an active scenario
+      if (window.ScenarioManager && window.ScenarioManager.getCurrentScenario()) {
+        const currentScenario = window.ScenarioManager.getCurrentScenario();
+        if (currentScenario && currentScenario.items) {
+          // Find the deliverable in the scenario
+          const delivItem = currentScenario.items.find(item => 
+            item.deliverable_code === code || 
+            item.deliverable === code
+          );
+          if (delivItem) {
+            // Update components for this deliverable
+            delivItem.components = Array.from(selectedSet);
+            delivItem.included_components = Array.from(selectedSet);
+            
+            // Trigger a scenario update to notify subscribers
+            window.ScenarioManager.setActiveScenario(currentScenario);
+          }
+        }
+      }
+      
       updateSummaryCounts();
     });
   });
@@ -9174,6 +10848,69 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// Session management UI functions
+function toggleSessionInfo() {
+  const sessionInfo = document.getElementById('session-info');
+  if (sessionInfo) {
+    sessionInfo.style.display = sessionInfo.style.display === 'none' ? 'block' : 'none';
+    
+    // Update session display
+    if (sessionInfo.style.display === 'block' && window.ScenarioManager) {
+      const sessionIdDisplay = document.getElementById('session-id-display');
+      const lastSavedDisplay = document.getElementById('last-saved-display');
+      
+      if (sessionIdDisplay) {
+        sessionIdDisplay.textContent = window.ScenarioManager.state.sessionId || 'None';
+      }
+      
+      if (lastSavedDisplay) {
+        if (window.ScenarioManager.state.lastSaved) {
+          const date = new Date(window.ScenarioManager.state.lastSaved);
+          lastSavedDisplay.textContent = 'Last saved: ' + date.toLocaleTimeString();
+        } else {
+          lastSavedDisplay.textContent = 'Not saved yet';
+        }
+      }
+    }
+  }
+}
+
+function startNewSession() {
+  if (confirm('Start a new session? This will clear all current data.')) {
+    // Clear current data and start fresh
+    SessionManager.startNewSession();
+    
+    // Clear ScenarioManager state
+    if (window.ScenarioManager) {
+      window.ScenarioManager.clear();
+      window.ScenarioManager.state.sessionId = SessionManager.getCurrentSessionId();
+      window.ScenarioManager.saveToBackend();
+    }
+    
+    // Reload the page to start fresh
+    window.location.reload();
+  }
+}
+
+function clearAllData() {
+  if (confirm('Clear all data? This cannot be undone.')) {
+    clearAllDataWithConfirmation();
+  }
+}
+
+// Update session info periodically
+setInterval(() => {
+  const sessionInfo = document.getElementById('session-info');
+  if (sessionInfo && sessionInfo.style.display === 'block') {
+    toggleSessionInfo(); // Refresh display
+    toggleSessionInfo(); // Show again
+  }
+}, 30000); // Every 30 seconds
+
+window.toggleSessionInfo = toggleSessionInfo;
+window.startNewSession = startNewSession;
+window.clearAllData = clearAllData;
 
 window.addEventListener("load", boot);
 

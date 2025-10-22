@@ -17,6 +17,9 @@ class AIAssistant {
         this.currentTypingIndicators = new Set(); // Track all active typing indicators
         this.apiTimeout = 10000; // 10 seconds timeout for API calls
         
+        // CRITICAL: Flag to prevent auto-resuming old/dead jobs on page load
+        this.skipJobRestore = true; // Always skip job restore to prevent 404 floods
+        
         // Enhanced State Management
         this.agentState = {
             uploadedFiles: [],
@@ -75,6 +78,9 @@ class AIAssistant {
     }
     
     init() {
+        // Clear any stale job IDs on initialization
+        this.cleanupStaleJobIds();
+        
         this.createSidebar();
         this.addEnhancedStyles();
         this.attachEventListeners();
@@ -82,6 +88,39 @@ class AIAssistant {
         this.restoreState();
         this.checkAgentStatus();
         this.initProgressIndicators();
+    }
+    
+    cleanupStaleJobIds() {
+        console.log('[CHARLES] Checking for stale job IDs on initialization...');
+        
+        // Check localStorage for stale job IDs
+        const savedState = localStorage.getItem('charles_agent_state');
+        if (savedState) {
+            try {
+                const state = JSON.parse(savedState);
+                if (state && state.jobId) {
+                    const jobIdAge = state.jobIdTimestamp ? (Date.now() - state.jobIdTimestamp) : Infinity;
+                    const fiveMinutes = 5 * 60 * 1000; // 5 minutes
+                    
+                    if (jobIdAge > fiveMinutes) {
+                        console.log('[CHARLES] Found stale job ID on init, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                        state.jobId = null;
+                        state.jobIdTimestamp = null;
+                        localStorage.setItem('charles_agent_state', JSON.stringify(state));
+                        this.agentState.jobId = null;
+                    }
+                }
+            } catch (e) {
+                console.error('[CHARLES] Failed to cleanup stale job IDs:', e);
+            }
+        }
+        
+        // Clear any existing polling interval
+        if (this.currentPollInterval) {
+            console.log('[CHARLES] Clearing existing poll interval on init');
+            clearInterval(this.currentPollInterval);
+            this.currentPollInterval = null;
+        }
     }
     
     // ====================
@@ -97,6 +136,7 @@ class AIAssistant {
             formValues: this.captureFormValues(),
             analysisMode: document.getElementById('analysis-mode')?.value || 'fast',
             jobId: this.agentState.jobId,
+            jobIdTimestamp: this.agentState.jobId ? Date.now() : null,  // Add timestamp for job ID
             rfpText: document.getElementById('rfpText')?.value || '',
             scenarios: window.SCENARIOS || null
         };
@@ -235,11 +275,31 @@ class AIAssistant {
                 this.navigateToStep(latestState.currentStep);
             }
             
-            // Restore job ID if analysis was in progress
-            if (latestState.jobId) {
-                this.agentState.jobId = latestState.jobId;
-                // Resume tracking
-                this.trackAnalysisJob(latestState.jobId, true);
+            // Restore job ID if analysis was in progress and not stale
+            // CRITICAL: Check multiple conditions to prevent auto-resume of dead jobs
+            const isTransitioningToPricing = window.isTransitioningToPricing || false;
+            
+            // NEVER auto-resume job polling if skipJobRestore is true
+            if (this.skipJobRestore) {
+                console.log('[CHARLES] skipJobRestore=true, NOT resuming any job polling');
+                this.agentState.jobId = null;
+            } else if (latestState.jobId && !isTransitioningToPricing) {
+                const jobIdAge = latestState.jobIdTimestamp ? (Date.now() - latestState.jobIdTimestamp) : Infinity;
+                const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
+                
+                if (jobIdAge < fiveMinutes) {
+                    console.log('[CHARLES] Restoring job ID:', latestState.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                    this.agentState.jobId = latestState.jobId;
+                    // Resume tracking
+                    this.trackAnalysisJob(latestState.jobId, true);
+                } else {
+                    console.log('[CHARLES] Job ID is stale (older than 5 minutes), not restoring:', latestState.jobId);
+                    // Clear the stale jobId
+                    this.agentState.jobId = null;
+                }
+            } else if (isTransitioningToPricing) {
+                console.log('[CHARLES] Transitioning to pricing - NOT resuming job polling');
+                this.agentState.jobId = null;
             }
             
             this.addMessage('✅ Previous state restored successfully', 'assistant');
@@ -385,7 +445,7 @@ class AIAssistant {
     }
     
     addProgressMessage(percentage, message, details) {
-        const messagesContainer = document.getElementById('ai-chat-messages');
+        const messagesContainer = this.sidebarElements?.messages || document.getElementById('chatgpt-messages');
         let progressMsg = document.getElementById('charles-progress-message');
         
         if (!progressMsg) {
@@ -611,31 +671,48 @@ class AIAssistant {
             this.saveState();
         }
         
-        let pollInterval;
+        // Cleanup any existing polling interval to prevent multiple loops
+        if (this.currentPollInterval) {
+            console.log('[CHARLES] Cleaning up existing poll interval before starting new one');
+            clearInterval(this.currentPollInterval);
+            this.currentPollInterval = null;
+        }
+        
         let pollCount = 0;
+        let consecutiveFourOhFours = 0; // Track consecutive 404s
         const maxPolls = 120; // 4 minutes at 2-second intervals
+        const max404s = 5; // Stop after 5 consecutive 404s
         
         this.updateProgress(0, 'Analysis started...', 'Initializing GPT-5 deep analysis');
         
         const cleanup = () => {
-            if (pollInterval) {
-                clearInterval(pollInterval);
-                pollInterval = null;
+            if (this.currentPollInterval) {
+                console.log('[CHARLES] Cleanup called - stopping poll interval');
+                clearInterval(this.currentPollInterval);
+                this.currentPollInterval = null;
             }
             this.agentState.jobId = null;
+            // Clear from localStorage too
+            const savedState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+            if (savedState) {
+                savedState.jobId = null;
+                savedState.jobIdTimestamp = null;
+                localStorage.setItem('charles_agent_state', JSON.stringify(savedState));
+            }
         };
         
-        pollInterval = setInterval(async () => {
+        this.currentPollInterval = setInterval(async () => {
             try {
                 pollCount++;
                 
                 if (pollCount > maxPolls) {
+                    console.log('[CHARLES] Max polls reached, cleaning up');
                     cleanup();
                     this.updateProgress(100, 'Checking for results...', 'Attempting to load completed analysis');
                     
                     // Try to fetch results one more time in case they're ready
                     try {
-                        const finalCheck = await fetch(`/api/agencydb/status/${jobId}`);
+                        const finalCheck = await fetch(`/api/ai/jobs/${jobId}`);  // Use correct endpoint
                         if (finalCheck.ok) {
                             const finalStatus = await finalCheck.json();
                             if (finalStatus.status === 'completed' && finalStatus.data) {
@@ -669,18 +746,59 @@ class AIAssistant {
                     return;
                 }
                 
+                // Use the correct endpoint for AI jobs
                 const response = await this.retryWithBackoff(
-                    () => fetch(`/api/agencydb/status/${jobId}`),
+                    () => fetch(`/api/ai/jobs/${jobId}`),  // Fixed endpoint
                     3,
                     1000
                 );
                 
+                // Handle 404 - job not found - STOP IMMEDIATELY
+                if (response.status === 404) {
+                    console.log(`[CHARLES] Job ${jobId} not found (404), stopping polling immediately`);
+                    
+                    // Call cleanup to stop polling and clear the job ID from everywhere
+                    cleanup();
+                    
+                    // Also clear from all stateHistory items to prevent resumption
+                    if (this.agentState.stateHistory && Array.isArray(this.agentState.stateHistory)) {
+                        this.agentState.stateHistory.forEach(historyItem => {
+                            if (historyItem.jobId === jobId) {
+                                historyItem.jobId = null;
+                                historyItem.jobIdTimestamp = null;
+                            }
+                            if (historyItem.agentState && historyItem.agentState.jobId === jobId) {
+                                historyItem.agentState.jobId = null;
+                            }
+                        });
+                    }
+                    
+                    // Save the cleaned state
+                    this.saveState();
+                    
+                    // Clear from any other localStorage keys that might have the job ID
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        const value = localStorage.getItem(key);
+                        if (value && value.includes(jobId)) {
+                            console.log(`[CHARLES] Removing job ID from localStorage key: ${key}`);
+                            localStorage.removeItem(key);
+                        }
+                    }
+                    
+                    this.addMessage('❌ Analysis job not found. It may have expired or been deleted. Please try uploading your document again.', 'assistant');
+                    this.updateProgress(100, 'Job not found', 'Analysis job no longer exists');
+                    return;
+                }
+                
                 if (response.ok) {
+                    consecutiveFourOhFours = 0; // Reset counter on successful response
                     const status = await response.json();
                     
                     // Update progress with real data
                     const progress = status.progress || 0;
-                    const stage = status.stage || 'Processing';
+                    const stage = status.current_stage || status.stage || status.message || 'Processing';
+                    const reasoning = status.reasoning || '';
                     
                     // Create detailed message based on stage
                     let details = '';
@@ -688,6 +806,14 @@ class AIAssistant {
                         details = `<ul>${Object.entries(status.stage_details).map(([k, v]) => 
                             `<li>${k}: ${v}</li>`
                         ).join('')}</ul>`;
+                    }
+                    
+                    // Show reasoning in sidebar
+                    if (window.reasoningSidebar) {
+                        window.reasoningSidebar.show(jobId);
+                        if (reasoning) {
+                            window.reasoningSidebar.update(reasoning, stage, progress, status.status, jobId);
+                        }
                     }
                     
                     this.updateProgress(progress, stage, details);
@@ -705,7 +831,10 @@ class AIAssistant {
                     }
                     
                     if (status.status === 'completed') {
+                        console.log('[CHARLES] Analysis completed, cleaning up poll interval');
                         cleanup();
+                        
+                        // Reasoning sidebar will auto-hide on completion
                         this.updateProgress(100, '✅ Analysis Complete!', 'Loading deliverables into app...');
                         
                         if (taskMonitor) {
@@ -740,6 +869,7 @@ class AIAssistant {
                         
                         this.saveState();
                     } else if (status.status === 'failed') {
+                        console.log('[CHARLES] Analysis failed, cleaning up poll interval');
                         cleanup();
                         this.updateProgress(100, '❌ Analysis Failed', status.error || 'Unknown error');
                         this.handleError(new Error(status.error || 'Analysis failed'), 'analysis', { jobId });
@@ -747,9 +877,12 @@ class AIAssistant {
                 }
             } catch (error) {
                 console.error('[CHARLES] Job tracking error:', error);
+                // Don't cleanup on transient errors, keep trying
                 this.handleError(error, 'job_tracking', { jobId });
             }
         }, 2000);
+        
+        console.log('[CHARLES] Poll interval started for job:', jobId);
     }
     
     // ====================
@@ -2071,7 +2204,7 @@ class AIAssistant {
         };
         
         // Log error
-        this.logError(context, errorInfo);
+        console.error(`[CHARLES ERROR] ${context}:`, errorInfo);
         
         // Add to recovery queue
         this.errorRecoveryQueue.push(errorInfo);
@@ -3008,138 +3141,66 @@ class AIAssistant {
     // ====================
     
     createSidebar() {
-        // Create main container
-        const container = document.createElement('div');
-        container.id = 'ai-assistant-container';
-        container.className = 'ai-assistant-container';
-        container.innerHTML = `
-            <div class="ai-assistant-resize-handle" title="Drag to resize"></div>
-            <div class="ai-assistant-sidebar ${this.isMinimized ? 'minimized' : ''}">
-                <div class="ai-assistant-header">
-                    <div class="ai-assistant-title">
-                        <span class="ai-icon charles-sphere">🔮</span>
-                        <span style="font-weight:700;">CHARLES AGENT</span>
-                        <span style="font-size:10px;opacity:0.8;">ProBuFo v3.0</span>
-                        <span class="ai-status-indicator" id="ai-status-indicator">●</span>
-                    </div>
-                    <div class="ai-assistant-controls">
-                        <button class="ai-btn-minimize" id="ai-btn-minimize" title="Minimize">
-                            <span>_</span>
-                        </button>
-                        <button class="ai-btn-close" id="ai-btn-close" title="Close">
-                            <span>×</span>
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="ai-assistant-body">
-                    <div class="ai-gpt5-selector">
-                        <label style="color:#8b5cf6;font-size:12px;font-weight:600;">GPT-5 Intelligence Level</label>
-                        <select id="gpt5-tier-selector" style="width:100%;padding:8px;background:#1a1a2e;color:white;border:1px solid #8b5cf6;border-radius:6px;margin-top:4px;">
-                            <option value="auto">🚀 Auto (Fast & Smart)</option>
-                            <option value="mini">⚡ GPT-5 Mini (Fastest)</option>
-                            <option value="thinking-mini">🧠 Thinking Mini (Balanced)</option>
-                            <option value="thinking">💭 Thinking (Deep Analysis)</option>
-                            <option value="pro">👑 Pro (Maximum Intelligence)</option>
-                        </select>
-                    </div>
-                    
-                    <!-- State Management Controls -->
-                    <div class="ai-state-controls">
-                        <button class="ai-btn-save-state" onclick="window.aiAssistant.saveState()">💾 Save State</button>
-                        <button class="ai-btn-restore-state" onclick="window.aiAssistant.restoreState()">📂 Restore State</button>
-                    </div>
-                    
-                    <!-- File Staging Area -->
-                    <div class="ai-file-staging" id="ai-file-staging" style="display: none;">
-                        <div class="ai-staging-header">
-                            <span>📁 Files Ready to Send</span>
-                            <button class="ai-clear-files" id="ai-clear-files" title="Clear All">×</button>
-                        </div>
-                        <div class="ai-staged-files" id="ai-staged-files"></div>
-                    </div>
-                    
-                    <div class="ai-chat-messages" id="ai-chat-messages">
-                        <div class="ai-welcome-message">
-                            <h4>🔮 Welcome to CHARLES AGENT: ProBuFo v3.0</h4>
-                            <p style="font-style:italic;color:#8b5cf6;">Progressive Business Forecasting Oracle</p>
-                            <p>Enhanced with autonomous self-healing, state preservation, and real-time progress tracking.</p>
-                            <div class="ai-capabilities">
-                                <p><strong>New Capabilities:</strong></p>
-                                <ul>
-                                    <li>🔄 Auto-recovery from errors</li>
-                                    <li>💾 Complete state preservation</li>
-                                    <li>📊 Real-time progress tracking</li>
-                                    <li>🎯 Enhanced UI manipulation</li>
-                                    <li>📁 Batch file processing</li>
-                                </ul>
-                            </div>
-                            <div class="ai-suggestions">
-                                <p><strong>Try commands like:</strong></p>
-                                <ul>
-                                    <li>📄 "Analyze the RFP in deep mode"</li>
-                                    <li>💰 "Set Creative Strategy to $10k monthly"</li>
-                                    <li>📊 "Add 20% markup to all deliverables"</li>
-                                    <li>📅 "Generate an optimized timeline"</li>
-                                    <li>💾 "Export to Excel"</li>
-                                    <li>🔧 "Enable auto-recovery"</li>
-                                </ul>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="ai-action-preview" id="ai-action-preview" style="display: none;">
-                        <div class="ai-action-header">
-                            <span>📋 Executing Actions</span>
-                            <span class="ai-action-count" id="ai-action-count">0/0</span>
-                        </div>
-                        <div class="ai-action-list" id="ai-action-list"></div>
-                    </div>
-                    
-                    <div class="ai-chat-input">
-                        <textarea 
-                            id="ai-chat-input" 
-                            placeholder="Type your command or drag & drop files here..."
-                            rows="2"
-                            maxlength="500"
-                        ></textarea>
-                        <div class="ai-input-controls">
-                            <input type="file" id="ai-file-input" accept=".pdf,.docx,.txt,.xlsx" multiple style="display:none;">
-                            <button id="ai-file-btn" class="ai-file-btn" title="Upload Documents">
-                                <span>📎</span>
-                            </button>
-                            <button id="ai-send-btn" class="ai-send-btn" disabled>
-                                <span class="send-icon">➤</span>
-                                <span class="loading-icon" style="display: none;">⏳</span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <button class="ai-assistant-toggle" id="ai-assistant-toggle" title="Open CHARLES AGENT">
-                <span class="toggle-icon charles-sphere">🔮</span>
-                <span class="toggle-text">CHARLES</span>
-                <span class="notification-badge" id="ai-notification-badge" style="display: none;">!</span>
-            </button>
-        `;
+        // The ChatGPT-style sidebar is created in chatgpt-sidebar.js
+        // This method waits for it to be ready, then sets up integration
+        console.log('[CHARLES] Using ChatGPT-style sidebar integration');
         
-        console.log('[CHARLES] About to append container to body...');
-        document.body.appendChild(container);
-        console.log('[CHARLES] Container appended to body successfully!');
+        // Wait for ChatGPT sidebar to be fully initialized
+        const waitForSidebar = () => {
+            if (window.chatgptSidebar && document.getElementById('chatgpt-sidebar')) {
+                this.syncWithChatGPTSidebar();
+            } else {
+                // Retry after a short delay
+                setTimeout(waitForSidebar, 50);
+            }
+        };
         
-        // Verify the toggle button is present
-        const toggle = document.getElementById('ai-assistant-toggle');
-        if (toggle) {
-            console.log('[CHARLES] Toggle button found after append:', toggle);
-            // Force it to be visible
-            toggle.style.display = 'flex';
-            toggle.style.visibility = 'visible';
-            toggle.style.opacity = '1';
-            toggle.style.zIndex = '99999';
-        } else {
-            console.error('[CHARLES] Toggle button NOT found after append!');
+        waitForSidebar();
+    }
+    
+    syncWithChatGPTSidebar() {
+        // Verify ChatGPT sidebar elements exist
+        const sidebarContainer = document.getElementById('chatgpt-sidebar');
+        const toggleButton = document.getElementById('chatgpt-hamburger');
+        const messagesDiv = document.getElementById('chatgpt-messages');
+        
+        if (!sidebarContainer || !toggleButton || !messagesDiv) {
+            console.error('[CHARLES] ChatGPT sidebar elements not found!');
+            return;
         }
+        
+        // Store references to ChatGPT sidebar elements (don't change their IDs)
+        this.sidebarElements = {
+            container: sidebarContainer,
+            toggleButton: toggleButton,
+            closeButton: document.getElementById('chatgpt-close'),
+            messages: messagesDiv,
+            input: document.getElementById('chatgpt-input'),
+            sendBtn: document.getElementById('chatgpt-send-btn'),
+            fileBtn: document.getElementById('chatgpt-file-btn'),
+            fileInput: document.getElementById('chatgpt-file-input'),
+            actionPreview: document.getElementById('chatgpt-action-preview'),
+            actionList: document.getElementById('chatgpt-action-list'),
+            actionCount: document.getElementById('chatgpt-action-count'),
+            fileStaging: document.getElementById('chatgpt-file-staging'),
+            stagedFiles: document.getElementById('chatgpt-staged-files'),
+            clearFiles: document.getElementById('chatgpt-clear-files'),
+            gpt5Selector: document.getElementById('chatgpt-gpt5-tier'),
+            statusText: document.getElementById('chatgpt-status-text'),
+            progressBar: document.getElementById('chatgpt-progress-bar'),
+            progressContainer: document.getElementById('chatgpt-progress-container')
+        };
+        
+        // Link to ChatGPT sidebar instance
+        this.chatgptSidebar = window.chatgptSidebar;
+        
+        // Hook into ChatGPT sidebar's toggle functionality
+        if (this.chatgptSidebar) {
+            this.toggle = () => this.chatgptSidebar.toggleSidebar();
+            this.isOpen = this.chatgptSidebar.isExpanded;
+        }
+        
+        console.log('[CHARLES] Synced with ChatGPT sidebar successfully');
     }
     
     addEnhancedStyles() {
@@ -4105,6 +4166,23 @@ class AIAssistant {
         // Initialize resize handle
         this.initializeResize();
         
+        // Cleanup on page visibility change or unload to prevent runaway polling
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && this.currentPollInterval) {
+                console.log('[CHARLES] Page hidden, cleaning up poll interval');
+                clearInterval(this.currentPollInterval);
+                this.currentPollInterval = null;
+            }
+        });
+        
+        window.addEventListener('beforeunload', () => {
+            if (this.currentPollInterval) {
+                console.log('[CHARLES] Page unloading, cleaning up poll interval');
+                clearInterval(this.currentPollInterval);
+                this.currentPollInterval = null;
+            }
+        });
+        
         // Send button
         const sendBtn = document.getElementById('ai-send-btn');
         sendBtn?.addEventListener('click', () => this.sendMessage());
@@ -4234,228 +4312,149 @@ class AIAssistant {
     }
     
     async handleFileUpload(files) {
-        if (files.length > 1) {
-            // Batch processing
-            await this.processFiles(files);
-        } else {
-            // Single file
-            await this.handleSingleFile(files[0]);
-        }
+        // REPLIT AGENT BEHAVIOR: Stage files without auto-processing
+        // Add files to staging area (avoid duplicates)
+        Array.from(files).forEach(file => {
+            if (!this.stagedFiles.find(f => f.name === file.name && f.size === file.size)) {
+                this.stagedFiles.push(file);
+            }
+        });
+        
+        this.updateStagedFiles();
+        this.updateSendButton();
+        
+        // Show message about staged files
+        const fileNames = Array.from(files).map(f => f.name).join(', ');
+        this.addMessage(`📎 Added ${files.length} file(s): ${fileNames}`, 'assistant');
+        this.addMessage('💡 Click send or press Enter to submit these files for analysis', 'assistant');
     }
     
     async handleSingleFile(file) {
-        const fileExt = file.name.split('.').pop().toLowerCase();
+        // DEPRECATED: This method is no longer used in the new Replit-style workflow
+        // Files are now staged via handleFileUpload() and submitted via submitStagedFilesForAnalysis()
+        console.warn('[CHARLES] handleSingleFile() is deprecated. Use staging workflow instead.');
         
-        if (['pdf', 'docx', 'txt'].includes(fileExt)) {
-            // Start tracking this operation
-            const operationId = this.startOperation('file_upload', `Uploading ${file.name}`, { file: file.name });
+        // Return basic file info for compatibility
+        return {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            staged: true
+        };
+    }
+    
+    async submitStagedFilesForAnalysis() {
+        // NEW REPLIT-STYLE WORKFLOW: Submit staged files directly to AI analysis
+        if (this.stagedFiles.length === 0) {
+            this.addMessage('⚠️ No files staged for submission.', 'assistant');
+            return;
+        }
+        
+        const operationId = this.startOperation('file_submission', `Submitting ${this.stagedFiles.length} file(s)`, { 
+            fileCount: this.stagedFiles.length 
+        });
+        
+        const taskMonitor = this.createTaskMonitor();
+        taskMonitor.addTask('Upload files to AI analysis', 'in_progress');
+        taskMonitor.addTask('Start AI analysis', 'pending');
+        taskMonitor.addTask('Track analysis progress', 'pending');
+        
+        try {
+            // Show progress message
+            const fileNames = this.stagedFiles.map(f => f.name).join(', ');
+            this.addMessage(`🚀 Submitting ${this.stagedFiles.length} file(s): ${fileNames}`, 'assistant');
             
-            // Create task monitor
-            const taskMonitor = this.createTaskMonitor();
-            taskMonitor.addTask('Upload document', 'in_progress');
-            taskMonitor.addTask('Click Analyze with AI button', 'pending');
-            taskMonitor.addTask('Wait for AI analysis', 'pending');
-            taskMonitor.addTask('Load deliverables', 'pending');
-            taskMonitor.addTask('Select and calculate pricing', 'pending');
+            // Create FormData with all staged files
+            const formData = new FormData();
             
-            this.addMessage(`📄 Setting "${file.name}" in main application...`, 'assistant');
+            // Add all files
+            this.stagedFiles.forEach(file => {
+                formData.append('file', file);
+            });
             
-            try {
-                // Access parent window (main app)
-                const parentWindow = window.parent || window;
-                const parentDoc = parentWindow.document;
-                
-                // Find the main app's file input and analyze button
-                const mainFileInput = parentDoc.querySelector('#rfpFile');
-                const analyzeBtn = parentDoc.querySelector('#btnAnalyze');
-                
-                if (!mainFileInput || !analyzeBtn) {
-                    // Fallback to API if UI elements not found
-                    this.addMessage('⚠️ Could not find UI elements, using direct upload...', 'assistant');
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    formData.append('mode', this.agentState.analysisMode || 'deep');
-                    formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
-                    
-                    const response = await this.retryWithBackoff(
-                        () => fetch('/api/upload_rfp', {
-                            method: 'POST',
-                            body: formData
-                        }),
-                        3,
-                        2000
-                    );
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        taskMonitor.updateTask(0, 'completed');
-                        
-                        if (result.job_id) {
-                            this.agentState.jobId = result.job_id;
-                            this.saveState();
-                            this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
-                            await this.trackAnalysisJob(result.job_id, taskMonitor);
-                        }
-                    }
-                    return;
-                }
-                
-                // Alternative approach: First extract text from file, then put it in textarea
-                this.addMessage('📄 Extracting text from PDF...', 'assistant');
-                
-                // Upload file to extract text
-                const formData = new FormData();
-                formData.append('files', file);
-                formData.append('analyze_images', 'true');
-                
-                const extractResponse = await fetch('/api/summarize_by_file', {
+            // Add analysis parameters
+            const analysisMode = this.agentState.analysisMode || document.getElementById('analysis-mode')?.value || 'deep';
+            const gpt5Tier = document.getElementById('gpt5-tier-selector')?.value || 
+                           document.getElementById('chatgpt-gpt5-tier')?.value || 'thinking-mini';
+            
+            formData.append('mode', analysisMode);
+            formData.append('tier', gpt5Tier);
+            formData.append('analyze', 'true'); // Direct to AI analysis
+            
+            // Submit to API
+            const response = await this.retryWithBackoff(
+                () => fetch('/api/upload_rfp', {
                     method: 'POST',
                     body: formData
+                }),
+                3,
+                2000
+            );
+            
+            if (!response.ok) {
+                throw new Error(`Upload failed: ${response.statusText}`);
+            }
+            
+            const result = await response.json();
+            taskMonitor.updateTask(0, 'completed');
+            
+            // Handle the response
+            if (result.job_id) {
+                // Store job ID and track analysis
+                this.agentState.jobId = result.job_id;
+                this.saveState();
+                
+                taskMonitor.updateTask(1, 'completed');
+                taskMonitor.updateTask(2, 'in_progress');
+                
+                this.addMessage(`✅ Files submitted! Job ID: ${result.job_id}`, 'assistant');
+                this.addMessage(`🔍 AI analysis started...`, 'assistant');
+                
+                // Store file info in agent state
+                this.stagedFiles.forEach(file => {
+                    this.agentState.uploadedFiles.push({
+                        name: file.name,
+                        timestamp: Date.now(),
+                        job_id: result.job_id
+                    });
                 });
                 
-                if (!extractResponse.ok) {
-                    throw new Error('Failed to extract text from file');
-                }
+                // Clear staged files after successful submission
+                this.stagedFiles = [];
+                this.updateStagedFiles();
+                this.updateSendButton();
                 
-                const summary = await extractResponse.json();
-                const extractedText = summary.summary_text || '';
+                // Track the analysis job
+                await this.trackAnalysisJob(result.job_id, taskMonitor);
                 
-                if (!extractedText) {
-                    this.addMessage('⚠️ No text extracted from file. Trying visual upload...', 'assistant');
-                    
-                    // Fallback: Try to set file directly (may not work across contexts)
-                    const dt = new DataTransfer();
-                    dt.items.add(file);
-                    mainFileInput.files = dt.files;
-                    mainFileInput.dispatchEvent(new Event('change', { bubbles: true }));
-                } else {
-                    taskMonitor.updateTask(0, 'completed');
-                    this.addMessage(`✅ Extracted ${extractedText.length} characters from PDF`, 'assistant');
-                    
-                    // Put extracted text into the textarea instead
-                    const rfpTextArea = parentDoc.querySelector('#rfpText');
-                    if (rfpTextArea) {
-                        // Visual effect on textarea
-                        this.flashElement(rfpTextArea);
-                        
-                        // Set the text
-                        rfpTextArea.value = extractedText;
-                        rfpTextArea.dispatchEvent(new Event('input', { bubbles: true }));
-                        rfpTextArea.dispatchEvent(new Event('change', { bubbles: true }));
-                        
-                        this.addMessage('📝 Text loaded into RFP content field', 'assistant');
-                        
-                        // Clear any file input to avoid confusion
-                        if (mainFileInput.files.length === 0) {
-                            // Good - no file conflict
-                        } else {
-                            mainFileInput.value = '';
-                        }
-                    }
-                }
+                this.completeOperation(operationId);
                 
-                // Update the file list display if it exists
-                const fileListDisplay = parentDoc.querySelector('#selected-files-list');
-                if (fileListDisplay) {
-                    fileListDisplay.textContent = `Processing: ${file.name}`;
-                    this.flashElement(fileListDisplay);
-                }
-                
-                // Wait a moment for UI to update
-                await this.delay(800);
-                
-                // Click the analyze button with visual effect
-                taskMonitor.updateTask(1, 'in_progress');
-                this.addMessage('🖱️ Clicking "Analyze with AI" button...', 'assistant');
-                
-                // Add visual click effect
-                this.showClickAnimation(analyzeBtn);
-                await this.delay(300);
-                
-                // Actually click the button
-                analyzeBtn.click();
+            } else if (result.success) {
+                // Successful upload without job tracking
                 taskMonitor.updateTask(1, 'completed');
+                taskMonitor.updateTask(2, 'completed');
                 
-                this.addMessage('✅ Analysis started! Watch the progress bar...', 'assistant');
+                this.addMessage(`✅ Files submitted successfully!`, 'assistant');
                 
-                // Monitor for the progress bar
-                taskMonitor.updateTask(2, 'in_progress');
-                await this.monitorMainAppProgress(taskMonitor);
+                // Clear staged files
+                this.stagedFiles = [];
+                this.updateStagedFiles();
+                this.updateSendButton();
                 
-            } catch (error) {
-                console.error('[CHARLES] Error in visual upload:', error);
-                this.handleError(error, 'visual_upload');
+                this.completeOperation(operationId);
                 
-                // Fallback to old method - wrap in its own try-catch
-                try {
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    formData.append('mode', this.agentState.analysisMode || 'deep');
-                    formData.append('tier', document.getElementById('gpt5-tier-selector')?.value || 'thinking-mini');
-                    
-                    const response = await this.retryWithBackoff(
-                        () => fetch('/api/upload_rfp', {
-                            method: 'POST',
-                            body: formData
-                        }),
-                        3,
-                        2000
-                    );
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        taskMonitor.updateTask(0, 'completed');
-                        taskMonitor.updateTask(1, 'completed');
-                        
-                        // Store the job ID for tracking
-                        if (result.job_id) {
-                            this.agentState.jobId = result.job_id;
-                            this.saveState();
-                            
-                            taskMonitor.updateTask(2, 'in_progress');
-                            this.addMessage(`✅ Document uploaded! Job ID: ${result.job_id}`, 'assistant');
-                            this.addMessage(`🔍 Starting AI analysis...`, 'assistant');
-                            
-                            // Start tracking the analysis job
-                            taskMonitor.updateTask(3, 'in_progress');
-                            await this.trackAnalysisJob(result.job_id, taskMonitor);
-                        } else {
-                            // Fallback for older API responses
-                            const rfpTextEl = document.getElementById('rfpText');
-                            if (rfpTextEl && result.text) {
-                                rfpTextEl.value = result.text;
-                                rfpTextEl.dispatchEvent(new Event('input', { bubbles: true }));
-                                rfpTextEl.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-                            
-                            taskMonitor.updateTask(2, 'completed');
-                            this.addMessage(`✅ Document processed. Text extracted: ${result.text_length || 0} chars`, 'assistant');
-                        }
-                        
-                        // Store in agent state
-                        this.agentState.uploadedFiles.push({
-                            name: file.name,
-                            timestamp: Date.now(),
-                            text: result.text,
-                            job_id: result.job_id
-                        });
-                        
-                        this.saveState();
-                        this.showSuccessMessage(`File "${file.name}" submitted for analysis!`);
-                        
-                    } else {
-                        throw new Error(`Upload failed: ${response.statusText}`);
-                    }
-                } catch (fallbackError) {
-                    taskMonitor.updateAllPending('failed');
-                    this.handleError(fallbackError, 'file_upload', { file });
-                }
+            } else {
+                throw new Error(result.error || 'Unknown error during file submission');
             }
-        } else if (fileExt === 'xlsx') {
-            this.addMessage(`📊 Processing Excel configuration file "${file.name}"...`, 'assistant');
-            this.addMessage('⚠️ Excel configuration upload not yet implemented.', 'assistant');
-        } else {
-            this.addMessage(`⚠️ Unsupported file type: .${fileExt}. Please upload PDF, DOCX, TXT, or XLSX files.`, 'assistant');
+            
+        } catch (error) {
+            console.error('[CHARLES] Error submitting files:', error);
+            taskMonitor.updateAllPending('failed');
+            this.completeOperation(operationId);
+            this.handleError(error, 'file_submission', { fileCount: this.stagedFiles.length });
+            
+            // Don't clear staged files on error so user can retry
+            this.addMessage('❌ File submission failed. Files remain staged - you can try again.', 'assistant');
         }
     }
     
@@ -4666,12 +4665,10 @@ class AIAssistant {
             input.value = '';
             this.updateSendButton();
             
-            // Process staged files
-            await this.handleFileUpload(this.stagedFiles);
+            // NEW REPLIT WORKFLOW: Submit staged files directly to AI analysis
+            await this.submitStagedFilesForAnalysis();
             
-            // Clear staging area
-            this.stagedFiles = [];
-            this.updateStagedFiles();
+            // Note: submitStagedFilesForAnalysis() clears staged files on success
             
             return;
         }
@@ -4753,6 +4750,67 @@ class AIAssistant {
         }
     }
     
+    async handleUserMessage(message) {
+        if (!message || this.isProcessing) return;
+        
+        this.addMessage(message, 'user');
+        
+        if (message.startsWith('/')) {
+            await this.processSlashCommand(message);
+            return;
+        }
+        
+        if (this.isAnalysisCommand(message)) {
+            const mode = message.toLowerCase().includes('deep') ? 'deep' : 'fast';
+            await this.triggerAnalysis(mode);
+            return;
+        }
+        
+        if (this.isSubmissionCommand(message)) {
+            await this.executeSubmission();
+            return;
+        }
+        
+        this.setProcessing(true);
+        const typingId = this.addTypingIndicator();
+        
+        try {
+            const context = this.getCurrentContext();
+            const gpt5TierSelector = document.getElementById('gpt5-tier-selector') || document.getElementById('chatgpt-gpt5-tier');
+            const gpt5Tier = gpt5TierSelector ? gpt5TierSelector.value : 'auto';
+            
+            const response = await this.retryWithBackoff(
+                () => fetch('/api/agent/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        context: context,
+                        session_id: this.sessionId,
+                        gpt5_tier: gpt5Tier
+                    })
+                }),
+                2,
+                1000
+            );
+            
+            const result = await response.json();
+            this.removeTypingIndicator(typingId);
+            this.addMessage(result.message, 'assistant');
+            
+            if (result.success && result.actions && result.actions.length > 0) {
+                await this.executeActions(result.actions);
+            }
+            
+        } catch (error) {
+            console.error('[CHARLES] Error:', error);
+            this.removeTypingIndicator(typingId);
+            this.handleError(error, 'chat', { message });
+        } finally {
+            this.setProcessing(false);
+        }
+    }
+    
     isAnalysisCommand(message) {
         const lowerMessage = message.toLowerCase();
         const analysisKeywords = ['analyze', 'analysis', 'deep mode', 'fast mode', 'scan', 'evaluate'];
@@ -4815,23 +4873,29 @@ class AIAssistant {
     }
     
     addMessage(content, sender) {
-        const messagesContainer = document.getElementById('ai-chat-messages');
+        // Use ChatGPT sidebar messages container
+        const messagesContainer = this.sidebarElements?.messages || document.getElementById('chatgpt-messages');
+        
+        if (!messagesContainer) {
+            console.warn('[CHARLES] Messages container not found');
+            return;
+        }
         
         // Remove welcome message if this is the first real message
-        const welcome = messagesContainer.querySelector('.ai-welcome-message');
+        const welcome = messagesContainer.querySelector('.chatgpt-welcome');
         if (welcome && messagesContainer.children.length === 1) {
             welcome.remove();
         }
         
         const messageDiv = document.createElement('div');
-        messageDiv.className = `ai-message ${sender}`;
+        messageDiv.className = `chatgpt-message ${sender}`;
         
         const avatar = document.createElement('div');
-        avatar.className = 'ai-message-avatar';
+        avatar.className = 'chatgpt-message-avatar';
         avatar.textContent = sender === 'user' ? '👤' : '🤖';
         
         const contentDiv = document.createElement('div');
-        contentDiv.className = 'ai-message-content';
+        contentDiv.className = 'chatgpt-message-content';
         contentDiv.textContent = content;
         
         messageDiv.appendChild(avatar);
@@ -5156,53 +5220,11 @@ function initializeCharles() {
         console.log('[CHARLES] Starting initialization...');
         window.aiAssistant = new AIAssistant();
         console.log('[CHARLES] Agent v3.0 initialized with full autonomy, self-healing, and state preservation.');
-        
-        // Force toggle button to be visible if it exists
-        setTimeout(() => {
-            const toggleBtn = document.getElementById('ai-assistant-toggle');
-            if (toggleBtn) {
-                console.log('[CHARLES] Toggle button found, ensuring visibility...');
-                toggleBtn.style.display = 'flex';
-                toggleBtn.style.visibility = 'visible';
-                toggleBtn.style.opacity = '1';
-            } else {
-                console.error('[CHARLES] Toggle button not found! Attempting to recreate...');
-                // Fallback: Create a simple toggle button if the main one failed
-                const fallbackBtn = document.createElement('button');
-                fallbackBtn.id = 'ai-assistant-toggle-fallback';
-                fallbackBtn.style.cssText = `
-                    position: fixed;
-                    right: 20px;
-                    bottom: 20px;
-                    z-index: 99999;
-                    padding: 12px 20px;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    border: none;
-                    border-radius: 12px;
-                    cursor: pointer;
-                    font-size: 14px;
-                    font-weight: 600;
-                    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                `;
-                fallbackBtn.innerHTML = '🔮 CHARLES';
-                fallbackBtn.onclick = () => {
-                    if (window.aiAssistant) {
-                        window.aiAssistant.toggle();
-                    }
-                };
-                document.body.appendChild(fallbackBtn);
-                console.log('[CHARLES] Created fallback toggle button');
-            }
-        }, 100);
     } catch (error) {
         console.error('[CHARLES] CRITICAL ERROR during initialization:', error);
         console.error('[CHARLES] Stack trace:', error.stack);
         
-        // Create emergency toggle button
+        // Create emergency reload button
         const emergencyBtn = document.createElement('button');
         emergencyBtn.style.cssText = `
             position: fixed;
@@ -5222,6 +5244,7 @@ function initializeCharles() {
             location.reload();
         };
         document.body.appendChild(emergencyBtn);
+        console.error('[CHARLES] Emergency reload button created');
     }
 }
 

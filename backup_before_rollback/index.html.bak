@@ -3,30 +3,157 @@
 <head>
   <meta charset="utf-8" />
   <title>Agency Project Builder</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, user-scalable=yes" />
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/static_weights.css" />
+  <link rel="stylesheet" href="/static/css/responsive.css" />
+  <!-- Error Boundaries CSS - Must load early -->
+  <link rel="stylesheet" href="/static/css/error-boundaries.css" />
   <!-- Frappe Gantt Library -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
+  <!-- NUCLEAR CLEANUP - Must load FIRST before anything else -->
+  <script src="/static/js/nuclear-cleanup.js"></script>
+  <!-- Global Polling Manager - Load first to intercept all intervals -->
+  <script src="/static/js/global-polling-manager.js"></script>
+  <!-- Error Recovery System - Load early to catch errors -->
+  <script src="/static/js/error-recovery.js"></script>
+  <!-- ChatGPT-Style Left Sidebar -->
+  <script src="/static/js/chatgpt-sidebar.js"></script>
   <!-- AI Assistant -->
-  <script src="/static/ai_assistant.js"></script>
+  <script src="/static/ai_assistant.js?v=5.11"></script>
+  <!-- CHARLES Chat Fix -->
+  <script src="/static/js/charles-chat-fix.js"></script>
+  <!-- AI Reasoning Sidebar -->
+  <script src="/static/js/reasoning-sidebar.js"></script>
+  <!-- Enhanced ScenarioManager with Real-time Sync -->
+  <script src="/static/js/scenario-manager-sync.js"></script>
+  <!-- Main App Logic -->
+  <script src="/static/app.js"></script>
+  <!-- Step-specific sync integrations -->
+  <script src="/static/js/step2-sync.js"></script>
+  <script src="/static/js/step3-sync.js"></script>
+  <script src="/static/js/step4-sync.js"></script>
+  <!-- Mobile Responsive Enhancements -->
+  <script src="/static/js/mobile.js"></script>
+  <!-- Stop Phantom Polling -->
+  <script src="/static/stop_phantom_polling.js"></script>
+  <!-- Mark JS as loaded when DOM is ready -->
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      document.body.classList.add('js-loaded');
+      console.log('[Main] JavaScript loaded successfully');
+    });
+  </script>
 </head>
 <body>
+  <!-- NoScript Fallback -->
+  <noscript>
+    <div class="noscript-container">
+      <h1>JavaScript Required</h1>
+      <p>Agency Project Builder requires JavaScript to be enabled in your browser.</p>
+      <p>Please enable JavaScript and reload the page.</p>
+      <p><a href="https://enable-javascript.com/" target="_blank">Learn how to enable JavaScript</a></p>
+    </div>
+  </noscript>
+  
+  <!-- Emergency Reset Button (hidden by default, shown if stuck) -->
+  <button class="emergency-reset" onclick="window.location.reload(true)" title="Emergency reload">
+    🔄 Emergency Reset
+  </button>
   <header>
     <h1>Agency Project Builder</h1>
     <div class="sub">Build project estimates from RFPs with 2‑step AI assistance</div>
+    <!-- Desktop Header Controls -->
+    <div class="desktop-header-controls" style="position: absolute; top: 12px; right: 20px; display: flex; gap: 16px; align-items: center;">
+      <!-- Auto-Fix Toggle (Desktop) -->
+      <div class="auto-fix-toggle" style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 6px;">
+        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; margin: 0; font-size: 12px; color: var(--text); font-weight: 500;">
+          <span>🔧 Auto-Fix</span>
+          <input type="checkbox" id="desktop-auto-fix" checked style="margin: 0; cursor: pointer;">
+        </label>
+      </div>
+      
+      <!-- Session Management UI -->
+      <div id="session-controls" style="display: flex; gap: 10px; align-items: center; font-size: 12px; color: #666;">
+        <div id="session-info" style="display: none;">
+          <span>Session: <code id="session-id-display" style="font-size: 10px;"></code></span>
+          <span id="last-saved-display" style="margin-left: 10px;"></span>
+        </div>
+        <button id="toggle-session-info" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="toggleSessionInfo()">📋</button>
+        <button id="new-session-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer;" onclick="startNewSession()">New Session</button>
+        <button id="clear-data-btn" style="padding: 4px 8px; font-size: 12px; cursor: pointer; background: #f44336; color: white; border: none; border-radius: 4px;" onclick="clearAllData()">Clear All Data</button>
+      </div>
+    </div>
+    
+    <!-- Mobile Menu Toggle Button -->
+    <button class="mobile-menu-toggle" id="mobile-menu-toggle" onclick="toggleMobileMenu()" aria-label="Toggle Menu">
+      <div class="hamburger">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </button>
   </header>
+  
+  <!-- Mobile Slide-Out Menu -->
+  <div class="mobile-menu" id="mobile-menu">
+    <div class="mobile-menu-header">
+      <h3 class="mobile-menu-title">Settings & Controls</h3>
+    </div>
+    <div class="mobile-menu-content">
+      <!-- Session Controls Section -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Session Management</div>
+        <div class="mobile-menu-item" onclick="toggleSessionInfo()">
+          <label>Show Session Info</label>
+          <span>📋</span>
+        </div>
+        <button class="mobile-menu-button" onclick="startNewSession()">Start New Session</button>
+        <button class="mobile-menu-button" style="background: #f44336;" onclick="clearAllData()">🗑️ Clear All Data</button>
+      </div>
+      
+      <!-- Auto-Fix Controls Section -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">AI Controls</div>
+        <div class="mobile-menu-item">
+          <label for="mobile-auto-fix">Auto-Fix Enabled</label>
+          <input type="checkbox" id="mobile-auto-fix" checked>
+        </div>
+      </div>
+      
+      <!-- View Mode Toggle Section -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Display Mode</div>
+        <div class="view-toggle-container">
+          <span class="view-toggle-label">Mobile View</span>
+          <label class="view-toggle-switch">
+            <input type="checkbox" id="view-toggle" onchange="toggleViewMode(this)">
+            <span class="view-toggle-slider"></span>
+          </label>
+          <span class="view-toggle-label">Desktop View</span>
+        </div>
+      </div>
+      
+      <!-- Additional Options -->
+      <div class="mobile-menu-section">
+        <div class="mobile-menu-section-title">Quick Actions</div>
+        <button class="mobile-menu-button" onclick="document.getElementById('btnAnalyze').click(); toggleMobileMenu();">
+          🚀 Analyze with AI
+        </button>
+        <button class="mobile-menu-button" onclick="window.scrollTo(0, 0); toggleMobileMenu();">
+          ⬆️ Back to Top
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Mobile Menu Overlay -->
+  <div class="mobile-menu-overlay" id="mobile-menu-overlay" onclick="toggleMobileMenu()"></div>
 
   <main>
     <!-- Step 1: Upload RFP -->
     <section class="card" id="step1">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h2 style="margin: 0;">Step 1 — Upload Your RFP / Brief</h2>
-        <button id="btnClearAllData" onclick="clearAllDataWithConfirmation()" 
-                style="background: #dc2626; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; display: flex; align-items: center; gap: 6px;">
-          🗑️ Clear All Data
-        </button>
-      </div>
+      <h2>Step 1 — Upload Your RFP / Brief</h2>
       
       <!-- Fast/Deep Mode Selector -->
       <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px;">
@@ -236,14 +363,6 @@
           </div>
         </div>
         
-        <!-- ADD GLOBAL RETAINER BUTTON -->
-        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(139, 92, 246, 0.15); text-align: center;">
-          <button id="btn-global-retainer-suggest" onclick="askAIForRetainerSuggestions()" 
-                  style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-            🤖 AI Suggest Retainer Items
-          </button>
-        </div>
-        
         <!-- XML Export Options -->
         <div style="margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);">
           <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.85em;">
@@ -371,35 +490,39 @@
       </div>
 
 
-      <!-- Pricing Details Table -->
-      <div class="pricing-table-container" style="margin-bottom: 20px;">
-        <h3 style="font-size: 1.1em; margin-bottom: 12px; color: var(--text);">📊 Deliverable Pricing Details</h3>
-        <div id="pricing-table-wrapper" style="background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto;">
-          <table id="pricing-details-table" style="width: 100%; border-collapse: collapse;">
-            <thead>
-              <tr style="border-bottom: 2px solid var(--border);">
-                <th style="padding: 8px; text-align: left; color: var(--muted);">Deliverable / Component</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Type</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Months</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Hours</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Rate</th>
-                <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
-                <th style="padding: 8px; text-align: left; color: var(--muted);">Resources</th>
-              </tr>
-            </thead>
-            <tbody id="pricing-tbody">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-        </div>
-        
-        <!-- Re-build Scenario Button -->
-        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
-          <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
-                  style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-            🔄 Re-build Scenario
-          </button>
-        </div>
+      <!-- Unified Pricing Table -->
+      {% include 'templates/partials/pricing-one-table.html' %}
+      
+      <!-- Hydration Script -->
+      <script>
+        // Hydrate unified pricing table from SCENARIOS.A when available
+        (function() {
+          function hydrateUnifiedPricing() {
+            if (window.SCENARIOS && window.SCENARIOS.A && window.transformScenarioToPatchFormat && window.APBOneTable) {
+              const patchData = transformScenarioToPatchFormat(window.SCENARIOS.A);
+              APBOneTable.hydrateFrom(patchData);
+              console.log('[PRICING] Unified table hydrated from SCENARIOS.A', patchData);
+            }
+          }
+          
+          // Try hydration on load
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', hydrateUnifiedPricing);
+          } else {
+            hydrateUnifiedPricing();
+          }
+          
+          // Re-hydrate when scenarios update
+          window.addEventListener('scenarios:updated', hydrateUnifiedPricing);
+        })();
+      </script>
+      
+      <!-- Re-build Scenario Button -->
+      <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+        <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
+                style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          🔄 Re-build Scenario
+        </button>
       </div>
 
       <!-- Enhanced Summary Panel -->
@@ -473,13 +596,17 @@
                     style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
               🤖 AI Suggest Type
             </button>
+            <button id="btn-global-retainer-suggest" onclick="askAIForRetainerSuggestions()" 
+                    style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+              🤖 AI Suggest Retainer Items
+            </button>
             <button id="btn-ai-optimize-pricing" class="btn-primary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
               Optimize All Pricing
             </button>
           </div>
         </div>
         <p style="color: var(--muted); font-size: 0.85em; margin-top: 8px; margin-bottom: 0;">
-          After building your scenario, use AI to suggest deliverable types (Project vs Retainer) and optimize pricing based on budget constraints.
+          After building your scenario, use AI to suggest deliverable types (Project vs Retainer), analyze retainer opportunities, and optimize pricing based on budget constraints.
         </p>
       </div>
 
@@ -1965,15 +2092,46 @@
     window.fmtUSD2 = window.fmtUSD2 || function(n){ return '$' + (Number(n)||0).toFixed(2); };
     window.fmtUSD = window.fmtUSD || (n => Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n));
 
-    // ISSUE 4 FIX: Enhanced scenario rendering function with editable pricing
+    // ISSUE 4 FIX: Enhanced scenario rendering function with editable pricing (updated to use ScenarioManager)
     function renderScenario(targetId, scenario) {
+      // If ScenarioManager is available, get scenario from it
+      if (window.ScenarioManager && !scenario) {
+        scenario = window.ScenarioManager.getCurrentScenario();
+      }
+      
       if (!scenario || !scenario.items || !scenario.items.length) {
         document.getElementById(targetId).innerHTML = '<p>(No data)</p>';
         return;
       }
       
-      // Store scenario globally for editing
+      // Store scenario globally for editing (and sync with ScenarioManager if available)
       window[`currentScenario_${targetId}`] = scenario;
+      
+      // If ScenarioManager is available and APBOneTable exists, use unified pricing table
+      if (window.ScenarioManager && window.APBOneTable && targetId === 'scenarioA') {
+        // Mount unified pricing table to the scenario container
+        const container = document.getElementById(targetId);
+        if (container) {
+          // Clear existing content and add container for unified pricing table
+          container.innerHTML = '<div id="unified-pricing-container"></div>';
+          
+          // Render the unified pricing table
+          window.APBOneTable.mount('#unified-pricing-container', window.ScenarioManager.state);
+          
+          // Subscribe to ScenarioManager changes to auto-update
+          if (!window.scenarioRenderSubscribed) {
+            window.ScenarioManager.subscribe(() => {
+              // Re-render when ScenarioManager state changes
+              const currentContainer = document.getElementById('unified-pricing-container');
+              if (currentContainer) {
+                window.APBOneTable.mount('#unified-pricing-container', window.ScenarioManager.state);
+              }
+            });
+            window.scenarioRenderSubscribed = true;
+          }
+        }
+        return; // Exit early - unified table handles everything
+      }
       
       // Check for retainer items
       const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
@@ -3015,8 +3173,13 @@
   </script>
   <!-- Frappe Gantt Library -->
   <script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
+  <!-- ScenarioStore and ScenarioManager for centralized state management -->
+  <script src="/static/js/scenario-store.js"></script>
+  <script src="/static/js/scenario-manager.js"></script>
+  <!-- Pricing Table Component -->
+  <script src="/static/js/pricing-one-table.js"></script>
   <script src="/static/static_weights.js"></script>
-  <script src="/static/app.js?v=5.6" defer></script>
+  <script src="/static/app.js?v=6.0" defer></script>
   <script>
     // Weighted AI Suggestions Handler
     document.addEventListener('DOMContentLoaded', () => {
@@ -3095,72 +3258,6 @@
           weightsContainer.style.display = 'none';
         });
       }
-    });
-  </script>
-  <!-- Initialize CHARLES after everything is loaded -->
-  <script>
-    // Force CHARLES initialization
-    window.addEventListener('load', function() {
-      console.log('[CHARLES] Window load event - attempting initialization...');
-      
-      // Check if AIAssistant class exists
-      if (typeof AIAssistant !== 'undefined') {
-        console.log('[CHARLES] AIAssistant class found');
-        
-        // Check if already initialized
-        if (!window.aiAssistant) {
-          console.log('[CHARLES] Creating new AIAssistant instance...');
-          try {
-            window.aiAssistant = new AIAssistant();
-            console.log('[CHARLES] Successfully created AIAssistant instance');
-          } catch (error) {
-            console.error('[CHARLES] Failed to create AIAssistant:', error);
-          }
-        } else {
-          console.log('[CHARLES] AIAssistant already initialized');
-        }
-      } else {
-        console.error('[CHARLES] AIAssistant class not found - script may not have loaded');
-      }
-      
-      // Verify toggle button exists
-      setTimeout(function() {
-        const toggle = document.getElementById('ai-assistant-toggle');
-        const container = document.getElementById('ai-assistant-container');
-        
-        if (toggle) {
-          console.log('[CHARLES] Toggle button found!');
-        } else if (container) {
-          console.log('[CHARLES] Container found but no toggle button');
-        } else {
-          console.error('[CHARLES] Neither toggle button nor container found');
-          
-          // Create emergency button
-          const emergencyBtn = document.createElement('button');
-          emergencyBtn.style.cssText = `
-            position: fixed;
-            right: 20px;
-            bottom: 20px;
-            z-index: 99999;
-            padding: 12px 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          `;
-          emergencyBtn.innerHTML = '🔮 CHARLES (Emergency)';
-          emergencyBtn.onclick = function() {
-            alert('CHARLES initialization failed. Check console for errors.');
-          };
-          document.body.appendChild(emergencyBtn);
-          console.log('[CHARLES] Created emergency button');
-        }
-      }, 500);
     });
   </script>
 </body>
