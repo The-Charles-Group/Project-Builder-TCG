@@ -433,10 +433,10 @@ async function askAIForRetainerSuggestions() {
   }));
   
   // Show loading on button
-  const btn = event?.target;
+  const btn = document.getElementById('btn-global-retainer-suggest');
   if (btn) {
     btn.disabled = true;
-    btn.textContent = 'Analyzing...';
+    btn.textContent = '🔄 Analyzing...';
   }
   
   try {
@@ -444,48 +444,59 @@ async function askAIForRetainerSuggestions() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        deliverables: deliverables,  // Correct format
+        deliverable_codes: codes,  // Backend expects just the codes array
         rfp_text: rfpText
       })
     });
     
-    if (res.ok) {
-      const data = await res.json();
-      const suggestions = data.suggestions || [];
-      
-      // Apply suggestions to pricingData
-      let retainerCount = 0;
-      suggestions.forEach(suggestion => {
-        if (suggestion.type === 'RETAINER') {
-          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'RETAINER');
-          pricingData.retainers.set(suggestion.deliverable_code, suggestion.recommended_months || 12);
-          retainerCount++;
-        } else {
-          pricingData.deliverableTypes.set(suggestion.deliverable_code, 'PROJECT');
-          pricingData.retainers.delete(suggestion.deliverable_code);
-        }
-      });
-      
-      // Update UI to show retainer indicators
-      if (window.renderDeliverablesPanel) {
-        renderDeliverablesPanel();
-      }
-      
-      // Show success message
-      if (retainerCount > 0) {
-        alert(`✅ AI Retainer Analysis Complete!\n\n${retainerCount} deliverables suggested as retainers.\n\nRetainer items will be marked in the deliverables list.`);
-      } else {
-        alert('✅ Analysis complete. All items are best suited as one-time projects.');
-      }
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({error: 'Unknown error'}));
+      throw new Error(errorData.error || `Server error: ${res.status}`);
+    }
+    
+    const data = await res.json();
+    const suggestions = data.suggestions || [];
+    
+    // Backend only returns items that SHOULD be retainers
+    // First, mark all selected codes as PROJECT (default)
+    codes.forEach(code => {
+      pricingData.deliverableTypes.set(code, 'PROJECT');
+      pricingData.retainers.delete(code);
+    });
+    
+    // Then apply retainer suggestions
+    let retainerCount = 0;
+    suggestions.forEach(suggestion => {
+      // Defensive: support both suggested_months and recommended_months field names
+      const months = suggestion.suggested_months || suggestion.recommended_months || 12;
+      pricingData.deliverableTypes.set(suggestion.deliverable_code, 'RETAINER');
+      pricingData.retainers.set(suggestion.deliverable_code, months);
+      retainerCount++;
+    });
+    
+    // Update UI to show retainer indicators
+    if (window.renderDeliverablesPanel) {
+      renderDeliverablesPanel();
+    }
+    
+    // Show success message with details
+    if (retainerCount > 0) {
+      const retainerNames = suggestions.map(s => {
+        const months = s.suggested_months || s.recommended_months || 12;
+        return `  • ${s.deliverable_name} (${months} months)`;
+      }).join('\n');
+      alert(`✅ AI Retainer Analysis Complete!\n\n${retainerCount} of ${codes.length} deliverables suggested as retainers:\n\n${retainerNames}\n\nRetainer items will be marked in the deliverables list.`);
+    } else {
+      alert(`✅ Analysis complete!\n\nAll ${codes.length} items are best suited as one-time projects.`);
     }
   } catch (error) {
     console.error('Failed to get retainer suggestions:', error);
-    alert('Failed to get AI suggestions. Please try again.');
+    alert(`❌ Failed to get AI suggestions.\n\nError: ${error.message}\n\nPlease try again or check console for details.`);
   } finally {
     // Reset button
     if (btn) {
       btn.disabled = false;
-      btn.textContent = '🤖 AI Retainer Analysis';
+      btn.textContent = '🤖 AI Suggest Retainer Items';
     }
   }
 }
@@ -2113,10 +2124,38 @@ async function updatePricing() {
 
 // Re-build scenario with current pricing settings
 async function rebuildScenario() {
-  if (!SCENARIOS || !SCENARIOS.A) {
+  // Try to load from memory or localStorage
+  let scenariosToUse = window.SCENARIOS;
+  
+  if (!scenariosToUse || !scenariosToUse.A) {
+    console.log('[REBUILD] SCENARIOS not in memory, checking localStorage...');
+    
+    // Try to load from localStorage
+    try {
+      const sessionId = window.APB?.sessionId || 
+                       sessionStorage.getItem('apb.session_id') || 
+                       'default';
+      const storageKey = `scenarios_${sessionId}`;
+      const saved = localStorage.getItem(storageKey) || localStorage.getItem('latest_scenarios');
+      
+      if (saved) {
+        scenariosToUse = JSON.parse(saved);
+        window.SCENARIOS = scenariosToUse;  // Restore to memory
+        console.log('[REBUILD] Restored scenarios from localStorage');
+      }
+    } catch (err) {
+      console.error('[REBUILD] Failed to load from localStorage:', err);
+    }
+  }
+  
+  if (!scenariosToUse || !scenariosToUse.A) {
+    console.error('[REBUILD] No scenario found in memory or localStorage');
     alert('No scenario to rebuild. Please build a scenario first.');
     return;
   }
+  
+  // Use the loaded scenarios
+  const SCENARIOS = scenariosToUse;
   
   const btn = document.getElementById('btn-rebuild-scenario') || 
             document.querySelector('button[onclick*="rebuildScenario"]');
@@ -2545,31 +2584,47 @@ function updatePeriods(code, periods) {
 
 // Export pricing details
 async function exportPricingDetails() {
-  // Implementation for exporting pricing details to Excel/CSV
-  console.log('Exporting pricing details...');
+  console.log('[EXPORT] Starting pricing export...');
   
-  // Prepare data for export
-  const exportData = {
-    project_name: document.getElementById('projectName')?.value || 'Project',
-    one_time_deliverables: [],
-    retainer_services: [],
-    monthly_breakdown: []
-  };
+  // Get button reference for UI feedback
+  const btn = document.getElementById('btn-export-pricing');
+  const originalText = btn?.textContent || 'Export Pricing Details';
   
-  // FIX: Wire Excel/CSV export button - Call POST /api/export with scenario + file_format
-  try {
-    // Get the scenario (default to A)
-    const scenario = SCENARIOS?.A;
-    if (!scenario) {
-      alert('Please build a scenario first before exporting');
-      return;
+  // Get the scenario (try memory first, then localStorage)
+  let scenario = window.SCENARIOS?.A;
+  
+  if (!scenario) {
+    console.log('[EXPORT] Trying to load scenario from localStorage...');
+    try {
+      const saved = localStorage.getItem('latest_scenarios');
+      if (saved) {
+        const scenarios = JSON.parse(saved);
+        scenario = scenarios.A;
+        window.SCENARIOS = scenarios;  // Restore to memory
+      }
+    } catch (err) {
+      console.error('[EXPORT] Failed to load from localStorage:', err);
     }
-    
-    // Get export format from dropdown
+  }
+  
+  if (!scenario) {
+    alert('❌ No scenario available to export.\n\nPlease build a scenario first in Step 3.');
+    return;
+  }
+  
+  // Show loading state
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Exporting...';
+  }
+  
+  try {
+    const projectName = document.getElementById('projectName')?.value || 'Project';
     const formatSelect = document.getElementById('export-format');
     const fileFormat = formatSelect?.value || 'xlsx';
     
-    // Call export endpoint with scenario and format
+    console.log('[EXPORT] Calling /api/export with format:', fileFormat);
+    
     const response = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2579,25 +2634,38 @@ async function exportPricingDetails() {
       })
     });
     
-    if (response.ok) {
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const ext = fileFormat === 'xlsx' ? 'xlsx' : 'csv';
-      a.download = `${exportData.project_name}_pricing_${new Date().toISOString().split('T')[0]}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    } else {
+    if (!response.ok) {
       const errorText = await response.text();
-      console.error('Export failed:', errorText);
-      alert('Failed to export pricing details. Please try again.');
+      console.error('[EXPORT] Server error:', errorText);
+      throw new Error(`Export failed (${response.status}): ${errorText}`);
     }
+    
+    // Download the file
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ext = fileFormat === 'xlsx' ? 'xlsx' : 'csv';
+    const filename = `${projectName}_pricing_${new Date().toISOString().split('T')[0]}.${ext}`;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    
+    // Show success message
+    console.log('[EXPORT] Successfully exported:', filename);
+    alert(`✅ Pricing exported successfully!\n\nFile: ${filename}\n\nCheck your downloads folder.`);
+    
   } catch (error) {
-    console.error('Error exporting pricing details:', error);
-    alert('Error exporting pricing details. Please try again.');
+    console.error('[EXPORT] Error:', error);
+    alert(`❌ Export failed.\n\nError: ${error.message}\n\nPlease try again or check the console for details.`);
+  } finally {
+    // Reset button state
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
   }
 }
 
@@ -4486,6 +4554,20 @@ async function buildFromCurrentSelection() {
   window.appState.scenarios = scenarios;
   window.latestScenarios = scenarios;
   window.SCENARIOS = scenarios;
+  
+  // Persist SCENARIOS to localStorage for rebuild and other operations
+  try {
+    const sessionId = window.APB?.sessionId || 
+                     sessionStorage.getItem('apb.session_id') || 
+                     Date.now().toString();
+    const storageKey = `scenarios_${sessionId}`;
+    localStorage.setItem(storageKey, JSON.stringify(scenarios));
+    localStorage.setItem('latest_scenarios', JSON.stringify(scenarios));
+    console.log('[BUILD] Saved scenarios to localStorage:', storageKey);
+    console.log('[BUILD] window.SCENARIOS.A is now available with', scenarios.A.items?.length || 0, 'items');
+  } catch (err) {
+    console.error('[BUILD] Failed to save scenarios to localStorage:', err);
+  }
 
   // Update AI button states now that scenario exists
   updateAIButtonStates();
