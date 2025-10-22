@@ -8901,40 +8901,27 @@ S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
 // ========== XML Export Functions ==========
 async function exportXMLScenario(letter) {
-  // ISSUE FIX 2: Include edited scenario in XML export to preserve manual edits
-  // Get the actual edited scenario to preserve manual changes
-  const scenario = SCENARIOS?.[letter];
-  if (!scenario) {
-    alert('Please build a scenario first before exporting');
-    return;
-  }
-  
   // Check if anchors should be included
   const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
   
-  // Build endpoint with query parameter
+  // Build endpoint with query parameter - using GET to match backend endpoint
   const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
   
-  // Get project name and pricing mode
+  // Get project name for filename
   const projectName = document.getElementById('projectName')?.value || 
                      document.getElementById('projectNameInput')?.value || 
                      'Project Export';
-  const pricingMode = document.getElementById('pricingMode')?.value || 'Flat_Blended';
   
   try {
-    // Send scenario data in the body to ensure edited values are preserved
+    // Backend uses stored _CURRENT_SCENARIOS data and validates there
     const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_name: projectName,
-        pricing_mode: pricingMode,
-        scenario: scenario,  // Include the full edited scenario
-        add_anchors: addAnchors
-      })
+      method: 'GET'
     });
     
-    if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Export failed: ${response.statusText}`);
+    }
     
     const blob = await response.blob();
     const url = window.URL.createObjectURL(blob);
