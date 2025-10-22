@@ -4450,14 +4450,20 @@ async def generate_timeline(request: TimelineGenerationRequest):
     
     # Start the timeline generation in background
     async def generate_with_progress():
+        print(f"[Timeline] Background task STARTED for job {job_id}")
+        print(f"[Timeline] Request has {len(request.deliverables)} deliverables")
+        print(f"[Timeline] use_intelligent_scheduler={request.use_intelligent_scheduler}")
         try:
+            print(f"[Timeline] Updating job status to PROCESSING...")
             # Update job status
             update_sse_job(job_id, 
                           status=StreamJobStatus.PROCESSING,
                           progress=5.0,
                           message="Preparing timeline generation...",
                           current_stage="initialization")
+            print(f"[Timeline] Job status updated, sleeping 0.1s...")
             await asyncio.sleep(0.1)  # Allow UI to update
+            print(f"[Timeline] Starting deliverable enrichment...")
             
             # Enrich deliverables with database information
             enriched_deliverables = []
@@ -4576,16 +4582,20 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 enriched_deliverables.append(enriched)
             
             # Progress: Creating dependencies (30-40%)
+            print(f"[Timeline] Enrichment complete: {len(enriched_deliverables)} deliverables enriched")
+            print(f"[Timeline] Updating progress: Creating dependencies...")
             update_sse_job(job_id,
                           status=StreamJobStatus.PROCESSING,
                           progress=35.0,
                           message="Creating dependencies and workstreams...",
                           current_stage="creating_dependencies")
             await asyncio.sleep(0.1)
+            print(f"[Timeline] Progress update complete")
             
             # CRITICAL: Determine if chunking is needed to avoid timeout
             total_enriched = len(enriched_deliverables)
             needs_chunking = total_enriched > CHUNK_SIZE
+            print(f"[Timeline] Total enriched: {total_enriched}, needs_chunking: {needs_chunking}")
             
             if needs_chunking:
                 # Large project - process in chunks to prevent timeout
@@ -4691,21 +4701,25 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 
             else:
                 # Standard processing for smaller projects
+                print(f"[Timeline] Starting standard processing (no chunking needed)")
                 # Use the intelligent timeline generator
                 if request.use_intelligent_scheduler:
                     # Progress: Using intelligent scheduler (40-70%)
+                    print(f"[Timeline] Using intelligent scheduler...")
                     update_sse_job(job_id,
                                   status=StreamJobStatus.PROCESSING,
                                   progress=40.0,
                                   message="Using intelligent scheduler to optimize timeline...",
                                   current_stage="optimizing_schedule")
                     
+                    print(f"[Timeline] Calling generate_intelligent_timeline() with {len(enriched_deliverables)} deliverables...")
                     # Use the new intelligent scheduler
                     result = await generate_intelligent_timeline(
                         enriched_deliverables,
                         request.project_start,
                         request.optimization_mode
                     )
+                    print(f"[Timeline] generate_intelligent_timeline() returned successfully")
                     
                     # Progress: AI reasoning (70-90%)
                     if request.rfp_text:
@@ -4817,8 +4831,38 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 'metadata': {}
             }
     
-    # Start the background task
-    asyncio.create_task(generate_with_progress())
+    # Wrapper to ensure background task exceptions are logged
+    async def background_task_wrapper():
+        try:
+            await generate_with_progress()
+        except Exception as e:
+            print(f"[CRITICAL] Background task for job {job_id} crashed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Update job status to failed
+            try:
+                update_sse_job(job_id,
+                              status=StreamJobStatus.FAILED,
+                              progress=0.0,
+                              message=f"Timeline generation crashed: {str(e)}",
+                              error=str(e))
+            except Exception as update_error:
+                print(f"[CRITICAL] Could not update job status: {update_error}")
+    
+    # Start the background task with error handling
+    task = asyncio.create_task(background_task_wrapper())
+    
+    # Add callback to log if task is cancelled or raises exception
+    def task_done_callback(future):
+        try:
+            future.result()
+        except asyncio.CancelledError:
+            print(f"[Timeline] Background task for job {job_id} was cancelled")
+        except Exception as e:
+            print(f"[Timeline] Background task for job {job_id} raised exception: {e}")
+    
+    task.add_done_callback(task_done_callback)
     
     # Return immediately with the job ID
     return JSONResponse({
