@@ -236,10 +236,18 @@ class TimelineScheduler:
     
     def detect_dependencies(self, tasks: List[Dict[str, Any]]) -> List[DependencyRelationship]:
         """Intelligently detect dependencies between tasks"""
+        print(f"[Scheduler] detect_dependencies() called with {len(tasks)} tasks")
         dependencies = []
         task_lookup = {t['id']: t for t in tasks}
         
+        total_comparisons = len(tasks) * (len(tasks) - 1)
+        print(f"[Scheduler] Will check {total_comparisons} task pairs for dependencies")
+        
+        comparisons_done = 0
         for i, task in enumerate(tasks):
+            if i % 3 == 0:  # Log progress every 3 tasks
+                print(f"[Scheduler] Dependency check: task {i+1}/{len(tasks)}, {len(dependencies)} dependencies so far")
+            
             task_name_lower = task['name'].lower()
             task_workstream = task.get('workstream', 'Strategy')
             
@@ -247,6 +255,7 @@ class TimelineScheduler:
                 if i == j:
                     continue
                     
+                comparisons_done += 1
                 other_name_lower = other_task['name'].lower()
                 other_workstream = other_task.get('workstream', 'Strategy')
                 
@@ -287,6 +296,7 @@ class TimelineScheduler:
                     )
                     dependencies.append(dep)
         
+        print(f"[Scheduler] detect_dependencies() COMPLETE: found {len(dependencies)} dependencies")
         return dependencies
     
     def identify_parallel_opportunities(self, tasks: List[WorkstreamTask]) -> Dict[str, List[str]]:
@@ -509,10 +519,15 @@ class TimelineScheduler:
     ) -> Dict[str, Any]:
         """Generate optimized timeline with parallel workstreams"""
         
+        print(f"[Scheduler] optimize_timeline STARTED with {len(deliverables)} deliverables")
+        
         tasks = []
         
         # Phase 1: Create tasks and assign to workstreams/phases
-        for deliv in deliverables:
+        print(f"[Scheduler] Phase 1: Creating tasks...")
+        for i, deliv in enumerate(deliverables):
+            if i % 5 == 0:  # Log every 5th deliverable
+                print(f"[Scheduler] Creating task {i+1}/{len(deliverables)}")
             workstream = self.identify_workstream(
                 deliv.get('deliverable_name', ''),
                 deliv.get('department')
@@ -553,10 +568,14 @@ class TimelineScheduler:
             self.workstreams[workstream].append(task)
             self.phases[phase].append(task)
         
+        print(f"[Scheduler] Phase 1 complete: {len(tasks)} tasks created")
+        
         # Phase 2: Detect and apply dependencies
+        print(f"[Scheduler] Phase 2: Detecting dependencies...")
         raw_dependencies = self.detect_dependencies(
             [{'id': t.id, 'name': t.name, 'workstream': t.workstream} for t in tasks]
         )
+        print(f"[Scheduler] Phase 2 complete: {len(raw_dependencies)} dependencies detected")
         
         # Apply dependencies to tasks
         for dep in raw_dependencies:
@@ -565,28 +584,41 @@ class TimelineScheduler:
                 task.dependencies.append(dep)
         
         # Phase 3: Identify parallel opportunities
+        print(f"[Scheduler] Phase 3: Identifying parallel opportunities...")
         parallel_opps = self.identify_parallel_opportunities(tasks)
+        print(f"[Scheduler] Phase 3 complete: {len(parallel_opps)} parallel opportunities found")
         for task_id, parallel_ids in parallel_opps.items():
             task = next((t for t in tasks if t.id == task_id), None)
             if task:
                 task.parallel_tasks = parallel_ids
         
         # Phase 4: Apply scheduling constraints
+        print(f"[Scheduler] Phase 4: Applying scheduling constraints...")
         tasks = await self.apply_scheduling_constraints(tasks, optimization_mode)
+        print(f"[Scheduler] Phase 4 complete: Scheduling constraints applied")
         
         # Phase 5: Calculate critical path
+        print(f"[Scheduler] Phase 5: Calculating critical path...")
         critical_path_ids = self.calculate_critical_path(tasks)
+        print(f"[Scheduler] Phase 5 complete: {len(critical_path_ids)} tasks on critical path")
         for task in tasks:
             task.is_critical = task.id in critical_path_ids
         
         # Phase 6: Apply resource constraints
+        print(f"[Scheduler] Phase 6: Applying resource constraints...")
         tasks = self.apply_resource_constraints(tasks)
+        print(f"[Scheduler] Phase 6 complete: Resource constraints applied")
         
         # Phase 7: Add milestones
+        print(f"[Scheduler] Phase 7: Adding milestones...")
         milestones = self.add_milestones(tasks, project_start)
         tasks.extend(milestones)
+        print(f"[Scheduler] Phase 7 complete: {len(milestones)} milestones added")
         
-        return self.format_timeline_response(tasks, optimization_mode)
+        print(f"[Scheduler] Formatting timeline response...")
+        result = self.format_timeline_response(tasks, optimization_mode)
+        print(f"[Scheduler] optimize_timeline COMPLETE - returning {len(result.get('tasks', []))} tasks")
+        return result
     
     async def apply_scheduling_constraints(
         self,
@@ -630,21 +662,37 @@ class TimelineScheduler:
     
     def topological_sort(self, tasks: List[WorkstreamTask]) -> List[WorkstreamTask]:
         """Sort tasks topologically based on dependencies"""
+        print(f"[Scheduler] topological_sort() called with {len(tasks)} tasks")
+        
         # Build adjacency list
         graph = defaultdict(list)
         in_degree = defaultdict(int)
         task_map = {t.id: t for t in tasks}
         
+        total_deps = 0
         for task in tasks:
             for dep in task.dependencies:
                 graph[dep.predecessor].append(task.id)
                 in_degree[task.id] += 1
+                total_deps += 1
+        
+        print(f"[Scheduler] Built dependency graph: {total_deps} total dependencies")
         
         # Start with tasks that have no dependencies
         queue = [t.id for t in tasks if in_degree[t.id] == 0]
         sorted_tasks = []
         
+        print(f"[Scheduler] Starting with {len(queue)} tasks that have no dependencies")
+        
+        iterations = 0
+        max_iterations = len(tasks) * 2  # Safety limit
+        
         while queue:
+            iterations += 1
+            if iterations > max_iterations:
+                print(f"[Scheduler] WARNING: topological_sort exceeded max iterations ({max_iterations}), breaking to prevent infinite loop")
+                break
+                
             task_id = queue.pop(0)
             sorted_tasks.append(task_map[task_id])
             
@@ -654,11 +702,19 @@ class TimelineScheduler:
                 if in_degree[successor] == 0:
                     queue.append(successor)
         
+        print(f"[Scheduler] Topological sort completed {len(sorted_tasks)}/{len(tasks)} tasks in {iterations} iterations")
+        
         # Add any remaining tasks (cycles or disconnected)
+        remaining_count = 0
         for task in tasks:
             if task not in sorted_tasks:
                 sorted_tasks.append(task)
+                remaining_count += 1
         
+        if remaining_count > 0:
+            print(f"[Scheduler] WARNING: Added {remaining_count} tasks with circular dependencies or disconnected from graph")
+        
+        print(f"[Scheduler] topological_sort() COMPLETE: returning {len(sorted_tasks)} tasks")
         return sorted_tasks
     
     def add_milestones(self, tasks: List[WorkstreamTask], project_start: datetime) -> List[WorkstreamTask]:
