@@ -1,0 +1,130 @@
+1) One helper to download any export
+
+Add this to your main front‑end JS (where you wire the buttons):
+
+function parseFilenameFromContentDisposition(cd, fallback) {
+  if (!cd) return fallback;
+  // RFC 5987 (filename*=UTF-8'')
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+  if (star) return decodeURIComponent(star[1]);
+  // Legacy: filename="..."
+  const quoted = /filename="?([^"]+)"?/i.exec(cd);
+  if (quoted) return quoted[1];
+  return fallback;
+}
+
+async function downloadFromEndpoint(url, payload, fallbackName = 'Workfront_Export.xlsx') {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  // If the server returned an error (e.g., missing openpyxl), show message
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    alert(`Export failed: ${res.status} — ${text}`);
+    return;
+  }
+
+  // Read the file as a Blob and honor the server-suggested name
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') || '';
+  const filename = parseFilenameFromContentDisposition(cd, fallbackName);
+
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename;
+  a.target = '_blank';   // safer in some embedded contexts
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(href);
+}
+
+
+Why this works here:
+
+Backend sends a real file with FileResponse and a filename; CORS exposes Content‑Disposition so we can read it.
+
+If your Python env lacks openpyxl, the route returns a clear 400 error (“XLSX export requires 'openpyxl'.”); the handler above will surface that instead of “nothing happens.”
+
+2) Wire the three buttons
+
+Make sure your scenario data is stored at window.appState.scenarios (or alias latestScenarios → appState.scenarios as we did earlier). Then wire the clicks:
+
+function getProjectName() {
+  return (document.querySelector('#project-name')?.value || '').trim();
+}
+function getFileFormat() {
+  // If you expose CSV/XLSX in a select; default to xlsx
+  const v = document.querySelector('#export-format')?.value || 'xlsx';
+  return v.toLowerCase();
+}
+function getScenario(letter) {
+  const s = (window.appState?.scenarios || {})[letter];
+  return (s && Array.isArray(s.items) && s.items.length) ? s : null;
+}
+
+async function onExportScenario(letter) {
+  const scen = getScenario(letter);
+  if (!scen) { alert('Build scenarios first.'); return; }
+
+  const payload = {
+    scenario: scen,
+    project_name: getProjectName(),
+    file_format: getFileFormat(),
+    scenario_label: `Scenario ${letter}`
+  };
+  await downloadFromEndpoint('/api/export', payload, `Workfront_Export_Scenario_${letter}.xlsx`);
+}
+
+async function onExportWorkbookAB() {
+  const A = getScenario('A');
+  const B = getScenario('B');
+  if (!A || !B) { alert('Build scenarios A & B first.'); return; }
+
+  const payload = {
+    scenario_a: A,
+    scenario_b: B,
+    project_name: getProjectName()
+  };
+  await downloadFromEndpoint('/api/export_workbook', payload,
+    'Workfront_Export_Scenarios_A_and_B.xlsx');
+}
+
+// Hook up your buttons (adjust IDs to your HTML)
+document.querySelector('#btnExportA')?.addEventListener('click', () => onExportScenario('A'));
+document.querySelector('#btnExportB')?.addEventListener('click', () => onExportScenario('B'));
+document.querySelector('#btnExportAB')?.addEventListener('click', onExportWorkbookAB);
+
+
+Payload shapes match your FastAPI models ExportPayload and ExportWorkbookPayload, so the server will accept and return a file.
+
+3) Make sure scenarios are saved where the exporter reads them
+
+When you click Build Scenarios A & B, put the results in appState.scenarios (and, if any legacy code still uses it, alias latestScenarios):
+
+window.appState = window.appState || {};
+Object.defineProperty(window, 'latestScenarios', {
+  get() { return window.appState.scenarios; },
+  set(v) { window.appState.scenarios = v; }
+});
+
+// After /api/build or /api/auto_build returns:
+appState.scenarios = res.scenarios || res;   // {A: {...}, B: {...}}
+
+
+This prevents “undefined” errors from older code paths while keeping the new state shape clean.
+
+4) Backend sanity (you’re good)
+
+Single scenario export: /api/export returns CSV/XLSX with a clean filename and applies number formats for XLSX.
+
+Workbook (A & B): /api/export_workbook writes two sheets (Scenario A, Scenario B) and returns a proper XLSX.
+
+CORS exposes Content‑Disposition so the filename can be read by JS.
+
+If you ever see an error alert about openpyxl, install it in your Replit/poetry env (that’s the only package the exporter depends on beyond pandas). The backend throws that exact message when the engine isn’t available.

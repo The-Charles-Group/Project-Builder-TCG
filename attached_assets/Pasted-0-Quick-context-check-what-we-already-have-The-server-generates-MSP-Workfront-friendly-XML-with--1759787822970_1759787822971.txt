@@ -1,0 +1,267 @@
+0) Quick context check (what we already have)
+
+The server generates MSP/Workfront‑friendly XML with a Standard calendar, 8hr days (480 minutes), and Monday–Friday working times. You can see those tags in recent exports (Calendars → WeekDays; MinutesPerDay/Week; DaysPerMonth).
+
+In some exports the project name is still “Project from Scenario A/B” (the <Name> element), which we previously corrected to pass the UI project name but still shows up in older files.
+
+The backend now includes Workfront header alignment (e.g., Service Department surfaced as its own column for CSV/flat exports) and a unified XML builder.
+
+The items below adjust the timeline engine, dependency writer, selection UX, scenario persistence, and AI suggestions.
+
+1) “Lack of dependencies in subtasks to reduce the duration?”
+Symptom
+
+In Workfront, only the first instance of a repeated sub‑task gets a predecessor. All subsequent instances in that component start at project start, so whole task groups run in parallel (you saw this in Strategy → edit’s children).
+
+Root cause
+
+When we expand repeated rows (e.g., multiple role lines or repeated L3 pieces under a component), we only attach one PredecessorLink. The chain isn’t built across all instances.
+
+Fix (server)
+
+Add a deterministic chaining step after we’ve expanded the rows for a deliverable/component:
+
+# server/timeline.py (new helper)
+def chain_instances(instances: list[TaskNode]) -> None:
+    """Give every instance a FS predecessor to the previous instance."""
+    for i in range(1, len(instances)):
+        prev = instances[i-1]
+        curr = instances[i]
+        curr.predecessors.append(Predecessor(uid=prev.uid, type="FS", lag=0))
+
+
+Then apply it inside the deliverable assembly:
+
+# after we group rows by (deliverable -> component -> L2 task group)
+for group in l2_groups:  # e.g., ["deck_build", "internal_review", "client_review", ...]
+    instances = expand_rows_for_group(group)  # returns list[TaskNode] in desired order
+    chain_instances(instances)                # <--- NEW
+    stitched.extend(instances)
+
+
+Finally, chain groups to each other (waterfall) using the same helper on the last‑UID of each group.
+
+Fix (XML writer)
+
+Ensure every TaskNode.predecessors becomes one or more <PredecessorLink> blocks:
+
+# server/xml_writer.py
+for pred in node.predecessors:
+    pl = SubElement(task, "PredecessorLink")
+    SubElement(pl, "PredecessorUID").text = str(pred.uid)
+    SubElement(pl, "Type").text = "1"         # Finish-to-Start
+    SubElement(pl, "LinkLag").text = "0"
+    SubElement(pl, "LagFormat").text = "7"    # days
+
+
+Acceptance test
+
+Build A/B/C, export XML, import to Workfront, switch to a view with “Predecessors” and “Successors” columns. All repeated L3 rows under the same L2 should chain serially (FS) and groups should also chain serially. Duration should collapse (no unintended parallelism).
+
+2) “Scenario B database needs work / scenarios not outputting different data”
+Symptom
+
+Scenario B often mirrors A or shows zeros because we’re not consistently applying the complexity/volume multipliers and/or the Scenario Templates/Bundle rules across both scenarios.
+
+Fix
+
+In the DB loader, we already normalize v3/v4 sources and scenario templates. Ensure the per‑scenario hours come from the proper column: f"{complexity}__{tier}_Hours" and not from a single baseline column. (You can see this helper exists as _scenario_col().)
+
+When building Scenario B, re‑read the bundle for the same deliverable selection but apply the “Producer‑edited” weighting/multipliers (from Scenario_Templates + Timeline_Weighting/Pricing_Settings). If the template row has an override multiplier, multiply hours per role before rate application.
+
+Make sure rate band and complexity/tier are plumbed distinctly for A and B (separate state keys).
+
+Acceptance test
+
+With identical selection, Scenario B should show different hours/price (typically lower), not zeros, and XML should reflect B’s counts if you export B.
+
+3) “Deliverable didn’t save to XML when timeline is changed”
+Symptom
+
+Reordering in Step 4 isn’t reflected in the export.
+
+Fix (front‑end + server)
+
+Step 4 already has Save Order. Call a new endpoint POST /timeline/order with:
+
+{ "scenario": "A"|"B"|"C", "order": ["deliverable_code_1", "deliverable_code_2", ...] }
+
+
+On the server, persist into the scenario context:
+
+state.scenarios[scenario_id].timeline_order = order
+
+
+In the XML generator, before we stitch tasks, sort deliverables/components by timeline_order. If no order is saved, fall back to DB default order or the selection order.
+
+Also persist to localStorage so reloads keep the chosen order.
+
+Acceptance test
+
+Reorder Step 4, click Save Order, export A/B/C. The top‑level task order in XML/Workfront now matches the on‑screen timeline.
+
+4) “Show one level down (subtask) when choosing fewer components; UI still says (all)”
+Symptom
+
+You can deselect at the component level, but the “Components… (all)” badge doesn’t reflect per‑task/per‑subtask pruning, and Step 3 lists all tasks.
+
+Fix (UI + server)
+
+Step 2 bubble: add a 3‑pane selector:
+
+Components (L1) – checkboxes with “Select all / Unselect all”.
+
+Tasks (L2) for the chosen component – checkboxes with “Select all / Unselect all”.
+
+Subtasks (L3) – checkboxes (defaults to all).
+
+Store selection as:
+
+type Selection = {
+  [deliverableCode: string]: {
+    components: {
+      [componentCode: string]: {
+         tasks: {
+           [taskCode: string]: string[] /* array of L3 subtask codes */
+         }
+      }
+    }
+  }
+}
+
+
+Update the blue badge to reflect what’s selected, e.g., Components… (3 of 5) and if tasks are pruned: Tasks… (7 of 12).
+
+Step 3 pricing table should build its task string from the selected L2/L3 sets only (not from the full catalog).
+
+Acceptance test
+
+Deselect some L2/L3 items; hours and the “Tasks” column in Step 3 must shrink accordingly, and the XML only contains the selected tasks/subtasks.
+
+5) “Timeline shows weekends; should be 9–5 and respect holidays”
+What’s already correct in XML
+
+Exports set 480 minutes per day and Monday–Friday workdays under <Calendar>. (Saturday/Sunday are non‑working.)
+
+What’s wrong
+
+Step 4’s math adds calendar days, not business days, and doesn’t consult a holiday list—so UI dates differ from Workfront/MSP after import.
+
+Fix (server date engine used by UI & XML)
+
+Add business‑time helpers and use them everywhere we compute Start/Finish:
+
+BUSINESS_START = datetime.time(9, 0)
+BUSINESS_END   = datetime.time(17, 0)
+WORK_MIN_PER_DAY = 480
+
+def is_business_day(d: date, holidays: set[date]) -> bool:
+    return d.weekday() < 5 and d not in holidays  # Mon=0..Fri=4
+
+def add_business_days(start: date, days: int, holidays: set[date]) -> date:
+    d = start
+    step = 1 if days >= 0 else -1
+    remaining = abs(days)
+    while remaining:
+        d += timedelta(days=step)
+        if is_business_day(d, holidays):
+            remaining -= 1
+    return d
+
+def calc_finish(start_dt: datetime, duration_days: int, holidays: set[date]) -> datetime:
+    start_date = start_dt.date()
+    end_date = add_business_days(start_date, duration_days, holidays)
+    return datetime.datetime.combine(end_date, BUSINESS_END, start_dt.tzinfo)
+
+
+Add a Holidays source: read from Timeline_Params or a new Holidays sheet. If absent, allow a comma‑separated holiday field in Step 3. (XML still writes the Standard calendar, but UI and assignment math now align with business days.)
+
+Acceptance test
+
+Set a start date near a weekend/holiday, build timeline; UI dates should match MSP/Workfront after import.
+
+6) “Scenario C timeline missing” (you previously saw this)
+
+We already made Scenario C compute pricing; extend the timeline toggle:
+
+Fix (UI + server)
+
+Add a Scenario C button next to A/B in Step 4 (same component).
+
+Wire it to GET /timeline?scenario=C and same Save Order behavior.
+
+Extend Export buttons: Export XML A / B / C and an “Export All (A, B, C)” wrapper.
+
+Acceptance test
+
+Click Scenario C, see rows populate; reorder; export only C or export all—each ZIP/XML has C’s dates and hours.
+
+7) “Project name on top; first task row should always be ‘Project Summary’”
+Fix (XML writer)
+
+<Project><Name> should be the UI value from Project name (Step 3).
+
+Insert Task #1:
+
+Name: Project Summary
+
+Summary=1, OutlineLevel=1
+
+Start = project start, Finish = start + 1 business day (or 0d in MSP format)
+
+Do not set Task #1 to the project name. The project title remains in <Project><Name>. Older files with “Project from Scenario A” show where it went wrong.
+
+Acceptance test
+
+After export/import, the Workfront project title is the UI project name, and the first row is “Project Summary”.
+
+8) “XML rate/work/duration mismatches”
+
+Sometimes Workfront shows odd durations even though we pass rates/hours. Ensure:
+
+Work = sum of role hours × 60 minutes.
+
+Duration = business days × 480 minutes (unless a fixed shorter block is intended).
+
+No task has Work > Duration × Units (that can cause automatic rescheduling).
+
+Keep <ScheduleFromStart>1</ScheduleFromStart> and <ConstraintType> to avoid random ALAP moves. See current tags in recent files.
+
+9) “GPT integration to select components/tasks/subtasks (L3)”
+What to add
+
+Endpoint: POST /ai/suggest
+Input: RFP plaintext, selected deliverables (codes), and the DB rows for those deliverables (L1/L2/L3).
+Output: { deliverable_code: { component_code: { task_code: [subtask_codes...] }}} plus confidence scores and short rationales.
+
+Prompt strategy: Provide:
+
+the project brief (Step 1 text)
+
+the deliverable descriptions
+
+the component/task/subtask catalog for those deliverables
+Ask GPT‑5 to choose a minimal viable set that hits objectives, then an expanded set (flag as Upsell) so we can offer Scenario C quickly.
+
+UI hooks (Step 2):
+
+Show “AI Picks (Lean)” and “AI Picks (Upsell)” tabs inside the selector bubble.
+
+Buttons: Apply, Refresh suggestions, Copy & Hide (as you already designed).
+
+(The server already has OpenAI client wiring; we just add this endpoint & prompt. Keep the model to GPT‑5 per your policy.)
+
+Acceptance test
+
+Click “Refresh suggestions” → see L3 list proposed; click Apply → the selector reflects per‑L3 toggles; Step 3/4/Export reflect only those.
+
+10) “When fewer components are chosen, hours/pricing/timeline must shrink everywhere”
+Fixes covered above, but double‑check:
+
+Pricing engine respects Selection shape (L1/L2/L3).
+
+Timeline builds only selected nodes.
+
+Exports only contain selected nodes.
+
+Budget analysis in Step 3 runs for A, B, and C (you already added this for A; carry to B/C).

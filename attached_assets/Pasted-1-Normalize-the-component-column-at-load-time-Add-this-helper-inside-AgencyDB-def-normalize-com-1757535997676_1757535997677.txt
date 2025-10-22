@@ -1,0 +1,117 @@
+1) Normalize the component column at load time
+
+Add this helper inside AgencyDB:
+
+def _normalize_component_column(self):
+    """
+    Ensure self.all_rows has a 'Component' column populated from v4's Component_Task_L1 (Column F).
+    If other synonyms exist, prefer them in this order.
+    """
+    if self.all_rows is None or self.all_rows.empty:
+        return
+    # Known header names (case-insensitive)
+    candidates = ["Component_Task_L1", "Component L1", "Component_L1", "Component"]
+    cols_lc = {c.lower(): c for c in self.all_rows.columns}
+    found = None
+    for cand in candidates:
+        if cand.lower() in cols_lc:
+            found = cols_lc[cand.lower()]
+            break
+
+    if found:
+        # Standardize to 'Component'
+        self.all_rows["Component"] = (
+            self.all_rows[found]
+            .astype(str)
+            .fillna("")
+            .str.strip()
+        )
+    else:
+        # Create empty for downstream logic; we'll only use 'General' per missing row, not globally
+        self.all_rows["Component"] = ""
+
+
+Then call it at the end of load() after you read the sheets:
+
+self._normalize_component_column()
+
+
+Result: every place in the code can now rely on self.all_rows["Component"] being the v4 L1 component (column F) when present.
+
+2) Use the normalized Component in the builder (Deliverable → Component → Task)
+
+Replace the 3 helpers we added previously so they always use the normalized Component:
+
+def components_for_deliverable(self, deliverable_code: str, included_tgs: list[str]) -> list[str]:
+    sub = self.all_rows[
+        (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+        (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
+    ].copy()
+    # Fill per-row only if blank
+    sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+    comps = [c for c in sub["Component"].unique().tolist() if c]
+
+    if not comps:
+        # No component values at all for this deliverable → one placeholder bucket
+        return ["General"]
+
+    # Order components by earliest task_group position from Timeline_Params
+    order_map = {str(tg): i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
+    comp_earliest = {}
+    for comp in comps:
+        tgs = sub.loc[sub["Component"] == comp, "task_group"].astype(str).unique().tolist()
+        comp_earliest[comp] = min([order_map.get(tg, 999) for tg in tgs]) if tgs else 999
+    return sorted(comps, key=lambda c: (comp_earliest.get(c, 999), c))
+
+def hours_by_component(self, deliverable_code: str, included_tgs: list[str], scenario_col: str) -> dict[str, float]:
+    sub = self.all_rows[
+        (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+        (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
+    ].copy()
+    sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+    # Only attach 'General' to rows that are actually blank
+    sub.loc[sub["Component"] == "", "Component"] = "General"
+    if sub.empty:
+        return {}
+    g = sub.groupby("Component", as_index=False)[scenario_col].sum()
+    return {str(r["Component"]): float(r[scenario_col]) for _, r in g.iterrows()}
+
+def hours_by_taskgroup_for_component(self, deliverable_code: str, component: str,
+                                     included_tgs: list[str], scenario_col: str) -> dict[str, float]:
+    sub = self.all_rows[
+        (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+        (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
+    ].copy()
+    sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+    comp_key = (component or "").strip() or "General"
+    # Select either the named component or the blank rows when comp == 'General'
+    if comp_key == "General":
+        sub = sub[sub["Component"] == "General"]
+    else:
+        sub = sub[sub["Component"] == comp_key]
+
+    if sub.empty:
+        return {}
+    g = sub.groupby("task_group", as_index=False)[scenario_col].sum()
+    return {str(r["task_group"]): float(r[scenario_col]) for _, r in g.iterrows()}
+
+def dominant_role_for_component_task(self, deliverable_code: str, component: str,
+                                     task_group: str, scenario_col: str) -> tuple[str, str]:
+    sub = self.all_rows[
+        (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+        (self.all_rows["task_group"].astype(str) == str(task_group))
+    ].copy()
+    sub["Component"] = sub["Component"].fillna("").astype(str).str.strip()
+    comp_key = (component or "").strip() or "General"
+    if comp_key == "General":
+        sub = sub[sub["Component"] == "General"]
+    else:
+        sub = sub[sub["Component"] == comp_key]
+    if sub.empty:
+        return ("", "")
+    g = sub.groupby(["Resource_Title", "Seniority"], as_index=False)[scenario_col].sum()
+    r = g.sort_values(scenario_col, ascending=False).iloc[0]
+    return (str(r["Resource_Title"]), str(r["Seniority"]))
+
+
+These helpers ensure “General” is only used for rows that actually have no Component value. If Component_Task_L1 exists (it does in v4), it will flow through as the actual component in your export (column F).

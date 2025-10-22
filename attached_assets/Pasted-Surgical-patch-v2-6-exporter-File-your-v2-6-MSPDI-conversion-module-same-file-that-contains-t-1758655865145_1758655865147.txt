@@ -1,0 +1,62 @@
+Surgical patch (v2.6 exporter)
+
+File: your v2.6 “MSPDI conversion” module (same file that contains the block starting with # Add PredecessorLinks for dependencies). Replace that block with the following.
+
+A) Write PredecessorLink directly under each successor <Task>
+
+Before (remove this):
+(what you have now)
+
+# Find the successor task element and add PredecessorLink
+for task_elem in tasks_elem.findall("Task"):
+    task_uid_elem = task_elem.find("UID")
+    if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
+        # Create or find PredecessorLinks container
+        pred_links_elem = task_elem.find("PredecessorLinks")
+        if pred_links_elem is None:
+            pred_links_elem = SubElement(task_elem, "PredecessorLinks")
+        # Add PredecessorLink
+        pred_link = SubElement(pred_links_elem, "PredecessorLink")
+        SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
+        SubElement(pred_link, "Type").text = "1"  # Finish-to-Start
+        SubElement(pred_link, "CrossProject").text = "0"
+        break
+
+
+(That wrapper is the problem. )
+
+After (use this):
+
+# Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
+for task_elem in tasks_elem.findall("Task"):
+    task_uid_elem = task_elem.find("UID")
+    if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
+        pred_link = SubElement(task_elem, "PredecessorLink")
+        SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
+        SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
+        SubElement(pred_link, "CrossProject").text = "0"
+        # Optional but harmless:
+        SubElement(pred_link, "LinkLag").text = "0"
+        SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
+        break
+
+B) Emit full outline metadata on every task
+
+Where you create each <Task>, add (or ensure) these three fields:
+
+SubElement(task_elem, "WBS").text = wbs               # e.g., "1.3.2"
+SubElement(task_elem, "OutlineNumber").text = wbs     # same string
+SubElement(task_elem, "OutlineLevel").text = str(level)
+
+
+We already do this in the working v2.5 code path, and that is what gives proper indentation + row-based predecessor display in Workfront. (Your current v2.6 XML shows OutlineLevel but not WBS/OutlineNumber. )
+
+(Optional, but recommended) Keep the v2.5 constraint behavior for reliable dates
+
+If you want Workfront to honor Step‑4 starts (and still resolve via dependencies), mirror the v2.5 leaf‑task constraint fields:
+
+SubElement(task_elem, "ConstraintType").text = "4"     # Start No Earlier Than
+SubElement(task_elem, "ConstraintDate").text = dtfmt(deliverable_start_dt)
+
+
+That’s how v2.5 pins leaves to their deliverable start while leaving summaries ASAP.

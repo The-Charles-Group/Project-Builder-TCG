@@ -1,0 +1,244 @@
+Here’s a do-this-exactly set of fixes for Replit’s agent so Step 2 works end‑to‑end (search, selection, Components, L3 Subtasks, “All/Clear” buttons) and Step 4 stops landing on Saturdays. I’m pointing to the API routes already present in your backend so you can wire the UI correctly and not invent new behavior.
+
+✅ What’s broken & why (quick)
+
+Step 2 search & “All/Clear” not clickable
+Root cause is UI state/handlers not bound (or overlaid) and the panel controls are disabled until a deliverable/component is recognized by the UI. The backend routes to populate Components/L3 already exist but the UI isn’t calling them or isn’t passing the right params.
+
+Components show up but no L3
+The UI is likely passing a component code or the wrong field; the API expects the displayed component name via component_name plus the deliverable code. The server route is /api/l3_for with params deliverable_code & component_name. The data are in DBv3/4 and the route is already implemented (see below).
+
+“Refresh AI Suggestions” sometimes says “No RFP text available”
+Step 2 doesn’t have the RFP text in its state when you hit Refresh. Persist it from Step 1 (localStorage/sessionStorage) and include it in the body when you refresh Suggestions.
+
+Timeline end date falls on Saturday
+Step 4’s date calc is adding calendar days. You need business‑day math on the client (and use the same logic server‑side if you compute again on export).
+
+📌 Use these existing backend endpoints (already in your code)
+
+List components for a deliverable
+GET /api/components_for?deliverable_code=...
+Returns the component names/hours under the deliverable. The route is in v2.8.1 (use it, don’t recreate).
+
+List L3 subtasks for a component
+GET /api/l3_for?deliverable_code=...&component_name=...
+component_name is the display label (“Paid Media Plan”, “Brand Narrative”, etc.), not a code. Route exists—wire the UI to it.
+
+Search deliverables
+GET /api/search_deliverables?q=... returns filtered deliverables; there’s also a full list via /api/deliverables. (You can also filter client‑side once you have the list.)
+
+Build scenarios & export (unchanged; listed here so you don’t invent new ones)
+
+Build A/B: /api/build (stores scenarios in memory) → later used by reorder/export. Scenarios also store project_start.
+
+Build C: /api/build_scenario_c (already implemented).
+
+Export XML single or workbook (uses the scenario in memory and project_start): /api/export_xml, /api/export_workbook_xml.
+
+Export Zip A+B+C is also implemented with post‑processing.
+
+🛠 Step‑by‑step fixes for Step 2 — Select & Configure
+
+Target files (front‑end): wherever your Step 2 UI lives (e.g., static/js/step2.js, Step2.jsx, or similar).
+The backend already has the data routes—do not change the backend for this.
+
+1) Persist RFP text from Step 1 and feed it to “Refresh AI Suggestions”
+
+When Step 1 completes (upload + AI pass), write both raw text and summary to sessionStorage:
+
+sessionStorage.setItem('apb_rfp_text', rawText);
+sessionStorage.setItem('apb_rfp_summary', summaryText);
+
+
+In Step 2, “Refresh AI Suggestions” must:
+
+const rfpText = sessionStorage.getItem('apb_rfp_text') || '';
+if (!rfpText) { /* show inline tip but do not alert; Step 1 cannot be reached without a file */ }
+await fetch('/api/auto_build', {
+  method: 'POST',
+  headers: {'Content-Type':'application/json'},
+  body: JSON.stringify({ rfp_text: rfpText })
+});
+
+
+(The auto-build/summarize path expects text if you call it from Step 2; your backend helpers already accept/expect text. This prevents the “No RFP text available” modal.)
+
+2) Fix Deliverables panel
+
+Search bar must be a controlled input and filter the in‑memory deliverables client‑side. Also enable server search for large lists:
+
+const [q, setQ] = useState('');
+const filtered = useMemo(() => allDeliverables.filter(d => d.label.toLowerCase().includes(q.toLowerCase())), [allDeliverables, q]);
+<input value={q} onChange={e=>setQ(e.target.value)} ... />
+
+
+(If you prefer server search, debounce and call /api/search_deliverables?q=... and replace the list.) Route is implemented.
+
+Pin chosen deliverables to the top group (“Selected”):
+Keep selectedDeliverables = Set<deliverable_code>. Render two sections:
+
+const selectedList = allDeliverables.filter(d => selected.has(d.code));
+const otherList    = allDeliverables.filter(d => !selected.has(d.code));
+
+
+(You’ve visually shown “Selected” in your screenshot; make sure this is data‑driven and updates immediately on toggle.)
+
+On select/unselect of a deliverable:
+
+Update selectedDeliverables.
+
+If the item becomes the active deliverable in the Components panel, fetch Components (next step).
+
+If unselected, clear its Components/L3 from state if it was the active context.
+
+3) Wire Components panel correctly (this unlocks L3)
+
+State:
+
+const [activeDeliverableCode, setActiveDeliverableCode] = useState(null);
+const [components, setComponents] = useState([]); // array of { name, hours? }
+const [selectedComponents, setSelectedComponents] = useState(new Set());
+
+
+On active deliverable change:
+
+if (activeDeliverableCode) {
+  const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(activeDeliverableCode)}`);
+  const data = await r.json(); // array of component names
+  setComponents(data);
+  setSelectedComponents(new Set()); // reset selection
+} else {
+  setComponents([]); setSelectedComponents(new Set());
+}
+
+
+(/api/components_for is already in the backend and includes component hours too. Use it.)
+
+Select All / Clear (Components):
+
+const handleSelectAllComponents = () => setSelectedComponents(new Set(components.map(c => c.name || c)));
+const handleClearComponents     = () => setSelectedComponents(new Set());
+
+
+Ensure the buttons are enabled whenever components.length>0 (do not gate on active deliverable textbox focus).
+
+Clicking a component:
+
+Toggle it in selectedComponents.
+
+Also load L3 for that one (below).
+
+4) Wire L3 Subtasks panel correctly
+
+State:
+
+const [l3ByComponent, setL3ByComponent] = useState(new Map()); // compName -> [{task_label, hours...}]
+const [selectedL3, setSelectedL3] = useState(new Set());        // optional if you want L3 filtering
+
+
+On component toggle (or on “Select All” Components) fetch L3 for each selected component:
+
+async function fetchL3For(compName) {
+  const r = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(activeDeliverableCode)}&component_name=${encodeURIComponent(compName)}`);
+  const data = await r.json(); // array of L3 rows; use .Task or .Task_Label field
+  setL3ByComponent(prev => new Map(prev).set(compName, data));
+}
+
+
+Important: pass the component’s display name as component_name (e.g., "Paid Media Plan", "Brand Narrative"). The server route expects that, not an ID.
+
+Render L3 list for the currently selected component in the dropdown:
+
+const activeComponentName = ... // from a dropdown bound to selectedComponents
+const l3 = l3ByComponent.get(activeComponentName) || [];
+
+
+“All/Clear” (L3) should operate on the visible L3 list:
+
+const handleSelectAllL3 = () => setSelectedL3(new Set(l3.map(t => t.Task || t.Task_Label)));
+const handleClearL3     = () => setSelectedL3(new Set());
+
+
+Summary counts: update counts from selectedDeliverables.size, selectedComponents.size, and selectedL3.size (or simply show “L3 Subtasks: n” by summing current visible L3 if you don’t capture explicit selection).
+
+5) Make sure “Add” buttons in AI Suggestions re‑appear
+
+When a suggestion is added, you’re likely mutating local state and hiding the “Add” button permanently.
+Fix: compute that button’s visibility from selectedDeliverables.has(suggestion.deliverable_code) every render.
+When a user unchecks the deliverable in the left panel, selectedDeliverables becomes false → “Add” button shows again.
+
+6) Ensure Proceed to Pricing sends the whole selection
+
+When the user clicks Proceed to Pricing, post the selected sets (deliverable codes, component names per deliverable, and optionally the L3 subsets) to your normal /api/build call. The backend already accepts selected_components (per deliverable) and will default reasonably if empty. (There’s fallback logic to avoid 0‑hour deliverables if front‑end sent no component hours.)
+
+🛠 Step‑by‑step fixes for Step 4 — Timeline (no weekends)
+
+Where: the client-side timeline calculation util (whatever computes Start/End shown in the Step 4 table).
+The exporter already produces a 5‑day calendar, but your UI dates are computed as calendar days—hence Saturday end dates.
+
+Use this exact helper and replace your start + duration math with business days:
+
+function isWeekend(d) {
+  const day = d.getDay(); // 0 Sun, 6 Sat
+  return day === 0 || day === 6;
+}
+
+function addBusinessDays(startDate, days, holidaysSet = new Set()) {
+  let d = new Date(startDate);
+  // If start lands on weekend, roll to Monday
+  while (isWeekend(d) || holidaysSet.has(d.toISOString().slice(0,10))) {
+    d.setDate(d.getDate()+1);
+  }
+  let remaining = Math.max(0, Number(days));
+  while (remaining > 0) {
+    d.setDate(d.getDate()+1);
+    const iso = d.toISOString().slice(0,10);
+    if (!isWeekend(d) && !holidaysSet.has(iso)) {
+      remaining -= 1;
+    }
+  }
+  // End must not be weekend/holiday; roll back to previous business day
+  while (isWeekend(d) || holidaysSet.has(d.toISOString().slice(0,10))) {
+    d.setDate(d.getDate()-1);
+  }
+  return d;
+}
+
+
+Build a US holiday set (optional pass‑through from server) and feed it as holidaysSet.
+
+Use addBusinessDays(projectStart, durationDays) for each deliverable and display that End date.
+
+Keep the same project_start you’re already storing on the scenario (server has it in the scenario object).
+
+🔎 Acceptance checks (please test these)
+
+Deliverables search filters list as you type. “Selected” group always stays at top.
+
+Click “Add” in AI Suggestions ⟶ the Deliverables checkbox turns on; Components panel immediately populates for that deliverable; L3 panel stays disabled until a component is chosen.
+
+Components “All/Clear” buttons are clickable (not disabled) when the panel has items.
+
+Choose a component ⟶ L3 list appears (coming from /api/l3_for with the name).
+
+L3 “All/Clear” buttons work. Summary counts update live.
+
+Uncheck a suggested deliverable ⟶ the “Add” button in AI Suggestions re‑appears for that item.
+
+Proceed to Pricing generates A/B correctly and Scenario C builds from A/B as before. (Server C build is already in code.)
+
+Step 4: No end date ever lands on Saturday/Sunday.
+
+Export XML: project name from Step 3 flows through; export works for A/B/C (those routes exist).
+
+Notes for Replit’s agent (edge cases you’ll hit)
+
+Pointer overlays: If “All/Clear” still don’t respond, check for CSS pointer-events:none overlays or button type="submit" inside a form. Ensure these are <button type="button"> with explicit onClick.
+
+Param mismatch: If L3 is empty, log the exact URL. It must be
+/api/l3_for?deliverable_code=<code>&component_name=<display label>
+not an ID or code for the component.
+
+Scenarios state: You already cache scenarios in memory on the server after build; the export routes read from that state and inject project_start when converting (no change required).
+
+DB v3/v4: Backend already supports choosing the primary DB via env APB_PRIMARY_DB_VERSION (v3 or v4), and the in‑memory DB is unified behind those routes—don’t read the spreadsheets from the client.

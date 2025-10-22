@@ -1,0 +1,216 @@
+A) Backend (FastAPI)
+
+File: main.py
+These patches sit cleanly on your current v2 codebase (endpoints like /api/options, /api/build, /api/export).
+
+1) Load v3 “Drivers” (to supply 3 complexities + 3 tiers)
+
+Add fields to AgencyDB.__init__:
+
+self.drivers_v3 = None
+
+
+Add this to the end of AgencyDB.load() (after you read the v4 sheets):
+
+# Try to read v3 drivers (exact file name may vary)
+for v3_name in ["Replit_App_DB_READABLE_FullRows_v3.xlsx",
+                "Replit_App_DB_READABLE_FullRows_v3 (2).xlsx"]:
+    if os.path.exists(v3_name):
+        try:
+            self.drivers_v3 = pd.read_excel(v3_name, sheet_name="Drivers")
+        except Exception:
+            self.drivers_v3 = None
+        break
+
+
+Add helpers inside AgencyDB:
+
+def _norm_token(self, s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(s).strip().lower())
+
+def _v4_complexity_tokens(self) -> list[str]:
+    toks = set()
+    for c in self.all_rows.columns:
+        if c.endswith("_Hours") and "__" in c:
+            toks.add(c.split("__", 1)[0])
+    return sorted(toks)
+
+def _v4_tier_tokens(self) -> list[str]:
+    toks = set()
+    for c in self.all_rows.columns:
+        if c.endswith("_Hours") and "__" in c:
+            toks.add(c.rsplit("__", 1)[0].split("__",1)[1].replace("_Hours",""))
+    return sorted(toks)
+
+def _map_to_v4_token(self, label: str, candidates: list[str]) -> str:
+    if not label: return ""
+    z = self._norm_token(label)
+    # exact normalized match first
+    for c in candidates:
+        if self._norm_token(c) == z:
+            return c
+    # relaxed: startswith / contains
+    for c in candidates:
+        if z and (self._norm_token(c).startswith(z) or z.startswith(self._norm_token(c))):
+            return c
+    # fallback to first
+    return candidates[0] if candidates else ""
+
+def drivers_complexities_tiers_v3(self) -> tuple[list[str], list[str]]:
+    """Return display labels from v3 Drivers (max 3 each)."""
+    if self.drivers_v3 is None or self.drivers_v3.empty:
+        return ([], [])
+    df = self.drivers_v3.copy()
+    cols = {c.lower(): c for c in df.columns}
+    # Try to find the columns
+    type_col = next((cols.get(x) for x in ["type","driver","driver_type","category"]), None)
+    key_col  = next((cols.get(x) for x in ["key","value","name","label","option"]), None)
+    order_col= next((cols.get(x) for x in ["sort","order","seq","priority"]), None)
+    if not type_col or not key_col:
+        return ([], [])
+    if order_col:
+        df = df.sort_values(order_col, kind="stable")
+    df[key_col] = df[key_col].astype(str).str.strip()
+    comp = df[df[type_col].str.contains("complex", case=False, na=False)][key_col].dropna().unique().tolist()
+    tier = df[df[type_col].str.contains("tier", case=False, na=False)][key_col].dropna().unique().tolist()
+    return (comp[:3], tier[:3])
+
+
+Patch scenario_hours_col so v3 labels map safely to v4 columns:
+
+def scenario_hours_col(self, complexity: str, tier: str) -> str:
+    # exact
+    col = f"{complexity}__{tier}_Hours"
+    if col in self.all_rows.columns:
+        return col
+    # try mapping display labels -> v4 tokens
+    c_tok = self._map_to_v4_token(complexity, self._v4_complexity_tokens())
+    t_tok = self._map_to_v4_token(tier,        self._v4_tier_tokens())
+    col2 = f"{c_tok}__{t_tok}_Hours"
+    if col2 not in self.all_rows.columns:
+        raise HTTPException(400, f"Scenario column not found for ({complexity}, {tier}).")
+    return col2
+
+
+Update /api/options to prefer v3 Drivers for exactly 3 options (fallback to v4 if missing):
+
+@app.get("/api/options")
+def api_options():
+    if not DB.loaded:
+        DB.load()
+
+    # Prefer v3 Drivers (3 each)
+    v3_complexities, v3_tiers = DB.drivers_complexities_tiers_v3()
+    if not v3_complexities:
+        v3_complexities = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Complexity"]["Key"].head(3).tolist()
+    if not v3_tiers:
+        v3_tiers = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].head(3).tolist()
+
+    rate_bands = DB.rate_bands["Band_Name"].head(3).tolist()  # 3 bands max
+    pricing_modes = ["Flat_Blended","Per_Resource"]
+    deliverables = DB.deliverables[["Deliverable_Code","Deliverable","Category"]].to_dict(orient="records")
+
+    return {
+        "complexities": v3_complexities,
+        "tiers": v3_tiers,
+        "rate_bands": rate_bands,
+        "pricing_modes": pricing_modes,
+        "deliverables": deliverables,
+    }
+
+
+Your current /api/options builds lists from v4 Timeline_Scaling and Rate_Bands; the patch above swaps in v3 Drivers (for 3 complexities & 3 tiers) and limits rate bands to 3.
+
+2) Export math: Price_USD = Planned_Hours × Rate_USD (row‑by‑row)
+
+If you already dropped in the pricing‑aware WBS builder I shared, you’re set—every row gets Rate_USD, and Price_USD is computed from it. If not, here’s the minimal change (inside your builder when you create each row):
+
+# compute rate and planned hours first...
+row_rate  = round(deliv_rate, 2)      # or comp_rate / task_rate
+row_hours = int(planned_hours_value)  # whatever you already computed
+row_price = round(row_hours * row_rate, 2)  # <— enforce formula
+
+rows.append({
+    # ...
+    "Planned_Hours": row_hours,
+    "Rate_USD": row_rate,
+    "Price_USD": row_price,            # ALWAYS Hours × Rate
+})
+
+
+In Flat_Blended, Rate_USD = blended_rate (from UI).
+
+In Per_Resource, Rate_USD = (Σ hrs(role)×rate(role,band))/total_hours (effective weighted rate from v4 Role_Rate_Card × Rate_Bands), so the same rule still holds: Price_USD = Hours × Rate_USD.
+
+Hours still come from v4 All_Task_Rows scenario columns (e.g., Advanced__T2_MediumVolume_Hours).
+
+B) Frontend (Step‑1 controls)
+
+File: static/index.html
+You already fetch /api/options in loadOptions(); we’ll populate three dropdowns and pass those into /api/build. Your current /api/options endpoint is here for reference.
+
+1) Markup — add three selects
+
+In Step 1 (near Pricing mode), replace your rate‑band input and add Complexity / Tier:
+
+<label>Rate band:
+  <select id="rateBand"></select>
+</label>
+<label>Complexity:
+  <select id="complexity"></select>
+</label>
+<label>Volume tier:
+  <select id="tier"></select>
+</label>
+
+2) Script — fill the selects from /api/options
+
+Extend loadOptions():
+
+<script>
+async function loadOptions() {
+  const res = await fetch('/api/options');
+  const data = await res.json();
+  allDeliverables = data.deliverables || [];
+
+  const fill = (id, list) => {
+    const el = document.getElementById(id);
+    el.innerHTML = '';
+    (list || []).forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      el.appendChild(opt);
+    });
+  };
+  fill('rateBand', data.rate_bands || []);
+  fill('complexity', data.complexities || []);
+  fill('tier', data.tiers || []);
+}
+</script>
+
+3) Script — send chosen Complexity/Tier/RateBand to /api/build
+
+In your autoBuildFromRFP() / autoBuildFromUpload() / regenerateWithEdits(), grab the values and set scenarios to template with those picks:
+
+const pricingMode = document.getElementById('pricingMode').value;
+const blendedRateStr = document.getElementById('blendedRate').value;
+const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+const rateBand = document.getElementById('rateBand').value;
+const complexity = document.getElementById('complexity').value;
+const tier = document.getElementById('tier').value;
+
+const payload = {
+  selected_deliverable_codes: selectedCodes,
+  scenario_a: { mode: "template", scenario_key: "CUSTOM", complexity, tier },
+  scenario_b: { mode: "template", scenario_key: "CUSTOM", complexity, tier },
+  pricing_mode: pricingMode,
+  blended_rate: blendedRate,
+  rate_band: rateBand,
+  use_slack: true,
+  slack_after_internal: 1,
+  slack_after_client: 2,
+  slack_global_pct: 0.05
+};
+
+
+This uses your existing /api/build data model (ScenarioSpec has complexity & tier overrides); server maps v3 display labels to the v4 scenario column automatically (see scenario_hours_col patch).

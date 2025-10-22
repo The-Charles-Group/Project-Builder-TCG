@@ -1,0 +1,183 @@
+Fix that works (one pass, minimal change)
+1) Keep one authoritative POST /api/reorder_timeline
+
+Search your server file for @app.post("/api/reorder_timeline"). Delete or comment out all but one and replace it with the snippet below. This version:
+
+Computes the sequential schedule (start→end) in the exact order the user saved
+
+Persists it into _CURRENT_SCENARIOS
+
+Sets user_order and manual_order_locked = True so subsequent /api/build calls must respect it
+
+# --- Authoritative: Step‑4 "Save Order" -> sequential schedule + persistence
+@app.post("/api/reorder_timeline")
+def api_reorder_timeline(p: ReorderPayload):
+    if not DB.loaded:
+        DB.load()
+
+    letter = (p.scenario_letter or "A").upper()
+    scens = _current_scenarios()
+    scen = scens.get(letter) or {}
+
+    # choose a base start date (payload > scenario > today)
+    base_start = (
+        p.project_start
+        or scen.get("project_start")
+        or datetime.date.today().isoformat()
+    )
+
+    # canonicalize codes & included_map (names are allowed on input)
+    order_codes = [_canonical_deliverable_code(x) for x in (p.deliverable_codes or [])]
+    inc_map = { _canonical_deliverable_code(k): v for k, v in (p.included_map or {}).items() }
+
+    items: list[dict] = []
+    cursor_date = None
+
+    # Build a quick lookup of existing items so we keep labels/category/etc.
+    prev_by_code = { str(it.get("deliverable_code")): dict(it)
+                     for it in (scen.get("items") or []) }
+
+    for code in order_codes:
+        # task groups: from client, else derive all present for that deliverable
+        included = inc_map.get(code)
+        if not included:
+            sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str) == str(code)]
+            included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+
+        start_for_this = base_start if cursor_date is None else str(cursor_date)
+        sched = DB.build_schedule(
+            deliverable_code=code,
+            included_task_groups=included,
+            complexity=p.complexity, tier=p.tier,
+            use_slack=p.use_slack,
+            slack_after_internal=p.slack_after_internal,
+            slack_after_client=p.slack_after_client,
+            slack_global_pct=p.slack_global_pct,
+            project_start=start_for_this,
+            scenario_letter=letter
+        )
+
+        if sched:
+            d_start = sched[0]["start_date"]
+            d_end   = sched[-1]["end_date"]
+            d_days  = sum(int(r["duration_days"]) for r in sched)
+            y, m, d = map(int, d_end.split("-"))
+            cursor_date = datetime.date(y, m, d) + datetime.timedelta(days=1)
+        else:
+            d_start = d_end = start_for_this
+            d_days  = 0
+
+        base = prev_by_code.get(str(code), {"deliverable_code": code})
+        base.update({
+            "schedule": sched,
+            "start": d_start,
+            "end": d_end,
+            "duration_days": d_days,
+        })
+        items.append(base)
+
+    # Persist on scenario
+    scen["items"] = items
+    scen["project_start"] = base_start
+    scen["user_order"] = order_codes
+    scen["ai_order"] = scen.get("ai_order") or list(order_codes)
+    scen["manual_order_locked"] = True
+    _CURRENT_SCENARIOS[letter] = scen
+
+    # Return both for convenience
+    return {
+        "items": [
+            {
+                "deliverable_code": it["deliverable_code"],
+                "start": it["start"], "end": it["end"],
+                "duration_days": it["duration_days"],
+                "schedule": it["schedule"],
+            } for it in items
+        ],
+        "scenario": scen,
+    }
+
+
+Why this matters
+Your current first-registered version returns only {"items": ...} and never sets manual_order_locked, so /api/build is free to re‑sort on the next refresh.
+The version above mirrors the later (correct) one you already have that sets user_order and manual_order_locked = True, but makes it the only handler for that path so it’s actually used.
+
+2) Ensure /api/build respects a locked timeline
+
+Keep the preserving variant of your /api/build (the one that checks _current_scenarios() and copies both order and schedules). That block looks like this in your file and is correct—make sure this is the active version and not overwritten by a later duplicate:
+
+_prev = _current_scenarios().get(letter) or {}
+locked = bool(_prev.get("manual_order_locked"))
+
+if locked:
+    built_by_code = {str(it["deliverable_code"]): it for it in per_deliv}
+    prev_order = [str(c) for c in (_prev.get("user_order") or [])]
+    keep = [c for c in prev_order if c in built_by_code]
+    tail = [c for c in built_by_code.keys() if c not in keep]
+    ordered_codes = keep + tail
+    per_deliv = [built_by_code[c] for c in ordered_codes]      # preserve user order
+
+    # carry forward the sequential schedule saved by Step 4
+    prev_by_code = {str(it.get("deliverable_code")): it for it in (_prev.get("items") or [])}
+    for it in per_deliv:
+        prev_it = prev_by_code.get(str(it["deliverable_code"]))
+        if prev_it and prev_it.get("schedule"):
+            sched = prev_it["schedule"]
+            it["schedule"] = sched
+            it["start"] = sched[0]["start_date"]
+            it["end"] = sched[-1]["end_date"]
+            it["duration_days"] = sum(int(r["duration_days"]) for r in sched)
+else:
+    per_deliv = _sort_deliverables(per_deliv, letter)  # only when not locked
+
+
+If you see another /api/build later in the file that always sorts with _sort_deliverables(...) (ignores the locked flag), delete/comment it; that’s the one that causes the fallback to default order.
+
+3) Make exports always honor Step‑4 order
+
+You have two versions of WBS ordering toggles in the file:
+
+One sets _wbs_order_mode() default to timeline (good).
+
+Another sets it to ui (reverts to table/UI order, bad for your case).
+
+Simplest, make this a one‑liner to remove ambiguity:
+
+def _wbs_order_mode():
+    return "timeline"
+
+
+…and in build_wbs_with_pricing prefer the already persisted order:
+
+items_sorted = list(scenario.get("items", []))  # export in Step‑4 order
+
+
+(You already have that exact line in one of the duplicates; keep that one. )
+
+What to change in the UI (1 minute check)
+
+Make sure your “Save Order” button does not immediately rebuild from scratch in a way that discards the server state. After the POST to /api/reorder_timeline, update local state with the returned scenario (or its items) so the table reflects the persisted order:
+
+// pseudo React
+const saveOrder = async () => {
+  const payload = {
+    scenario_letter: activeLetter,
+    deliverable_codes: rows.map(r => r.deliverable_code),
+    included_map, complexity, tier, use_slack,
+    slack_after_internal, slack_after_client, slack_global_pct,
+    project_start
+  };
+  const res = await fetch("/api/reorder_timeline", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  }).then(r => r.json());
+
+  setScenarios(prev => ({
+    ...prev,
+    [activeLetter]: res.scenario ? res.scenario : { ...(prev[activeLetter] || {}), items: res.items }
+  }));
+};
+
+
+Even if your UI does call /api/build after saving, the server will now keep the order because it sets manual_order_locked = True during Save Order, and /api/build respects it.

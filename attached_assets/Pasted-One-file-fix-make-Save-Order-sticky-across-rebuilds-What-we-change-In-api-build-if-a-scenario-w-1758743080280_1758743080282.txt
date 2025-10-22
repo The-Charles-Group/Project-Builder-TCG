@@ -1,0 +1,116 @@
+One-file fix: make Save Order sticky across rebuilds
+
+What we change: In /api/build, if a scenario was previously “locked” by Save Order, we (a) keep the user’s order, and (b) carry forward the sequential schedule and dates that Save Order computed. Only if the scenario isn’t locked do we use your phase sort.
+
+Apply this to every /api/build definition in your v2.7 file (there are a couple duplicates in the docx). Search for def api_build(payload: BuildPayload):.
+
+Patch (drop‑in replacement for the block that currently sorts + builds the scenario list):
+
+# ... inside the for-letter loop in /api/build, right after we finish assembling `per_deliv` ...
+
+# Look up any previously built scenario so we can preserve a user-locked timeline
+_prev = _current_scenarios().get(letter) or {}
+locked = bool(_prev.get("manual_order_locked"))
+
+if locked:
+    # 1) Preserve the user's order (keep intersection, append any new codes at the end)
+    built_by_code = {str(it["deliverable_code"]): it for it in per_deliv}
+    prev_order = [str(c) for c in (_prev.get("user_order") or [])]
+    keep = [c for c in prev_order if c in built_by_code]
+    tail = [c for c in built_by_code.keys() if c not in keep]
+    ordered_codes = keep + tail
+    per_deliv = [built_by_code[c] for c in ordered_codes]
+
+    # 2) Carry forward the sequential schedule/dates computed by Save Order
+    prev_by_code = {str(it.get("deliverable_code")): it for it in (_prev.get("items") or [])}
+    for it in per_deliv:
+        code = str(it["deliverable_code"])
+        prev_it = prev_by_code.get(code)
+        if prev_it and prev_it.get("schedule"):
+            sched = prev_it["schedule"]
+            it["schedule"] = sched
+            it["start"] = sched[0]["start_date"]
+            it["end"]   = sched[-1]["end_date"]
+            it["duration_days"] = sum(int(r["duration_days"]) for r in sched)
+else:
+    # Default behavior when user hasn't locked a timeline yet
+    per_deliv = _sort_deliverables(per_deliv, letter)
+
+# Totals after order is finalized
+price_sum = sum(int(x["price"]) for x in per_deliv)
+hours_sum = sum(int(round(x["total_hours"])) for x in per_deliv)
+
+# Build the scenario object
+scenario_out = {
+    "pricing_mode": pricing_mode,
+    "rate_band": rate_band,
+    "blended_rate": blended_rate,
+    "use_slack": use_slack,
+    "slack_after_internal": slack_i,
+    "slack_after_client": slack_c,
+    "slack_global_pct": slack_pct,
+    "project_start": project_start,
+    "items": per_deliv,
+    "totals": {"hours": int(hours_sum), "price": int(price_sum)}
+}
+
+# Preserve/Set order tracking flags
+if locked:
+    scenario_out["ai_order"] = list(_prev.get("ai_order") or [it["deliverable_code"] for it in per_deliv])
+    scenario_out["user_order"] = ordered_codes
+    scenario_out["manual_order_locked"] = True
+else:
+    scenario_out["ai_order"] = [it["deliverable_code"] for it in per_deliv]
+    scenario_out["user_order"] = list(scenario_out["ai_order"])
+    scenario_out["manual_order_locked"] = False
+
+scenarios[letter] = scenario_out
+
+
+Why this works
+
+We only sort by phase order when the user hasn’t saved a custom timeline yet.
+
+Once Save Order runs, the “locked” order and its sequential schedule are carried forward on every /api/build, so the table won’t snap back.
+
+Keep Save Order endpoint as-is (it already does the right thing)
+
+Your Step‑4 endpoints already do sequential packing and persistence; they’re fine:
+
+Save order / pack builds a sequential schedule using a moving cursor date and persists it to the in‑memory scenario.
+
+The other Save‑Order variant explicitly sets manual_order_locked = True and writes user_order.
+
+(If you’re calling /api/timeline/pack instead of /api/reorder_timeline, you can also set scen["user_order"] and scen["manual_order_locked"]=True there in the same way—optional.)
+
+Minimal frontend note (so you don’t chase your tail)
+
+After drag‑drop, call only the Save‑Order endpoint (/api/reorder_timeline or /api/timeline/pack) and update the table with the returned items.
+
+If your component reruns /api/build (e.g., to recalc totals), that’s now safe—the server preserves the locked order/schedule.
+
+Quick test script (any HTTP client)
+
+Build A/B (default):
+
+POST /api/build
+{ "selected_deliverable_codes": ["..."], "...": "..." }
+
+
+Save a new order:
+
+POST /api/reorder_timeline
+{ "scenario_letter":"A", "project_start":"2025-09-24", "deliverable_codes": ["X","Y","Z"], ... }
+
+
+Rebuild to simulate a refresh:
+
+POST /api/build
+{ "selected_deliverable_codes": ["X","Y","Z"], "...": "..." }
+
+
+✅ The order and the start/end dates remain as in step 2 (sequentially packed), not phase‑sorted.
+
+Why the exporter will now match Step‑4
+
+With the timeline sticky, the exporter—when WBS_Order_Mode is ui—iterates scenario["items"] as-is, so exports mirror the on‑screen order/dates. (That’s the branch where you skip the timeline sort.)

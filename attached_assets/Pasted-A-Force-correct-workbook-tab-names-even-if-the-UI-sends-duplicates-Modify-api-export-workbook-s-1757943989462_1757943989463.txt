@@ -1,0 +1,103 @@
+A) Force correct workbook tab names (even if the UI sends duplicates)
+
+Modify /api/export_workbook so it ignores incoming tab names and always uses distinct “Scenario A” / “Scenario B”.
+
+Replace this part (near the bottom of /api/export_workbook):
+
+sheetA = _safe_sheet_name(payload.sheet_name_a or "Scenario A")
+sheetB = _safe_sheet_name(payload.sheet_name_b or "Scenario B")
+
+
+with this:
+
+# Always use stable, distinct tab names to prevent accidental overwrite
+sheetA = "Scenario A"
+sheetB = "Scenario B"
+
+
+That guarantees two tabs every time. (Rest of the function stays the same.)
+
+B) Make the “export filename” exactly match your spec, every time
+
+Use the new helpers everywhere and remove any “Add timestamp” toggle from the UI:
+
+Single‑scenario export already builds names with _export_basename(project, scenario_label) and returns a server‑suggested filename. Keep that path.
+
+A&B workbook export already calls _export_basename(project, "Scenarios A & B"). Keep that too.
+
+No checkbox is needed—the timestamp is always there, in EST, in 12‑hour format (e.g., 09.30AM).
+
+C) Front‑end download routine (to fix “nothing happens”)
+
+When you click Export Scenario A, Export Scenario B, or Export A & B (one file), the browser must consume the response as a blob and apply the server’s filename from the Content‑Disposition header (CORS already exposes this).
+
+Use this fetch pattern:
+
+async function downloadFromEndpoint(url, payload) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    alert(`Export failed: ${text}`);
+    return;
+    }
+  const blob = await res.blob();
+  // Prefer server-suggested name, else fall back
+  const disp = res.headers.get('Content-Disposition') || '';
+  const match = /filename\*=UTF-8''([^;]+)|filename="?([^"]+)"?/.exec(disp);
+  const suggested = decodeURIComponent((match?.[1] || match?.[2] || 'Workfront_Export.xlsx'));
+  const urlObj = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = urlObj;
+  a.download = suggested;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(urlObj);
+}
+
+
+For A or B: POST to /api/export with that single scenario block and scenario_label: "Scenario A" (or B). The server will name it … - Scenario A - … EST.xlsx.
+
+For A & B: POST to /api/export_workbook with both scenarios; the server will name it … - Scenarios A & B - … EST.xlsx.
+
+D) UI: remove the “Add timestamp” checkbox
+
+Delete the checkbox markup and any code sending add_timestamp—the backend ignores it when using _export_basename anyway, and the timestamp is always included.
+
+(Optional) If you actually want A & B in one single sheet
+
+If the product direction changes and you truly want a single worksheet that stacks Scenario A over Scenario B with a header divider, add a combined_sheet: true option:
+
+@app.post("/api/export_workbook")
+def api_export_workbook(payload: ExportWorkbookPayload):
+    if not DB.loaded: DB.load()
+    project = (payload.project_name
+               or _upload_title_default()
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
+
+    dfA = _ensure_v3_ae_columns(build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project))
+    dfB = _ensure_v3_ae_columns(build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project))
+
+    base = _export_basename(project, "Scenarios A & B")  # EST timestamp baked-in
+    out_path = f"{base}.xlsx"
+
+    with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+        if getattr(payload, "combined_sheet", False):
+            dfA2 = dfA.copy(); dfA2.insert(0, "Scenario", "A")
+            dfB2 = dfB.copy(); dfB2.insert(0, "Scenario", "B")
+            combined = pd.concat([dfA2, dfB2], ignore_index=True)
+            combined.to_excel(xw, sheet_name="Scenarios", index=False)
+            _apply_number_formats(xw.sheets["Scenarios"], combined)
+        else:
+            # default: two tabs
+            dfA.to_excel(xw, sheet_name="Scenario A", index=False)
+            dfB.to_excel(xw, sheet_name="Scenario B", index=False)
+            _apply_number_formats(xw.sheets["Scenario A"], dfA)
+            _apply_number_formats(xw.sheets["Scenario B"], dfB)
+
+    return FileResponse(out_path, filename=os.path.basename(out_path),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.s

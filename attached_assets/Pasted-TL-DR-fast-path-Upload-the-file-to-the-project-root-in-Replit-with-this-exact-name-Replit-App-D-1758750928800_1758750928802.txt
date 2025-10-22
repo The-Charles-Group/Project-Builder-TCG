@@ -1,0 +1,155 @@
+TL;DR (fast path)
+
+Upload the file to the project root in Replit with this exact name:
+
+Replit_App_DB_READABLE_FullRows_v3.xlsx
+
+
+Make sure openpyxl is installed (pandas needs it for .xlsx):
+
+# requirements.txt
+openpyxl>=3.1
+
+
+Reload the DB (add the tiny /api/db/reload route below once, then call it), or just restart the repl.
+
+Confirm at:
+
+GET /api/db/status → has_v3: true
+
+GET /api/options → “complexities/tiers” should now come from v3 Drivers (3 each). 
+
+v2.8 prod
+
+That’s it. If you prefer putting the file in a folder or using a secret path, drop in the “env/path‑aware loader” patch below.
+
+Why it currently says “missing”
+
+Your v2.8 code tries to auto‑load v3 only if a file named exactly Replit_App_DB_READABLE_FullRows_v3.xlsx (or “(2).xlsx”) is present in the project root. It then reads the Drivers and All_Task_Rows sheets. If the file is elsewhere or named differently, the app falls back and you’ll see “missing” behavior (no v3 Drivers; blank Service Department). 
+
+v2.8 prod
+
+One‑time patch (path/env‑aware + status endpoints)
+
+Paste this into your FastAPI file (where AgencyDB.load() is defined). If you’re on the full v2.8 server, you’ll recognize the surrounding code. If you’re on the minimal server, paste the same helper + endpoints—the logic is identical.
+
+1) Add a helper to find v3 by env var or common paths
+# Add near AgencyDB class (top-level helper)
+def _find_v3_path() -> str | None:
+    candidates = [
+        os.getenv("APB_V3_DB"),                                     # preferred: Replit Secret
+        "Replit_App_DB_READABLE_FullRows_v3.xlsx",                  # project root
+        "data/Replit_App_DB_READABLE_FullRows_v3.xlsx",             # ./data
+        "static/data/Replit_App_DB_READABLE_FullRows_v3.xlsx",      # ./static/data
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+2) In AgencyDB.load(), replace the hard‑coded v3 lookup with:
+# after v4 sheets are loaded
+v3_path = _find_v3_path()
+if v3_path:
+    try:
+        self.drivers_v3 = pd.read_excel(v3_path, sheet_name="Drivers")
+    except Exception:
+        self.drivers_v3 = None
+    try:
+        self.v3_all_rows = pd.read_excel(v3_path, sheet_name="All_Task_Rows")
+    except Exception:
+        self.v3_all_rows = None
+    print(f"[DB] v3 loaded from: {v3_path}")
+else:
+    self.drivers_v3 = None
+    self.v3_all_rows = None
+    print("[DB] v3 not found (Drivers/All_Task_Rows unavailable)")
+
+
+(On your full v2.8 file, this replaces the two small loops that only check the root for Replit_App_DB_READABLE_FullRows_v3.xlsx or “(2).xlsx”.) 
+
+v2.8 prod
+
+3) Add quick diagnostics endpoints
+@app.get("/api/db/status")
+def db_status():
+    if not DB.loaded: DB.load()
+    def _ok(df): return (df is not None) and (not getattr(df, "empty", True))
+    return {
+        "loaded": DB.loaded,
+        "v4_src": DB.src,
+        "has_v3": _ok(DB.v3_all_rows),
+        "v3_sheets": {
+            "drivers": _ok(DB.drivers_v3),
+            "all_rows": _ok(DB.v3_all_rows),
+        }
+    }
+
+@app.post("/api/db/reload")
+def db_reload():
+    DB.loaded = False
+    DB.load()
+    return {"ok": True, "status": db_status()}
+
+
+Now you can upload/rename the file and POST /api/db/reload without restarting the repl.
+
+How to set a path (optional but robust)
+
+If you keep data in a folder or mount a drive:
+
+Upload your workbook anywhere in the project (e.g., data/Replit_App_DB_READABLE_FullRows_v3.xlsx).
+
+Set a Replit Secret:
+Key: APB_V3_DB
+Value: data/Replit_App_DB_READABLE_FullRows_v3.xlsx
+
+Call POST /api/db/reload and confirm with GET /api/db/status.
+
+What you get when v3 is detected
+
+/api/options will pull Complexities and Tiers from v3 Drivers (up to three each) instead of the generic v4 lists—exactly what Bradley wanted in the UI caps. 
+
+v2.8 prod
+
+Exports and WBS rows populate Service Department using v3’s All_Task_Rows (majority by hours) at deliverable/component/task granularity; when v3 is missing, those cells are blank by design. 
+
+v2.8 prod
+
+Quick smoke tests (copy/paste)
+
+Check load
+GET /api/db/status → expect:
+{"has_v3": true, "v3_sheets":{"drivers":true,"all_rows":true}}
+
+Options
+GET /api/options → complexities and tiers lists should be the v3 pick‑list (≤3 each). 
+
+v2.8 prod
+
+Build
+Run a normal /api/build from Step 1. Service Department should appear in export rows if you use the enhanced exporter (already present in your full v2.8 code). 
+
+v2.8 prod
+
+Common gotchas (and instant fixes)
+
+Filename mismatch → rename to Replit_App_DB_READABLE_FullRows_v3.xlsx (or set APB_V3_DB). 
+
+v2.8 prod
+
+Sheet names must be exactly Drivers and All_Task_Rows. (Your file matches.) 
+
+agency project builder v1 code
+
+Missing dependency → add openpyxl>=3.1 to requirements.txt, then reinstall/restart.
+
+Didn’t reload after upload → POST /api/db/reload.
+
+Notes for your two server variants
+
+Full v2.8 server (the long file): it already prefers v3 Drivers in /api/options and uses v3 for Service Department mapping; the patch above only makes the v3 file discovery more forgiving and adds the status endpoints. 
+
+v2.8 prod
+
+Minimal v2.8 server (shorter file): drop in the same _find_v3_path + v3 reads + status/reload endpoints; it’ll behave the same way.

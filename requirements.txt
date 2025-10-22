@@ -53,5 +53,3 @@ pytest-cov
 pytest-html
 pytest-json-report
 pytest-xdist
-pypdf
-python-docx

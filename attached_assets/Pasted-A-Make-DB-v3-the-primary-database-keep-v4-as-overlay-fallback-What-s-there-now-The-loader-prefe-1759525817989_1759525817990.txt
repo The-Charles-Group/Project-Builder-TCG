@@ -1,0 +1,317 @@
+A) Make DB v3 the primary database (keep v4 as overlay/fallback)
+
+What’s there now:
+The loader prefers v4 (v4b → v4 → CSVs). It then optionally loads v3 (Drivers + All_Task_Rows) mainly to enrich “Service Department”. You can see the v4‑first order and the v3 locator helper in AgencyDB.load() and _find_v3_path().
+
+Goal: Flip the order so v3 can be primary with v4 used as a selective overlay (only for sheets missing in v3).
+
+A.1 Loader flag + environment variable
+
+Add a feature flag: APB_PRIMARY_DB_VERSION (default v4, set to v3 to switch).
+
+Keep the existing APB_V3_DB path secret (the loader already checks it).
+
+Patch (server — where AgencyDB is defined):
+
+# at top, near other env helpers
+PRIMARY = os.getenv("APB_PRIMARY_DB_VERSION", "v4").lower()  # 'v3' or 'v4'
+
+def _find_v4_path() -> str | None:
+    for p in [
+        "Replit_App_DB_READABLE_FullRows_v4b.xlsx",
+        "Replit_App_DB_READABLE_FullRows_v4.xlsx",
+        "Replit_App_DB_READABLE_FullRows_v4_csvs",  # dir
+    ]:
+        if os.path.exists(p):
+            return p
+    return None
+
+class AgencyDB:
+    # ...
+
+    def load(self):
+        prefer_v3 = (PRIMARY == "v3")
+
+        v3_path = _find_v3_path()
+        v4_path = _find_v4_path()
+
+        if prefer_v3 and v3_path:
+            self._load_from_v3_primary(v3_path, v4_path)  # v3 base, v4 overlay
+        else:
+            self._load_from_v4_primary(v4_path, v3_path)  # current behavior
+        self.loaded = True
+        return True
+
+    def _load_from_v3_primary(self, v3_path: str, v4_path: str | None):
+        # --- base: v3 ---
+        read_v3 = lambda sh: pd.read_excel(v3_path, sheet_name=sh)
+        self.src            = v3_path
+        self.all_rows       = read_v3("All_Task_Rows")
+        self.deliverables   = read_v3("Deliverable_Index") if "Deliverable_Index" in pd.ExcelFile(v3_path).sheet_names else None
+        self.role_rate_card = read_v3("Role_Rate_Card")   if "Role_Rate_Card"   in pd.ExcelFile(v3_path).sheet_names else None
+        self.drivers_v3     = read_v3("Drivers")          if "Drivers"          in pd.ExcelFile(v3_path).sheet_names else None
+        # optional v3 sheets:
+        def _maybe(sh): 
+            try: return read_v3(sh)
+            except: return None
+        self.b_rules           = _maybe("Bundle_Rules_Table")
+        self.b_defaults        = _maybe("Bundle_Scenario_Defaults")
+        self.b_by_deliv        = _maybe("Bundles_By_Deliverable")
+        self.b_hours_by_role   = _maybe("Bundles_Hours_By_Role")
+        self.rate_matrix       = _maybe("Role_Rate_Matrix")
+        self.rate_bands        = _maybe("Rate_Bands")
+        self.timeline_params   = _maybe("Timeline_Params")
+        self.timeline_scaling  = _maybe("Timeline_Scaling")
+        self.timeline_weighting= _maybe("Timeline_Weighting")
+        self.slack_settings    = _maybe("Slack_Settings")
+        self.pricing_settings  = _maybe("Pricing_Settings")
+        self.scenario_templates= _maybe("Scenario_Templates")
+        self.ui_options        = _maybe("UI_Options")
+        self.rfp_rules         = _maybe("RFP_Matching_Rules")
+
+        # --- overlay: v4 for any sheet missing in v3 ---
+        if v4_path:
+            if v4_path.endswith(".xlsx"):
+                read_v4 = lambda sh: pd.read_excel(v4_path, sheet_name=sh)
+                v4_book = pd.ExcelFile(v4_path)
+                def fill(attr, sh):
+                    if getattr(self, attr) is None and sh in v4_book.sheet_names:
+                        setattr(self, attr, read_v4(sh))
+                for attr, sh in [
+                    ("deliverables","Deliverable_Index"),
+                    ("b_rules","Bundle_Rules_Table"),
+                    ("b_defaults","Bundle_Scenario_Defaults"),
+                    ("b_by_deliv","Bundles_By_Deliverable"),
+                    ("b_hours_by_role","Bundles_Hours_By_Role"),
+                    ("role_rate_card","Role_Rate_Card"),
+                    ("rate_matrix","Role_Rate_Matrix"),
+                    ("rate_bands","Rate_Bands"),
+                    ("timeline_params","Timeline_Params"),
+                    ("timeline_scaling","Timeline_Scaling"),
+                    ("timeline_weighting","Timeline_Weighting"),
+                    ("slack_settings","Slack_Settings"),
+                    ("pricing_settings","Pricing_Settings"),
+                    ("scenario_templates","Scenario_Templates"),
+                    ("ui_options","UI_Options"),
+                    ("rfp_rules","RFP_Matching_Rules"),
+                ]:
+                    fill(attr, sh)
+
+        # normalize & code‑path compat (uses existing helpers)
+        self._normalize_component_column()
+        self._normalize_task_label_column()
+        self._normalize_v3_service_department()  # keeps v3 “Service Department” field normalized
+        self._normalize_code_columns()
+        self._normalize_role_and_seniority_columns()
+        self._normalize_rate_card_seniority()
+
+
+How to turn it on (Replit):
+
+Add Replit Secrets
+
+APB_PRIMARY_DB_VERSION = v3
+
+APB_V3_DB = Replit_App_DB_READABLE_FullRows_v3.xlsx (or absolute path)
+
+Restart app. The server log will show self.src pointing at v3.
+
+Why this is safe: The code already knows how to find v3, normalize “Service Department,” and read the same core sheets; we’re only changing the order of precedence and overlaying any missing sheets from v4.
+
+B) Fix rate/pricing mismatches between app and Workfront
+
+Observed problem: XML exports do not include resource rates or assignment costs, so Workfront falls back to its own system rates—hence totals differ from what you set in Step 3. In your current XML files, <Resources> have names but no <StandardRate> or cost tables; assignments don’t include <Cost>. Examples:
+
+Only “Unassigned” resource and no rate/cost in one export.
+
+Another export has many resources but still no <StandardRate> entries.
+
+Fix: Write the rates and costs into MSPDI:
+
+When pricing mode = Flat_Blended:
+
+Put one resource (“Unassigned” or “Blended Team”) with <StandardRate> = the blended rate from Step 3 (e.g., 195).
+
+Assign all work to this resource.
+
+For each assignment, set <Cost> = (Work minutes / 60) * rate.
+
+When pricing mode = Per_Resource:
+
+Create one resource per role (Account Manager, Strategist, Designer, etc.).
+
+For each, write <StandardRate> using Rate Band & Role lookup (Role_Rate_Card/Matrix from DB).
+
+On every assignment, compute and set <Cost> again from the role‑specific rate.
+
+Patch (exporter — where MSPDI XML is built):
+
+# helpers
+def _std_rate_for(role: str, mode: str, band: str, blended: float, db: AgencyDB) -> float:
+    if mode == "Flat_Blended" and blended:
+        return float(blended)
+    # per-resource lookup
+    try:
+        # prefer matrix; fallback to role_rate_card
+        m = db.rate_matrix
+        if m is not None:
+            row = m[(m["Role"].str.strip().str.lower()==role.strip().lower()) &
+                    (m["Band"].str.strip().str.lower()==band.strip().lower())]
+            if not row.empty:
+                return float(row["USD_per_hour"].iloc[0])
+        rc = db.role_rate_card
+        if rc is not None:
+            row = rc[rc["Role"].str.strip().str.lower()==role.strip().lower()]
+            if not row.empty:
+                return float(row[band].iloc[0])  # columns like Standard_US, Premium_US
+    except Exception:
+        pass
+    return float(blended or 0)
+
+# when writing <Resources>
+for res in resources_list:  # e.g., [{'uid':1,'name':'Designer','role':'Designer'}]
+    r = SubElement(resources_el, "Resource")
+    SubElement(r, "UID").text = str(res["uid"])
+    SubElement(r, "ID").text  = str(res["uid"])
+    SubElement(r, "Name").text = res["name"]
+    SubElement(r, "Type").text = "1"
+    rate = _std_rate_for(res["role"], pricing_mode, rate_band, blended_rate, db)
+    SubElement(r, "StandardRate").text = f"{rate:.2f}"
+    # optional: add cost rate table entries if needed
+
+# when writing each <Assignment>
+work_mins = int(planned_hours * 60)
+SubElement(a, "Work").text = f"PT{work_mins}M"
+# Cost = rate * hours
+SubElement(a, "Cost").text = f"{(work_mins/60.0)*rate:.2f}"
+
+
+Result: Workfront will ingest both rates and costs aligning with your Step‑3 pricing—so totals stop drifting after import. (Your current XMLs lack these fields, which is why Workfront “re‑prices” them.)
+
+C) Scenario Builder — make A / B / C materially different
+
+Observed: A, B, C often look the same because they’re all built from the same base hours column and similar component sets.
+
+What to change:
+
+Use distinct scenario multipliers (hours + overhead) and component sets:
+
+Add a small config table (or reuse Scenario_Templates if present) with per‑scenario knobs:
+
+SCENARIO_MULT = {
+  "A": {"hours_mult": 1.00, "qa_pct": 0.00, "pm_pct": 0.05, "strip_optional": True},
+  "B": {"hours_mult": 1.15, "qa_pct": 0.03, "pm_pct": 0.10, "strip_optional": False},
+  "C": {"hours_mult": 1.30, "qa_pct": 0.05, "pm_pct": 0.12, "include_addons": True}
+}
+
+
+In the builder, after selecting base hours via the column
+f"{complexity}__{tier}_Hours" (that’s how your loader selects hours now), multiply by the scenario knobs.
+
+A (lean): remove “optional/nice‑to‑have” components (mark via tag or a list).
+B (producer‑edited): keep all core components and add PM/QA overhead.
+C (upsell): include add‑ons and increase hours slightly.
+
+Make the pricing genuinely diverge:
+
+Compute scenario_price = sum(hours_by_role * rate_by_role) using the same rate band, then apply scenario‑specific management overheads as separate “Tasks” (PM, QA) so the difference is visible both in Step 3 and in the XML (and not just hidden in numbers).
+
+Patch (server — in the function that constructs scenarios A/B and in /api/build_scenario_c):
+
+def _apply_scenario_knobs(items, letter, complexity, tier, pricing_mode, rate_band, db, blended_rate=None):
+    knobs = SCENARIO_MULT[letter]
+    for it in items:
+        base_col = db._scenario_col(complexity, tier)   # e.g. Advanced__T2_MediumVolume_Hours
+        for r in it["hours_by_role"]:
+            r["hours"] = r["hours"] * knobs["hours_mult"]
+        # strip/augment components
+        if knobs.get("strip_optional"):
+            it["components"] = [c for c in it["components"] if not c.get("optional")]
+        if knobs.get("include_addons"):
+            it["components"].extend(it.get("addons", []))
+    # add PM/QA overhead as explicit task groups
+    pm_hours = sum(sum(r["hours"] for r in it["hours_by_role"]) for it in items) * knobs["pm_pct"]
+    qa_hours = sum(sum(r["hours"] for r in it["hours_by_role"]) for it in items) * knobs["qa_pct"]
+    if pm_hours > 0:
+        items.append(_make_overhead_item("Project Management", pm_hours))
+    if qa_hours > 0:
+        items.append(_make_overhead_item("QA / Reporting", qa_hours))
+    return items
+
+
+Bind this in both A/B builder route and the Scenario C route so all three letters branch differently.
+
+D) Complexity & Volume multipliers that produce realistic estimates
+
+What’s there now: Hours come from a per‑row column like Advanced__T2_MediumVolume_Hours. (That mapping already exists in the loader as _scenario_col.)
+
+What to add:
+
+Read “global” multipliers from Pricing_Settings or Timeline_Scaling if present (e.g., Complexity.Advanced = 1.25, Volume.T3_HighVolume = 1.20). Those sheets are already loaded by AgencyDB.
+
+Apply them on top of the column hours, so we have:
+
+final_hours = db_hours_column
+              * complexity_multiplier
+              * volume_multiplier
+              * scenario_hours_multiplier (A/B/C)
+
+
+Cap and floor multipliers (e.g., min 0.5x, max 2.0x) to avoid extremes from AI suggestions.
+
+Patch (where hours are computed):
+
+def _resolve_global_multipliers(db: AgencyDB, complexity: str, tier: str) -> tuple[float,float]:
+    cm = 1.0; vm = 1.0
+    try:
+        ps = db.pricing_settings
+        if ps is not None:
+            cm_row = ps[ps["Key"].str.lower()==f"complexity.{complexity.lower()}"]
+            vm_row = ps[ps["Key"].str.lower()==f"volume.{tier.lower()}"]
+            if not cm_row.empty: cm = float(cm_row["Value"].iloc[0])
+            if not vm_row.empty: vm = float(vm_row["Value"].iloc[0])
+    except Exception:
+        pass
+    return cm, vm
+
+def _apply_multipliers(row_hours, complexity, tier, letter, db):
+    cm, vm = _resolve_global_multipliers(db, complexity, tier)
+    sm = SCENARIO_MULT[letter]["hours_mult"]
+    return max(0.5, min(2.0, row_hours * cm * vm * sm))
+
+
+Wire _apply_multipliers wherever we loop rows to compute scenario hours.
+
+Outcome:
+
+Scenario A, B, C numerically differ.
+
+Differences are traceable (PM/QA tasks present).
+
+Changing complexity/tier actually moves totals (A/B now produce realistic spreads).
+
+E) Quick validation steps for Replit
+
+Switch DB: set APB_PRIMARY_DB_VERSION=v3 + APB_V3_DB=... → restart → confirm server logs show v3 as self.src.
+
+Pricing parity: export XML for a small project in Flat_Blended and Per_Resource; open XML and verify <StandardRate> under each <Resource> and <Cost> under each <Assignment>. (Previous XMLs had neither.)
+
+Scenario deltas: Build A/B/C on the same input and compare total Hours and Price; B should be ~15–25% above A with PM/QA lines; C > B with add‑ons.
+
+Complexity/Volume: flip from Standard_US / T2 to Advanced / T3 and confirm totals jump according to your Pricing_Settings multipliers.
+
+Notes / gotchas
+
+Workfront import behavior: If Workfront still doesn’t honor costs, add <FixedCost> on each leaf <Task> (in addition to <Assignment><Cost>). Some Workfront tenants map either assignment cost or fixed task cost on import—our patch can set both.
+
+Rate Band mapping: Ensure your DB’s Role_Rate_Card headers match the UI band keys exactly (e.g., Standard_US, Premium_US). If they differ, add a small alias map.
+
+Service Department column: Your CSV/XLS “Workfront” export column set already includes a “Service Department” field; keeping v3 primary preserves those values (v4 is overlaid only where v3 lacks a sheet).
+
+TL;DR for the agent
+
+Flip DB default: add APB_PRIMARY_DB_VERSION=v3 secret; apply the AgencyDB.load() patch to support v3‑primary with v4 overlay.
+
+Pricing in XML: add <StandardRate> per resource and <Cost> per assignment (and optional <FixedCost> per task). This aligns Workfront totals to the app.
+
+Different scenarios: implement scenario‑specific multipliers & PM/QA overhead tasks; use global complexity/volume multipliers on top of the hours column f"{complexity}__{tier}_Hours"

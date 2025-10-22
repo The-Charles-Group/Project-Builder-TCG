@@ -1,0 +1,52 @@
+Patch (minimal)
+
+Where: in build_wbs_with_pricing(...), inside the innermost loop that appends each role row (right after you compute wbs_role and before rows.append({...})). You’ll see the existing append that currently omits rate/price on role rows.
+
+Add this block before rows.append({...}):
+
+# --- determine rate for this role row ---
+if pricing_mode == "Flat_Blended":
+    role_rate = float(blended_rate)
+else:
+    # Get band-adjusted role rates once (outside loops if you prefer)
+    rr = DB.role_rates_table(rate_band)  # already band-adjusted
+    # exact role+seniority match
+    match = rr[(rr["Resource_Title"] == str(role)) &
+               (rr["Seniority"] == str(sen))]
+    if not match.empty:
+        role_rate = float(match["Rate_USD"].iloc[0])
+    else:
+        # fallback 1: role-only
+        match2 = rr[rr["Resource_Title"] == str(role)]
+        if not match2.empty:
+            role_rate = float(match2["Rate_USD"].iloc[0])
+        else:
+            # fallback 2: band-aware default (mirrors price_for_hours_by_role)
+            ps = DB.pricing_settings[DB.pricing_settings["Key"] == "Default_Blended_Rate"]
+            base_default = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+            role_rate = base_default * _band_multiplier(rate_band)
+
+# Optional: compute row price here; the export recalcs anyway
+row_hours = int(h)
+row_price = int(round(role_rate * row_hours))
+
+
+Then change the existing rows.append({...}) for the role row to include rates:
+
+rows.append({
+    "Row_ID": row_id,
+    "Deliverable_Code": dcode,
+    "Task_Code": task_code,
+    "Service_Department": (svc_task or svc_comp),
+    "Deliverable": str(d.get("deliverable","")),
+    "Project_Name": project_name, "WBS_ID": wbs_role, "Parent_WBS_ID": wbs_task,
+    "Task_Name": label, "Component": comp, "Task": label,
+    "Role": role or "", "Seniority": sen or "",
+    "Planned_Hours": row_hours,
+    "Start_Offset_Days": "", "Duration_Days": "",
+    "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
+    "Assignee_External_ID": "", "Notes": "",
+    # NEW:
+    "Rate_USD": round(role_rate, 2),
+    "Price_USD": row_price
+})

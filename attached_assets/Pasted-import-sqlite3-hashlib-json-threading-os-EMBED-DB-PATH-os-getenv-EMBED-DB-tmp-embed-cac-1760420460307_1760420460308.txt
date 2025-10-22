@@ -1,0 +1,59 @@
+import sqlite3, hashlib, json, threading, os
+_EMBED_DB_PATH = os.getenv("EMBED_DB", "/tmp/embed_cache.sqlite3")
+_EMBED_DB_LOCK = threading.Lock()
+
+def _embed_db():
+    conn = sqlite3.connect(_EMBED_DB_PATH, check_same_thread=False, timeout=10)
+    with conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS embeds (
+                key TEXT PRIMARY KEY,
+                text_hash TEXT NOT NULL,
+                model TEXT NOT NULL,
+                vec BLOB NOT NULL
+            )
+        """)
+    return conn
+
+def _hash_text(t: str) -> str:
+    return hashlib.sha256((t or "").encode("utf-8")).hexdigest()
+
+def _get_cached_embed(conn, model: str, text: str):
+    key = f"{model}:{_hash_text(text)}"
+    row = conn.execute("SELECT vec FROM embeds WHERE key=?", (key,)).fetchone()
+    if row: return json.loads(row[0])
+    return None
+
+def _put_cached_embed(conn, model: str, text: str, vec):
+    key = f"{model}:{_hash_text(text)}"
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO embeds(key,text_hash,model,vec) VALUES(?,?,?,?)",
+                     (key, key.split(":",1)[1], model, json.dumps(vec)))
+
+def embed_many(texts: list[str], model: str = "text-embedding-3-large"):
+    if not texts: return []
+    conn = _embed_db()
+    pending = []
+    out = [None] * len(texts)
+
+    # 1) hit cache
+    for i, t in enumerate(texts):
+        cached = _get_cached_embed(conn, model, t)
+        if cached is None:
+            pending.append((i, t))
+        else:
+            out[i] = cached
+
+    # 2) fetch missing in batches
+    BATCH = 256
+    for b in range(0, len(pending), BATCH):
+        chunk = pending[b:b+BATCH]
+        idxs = [i for (i, _) in chunk]
+        payload = [t for (_, t) in chunk]
+        if not payload: continue
+        # call OpenAI (use your existing helper/client)
+        vecs = oai.embeddings.create(model=model, input=payload).data
+        for j, v in zip(idxs, vecs):
+            out[j] = v.embedding
+            _put_cached_embed(conn, model, texts[j], out[j])
+    return out

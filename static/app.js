@@ -1,11 +1,3 @@
-// ================================================================================
-// DEBUG MODE - Set to true to enable verbose logging (reduces browser CPU usage)
-// ================================================================================
-const DEBUG_MODE = false;  // Change to true for detailed debugging logs
-const log = (...args) => DEBUG_MODE && console.log(...args);
-const logGroup = (title) => DEBUG_MODE && console.group(title);
-const logGroupEnd = () => DEBUG_MODE && console.groupEnd();
-
 let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
@@ -18,7 +10,7 @@ let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 window.addEventListener('error', function(event) {
   console.error('[GLOBAL ERROR]', event.message, event.filename, event.lineno, event.colno);
   console.error('[GLOBAL ERROR] Stack:', event.error?.stack);
-
+  
   // Show user-friendly message
   if (!window._errorShown) {
     window._errorShown = true;
@@ -27,14 +19,14 @@ window.addEventListener('error', function(event) {
       window._errorShown = false;
     }, 100);
   }
-
+  
   // Don't prevent default - let console show the error too
   return false;
 });
 
 window.addEventListener('unhandledrejection', function(event) {
   console.error('[UNHANDLED PROMISE REJECTION]', event.reason);
-
+  
   // Show user-friendly message
   if (!window._promiseErrorShown) {
     window._promiseErrorShown = true;
@@ -75,7 +67,7 @@ window.getCurrentSessionId = getCurrentSessionId;
 // ================================================================================
 const SessionManager = {
   generateSessionId,
-
+  
   getCurrentSessionId() {
     let sessionId = localStorage.getItem('apb.currentSession');
     if (!sessionId) {
@@ -84,42 +76,42 @@ const SessionManager = {
     }
     return sessionId;
   },
-
+  
   startNewSession() {
     const newSessionId = this.generateSessionId();
-
+    
     // Clear ALL apb localStorage data from previous sessions (both 'apb.' and 'apb:' patterns)
     Object.keys(localStorage).forEach(key => {
       if (key.startsWith('apb.') || key.startsWith('apb:')) {
         localStorage.removeItem(key);
       }
     });
-
+    
     // Clear sessionStorage (all patterns)
     Object.keys(sessionStorage).forEach(key => {
       if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
         sessionStorage.removeItem(key);
       }
     });
-
+    
     // Clear in-memory summary to prevent persistence
     if (window.APP) {
       window.APP.summary = null;
       window.APP.rfpText = '';
     }
-
+    
     // Set new session ID
     localStorage.setItem('apb.currentSession', newSessionId);
-
+    
     console.log('[SESSION] Started new session:', newSessionId);
     return newSessionId;
   },
-
+  
   async clearAllData() {
     const sessionId = this.getCurrentSessionId();
-
+    
     console.log('[CLEAR] Starting complete data clear at', new Date().toISOString());
-
+    
     // Track what we're clearing for logging
     const clearingLog = {
       localStorage: [],
@@ -127,7 +119,7 @@ const SessionManager = {
       inMemory: [],
       timestamp: Date.now()
     };
-
+    
     // Clear localStorage (ALL patterns - be aggressive)
     Object.keys(localStorage).forEach(key => {
       if (key.startsWith('apb.') || key.startsWith('apb:') || 
@@ -139,7 +131,7 @@ const SessionManager = {
         localStorage.removeItem(key);
       }
     });
-
+    
     // Explicitly clear ALL known problematic keys
     const explicitKeys = [
       'apb.rfpText.v1', 'charles_agent_state', 'latest_scenarios',
@@ -152,13 +144,13 @@ const SessionManager = {
       }
       localStorage.removeItem(key);
     });
-
+    
     // Clear ALL sessionStorage
     Object.keys(sessionStorage).forEach(key => {
       clearingLog.sessionStorage.push(key);
       sessionStorage.removeItem(key);
     });
-
+    
     // Clear ALL in-memory data comprehensively
     if (window.APP) {
       clearingLog.inMemory.push('APP object');
@@ -167,7 +159,7 @@ const SessionManager = {
       window.APP.suggestions = null;
       window.APP.deliverables = [];
     }
-
+    
     if (window.APB) {
       clearingLog.inMemory.push('APB object');
       if (window.APB.step2) {
@@ -176,7 +168,7 @@ const SessionManager = {
         window.APB.step2.components = {};
       }
     }
-
+    
     // Clear global variables
     if (window.SCENARIOS) {
       clearingLog.inMemory.push('SCENARIOS');
@@ -215,7 +207,7 @@ const SessionManager = {
       clearingLog.inMemory.push('componentDataCache');
       window.componentDataCache.clear();
     }
-
+    
     // Clear AI Assistant state
     if (window.aiAssistant) {
       clearingLog.inMemory.push('AI Assistant');
@@ -224,56 +216,56 @@ const SessionManager = {
         selectedDeliverables: [],
         currentStep: 'step1',
         formValues: {},
-        analysisMode: 'deep',
+        analysisMode: 'fast',
         jobId: null,
         lastError: null,
         stateHistory: []
       };
     }
-
+    
     // Set PERMANENT flag to prevent auto-restore
     localStorage.setItem('apb.data_cleared', 'true');
     localStorage.setItem('apb.clear_timestamp', Date.now().toString());
-
+    
     // Log what we cleared
     console.log('[CLEAR] Cleared localStorage keys:', clearingLog.localStorage);
     console.log('[CLEAR] Cleared sessionStorage keys:', clearingLog.sessionStorage);
     console.log('[CLEAR] Cleared in-memory data:', clearingLog.inMemory);
-
+    
     // Clear server-side cache
     try {
       await fetch('/api/clear_session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.JSON.stringify({ session_id: sessionId })
+        body: JSON.stringify({ session_id: sessionId })
       });
       console.log('[CLEAR] Server cache cleared for session:', sessionId);
     } catch (err) {
       console.warn('[CLEAR] Failed to clear server cache:', err);
     }
-
+    
     // Start fresh session
     this.startNewSession();
-
+    
     console.log('[CLEAR] ✅ All data cleared completely at', new Date().toISOString());
     return clearingLog;
   },
-
+  
   getSessionKey(key) {
     const sessionId = this.getCurrentSessionId();
     return `apb.${sessionId}.${key}`;
   },
-
+  
   setSessionItem(key, value) {
     const sessionKey = this.getSessionKey(key);
     localStorage.setItem(sessionKey, value);
   },
-
+  
   getSessionItem(key) {
     const sessionKey = this.getSessionKey(key);
     return localStorage.getItem(sessionKey);
   },
-
+  
   removeSessionItem(key) {
     const sessionKey = this.getSessionKey(key);
     localStorage.removeItem(sessionKey);
@@ -295,7 +287,7 @@ function transformScenarioToPatchFormat(scenario) {
   if (!scenario || !scenario.items) {
     return { deliverables: [] };
   }
-
+  
   // Helper to slugify component names for IDs
   function slugify(text) {
     return text
@@ -308,13 +300,13 @@ function transformScenarioToPatchFormat(scenario) {
       .replace(/^-+/, '')              // Trim - from start
       .replace(/-+$/, '');             // Trim - from end
   }
-
+  
   const deliverables = scenario.items.map(item => {
     // Determine cadence based on is_retainer flag
     const isRetainer = item.is_retainer || item.retainer_months > 0;
     const cadence = isRetainer ? 'Monthly' : 'One-Time';
     const months = isRetainer ? (item.retainer_months || 12) : 0;
-
+    
     const deliverable = {
       id: item.deliverable_code,
       title: item.deliverable_name || item.deliverable || item.deliverable_code,
@@ -327,7 +319,7 @@ function transformScenarioToPatchFormat(scenario) {
       resources: item.resources || [],
       components: []
     };
-
+    
     // Transform components if they exist
     if (item.components && Array.isArray(item.components)) {
       deliverable.components = item.components.map(comp => ({
@@ -339,10 +331,10 @@ function transformScenarioToPatchFormat(scenario) {
         months: comp.months || deliverable.months
       }));
     }
-
+    
     return deliverable;
   });
-
+  
   return { deliverables };
 }
 
@@ -365,22 +357,22 @@ async function handleIndustrySelection() {
   const applyBtn = document.getElementById('btn-apply-template');
   const infoDiv = document.getElementById('industry-info');
   const descDiv = document.getElementById('industry-description');
-
+  
   selectedIndustry = selector.value;
-
+  
   if (!selectedIndustry) {
     applyBtn.style.display = 'none';
     infoDiv.style.display = 'none';
     industryDeliverables = [];
     return;
   }
-
+  
   // Show apply button
   applyBtn.style.display = 'block';
-
+  
   // Show industry-specific information
   infoDiv.style.display = 'block';
-
+  
   if (selectedIndustry === 'luxury_fashion') {
     descDiv.innerHTML = `
       <strong>Luxury & Fashion Template:</strong><br>
@@ -393,51 +385,46 @@ async function handleIndustrySelection() {
       <span style="color: #d946ef;">✨ Includes 1.5x-2x luxury pricing multipliers</span>
     `;
   }
-
+  
   // Fetch industry-specific deliverables when button clicked
   applyBtn.onclick = async () => {
-    try {
-      await applyIndustryTemplate();
-    } catch (error) {
-      console.error('[INDUSTRY] Error applying industry template:', error);
-      alert(`An error occurred while applying the industry template. Please try again.`);
-    }
+    await applyIndustryTemplate();
   };
 }
 
 async function applyIndustryTemplate() {
   if (!selectedIndustry) return;
-
+  
   const applyBtn = document.getElementById('btn-apply-template');
   applyBtn.disabled = true;
   applyBtn.textContent = 'Applying...';
-
+  
   try {
     // Get RFP text if available
     const rfpText = document.getElementById('rfpText').value || '';
-
+    
     // Fetch industry-specific suggestions
     const response = await fetch('/api/industry/suggest-deliverables', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         industry: selectedIndustry,
         rfp_text: rfpText
       })
     });
-
+    
     if (!response.ok) throw new Error('Failed to fetch industry deliverables');
-
+    
     const data = await response.json();
     industryDeliverables = data.deliverables || [];
-
+    
     // Show a notification
     if (industryDeliverables.length > 0) {
       alert(`✅ Applied ${data.industry} template!\n\n${industryDeliverables.length} fashion-specific deliverables loaded.\n\nClick "Analyze with AI" to incorporate these into your project.`);
-
+      
       // Store for use during analysis
       sessionStorage.setItem('industry_template', selectedIndustry);
-      sessionStorage.setItem('industry_deliverables', JSON.JSON.stringify(industryDeliverables));
+      sessionStorage.setItem('industry_deliverables', JSON.stringify(industryDeliverables));
     } else {
       alert('No specific deliverables found for this industry template.');
     }
@@ -449,76 +436,6 @@ async function applyIndustryTemplate() {
     applyBtn.textContent = 'Apply Template';
   }
 }
-
-// Manual AI Polling Recovery - Can be called from console if polling gets stuck
-window.resumeAIPolling = function(jobId) {
-  if (!jobId && window.aiAnalysisJobId) {
-    jobId = window.aiAnalysisJobId;
-  }
-
-  if (!jobId) {
-    console.error('[MANUAL RECOVERY] No job ID available. Cannot resume polling.');
-    return false;
-  }
-
-  console.log('[MANUAL RECOVERY] 🚨 Manually resuming AI polling for job:', jobId);
-
-  // Clear any existing intervals first
-  if (window.aiAnalysisInterval) {
-    clearInterval(window.aiAnalysisInterval);
-    window.aiAnalysisInterval = null;
-  }
-  if (window.PROTECTED_AI_INTERVAL) {
-    clearInterval(window.PROTECTED_AI_INTERVAL);
-    window.PROTECTED_AI_INTERVAL = null;
-  }
-
-  // Reset polling state for fresh start
-  window.aiPollingState = null;
-
-  // Set protection flags
-  window.PROTECTED_AI_POLLING = true;
-
-  // Create new protected interval
-  window.aiAnalysisInterval = setInterval(() => {
-    console.log('[MANUAL RECOVERY] ⚡ Polling tick at', new Date().toLocaleTimeString());
-    pollAIAnalysis(jobId);
-  }, 2000);
-
-  window.PROTECTED_AI_INTERVAL = window.aiAnalysisInterval;
-
-  // Start polling immediately
-  pollAIAnalysis(jobId);
-
-  console.log('[MANUAL RECOVERY] ✅ Polling resumed. Use window.stopAIPolling() to stop.');
-  return true;
-};
-
-// Stop AI Polling manually
-window.stopAIPolling = function() {
-  console.log('[MANUAL] 🛑 Manually stopping AI polling');
-  window.PROTECTED_AI_POLLING = false;
-
-  if (window.aiAnalysisInterval) {
-    clearInterval(window.aiAnalysisInterval);
-    window.aiAnalysisInterval = null;
-  }
-  if (window.PROTECTED_AI_INTERVAL) {
-    clearInterval(window.PROTECTED_AI_INTERVAL);
-    window.PROTECTED_AI_INTERVAL = null;
-  }
-
-  console.log('[MANUAL] ✅ AI polling stopped');
-  return true;
-};
-
-// Emergency polling override for AI analysis
-window.forceAllowPolling = function() {
-  if (window.GlobalPollingManager) {
-    window.GlobalPollingManager.isShuttingDown = false;
-    console.log('[POLLING] Force allowed all polling');
-  }
-};
 
 // Clear All Data with Confirmation Dialog
 async function clearAllDataWithConfirmation() {
@@ -532,65 +449,70 @@ async function clearAllDataWithConfirmation() {
     '• Clear server-side cache\n\n' +
     'This action cannot be undone. Continue?'
   );
-
+  
   if (!confirmed) return;
-
+  
   try {
     console.log('[CLEAR] User confirmed data clear at', new Date().toISOString());
-
+    
     // Show loading state
     const btn = document.getElementById('btnClearAllData');
     if (btn) {
       btn.disabled = true;
       btn.innerHTML = '⏳ Clearing...';
     }
-
+    
     // Clear all data - this now returns detailed log
     const clearLog = await SessionManager.clearAllData();
-
+    
     // Clear AI Assistant data
     if (window.aiAssistant) {
       window.aiAssistant.clearAllData();
     }
-
+    
     // Reset UI completely
     document.getElementById('rfpText').value = '';
     document.getElementById('rfpFile').value = '';
-
+    
     // Clear any file previews
     const filePreview = document.getElementById('file-preview');
     if (filePreview) filePreview.innerHTML = '';
-
-    // All steps remain visible - open dashboard layout
-    // No need to hide steps as users can see entire workflow
-
+    
+    // Hide all steps except Step 1
+    document.getElementById('step1').style.display = 'block';
+    document.getElementById('step2').style.display = 'none';
+    const step3 = document.getElementById('step3');
+    if (step3) step3.style.display = 'none';
+    const step4 = document.getElementById('step4');
+    if (step4) step4.style.display = 'none';
+    
     // Clear any visible deliverables or components panels
     const delivPanel = document.getElementById('deliverableList');
     if (delivPanel) delivPanel.innerHTML = '';
     const compPanel = document.getElementById('componentsList');
     if (compPanel) compPanel.innerHTML = '';
-
+    
     // Log what was cleared
     console.log('[CLEAR] Clear operation completed:', clearLog);
-
+    
     // Reset button state
     if (btn) {
       btn.disabled = false;
       btn.innerHTML = '🗑️ Clear All Data';
     }
-
+    
     alert(
       '✅ All data cleared successfully!\n\n' +
       'The application has been reset to a fresh state.\n\n' +
       'The page will reload to ensure complete cleanup.'
     );
-
+    
     // Reload page for complete reset
     setTimeout(() => window.location.reload(), 500);
   } catch (err) {
     console.error('[CLEAR] Error clearing data:', err);
     alert('❌ Error clearing data. Please try again or refresh the page.');
-
+    
     // Reset button state
     const btn = document.getElementById('btnClearAllData');
     if (btn) {
@@ -608,17 +530,17 @@ window.clearAllDataWithConfirmation = clearAllDataWithConfirmation;
 // Listen for pricing leveling applied events to refresh the pricing display
 document.addEventListener('pricing:leveling-applied', (event) => {
   console.log('[Resource Leveling] Pricing updated with leveling costs:', event.detail);
-
+  
   // Refresh pricing table to show conflict indicators
   if (typeof updatePricingTable === 'function') {
     updatePricingTable();
   }
-
+  
   // Refresh pricing summary to show leveling costs
   if (typeof updatePricingSummary === 'function') {
     updatePricingSummary();
   }
-
+  
   // Notify user of the resource conflicts detected
   const levelingData = event.detail;
   if (levelingData && levelingData.totalCost > 0) {
@@ -630,7 +552,7 @@ document.addEventListener('pricing:leveling-applied', (event) => {
 // Listen for gantt:changed events to re-analyze resource conflicts
 document.addEventListener('gantt:changed', (event) => {
   console.log('[Resource Leveling] Gantt changed, re-analyzing resource conflicts');
-
+  
   // Get all tasks from the Gantt if available
   if (window.gantt && typeof window.gantt.getTaskByTime === 'function') {
     const tasks = window.gantt.getTaskByTime();
@@ -645,7 +567,7 @@ document.addEventListener('gantt:changed', (event) => {
 document.addEventListener('task:dragging', (event) => {
   const { taskId, newStart, newEnd } = event.detail || {};
   if (!taskId) return;
-
+  
   // Get current tasks and create a temporary updated list
   if (window.gantt && typeof window.gantt.getTaskByTime === 'function') {
     const tasks = window.gantt.getTaskByTime();
@@ -655,10 +577,10 @@ document.addEventListener('task:dragging', (event) => {
       }
       return task;
     });
-
+    
     // Analyze temporary state for preview
     const tempRisks = analyzeResourceRisks(tempTasks);
-
+    
     // Show preview of cost impact (could be displayed in a tooltip or status bar)
     if (tempRisks.length > 0) {
       const totalCost = tempRisks.reduce((sum, risk) => sum + risk.idleCost, 0);
@@ -667,50 +589,50 @@ document.addEventListener('task:dragging', (event) => {
   }
 });
 
-// NEW: Gantt task updates sync with SCENARIO_STORE
+// NEW: Listen for Gantt task updates (drag/resize) and sync with SCENARIO_STORE
 document.addEventListener('gantt:task_updated', async (event) => {
-  const {task, wbs_id, start_date, duration_days } = event.detail || {};
+  const { task, wbs_id, start_date, duration_days } = event.detail || {};
   if (!wbs_id) return;
-
+  
   console.log('[GANTT SYNC] Task updated:', { wbs_id, start_date, duration_days });
-
+  
   // Get session ID from APP_STATE (must exist from build_scenario)
   const sessionId = getCurrentSessionId();
-
+  
   try {
     // Call new SCENARIO_STORE timeline update endpoint
     const response = await fetch('/api/timeline/update_task', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         session_id: sessionId,
         wbs_id: wbs_id,
         start_date: start_date,
         duration_days: duration_days
       })
     });
-
+    
     if (!response.ok) {
       const errorText = await response.text();
       console.error('[GANTT SYNC] Update failed:', errorText);
       return;
     }
-
+    
     const result = await response.json();
-
+    
     // Update the scenario with timeline changes
     const updatedScenario = result.scenario || result;
-
+    
     if (updatedScenario && updatedScenario.items) {
       // Store updated scenario
       window.currentScenario = updatedScenario;
       window.SCENARIOS = { A: updatedScenario };
-
+      
       // Update pricing table display to reflect timeline changes
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
       }
-
+      
       console.log('[GANTT SYNC] Pricing table updated with timeline changes');
     }
   } catch (error) {
@@ -731,7 +653,7 @@ if (typeof window.Gantt !== 'undefined') {
           const start = new Date(task.start);
           const end = new Date(task.end);
           const durationDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-
+          
           // Dispatch our custom event for SCENARIO_STORE sync
           document.dispatchEvent(new CustomEvent('gantt:task_updated', {
             detail: {
@@ -756,16 +678,16 @@ async function askAIForRetainerSuggestions(monthlyBudget = null) {
     alert('ScenarioManager not available. Please reload the page.');
     return;
   }
-
+  
   // Get current scenario from ScenarioManager
   const currentScenario = window.ScenarioManager.getCurrentScenario();
-
+  
   // Check for scenario
   if (!currentScenario || !currentScenario.items || currentScenario.items.length === 0) {
     alert('Please build a scenario first before analyzing retainers.');
     return;
   }
-
+  
   // Get session ID - prioritize ScenarioManager's session ID
   let sessionId;
   try {
@@ -777,75 +699,75 @@ async function askAIForRetainerSuggestions(monthlyBudget = null) {
       window.ScenarioManager.state.sessionId = sessionId;
     }
   }
-
+  
   // Show loading on button
   const btn = event?.target;
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Analyzing...';
   }
-
+  
   try {
     // Call updated retainer_suggestions endpoint with full scenario
     const res = await fetch('/api/pricing/retainer_suggestions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         session_id: sessionId,
         monthly_budget: monthlyBudget,
         scenario: currentScenario  // Send the full scenario for analysis
       })
     });
-
+    
     if (!res.ok) {
       const errorText = await res.text();
       throw new Error(`Retainer suggestions failed: ${errorText}`);
     }
-
+    
     const result = await res.json();
-
+    
     // Update the scenario with retainer suggestions
     const updatedScenario = result.scenario;
-
+    
     if (updatedScenario && updatedScenario.items) {
       // Update ScenarioManager with new data
       window.ScenarioManager.updateDeliverablesFromAPI({ 
         scenarios: { A: updatedScenario },
         scenario: updatedScenario 
       });
-
+      
       // Also update global references for compatibility
       window.currentScenario = updatedScenario;
       window.SCENARIOS = { A: updatedScenario };
-
+      
       // Update pricing table display
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
       }
-
+      
       // Re-render scenario if function exists
       if (window.renderScenario) {
         window.renderScenario('scenarioA', updatedScenario);
       }
-
+      
       // Display retainer plan in UI panel
       if (result.retainer_plan) {
         displayRetainerPlan(result.retainer_plan);
       }
-
+      
       // Display individual suggestions in AI Assistant panel if available
       if (result.suggestions && result.suggestions.length > 0) {
         displayRetainerSuggestions(result.suggestions);
       }
-
+      
       // Show success message with details
       const message = result.message || 'Retainer suggestions applied successfully.';
       const details = result.converted_count > 0 
         ? `\n\n✓ ${result.converted_count} deliverables converted to retainers\n✓ ${result.retainer_plan?.monthly_hours || 0} total monthly hours\n✓ $${result.retainer_plan?.monthly_budget || 0} monthly budget`
         : '';
-
+      
       alert(`✅ AI Retainer Suggestions Complete!\n\n${message}${details}`);
-
+      
       console.log('[Retainer Suggestions] Applied:', result);
     } else {
       throw new Error('Invalid retainer suggestions response');
@@ -870,16 +792,16 @@ function displayRetainerPlan(retainerPlan) {
     const newContainer = document.createElement('div');
     newContainer.id = 'retainer-plan-container';
     newContainer.style.cssText = 'margin: 20px 0; padding: 20px; background: var(--card); border-radius: 12px; border: 2px solid var(--accent2);';
-
+    
     // Insert after pricing table or in Step 3
     const step3 = document.getElementById('step3');
     if (step3) {
       step3.appendChild(newContainer);
     }
   }
-
+  
   const displayContainer = container || document.getElementById('retainer-plan-container');
-
+  
   if (displayContainer && retainerPlan) {
     let html = `
       <h3 style="color: var(--accent2); margin-bottom: 16px;">
@@ -890,14 +812,14 @@ function displayRetainerPlan(retainerPlan) {
           ${retainerPlan.description || 'Recommended retainer configuration based on your project requirements.'}
         </p>
     `;
-
+    
     if (retainerPlan.items && retainerPlan.items.length > 0) {
       html += `
         <div style="margin-top: 16px;">
           <h4 style="color: var(--accent); margin-bottom: 8px;">Retainer Items:</h4>
           <ul style="list-style: none; padding: 0;">
       `;
-
+      
       retainerPlan.items.forEach(item => {
         html += `
           <li style="padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
@@ -906,17 +828,17 @@ function displayRetainerPlan(retainerPlan) {
           </li>
         `;
       });
-
+      
       html += `
           </ul>
         </div>
       `;
     }
-
+    
     html += `
       </div>
     `;
-
+    
     displayContainer.innerHTML = html;
     displayContainer.style.display = 'block';
   }
@@ -926,12 +848,12 @@ function displayRetainerPlan(retainerPlan) {
 function displayRetainerSuggestions(suggestions) {
   // Find or create container for suggestions in the AI Assistant panel
   let suggestionsContainer = document.getElementById('retainer-suggestions-list');
-
+  
   if (!suggestionsContainer) {
     // Try to find AI Assistant panel or create in Step 3
     const aiAssistantPanel = document.querySelector('.ai-assistant-panel') || 
                             document.querySelector('#ai-assistant-content');
-
+    
     if (aiAssistantPanel) {
       suggestionsContainer = document.createElement('div');
       suggestionsContainer.id = 'retainer-suggestions-list';
@@ -948,9 +870,9 @@ function displayRetainerSuggestions(suggestions) {
       }
     }
   }
-
+  
   if (!suggestionsContainer) return;
-
+  
   // Build HTML for suggestions
   let html = `
     <h4 style="color: var(--accent2); margin-bottom: 16px;">
@@ -958,11 +880,11 @@ function displayRetainerSuggestions(suggestions) {
     </h4>
     <div class="suggestions-grid" style="display: grid; gap: 12px;">
   `;
-
+  
   suggestions.forEach(suggestion => {
     const confidence = Math.round((suggestion.confidence || 0.85) * 100);
     const confidenceColor = confidence >= 80 ? '#10b981' : confidence >= 60 ? '#f59e0b' : '#ef4444';
-
+    
     html += `
       <div class="suggestion-card" style="padding: 16px; background: rgba(139,92,246,0.05); border: 1px solid rgba(139,92,246,0.2); border-radius: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
@@ -973,7 +895,7 @@ function displayRetainerSuggestions(suggestions) {
             ${confidence}% confidence
           </span>
         </div>
-
+        
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0;">
           <div style="text-align: center;">
             <div style="color: var(--muted); font-size: 0.8em;">Monthly Hours</div>
@@ -988,11 +910,11 @@ function displayRetainerSuggestions(suggestions) {
             <div style="color: var(--accent); font-weight: bold;">${suggestion.total_hours}</div>
           </div>
         </div>
-
+        
         <p style="color: var(--muted); font-size: 0.85em; margin: 8px 0; font-style: italic;">
           ${suggestion.reasoning}
         </p>
-
+        
         <button 
           onclick="applyRetainerSuggestion('${suggestion.deliverable_code}', ${suggestion.suggested_months}, ${suggestion.monthly_hours})"
           style="width: 100%; padding: 8px; background: var(--accent2); color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em;"
@@ -1004,11 +926,11 @@ function displayRetainerSuggestions(suggestions) {
       </div>
     `;
   });
-
+  
   html += `
     </div>
   `;
-
+  
   suggestionsContainer.innerHTML = html;
   suggestionsContainer.style.display = 'block';
 }
@@ -1020,26 +942,26 @@ function applyRetainerSuggestion(deliverableCode, months, monthlyHours) {
     const deliverable = window.ScenarioManager.state.deliverables.find(
       d => d.id === deliverableCode || d.deliverable_code === deliverableCode
     );
-
+    
     if (deliverable) {
       // Update deliverable to retainer
       deliverable.cadence = 'Monthly';
       deliverable.months = months;
       deliverable.monthly_hours = monthlyHours;
       deliverable.is_retainer = true;
-
+      
       // Recalculate price
       deliverable.price = monthlyHours * months * (deliverable.rate || 195);
-
+      
       // Trigger updates
       window.ScenarioManager.recompute();
       window.ScenarioManager.emit();
-
+      
       // Update pricing table
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
       }
-
+      
       // Show confirmation
       alert(`✅ Applied retainer configuration:\n\n${deliverable.title}\n${monthlyHours} hours/month for ${months} months`);
     }
@@ -1065,7 +987,7 @@ function toggleRetainerType(code, isRetainer) {
     const monthsWrap = document.querySelector(`.retainer-months-wrap[data-code="${code}"]`);
     if (monthsWrap) monthsWrap.style.display = 'none';
   }
-
+  
   console.log(`[RETAINER] ${code} set to ${isRetainer ? 'RETAINER' : 'PROJECT'}`);
 }
 
@@ -1073,11 +995,11 @@ function updateRetainerMonths(code, months) {
   const monthsNum = parseInt(months) || 12;
   const clampedMonths = Math.min(Math.max(monthsNum, 1), 36); // Allow up to 36 months
   pricingData.retainerMonths.set(code, clampedMonths);
-
+  
   // Update the pricing display immediately
   updatePricingTable();
   updatePricingSummary();
-
+  
   console.log(`[RETAINER] ${code} set to ${clampedMonths} months`);
 }
 
@@ -1085,32 +1007,32 @@ async function suggestRetainerConfig(code) {
   const btn = event.target;
   btn.disabled = true;
   btn.textContent = 'Analyzing...';
-
+  
   try {
     // Get RFP text
     const rfpText = window.APP?.rfpText || APB.step2.rfpText || 
                    sessionStorage.getItem('apb.rfp_text') || 
                    document.getElementById('rfpText')?.value || '';
-
+    
     if (!rfpText) {
       alert('Please provide RFP text before using AI suggestions');
       return;
     }
-
+    
     // Call AI to analyze if this should be a retainer
     const analyzeRes = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         rfp_text: rfpText,
         deliverables: [{ code, name: labelFor(code) || code }]
       })
     });
-
+    
     if (analyzeRes.ok) {
       const analysis = await analyzeRes.json();
       const suggestion = analysis.suggestions?.[0];
-
+      
       if (suggestion) {
         // Update retainer type
         const isRetainer = suggestion.type === 'RETAINER';
@@ -1119,13 +1041,13 @@ async function suggestRetainerConfig(code) {
           retainerToggle.checked = isRetainer;
           toggleRetainerType(code, isRetainer);
         }
-
+        
         // If retainer, get month suggestion
         if (isRetainer) {
           const monthsRes = await fetch('/api/pricing/retainer_suggest', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.JSON.stringify({
+            body: JSON.stringify({
               deliverables: [{ 
                 code, 
                 name: labelFor(code) || code,
@@ -1134,11 +1056,11 @@ async function suggestRetainerConfig(code) {
               rfp_text: rfpText
             })
           });
-
+          
           if (monthsRes.ok) {
             const monthsData = await monthsRes.json();
             const monthsSuggestion = monthsData.suggestions?.[0];
-
+            
             if (monthsSuggestion && monthsSuggestion.recommended_months) {
               const monthsInput = document.querySelector(`.retainer-months[data-code="${code}"]`);
               if (monthsInput) {
@@ -1148,7 +1070,7 @@ async function suggestRetainerConfig(code) {
             }
           }
         }
-
+        
         // Show feedback
         alert(`Suggested: ${isRetainer ? 'RETAINER' : 'PROJECT'}${isRetainer && suggestion.recommended_months ? ' for ' + suggestion.recommended_months + ' months' : ''}\n\nReason: ${suggestion.reason || 'Based on RFP analysis'}`);
       }
@@ -1167,24 +1089,24 @@ async function autoDetectRetainers() {
   const rfpText = window.APP?.rfpText || APB.step2.rfpText || 
                  sessionStorage.getItem('apb.rfp_text') || 
                  document.getElementById('rfpText')?.value || '';
-
+  
   if (!rfpText || APB.step2.selectedCodes.size === 0) return;
-
+  
   const deliverables = Array.from(APB.step2.selectedCodes).map(code => ({
     code,
     name: labelFor(code) || code
   }));
-
+  
   try {
     const res = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         rfp_text: rfpText,
         deliverables
       })
     });
-
+    
     if (res.ok) {
       const data = await res.json();
       data.suggestions?.forEach(suggestion => {
@@ -1193,7 +1115,7 @@ async function autoDetectRetainers() {
           pricingData.retainers.set(suggestion.deliverable_code, suggestion.recommended_months || 12);
         }
       });
-
+      
       // Re-render to show retainer badges
       renderDeliverablesPanel();
     }
@@ -1219,24 +1141,24 @@ const USE_GPT_FOR_AUTOSUGGEST = true;
 const selectionStore = {
   deliverables: new Set(),                       // deliverable codes (e.g., deck_strategy)
   componentsByDeliv: new Map(),                  // Map<delivCode, Set<componentName>>
-  l2ByComponent: new Map(),                      // Map<delivCode::componentKey, Set<l2Name>>
+  l3ByComponent: new Map(),                      // Map<delivCode::componentKey, Set<l3Name>>
 };
 
 window.APB.step2 = {
   rfpText: '',                                   // filled from Step 1 or sessionStorage
   selectedCodes: selectionStore.deliverables,    // alias for compatibility
   selectedComponentsByCode: {},                  // DEPRECATED: use selectionStore.componentsByDeliv
-  selectedL2ByKey: {},                           // DEPRECATED: use selectionStore.l2ByComponent
+  selectedL3ByKey: {},                           // DEPRECATED: use selectionStore.l3ByComponent
   complexity: 'Advanced',                        // default complexity
   tier: 'T2_MediumVolume',                       // default tier
   activeDeliverableCode: null,                   // currently active deliverable in Components panel
-  activeComponentName: null,                     // currently active component in L2 panel
+  activeComponentName: null,                     // currently active component in L3 panel
   allDeliverables: [],                           // from /api/options
   aiSuggestedCodes: new Set(),                   // codes that came from AI suggestions
   filters: {                                     // Task 1.3: search filter state
     deliverables: '',
     components: '',
-    l2: ''
+    l3: ''
   },
   els: {                                         // DOM element references
     listRight: null,
@@ -1271,58 +1193,58 @@ Object.defineProperty(S2, 'selectedComponentsMap', {
   configurable: true
 });
 
-// CRITICAL FIX: Create Proxy-backed object for selectedL2ByKey (Task 6 fix)
-// This ensures ALL read/write operations sync with selectionStore.l2ByComponent
-const selectedL2Proxy = new Proxy({}, {
+// CRITICAL FIX: Create Proxy-backed object for selectedL3ByKey (Task 6 fix)
+// This ensures ALL read/write operations sync with selectionStore.l3ByComponent
+const selectedL3Proxy = new Proxy({}, {
   get(target, key) {
     // Let Object.entries(), Object.keys() work via ownKeys/getOwnPropertyDescriptor
-    return selectionStore.l2ByComponent.get(String(key));
+    return selectionStore.l3ByComponent.get(String(key));
   },
   set(target, key, value) {
     if (value instanceof Set) {
-      selectionStore.l2ByComponent.set(String(key), value);
+      selectionStore.l3ByComponent.set(String(key), value);
     } else if (Array.isArray(value)) {
-      selectionStore.l2ByComponent.set(String(key), new Set(value));
+      selectionStore.l3ByComponent.set(String(key), new Set(value));
     } else if (value === undefined || value === null) {
-      selectionStore.l2ByComponent.delete(String(key));
+      selectionStore.l3ByComponent.delete(String(key));
     }
     return true;
   },
   deleteProperty(target, key) {
-    selectionStore.l2ByComponent.delete(String(key));
+    selectionStore.l3ByComponent.delete(String(key));
     return true;
   },
   has(target, key) {
-    return selectionStore.l2ByComponent.has(String(key));
+    return selectionStore.l3ByComponent.has(String(key));
   },
   ownKeys() {
-    return Array.from(selectionStore.l2ByComponent.keys());
+    return Array.from(selectionStore.l3ByComponent.keys());
   },
   getOwnPropertyDescriptor(target, key) {
-    if (selectionStore.l2ByComponent.has(String(key))) {
+    if (selectionStore.l3ByComponent.has(String(key))) {
       return {
         enumerable: true,
         configurable: true,
-        value: selectionStore.l2ByComponent.get(String(key))
+        value: selectionStore.l3ByComponent.get(String(key))
       };
     }
   }
 });
 
 // Lock the property to prevent accidental reassignment
-Object.defineProperty(S2, 'selectedL2ByKey', {
-  get() { return selectedL2Proxy; },
+Object.defineProperty(S2, 'selectedL3ByKey', {
+  get() { return selectedL3Proxy; },
   set(value) {
     // If someone tries to replace the whole object, sync it to the Map instead
     if (value === null || (typeof value === 'object' && Object.keys(value).length === 0)) {
-      selectionStore.l2ByComponent.clear();
+      selectionStore.l3ByComponent.clear();
     } else if (typeof value === 'object') {
-      selectionStore.l2ByComponent.clear();
+      selectionStore.l3ByComponent.clear();
       Object.entries(value).forEach(([k, v]) => {
         if (v instanceof Set) {
-          selectionStore.l2ByComponent.set(k, v);
+          selectionStore.l3ByComponent.set(k, v);
         } else if (Array.isArray(v)) {
-          selectionStore.l2ByComponent.set(k, new Set(v));
+          selectionStore.l3ByComponent.set(k, new Set(v));
         }
       });
     }
@@ -1403,10 +1325,10 @@ function readSelectedCodesFromUI() {
   // New UI uses APB.step2.selectedCodes, old UI uses S2.selectedCodes
   const newSystemCodes = (window.APB?.step2?.selectedCodes) ? Array.from(APB.step2.selectedCodes) : [];
   const oldSystemCodes = Array.from(S2.selectedCodes);
-
+  
   // Get whichever has data (prefer new system if both have data)
   const codes = newSystemCodes.length > 0 ? newSystemCodes : oldSystemCodes;
-
+  
   // Filter out null, undefined, empty strings, and invalid values
   const validCodes = codes.filter(code => {
     if (code == null || code === undefined) return false;
@@ -1414,12 +1336,12 @@ function readSelectedCodesFromUI() {
     if (code.trim() === '') return false;
     return true;
   });
-
+  
   console.log(`[readSelectedCodesFromUI] Total: ${codes.length}, Valid: ${validCodes.length}`);
   if (codes.length !== validCodes.length) {
     console.warn('[readSelectedCodesFromUI] Filtered out invalid codes:', codes.filter(c => !validCodes.includes(c)));
   }
-
+  
   return validCodes;
 }
 
@@ -1433,15 +1355,15 @@ async function initializeGanttChart(tasks = []) {
     showFallbackTable(tasks);
     return;
   }
-
+  
   // Clear any existing chart
   container.innerHTML = '';
-
+  
   if (tasks.length === 0) {
     container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);">No timeline data. Click "Generate AI Timeline" to create one.</div>';
     return;
   }
-
+  
   try {
     // Initialize Frappe Gantt
     ganttChart = new Gantt(container, tasks, {
@@ -1453,7 +1375,7 @@ async function initializeGanttChart(tasks = []) {
         const start = new Date(task._start);
         const end = new Date(task._end);
         const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-
+        
         return `
           <div class="gantt-popup" style="padding:12px;">
             <h5 style="margin:0 0 8px;">${task.name}</h5>
@@ -1477,7 +1399,7 @@ async function initializeGanttChart(tasks = []) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
-
+        
         // Emit change to ScenarioStore via GanttBridge
         if (window.GanttBridge && window.GanttBridge.emitChange) {
           GanttBridge.emitChange({
@@ -1488,7 +1410,7 @@ async function initializeGanttChart(tasks = []) {
             resources: task.resources || []
           });
         }
-
+        
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
         if (saveBtn) saveBtn.style.display = '';
@@ -1500,7 +1422,7 @@ async function initializeGanttChart(tasks = []) {
         console.log('View mode changed to:', mode);
       }
     });
-
+    
     // Apply custom classes for department colors and critical path
     setTimeout(() => {
       tasks.forEach(task => {
@@ -1517,7 +1439,7 @@ async function initializeGanttChart(tasks = []) {
         }
       });
     }, 100);
-
+    
   } catch (error) {
     console.error('Error initializing Gantt chart:', error);
     showFallbackTable(tasks);
@@ -1528,11 +1450,11 @@ function showFallbackTable(tasks) {
   // Show the fallback table
   const table = document.getElementById('tl-table');
   const tbody = document.getElementById('tl-body');
-
+  
   if (table) table.style.display = '';
-
+  
   if (!tbody) return;
-
+  
   tbody.innerHTML = tasks.map(task => `
     <tr>
       <td>${task.name}</td>
@@ -1559,17 +1481,17 @@ async function redistributeHours(deliverableCode, newTotalHours, level) {
     const response = await fetch('/api/pricing/redistribute-hours', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         deliverable_code: deliverableCode,
         new_total_hours: newTotalHours,
         level: level // 'deliverable' or 'component'
       })
     });
-
+    
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-
+    
     const result = await response.json();
     showRedistributionModal(result);
   } catch (error) {
@@ -1582,11 +1504,11 @@ async function redistributeHours(deliverableCode, newTotalHours, level) {
 function showRedistributionModal(data) {
   const modal = document.getElementById('redistribution-modal');
   const content = document.getElementById('redistribution-content');
-
+  
   if (!modal || !content) return;
-
+  
   pricingData.currentRedistribution = data;
-
+  
   let html = `
     <div style="margin-bottom: 16px;">
       <h4 style="color: var(--text); margin-bottom: 8px;">AI Recommendation</h4>
@@ -1595,7 +1517,7 @@ function showRedistributionModal(data) {
     <div style="background: rgba(0,0,0,0.3); border-radius: 8px; padding: 12px;">
       <h5 style="color: var(--text); margin-bottom: 12px;">Suggested Hour Distribution</h5>
   `;
-
+  
   if (data.distribution) {
     html += '<table style="width: 100%; border-collapse: collapse;">';
     html += '<thead><tr><th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--border); color: var(--muted);">Component</th>';
@@ -1603,13 +1525,13 @@ function showRedistributionModal(data) {
     html += '<th style="text-align: center; padding: 8px; border-bottom: 1px solid var(--border); color: var(--muted);">Suggested Hours</th>';
     html += '<th style="text-align: center; padding: 8px; border-bottom: 1px solid var(--border); color: var(--muted);">Change</th></tr></thead>';
     html += '<tbody>';
-
+    
     for (const [component, hours] of Object.entries(data.distribution)) {
       const currentHours = data.currentDistribution?.[component] || 0;
       const change = hours - currentHours;
       const changeClass = change > 0 ? 'color: var(--accent2);' : change < 0 ? 'color: #dc3545;' : 'color: var(--muted);';
       const changePrefix = change > 0 ? '+' : '';
-
+      
       html += `<tr>
         <td style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.1);">${component}</td>
         <td style="padding: 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1);">${currentHours}</td>
@@ -1617,12 +1539,12 @@ function showRedistributionModal(data) {
         <td style="padding: 8px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.1); ${changeClass}">${changePrefix}${change}</td>
       </tr>`;
     }
-
+    
     html += '</tbody></table>';
   }
-
+  
   html += '</div>';
-
+  
   content.innerHTML = html;
   modal.style.display = 'block';
 }
@@ -1637,9 +1559,9 @@ function closeRedistributionModal() {
 // Apply redistribution
 function applyRedistribution() {
   if (!pricingData.currentRedistribution) return;
-
+  
   const data = pricingData.currentRedistribution;
-
+  
   // Apply the new hour distribution to the pricing table
   if (data.distribution) {
     for (const [component, hours] of Object.entries(data.distribution)) {
@@ -1649,7 +1571,7 @@ function applyRedistribution() {
       }
     }
   }
-
+  
   updatePricingCalculations();
   closeRedistributionModal();
 }
@@ -1670,13 +1592,13 @@ function toggleRetainer(itemId, isRetainer) {
 function showMonthlyHoursModal(itemId) {
   const modal = document.getElementById('monthly-hours-modal');
   const content = document.getElementById('monthly-hours-content');
-
+  
   if (!modal || !content) return;
-
+  
   pricingData.currentMonthlyItem = itemId;
-
+  
   const existingHours = pricingData.monthlyHours.get(itemId) || {};
-
+  
   content.innerHTML = createMonthlyHoursGrid(itemId, existingHours);
   modal.style.display = 'block';
 }
@@ -1692,7 +1614,7 @@ function closeMonthlyHoursModal() {
 function createMonthlyHoursGrid(itemId, existingHours = {}) {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
+  
   let html = `
     <div style="margin-bottom: 16px;">
       <h4 style="color: var(--text);">Monthly Hour Allocation for: ${itemId}</h4>
@@ -1700,7 +1622,7 @@ function createMonthlyHoursGrid(itemId, existingHours = {}) {
     </div>
     <div class="monthly-hours-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;">
   `;
-
+  
   months.forEach(month => {
     const value = existingHours[month] || 0;
     html += `
@@ -1711,7 +1633,7 @@ function createMonthlyHoursGrid(itemId, existingHours = {}) {
       </div>
     `;
   });
-
+  
   html += `
     </div>
     <div style="margin-top: 16px; display: flex; gap: 12px; align-items: center;">
@@ -1724,26 +1646,26 @@ function createMonthlyHoursGrid(itemId, existingHours = {}) {
       </div>
     </div>
   `;
-
+  
   return html;
 }
 
 // Save monthly hours
 function saveMonthlyHours() {
   if (!pricingData.currentMonthlyItem) return;
-
+  
   const itemId = pricingData.currentMonthlyItem;
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const monthlyHours = {};
-
+  
   months.forEach(month => {
     const input = document.querySelector(`input[data-month="${month}"]`);
     if (input) {
       monthlyHours[month] = parseFloat(input.value) || 0;
     }
   });
-
+  
   pricingData.monthlyHours.set(itemId, monthlyHours);
   updatePricingCalculations();
   closeMonthlyHoursModal();
@@ -1753,16 +1675,16 @@ function saveMonthlyHours() {
 function copyToAllMonths() {
   const firstInput = document.querySelector('input[data-month="Jan"]');
   if (!firstInput) return;
-
+  
   const value = firstInput.value;
   const months = ['Feb', 'Mar', 'Apr', 'May', 'Jun', 
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
+  
   months.forEach(month => {
     const input = document.querySelector(`input[data-month="${month}"]`);
     if (input) input.value = value;
   });
-
+  
   updateMonthlyTotal();
 }
 
@@ -1771,14 +1693,14 @@ function updateMonthlyTotal() {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   let total = 0;
-
+  
   months.forEach(month => {
     const input = document.querySelector(`input[data-month="${month}"]`);
     if (input) {
       total += parseFloat(input.value) || 0;
     }
   });
-
+  
   const totalEl = document.getElementById('monthly-total-hours');
   if (totalEl) totalEl.textContent = total.toFixed(1);
 }
@@ -1786,24 +1708,24 @@ function updateMonthlyTotal() {
 // AI suggest monthly distribution
 async function aiSuggestMonthlyDistribution() {
   if (!pricingData.currentMonthlyItem) return;
-
+  
   try {
     const response = await fetch('/api/pricing/suggest-monthly-distribution', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         item_id: pricingData.currentMonthlyItem,
         total_hours: 100, // Default or calculated from current values
         seasonality: 'balanced' // Could be 'front-loaded', 'back-loaded', 'seasonal'
       })
     });
-
+    
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-
+    
     const result = await response.json();
-
+    
     // Apply suggested distribution
     if (result.distribution) {
       for (const [month, hours] of Object.entries(result.distribution)) {
@@ -1812,21 +1734,21 @@ async function aiSuggestMonthlyDistribution() {
       }
       updateMonthlyTotal();
     }
-
+    
   } catch (error) {
     console.error('Error getting AI suggestions:', error);
     alert('Error getting AI suggestions. Using balanced distribution.');
-
+    
     // Fallback to balanced distribution
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const hoursPerMonth = 10; // Default hours
-
+    
     months.forEach(month => {
       const input = document.querySelector(`input[data-month="${month}"]`);
       if (input) input.value = hoursPerMonth;
     });
-
+    
     updateMonthlyTotal();
   }
 }
@@ -1850,22 +1772,22 @@ const pricingDataEnhanced = {
 function updatePricingTable() {
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
   if (!container || !SCENARIOS) return;
-
+  
   const scenario = SCENARIOS.A || SCENARIOS[0];
   if (!scenario || !scenario.items) return;
-
+  
   // Store original scenario on first load
   if (!pricingData.originalScenario) {
-    pricingData.originalScenario = JSON.parse(JSON.JSON.stringify(scenario));
+    pricingData.originalScenario = JSON.parse(JSON.stringify(scenario));
   }
-
+  
   // Create comprehensive table HTML structure
   let tableHTML = `
     <div class="unified-pricing-table" style="margin: 20px 0;">
       <h3 style="color: var(--accent); margin-bottom: 16px; font-size: 1.3em;">
         📊 Unified Pricing Details
       </h3>
-
+      
       <table id="pricing-details-table" style="width: 100%; border-collapse: separate; border-spacing: 0; background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
         <thead style="background: linear-gradient(135deg, rgba(106,163,255,0.1), rgba(139,92,246,0.1));">
           <tr>
@@ -1903,15 +1825,15 @@ function updatePricingTable() {
         </thead>
         <tbody>
   `;
-
+  
   // NEW: Calculate grand total from scenario.totals.price instead of manual calculation
   let grandTotal = 0;
   if (scenario.totals && typeof scenario.totals.price === 'number' && !isNaN(scenario.totals.price) && scenario.totals.price > 0) {
     grandTotal = scenario.totals.price;
   }
-
+  
   let rowIndex = 0;
-
+  
   scenario.items.forEach((item, itemIndex) => {
     // Get cadence and periods
     const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
@@ -1919,25 +1841,25 @@ function updatePricingTable() {
     const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
                    (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
     const isEditing = pricingDataEnhanced.editMode.get(item.deliverable_code) || false;
-
+    
     // Get custom values or defaults
     const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
     const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
     const pricePerPeriod = customHours * customRate;
     const totalPrice = pricePerPeriod * periods;
-
+    
     // Get resource breakdown
     const resources = pricingData.resourceBreakdown.get(item.deliverable_code) || 
                      extractResourceAllocation(item);
-
+    
     // Get tasks list
     const tasks = extractDeliverableTasks(item);
-
+    
     // Check for resource conflicts from ScenarioStore
     let hasResourceConflict = false;
     let conflictCost = 0;
     let conflictTooltip = '';
-
+    
     if (window.ScenarioStore && window.ScenarioStore.state.resourceLeveling) {
       const conflicts = window.ScenarioStore.state.resourceLeveling.deliverableConflicts[item.deliverable_code];
       if (conflicts) {
@@ -1948,18 +1870,18 @@ function updatePricingTable() {
         conflictTooltip = `Resource conflicts detected:\n- ${resources.join(', ')}\n- Type: ${conflictTypes.join(', ')}\n- Leveling Cost: $${conflictCost.toLocaleString()}`;
       }
     }
-
+    
     // Note: Grand total is now calculated from scenario.totals.price, not accumulated here
-
+    
     // Determine row background (alternating + highlight for recurring)
     const isRecurring = cadenceType !== 'ONE_TIME';
     const rowBg = isRecurring ? 
       'background: linear-gradient(90deg, rgba(139,92,246,0.05), rgba(139,92,246,0.02));' : 
       (rowIndex % 2 === 0 ? 'background: rgba(255,255,255,0.01);' : 'background: transparent;');
-
+    
     // Main deliverable row
     tableHTML += `
-      <tr data-deliverable="${item.deliverable_code}" data=row-type="deliverable" 
+      <tr data-deliverable="${item.deliverable_code}" data-row-type="deliverable" 
           style="${rowBg} ${hasResourceConflict ? 'border-left: 4px solid #ef4444;' : ''} border-bottom: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;">
         <td style="padding: 12px; font-weight: 700; color: var(--text);">
           <button onclick="toggleDeliverableExpand('${item.deliverable_code}')" 
@@ -2003,8 +1925,9 @@ function updatePricingTable() {
                       min="1" max="36" step="1"
                       onchange="updatePeriods('${item.deliverable_code}', this.value)"
                       style="width: 70px; padding: 6px; border: 1px solid rgba(139,92,246,0.3); 
-                             border-radius: 4px; font-size: 0.85em;" />` :
-              `<span style="font-weight: 500;">${periods}</span>`) :
+                             border-radius: 4px; background: rgba(139,92,246,0.05); 
+                             color: var(--text); text-align: center; font-weight: 500;" />` :
+              `<span style="font-weight: 500; color: var(--accent2);">${periods}</span>`) :
             '<span style="color: var(--muted);">-</span>'}
         </td>
         <td style="padding: 8px; text-align: center;">
@@ -2033,7 +1956,7 @@ function updatePricingTable() {
         <td style="padding: 8px; text-align: right; font-weight: 600; color: var(--accent);">
           $${pricePerPeriod.toLocaleString()}
         </td>
-        <td style="padding: 8px; text-align: right; font-weight: 700; font-size: 1.05em;
+        <td style="padding: 8px; text-align: right; font-weight: 700; font-size: 1.05em; 
                    color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
           $${totalPrice.toLocaleString()}
         </td>
@@ -2048,7 +1971,8 @@ function updatePricingTable() {
             `<div style="display: flex; gap: 4px; justify-content: center;">
               <button onclick="saveRowEdit('${item.deliverable_code}')"
                       style="padding: 4px 12px; background: var(--accent2); border: none; 
-                             border-radius: 4px; color: #08121e; font-size: 0.8em; font-weight: 600;">
+                             border-radius: 4px; color: #08121e; cursor: pointer; 
+                             font-size: 0.8em; font-weight: 600;">
                 Save
               </button>
               <button onclick="cancelRowEdit('${item.deliverable_code}')"
@@ -2068,9 +1992,9 @@ function updatePricingTable() {
         </td>
       </tr>
     `;
-
+    
     rowIndex++;
-
+    
     // Component rows (initially hidden)
     if (item.components && item.components.length > 0) {
       item.components.forEach(comp => {
@@ -2084,13 +2008,13 @@ function updatePricingTable() {
         const compTotalPrice = compPricePerPeriod * compPeriods;
         const compResources = extractComponentResources(comp);
         const compTasks = comp.tasks || [];
-
+        
         // Note: Grand total is now calculated from scenario.totals.price, not accumulated here
-
+        
         const compRowBg = compCadence !== 'ONE_TIME' ? 
           'background: linear-gradient(90deg, rgba(139,92,246,0.03), rgba(139,92,246,0.01));' :
           'background: rgba(255,255,255,0.005);';
-
+        
         tableHTML += `
           <tr data-component="${compKey}" data-parent="${item.deliverable_code}" 
               class="component-row-${item.deliverable_code}"
@@ -2183,11 +2107,11 @@ function updatePricingTable() {
       });
     }
   });
-
+  
   tableHTML += `
         </tbody>
       </table>
-
+      
       <!-- Unified Grand Total Section -->
       <div class="grand-total-section" style="margin-top: 24px; padding: 20px; 
                 background: linear-gradient(135deg, rgba(139,92,246,0.1), rgba(106,163,255,0.1)); 
@@ -2224,7 +2148,7 @@ function updatePricingTable() {
       </div>
     </div>
   `;
-
+  
   // Replace the container content
   if (container.id === 'pricing-tbody') {
     // Replace entire table structure
@@ -2232,7 +2156,7 @@ function updatePricingTable() {
   } else {
     container.innerHTML = tableHTML;
   }
-
+  
   // Update any other summary sections that might exist
   updatePricingSummary();
 }
@@ -2240,29 +2164,29 @@ function updatePricingTable() {
 // Update pricing summary panels - FIXED CALCULATION VERSION
 function updatePricingSummary() {
   if (!SCENARIOS) return;
-
+  
   const scenario = SCENARIOS.A || SCENARIOS[0];
   if (!scenario || !scenario.items) return;
-
+  
   let oneTimeCount = 0;
   let oneTimeHours = 0;
   let oneTimeCost = 0;
   const projectItemsList = [];
-
+  
   let retainerCount = 0;
   let retainerMonthlyHours = 0;
   let retainerMonthlyCost = 0;
   const retainerItemsList = [];
-
+  
   scenario.items.forEach(item => {
     const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
     const isRetainer = (delivType === 'RETAINER');
-
+    
     // Get custom values or defaults
     const hours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
     const rate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
     const cost = hours * rate;
-
+    
     if (isRetainer) {
       retainerCount++;
       retainerMonthlyHours += hours;
@@ -2274,7 +2198,7 @@ function updatePricingSummary() {
       oneTimeCost += cost;
       projectItemsList.push(item.deliverable);
     }
-
+    
     // Also count components (FIXED KEY FORMAT)
     if (item.components && item.components.length > 0) {
       item.components.forEach(comp => {
@@ -2284,7 +2208,7 @@ function updatePricingSummary() {
         const compHours = pricingData.customHours.get(compKey) || comp.hours || 0;
         const compRate = pricingData.customRates.get(compKey) || comp.rate || rate;
         const compCost = compHours * compRate;
-
+        
         if (compIsRetainer) {
           retainerMonthlyHours += compHours;
           retainerMonthlyCost += compCost;
@@ -2295,27 +2219,27 @@ function updatePricingSummary() {
       });
     }
   });
-
+  
   // Update One-Time Summary
   const oneTimeCountEl = document.getElementById('one-time-count');
   const oneTimeHoursEl = document.getElementById('one-time-hours');
   const oneTimeCostEl = document.getElementById('one-time-cost');
-
+  
   if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
   if (oneTimeHoursEl) oneTimeHoursEl.textContent = oneTimeHours.toFixed(1);
   if (oneTimeCostEl) oneTimeCostEl.textContent = `$${Math.round(oneTimeCost).toLocaleString()}`;
-
+  
   // Update Retainer Summary
   const retainerCountEl = document.getElementById('retainer-count');
   const retainerHoursEl = document.getElementById('retainer-monthly-hours');
   const retainerCostEl = document.getElementById('retainer-monthly-cost');
   const retainerAnnualEl = document.getElementById('retainer-annual-cost');
-
+  
   if (retainerCountEl) retainerCountEl.textContent = retainerCount;
   if (retainerHoursEl) retainerHoursEl.textContent = retainerMonthlyHours.toFixed(1);
   if (retainerCostEl) retainerCostEl.textContent = `$${Math.round(retainerMonthlyCost).toLocaleString()}`;
   if (retainerAnnualEl) retainerAnnualEl.textContent = `$${Math.round(retainerMonthlyCost * 12).toLocaleString()}`;
-
+  
   // Update Retainer Items List
   const retainerListEl = document.getElementById('retainer-items-list');
   if (retainerListEl) {
@@ -2327,33 +2251,33 @@ function updatePricingSummary() {
       retainerListEl.innerHTML = '<div style="color: var(--muted); font-size: 0.85em; font-style: italic;">No retainer services configured</div>';
     }
   }
-
+  
   // FIX: Update Grand Total - read from scenarios.A.totals.price
   const scenarioTotal = (scenario.totals && scenario.totals.price) ? scenario.totals.price : oneTimeCost;
-
+  
   // Get resource leveling costs from ScenarioStore if available
   let resourceLevelingCost = 0;
   if (window.ScenarioStore && window.ScenarioStore.state.resourceLeveling) {
     resourceLevelingCost = window.ScenarioStore.state.resourceLeveling.totalCost || 0;
   }
-
+  
   const grandTotal = scenarioTotal + (retainerMonthlyCost * 12) + resourceLevelingCost;
   const grandTotalEl = document.getElementById('grand-total-cost');
   const grandBreakdownEl = document.getElementById('grand-total-breakdown');
-
+  
   if (grandTotalEl) grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
   if (grandBreakdownEl) {
     // Build breakdown text including resource leveling if applicable
     let breakdownParts = [`Scenario total ($${Math.round(scenarioTotal).toLocaleString()})`];
-
+    
     if (retainerMonthlyCost > 0) {
       breakdownParts.push(`12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`);
     }
-
+    
     if (resourceLevelingCost > 0) {
       breakdownParts.push(`<span style="color: #ef4444;">Resource leveling ($${Math.round(resourceLevelingCost).toLocaleString()})</span>`);
     }
-
+    
     grandBreakdownEl.innerHTML = breakdownParts.join(' + ');
   }
 }
@@ -2361,7 +2285,7 @@ function updatePricingSummary() {
 // Helper function to extract resource allocation from item
 function extractResourceAllocation(item) {
   const resources = {};
-
+  
   // First, try to get from hours_by_role (from backend API)
   if (item.hours_by_role && Array.isArray(item.hours_by_role)) {
     item.hours_by_role.forEach(roleData => {
@@ -2379,12 +2303,12 @@ function extractResourceAllocation(item) {
       return resources;
     }
   }
-
+  
   // Try to get from existing resources data structure
   if (item.resources) {
     return item.resources;
   }
-
+  
   // Try to parse from tasks if available
   if (item.tasks && Array.isArray(item.tasks)) {
     item.tasks.forEach(task => {
@@ -2395,19 +2319,19 @@ function extractResourceAllocation(item) {
       }
     });
   }
-
+  
   // Fallback to basic allocation
   if (Object.keys(resources).length === 0 && item.hours > 0) {
     resources['Team'] = item.hours;
   }
-
+  
   return resources;
 }
 
 // Helper function to extract component resources
 function extractComponentResources(comp) {
   const resources = {};
-
+  
   // First, try to get from hours_by_role (from backend API)
   if (comp.hours_by_role && Array.isArray(comp.hours_by_role)) {
     comp.hours_by_role.forEach(roleData => {
@@ -2425,10 +2349,10 @@ function extractComponentResources(comp) {
       return resources;
     }
   }
-
+  
   // Try to get from existing resources data
   if (comp.resources) return comp.resources;
-
+  
   // Try to parse from tasks if available
   if (comp.tasks && Array.isArray(comp.tasks)) {
     comp.tasks.forEach(task => {
@@ -2439,12 +2363,12 @@ function extractComponentResources(comp) {
       }
     });
   }
-
+  
   // Fallback to basic allocation
   if (Object.keys(resources).length === 0 && comp.hours > 0) {
     resources['Team'] = comp.hours;
   }
-
+  
   return resources;
 }
 
@@ -2453,12 +2377,12 @@ function formatResourceDisplay(resources) {
   if (!resources || Object.keys(resources).length === 0) {
     return '-';
   }
-
+  
   const entries = Object.entries(resources)
     .sort((a, b) => b[1] - a[1]) // Sort by hours descending
     .slice(0, 3) // Show top 3
     .map(([role, hours]) => `${role}: ${hours}h`);
-
+  
   return entries.join(' • ');
 }
 
@@ -2467,7 +2391,7 @@ function toggleDeliverableExpand(deliverableCode) {
   const expandIcon = document.getElementById(`expand-${deliverableCode}`);
   const componentRows = document.querySelectorAll(`.component-row-${deliverableCode}`);
   const taskRows = document.querySelectorAll(`.task-row-${deliverableCode}`);
-
+  
   if (expandIcon.textContent === '▶') {
     expandIcon.textContent = '▼';
     componentRows.forEach(row => row.style.display = '');
@@ -2475,6 +2399,7 @@ function toggleDeliverableExpand(deliverableCode) {
   } else {
     expandIcon.textContent = '▶';
     componentRows.forEach(row => row.style.display = 'none');
+    taskRows.forEach(row => row.style.display = 'none');
     // Reset all component expand icons
     componentRows.forEach(row => {
       const compButton = row.querySelector('span[id^="expand-comp-"]');
@@ -2483,17 +2408,32 @@ function toggleDeliverableExpand(deliverableCode) {
   }
 }
 
+// Toggle component expansion to show/hide tasks
+function toggleComponentExpand(deliverableCode, componentName) {
+  const safeCompName = componentName.replace(/\s+/g, '_');
+  const expandIcon = document.getElementById(`expand-comp-${deliverableCode}-${safeCompName}`);
+  const taskRows = document.querySelectorAll(`.task-row-comp-${deliverableCode}-${safeCompName}`);
+  
+  if (expandIcon.textContent === '▶') {
+    expandIcon.textContent = '▼';
+    taskRows.forEach(row => row.style.display = '');
+  } else {
+    expandIcon.textContent = '▶';
+    taskRows.forEach(row => row.style.display = 'none');
+  }
+}
+
 // Update deliverable type (PROJECT/RETAINER)
 function updateDeliverableType(deliverableCode, type) {
   pricingData.deliverableTypes.set(deliverableCode, type);
-
+  
   // If switching to retainer, set default months
   if (type === 'RETAINER') {
     if (!pricingData.retainerMonths.has(deliverableCode)) {
       pricingData.retainerMonths.set(deliverableCode, 12); // Default 12 months
     }
   }
-
+  
   updatePricingTable();
   updatePricingSummary();
 }
@@ -2512,51 +2452,51 @@ function updateCustomRate(deliverableCode, rate) {
   updatePricingCalculations();
 }
 
-// AI analyze PROJECT vs RETAINER with AI - BATCH ENDPOINT (Brad build format)
+// Analyze PROJECT vs RETAINER with AI - BATCH ENDPOINT (Brad build format)
 async function analyzeProjectRetainer() {
   // Check for scenario first
   if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
     alert('Please build a scenario first (click Build Scenario button).');
     return;
   }
-
+  
   const btn = document.getElementById('btn-ai-suggest-type');
   if (btn) {
     btn.disabled = true;
     btn.textContent = '🔄 Analyzing...';
   }
-
+  
   try {
     // Get scenario and RFP text
     const scenario = window.currentScenario || SCENARIOS.A;
     const rfpText = window.APB?.step2?.rfpText || sessionStorage.getItem('rfpText') || '';
-
+    
     // Build deliverables array from scenario items
     const deliverables = scenario.items.map(item => ({
       code: item.deliverable_code,
       name: item.deliverable_name || item.deliverable || item.deliverable_code
     }));
-
+    
     console.log('[AI RETAINER] Calling batch endpoint with', deliverables.length, 'deliverables');
-
+    
     // Call Brad build batch endpoint
     const response = await fetch('/api/ai/analyze_project_retainer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         rfp_text: rfpText,
         deliverables: deliverables
       })
     });
-
+    
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`Analysis failed: ${errorText}`);
     }
-
+    
     const result = await response.json();
     console.log('[AI RETAINER] Received suggestions:', result);
-
+    
     // Apply suggestions to scenario items
     if (result.suggestions) {
       let updatedCount = 0;
@@ -2572,21 +2512,21 @@ async function analyzeProjectRetainer() {
           updatedCount++;
         }
       });
-
+      
       // Store updated scenario
       window.currentScenario = scenario;
       window.SCENARIOS = { A: scenario };
-
+      
       // Update pricing table display
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
       }
-
+      
       // Re-render scenario
       if (window.renderScenario) {
         window.renderScenario('scenarioA', scenario);
       }
-
+      
       alert(`✅ AI Retainer Analysis Complete!\n\n${updatedCount} deliverables classified as PROJECT or RETAINER.`);
     } else {
       throw new Error('No suggestions returned from API');
@@ -2608,56 +2548,57 @@ async function updatePricing() {
     alert('No scenario to update. Please build a scenario first.');
     return;
   }
-
+  
   const btn = document.getElementById('btn-update-pricing');
   if (btn) {
     btn.disabled = true;
     btn.textContent = '🔄 Updating...';
   }
-
+  
   try {
     // Recalculate all totals
     updatePricingCalculations();
-
+    
     // Save to scenario
     const scenario = SCENARIOS.A;
     scenario.items.forEach(item => {
       const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
       const customHours = pricingData.customHours.get(item.deliverable_code);
       const customRate = pricingData.customRates.get(item.deliverable_code);
-
+      
       if (customHours !== undefined) item.hours = customHours;
       if (customRate !== undefined) item.blended_rate = customRate;
       item.price = (item.hours || 0) * (item.blended_rate || 195);
       item.is_retainer = (delivType === 'RETAINER');
-
+      
       // Update components
       if (item.components) {
         item.components.forEach(comp => {
           const compKey = `${item.deliverable_code}::${comp.name}`;
           const compHours = pricingData.customHours.get(compKey);
           const compRate = pricingData.customRates.get(compKey);
+          
           if (compHours !== undefined) comp.hours = compHours;
           if (compRate !== undefined) comp.rate = compRate;
           comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
         });
       }
     });
-
+    
     // Update displays
     updatePricingTable();
     updatePricingSummary();
-
+    
     // Show success message
     const oneTimeCount = document.getElementById('one-time-count')?.textContent || '0';
     const retainerCount = document.getElementById('retainer-count')?.textContent || '0';
     const grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
-
+    
     alert(`✅ Pricing Updated Successfully!\n\n` +
           `📦 One-Time Items: ${oneTimeCount}\n` +
           `🔄 Retainer Items: ${retainerCount}\n` +
           `💰 Grand Total: ${grandTotal}`);
-
+    
   } catch (error) {
     console.error('Error updating pricing:', error);
     alert('Error updating pricing. Please try again.');
@@ -2671,27 +2612,27 @@ async function updatePricing() {
 
 // Re-build scenario with current pricing settings
 async function rebuildScenario() {
-  if (!window.ScenarioManager) {
-    alert('ScenarioManager not available. Please ensure the unified pricing system is loaded.');
+  if (!window.ScenarioStore) {
+    alert('ScenarioStore not available. Please ensure the unified pricing system is loaded.');
     return;
   }
-
+  
   const btn = document.getElementById('btn-rebuild-scenario') || 
             document.querySelector('button[onclick*="rebuildScenario"]');
-
+  
   if (btn) {
     btn.disabled = true;
     btn.textContent = '🔄 Saving...';
   }
-
+  
   try {
-    // Simply save the current scenario state via ScenarioManager
-    await ScenarioManager.save();
-    console.log('[REBUILD] Scenario saved successfully via ScenarioManager');
-
+    // Simply save the current scenario state via ScenarioStore
+    await ScenarioStore.save();
+    console.log('[REBUILD] Scenario saved successfully via ScenarioStore');
+    
     // Trigger scenarios:updated event to refresh UI
     window.dispatchEvent(new Event('scenarios:updated'));
-
+    
   } catch (error) {
     console.error('Error saving scenario:', error);
     alert('Error saving scenario. Please try again.');
@@ -2720,7 +2661,7 @@ function showScenarioComparison(original, rebuilt) {
     quarterly: 0,
     semiAnnual: 0
   };
-
+  
   // Calculate original totals
   original.items.forEach(item => {
     const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
@@ -2729,14 +2670,14 @@ function showScenarioComparison(original, rebuilt) {
                    (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
     const price = item.price || (item.hours * (item.blended_rate || 195));
     const totalPrice = price * periods;
-
+    
     originalGrandTotal += totalPrice;
-
+    
     if (cadenceType === 'ONE_TIME') originalBreakdown.oneTime += totalPrice;
     else if (cadenceType === 'MONTHLY') originalBreakdown.monthly += price;
     else if (cadenceType === 'QUARTERLY') originalBreakdown.quarterly += price;
     else if (cadenceType === 'SEMI_ANNUAL') originalBreakdown.semiAnnual += price;
-
+    
     // Add components
     if (item.components) {
       item.components.forEach(comp => {
@@ -2745,9 +2686,9 @@ function showScenarioComparison(original, rebuilt) {
         const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || periods;
         const compPrice = comp.price || (comp.hours * (comp.rate || item.blended_rate || 195));
         const compTotalPrice = compPrice * compPeriods;
-
+        
         originalGrandTotal += compTotalPrice;
-
+        
         if (compCadence === 'ONE_TIME') originalBreakdown.oneTime += compTotalPrice;
         else if (compCadence === 'MONTHLY') originalBreakdown.monthly += compPrice;
         else if (compCadence === 'QUARTERLY') originalBreakdown.quarterly += compPrice;
@@ -2755,7 +2696,7 @@ function showScenarioComparison(original, rebuilt) {
       });
     }
   });
-
+  
   // Calculate rebuilt totals
   rebuilt.items.forEach(item => {
     const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
@@ -2765,14 +2706,14 @@ function showScenarioComparison(original, rebuilt) {
                    (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
     const price = item.price;
     const totalPrice = price * periods;
-
+    
     rebuiltGrandTotal += totalPrice;
-
+    
     if (cadenceType === 'ONE_TIME') rebuiltBreakdown.oneTime += totalPrice;
     else if (cadenceType === 'MONTHLY') rebuiltBreakdown.monthly += price;
     else if (cadenceType === 'QUARTERLY') rebuiltBreakdown.quarterly += price;
     else if (cadenceType === 'SEMI_ANNUAL') rebuiltBreakdown.semiAnnual += price;
-
+    
     // Add components
     if (item.components) {
       item.components.forEach(comp => {
@@ -2782,9 +2723,9 @@ function showScenarioComparison(original, rebuilt) {
                           comp.retainer_months || periods;
         const compPrice = comp.price;
         const compTotalPrice = compPrice * compPeriods;
-
+        
         rebuiltGrandTotal += compTotalPrice;
-
+        
         if (compCadence === 'ONE_TIME') rebuiltBreakdown.oneTime += compTotalPrice;
         else if (compCadence === 'MONTHLY') rebuiltBreakdown.monthly += compPrice;
         else if (compCadence === 'QUARTERLY') rebuiltBreakdown.quarterly += compPrice;
@@ -2792,10 +2733,10 @@ function showScenarioComparison(original, rebuilt) {
       });
     }
   });
-
+  
   const difference = rebuiltGrandTotal - originalGrandTotal;
   const percentChange = originalGrandTotal > 0 ? ((difference / originalGrandTotal) * 100).toFixed(1) : '0.0';
-
+  
   // Create comparison modal
   const modal = document.createElement('div');
   modal.style.cssText = `
@@ -2803,12 +2744,12 @@ function showScenarioComparison(original, rebuilt) {
     background: rgba(0,0,0,0.8); z-index: 1000;
     display: flex; align-items: center; justify-content: center;
   `;
-
+  
   modal.innerHTML = `
     <div style="background: var(--card); border: 1px solid var(--accent); border-radius: 12px; 
                 padding: 24px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto;">
       <h3 style="margin: 0 0 20px; color: var(--accent);">📊 Scenario Comparison</h3>
-
+      
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
         <div style="padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px;">
           <h4 style="margin: 0 0 12px; color: var(--muted);">Version 1 (Original)</h4>
@@ -2822,7 +2763,7 @@ function showScenarioComparison(original, rebuilt) {
             </div>
           </div>
         </div>
-
+        
         <div style="padding: 16px; background: rgba(139, 92, 246, 0.1); border-radius: 8px;">
           <h4 style="margin: 0 0 12px; color: var(--accent);">Version ${pricingData.rebuildVersion || 2} (Rebuilt)</h4>
           <div style="font-size: 0.9em;">
@@ -2836,7 +2777,7 @@ function showScenarioComparison(original, rebuilt) {
           </div>
         </div>
       </div>
-
+      
       <div style="padding: 12px; background: ${difference > 0 ? 'rgba(220, 38, 38, 0.1)' : 'rgba(16, 185, 129, 0.1)'}; 
                   border-radius: 8px; text-align: center; margin-bottom: 20px;">
         <div style="font-size: 1.2em; font-weight: bold; color: ${difference > 0 ? '#fca5a5' : '#6ee7b7'};">
@@ -2846,7 +2787,7 @@ function showScenarioComparison(original, rebuilt) {
           ${difference > 0 ? 'Increase from original' : 'Decrease from original'}
         </div>
       </div>
-
+      
       <button onclick="this.parentElement.parentElement.remove()" 
               style="width: 100%; padding: 10px; background: var(--accent); color: white; 
                      border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
@@ -2854,14 +2795,14 @@ function showScenarioComparison(original, rebuilt) {
       </button>
     </div>
   `;
-
+  
   document.body.appendChild(modal);
 }
 
 // Helper function to extract deliverable tasks
 function extractDeliverableTasks(item) {
   const tasks = [];
-
+  
   // Extract from components
   if (item.components && Array.isArray(item.components)) {
     item.components.forEach(comp => {
@@ -2874,7 +2815,7 @@ function extractDeliverableTasks(item) {
       }
     });
   }
-
+  
   // Extract from included_task_groups
   if (item.included_task_groups && Array.isArray(item.included_task_groups)) {
     item.included_task_groups.forEach(tg => {
@@ -2883,7 +2824,7 @@ function extractDeliverableTasks(item) {
       }
     });
   }
-
+  
   return tasks.slice(0, 5); // Limit to 5 for display
 }
 
@@ -2892,7 +2833,7 @@ function formatTasksList(tasks) {
   if (!tasks || tasks.length === 0) {
     return '<span style="color: var(--muted); font-style: italic;">No tasks</span>';
   }
-
+  
   return tasks.map(task => 
     `<div style="padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
       • ${task}
@@ -2917,21 +2858,21 @@ function saveRowEdit(code) {
   const rateInput = document.getElementById(`rate-${code}`);
   const cadenceSelect = document.getElementById(`cadence-${code}`);
   const periodsInput = document.getElementById(`periods-${code}`);
-
+  
   if (hoursInput) {
     const hours = parseFloat(hoursInput.value) || 0;
     pricingData.customHours.set(code, hours);
   }
-
+  
   if (rateInput) {
     const rate = parseFloat(rateInput.value) || 195;
     pricingData.customRates.set(code, rate);
   }
-
+  
   if (cadenceSelect) {
     const cadence = cadenceSelect.value;
     pricingDataEnhanced.cadenceTypes.set(code, cadence);
-
+    
     // Update deliverable type based on cadence
     if (cadence === 'ONE_TIME') {
       pricingData.deliverableTypes.set(code, 'PROJECT');
@@ -2939,17 +2880,17 @@ function saveRowEdit(code) {
       pricingData.deliverableTypes.set(code, 'RETAINER');
     }
   }
-
+  
   if (periodsInput) {
     const periods = parseInt(periodsInput.value) || 1;
-    pricingDataEnhanced.periodsCount.set(code, Math.max(1, Math.min(36, periods)));
-
+    pricingDataEnhanced.periodsCount.set(code, periods);
+    
     // Store retainer months if it's a retainer
     if (pricingData.deliverableTypes.get(code) === 'RETAINER') {
-      pricingData.retainers.set(code, pricingDataEnhanced.periodsCount.get(code));
+      pricingData.retainers.set(code, periods);
     }
   }
-
+  
   // Update scenario items with new values
   if (SCENARIOS && SCENARIOS.A) {
     SCENARIOS.A.items.forEach(item => {
@@ -2959,7 +2900,7 @@ function saveRowEdit(code) {
         if (hours !== undefined) item.hours = hours;
         if (rate !== undefined) item.blended_rate = rate;
         item.price = (item.hours || 0) * (item.blended_rate || 195);
-
+        
         // Update retainer status
         const cadence = pricingDataEnhanced.cadenceTypes.get(code);
         item.is_retainer = (cadence !== 'ONE_TIME');
@@ -2967,7 +2908,7 @@ function saveRowEdit(code) {
           item.retainer_months = pricingDataEnhanced.periodsCount.get(code) || 12;
         }
       }
-
+      
       // Update components
       if (item.components) {
         item.components.forEach(comp => {
@@ -2983,10 +2924,10 @@ function saveRowEdit(code) {
       }
     });
   }
-
+  
   // Exit edit mode
   pricingDataEnhanced.editMode.set(code, false);
-
+  
   // Update the table
   updatePricingTable();
 }
@@ -2995,10 +2936,10 @@ function saveRowEdit(code) {
 function toggleDeliverableExpand(deliverableCode) {
   const expandIcon = document.getElementById(`expand-${deliverableCode}`);
   const componentRows = document.querySelectorAll(`.component-row-${deliverableCode}`);
-
+  
   if (expandIcon && componentRows.length > 0) {
     const isExpanded = expandIcon.style.transform === 'rotate(90deg)';
-
+    
     if (isExpanded) {
       // Collapse
       expandIcon.style.transform = 'rotate(0deg)';
@@ -3017,7 +2958,7 @@ function toggleDeliverableExpand(deliverableCode) {
 
 function updateCadenceType(code, cadence) {
   pricingDataEnhanced.cadenceTypes.set(code, cadence);
-
+  
   // Set default periods based on cadence
   if (cadence === 'MONTHLY') {
     pricingDataEnhanced.periodsCount.set(code, 12);
@@ -3028,7 +2969,7 @@ function updateCadenceType(code, cadence) {
   } else {
     pricingDataEnhanced.periodsCount.set(code, 1);
   }
-
+  
   // If in edit mode, update the display
   if (pricingDataEnhanced.editMode.get(code)) {
     const periodsInput = document.getElementById(`periods-${code}`);
@@ -3043,24 +2984,82 @@ function updatePeriods(code, periods) {
   pricingDataEnhanced.periodsCount.set(code, Math.max(1, Math.min(36, periodsNum)));
 }
 
+// Export pricing details
+async function exportPricingDetails() {
+  // Implementation for exporting pricing details to Excel/CSV
+  console.log('Exporting pricing details...');
+  
+  // Prepare data for export
+  const exportData = {
+    project_name: document.getElementById('projectName')?.value || 'Project',
+    one_time_deliverables: [],
+    retainer_services: [],
+    monthly_breakdown: []
+  };
+  
+  // FIX: Wire Excel/CSV export button - Call POST /api/export with scenario + file_format
+  try {
+    // Get the scenario (default to A)
+    const scenario = SCENARIOS?.A;
+    if (!scenario) {
+      alert('Please build a scenario first before exporting');
+      return;
+    }
+    
+    // Get export format from dropdown
+    const formatSelect = document.getElementById('export-format');
+    const fileFormat = formatSelect?.value || 'xlsx';
+    
+    // Call export endpoint with scenario and format
+    const response = await fetch('/api/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scenario: scenario,
+        file_format: fileFormat
+      })
+    });
+    
+    if (response.ok) {
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const ext = fileFormat === 'xlsx' ? 'xlsx' : 'csv';
+      a.download = `${exportData.project_name}_pricing_${new Date().toISOString().split('T')[0]}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } else {
+      const errorText = await response.text();
+      console.error('Export failed:', errorText);
+      alert('Failed to export pricing details. Please try again.');
+    }
+  } catch (error) {
+    console.error('Error exporting pricing details:', error);
+    alert('Error exporting pricing details. Please try again.');
+  }
+}
+
 // AI Optimize All Pricing Function - Calls Brad build redistribute-hours per deliverable
 async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
   if (!btn) return;
-
+  
   // Check for scenario
   if (!window.currentScenario && (!SCENARIOS || !SCENARIOS.A)) {
     alert('Please build a scenario first before optimizing pricing.');
     return;
   }
-
+  
   // Show loading state
   btn.disabled = true;
   btn.textContent = '🔄 Optimizing...';
-
+  
   try {
     const scenario = window.currentScenario || SCENARIOS.A;
-
+    
     // Group items by deliverable code
     const deliverableMap = new Map();
     scenario.items.forEach(item => {
@@ -3075,7 +3074,7 @@ async function optimizeAllPricing() {
       }
       const deliv = deliverableMap.get(code);
       deliv.total_hours += (item.total_hours || item.hours || 0);
-
+      
       // Track components
       const compName = item.component_name || item.component || '';
       if (compName) {
@@ -3090,9 +3089,9 @@ async function optimizeAllPricing() {
         }
       }
     });
-
+    
     console.log(`[OPTIMIZE] Processing ${deliverableMap.size} deliverables`);
-
+    
     // Call redistribute-hours for each deliverable
     const optimizationResults = [];
     for (const [code, deliv] of deliverableMap.entries()) {
@@ -3100,14 +3099,14 @@ async function optimizeAllPricing() {
         const response = await fetch('/api/pricing/redistribute-hours', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.JSON.stringify({
+          body: JSON.stringify({
             deliverable_code: code,
             deliverable_name: deliv.name,
             new_total_hours: deliv.total_hours,
             components: deliv.components
           })
         });
-
+        
         if (response.ok) {
           const result = await response.json();
           optimizationResults.push({ code, result });
@@ -3118,7 +3117,7 @@ async function optimizeAllPricing() {
         console.error(`[OPTIMIZE] Error for ${code}:`, err);
       }
     }
-
+    
     // Apply optimization results back to scenario
     if (optimizationResults.length > 0) {
       optimizationResults.forEach(({ code, result }) => {
@@ -3138,7 +3137,7 @@ async function optimizeAllPricing() {
           });
         }
       });
-
+      
       // Recompute totals
       let totalHours = 0;
       let totalPrice = 0;
@@ -3146,15 +3145,15 @@ async function optimizeAllPricing() {
         totalHours += (item.total_hours || item.hours || 0);
         totalPrice += (item.price || 0);
       });
-
+      
       if (!scenario.totals) scenario.totals = {};
       scenario.totals.hours = totalHours;
       scenario.totals.price = totalPrice;
-
+      
       // Store updated scenario
       window.currentScenario = scenario;
       window.SCENARIOS = { A: scenario };
-
+      
       // Update UI
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
@@ -3162,12 +3161,12 @@ async function optimizeAllPricing() {
       if (window.renderScenario) {
         window.renderScenario('scenarioA', scenario);
       }
-
+      
       alert(`✅ Pricing Optimized!\n\n${optimizationResults.length} deliverables redistributed using AI.`);
     } else {
       alert('⚠️ No optimization results. Please try again.');
     }
-
+    
   } catch (error) {
     console.error('[OPTIMIZE] Error:', error);
     alert(`❌ Optimization Error:\n\n${error.message || 'Failed to optimize pricing. Please try again.'}`);
@@ -3178,24 +3177,75 @@ async function optimizeAllPricing() {
   }
 }
 
+// Smart optimization fallback
+function performSmartOptimization(scenario, clientBudget) {
+  if (!clientBudget || clientBudget <= 0) {
+    alert('Please enter a client budget to optimize pricing.');
+    return;
+  }
+  
+  const currentTotal = scenario.totals.price;
+  const scaleFactor = clientBudget / currentTotal;
+  
+  // Apply scaling to all items
+  scenario.items.forEach(item => {
+    // Scale hours and price proportionally
+    const originalHours = item.total_hours;
+    const originalPrice = item.price;
+    
+    item.total_hours = Math.round(originalHours * scaleFactor);
+    item.price = Math.round(originalPrice * scaleFactor);
+    
+    // Maintain effective rate
+    if (item.total_hours > 0) {
+      item.effective_rate = item.price / item.total_hours;
+    }
+  });
+  
+  // Update totals
+  scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
+  scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
+  
+  // Re-render scenario
+  if (window.renderScenario) {
+    window.renderScenario('scenarioA', scenario);
+  }
+  
+  // Show results
+  let message = '✅ Pricing Optimized!\n\n';
+  if (scaleFactor < 1) {
+    const reduction = ((1 - scaleFactor) * 100).toFixed(1);
+    message += `📉 Reduced all deliverables by ${reduction}% to fit within budget\n`;
+    message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
+  } else if (scaleFactor > 1) {
+    const increase = ((scaleFactor - 1) * 100).toFixed(1);
+    message += `📈 Increased all deliverables by ${increase}% to maximize budget utilization\n`;
+    message += `💰 New Total: ${window.fmtUSD0 ? window.fmtUSD0(scenario.totals.price) : '$' + scenario.totals.price.toLocaleString()}`;
+  } else {
+    message += `✨ Pricing is already optimized for the budget`;
+  }
+  
+  alert(message);
+}
+
 // Show optimization success message
 function showOptimizationSuccess(result, clientBudget) {
   let message = '🎯 AI Pricing Optimization Complete!\n\n';
-
+  
   if (result.method === 'gpt5') {
     message += '🧠 Powered by GPT-5 Intelligence\n';
   }
-
+  
   if (result.summary) {
     message += `📊 ${result.summary}\n`;
   }
-
+  
   if (result.total_hours && result.total_price) {
     message += `\n💼 Optimized Totals:\n`;
     message += `• Hours: ${result.total_hours}\n`;
     message += `• Price: $${result.total_price.toLocaleString()}\n`;
   }
-
+  
   if (clientBudget && result.total_price) {
     const variance = ((result.total_price - clientBudget) / clientBudget * 100).toFixed(1);
     if (Math.abs(variance) < 5) {
@@ -3206,14 +3256,14 @@ function showOptimizationSuccess(result, clientBudget) {
       message += `📈 ${variance}% over budget\n`;
     }
   }
-
+  
   if (result.adjustments && result.adjustments.length > 0) {
     message += `\n🔧 Key Adjustments:\n`;
     result.adjustments.slice(0, 3).forEach(adj => {
       message += `• ${adj}\n`;
     });
   }
-
+  
   alert(message);
 }
 
@@ -3221,16 +3271,16 @@ function showOptimizationSuccess(result, clientBudget) {
 function showOptimizationResults(data) {
   const modal = document.getElementById('redistribution-modal');
   const content = document.getElementById('redistribution-content');
-
+  
   if (!modal || !content) return;
-
+  
   let html = `
     <div style="margin-bottom: 16px;">
       <h4 style="color: var(--text); margin-bottom: 8px;">AI Pricing Optimization Complete</h4>
       <p style="color: var(--muted); font-size: 0.9em; line-height: 1.4;">${data.summary || 'Optimized for budget, resources, and timeline efficiency.'}</p>
     </div>
   `;
-
+  
   if (data.savings) {
     html += `
       <div style="background: rgba(61, 220, 151, 0.1); border: 1px solid rgba(61, 220, 151, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
@@ -3243,7 +3293,7 @@ function showOptimizationResults(data) {
       </div>
     `;
   }
-
+  
   if (data.recommendations) {
     html += '<div style="margin-top: 16px;"><h5 style="color: var(--text);">Recommendations:</h5><ul style="padding-left: 20px;">';
     data.recommendations.forEach(rec => {
@@ -3251,7 +3301,7 @@ function showOptimizationResults(data) {
     });
     html += '</ul></div>';
   }
-
+  
   content.innerHTML = html;
   modal.style.display = 'block';
 }
@@ -3263,13 +3313,13 @@ function optimizePricingFallback() {
     alert('Please enter a client budget for optimization');
     return;
   }
-
+  
   // Simple optimization: scale hours to fit budget
   const scenario = SCENARIOS?.A || SCENARIOS?.[0];
   if (scenario && scenario.totals) {
     const currentTotal = scenario.totals.price;
     const scaleFactor = clientBudget / currentTotal;
-
+    
     if (scaleFactor < 1) {
       // Need to reduce hours
       const reduction = ((1 - scaleFactor) * 100).toFixed(1);
@@ -3281,62 +3331,6 @@ function optimizePricingFallback() {
     } else {
       alert('Current pricing is well-aligned with budget');
     }
-  }
-}
-
-// Export pricing details
-async function exportPricingDetails() {
-  // Implementation for exporting pricing details to Excel/CSV
-  console.log('Exporting pricing details...');
-
-  // Prepare data for export
-  const exportData = {
-    project_name: document.getElementById('projectName')?.value || 'Project',
-    one_time_deliverables: [],
-    retainer_services: [],
-    monthly_breakdown: []
-  };
-
-  // FIX: Wire Excel/CSV export button - Call POST /api/export with scenario + file_format
-  try {
-    // Get the scenario (default to A)
-    const scenario = SCENARIOS?.A;
-    if (!scenario) {
-      alert('Please build a scenario first before exporting');
-      return;
-    }
-
-    // Get export format from dropdown
-    const formatSelect = document.getElementById('export-format');
-    const fileFormat = formatSelect?.value || 'xlsx';
-
-    // Call export endpoint with scenario and format
-    const response = await fetch('/api/export', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
-        scenario: scenario,
-        file_format: fileFormat
-      })
-    });
-
-    if (response.ok) {
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const ext = fileFormat === 'xlsx' ? 'xlsx' : 'csv';
-      a.download = `${exportData.project_name}_pricing_${new Date().toISOString().split('T')[0]}.${ext}`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-    } else {
-      const errorText = await response.text();
-      console.error('Export failed:', errorText);
-      alert('Failed to export pricing details. Please try again.');
-    }
-  } catch (error) {
-    console.error('Error exporting pricing details:', error);
-    alert('Error exporting pricing details. Please try again.');
   }
 }
 
@@ -3374,66 +3368,39 @@ window.updatePeriods = updatePeriods;
 window.extractDeliverableTasks = extractDeliverableTasks;
 window.formatTasksList = formatTasksList;
 
-// Global timeline polling state for cancellation
-let timelinePollingIntervalId = null;
-
 // Export timeline error handling functions
 window.generateAITimeline = generateAITimeline;
 window.showUserFriendlyError = showUserFriendlyError;
 window.cancelTimelineGeneration = cancelTimelineGeneration;
 
-function cancelTimelineGeneration() {
-  log('[TIMELINE] Cancelling timeline generation');
-
-  // Clear polling interval if active
-  if (timelinePollingIntervalId) {
-    clearInterval(timelinePollingIntervalId);
-    timelinePollingIntervalId = null;
-  }
-
-  // Hide progress UI
-  const loading = document.getElementById('timeline-loading');
-  if (loading) {
-    loading.style.display = 'none';
-  }
-
-  // Reset button state
-  const btn = document.getElementById('btn-generate-timeline');
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = '🤖 Generate AI Timeline';
-  }
-
-  console.log('[TIMELINE] Timeline generation cancelled');
-}
-
 async function generateAITimeline(retryAttempt = 0) {
   const btn = document.getElementById('btn-generate-timeline');
   const loading = document.getElementById('timeline-loading');
   const container = document.getElementById('gantt-container');
-
+  
   if (!btn || !loading || !container) return;
-
+  
   // Get selected deliverables from Step 2
   const selectedCodes = readSelectedCodesFromUI();
   if (selectedCodes.length === 0) {
     showUserFriendlyError('No deliverables selected', 'Please select at least one deliverable in Step 2 before generating a timeline.');
     return;
   }
-
+  
   const deliverableCount = selectedCodes.length;
-
+  
   // Polling configuration
   const POLLING_INTERVAL_MS = 2500; // Poll every 2.5 seconds
   const MAX_POLLING_TIME_MS = 600000; // 10 minutes timeout
-
-  // Polling state (using global variable for cancellation support)
+  
+  // Polling state
+  let pollingIntervalId = null;
   let pollingStartTime = Date.now();
-
+  
   // Show loading state with progress UI
   btn.disabled = true;
   btn.textContent = retryAttempt > 0 ? `Retrying... (Attempt ${retryAttempt + 1}/3)` : 'Starting...';
-
+  
   // Create comprehensive progress UI with error display area
   const progressHTML = `
     <div id="timeline-progress-container" style="padding: 20px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; margin-bottom: 20px;">
@@ -3486,28 +3453,30 @@ async function generateAITimeline(retryAttempt = 0) {
       </div>
     </div>
   `;
-
+  
   loading.innerHTML = progressHTML;
   loading.style.display = 'block';
   container.style.display = 'none';
-
+  
+  let jobId = null;
+  
   // Helper function to show error in the UI
   const showTimelineError = (title, message, canRetry = true) => {
     const errorContainer = document.getElementById('timeline-error-container');
     const errorTitle = document.getElementById('timeline-error-title');
     const errorMessage = document.getElementById('timeline-error-message');
     const progressContent = document.getElementById('timeline-progress-content');
-
+    
     if (errorContainer && errorTitle && errorMessage) {
       errorTitle.textContent = title;
       errorMessage.textContent = message;
       errorContainer.style.display = 'block';
-
+      
       // Hide progress UI when showing error
       if (progressContent) {
         progressContent.style.display = 'none';
       }
-
+      
       // Update retry button visibility and attempts left
       const retryBtn = document.getElementById('btn-retry-timeline');
       if (retryBtn) {
@@ -3518,32 +3487,32 @@ async function generateAITimeline(retryAttempt = 0) {
         }
       }
     }
-
+    
     // Re-enable main button
     btn.disabled = false;
     btn.textContent = '🤖 Generate AI Timeline';
   };
-
+  
   // Clean up function
   const cleanup = () => {
-    if (timelinePollingIntervalId) {
-      clearInterval(timelinePollingIntervalId);
-      timelinePollingIntervalId = null;
+    if (pollingIntervalId) {
+      clearInterval(pollingIntervalId);
+      pollingIntervalId = null;
     }
   };
-
+  
   // Polling function for job status
   const startPolling = async () => {
     if (!jobId) {
       console.error('[TIMELINE] Cannot start polling: no job ID');
       return;
     }
-
+    
     console.log('[TIMELINE] Starting polling for job:', jobId);
-
+    
     const pollJobStatus = async () => {
       if (!jobId) return;
-
+      
       // Check for timeout
       const elapsed = Date.now() - pollingStartTime;
       if (elapsed > MAX_POLLING_TIME_MS) {
@@ -3555,10 +3524,10 @@ async function generateAITimeline(retryAttempt = 0) {
         );
         return;
       }
-
+      
       try {
         const response = await fetch(`/api/agencydb/status/${jobId}`);
-
+        
         if (!response.ok) {
           if (response.status === 404) {
             // Job not found - might have been cleaned up
@@ -3573,22 +3542,22 @@ async function generateAITimeline(retryAttempt = 0) {
           }
           throw new Error(`Status check failed: ${response.status}`);
         }
-
+        
         const data = await response.json();
-
+        
         console.log('[TIMELINE] Poll update:', {
           status: data.status,
           progress: data.progress,
           stage: data.current_stage
         });
-
+        
         // Update UI with polling data
         updateProgressUI(data);
-
+        
         // Check if job is complete
         if (data.status === 'completed') {
           cleanup();
-
+          
           // Extract result from either 'data' or 'result' field
           const result = data.data || data.result;
           if (result) {
@@ -3605,10 +3574,10 @@ async function generateAITimeline(retryAttempt = 0) {
           handleTimelineError(data.error || 'Timeline generation failed');
         }
         // Otherwise continue polling (status is still "pending" or "processing")
-
+        
       } catch (error) {
         console.error('[TIMELINE] Polling error:', error);
-
+        
         // For network errors, continue polling but log the issue
         // Only stop if we've been trying for too long
         const elapsedMinutes = Math.floor(elapsed / 60000);
@@ -3623,14 +3592,14 @@ async function generateAITimeline(retryAttempt = 0) {
         // Otherwise, continue polling - transient network issues should resolve
       }
     };
-
+    
     // Start polling immediately
     await pollJobStatus();
-
+    
     // Continue polling at intervals
-    timelinePollingIntervalId = setInterval(pollJobStatus, POLLING_INTERVAL_MS);
+    pollingIntervalId = setInterval(pollJobStatus, POLLING_INTERVAL_MS);
   };
-
+  
   // Helper function to update progress UI
   const updateProgressUI = (data) => {
     const progressBar = document.getElementById('timeline-progress-bar');
@@ -3640,15 +3609,15 @@ async function generateAITimeline(retryAttempt = 0) {
     const progressDeliverables = document.getElementById('timeline-progress-deliverables');
     const progressDetails = document.getElementById('timeline-progress-details');
     const progressItems = document.getElementById('timeline-progress-items');
-
+    
     if (progressBar && data.progress !== undefined) {
       progressBar.style.width = `${data.progress}%`;
     }
-
+    
     if (progressPercentage) {
       progressPercentage.textContent = `${Math.round(data.progress || 0)}%`;
     }
-
+    
     // Map stage names to user-friendly messages
     const stageMessages = {
       'initialization': '⚙️ Initializing timeline generation...',
@@ -3660,22 +3629,22 @@ async function generateAITimeline(retryAttempt = 0) {
       'finalizing': '✨ Finalizing timeline...',
       'completed': '✅ Timeline generation complete!'
     };
-
+    
     if (progressStage && data.current_stage) {
       progressStage.textContent = stageMessages[data.current_stage] || data.current_stage;
     }
-
+    
     if (progressMessage && data.message) {
       progressMessage.textContent = data.message;
     }
-
+    
     // Show deliverable progress for large sets
     if (data.processed_items !== undefined && data.total_items !== undefined) {
       if (progressDeliverables) {
         progressDeliverables.style.display = 'inline';
         progressDeliverables.textContent = `Processing deliverable ${data.processed_items} of ${data.total_items}`;
       }
-
+      
       if (progressDetails && progressItems && data.total_items > 10) {
         progressDetails.style.display = 'block';
         const percentage = Math.round((data.processed_items / data.total_items) * 100);
@@ -3683,36 +3652,36 @@ async function generateAITimeline(retryAttempt = 0) {
       }
     }
   };
-
+  
   // Helper function to handle timeline completion
   const handleTimelineCompletion = (result) => {
     currentTimelineTasks = result.tasks || [];
     timelineReasoning = result.reasoning || {};
-
+    
     // Update reasoning panel
     updateReasoningPanel(result.reasoning);
-
+    
     // Auto-show the reasoning panel when timeline is generated
     const panel = document.getElementById('ai-reasoning-panel');
     if (panel) {
       panel.style.display = 'block';
     }
-
+    
     // Update metadata
     updateTimelineMetadata(result.metadata);
-
+    
     // Update resource risk table
     updateResourceRiskTable(currentTimelineTasks, result.reasoning);
-
+    
     // Initialize Gantt chart with AI-generated timeline
     initializeGanttChart(currentTimelineTasks).then(() => {
       // Show the container
       container.style.display = '';
-
+      
       // Show metadata
       const metadataDiv = document.getElementById('timeline-metadata');
       if (metadataDiv) metadataDiv.style.display = '';
-
+      
       // Hide loading
       loading.style.display = 'none';
       btn.disabled = false;
@@ -3726,14 +3695,14 @@ async function generateAITimeline(retryAttempt = 0) {
       );
     });
   };
-
+  
   // Helper function to handle timeline errors
   const handleTimelineError = (error) => {
     let errorMessage = 'Timeline generation failed. Please try again.';
-
+    
     if (error) {
       const errorLower = error.toLowerCase();
-
+      
       if (errorLower.includes('timeout')) {
         errorMessage = 'The request took too long. Please try with fewer deliverables.';
       } else if (errorLower.includes('memory') || errorLower.includes('resource')) {
@@ -3742,40 +3711,35 @@ async function generateAITimeline(retryAttempt = 0) {
         errorMessage = 'Some selected deliverables have invalid data. Please review your selection.';
       } else if (errorLower.includes('api') || errorLower.includes('gpt') || errorLower.includes('openai')) {
         errorMessage = 'The AI service is temporarily unavailable. Please try again in a moment.';
-      } else if (errorLower.includes('gateway timeout') || errorLower.includes('504')) {
-        errorMessage = 'The request took too long. Try selecting fewer deliverables.';
-      } else {
-        // Use a simplified version of the error if it's not too technical
-        errorMessage = error.length < 100 ? error : 'An unexpected error occurred. Please try again.';
       }
     }
-
+    
     showTimelineError('Timeline Generation Failed', errorMessage, true);
   };
-
+  
   try {
     // Get optimization mode
     const optimizationMode = document.getElementById('timeline-optimization')?.value || 'balanced';
-
+    
     // Get project start date from Step 3
     const projectStart = document.getElementById('projectStart')?.value || null;
-
+    
     // Get RFP text for context
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
-
-    // ISSUE 3: Ensure timeline gets proper scenario items with actual count
+    
+    // ISSUE FIX 4: Ensure timeline gets proper scenario items with actual count
     // First check if SCENARIOS exists in memory, if not, try to load from localStorage
     let SCENARIOS = window.SCENARIOS;
-
+    
     if (!SCENARIOS) {
       console.log('[TIMELINE] No SCENARIOS in memory, checking localStorage...');
-
+      
       // Try to load from localStorage with session ID
       const sessionId = window.APB?.sessionId || 
                        localStorage.getItem('current_session_id') || 
                        'default_session';
       const storageKey = `scenarios_${sessionId}`;
-
+      
       try {
         const savedScenarios = localStorage.getItem(storageKey);
         if (savedScenarios) {
@@ -3795,9 +3759,9 @@ async function generateAITimeline(retryAttempt = 0) {
         console.error('[TIMELINE] Failed to load scenarios from localStorage:', err);
       }
     }
-
+    
     const scenario = SCENARIOS?.A;
-
+    
     // Enhanced error diagnostics
     if (!SCENARIOS) {
       console.error('[TIMELINE] No SCENARIOS object found in memory or localStorage');
@@ -3807,7 +3771,7 @@ async function generateAITimeline(retryAttempt = 0) {
       loading.style.display = 'none';
       return;
     }
-
+    
     if (!scenario) {
       console.error('[TIMELINE] SCENARIOS exists but no A scenario:', SCENARIOS);
       alert('Error: Scenario A not found. Please rebuild your scenario in Step 3.');
@@ -3816,16 +3780,16 @@ async function generateAITimeline(retryAttempt = 0) {
       loading.style.display = 'none';
       return;
     }
-
+    
     if (!scenario.items) {
       console.error('[TIMELINE] Scenario A exists but has no items:', scenario);
-      alert('Error: Scenario has no deliverables list. Please select deliverables in Step 2 and rebuild.');
+      alert('Error: Scenario has no deliverables list. Please rebuild in Step 3.');
       btn.disabled = false;
       btn.textContent = '🤖 Generate AI Timeline';
       loading.style.display = 'none';
       return;
     }
-
+    
     if (scenario.items.length === 0) {
       console.error('[TIMELINE] Scenario has empty items array:', scenario);
       alert('Error: No deliverables in scenario. Please select deliverables in Step 2 and rebuild.');
@@ -3834,13 +3798,13 @@ async function generateAITimeline(retryAttempt = 0) {
       loading.style.display = 'none';
       return;
     }
-
+    
     console.log('[TIMELINE] Scenario validation passed:', {
       scenarioExists: true,
       itemsCount: scenario.items.length,
       sampleItem: scenario.items[0]
     });
-
+    
     // Use actual scenario items for timeline generation
     const deliverables = scenario.items.map(item => {
       return {
@@ -3853,23 +3817,23 @@ async function generateAITimeline(retryAttempt = 0) {
         retainer_months: pricingData.retainers.get(item.deliverable_code) || 0
       };
     });
-
+    
     console.log(`[TIMELINE] Generating timeline for ${deliverables.length} deliverables from Scenario A`);
-
+    
     // Exponential backoff delay for retries
     if (retryAttempt > 0) {
       const delayMs = Math.min(1000 * Math.pow(2, retryAttempt - 1), 8000); // 1s, 2s, 4s, max 8s
       console.log(`[TIMELINE] Retry attempt ${retryAttempt + 1}/3 with ${delayMs}ms delay`);
       await new Promise(resolve => setTimeout(resolve, delayMs));
     }
-
+    
     // Call NEW SSE-enabled timeline endpoint with better error handling
     let response;
     try {
       response = await fetch('/api/ai/generate_timeline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.JSON.stringify({
+        body: JSON.stringify({
           deliverables: deliverables,
           rfp_text: rfpText,
           project_start: projectStart,
@@ -3881,14 +3845,14 @@ async function generateAITimeline(retryAttempt = 0) {
     } catch (fetchError) {
       // Network error - couldn't reach the server
       cleanup();
-
+      
       // Auto-retry for network errors with exponential backoff
       if (retryAttempt < 2) {
         console.log('[TIMELINE] Network error, auto-retrying...');
         setTimeout(() => generateAITimeline(retryAttempt + 1), 1000 * Math.pow(2, retryAttempt));
         return;
       }
-
+      
       showTimelineError(
         'Connection Failed',
         `Unable to connect to the server after ${retryAttempt + 1} attempts. Please check your internet connection and try again.`,
@@ -3896,15 +3860,15 @@ async function generateAITimeline(retryAttempt = 0) {
       );
       return;
     }
-
+    
     if (!response.ok) {
       cleanup();
-
+      
       // Handle specific HTTP errors with user-friendly messages
       let errorTitle = 'Timeline Generation Failed';
       let errorMessage = 'Something went wrong. Please try again.';
       let shouldRetry = true;
-
+      
       if (response.status === 400) {
         // User error - don't auto-retry
         errorMessage = 'Invalid request. Please ensure you have selected valid deliverables and try again.';
@@ -3928,11 +3892,11 @@ async function generateAITimeline(retryAttempt = 0) {
       } else if (response.status === 504) {
         errorMessage = 'The request took too long. Try selecting fewer deliverables.';
       }
-
+      
       showTimelineError(errorTitle, errorMessage, shouldRetry && retryAttempt < 2);
       return;
     }
-
+    
     let jobData;
     try {
       jobData = await response.json();
@@ -3945,7 +3909,7 @@ async function generateAITimeline(retryAttempt = 0) {
       );
       return;
     }
-
+    
     if (!jobData.job_id) {
       cleanup();
       showTimelineError(
@@ -3955,25 +3919,25 @@ async function generateAITimeline(retryAttempt = 0) {
       );
       return;
     }
-
+    
     // Store job ID and start polling
     jobId = jobData.job_id;
     console.log('[TIMELINE] Timeline generation started, job ID:', jobId);
-
+    
     // Start polling for status updates
     await startPolling();
-
+    
   } catch (error) {
     console.error('Error generating AI timeline:', error);
     cleanup();
-
+    
     // Determine the error type and show appropriate message
     let errorTitle = 'Timeline Generation Failed';
     let errorMessage = 'Something went wrong. Please try again.';
-
+    
     if (error.message) {
       const errorLower = error.message.toLowerCase();
-
+      
       if (errorLower.includes('scenario')) {
         errorMessage = 'No pricing scenario found. Please complete Step 3 (Build Scenario) first.';
       } else if (errorLower.includes('deliverable')) {
@@ -3985,7 +3949,7 @@ async function generateAITimeline(retryAttempt = 0) {
         errorMessage = error.message.length < 100 ? error.message : 'An unexpected error occurred. Please try again.';
       }
     }
-
+    
     showTimelineError(errorTitle, errorMessage, true);
   }
 }
@@ -4001,7 +3965,7 @@ function showUserFriendlyError(title, message) {
       <p style="margin: 0 0 16px 0; color: #4b5563;">${message}</p>
       <button onclick="this.parentElement.remove()" 
               style="padding: 8px 16px; background: #3b82f6; color: white; border: none; 
-                     border-radius: 4px; cursor: pointer; font-weight: 600;">
+                     border-radius: 4px; cursor: pointer;">
         OK
       </button>
     </div>
@@ -4010,15 +3974,1726 @@ function showUserFriendlyError(title, message) {
          onclick="this.remove(); this.previousElementSibling.remove()">
     </div>
   `;
-
+  
   // Add to body
   document.body.insertAdjacentHTML('beforeend', modalHTML);
+}
+
+// Function to cancel timeline generation and clean up
+function cancelTimelineGeneration() {
+  const loading = document.getElementById('timeline-loading');
+  const btn = document.getElementById('btn-generate-timeline');
+  
+  if (loading) {
+    loading.style.display = 'none';
+  }
+  
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '🤖 Generate AI Timeline';
+  }
+  
+  console.log('[TIMELINE] Generation cancelled by user');
+}
+
+function updateReasoningPanel(reasoning) {
+  if (!reasoning) return;
+  
+  // Update strategy
+  const strategyEl = document.getElementById('ai-strategy');
+  if (strategyEl) {
+    strategyEl.textContent = reasoning.overall_strategy || 'Timeline optimized for balanced delivery';
+  }
+  
+  // Update confidence
+  const confidenceBar = document.getElementById('ai-confidence-bar');
+  const confidenceText = document.getElementById('ai-confidence-text');
+  if (confidenceBar && confidenceText) {
+    const confidence = Math.round((reasoning.confidence_score || 0.75) * 100);
+    confidenceBar.style.width = confidence + '%';
+    confidenceText.textContent = confidence + '%';
+  }
+  
+  // Update critical path
+  const criticalPathEl = document.getElementById('ai-critical-path');
+  if (criticalPathEl) {
+    criticalPathEl.textContent = reasoning.critical_path_explanation || 'All sequential tasks form the critical path';
+  }
+  
+  // Update dependencies
+  const depsEl = document.getElementById('ai-dependencies');
+  if (depsEl && reasoning.dependency_rationale) {
+    const deps = Object.entries(reasoning.dependency_rationale)
+      .filter(([k, v]) => v)
+      .map(([k, v]) => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">• ${v}</li>`)
+      .join('');
+    depsEl.innerHTML = deps || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">No specific dependencies noted</li>';
+  }
+  
+  // Update optimization notes
+  const optEl = document.getElementById('ai-optimization');
+  if (optEl && reasoning.optimization_notes) {
+    const notes = reasoning.optimization_notes
+      .map(note => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">• ${note}</li>`)
+      .join('');
+    optEl.innerHTML = notes || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Using standard scheduling</li>';
+  }
+  
+  // Update parallel opportunities
+  const parallelEl = document.getElementById('ai-parallel');
+  if (parallelEl && reasoning.parallel_opportunities) {
+    const parallel = reasoning.parallel_opportunities
+      .map(opp => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">• ${opp}</li>`)
+      .join('');
+    parallelEl.innerHTML = parallel || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">No parallel work opportunities identified</li>';
+  }
+  
+  // Update risks
+  const risksEl = document.getElementById('ai-risks');
+  if (risksEl && reasoning.risk_factors) {
+    const risks = reasoning.risk_factors
+      .map(risk => `<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">⚠️ ${risk}</li>`)
+      .join('');
+    risksEl.innerHTML = risks || '<li style="font-size:0.85em; color:var(--muted); padding:6px 0;">No significant risks identified</li>';
+  }
+}
+
+function updateTimelineMetadata(metadata) {
+  if (!metadata) return;
+  
+  const elements = {
+    'meta-duration': metadata.total_duration_days ? `${metadata.total_duration_days} days` : '-',
+    'meta-tasks': metadata.total_tasks || '-',
+    'meta-critical': metadata.critical_tasks || '-',
+    'meta-departments': metadata.departments_involved ? metadata.departments_involved.join(', ') : '-'
+  };
+  
+  for (const [id, value] of Object.entries(elements)) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+  }
+}
+
+// Update Resource Risk Management table
+function updateResourceRiskTable(tasks, reasoning) {
+  const tbody = document.getElementById('resource-risk-tbody');
+  const section = document.getElementById('resource-risk-section');
+  const summaryText = document.getElementById('risk-summary-text');
+  
+  if (!tbody || !section) return;
+  
+  // Analyze resource conflicts
+  const resourceRisks = analyzeResourceRisks(tasks);
+  
+  if (resourceRisks.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px; color:var(--muted);">No resource conflicts or risks detected</td></tr>';
+    summaryText.textContent = 'No resource conflicts detected';
+    section.style.display = 'none';
+    return;
+  }
+  
+  // Show the section
+  section.style.display = 'block';
+  
+  // Populate the table
+  let totalIdleCost = 0;
+  let highRiskCount = 0;
+  
+  const rows = resourceRisks.map(risk => {
+    totalIdleCost += risk.idleCost;
+    if (risk.riskLevel === 'High') highRiskCount++;
+    
+    const riskBadge = risk.riskLevel === 'High' 
+      ? '<span style="background:#ef4444; color:white; padding:2px 8px; border-radius:4px;">High</span>'
+      : risk.riskLevel === 'Medium'
+      ? '<span style="background:#f59e0b; color:white; padding:2px 8px; border-radius:4px;">Medium</span>'
+      : '<span style="background:#10b981; color:white; padding:2px 8px; border-radius:4px;">Low</span>';
+    
+    return `<tr>
+      <td style="padding:12px; border-bottom:1px solid var(--border);">${risk.resource}</td>
+      <td style="padding:12px; border-bottom:1px solid var(--border);">${risk.waitingPeriod} days</td>
+      <td style="padding:12px; text-align:right; border-bottom:1px solid var(--border);">$${risk.idleCost.toLocaleString()}</td>
+      <td style="padding:12px; text-align:center; border-bottom:1px solid var(--border);">${riskBadge}</td>
+      <td style="padding:12px; border-bottom:1px solid var(--border); font-size:0.9em; color:var(--muted);">${risk.recommendation}</td>
+    </tr>`;
+  }).join('');
+  
+  tbody.innerHTML = rows;
+  
+  // Update summary
+  if (highRiskCount > 0) {
+    summaryText.innerHTML = `<span style="color:#ef4444;">⚠️ ${highRiskCount} high-risk resource conflicts detected. Total potential idle cost: $${totalIdleCost.toLocaleString()}</span>`;
+  } else {
+    summaryText.textContent = `${resourceRisks.length} resource risks identified. Total potential idle cost: $${totalIdleCost.toLocaleString()}`;
+  }
+}
+
+// Analyze tasks for resource risks and conflicts
+function analyzeResourceRisks(tasks) {
+  if (!tasks || tasks.length === 0) return [];
+  
+  const risks = [];
+  const resourceSchedule = {};
+  const deliverableConflicts = {};  // Track conflicts by deliverable
+  
+  // Build resource schedule
+  tasks.forEach(task => {
+    // Use proper department name, defaulting to 'Strategy' if not specified
+    const resource = task.department || task.custom_class?.replace('dept-', '').replace(/-/g, ' ') || 'Strategy';
+    if (!resourceSchedule[resource]) {
+      resourceSchedule[resource] = [];
+    }
+    
+    // Extract deliverable ID from task ID or name
+    const deliverableId = task.deliverable_id || task.id?.split('-')[0] || task.parent_id || 'unknown';
+    
+    resourceSchedule[resource].push({
+      taskId: task.id,
+      taskName: task.name,
+      deliverableId: deliverableId,
+      start: new Date(task.start),
+      end: new Date(task.end)
+    });
+  });
+  
+  // Analyze each resource for conflicts and idle time
+  let totalLevelingCost = 0;
+  
+  Object.entries(resourceSchedule).forEach(([resource, schedule]) => {
+    if (schedule.length < 2) return;
+    
+    // Sort by start date
+    schedule.sort((a, b) => a.start - b.start);
+    
+    // Look for gaps and overlaps
+    for (let i = 0; i < schedule.length - 1; i++) {
+      const current = schedule[i];
+      const next = schedule[i + 1];
+      
+      const gapDays = Math.floor((next.start - current.end) / (1000 * 60 * 60 * 24));
+      
+      // Check for overlaps (negative gap)
+      const overlapDays = Math.floor((current.end - next.start) / (1000 * 60 * 60 * 24));
+      
+      let conflictCost = 0;
+      let conflictType = null;
+      let affectedDeliverables = [];
+      
+      if (overlapDays > 0) {
+        // Resource conflict - overlapping tasks
+        conflictCost = overlapDays * 1200; // Higher cost for conflicts ($1200/day)
+        conflictType = 'overlap';
+        affectedDeliverables = [current.deliverableId, next.deliverableId];
+        
+        risks.push({
+          resource: resource,
+          waitingPeriod: -overlapDays, // Negative to indicate overlap
+          idleCost: conflictCost,
+          riskLevel: 'High',
+          conflictType: 'overlap',
+          affectedTasks: [current.taskName, next.taskName],
+          affectedDeliverables: affectedDeliverables,
+          recommendation: 'Resource conflict - same resource scheduled for multiple tasks simultaneously'
+        });
+      } else if (gapDays > 3) {
+        // Idle time gap
+        conflictCost = gapDays * 800; // $800/day for idle time
+        conflictType = 'idle';
+        const riskLevel = gapDays > 10 ? 'High' : gapDays > 5 ? 'Medium' : 'Low';
+        affectedDeliverables = [next.deliverableId]; // Affects the waiting deliverable
+        
+        risks.push({
+          resource: resource,
+          waitingPeriod: gapDays,
+          idleCost: conflictCost,
+          riskLevel: riskLevel,
+          conflictType: 'idle',
+          affectedTasks: [current.taskName, next.taskName],
+          affectedDeliverables: affectedDeliverables,
+          recommendation: gapDays > 10 
+            ? 'Consider reassigning tasks or adjusting timeline to reduce idle time'
+            : 'Minor gap - may be acceptable for resource availability'
+        });
+      }
+      
+      // Track costs by deliverable
+      if (conflictCost > 0) {
+        totalLevelingCost += conflictCost;
+        affectedDeliverables.forEach(delivId => {
+          if (!deliverableConflicts[delivId]) {
+            deliverableConflicts[delivId] = {
+              totalCost: 0,
+              conflicts: []
+            };
+          }
+          deliverableConflicts[delivId].totalCost += conflictCost / affectedDeliverables.length;
+          deliverableConflicts[delivId].conflicts.push({
+            resource: resource,
+            type: conflictType,
+            cost: conflictCost / affectedDeliverables.length,
+            riskLevel: risks[risks.length - 1].riskLevel
+          });
+        });
+      }
+    }
+  });
+  
+  // Emit resource leveling event to pricing system
+  const levelingData = {
+    totalCost: totalLevelingCost,
+    deliverableConflicts: deliverableConflicts,
+    risks: risks
+  };
+  
+  console.log('[Resource Leveling] Emitting resource:conflicts event:', levelingData);
+  document.dispatchEvent(new CustomEvent('resource:conflicts', { 
+    detail: levelingData
+  }));
+  
+  return risks;
+}
+
+// Function to manage AI button states based on scenario existence
+function updateAIButtonStates() {
+  const hasScenario = !!(window.SCENARIOS && window.SCENARIOS.A);
+  
+  // AI Suggest Type button
+  const btnAISuggest = document.getElementById('btn-ai-suggest-type');
+  if (btnAISuggest) {
+    btnAISuggest.disabled = !hasScenario;
+    if (!hasScenario) {
+      btnAISuggest.title = 'Build a scenario first before using AI suggestions';
+      btnAISuggest.style.opacity = '0.5';
+      btnAISuggest.style.cursor = 'not-allowed';
+    } else {
+      btnAISuggest.title = 'Analyze deliverable types using AI';
+      btnAISuggest.style.opacity = '1';
+      btnAISuggest.style.cursor = 'pointer';
+    }
+  }
+  
+  // Optimize Pricing button
+  const btnOptimize = document.getElementById('btn-ai-optimize-pricing');
+  if (btnOptimize) {
+    btnOptimize.disabled = !hasScenario;
+    if (!hasScenario) {
+      btnOptimize.title = 'Build a scenario first before optimizing pricing';
+      btnOptimize.style.opacity = '0.5';
+      btnOptimize.style.cursor = 'not-allowed';
+    } else {
+      btnOptimize.title = 'Optimize pricing using AI';
+      btnOptimize.style.opacity = '1';
+      btnOptimize.style.cursor = 'pointer';
+    }
+  }
+  
+  // Update AI panel visibility
+  const aiPanel = document.querySelector('.ai-pricing-panel');
+  if (aiPanel) {
+    if (!hasScenario) {
+      aiPanel.style.display = 'none';
+    } else {
+      aiPanel.style.display = 'block';
+    }
+  }
+}
+
+// Initialize Gantt event handlers when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  // Initialize button states
+  updateAIButtonStates();
+  
+  // Generate AI Timeline button
+  const btnGenerate = document.getElementById('btn-generate-timeline');
+  if (btnGenerate) {
+    btnGenerate.addEventListener('click', generateAITimeline);
+  }
+  
+  // Toggle AI Reasoning Panel
+  const btnToggleReasoning = document.getElementById('btn-toggle-reasoning');
+  if (btnToggleReasoning) {
+    btnToggleReasoning.addEventListener('click', () => {
+      const panel = document.getElementById('ai-reasoning-panel');
+      if (panel) {
+        panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      }
+    });
+  }
+  
+  // View mode change
+  const viewModeSelect = document.getElementById('gantt-view-mode');
+  if (viewModeSelect) {
+    viewModeSelect.addEventListener('change', (e) => {
+      if (ganttChart) {
+        ganttChart.change_view_mode(e.target.value);
+      }
+    });
+  }
+  
+  // Save timeline changes - unified save mechanism
+  const btnSave = document.getElementById('btn-save-timeline');
+  if (btnSave) {
+    btnSave.addEventListener('click', async () => {
+      // Save BOTH timeline and scenario data together
+      if (!currentTimelineTasks || currentTimelineTasks.length === 0) {
+        alert('No timeline data to save');
+        return;
+      }
+      
+      // Show syncing status
+      const originalText = btnSave.textContent;
+      btnSave.textContent = 'Syncing...';
+      btnSave.disabled = true;
+      
+      try {
+        // First save timeline data
+        const timelineResponse = await fetch('/api/timeline/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tasks: currentTimelineTasks,
+            reasoning: timelineReasoning,
+            scenario: window.currentScenario || 'A',
+            metadata: {
+              saved_at: new Date().toISOString(),
+              project_name: document.getElementById('projectName')?.value || 'Project',
+              hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 6
+            }
+          })
+        });
+        
+        // Then save scenario data if ScenarioStore exists
+        if (window.ScenarioStore && window.ScenarioStore.save) {
+          await window.ScenarioStore.save();
+          console.log('[SYNC] Scenario data saved');
+        }
+        
+        if (timelineResponse.ok) {
+          const result = await timelineResponse.json();
+          
+          // Update UI with sync status
+          btnSave.innerHTML = '✅ Synced';
+          btnSave.classList.add('synced');
+          
+          // Mark timeline as synced
+          localStorage.setItem('timeline_synced', 'true');
+          localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
+          
+          // Log sync metrics
+          console.log('[SYNC] Timeline saved successfully:', result.metrics);
+          
+          // Hide save button after 2 seconds
+          setTimeout(() => {
+            btnSave.style.display = 'none';
+            btnSave.textContent = originalText;
+            btnSave.classList.remove('synced');
+            btnSave.disabled = false;
+          }, 2000);
+        } else {
+          throw new Error('Failed to save timeline');
+        }
+      } catch (error) {
+        console.error('[SYNC ERROR]', error);
+        // Save to local storage as fallback
+        localStorage.setItem('timeline_data', JSON.stringify(currentTimelineTasks));
+        localStorage.setItem('timeline_reasoning', JSON.stringify(timelineReasoning));
+        
+        btnSave.textContent = '⚠️ Saved Locally';
+        btnSave.classList.add('warning');
+        
+        setTimeout(() => {
+          btnSave.textContent = originalText;
+          btnSave.classList.remove('warning');
+          btnSave.disabled = false;
+        }, 3000);
+      }
+    });
+  }
+  
+  // Listen for pricing:changed events and update Gantt
+  document.addEventListener('pricing:changed', (event) => {
+    const detail = event.detail;
+    console.log('[GANTT SYNC] Received pricing:changed event:', detail);
+    
+    if (!ganttChart || !detail.deliverableId) return;
+    
+    // Find the task in Gantt
+    const task = ganttChart.get_task(detail.deliverableId);
+    if (!task) {
+      console.log('[GANTT SYNC] Task not found in Gantt:', detail.deliverableId);
+      return;
+    }
+    
+    // Calculate new end date based on duration
+    const startDate = new Date(task.start);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + detail.durationDays);
+    
+    // Update task in Gantt
+    try {
+      ganttChart.update_task({
+        id: detail.deliverableId,
+        start: task.start,
+        end: endDate.toISOString(),
+        duration: detail.durationDays,
+        resources: detail.resources
+      });
+      
+      // Show visual feedback
+      const taskEl = document.querySelector(`[data-task-id="${detail.deliverableId}"]`);
+      if (taskEl) {
+        taskEl.classList.add('synced-from-pricing');
+        setTimeout(() => {
+          taskEl.classList.remove('synced-from-pricing');
+        }, 1500);
+      }
+      
+      // Update currentTimelineTasks if exists
+      if (currentTimelineTasks) {
+        const taskIndex = currentTimelineTasks.findIndex(t => 
+          t.id === detail.deliverableId || t.deliverable_code === detail.deliverableId
+        );
+        if (taskIndex >= 0) {
+          currentTimelineTasks[taskIndex].duration = { days: detail.durationDays };
+          currentTimelineTasks[taskIndex].end = endDate.toISOString();
+          console.log('[GANTT SYNC] Updated task duration:', detail.deliverableId, detail.durationDays, 'days');
+        }
+      }
+      
+      // Show save button since timeline changed
+      if (btnSave) {
+        btnSave.style.display = 'inline-block';
+      }
+    } catch (error) {
+      console.error('[GANTT SYNC ERROR] Failed to update Gantt:', error);
+    }
+  });
+  
+  // Listen for gantt:changed events (already handled by ScenarioStore)
+  document.addEventListener('gantt:changed', (event) => {
+    console.log('[PRICING SYNC] Gantt changed, pricing will update via ScenarioStore:', event.detail);
+    // ScenarioStore already handles this event
+  });
+});
+
+// Export timeline data for use in exports
+window.getTimelineData = function() {
+  return {
+    tasks: currentTimelineTasks,
+    reasoning: timelineReasoning
+  };
+};
+
+// Save component choices for a deliverable
+// If "all" are selected or empty, remove the key so server includes all by default
+function setComponentsFor(delivCode, labelsArray) {
+  if (!labelsArray || !labelsArray.length) {
+    delete S2.selectedComponentsMap[delivCode];
+    return;
+  }
+  const dict = Object.create(null);
+  labelsArray.forEach(label => { dict[label] = null; });
+  S2.selectedComponentsMap[delivCode] = dict;
+}
+
+async function api(path, opts={}) {
+  const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
+  if(!res.ok){ throw new Error(await res.text()); }
+  const ct = res.headers.get("content-type") || "";
+  if(ct.includes("application/json")) return res.json();
+  return res.text();
+}
+
+function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
+
+function currency(n){ return `$${Number(n||0).toLocaleString()}`; }
+
+// ================================================================================
+// Centralized Step 2 Hydration Functions - wire ALL entry points to selectionStore
+// ================================================================================
+
+async function hydrateComponentsFor(delivCode) {
+  try {
+    const comps = await api(`/api/components?deliverable=${encodeURIComponent(delivCode)}`);
+    selectionStore.componentsByDeliv.set(delivCode, new Set(comps));
+    
+    // Auto-load ALL L3 for ALL components (Task 1.1 requirement)
+    if (comps.length > 0) {
+      await Promise.all(comps.map(comp => hydrateL3For(delivCode, comp)));
+    }
+  } catch (error) {
+    console.error(`Failed to hydrate components for ${delivCode}:`, error);
+  }
+}
+
+async function hydrateL3For(delivCode, componentName) {
+  try {
+    const l3 = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(componentName)}`);
+    const key = `${delivCode}::${componentName}`;
+    // FIX: Extract task names from objects if needed
+    const taskNames = l3.map(task => {
+      if (typeof task === 'string') return task;
+      if (task && typeof task === 'object') {
+        const name = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
+        if (name && typeof name === 'string') return name;
+      }
+      return null; // Filter out invalid entries
+    }).filter(name => name && name !== '[object Object]'); // Remove nulls and object strings
+    selectionStore.l3ByComponent.set(key, new Set(taskNames));
+  } catch (error) {
+    console.error(`Failed to hydrate L3 for ${delivCode}::${componentName}:`, error);
+  }
+}
+
+async function selectDeliverable(code) {
+  // Validate code before adding to prevent null/undefined/empty values
+  if (code == null || code === undefined) {
+    console.error('[selectDeliverable] Cannot add null/undefined code');
+    return;
+  }
+  if (typeof code !== 'string' || code.trim() === '') {
+    console.error('[selectDeliverable] Cannot add invalid code:', code);
+    return;
+  }
+  
+  selectionStore.deliverables.add(code);
+  APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
+  
+  // Hydrate components for this deliverable
+  await hydrateComponentsFor(code);
+  
+  // Update AI checkbox if present (bi-directional sync)
+  const aiCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${code}"]`);
+  if (aiCheckbox) {
+    aiCheckbox.checked = true;
+  }
+  
+  // Update AI "Add to Selection" button if present
+  const aiDiv = document.querySelector(`.ai-deliverable[data-deliv-code="${code}"]`);
+  if (aiDiv) {
+    const btn = aiDiv.querySelector('button[onclick*="addAIDeliverableToSelection"]');
+    if (btn) {
+      btn.textContent = 'Added';
+      btn.style.background = '#10b981';
+      btn.disabled = true;
+    }
+  }
+  
+  // Re-render all panels
+  if (window.renderDeliverablesPanel) renderDeliverablesPanel();
+  if (window.renderComponentsPanel) renderComponentsPanel(code);
+  if (window.renderSummary) renderSummary();
+}
+
+// Batch add multiple deliverables (used by AI suggestions)
+async function addDeliverables(codes) {
+  if (!codes || codes.length === 0) return;
+  
+  // Add all codes to selection
+  for (const code of codes) {
+    selectionStore.deliverables.add(code);
+  }
+  APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
+  
+  // Hydrate components for all new deliverables
+  for (const code of codes) {
+    await hydrateComponentsFor(code);
+  }
+  
+  // Re-render all panels once
+  if (window.renderDeliverablesPanel) renderDeliverablesPanel();
+  if (window.renderSummary) renderSummary();
+  if (window.updateSummaryCounts) updateSummaryCounts();
+}
+
+// Wire addDeliverables to APB.step2 API
+APB.step2.addDeliverables = addDeliverables;
+
+async function deselectDeliverable(code) {
+  selectionStore.deliverables.delete(code);
+  selectionStore.componentsByDeliv.delete(code);
+  
+  // Remove all L3 entries for this deliverable
+  Array.from(selectionStore.l3ByComponent.keys())
+    .filter(k => k.startsWith(`${code}::`))
+    .forEach(k => selectionStore.l3ByComponent.delete(k));
+  
+  // Also clean up S2 state for compatibility
+  delete S2.selectedComponentsByCode[code];
+  
+  APB.step2.selectedCodes = selectionStore.deliverables; // sync alias
+  
+  // Update AI checkbox if present (bi-directional sync)
+  const aiCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${code}"]`);
+  if (aiCheckbox) {
+    aiCheckbox.checked = false;
+  }
+  
+  // Update AI "Add to Selection" button if present
+  const aiDiv = document.querySelector(`.ai-deliverable[data-deliv-code="${code}"]`);
+  if (aiDiv) {
+    const btn = aiDiv.querySelector('button[onclick*="addAIDeliverableToSelection"]');
+    if (btn) {
+      btn.textContent = 'Add to Selection';
+      btn.style.background = '#3b82f6';
+      btn.disabled = false;
+    }
+  }
+  
+  // Uncheck all components and tasks for this deliverable in AI suggestions
+  document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${code}"]`).forEach(cb => cb.checked = false);
+  document.querySelectorAll(`.ai-task-checkbox[data-deliv="${code}"]`).forEach(cb => cb.checked = false);
+  
+  // Re-render panels
+  if (window.renderDeliverablesPanel) renderDeliverablesPanel();
+  if (window.renderSummary) renderSummary();
+  
+  // If this was an AI suggestion, show Add button again
+  if (APB.step2.aiSuggestedCodes.has(code)) {
+    APB.step2.aiSuggestedCodes.delete(code);
+    if (window.renderAISuggestions) renderAISuggestions();
+  }
+}
+
+// Export hydration functions globally
+window.selectDeliverable = selectDeliverable;
+window.deselectDeliverable = deselectDeliverable;
+window.hydrateComponentsFor = hydrateComponentsFor;
+window.hydrateL3For = hydrateL3For;
+
+async function boot() {
+  // NUCLEAR CLEANUP: Complete purge of all polling and job IDs on page load
+  console.log('[BOOT] ========= NUCLEAR CLEANUP ON PAGE LOAD =========');
+  console.log('[BOOT] Timestamp:', new Date().toISOString());
+  
+  // 1. Stop ALL polling globally using GlobalPollingManager
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[BOOT] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[BOOT] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Clear any existing intervals from previous sessions
+  if (window.aiAnalysisInterval) {
+    console.log('[BOOT] Clearing existing AI analysis interval');
+    clearInterval(window.aiAnalysisInterval);
+    window.aiAnalysisInterval = null;
+  }
+  if (window.progressInterval) {
+    console.log('[BOOT] Clearing existing progress interval');
+    clearInterval(window.progressInterval);
+    window.progressInterval = null;
+  }
+  
+  // 3. COMPREHENSIVE cleanup of ALL job IDs from localStorage
+  const savedState = localStorage.getItem('charles_agent_state');
+  if (savedState) {
+    try {
+      const state = JSON.parse(savedState);
+      let cleaned = false;
+      
+      // Clear top-level jobId (especially the problematic 642a96bd-f94b-440e-b865-d160839a57c0)
+      if (state && state.jobId) {
+        console.log('[BOOT] Clearing top-level jobId:', state.jobId);
+        state.jobId = null;
+        state.jobIdTimestamp = null;
+        cleaned = true;
+      }
+      
+      // CRITICAL: Clear jobId from ALL stateHistory entries (where it keeps resurrecting from!)
+      if (state.stateHistory && Array.isArray(state.stateHistory)) {
+        console.log('[BOOT] Clearing jobIds from', state.stateHistory.length, 'stateHistory entries...');
+        state.stateHistory.forEach((historyState, idx) => {
+          if (historyState.jobId) {
+            console.log(`[BOOT] Clearing jobId from stateHistory[${idx}]:`, historyState.jobId);
+            historyState.jobId = null;
+            historyState.jobIdTimestamp = null;
+            cleaned = true;
+          }
+          if (historyState.agentState && historyState.agentState.jobId) {
+            console.log(`[BOOT] Clearing agentState.jobId from stateHistory[${idx}]:`, historyState.agentState.jobId);
+            historyState.agentState.jobId = null;
+            cleaned = true;
+          }
+        });
+      }
+      
+      // Save the cleaned state back to localStorage
+      if (cleaned) {
+        localStorage.setItem('charles_agent_state', JSON.stringify(state));
+        console.log('[BOOT] Saved cleaned charles_agent_state to localStorage');
+      }
+    } catch (e) {
+      console.error('[BOOT] Failed to clean job IDs:', e);
+    }
+  }
+  
+  // 4. Clear any other job-related localStorage items
+  ['aiAnalysisJobId', 'currentJobId', 'pollingJobId'].forEach(key => {
+    if (localStorage.getItem(key)) {
+      console.log('[BOOT] Removing localStorage:', key);
+      localStorage.removeItem(key);
+    }
+  });
+  
+  // Clear the aiAnalysisJobId if it exists and is stale (generic cleanup)
+  if (window.aiAnalysisJobId) {
+    console.log('[CLEANUP] Checking aiAnalysisJobId for staleness:', window.aiAnalysisJobId);
+    // Clear it if we have no tracking information or if it matches any stale patterns
+    window.aiAnalysisJobId = null;
+  }
+  
+  await api("/api/load");
+  OPTIONS = await api("/api/options");
+  
+  // Initialize APB.step2 state - load RFP text from sessionStorage or localStorage
+  // CRITICAL FIX: Check if data was recently cleared (don't auto-restore)
+  const dataClearedFlag = localStorage.getItem('apb.data_cleared');
+  const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+  const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
+  
+  // Don't auto-restore if cleared within last hour (3600000 ms)
+  if (dataClearedFlag === 'true' && timeSinceClear < 3600000) {
+    console.log('[RESTORE] Data was cleared recently, not auto-restoring');
+    APB.step2.rfpText = '';
+  } else {
+    // Only restore if not recently cleared
+    console.log('[RESTORE] Checking for stored data...');
+    const restoredText = sessionStorage.getItem('apb.rfp_text') || localStorage.getItem('apb.rfpText.v1') || '';
+    if (restoredText) {
+      console.log('[RESTORE] Found and restored RFP text, length:', restoredText.length);
+    }
+    APB.step2.rfpText = restoredText;
+  }
+  APB.step2.allDeliverables = OPTIONS.deliverables || [];
+  
+  // Initialize DOM element references for Step 2
+  APB.step2.els.listRight = document.querySelector('#s2-deliv-list, #deliverableList');
+  APB.step2.els.search = document.querySelector('#s2-deliv-search, #delivSearch');
+  APB.step2.els.btnApply = document.querySelector('#s2-apply, #applySelection, #btnApplySelection');
+  APB.step2.els.btnSelectAll = document.querySelector('#s2-deliv-selectall, #delivSelectAll');
+  APB.step2.els.btnClear = document.querySelector('#s2-deliv-clear, #delivClear');
+  APB.step2.els.yourSel = document.querySelector('#s2-your-list, #yourSelection, #yourSelectionList');
+  APB.step2.els.compDrawer = document.getElementById('compDrawer');
+  APB.step2.els.compList = document.getElementById('compList');
+  APB.step2.els.compTitle = document.getElementById('compTitle');
+  APB.step2.els.compDone = document.getElementById('compDone');
+  
+  // Populate dropdowns (with duplicate removal)
+  const pricingMode = document.querySelector("#pricingMode");
+  if (pricingMode) populateSelect(pricingMode, OPTIONS.pricing_modes);
+  const rateBand = document.querySelector("#rateBand");
+  if (rateBand) populateSelect(rateBand, OPTIONS.rate_bands);
+  // Scenario templates (Scenario B/C removed - only populate A if it exists)
+  const sA = document.querySelector("#scenarioA");
+  if (sA) {
+    OPTIONS.scenario_templates.forEach(s => {
+      sA.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
+    });
+    // Default: MED_LOW
+    if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_LOW")) sA.value="MED_LOW";
+  }
+
+  // Deliverables list
+  DELIVERABLES = OPTIONS.deliverables;
+  
+  // Build code→deliverable index for fast lookups
+  DELIV_INDEX = {};
+  DELIV_INDEX_LO = {};
+  for (const d of (OPTIONS.deliverables || [])) {
+    const code = String(d.Deliverable_Code).trim();
+    DELIV_INDEX[code] = d;
+    DELIV_INDEX_LO[key(code)] = d;
+  }
+  
+  renderDeliverableList(DELIVERABLES);
+
+  // Initialize Step 2 state
+  selectedCodes = [];
+  removedCodes = [];
+  addedCodes = [];
+  
+  // Initialize S2 system
+  s2LoadDeliverables();
+
+  // Pricing default blended - with null check
+  const ps = OPTIONS.pricing_settings.find(x => x.Key==="Default_Blended_Rate");
+  const blendedRateEl = document.querySelector("#blendedRate");
+  if(ps && blendedRateEl) blendedRateEl.value = ps.Default;
+
+  // Slack defaults - with null checks
+  const ss = Object.fromEntries(OPTIONS.slack_settings.map(x => [x.Key, x.Default]));
+  const useSlackEl = document.querySelector("#useSlack");
+  if (useSlackEl) useSlackEl.checked = !!ss["Use_Slack"];
+  
+  const slackInternalEl = document.querySelector("#slackInternal");
+  if (slackInternalEl) slackInternalEl.value = ss["Slack_After_Internal_Review_Days"] ?? 1;
+  
+  const slackClientEl = document.querySelector("#slackClient");
+  if (slackClientEl) slackClientEl.value = ss["Slack_After_Client_Review_Days"] ?? 2;
+  
+  const slackGlobalEl = document.querySelector("#slackGlobal");
+  if (slackGlobalEl) slackGlobalEl.value = ss["Slack_Global_Percent"] ?? 0.05;
+
+  // UI wiring (original) - with null checks
+  const btnAnalyze = document.querySelector("#btnAnalyze");
+  if (btnAnalyze) btnAnalyze.onclick = onRunReconcile;
+  
+  // Remove double binding - Step 3 uses buildScenariosAB from index.html
+  // const btnBuild = document.querySelector("#btnBuild");
+  // if (btnBuild) btnBuild.onclick = onBuild;
+  
+  const pricingModeEl = document.querySelector("#pricingMode");
+  if (pricingModeEl) pricingModeEl.onchange = onPricingModeChanged;
+  
+  const useTemplates = document.querySelector("#useTemplates");
+  if (useTemplates) useTemplates.onchange = onScenarioTypeChanged;
+  
+  const useBundles = document.querySelector("#useBundles");
+  if (useBundles) useBundles.onchange = onScenarioTypeChanged;
+  
+  const btnExportA = document.querySelector("#btnExportA");
+  if (btnExportA) btnExportA.onclick = () => onExport('A');
+
+  // UI wiring (new Step 2)
+  const proceedBtn = document.querySelector("#btnProceedToStep3");
+  if (proceedBtn) proceedBtn.onclick = onProceedToStep3;
+  
+  const reconcileBtn = document.querySelector("#btnRunReconcile");
+  if (reconcileBtn) {
+    reconcileBtn.onclick = async (e) => {
+      e.preventDefault();
+      
+      // Task 1.7: Get RFP text from multiple sources including backend cache
+      // CRITICAL FIX: Check if data was recently cleared
+      const dataClearedFlag = localStorage.getItem('apb.data_cleared');
+      const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+      const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
+      
+      let rfpText = '';
+      // Only restore if not recently cleared (within last hour)
+      if (dataClearedFlag !== 'true' || timeSinceClear > 3600000) {
+        rfpText = window.APP?.rfpText || APB.step2.rfpText || sessionStorage.getItem('apb.rfp_text') || '';
+        // IMPORTANT: Do NOT restore from localStorage.getItem('apb.rfpText.v1') anymore
+        console.log('[ANALYZE] Attempting to use existing RFP text, length:', rfpText?.length || 0);
+      } else {
+        console.log('[ANALYZE] Data was cleared recently, not using stored RFP text');
+      }
+      
+      // If still no text, check if we have a stored analysis summary
+      if (!rfpText && sessionStorage.getItem('apb:rfpSummary')) {
+        try {
+          const summary = JSON.parse(sessionStorage.getItem('apb:rfpSummary'));
+          if (summary && summary.summary_text) {
+            rfpText = summary.summary_text; // Use summary as fallback
+          }
+        } catch (e) {
+          console.warn('Could not parse stored summary:', e);
+        }
+      }
+      
+      // Task 1.7: If still no text, try backend RFP cache (uses LAST_UPLOAD_FILENAME)
+      if (!rfpText) {
+        try {
+          const cacheRes = await fetch('/api/rfp/cache');
+          if (cacheRes.ok) {
+            const cacheData = await cacheRes.json();
+            if (cacheData.text) {
+              rfpText = cacheData.text;
+              console.log('Using cached RFP text from backend');
+            }
+          }
+        } catch (e) {
+          console.warn('Could not fetch backend RFP cache:', e);
+        }
+      }
+      
+      if (!rfpText) {
+        // Last resort: show non-blocking message but don't prevent refresh
+        console.warn('No RFP text found - refresh may have limited results');
+      }
+      
+      try {
+        const res = await fetch('/api/suggest_by_text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rfp_text: rfpText })
+        });
+        
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        
+        const data = await res.json();
+        // Update stored summary with new suggestions
+        window.APP = window.APP || {};
+        window.APP.summary = data;
+        sessionStorage.setItem('apb:rfpSummary', JSON.stringify(data));
+        
+        // Re-render AI summary and suggestions
+        initAISummaryAndSuggestions();
+      } catch (error) {
+        console.error('Refresh error:', error);
+        alert(`Failed to refresh suggestions: ${error.message}`);
+      }
+    };
+  }
+
+  onPricingModeChanged();
+  
+  // Wire up retainer toggle
+  const retainersToggle = document.querySelector("#retainersToggle");
+  if (retainersToggle) {
+    retainersToggle.addEventListener('change', onToggleRetainers);
+  }
+  
+  // ISSUE 2 FIX: Auto-clear on first keystroke in RFP text area
+  const rfpTextEl = document.querySelector("#rfpText");
+  if (rfpTextEl && !rfpTextEl.dataset.clearOnKeystrokeWired) {
+    rfpTextEl.dataset.clearOnKeystrokeWired = 'true';
+    let hasTyped = false;
+    rfpTextEl.addEventListener('keydown', async (e) => {
+      // Skip modifier keys and navigation keys
+      if (e.ctrlKey || e.metaKey || e.altKey || ['Tab', 'Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) {
+        return;
+      }
+      
+      // Only clear on first real character typed in a new session
+      if (!hasTyped && rfpTextEl.value.trim().length === 0 && !['Backspace', 'Delete', 'Enter'].includes(e.key)) {
+        hasTyped = true;
+        console.log('[SESSION] Auto-clearing on first keystroke');
+        
+        // Clear server cache but don't reset the entire UI
+        const sessionId = SessionManager.getCurrentSessionId();
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId })
+          });
+          
+          // Start fresh session
+          SessionManager.startNewSession();
+          console.log('[SESSION] Session cleared on first keystroke');
+        } catch (err) {
+          console.warn('[SESSION] Failed to clear on keystroke:', err);
+        }
+      }
+    });
+  }
+  
+  // ISSUE 2 FIX: Auto-clear on new file upload
+  const rfpFileEl = document.querySelector("#rfpFile");
+  if (rfpFileEl && !rfpFileEl.dataset.clearOnUploadWired) {
+    rfpFileEl.dataset.clearOnUploadWired = 'true';
+    rfpFileEl.addEventListener('change', async (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        console.log('[SESSION] Auto-clearing on file upload');
+        
+        // Clear server cache
+        const sessionId = SessionManager.getCurrentSessionId();
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId })
+          });
+          
+          // Start fresh session
+          SessionManager.startNewSession();
+          console.log('[SESSION] Session cleared on file upload');
+        } catch (err) {
+          console.warn('[SESSION] Failed to clear on file upload:', err);
+        }
+      }
+    });
+  }
+  
+  // Export functions globally for index.html
+  window.onRunReconcile = onRunReconcile;
+  window.buildFromCurrentSelection = buildFromCurrentSelection;
+}
+
+function onPricingModeChanged(){
+  const pricingMode = document.querySelector("#pricingMode");
+  if (!pricingMode) return;
+  const mode = pricingMode.value;
+  
+  const blendedWrap = document.querySelector("#blendedWrap");
+  if (blendedWrap) blendedWrap.classList.toggle("hidden", mode!=="Flat_Blended");
+  
+  const bandWrap = document.querySelector("#bandWrap");
+  if (bandWrap) bandWrap.classList.toggle("hidden", mode!=="Per_Resource");
+}
+
+function onScenarioTypeChanged(){
+  const useTemplates = document.querySelector("#useTemplates").checked;
+  document.querySelector("#templateRow").classList.toggle("hidden", !useTemplates);
+  document.querySelector("#bundleRow").classList.toggle("hidden", useTemplates);
+}
+
+function renderDeliverableList(items){
+  const box = document.querySelector("#deliverableList");
+  if (!box) return; // Element doesn't exist, skip rendering
+  box.innerHTML = "";
+  items.forEach(d => {
+    const id = `deliv_${d.Deliverable_Code}`;
+    box.append(el(`
+      <div class="row">
+        <input type="checkbox" id="${id}" data-code="${d.Deliverable_Code}"/>
+        <label for="${id}"><strong>${d.Deliverable}</strong> <small class="badge">${d.Category}</small></label>
+      </div>
+    `));
+  });
+}
+
+// Build from current S2 selection (SIMPLIFIED to prevent freezing)
+async function buildFromCurrentSelection() {
+  console.log('[BUILD] ========= PROCEED TO PRICING CLICKED =========');
+  console.log('[BUILD] Timestamp:', new Date().toISOString());
+  
+  // CRITICAL: NUCLEAR OPTION - Stop ALL polling everywhere
+  console.log('[BUILD] Step 0/10: NUCLEAR SHUTDOWN - Stopping ALL polling...');
+  
+  // Set global flag to prevent AI Assistant from auto-resuming
+  window.isTransitioningToPricing = true;
+  
+  // 1. Use GlobalPollingManager master kill switch
+  if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
+    console.log('[BUILD] Calling GlobalPollingManager.stopAllPolling()...');
+    const result = window.GlobalPollingManager.stopAllPolling();
+    console.log('[BUILD] GlobalPollingManager stopped:', result);
+  }
+  
+  // 2. Clear all job IDs from localStorage to prevent auto-restart
+  console.log('[BUILD] Clearing all job IDs from localStorage...');
+  try {
+    // CRITICAL: Clear CHARLES agent state completely - including ALL stateHistory entries
+    const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
+    
+    // Clear top-level jobId
+    if (charlesState.jobId) {
+      console.log('[BUILD] Clearing top-level CHARLES jobId:', charlesState.jobId);
+      charlesState.jobId = null;
+      charlesState.jobIdTimestamp = null;
+    }
+    
+    // CRITICAL: Clear jobId from EVERY stateHistory entry (this is where it resurrects from!)
+    if (charlesState.stateHistory && Array.isArray(charlesState.stateHistory)) {
+      console.log('[BUILD] Clearing jobIds from', charlesState.stateHistory.length, 'stateHistory entries...');
+      charlesState.stateHistory.forEach((state, idx) => {
+        if (state.jobId) {
+          console.log(`[BUILD] Clearing jobId from stateHistory[${idx}]:`, state.jobId);
+          state.jobId = null;
+          state.jobIdTimestamp = null;
+        }
+        if (state.agentState && state.agentState.jobId) {
+          console.log(`[BUILD] Clearing agentState.jobId from stateHistory[${idx}]:`, state.agentState.jobId);
+          state.agentState.jobId = null;
+        }
+      });
+    }
+    
+    // Save the cleaned state back
+    localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
+    console.log('[BUILD] CHARLES agent state cleaned and saved');
+    
+    // Clear any other job-related items
+    const keysToCheck = ['aiAnalysisJobId', 'currentJobId', 'pollingJobId'];
+    keysToCheck.forEach(key => {
+      if (localStorage.getItem(key)) {
+        console.log('[BUILD] Clearing localStorage:', key);
+        localStorage.removeItem(key);
+      }
+    });
+  } catch (e) {
+    console.error('[BUILD] Error clearing localStorage:', e);
+  }
+  
+  // 3. Force stop AI Assistant polling
+  if (window.aiAssistant) {
+    console.log('[BUILD] Stopping AI Assistant polling...');
+    if (window.aiAssistant.currentPollInterval) {
+      clearInterval(window.aiAssistant.currentPollInterval);
+      window.aiAssistant.currentPollInterval = null;
+    }
+    if (window.aiAssistant.stopJobPolling) {
+      window.aiAssistant.stopJobPolling();
+    }
+    // Clear the job ID from assistant state
+    if (window.aiAssistant.agentState) {
+      window.aiAssistant.agentState.jobId = null;
+    }
+  }
+  
+  // 4. Manual cleanup of any remaining intervals
+  if (typeof cleanupPolling === 'function') {
+    cleanupPolling();
+    console.log('[BUILD] Called cleanupPolling()');
+  }
+  
+  // 5. Clear global variables
+  if (typeof aiAnalysisInterval !== 'undefined') {
+    clearInterval(aiAnalysisInterval);
+    aiAnalysisInterval = null;
+  }
+  if (typeof progressInterval !== 'undefined') {
+    clearInterval(progressInterval);
+    progressInterval = null;
+  }
+  if (typeof aiAnalysisJobId !== 'undefined') {
+    aiAnalysisJobId = null;
+  }
+  
+  console.log('[BUILD] ✅ NUCLEAR SHUTDOWN COMPLETE - All polling stopped');
+  
+  // Add timeout protection to prevent infinite freeze
+  const timeoutId = setTimeout(() => {
+    console.error('[BUILD] TIMEOUT - Function taking too long! Forcing Step 3 to show...');
+    forceShowStep3();
+  }, 10000); // 10 second timeout
+  
+  // Step 1: Clear any previous error states
+  clearErrorState();
+  
+  // Step 2: Validate deliverable selection
+  let codes = [];
+  try {
+    console.log('[BUILD] Step 1/10: Reading selected codes from UI...');
+    codes = readSelectedCodesFromUI();
+    console.log('[BUILD] Selected codes:', codes);
+    
+    if (!codes.length) {
+      console.warn('[BUILD] No deliverables selected');
+      showUserFriendlyError('Please select at least one deliverable before proceeding to pricing.', false);
+      return;
+    }
+  } catch (error) {
+    console.error('[BUILD] Error reading selected codes:', error);
+    showUserFriendlyError('Unable to read your selections. Please refresh and try again.', true);
+    return;
+  }
+
+  // Step 3: Initialize ScenarioManager with fallback
+  let sessionId = null;
+  try {
+    console.log('[BUILD] Step 2/10: Initializing ScenarioManager...');
+    
+    if (!window.ScenarioManager) {
+      console.warn('[BUILD] ScenarioManager not loaded, attempting fallback...');
+      // Fallback: Show Step 3 anyway with minimal data
+      showStep3WithFallback(codes);
+      return;
+    }
+    
+    sessionId = window.ScenarioManager.initSession(generateSessionId());
+    console.log('[BUILD] ScenarioManager initialized with session:', sessionId);
+  } catch (error) {
+    console.error('[BUILD] Error initializing ScenarioManager:', error);
+    // Non-critical error - continue with fallback
+    showStep3WithFallback(codes);
+    return;
+  }
+
+  // Step 4: Sync legacy state (non-critical)
+  try {
+    console.log('[BUILD] Step 3/10: Syncing legacy state...');
+    selectedCodes = codes;
+    if (window.appState) window.appState.selectedCodes = codes;
+    window.selectedCodes = codes;
+    console.log('[BUILD] Legacy state synced');
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error syncing legacy state:', error);
+    // Continue - this is not critical
+  }
+
+  // Step 5: Build component payload (defensive)
+  let selectedComponentsPayload = {};
+  try {
+    console.log('[BUILD] Step 4/10: Building component payload...');
+    console.log('[BUILD DEBUG] Number of codes to process:', codes.length);
+    
+    let processedCount = 0;
+    codes.forEach(code => {
+      console.log(`[BUILD DEBUG] Processing component for code ${processedCount + 1}/${codes.length}: ${code}`);
+      try {
+        // Try new state system first (preferred)
+        let compSet = window.APB?.step2?.selectedComponentsByCode?.[code];
+        console.log(`[BUILD DEBUG] ${code} - Found in APB.step2:`, !!compSet);
+        
+        // Fall back to old state system if new system has no data
+        if (!compSet && window.S2) {
+          compSet = S2.selectedComponentsMap?.[code];
+          console.log(`[BUILD DEBUG] ${code} - Found in S2:`, !!compSet);
+        }
+        
+        if (compSet instanceof Set) {
+          console.log(`[BUILD DEBUG] ${code} - Is Set with size:`, compSet.size);
+          if (compSet.size > 0) {
+            const dict = Object.create(null);
+            let setItemCount = 0;
+            compSet.forEach(label => { 
+              dict[label] = null;
+              setItemCount++;
+              console.log(`[BUILD DEBUG] ${code} - Added component ${setItemCount}: ${label}`);
+            });
+            selectedComponentsPayload[code] = dict;
+          } else {
+            selectedComponentsPayload[code] = {};
+          }
+        } else if (compSet && typeof compSet === 'object') {
+          console.log(`[BUILD DEBUG] ${code} - Is object`);
+          selectedComponentsPayload[code] = compSet;
+        } else {
+          console.log(`[BUILD DEBUG] ${code} - Using __ALL__ fallback`);
+          selectedComponentsPayload[code] = "__ALL__";
+        }
+        processedCount++;
+        console.log(`[BUILD DEBUG] Successfully processed ${processedCount}/${codes.length} codes`);
+      } catch (compError) {
+        console.warn(`[BUILD] Error processing components for ${code}:`, compError);
+        selectedComponentsPayload[code] = "__ALL__"; // Safe default
+      }
+    });
+    
+    console.log('[BUILD] Component payload built:', selectedComponentsPayload);
+    console.log('[BUILD DEBUG] Component payload complete - moving to L3');
+  } catch (error) {
+    console.warn('[BUILD] Error building component payload:', error);
+    // Use safe defaults
+    codes.forEach(code => {
+      selectedComponentsPayload[code] = "__ALL__";
+    });
+  }
+
+  // Step 6: Build L3 payload (defensive)
+  let l3Payload = {};
+  try {
+    console.log('[BUILD] Step 5/10: Building L3 subtasks payload...');
+    console.log('[BUILD DEBUG] Checking for L3 data in APB.step2...');
+    
+    if (window.APB?.step2?.selectedL3ByKey) {
+      const l3Keys = Object.entries(window.APB.step2.selectedL3ByKey);
+      console.log(`[BUILD DEBUG] Found ${l3Keys.length} L3 keys to process`);
+      
+      let l3ProcessedCount = 0;
+      l3Keys.forEach(([key, l3Set]) => {
+        console.log(`[BUILD DEBUG] Processing L3 key ${l3ProcessedCount + 1}/${l3Keys.length}: ${key}`);
+        try {
+          const [code, component] = key.split('::');
+          console.log(`[BUILD DEBUG] L3 key split - code: ${code}, component: ${component}`);
+          console.log(`[BUILD DEBUG] Is code in selected codes:`, codes.includes(code));
+          console.log(`[BUILD DEBUG] L3 Set size:`, l3Set?.size);
+          
+          if (codes.includes(code) && l3Set && l3Set.size > 0) {
+            if (!l3Payload[code]) l3Payload[code] = {};
+            console.log(`[BUILD DEBUG] Converting L3 Set to Array for ${key}...`);
+            const l3Array = Array.from(l3Set);
+            console.log(`[BUILD DEBUG] Array created, length: ${l3Array.length}`);
+            
+            const mappedItems = l3Array.map((item, idx) => {
+              console.log(`[BUILD DEBUG] Mapping L3 item ${idx + 1}/${l3Array.length}:`, typeof item);
+              if (typeof item === 'string') return item;
+              if (item && typeof item === 'object') {
+                const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
+                if (name && typeof name === 'string') return name;
+              }
+              return null;
+            });
+            console.log(`[BUILD DEBUG] Mapped ${mappedItems.length} items`);
+            
+            const filteredItems = mappedItems.filter(name => name && name !== '[object Object]' && name !== '');
+            console.log(`[BUILD DEBUG] Filtered to ${filteredItems.length} valid items`);
+            
+            l3Payload[code][component] = filteredItems;
+          }
+          l3ProcessedCount++;
+          console.log(`[BUILD DEBUG] L3 processed ${l3ProcessedCount}/${l3Keys.length}`);
+        } catch (l3Error) {
+          console.warn(`[BUILD] Error processing L3 for ${key}:`, l3Error);
+        }
+      });
+    } else {
+      console.log('[BUILD DEBUG] No L3 data found in APB.step2.selectedL3ByKey');
+    }
+    
+    console.log('[BUILD] L3 payload built:', l3Payload);
+    console.log('[BUILD DEBUG] L3 payload complete - moving to ScenarioManager update');
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error building L3 payload:', error);
+    // Continue without L3 data
+  }
+
+  // Step 7: Update ScenarioManager (defensive)
+  try {
+    console.log('[BUILD] Step 6/10: Updating ScenarioManager with selections...');
+    
+    if (window.ScenarioManager?.setSelectedDeliverables) {
+      window.ScenarioManager.setSelectedDeliverables(codes, selectedComponentsPayload, l3Payload);
+      console.log('[BUILD] ScenarioManager updated with selections');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error updating ScenarioManager:', error);
+    // Continue - we can still try to build
+  }
+
+  // Step 8: Build retainers payload (defensive)
+  try {
+    console.log('[BUILD] Step 7/10: Building retainers payload...');
+    
+    const retainersPayload = [];
+    if (window.pricingData?.deliverableTypes) {
+      window.pricingData.deliverableTypes.forEach((type, code) => {
+        if (type === 'RETAINER' && codes.includes(code)) {
+          retainersPayload.push({
+            deliverable_code: code,
+            months: window.pricingData.retainers?.get(code) || 12,
+            type: 'RETAINER'
+          });
+        }
+      });
+    }
+    
+    // Set blended rate
+    if (window.ScenarioManager?.setState) {
+      window.ScenarioManager.setState({
+        blendedRate: window.getBlendedRateFromUI?.() || 195
+      });
+    }
+    
+    console.log('[BUILD] Retainers configured:', retainersPayload);
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error building retainers:', error);
+    // Continue without retainer data
+  }
+
+  // Step 9: Build scenario (with multiple fallbacks)
+  let scenarios = null;
+  let buildSuccess = false;
+  
+  try {
+    console.log('[BUILD] Step 8/10: Building scenario via ScenarioManager...');
+    console.log('[BUILD DEBUG] ScenarioManager exists:', !!window.ScenarioManager);
+    console.log('[BUILD DEBUG] ScenarioManager.buildScenario exists:', !!window.ScenarioManager?.buildScenario);
+    
+    if (window.ScenarioManager?.buildScenario) {
+      console.log('[BUILD DEBUG] *** CALLING ScenarioManager.buildScenario() ***');
+      console.log('[BUILD DEBUG] Call initiated at:', new Date().toISOString());
+      
+      const json = await window.ScenarioManager.buildScenario();
+      
+      console.log('[BUILD DEBUG] *** ScenarioManager.buildScenario() RETURNED ***');
+      console.log('[BUILD DEBUG] Response received at:', new Date().toISOString());
+      console.log('[BUILD] ScenarioManager response:', json);
+      console.log('[BUILD DEBUG] Response type:', typeof json);
+      console.log('[BUILD DEBUG] Response keys:', json ? Object.keys(json) : 'null');
+      
+      // Extract scenarios with multiple fallback attempts
+      console.log('[BUILD DEBUG] Extracting scenarios from response...');
+      scenarios = json.scenarios || {};
+      console.log('[BUILD DEBUG] Scenarios extracted:', Object.keys(scenarios || {}).length, 'scenarios');
+      
+      let scenario = scenarios.A || json.scenario || json;
+      console.log('[BUILD DEBUG] Scenario A exists:', !!scenario);
+      
+      // Wrap if needed
+      if ((!scenarios || Object.keys(scenarios).length === 0) && scenario && scenario.items) {
+        console.log('[BUILD DEBUG] Wrapping scenario in scenarios object...');
+        scenarios = { A: scenario };
+      }
+      
+      if (scenarios && Object.keys(scenarios).length > 0) {
+        buildSuccess = true;
+        console.log('[BUILD] Scenario built successfully');
+        console.log('[BUILD DEBUG] Build success - proceeding to state save');
+      } else {
+        console.log('[BUILD DEBUG] Scenarios empty or invalid');
+      }
+    } else {
+      console.log('[BUILD DEBUG] ScenarioManager.buildScenario not available');
+    }
+  } catch (error) {
+    console.error('[BUILD] Error building scenario:', error);
+    console.error('[BUILD DEBUG] Error stack:', error.stack);
+    // Will attempt fallback below
+  }
+  
+  // Fallback if scenario build failed
+  if (!buildSuccess) {
+    console.warn('[BUILD] Primary build failed, attempting fallback...');
+    
+    try {
+      // Create minimal scenario structure
+      scenarios = {
+        A: {
+          items: codes.map(code => ({
+            deliverable_code: code,
+            deliverable_name: code,
+            category: 'General',
+            hours: 40,
+            rate: 195,
+            price: 7800
+          })),
+          total: codes.length * 7800
+        }
+      };
+      buildSuccess = true;
+      console.log('[BUILD] Fallback scenario created');
+    } catch (fallbackError) {
+      console.error('[BUILD] Fallback scenario creation failed:', fallbackError);
+    }
+  }
+
+  // Step 10: Update state and UI (defensive with multiple try-catch blocks)
+  
+  // Save state (non-critical)
+  try {
+    console.log('[BUILD] Step 9/10: Saving state...');
+    
+    if (scenarios) {
+      window.APP_STATE = window.APP_STATE || {};
+      window.APP_STATE.scenarios = scenarios;
+      window.APP_STATE.activeScenario = 'A';
+      window.APP_STATE.sessionId = sessionId;
+      
+      // Legacy aliases
+      window.BUILD = { scenarios };
+      window.appState = window.appState || {};
+      window.appState.scenarios = scenarios;
+      window.latestScenarios = scenarios;
+      window.SCENARIOS = scenarios;
+      
+      console.log('[BUILD] State saved successfully');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error saving state:', error);
+    // Continue - UI is more important
+  }
+
+  // Update AI buttons (non-critical)
+  try {
+    if (typeof updateAIButtonStates === 'function') {
+      updateAIButtonStates();
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error updating AI buttons:', error);
+  }
+
+  // CRITICAL: Show Step 3 - This MUST happen
+  try {
+    console.log('[BUILD] Step 10/10: CRITICAL - Showing Step 3...');
+    console.log('[BUILD DEBUG] *** ABOUT TO SHOW STEP 3 ***');
+    console.log('[BUILD DEBUG] Current time:', new Date().toISOString());
+    
+    const step3 = document.querySelector("#step3");
+    console.log('[BUILD DEBUG] Step 3 element found:', !!step3);
+    
+    if (step3) {
+      console.log('[BUILD DEBUG] Current Step 3 display:', step3.style.display);
+      console.log('[BUILD DEBUG] Setting Step 3 to display: block...');
+      
+      // Force display regardless of any errors
+      step3.style.display = "block";
+      step3.style.visibility = "visible";
+      step3.style.opacity = "1";
+      
+      console.log('[BUILD DEBUG] Display set. Removing error classes...');
+      
+      // Clear any potential error classes
+      step3.classList.remove('hidden', 'error', 'loading');
+      
+      console.log('[BUILD] ✓ Step 3 is now visible');
+      console.log('[BUILD DEBUG] *** STEP 3 SHOULD BE VISIBLE NOW ***');
+      
+      // Smooth scroll (non-critical)
+      try {
+        console.log('[BUILD DEBUG] Attempting smooth scroll...');
+        step3.scrollIntoView({ behavior: "smooth", block: "start" });
+        console.log('[BUILD DEBUG] Smooth scroll initiated');
+      } catch (scrollError) {
+        console.log('[BUILD DEBUG] Smooth scroll failed, trying basic scroll...');
+        // Fallback to basic scroll
+        step3.scrollIntoView();
+        console.log('[BUILD DEBUG] Basic scroll completed');
+      }
+      
+      // Show success message if we had to use fallback
+      if (!window.ScenarioManager || !scenarios) {
+        console.log('[BUILD DEBUG] Showing recoverable warning...');
+        showRecoverableWarning('Some features may be limited. You can still proceed with pricing configuration.');
+      }
+      
+      console.log('[BUILD DEBUG] Step 3 display complete');
+    } else {
+      console.error('[BUILD] CRITICAL ERROR: Step 3 element not found in DOM');
+      showUserFriendlyError('Unable to display pricing section. Please refresh the page and try again.', true);
+      // Attempt to create Step 3 dynamically as last resort
+      createStep3Fallback();
+    }
+  } catch (error) {
+    console.error('[BUILD] CRITICAL ERROR showing Step 3:', error);
+    console.error('[BUILD DEBUG] Error stack:', error.stack);
+    // Last resort - try to show something
+    createStep3Fallback();
+  }
+
+  // Clear timeout since we got here
+  clearTimeout(timeoutId);
+  console.log('[BUILD DEBUG] Timeout cleared');
+  
+  // Initialize pricing table (non-critical)
+  try {
+    console.log('[BUILD DEBUG] Checking for pricing table initialization...');
+    if (window.APBOneTable && scenarios?.A) {
+      console.log('[BUILD] Initializing pricing table...');
+      console.log('[BUILD DEBUG] Pricing data items count:', scenarios.A.items?.length || 0);
+      
+      const pricingData = scenarios.A;
+      const transformedData = {
+        deliverables: (pricingData.items || []).map(item => ({
+          id: item.deliverable_code,
+          title: item.deliverable_name || item.deliverable || item.deliverable_code,
+          dept: item.category || 'General',
+          cadence: item.cadence || (item.is_retainer ? 'Monthly' : 'One-Time'),
+          months: item.retainer_months || 0,
+          hours: item.hours || 0,
+          rate: item.rate || item.blended_rate || 195,
+          price: item.price || 0,
+          resources: item.resources || [],
+          components: (item.components || []).map(comp => ({
+            id: window.ScenarioManager?.slugify?.(comp.name) || comp.name,
+            title: comp.name,
+            hours: comp.hours || 0,
+            rate: comp.rate || 195,
+            cadence: comp.cadence,
+            months: comp.months || 0
+          }))
+        }))
+      };
+      window.APBOneTable.hydrateFrom(transformedData);
+      console.log('[BUILD] Pricing table initialized');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error initializing pricing table:', error);
+  }
+
+  // Render scenario (non-critical)
+  try {
+    if (window.renderScenario && scenarios?.A) {
+      window.renderScenario('scenarioA', scenarios.A);
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error rendering scenario:', error);
+  }
+
+  // Show additional steps (non-critical)
+  try {
+    const step4 = document.querySelector("#step4");
+    const step5 = document.querySelector("#step5");
+    if (step5) step5.style.display = 'block';
+    if (step4 && window.showStep4) {
+      window.showStep4('A');
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error showing additional steps:', error);
+  }
+
+  // Sync to backend (non-critical)
+  try {
+    if (window.ScenarioManager?.syncToBackend) {
+      window.ScenarioManager.syncToBackend();
+    }
+  } catch (error) {
+    console.warn('[BUILD] Non-critical: Error syncing to backend:', error);
+  }
+  
+  console.log('[BUILD] ========= Transition complete =========');
+}
+
+// Helper: Clear error states
+function clearErrorState() {
+  const errorBanner = document.getElementById('transition-error-banner');
+  if (errorBanner) {
+    errorBanner.style.display = 'none';
+  }
+  
+  // Remove error classes from all steps
+  document.querySelectorAll('.card').forEach(card => {
+    card.classList.remove('error', 'loading');
+  });
+}
+
+// Helper: Show user-friendly error with recovery options
+function showUserFriendlyError(message, showRetry = true) {
+  console.error('[BUILD] Showing user error:', message);
+  
+  // Create or update error banner
+  let errorBanner = document.getElementById('transition-error-banner');
+  if (!errorBanner) {
+    errorBanner = document.createElement('div');
+    errorBanner.id = 'transition-error-banner';
+    errorBanner.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, #dc3545, #c82333);
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 10000;
+      max-width: 500px;
+      text-align: center;
+      animation: slideDown 0.3s ease;
+    `;
+    document.body.appendChild(errorBanner);
+  }
+  
+  errorBanner.innerHTML = `
+    <div style="margin-bottom: 12px; font-weight: 600;">⚠️ ${message}</div>
+    ${showRetry ? `
+      <button onclick="retryTransition()" style="
+        background: white;
+        color: #dc3545;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+        margin-right: 8px;
+      ">Retry</button>
+      <button onclick="this.parentElement.style.display='none'" style="
+        background: rgba(255,255,255,0.2);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.3);
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+      ">Dismiss</button>
+    ` : `
+      <button onclick="this.parentElement.style.display='none'" style="
+        background: white;
+        color: #dc3545;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+      ">OK</button>
+    `}
+  `;
+  
+  errorBanner.style.display = 'block';
+  
+  // Auto-hide after 10 seconds
+  setTimeout(() => {
+    if (errorBanner) errorBanner.style.display = 'none';
+  }, 10000);
 }
 
 // Helper: Show recoverable warning
 function showRecoverableWarning(message) {
   console.warn('[BUILD] Showing warning:', message);
-
+  
   let warningBanner = document.getElementById('transition-warning-banner');
   if (!warningBanner) {
     warningBanner = document.createElement('div');
@@ -4040,17 +5715,105 @@ function showRecoverableWarning(message) {
     `;
     document.body.appendChild(warningBanner);
   }
-
+  
   warningBanner.innerHTML = `
     <div>ℹ️ ${message}</div>
   `;
-
+  
   warningBanner.style.display = 'block';
-
+  
   // Auto-hide after 5 seconds
   setTimeout(() => {
     if (warningBanner) warningBanner.style.display = 'none';
   }, 5000);
+}
+
+// Helper: Show Step 3 with fallback data
+function showStep3WithFallback(codes) {
+  console.warn('[BUILD] Using fallback to show Step 3');
+  
+  try {
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = "block";
+      step3.scrollIntoView({ behavior: "smooth" });
+      
+      // Show warning message
+      showRecoverableWarning('Limited functionality mode. Basic pricing options are available.');
+      
+      // Create minimal scenario for UI
+      const fallbackScenario = {
+        A: {
+          items: codes.map(code => ({
+            deliverable_code: code,
+            deliverable_name: code,
+            category: 'General',
+            hours: 40,
+            rate: 195,
+            price: 7800
+          }))
+        }
+      };
+      
+      window.SCENARIOS = fallbackScenario;
+      window.APP_STATE = window.APP_STATE || {};
+      window.APP_STATE.scenarios = fallbackScenario;
+    }
+  } catch (error) {
+    console.error('[BUILD] Error in fallback:', error);
+    createStep3Fallback();
+  }
+}
+
+// Helper: Create Step 3 dynamically as last resort
+function createStep3Fallback() {
+  console.error('[BUILD] Creating Step 3 dynamically as last resort');
+  
+  try {
+    // Find where to insert Step 3
+    const step2 = document.querySelector("#step2");
+    if (!step2) {
+      console.error('[BUILD] Cannot find Step 2 to insert after');
+      return;
+    }
+    
+    // Create minimal Step 3
+    const step3 = document.createElement('section');
+    step3.id = 'step3';
+    step3.className = 'card';
+    step3.innerHTML = `
+      <h2>Step 3 — Configure Pricing</h2>
+      <div style="padding: 20px; background: rgba(220, 53, 69, 0.1); border: 1px solid rgba(220, 53, 69, 0.3); border-radius: 8px; margin: 20px 0;">
+        <h3 style="color: #dc3545;">⚠️ Recovery Mode</h3>
+        <p>We encountered an issue loading the pricing configuration.</p>
+        <p>You can:</p>
+        <ul>
+          <li>Refresh the page and try again</li>
+          <li>Contact support if the issue persists</li>
+        </ul>
+        <button onclick="window.location.reload()" style="
+          background: #dc3545;
+          color: white;
+          border: none;
+          padding: 10px 20px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 600;
+          margin-top: 10px;
+        ">Refresh Page</button>
+      </div>
+    `;
+    
+    // Insert after Step 2
+    step2.parentNode.insertBefore(step3, step2.nextSibling);
+    step3.style.display = 'block';
+    step3.scrollIntoView({ behavior: 'smooth' });
+    
+    console.log('[BUILD] Emergency Step 3 created and displayed');
+  } catch (error) {
+    console.error('[BUILD] Failed to create emergency Step 3:', error);
+    alert('Critical error: Unable to proceed to pricing. Please refresh the page.');
+  }
 }
 
 // Helper: Retry transition
@@ -4059,6 +5822,9 @@ window.retryTransition = function() {
   clearErrorState();
   buildFromCurrentSelection();
 };
+
+// Alias for backward compatibility
+const onProceedToStep3 = buildFromCurrentSelection;
 
 // ================================================================================
 // Global Error Handler for Transition Issues
@@ -4071,14 +5837,14 @@ window.addEventListener('error', function(event) {
   if (transitionInProgress) {
     console.error('[GLOBAL ERROR] Error during transition:', event);
     lastTransitionError = event.error || event.message;
-
+    
     // Log the error details
     console.error('[GLOBAL ERROR] Message:', event.message);
     console.error('[GLOBAL ERROR] File:', event.filename);
     console.error('[GLOBAL ERROR] Line:', event.lineno);
     console.error('[GLOBAL ERROR] Column:', event.colno);
     console.error('[GLOBAL ERROR] Stack:', event.error?.stack);
-
+    
     // Try to recover and show Step 3 anyway
     const step3 = document.querySelector("#step3");
     if (step3 && step3.style.display === 'none') {
@@ -4086,12 +5852,12 @@ window.addEventListener('error', function(event) {
       step3.style.display = 'block';
       step3.style.visibility = 'visible';
       step3.style.opacity = '1';
-      // No scrollIntoView here, let the user decide where to look
-
+      step3.classList.remove('hidden', 'error', 'loading');
+      
       // Show error message
       showUserFriendlyError('An error occurred during the transition. Some features may be limited.', true);
     }
-
+    
     // Don't prevent default - let console show the error too
     return false;
   }
@@ -4102,7 +5868,7 @@ window.addEventListener('unhandledrejection', function(event) {
   if (transitionInProgress) {
     console.error('[GLOBAL PROMISE] Unhandled rejection during transition:', event);
     lastTransitionError = event.reason;
-
+    
     // Try to recover and show Step 3 anyway
     const step3 = document.querySelector("#step3");
     if (step3 && step3.style.display === 'none') {
@@ -4110,23 +5876,50 @@ window.addEventListener('unhandledrejection', function(event) {
       step3.style.display = 'block';
       step3.style.visibility = 'visible';
       step3.style.opacity = '1';
-      step3.scrollIntoView({ behavior: 'smooth' });
-
+      step3.classList.remove('hidden', 'error', 'loading');
+      
       // Show error message
       showUserFriendlyError('An async error occurred. Some features may be limited.', true);
     }
   }
 });
 
-// Placeholder for buildFromCurrentSelection (referenced by retryTransition)
-// TODO: Implement proper scenario rebuild logic
-window.buildFromCurrentSelection = function() {
-  console.warn('[BUILD] buildFromCurrentSelection not yet implemented - using fallback');
-  // Fallback: just show Step 3
-  const step3 = document.querySelector("#step3");
-  if (step3) {
-    step3.style.display = 'block';
-    step3.scrollIntoView({ behavior: 'smooth' });
+// Enhanced buildFromCurrentSelection wrapper with transition tracking
+const originalBuildFromCurrentSelection = buildFromCurrentSelection;
+window.buildFromCurrentSelection = async function() {
+  console.log('[TRANSITION] Starting monitored transition...');
+  transitionInProgress = true;
+  lastTransitionError = null;
+  
+  try {
+    await originalBuildFromCurrentSelection();
+  } catch (error) {
+    console.error('[TRANSITION] Caught error in wrapper:', error);
+    lastTransitionError = error;
+    
+    // Force Step 3 to show even on error
+    const step3 = document.querySelector("#step3");
+    if (step3) {
+      step3.style.display = 'block';
+      step3.style.visibility = 'visible';
+      step3.style.opacity = '1';
+      step3.scrollIntoView({ behavior: 'smooth' });
+    }
+    
+    showUserFriendlyError('Failed to complete transition. Please try again.', true);
+  } finally {
+    transitionInProgress = false;
+    console.log('[TRANSITION] Transition monitoring ended');
+    
+    // Final safety check - ensure Step 3 is visible
+    setTimeout(() => {
+      const step3 = document.querySelector("#step3");
+      if (step3 && step3.style.display === 'none') {
+        console.warn('[TRANSITION] Final safety check - Step 3 was hidden, forcing display');
+        step3.style.display = 'block';
+        step3.scrollIntoView({ behavior: 'smooth' });
+      }
+    }, 100);
   }
 };
 
@@ -4142,7 +5935,7 @@ window.getTransitionDebugInfo = function() {
     appState: window.APP_STATE,
     timestamp: new Date().toISOString()
   };
-
+  
   console.table(info);
   return info;
 };
@@ -4155,6 +5948,7 @@ window.forceShowStep3 = function() {
     step3.style.display = 'block';
     step3.style.visibility = 'visible';
     step3.style.opacity = '1';
+    step3.classList.remove('hidden', 'error', 'loading');
     step3.scrollIntoView({ behavior: 'smooth' });
     console.log('[DEBUG] Step 3 forced to display');
   } else {
@@ -4166,10 +5960,10 @@ window.forceShowStep3 = function() {
 // Debug helper: Test transition with mock data
 window.testTransition = function() {
   console.log('[DEBUG] Testing transition with mock data...');
-
+  
   // Create mock selection
   window.selectedCodes = ['TEST_001', 'TEST_002'];
-
+  
   // Create mock scenario
   window.SCENARIOS = {
     A: {
@@ -4194,10 +5988,10 @@ window.testTransition = function() {
       total: 19500
     }
   };
-
+  
   // Force show Step 3
   window.forceShowStep3();
-
+  
   console.log('[DEBUG] Test transition complete');
 };
 
@@ -4231,10 +6025,10 @@ function updateProgressUI(progress) {
   const status = document.getElementById('image-progress-status');
   const eta = document.getElementById('image-progress-eta');
   const errors = document.getElementById('image-progress-errors');
-
+  
   if (bar) bar.style.width = `${progress.percentage || 0}%`;
   if (percentage) percentage.textContent = `${Math.round(progress.percentage || 0)}%`;
-
+  
   // Update status message with two-phase support
   if (status) {
     if (progress.status === 'processing') {
@@ -4263,7 +6057,7 @@ function updateProgressUI(progress) {
       status.textContent = 'Preparing...';
     }
   }
-
+  
   // Update ETA
   if (eta && progress.eta_seconds != null && progress.eta_seconds > 0) {
     const seconds = Math.ceil(progress.eta_seconds);
@@ -4276,7 +6070,7 @@ function updateProgressUI(progress) {
   } else {
     if (eta) eta.textContent = '';
   }
-
+  
   // Show errors if any
   if (errors && progress.errors && progress.errors.length > 0) {
     errors.textContent = `⚠️ Errors: ${progress.errors.join(', ')}`;
@@ -4288,7 +6082,7 @@ function updateProgressUI(progress) {
 
 async function pollProgress(jobId) {
   if (!jobId) return;
-
+  
   try {
     const res = await fetch(`/api/upload/progress/${jobId}`);
     if (!res.ok) {
@@ -4296,21 +6090,21 @@ async function pollProgress(jobId) {
       hideProgressUI();
       return;
     }
-
+    
     const progress = await res.json();
     updateProgressUI(progress);
-
+    
     // Stop polling if complete, failed, or cancelled
     if (['completed', 'failed', 'cancelled'].includes(progress.status)) {
       if (progressInterval) {
         clearInterval(progressInterval);
         progressInterval = null;
       }
-
+      
       // Hide UI after a short delay
       setTimeout(() => {
         hideProgressUI();
-
+        
         // If completed successfully, update RFP text cache with image results
         if (progress.status === 'completed' && progress.result_text) {
           APB.step2.rfpText = progress.result_text;
@@ -4329,36 +6123,36 @@ async function pollProgress(jobId) {
 
 function startProgressPolling(jobId) {
   if (!jobId) return;
-
+  
   currentJobId = jobId;
   showProgressUI();
   updateProgressUI({ status: 'pending', percentage: 0, processed_images: 0, total_images: 0 });
-
+  
   // Use SSE instead of polling for real-time updates
   const eventSource = new EventSource(`/api/stream/${jobId}`);
-
+  
   eventSource.onmessage = (event) => {
     try {
       const data = JSON.parse(event.data);
-
+      
       // Update progress UI with SSE data
       updateProgressUI({
         status: data.status || 'processing',
         percentage: Math.round(data.progress || 0),
         processed_images: data.processed_items || 0,
         total_images: data.total_items || 0,
-        current_stage: data.current_stage,
+        current_stage: data.current_stage || '',
         message: data.message || '',
         eta_seconds: data.eta_seconds
       });
-
+      
       // Handle completion
       if (data.status === 'completed') {
         eventSource.close();
         hideProgressUI();
         currentJobId = null;
       }
-
+      
       // Handle errors
       if (data.status === 'failed') {
         eventSource.close();
@@ -4370,17 +6164,17 @@ function startProgressPolling(jobId) {
       console.error('Error parsing SSE data:', error);
     }
   };
-
+  
   eventSource.onerror = (error) => {
     console.error('SSE connection error:', error);
     eventSource.close();
-
+    
     // Fallback to polling if SSE fails
     if (!progressInterval) {
       progressInterval = setInterval(() => pollProgress(jobId), 500);
     }
   };
-
+  
   // Store event source for cleanup
   window.currentEventSource = eventSource;
 }
@@ -4401,7 +6195,7 @@ function cleanupPolling() {
     clearInterval(progressInterval);
     progressInterval = null;
   }
-  // Note: timelinePollingIntervalId is managed within generateAITimeline function scope
+  // Note: pollingIntervalId is managed within generateAITimeline function scope
 }
 
 // Expose cleanup function globally
@@ -4429,7 +6223,7 @@ function showAIProgressBar() {
       progressBar.innerHTML = `
         <div style="margin-bottom: 12px;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-            <strong id="ai-progress-stage" style="color: #6366f1;">Initializing AI Analysis...</strong>
+            <strong id="ai-progress-stage" style="color: #000000;">Initializing AI Analysis...</strong>
             <span id="ai-progress-percent" style="color: #2563eb; font-weight: bold;">0%</span>
           </div>
           <div style="background: #e5e7eb; height: 24px; border-radius: 12px; overflow: hidden;">
@@ -4462,13 +6256,13 @@ function updateAIProgress(status) {
   const stageEl = document.getElementById('ai-progress-stage');
   const elapsedEl = document.getElementById('ai-progress-elapsed');
   const etaEl = document.getElementById('ai-progress-eta');
-
+  
   if (fillEl) fillEl.style.width = `${status.progress || 0}%`;
-  if (percentEl) percentEl.textContent = `${Math.round(status.progress || 0)}%`;
+  if (percentEl) percentEl.textContent = `${status.progress || 0}%`;
   if (stageEl) stageEl.textContent = status.current_stage || 'Processing...';
   if (elapsedEl) elapsedEl.textContent = `Elapsed: ${Math.round(status.elapsed_seconds || 0)}s`;
   if (etaEl) {
-    if (status.eta_seconds != null && status.eta_seconds > 0) {
+    if (status.eta_seconds !== null && status.eta_seconds !== undefined) {
       etaEl.textContent = `ETA: ${Math.round(status.eta_seconds)}s`;
     } else {
       etaEl.textContent = 'Estimating...';
@@ -4476,405 +6270,130 @@ function updateAIProgress(status) {
   }
 }
 
-// Helper function to stop polling and clean up
-function stopPollingWithCleanup(message) {
-  console.log(`[POLLING] 🛑 Stopping polling: ${message}`);
-
-  // Clear polling state
-  window.aiPollingState = null;
-  window.PROTECTED_AI_POLLING = false;
-
-  // Clear all intervals
-  if (window.aiAnalysisInterval) {
-    clearInterval(window.aiAnalysisInterval);
-    window.aiAnalysisInterval = null;
-  }
-  if (window.PROTECTED_AI_INTERVAL) {
-    clearInterval(window.PROTECTED_AI_INTERVAL);
-    window.PROTECTED_AI_INTERVAL = null;
-  }
-
-  // Show alert if there's a message
-  if (message) {
-    alert(message);
-  }
-}
-
-// Helper function to apply exponential backoff
-function applyBackoff(state) {
-  // Calculate backoff delay: min 2s, max 30s
-  state.backoffDelay = Math.min(30000, Math.max(2000, state.backoffDelay * 2 || 2000));
-  const seconds = Math.round(state.backoffDelay / 1000);
-  console.log(`[POLLING] ⏱️ Applying backoff: waiting ${seconds}s before next attempt`);
-}
-
 async function pollAIAnalysis(jobId) {
-  log(`[POLLING] pollAIAnalysis called for job ${jobId}`);
-
-  // Initialize polling state if not exists
-  if (!window.aiPollingState) {
-    window.aiPollingState = {
-      consecutive404Count: 0,
-      consecutiveErrorCount: 0,
-      totalPollingTime: 0,
-      startTime: Date.now(),
-      lastSuccessTime: null,
-      backoffDelay: 0,
-      maxConsecutive404s: 3,  // Stop after 3 consecutive 404s
-      maxConsecutiveErrors: 10, // Stop after 10 consecutive errors
-      maxPollingTime: 600000,  // Maximum 10 minutes (600 seconds)
-      retryCount: 0
-    };
-    console.log(`[POLLING] 🚀 Initialized polling state for job ${jobId}`);
-  }
-
-  const state = window.aiPollingState;
-  state.totalPollingTime = Date.now() - state.startTime;
-
-  // Force allow polling every time
-  if (window.GlobalPollingManager && window.GlobalPollingManager.isShuttingDown) {
-    log('[POLLING] Overriding shutdown mode to allow critical polling');
-    window.GlobalPollingManager.isShuttingDown = false;
-  }
-
-  log(`[POLLING] ⏰ pollAIAnalysis STARTED for job ${jobId} at ${new Date().toISOString()}`);
-  console.log(`[POLLING] State: 404s=${state.consecutive404Count}, errors=${state.consecutiveErrorCount}, time=${Math.round(state.totalPollingTime/1000)}s`);
-
-  // Check max polling time (10 minutes default)
-  if (state.totalPollingTime > state.maxPollingTime) {
-    console.error(`[POLLING] ⏱️ Maximum polling time exceeded (${state.maxPollingTime/1000}s). Stopping.`);
-    stopPollingWithCleanup('Maximum polling time exceeded. The job may still be running on the server.');
-    return;
-  }
-
   try {
-    log(`[POLLING] Checking status for job ${jobId}...`);
     const res = await fetch(`/api/ai/jobs/${jobId}`);
-
-    // Handle 404 (job not found)
+    
+    // Handle 404s - STOP IMMEDIATELY, don't wait for multiple attempts
     if (res.status === 404) {
-      state.consecutive404Count++;
-      state.consecutiveErrorCount++;
-
-      console.warn(`[POLLING] 404 for job ${jobId} - consecutive 404s: ${state.consecutive404Count}/${state.maxConsecutive404s}`);
-
-      // Only stop after multiple consecutive 404s
-      if (state.consecutive404Count >= state.maxConsecutive404s) {
-        console.error(`[POLLING] Job ${jobId} not found after ${state.maxConsecutive404s} attempts - stopping polling.`);
-        stopPollingWithCleanup(`Analysis job ${jobId} not found after multiple attempts. It may have expired or been deleted.`);
-        return;
+      console.log(`[POLLING] Job ${jobId} not found (404), stopping polling permanently`);
+      
+      // Clear the interval immediately
+      if (aiAnalysisInterval) {
+        clearInterval(aiAnalysisInterval);
+        aiAnalysisInterval = null;
       }
-
-      // Continue polling with backoff
-      console.log(`[POLLING] 404 error ${state.consecutive404Count}/${state.maxConsecutive404s} - will retry...`);
-      applyBackoff(state);
+      
+      // Clear the job ID from memory
+      aiAnalysisJobId = null;
+      
+      // Hide progress bar
+      hideAIProgressBar();
+      
+      // Clear from ALL localStorage entries to prevent resumption
+      // 1. Clear from charles_agent_state
+      const savedState = localStorage.getItem('charles_agent_state');
+      if (savedState) {
+        try {
+          const state = JSON.parse(savedState);
+          if (state && state.jobId === jobId) {
+            state.jobId = null;
+            state.jobIdTimestamp = null;
+            // Also clear from stateHistory
+            if (state.stateHistory && Array.isArray(state.stateHistory)) {
+              state.stateHistory.forEach(historyItem => {
+                if (historyItem.jobId === jobId) {
+                  historyItem.jobId = null;
+                  historyItem.jobIdTimestamp = null;
+                }
+              });
+            }
+            localStorage.setItem('charles_agent_state', JSON.stringify(state));
+            console.log('[POLLING] Cleared job ID from charles_agent_state');
+          }
+        } catch (e) {
+          console.error('[POLLING] Failed to clear job from localStorage:', e);
+        }
+      }
+      
+      // 2. Clear from any other localStorage keys that might have the job ID
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const value = localStorage.getItem(key);
+        if (value && value.includes(jobId)) {
+          console.log(`[POLLING] Removing job ID from localStorage key: ${key}`);
+          localStorage.removeItem(key);
+        }
+      }
+      
+      // Show error message to user
+      const errorMsg = `Analysis job ${jobId} not found. It may have expired or been deleted.`;
+      console.error('[POLLING]', errorMsg);
+      
+      // Don't continue polling
       return;
     }
-
-    // Handle 410 Gone (permanent deletion)
-    if (res.status === 410) {
-      console.error(`[POLLING] Job ${jobId} permanently deleted (410 Gone) - stopping polling.`);
-      stopPollingWithCleanup(`Analysis job ${jobId} has been permanently deleted.`);
-      return;
-    }
-
-    // Handle other errors (500, 502, 503, etc.)
+    
     if (!res.ok) {
-      state.consecutiveErrorCount++;
-
-      console.error(`[POLLING] HTTP ${res.status} error for job ${jobId} - consecutive errors: ${state.consecutiveErrorCount}/${state.maxConsecutiveErrors}`);
-
-      // Stop after too many consecutive errors
-      if (state.consecutiveErrorCount >= state.maxConsecutiveErrors) {
-        console.error(`[POLLING] Too many consecutive errors (${state.consecutiveErrorCount}) - stopping polling.`);
-        stopPollingWithCleanup(`Unable to check job status after ${state.consecutiveErrorCount} attempts. Please try again.`);
-        return;
-      }
-
-      // Continue polling with backoff for temporary errors
-      console.log(`[POLLING] HTTP ${res.status} error ${state.consecutiveErrorCount}/${state.maxConsecutiveErrors} - will retry with backoff...`);
-      applyBackoff(state);
+      console.error(`[POLLING] Error fetching job status: ${res.status}`);
       return;
     }
-
-    // Success - reset error counters
-    state.consecutive404Count = 0;
-    state.consecutiveErrorCount = 0;
-    state.lastSuccessTime = Date.now();
-    state.backoffDelay = 0;
-
+    
+    // Reset counter on successful response
+    consecutive404Count = 0;
+    
     const status = await res.json();
-    console.log(`[POLLING] ✅ Job ${jobId} status: ${status.status}, progress: ${status.progress}%`);
+    console.log(`[POLLING] Job ${jobId} status:`, status);
     updateAIProgress(status);
-
-    // CRITICAL: Continue polling for queued or running states
-    const isQueued = status.status === 'queued' || 
-                     status.status === 'pending' || 
-                     status.status === 'waiting';
-
-    const isRunning = status.status === 'running' || 
-                      status.status === 'processing' || 
-                      status.status === 'in_progress';
-
-    if (isQueued || isRunning) {
-      const timeSinceStart = Math.round((Date.now() - state.startTime) / 1000);
-      console.log(`[POLLING] 🔄 Job ${jobId} is ${status.status} (${status.progress || 0}% complete, ${timeSinceStart}s elapsed) - continuing to poll...`);
-      // Don't stop polling for active jobs!
-      return;
-    }
-
+    
     // Check for completion states (completed, complete, done, etc.)
     const isCompleted = status.status === 'completed' || 
                         status.status === 'complete' || 
                         status.status === 'done';
-
+    
     const isFailed = status.status === 'failed' || 
                      status.status === 'error' || 
                      status.status === 'cancelled';
-
+    
     // Handle completion - check for result OR if status is complete with 100% progress
     if (isCompleted) {
-      console.log('[ANALYSIS] ✅ Job complete, advancing to Step 2', status);
-      log('[POLLING] 🛑 Stopping AI analysis polling - job completed');
-
-      // Clean up polling state and intervals
-      stopPollingWithCleanup(null); // null message = no alert
-
+      console.log(`[ANALYSIS] Job complete, advancing to Step 2`, status);
+      clearInterval(aiAnalysisInterval);
+      aiAnalysisInterval = null;
       hideAIProgressBar();
-
+      
       // Handle completed analysis - result might be in status.result or status.data
       const aiPlanResponse = status.result || status.data || status;
       window.APP = window.APP || {};
       window.APP.aiPlan = aiPlanResponse;
-      sessionStorage.setItem('apb:aiPlan', JSON.JSON.stringify(aiPlanResponse));
-
-      // CRITICAL: Update PRIMARY_SCENARIO with deliverables from AI analysis
-      log('[ANALYSIS DEBUG] AI Plan Response structure:', {
-        hasDeliverables: !!aiPlanResponse.deliverables,
-        hasPlan: !!aiPlanResponse.plan,
-        hasSuggestionsByDept: !!(aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department),
-        responseKeys: Object.keys(aiPlanResponse),
-        planKeys: aiPlanResponse.plan ? Object.keys(aiPlanResponse.plan) : []
-      });
-
-      if (window.PRIMARY_SCENARIO) {
-        // Extract deliverables from response (may be nested in .plan or .deliverables or directly in response)
-        let deliverables = [];
-
-        // Try direct deliverables first
-        if (aiPlanResponse.deliverables && Array.isArray(aiPlanResponse.deliverables)) {
-          deliverables = aiPlanResponse.deliverables;
-          log('[ANALYSIS DEBUG] Found deliverables directly in response:', deliverables.length);
-        } 
-        // Try plan.deliverables
-        else if (aiPlanResponse.plan && aiPlanResponse.plan.deliverables && Array.isArray(aiPlanResponse.plan.deliverables)) {
-          deliverables = aiPlanResponse.plan.deliverables;
-          log('[ANALYSIS DEBUG] Found deliverables in plan.deliverables:', deliverables.length);
-        } 
-        // Try plan.suggestions_by_department
-        else if (aiPlanResponse.plan && aiPlanResponse.plan.suggestions_by_department) {
-          const suggestionsByDept = aiPlanResponse.plan.suggestions_by_department;
-          log('[ANALYSIS DEBUG] Extracting from suggestions_by_department. Departments:', Object.keys(suggestionsByDept));
-
-          Object.entries(suggestionsByDept).forEach(([dept, deptDeliverables]) => {
-            log(`[ANALYSIS DEBUG] Department "${dept}" has ${Array.isArray(deptDeliverables) ? deptDeliverables.length : 0} deliverables`);
-            if (Array.isArray(deptDeliverables)) {
-              // Map the backend format to our expected format
-              const mappedDeliverables = deptDeliverables.map(d => ({
-                deliverable_code: d.code || d.deliverable_code || d.deliverable_code,
-                deliverable_name: d.name || d.deliverable_name || d.deliverable || d.title,
-                department: dept,
-                category: dept,
-                confidence: d.confidence_score || d.confidence || 0,
-                selected: d.selected || false,
-                // Preserve additional fields for AI suggestions
-                confidence_score: d.confidence_score,
-                relevancy_tags: d.relevancy_tags,
-                evidence: d.evidence
-              }));
-              deliverables = deliverables.concat(mappedDeliverables);
-            }
-          });
-          log('[ANALYSIS DEBUG] Total deliverables extracted from departments:', deliverables.length);
-        }
-
-        // Log sample deliverable structure if we have any
-        if (deliverables.length > 0) {
-          log('[ANALYSIS DEBUG] Sample deliverable structure:', JSON.JSON.stringify(deliverables[0], null, 2));
-          log('[ANALYSIS DEBUG] All deliverable codes:', deliverables.map(d => d.deliverable_code || d.code || 'NO_CODE'));
-        }
-
-        console.log('[ANALYSIS] Found deliverables to load into PRIMARY_SCENARIO:', deliverables.length);
-
-        // Update PRIMARY_SCENARIO with deliverables and analysis results
-        window.PRIMARY_SCENARIO = window.PRIMARY_SCENARIO || {}; // Ensure it exists
-        window.PRIMARY_SCENARIO.deliverables = deliverables;
-        window.PRIMARY_SCENARIO.status = 'analyzed';
-        window.PRIMARY_SCENARIO.updatedAt = new Date().toISOString();
-        window.PRIMARY_SCENARIO.rfpText = rfpText; // Store RFP text for Step 2
-
-        // Also update DELIVERABLES for backward compatibility
-        window.DELIVERABLES = deliverables;
-
-        // If ScenarioManager exists, update it too
-        if (window.ScenarioManager && window.ScenarioManager.setState) {
-          window.ScenarioManager.setState({
-            deliverables: deliverables
-          });
-        }
-
-        log('[ANALYSIS] Updated PRIMARY_SCENARIO with', deliverables.length, 'deliverables');
-      } else {
-        console.warn('[ANALYSIS] PRIMARY_SCENARIO not available, creating it now');
-        window.PRIMARY_SCENARIO = {
-          deliverables: aiPlanResponse.deliverables || [],
-          analysisResults: aiPlanResponse,
-          status: 'analyzed',
-          updatedAt: new Date().toISOString(),
-          rfpText: rfpText // Store RFP text for Step 2
-        };
-      }
-
-      // Show Step 2
+      sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
+      
       const step2 = document.getElementById('step2');
       if (step2) {
         console.log('[ANALYSIS] Showing Step 2');
         step2.style.display = 'block';
         step2.scrollIntoView({ behavior: 'smooth' });
       }
-
-      // This block is now handled after normalization - removed to avoid duplication
-
-      // Normalize the AI response to expected format
-      const normalizedPlan = normalizeAIResponse(aiPlanResponse);
-
-      if (normalizedPlan) {
-        // Store normalized plan in window.lastAIPlan for renderAIPlan
-        window.lastAIPlan = normalizedPlan;
-        console.log('[ANALYSIS] Normalized AI plan stored in window.lastAIPlan:', {
-          hasSummary: !!normalizedPlan.summary,
-          departments: Object.keys(normalizedPlan.suggestions_by_department),
-          totals: normalizedPlan.totals
-        });
-
-        // CRITICAL: Populate PRIMARY_SCENARIO.deliverables from normalized plan
-        // This enables the deliverables to render in Step 2
-        const allDeliverables = [];
-        for (const dept in normalizedPlan.suggestions_by_department) {
-          const deptDeliverables = normalizedPlan.suggestions_by_department[dept] || [];
-          deptDeliverables.forEach(d => {
-            allDeliverables.push({
-              deliverable_code: d.deliverable_code || d.code || `DEL-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
-              deliverable_name: d.deliverable_name || d.name || d.title || d.deliverable || 'Unnamed Deliverable',
-              department: dept,
-              calibrated_confidence: d.calibrated_confidence || d.confidence || d.confidence_score || 0,
-              risk_notes: d.risk_notes || d.risks || '',
-              evidence: d.evidence || d.why || d.rationale || '',
-              components: d.components || [],
-              // Additional fields for UI
-              selected: d.selected || d.select || false,
-              ai_selected: d.ai_selected !== false, // Default to true
-              hours: d.hours || d.base_hours || 0
-            });
-          });
-        }
-
-        // Store in PRIMARY_SCENARIO for Step 2 to access
-        window.PRIMARY_SCENARIO.deliverables = allDeliverables;
-        console.log('[ANALYSIS] Stored', allDeliverables.length, 'deliverables in PRIMARY_SCENARIO');
-
-        // Now populate APB.step2.allDeliverables from PRIMARY_SCENARIO
-        // This triggers the code at line 4642 to work properly
-        if (allDeliverables.length > 0) {
-          // Ensure APB.step2 exists
-          if (!window.APB) {
-            window.APB = {};
-          }
-          if (!window.APB.step2) {
-            window.APB.step2 = {
-              selectedCodes: new Set(),
-              selectedComponentsByCode: {},
-              selectedL2ByKey: {},
-              allDeliverables: [],
-              aiSuggestedCodes: new Set(),
-              filters: { deliverables: '', components: '', l2: '' },
-              els: {}
-            };
-          }
-
-          APB.step2.allDeliverables = allDeliverables.map(d => ({
-            Deliverable_Code: d.deliverable_code || d.code,
-            Deliverable: d.deliverable_name || d.name,
-            Category: d.department || '',
-            Service_Dept_for_PM: d.department || '',
-            confidence: d.confidence || 0,
-            selected: d.selected || false,
-            confidence_score: d.confidence_score,
-            relevancy_tags: d.relevancy_tags,
-            evidence: d.evidence
-          }));
-
-          // Also populate DELIVERABLES for backward compatibility
-          window.DELIVERABLES = APB.step2.allDeliverables;
-
-          // Build the indexes for fast lookup
-          window.DELIV_INDEX = {};
-          window.DELIV_INDEX_LO = {};
-          APB.step2.allDeliverables.forEach(d => {
-            const code = String(d.Deliverable_Code);
-            window.DELIV_INDEX[code] = d;
-            window.DELIV_INDEX_LO[code.toLowerCase()] = d;
-          });
-
-          log('[ANALYSIS] Built deliverable indexes with', Object.keys(window.DELIV_INDEX).length, 'items');
-        }
-
-        // Create wrapper for renderAIPlan which expects {plan: ...}
-        const planWrapper = {
-          plan: normalizedPlan
-        };
-
-        // Call renderAIPlan with normalized structure
-        renderAIPlan(planWrapper);
+      
+      // Only call renderAIPlan if we have a valid plan structure
+      if (aiPlanResponse && (aiPlanResponse.plan || aiPlanResponse.deliverables)) {
+        renderAIPlan(aiPlanResponse);
       } else {
-        console.warn('[ANALYSIS] Could not normalize AI response, skipping renderAIPlan');
+        console.warn('[ANALYSIS] No valid plan structure found in response:', aiPlanResponse);
       }
-
-      // CRITICAL: Call renderDeliverablesPanel to populate Step 2 UI
-      if (typeof window.renderDeliverablesPanel === 'function') {
-        log('[ANALYSIS] Calling renderDeliverablesPanel to populate Step 2');
-        window.renderDeliverablesPanel();
-
-        // Verify rendering worked
-        setTimeout(() => {
-          const delivRows = document.querySelectorAll('.deliv-row');
-          console.log('[ANALYSIS] Verification: Found', delivRows.length, 'deliverable rows in DOM');
-          if (delivRows.length === 0) {
-            console.error('[ANALYSIS] ❌ Deliverables did not render! Force re-render...');
-            window.renderDeliverablesPanel();
-          } else {
-            console.log('[ANALYSIS] ✅ Deliverables rendered successfully');
-          }
-        }, 100);
-      } else {
-        console.warn('[ANALYSIS] renderDeliverablesPanel function not found!');
-      }
-
+      
       const btnAnalyze = document.querySelector('#btnAnalyze');
       if (btnAnalyze) {
         btnAnalyze.disabled = false;
         btnAnalyze.textContent = 'Analyze with AI';
       }
     } else if (isFailed) {
-      log(`[POLLING] ❌ Job ${jobId} failed, stopping polling`);
-      log(`[POLLING] 🛑 Stopping AI analysis polling - job failed`);
-
-      // Clean up polling state and show error message
-      const errorMessage = `AI analysis failed: ${status.error || status.message || 'Unknown error'}`;
-      stopPollingWithCleanup(errorMessage);
-
+      console.log(`[POLLING] Job ${jobId} failed, stopping polling`);
+      clearInterval(aiAnalysisInterval);
+      aiAnalysisInterval = null;
       hideAIProgressBar();
-
+      alert(`AI analysis failed: ${status.error || status.message || 'Unknown error'}`);
+      
       const btnAnalyze = document.querySelector('#btnAnalyze');
       if (btnAnalyze) {
         btnAnalyze.disabled = false;
@@ -4883,18 +6402,18 @@ async function pollAIAnalysis(jobId) {
     }
   } catch (error) {
     console.error('[POLLING] Error polling AI analysis:', error);
-    // Don't stop polling on transient errors - retry
+    // Don't stop polling on network errors, let it retry
   }
 }
 
 // Helper function for fetch with retry logic for 502 errors
 async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 2000) {
   let lastError = null;
-
+  
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       const response = await fetch(url, options);
-
+      
       // If we get a 502 error, retry with exponential backoff
       if (response.status === 502) {
         if (attempt < maxRetries - 1) {
@@ -4905,11 +6424,11 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 200
         }
         throw new Error(`Gateway timeout (502). The server may be processing your request. Please wait and try again.`);
       }
-
+      
       return response;
     } catch (error) {
       lastError = error;
-
+      
       // Network errors - retry
       if (attempt < maxRetries - 1) {
         const delay = baseDelay * Math.pow(2, attempt);
@@ -4919,7 +6438,7 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 200
       }
     }
   }
-
+  
   throw lastError || new Error('Request failed after multiple retries');
 }
 
@@ -4928,10 +6447,10 @@ window.setAnalysisMode = function(mode) {
   const fastBtn = document.getElementById('mode-fast');
   const deepBtn = document.getElementById('mode-deep');
   const modeInput = document.getElementById('analysis-mode');
-
+  
   // Set global variable for analysis
   window.selectedAnalysisMode = mode;
-
+  
   if (mode === 'fast') {
     fastBtn.style.background = '#10b981';
     fastBtn.style.color = 'white';
@@ -4945,428 +6464,156 @@ window.setAnalysisMode = function(mode) {
     fastBtn.style.color = '#10b981';
     modeInput.value = 'deep';
   }
-
+  
   console.log('Analysis mode set to:', mode);
-}
-
-// Normalize AI response to expected format for renderAIPlan
-function normalizeAIResponse(response) {
-  console.log('[NORMALIZE] Input response:', response);
-
-  // Handle different response structures
-  let plan = null;
-
-  // Case 1: Response has plan.suggestions_by_department
-  if (response?.plan?.suggestions_by_department) {
-    plan = response.plan;
-  }
-  // Case 2: Response has suggestions_by_department directly
-  else if (response?.suggestions_by_department) {
-    plan = response;
-  }
-  // Case 3: Response has deliverables array that needs to be grouped
-  else if (response?.deliverables && Array.isArray(response.deliverables)) {
-    // Group deliverables by department
-    const byDept = {};
-    response.deliverables.forEach(d => {
-      const dept = d.department || d.category || d.dept || 'Strategy';
-      if (!byDept[dept]) byDept[dept] = [];
-      byDept[dept].push(d);
-    });
-
-    plan = {
-      suggestions_by_department: byDept,
-      summary: response.summary || {}
-    };
-  }
-  // Case 4: Try to use the response as-is if it has the right structure
-  else {
-    console.warn('[NORMALIZE] Unknown response structure, attempting to use as-is');
-    plan = response;
-  }
-
-  // Ensure plan has proper structure
-  if (!plan) {
-    console.error('[NORMALIZE] Could not normalize response - no valid plan structure found');
-    return null;
-  }
-
-  // Normalize the plan structure
-  const normalized = {
-    summary: plan.summary || {
-      goals: [],
-      channels: [],
-      markets: [],
-      complexity: 'Medium',
-      text: ''
-    },
-    suggestions_by_department: {},
-    totals: {
-      deliverables: 0,
-      components: 0,
-      tasks: 0
-    }
-  };
-
-  // Process each department's deliverables
-  const depts = plan.suggestions_by_department || {};
-  Object.keys(depts).forEach(dept => {
-    const deliverables = depts[dept] || [];
-    normalized.suggestions_by_department[dept] = [];
-
-    deliverables.forEach(deliv => {
-      // Normalize deliverable structure
-      const normalizedDeliv = {
-        deliverable_code: deliv.deliverable_code || deliv.code || deliv.id || `DEL-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
-        deliverable_name: deliv.deliverable_name || deliv.name || deliv.title || deliv.deliverable || 'Unnamed Deliverable',
-        department: dept,
-        calibrated_confidence: deliv.calibrated_confidence || deliv.confidence || deliv.confidence_score || 0,
-        risk_notes: deliv.risk_notes || deliv.risks || '',
-        evidence: deliv.evidence || deliv.why || deliv.rationale || '',
-        components: [],
-        // Additional fields for UI
-        selected: deliv.selected || deliv.select || false,
-        ai_selected: deliv.ai_selected !== false, // Default to true
-        hours: deliv.hours || deliv.base_hours || 0
-      };
-
-      // Normalize components if they exist
-      if (deliv.components && Array.isArray(deliv.components)) {
-        deliv.components.forEach(comp => {
-          const normalizedComp = {
-            id: `${normalizedDeliv.deliverable_code}::${comp.title || comp.name || 'Component'}`,
-            title: comp.title || comp.name || 'Component',
-            hours: comp.hours || 0,
-            ai_selected: comp.ai_selected !== false,
-            tasks: []
-          };
-
-          // Normalize tasks if they exist
-          if (comp.tasks && Array.isArray(comp.tasks)) {
-            comp.tasks.forEach(task => {
-              const normalizedTask = {
-                id: `${normalizedComp.id}::${task.title || task.name || 'Task'}`,
-                title: task.title || task.name || 'Task',
-                planned_hours: task.planned_hours || task.hours || 0,
-                ai_selected: task.ai_selected !== false,
-                why: task.why || task.rationale || ''
-              };
-              normalizedComp.tasks.push(normalizedTask);
-              normalized.totals.tasks++;
-            });
-          }
-
-          normalizedDeliv.components.push(normalizedComp);
-          normalized.totals.components++;
-        });
-      }
-
-      normalized.suggestions_by_department[dept].push(normalizedDeliv);
-      normalized.totals.deliverables++;
-    });
-  });
-
-  console.log('[NORMALIZE] Output structure:', {
-    hasSummary: !!normalized.summary,
-    departments: Object.keys(normalized.suggestions_by_department),
-    totals: normalized.totals
-  });
-
-  return normalized;
 }
 
 // Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
 async function onRunReconcile() {
   const fileEl = document.querySelector('#rfpFile');
   const textEl = document.querySelector('#rfpText');
-
-  // Check for uploaded session ID (for GPT-5 Vision PDF processing) or text
-  let rfpText = '';
-  let uploadSessionId = null;
-  let hasStagedFiles = false;
-  let extractionErrors = [];
-
-  // PRIORITY 1: Check for staged files FIRST (using SessionManager for consistency)
-  const stagedSessionId = SessionManager.getCurrentSessionId();
-  log('[ANALYSIS DEBUG] Current session ID:', stagedSessionId);
-
-  if (stagedSessionId) {
-    try {
-      log('[ANALYSIS] Checking for staged files in session:', stagedSessionId);
-
-      // Call the extract endpoint to get text from staged files
-      const extractFormData = new FormData();
-      extractFormData.append('session_id', stagedSessionId);
-
-      log('[ANALYSIS DEBUG] Calling /api/stage/extract with session:', stagedSessionId);
-      const extractRes = await fetch('/api/stage/extract', {
-        method: 'POST',
-        body: extractFormData
-      });
-
-      log('[ANALYSIS DEBUG] Extract response status:', extractRes.status);
-
-      if (extractRes.ok) {
-        const extractData = await extractRes.json();
-        log('[ANALYSIS DEBUG] Extract response data:', extractData);
-
-        // Track if we have staged files (even if extraction fails for some)
-        if (extractData.files_count > 0 || extractData.total_files > 0) {
-          hasStagedFiles = true;
-          log('[ANALYSIS DEBUG] Staged files detected:', extractData.files_count || extractData.total_files);
-        }
-
-        // Track any extraction errors (even if success is false)
-        if (extractData.errors && extractData.errors.length > 0) {
-          extractionErrors = extractData.errors;
-          console.warn('[ANALYSIS] File extraction errors:', extractData.errors);
-        }
-
-        if (extractData.success && extractData.text) {
-          // Start with textarea text first (if present)
-          const textareaText = (textEl?.value || '').trim();
-          if (textareaText) {
-            rfpText = textareaText + '\n\n=== UPLOADED FILES ===\n\n';
-            log('[ANALYSIS] Starting with textarea text:', textareaText.length, 'chars');
-          }
-
-          // Add staged files text
-          rfpText += extractData.text;
-          log('[ANALYSIS] Added staged files text:', extractData.files_count, 'files,', extractData.text.length, 'chars');
-          log('[ANALYSIS] Total combined text:', rfpText.length, 'chars');
-        } else {
-          log('[ANALYSIS DEBUG] No text extracted. Success:', extractData.success, 'Text length:', extractData.text?.length);
-        }
-      } else {
-        console.warn('[ANALYSIS] Extract endpoint returned error:', extractRes.status);
-        const errorText = await extractRes.text();
-        log('[ANALYSIS DEBUG] Error response:', errorText);
-      }
-    } catch (e) {
-      console.error('[ANALYSIS] Error extracting staged files:', e);
-      log('[ANALYSIS DEBUG] Full error:', e.stack);
-      // Show user-friendly error
-      extractionErrors.push('Network error while extracting files: ' + e.message);
-    }
-  } else {
-    log('[ANALYSIS DEBUG] No session ID available for staged files');
-  }
-
-  // PRIORITY 2: Check for old-style uploaded files (GPT-5 Vision PDF processing)
-  if (!rfpText && window.APP?.uploadSessionId) {
-    log('[ANALYSIS] Using uploaded PDF session:', window.APP.uploadSessionId);
-    uploadSessionId = window.APP.uploadSessionId;
-    rfpText = window.APP.uploadedFileText || "PDF files uploaded";
-  } else if (!rfpText && window.uploadedFileText) {
-    log('[ANALYSIS] Using uploaded file text:', window.uploadedFileText.length, 'chars');
-    rfpText = window.uploadedFileText;
-  } else if (!rfpText && window.APP?.uploadedFileText) {
-    log('[ANALYSIS] Using APP.uploadedFileText:', window.APP.uploadedFileText.length, 'chars');
-    rfpText = window.APP.uploadedFileText;
-  } else if (!rfpText) {
-    // PRIORITY 3: Fall back to textarea only
-    rfpText = (textEl?.value || '').trim();
-    if (rfpText) {
-      log('[ANALYSIS] Using textarea text only:', rfpText.length, 'chars');
-    }
-  }
-
+  let rfpText = (textEl?.value || '').trim();
   const btnAnalyze = document.querySelector('#btnAnalyze');
-  const analysisMode = document.getElementById('analysis-mode')?.value || 'deep';
-  log('[ANALYSIS] Starting analysis with mode:', analysisMode);
+  const analysisMode = document.getElementById('analysis-mode')?.value || 'fast';
 
   // ============================================================================
-  // SESSION ISOLATION: Use existing session if we have uploaded/staged files, otherwise start fresh
+  // SESSION ISOLATION: Start fresh session for each new analysis
   // ============================================================================
-  let sessionId;
-  if (uploadSessionId || hasStagedFiles) {
-    // Keep existing session if we have uploaded files or staged files
-    sessionId = SessionManager.getCurrentSessionId();
-    log('[SESSION] Using existing session with files:', sessionId);
-  } else {
-    // Start fresh session only if no files were uploaded
-    sessionId = SessionManager.startNewSession();
-    log('[SESSION] New analysis session:', sessionId);
-  }
-
-  // Reset global state for fresh analysis - done async to avoid blocking
-  requestAnimationFrame(() => {
-    SCENARIOS = null;
-    DELIVERABLES = [];
-    DELIV_INDEX = {};
-    DELIV_INDEX_LO = {};
-
-    // Reset Step 2 state - check if they exist first to avoid errors
-    if (selectionStore) {
-      if (selectionStore.deliverables) selectionStore.deliverables.clear();
-      if (selectionStore.componentsByDeliv) selectionStore.componentsByDeliv.clear();
-      if (selectionStore.l2ByComponent) selectionStore.l2ByComponent.clear();
-    }
-    if (S2) {
-      S2.selectedComponentsByCode = {};
-      S2.aiSuggestedCodes = new Set();
-    }
-  });
+  const sessionId = SessionManager.startNewSession();
+  console.log('[SESSION] New analysis session:', sessionId);
+  
+  // Reset global state for fresh analysis
+  SCENARIOS = null;
+  DELIVERABLES = [];
+  DELIV_INDEX = {};
+  DELIV_INDEX_LO = {};
+  
+  // Reset Step 2 state
+  selectionStore.deliverables.clear();
+  selectionStore.componentsByDeliv.clear();
+  selectionStore.l3ByComponent.clear();
+  S2.selectedComponentsByCode = {};
+  S2.aiSuggestedCodes = new Set();
   S2.activeDeliverableCode = null;
   S2.activeComponentName = null;
-
+  
   // Show progress bar IMMEDIATELY when button is clicked
   showAIProgressBar();
-  updateAIProgress({ progress: 10, current_stage: 'Preparing analysis...', elapsed_seconds: 0, eta_seconds: null });
+  updateAIProgress({ progress: 0, current_stage: 'Preparing analysis...', elapsed_seconds: 0, eta_seconds: null });
 
   let aiPlanResponse;
   try {
-    // Check for RFP text from multiple sources
-    const hasText = rfpText.trim().length > 0 || 
-                    window.PRIMARY_SCENARIO?.rfpText?.trim().length > 0;
-    const hasStagedFilesCheck = window.FileStagingModule?.state?.files?.length > 0;
-
-    if (!hasText && !hasStagedFilesCheck) {
-      hideAIProgressBar();
-
-      // Show extraction errors if any
-      if (extractionErrors.length > 0) {
-        alert('File extraction errors:\n\n' + extractionErrors.join('\n') + '\n\nPlease check your files and try again.');
-      } else {
-        alert('Please enter RFP text or upload a document first.');
+    // First, extract text from file if provided
+    if (fileEl?.files?.length) {
+      if (btnAnalyze) {
+        btnAnalyze.disabled = true;
+        btnAnalyze.textContent = 'Extracting text...';
       }
+      
+      updateAIProgress({ progress: 5, current_stage: 'Extracting text from file...', elapsed_seconds: 0, eta_seconds: null });
+      
+      const form = new FormData();
+      for (let i = 0; i < fileEl.files.length; i++) {
+        form.append('files', fileEl.files[i]);
+      }
+      
+      const analyzeToggle = document.querySelector('#analyzeImagesToggle');
+      const analyzeImages = analyzeToggle ? analyzeToggle.checked : true;
+      form.append('analyze_images', analyzeImages);
+      
+      const res = await fetchWithRetry('/api/summarize_by_file', { method: 'POST', body: form });
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status} ${res.statusText}`);
+      }
+      const summary = await res.json();
+      
+      // Update rfpText from file extraction
+      rfpText = summary.summary_text || '';
+      
+      // Start progress polling if image processing jobs were started
+      if (summary.job_ids && summary.job_ids.length > 0 && summary.processing_images) {
+        startProgressPolling(summary.job_ids[0]);
+      }
+    }
+    
+    if (!rfpText) {
+      hideAIProgressBar();
+      alert('Please enter RFP text or upload a file first.');
       return;
     }
-
-    // Debug logging to help diagnose validation issues
-    log('[VALIDATION] RFP text length:', rfpText.trim().length);
-    log('[VALIDATION] Staged files:', hasStagedFilesCheck);
-    log('[VALIDATION] PRIMARY_SCENARIO.rfpText length:', window.PRIMARY_SCENARIO?.rfpText?.length || 0);
-    log('[VALIDATION] ✅ Validation passed, starting analysis');
-
-    // If we have staged files but no text yet, use placeholder
-    if (!rfpText && (hasStagedFilesCheck || uploadSessionId)) {
-      log('[ANALYSIS] Using placeholder for staged files');
-      rfpText = "Analyzing uploaded files...";
-    }
-
-    // Warn about extraction errors but proceed with analysis
-    if (extractionErrors.length > 0) {
-      console.warn('[ANALYSIS] Proceeding with partial extraction. Errors:', extractionErrors);
-      // Optional: Show a non-blocking warning to the user
-      const warningMsg = `Note: Some files had extraction errors:\n${extractionErrors.join('\n')}\n\nProceeding with available text...`;
-      if (confirm(warningMsg + '\n\nContinue with analysis?')) {
-        log('[ANALYSIS] User chose to continue despite extraction errors');
-      } else {
-        hideAIProgressBar();
-        if (btnAnalyze) {
-          btnAnalyze.disabled = false;
-          btnAnalyze.textContent = 'Analyze with AI';
-        }
-        return;
-      }
-    }
-
-    log('[ANALYSIS] Proceeding with text analysis:', rfpText.length, 'characters');
 
     // Start AI analysis as background job
     if (btnAnalyze) {
       btnAnalyze.disabled = true;
       btnAnalyze.textContent = 'Starting AI Analysis...';
     }
-
+    
     updateAIProgress({ progress: 10, current_stage: 'Sending request to AI...', elapsed_seconds: 0, eta_seconds: null });
-
+    
     // Map mode to tier
     const tierMap = {
       'fast': 'mini',
       'deep': 'thinking'
     };
     const tier = tierMap[analysisMode] || 'thinking';
-
+    
     // Get selected mode (Fast or Deep) - use analysisMode variable
     const selectedMode = analysisMode || 'deep';
-
-    log('[ANALYSIS] Sending API request with:', {
-      mode: selectedMode,
-      tier: tier,
-      textLength: rfpText.length,
-      sessionId: sessionId
-    });
-
+    
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({ 
+      body: JSON.stringify({ 
         request_text: rfpText,
         strictness: 'balanced',
         tier: tier,
         mode: selectedMode,  // Add mode parameter
-        session_id: sessionId,  // Add session_id for cache isolation
-        upload_session_id: uploadSessionId  // NEW: Pass upload session for PDF processing
+        session_id: sessionId  // Add session_id for cache isolation
       })
-    }, 3, 2000); // Use fetchWithRetry for robustness
-
+    }, 3, 2000);
+    
     if (!aiRes.ok) {
       throw new Error(`AI analysis error: ${aiRes.status} ${aiRes.statusText}`);
     }
-
+    
     const jobInfo = await aiRes.json();
-    console.log('[ANALYSIS] Job created with ID:', jobInfo.job_id);
-
+    
     // Persist RFP text for Step 2
     window.APP = window.APP || {};
     window.APP.rfpText = rfpText;
-
+    
     // Store RFP text with session isolation
     SessionManager.setSessionItem('rfp_text', rfpText);
     sessionStorage.setItem('apb.rfp_text', rfpText);  // Keep for backward compatibility
-
+    
     APB.step2.rfpText = rfpText;
-
+    
     // Start SSE streaming for AI analysis progress
     if (jobInfo.job_id) {
       aiAnalysisJobId = jobInfo.job_id;
       showAIProgressBar();
       updateAIProgress({ progress: 0, current_stage: 'Starting AI analysis...', elapsed_seconds: 0, eta_seconds: null });
-
+      
       // Clear any existing polling interval before starting a new one
       if (aiAnalysisInterval) {
         console.log('[POLLING] Clearing existing interval before starting new polling');
         clearInterval(aiAnalysisInterval);
         aiAnalysisInterval = null;
       }
-
+      
       // Start polling for job status (SSE not implemented for AI jobs yet)
       // Poll the correct endpoint for job status
-
-      // CRITICAL: Force GlobalPollingManager to allow polling BEFORE starting
-      if (window.GlobalPollingManager) {
-        console.log('[POLLING FIX] Forcing GlobalPollingManager to allow polling...');
-        window.GlobalPollingManager.isShuttingDown = false;
-        if (window.GlobalPollingManager.resumePolling) {
-          window.GlobalPollingManager.resumePolling();
-        }
-      }
-
-      // Set protection flag for AI polling
-      window.PROTECTED_AI_POLLING = true;
-      console.log('[POLLING] 🚀 Starting PROTECTED AI Analysis polling for job:', jobInfo.job_id);
-
-      // Use both a protected interval and store it globally
-      aiAnalysisInterval = setInterval(() => {
-        console.log('[POLLING] Executing poll for job:', jobInfo.job_id);
-        pollAIAnalysis(jobInfo.job_id);
-      }, 2000);
-
-      // Also store as protected interval in case the global manager tries to clear it
-      window.PROTECTED_AI_INTERVAL = aiAnalysisInterval;
-
-      // Start the first poll immediately
-      console.log('[POLLING] 🎯 Triggering first poll immediately');
+      aiAnalysisInterval = setInterval(() => pollAIAnalysis(jobInfo.job_id), 2000);
       pollAIAnalysis(jobInfo.job_id);
-
+      
       // Old SSE code commented out for now
+      // const eventSource = new EventSource(`/api/stream/${jobInfo.job_id}`);
+      
       /* SSE event handler disabled for now - using polling instead
       eventSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-
+          
           // Update progress UI with detailed status
           const progressUpdate = {
             progress: Math.round(data.progress || 0),
@@ -5374,7 +6621,7 @@ async function onRunReconcile() {
             elapsed_seconds: data.elapsed_seconds || 0,
             eta_seconds: data.eta_seconds
           };
-
+          
           // Map stages to user-friendly messages
           const stageMap = {
             'extracting_text': '📄 Extracting text from document...',
@@ -5383,44 +6630,45 @@ async function onRunReconcile() {
             'generating_suggestions': '💡 Generating AI suggestions...',
             'finalizing': '✨ Finalizing analysis...'
           };
-
+          
           if (data.current_stage && stageMap[data.current_stage]) {
             progressUpdate.current_stage = stageMap[data.current_stage];
           }
-
+          
           updateAIProgress(progressUpdate);
-
+          
           // Handle completion
-          if (data.status === 'completed' &&data.result) {
+          if (data.status === 'completed' && data.result) {
             eventSource.close();
             hideAIProgressBar();
-
+            
             // Handle completed analysis
             const aiPlanResponse = data.result;
             window.APP = window.APP || {};
             window.APP.aiPlan = aiPlanResponse;
-            sessionStorage.setItem('apb:aiPlan', JSON.JSON.stringify(aiPlanResponse));
-
+            sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
+            
             const step2 = document.getElementById('step2');
             if (step2) {
               step2.style.display = 'block';
               step2.scrollIntoView({ behavior: 'smooth' });
             }
-
+            
             renderAIPlan(aiPlanResponse);
-
+            
             const btnAnalyze = document.querySelector('#btnAnalyze');
             if (btnAnalyze) {
               btnAnalyze.disabled = false;
               btnAnalyze.textContent = 'Analyze with AI';
             }
           }
-
+          
           // Handle errors
           if (data.status === 'failed') {
             eventSource.close();
+            hideAIProgressBar();
             alert(`AI analysis failed: ${data.error || 'Unknown error'}`);
-
+            
             const btnAnalyze = document.querySelector('#btnAnalyze');
             if (btnAnalyze) {
               btnAnalyze.disabled = false;
@@ -5431,28 +6679,25 @@ async function onRunReconcile() {
           console.error('Error parsing SSE data:', error);
         }
       };
-
+      
       */
       // SSE error handler also disabled
       /*
       eventSource.onerror = (error) => {
         console.error('SSE connection error:', error);
         eventSource.close();
-
+        
         // Fallback to polling if SSE fails
         if (!aiAnalysisInterval) {
-          window.PROTECTED_AI_POLLING = true;
-          console.log('[POLLING] 🚀 Starting PROTECTED AI polling');
           aiAnalysisInterval = setInterval(() => pollAIAnalysis(aiAnalysisJobId), 2000);
-          window.PROTECTED_AI_INTERVAL = aiAnalysisInterval;
           pollAIAnalysis(aiAnalysisJobId);
         }
       };
-
+      
       // Store event source for cleanup
       window.aiAnalysisEventSource = eventSource;
       */
-
+      
       // PATCH: Auto-fill project name from last upload
       try {
         const nameRes = await fetch('/api/last_upload_name');
@@ -5466,14 +6711,14 @@ async function onRunReconcile() {
       } catch (e) {
         console.warn('Could not fetch project name default:', e);
       }
-
+      
       return; // Exit early - polling will handle completion
     }
-
+    
   } catch (error) {
     console.error('Error analyzing RFP:', error);
     hideAIProgressBar();
-
+    
     // Provide more user-friendly error messages
     let errorMessage = 'Error getting AI analysis: ';
     if (error.message.includes('502') || error.message.includes('Gateway timeout')) {
@@ -5483,9 +6728,9 @@ async function onRunReconcile() {
     } else {
       errorMessage += error.message;
     }
-
+    
     alert(errorMessage);
-
+    
     // Re-enable button only on error (not during normal operation - polling handles it)
     if (btnAnalyze) {
       btnAnalyze.disabled = false;
@@ -5496,48 +6741,34 @@ async function onRunReconcile() {
 
 // Render NEW AI Plan (GPT-5 Pro: Summary + Evidence-backed Suggestions)
 function renderAIPlan(aiPlan) {
-  console.log('[renderAIPlan DEBUG] Called with:', {
-    hasAIPlan: !!aiPlan,
-    hasPlan: !!(aiPlan?.plan),
-    planKeys: aiPlan ? Object.keys(aiPlan) : [],
-    planPlanKeys: aiPlan?.plan ? Object.keys(aiPlan.plan) : []
-  });
-
   if (!aiPlan || !aiPlan.plan) {
-    console.warn('[renderAIPlan] No AI plan to render, received:', aiPlan);
+    console.warn('No AI plan to render');
     return;
   }
 
   const plan = aiPlan.plan;
   const summary = plan.summary || {};
   const suggestionsByDept = plan.suggestions_by_department || {};
-
-  console.log('[renderAIPlan DEBUG] Departments found:', Object.keys(suggestionsByDept));
-  console.log('[renderAIPlan DEBUG] Total deliverables by dept:', 
-    Object.entries(suggestionsByDept).map(([dept, items]) => 
-      `${dept}: ${Array.isArray(items) ? items.length : 0}`
-    ).join(', ')
-  );
-
+  
   // Render summary panel
   const summaryPanel = document.getElementById('ai-summary-panel');
   if (summaryPanel) {
     const goals = (summary.goals || []).map(g => `<li>${g}</li>`).join('');
     const channels = (summary.channels || []).join(', ') || 'Not specified';
     const markets = (summary.markets || []).join(', ') || 'Not specified';
-
+    
     summaryPanel.innerHTML = `
       <div style="background: rgba(59, 130, 246, 0.1); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
         <h3 style="margin: 0 0 12px 0; color: #2563eb;">📋 RFP Summary</h3>
         <p style="margin: 0 0 12px 0; line-height: 1.6;">${summary.summary || 'No summary available'}</p>
-
+        
         ${goals ? `
           <div style="margin-bottom: 12px;">
             <strong>Goals:</strong>
             <ul style="margin: 4px 0 0 20px; line-height: 1.6;">${goals}</ul>
           </div>
         ` : ''}
-
+        
         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px;">
           <div>
             <strong>Channels:</strong> <span style="color: #6b7280;">${channels}</span>
@@ -5549,14 +6780,14 @@ function renderAIPlan(aiPlan) {
             <strong>Complexity:</strong> <span style="color: #6b7280; text-transform: capitalize;">${summary.complexity || 'medium'}</span>
           </div>
         </div>
-
+        
         <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(0,0,0,0.1);">
           <strong>Total Planned Hours:</strong> <span style="font-size: 1.2em; color: #2563eb;">${plan.totals?.planned_hours_total || 0}</span>
         </div>
       </div>
     `;
   }
-
+  
   // Render suggestions by department
   const suggestionsPanel = document.getElementById('ai-suggestions-panel');
   if (suggestionsPanel) {
@@ -5580,7 +6811,7 @@ function renderAIPlan(aiPlan) {
           </button>
         </div>
       </div>
-
+      
       <!-- Smart Select by Relevancy -->
       <div id="smart-select-container" style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
         <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
@@ -5607,7 +6838,7 @@ function renderAIPlan(aiPlan) {
           Automatically select deliverables, components, and tasks with confidence ≥ threshold
         </div>
       </div>
-
+      
       <div style="background: #f0f9ff; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
         <h4 style="margin: 0 0 8px 0; color: #1e40af;">📊 Project Flow & Department Sequencing</h4>
         <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: #1e3a8a;">
@@ -5621,11 +6852,13 @@ function renderAIPlan(aiPlan) {
         </p>
       </div>
     `;
-
+    
+    const deptOrder = ['Strategy', 'Creative', 'Content', 'Paid Media', 'Technology', 'Integrated Marketing Management'];
+    
     for (const dept of deptOrder) {
       const deliverables = suggestionsByDept[dept] || [];
       if (deliverables.length === 0) continue;
-
+      
       // Department colors for visual distinction
       const deptColors = {
         'Strategy': '#8b5cf6',
@@ -5635,7 +6868,7 @@ function renderAIPlan(aiPlan) {
         'Technology': '#6366f1',
         'Integrated Marketing Management': '#ec4899'
       };
-
+      
       html += `
         <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
           <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: #1f2937; margin-bottom: 12px;">
@@ -5643,12 +6876,12 @@ function renderAIPlan(aiPlan) {
             ${dept} <span style="color: #6b7280; font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
           </summary>
       `;
-
+      
       for (const deliv of deliverables) {
         const confidence = Math.round((deliv.calibrated_confidence || 0) * 100);
         const confidenceColor = confidence >= 75 ? '#10b981' : confidence >= 50 ? '#f59e0b' : '#ef4444';
         const delivCode = deliv.deliverable_code || deliv.code;
-
+        
         html += `
           <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
@@ -5671,32 +6904,32 @@ function renderAIPlan(aiPlan) {
                 <span style="font-size: 0.85em; color: #6b7280;">${deliv.planned_hours || 0}h</span>
                 <button class="btn-small" 
                         onclick="addAIDeliverableToSelection('${delivCode}', this)"
-                        style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                        style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
                   Add to Selection
                 </button>
               </div>
             </div>
-
+            
             ${deliv.why ? `
               <p style="margin: 8px 0; font-size: 0.9em; color: #4b5563; line-height: 1.5;">${deliv.why}</p>
             ` : ''}
-
+            
             ${deliv.risks ? `
               <div style="background: rgba(239, 68, 68, 0.1); padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 0.85em; color: #991b1b;">
                 <strong>⚠️ Risks:</strong> ${deliv.risks}
               </div>
             ` : ''}
-
+            
             ${(deliv.components || []).length > 0 ? `
               <details style="margin-top: 8px;">
                 <summary style="cursor: pointer; font-size: 0.9em; color: #4b5563; font-weight: 500;">
                   Components (${deliv.components.length})
                   <button onclick="event.stopPropagation(); selectAllComponents('${delivCode}', true)" 
-                          style="margin-left: 8px; padding: 2px 8px; font-size: 0.75em; background: #e5e7eb; border: none; border-radius: 3px;">
+                          style="margin-left: 8px; padding: 2px 8px; font-size: 0.8em; background: #e5e7eb; border: none; border-radius: 3px;">
                     Select All
                   </button>
                   <button onclick="event.stopPropagation(); selectAllComponents('${delivCode}', false)" 
-                          style="margin-left: 4px; padding: 2px 8px; font-size: 0.75em; background: #e5e7eb; border: none; border-radius: 3px;">
+                          style="margin-left: 4px; padding: 2px 8px; font-size: 0.8em; background: #e5e7eb; border: none; border-radius: 3px;">
                     Deselect All
                   </button>
                 </summary>
@@ -5716,7 +6949,7 @@ function renderAIPlan(aiPlan) {
                           <div style="font-size: 0.85em; color: #9ca3af; margin-top: 2px;">${comp.planned_hours || 0}h</div>
                         </div>
                       </div>
-
+                      
                       ${(comp.tasks || []).length > 0 ? `
                         <details style="margin-top: 8px; margin-left: 24px;">
                           <summary style="cursor: pointer; font-size: 0.85em; color: #6b7280;">
@@ -5761,10 +6994,10 @@ function renderAIPlan(aiPlan) {
           </div>
         `;
       }
-
+      
       html += '</details>';
     }
-
+    
     // Add button to apply all selected items
     html += `
       <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e5e7eb; display: flex; gap: 12px;">
@@ -5778,10 +7011,10 @@ function renderAIPlan(aiPlan) {
         </button>
       </div>
     `;
-
+    
     html += '</div>';
     suggestionsPanel.innerHTML = html;
-
+    
     // Store AI plan for later use
     window.lastAIPlan = plan;
   }
@@ -5794,49 +7027,49 @@ function applySmartSelection() {
     console.warn('Smart select threshold input not found');
     return;
   }
-
+  
   const threshold = parseFloat(thresholdInput.value) || 60;
   console.log(`Applying smart selection with threshold: ${threshold}%`);
-
+  
   // Check if AI data is available
   if (!window.lastAIPlan || !window.lastAIPlan.suggestions_by_department) {
     console.warn('No AI suggestions available. Please run AI analysis first.');
     alert('No AI suggestions available. Please run AI analysis first.');
     return;
   }
-
+  
   // Clear all current selections first
   clearAllAISelections();
-
+  
   let selectedDelivCount = 0;
   let selectedCompCount = 0;
   let selectedTaskCount = 0;
-
+  
   // Iterate through AI suggestions data directly
   const suggestionsByDept = window.lastAIPlan.suggestions_by_department || {};
-
+  
   for (const dept in suggestionsByDept) {
     const deliverables = suggestionsByDept[dept] || [];
-
+    
     for (const deliv of deliverables) {
       // Get confidence score from the AI data (0-1 scale, convert to percentage)
-      const confidence = Math.round((deliv.calibrated_confidence || 0) * 100);
+      const confidence = Math.round((deliv.calibrated_confidence || deliv.confidence || 0) * 100);
       const delivCode = deliv.deliverable_code || deliv.code;
-
+      
       console.log(`Deliverable ${delivCode}: ${confidence}% confidence vs threshold ${threshold}%`);
-
+      
       // Get the checkbox for this deliverable
       const delivCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
       if (!delivCheckbox) {
         console.warn(`Checkbox not found for deliverable ${delivCode}`);
         continue;
       }
-
+      
       // Check if deliverable meets threshold
       if (confidence >= threshold) {
         delivCheckbox.checked = true;
         selectedDelivCount++;
-
+        
         // For components within this deliverable
         const components = deliv.components || [];
         for (const comp of components) {
@@ -5845,7 +7078,7 @@ function applySmartSelection() {
           if (compCheckbox) {
             compCheckbox.checked = true;
             selectedCompCount++;
-
+            
             // For tasks within this component
             const tasks = comp.tasks || [];
             for (const task of tasks) {
@@ -5866,13 +7099,13 @@ function applySmartSelection() {
       } else {
         // Uncheck this deliverable and all its components/tasks
         delivCheckbox.checked = false;
-
+        
         // Uncheck all components for this deliverable
         const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]`);
         compCheckboxes.forEach(compCheckbox => {
           compCheckbox.checked = false;
         });
-
+        
         // Uncheck all tasks for this deliverable
         const taskCheckboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"]`);
         taskCheckboxes.forEach(taskCheckbox => {
@@ -5881,11 +7114,11 @@ function applySmartSelection() {
       }
     }
   }
-
+  
   // Show feedback
   const feedbackMessage = `Smart Selection Applied: ${selectedDelivCount} deliverables, ${selectedCompCount} components, ${selectedTaskCount} tasks selected (threshold: ${threshold}%)`;
   console.log(feedbackMessage);
-
+  
   // Show visual feedback (optional - add a temporary notification)
   const smartSelectContainer = document.getElementById('smart-select-container');
   if (smartSelectContainer) {
@@ -5893,13 +7126,13 @@ function applySmartSelection() {
     if (existingFeedback) {
       existingFeedback.remove();
     }
-
+    
     const feedbackDiv = document.createElement('div');
     feedbackDiv.className = 'smart-select-feedback';
     feedbackDiv.style = 'margin-top: 8px; padding: 8px; background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; border-radius: 4px; color: #10b981; font-size: 0.9em;';
     feedbackDiv.textContent = feedbackMessage;
     smartSelectContainer.appendChild(feedbackDiv);
-
+    
     // Remove feedback after 5 seconds
     setTimeout(() => {
       feedbackDiv.remove();
@@ -5917,18 +7150,18 @@ function addAIDeliverableToSelection(delivCode, button) {
     selectDeliverable(delivCode).then(() => {
       // Mark as AI-suggested for tracking
       APB.step2.aiSuggestedCodes.add(delivCode);
-
+      
       // Update button state
       button.textContent = 'Added';
       button.style.background = '#10b981';
       button.disabled = true;
-
+      
       // Update AI checkbox state
       const aiCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
       if (aiCheckbox) {
         aiCheckbox.checked = true;
       }
-
+      
       // Update task panel if visible
       if (window.renderTasksPanel && APB.step2.activeComponentName && APB.step2.activeDeliverableCode === delivCode) {
         renderTasksPanel();
@@ -5945,7 +7178,7 @@ function selectAllAIDeliverables(select) {
   const checkboxes = document.querySelectorAll('.ai-deliv-checkbox');
   checkboxes.forEach(checkbox => {
     checkbox.checked = select;
-
+    
     // Also trigger component checkboxes if selecting
     if (select) {
       const delivCode = checkbox.dataset.code;
@@ -5953,14 +7186,14 @@ function selectAllAIDeliverables(select) {
       compCheckboxes.forEach(cb => cb.checked = true);
     }
   });
-
+  
   // Also update component and task checkboxes
   if (!select) {
     // If deselecting all, also deselect all components and tasks
     document.querySelectorAll('.ai-comp-checkbox').forEach(cb => cb.checked = false);
     document.querySelectorAll('.ai-task-checkbox').forEach(cb => cb.checked = false);
   }
-
+  
   // Update button visual feedback
   const selectAllBtn = event?.target;
   if (selectAllBtn) {
@@ -5969,7 +7202,7 @@ function selectAllAIDeliverables(select) {
       selectAllBtn.style.transform = 'scale(1)';
     }, 100);
   }
-
+  
   // Update UI to show selection state
   const count = checkboxes.length;
   if (select) {
@@ -5995,21 +7228,21 @@ function clearAllAISelections() {
   document.querySelectorAll('.ai-deliv-checkbox').forEach(cb => cb.checked = false);
   document.querySelectorAll('.ai-comp-checkbox').forEach(cb => cb.checked = false);
   document.querySelectorAll('.ai-task-checkbox').forEach(cb => cb.checked = false);
-
+  
   console.log('Cleared all AI selections');
 }
 
 async function applyAllSelectedFromAI() {
   // CRITICAL: Stop all polling before applying selections to prevent 404 flood
   console.log('[APPLY-AI] ========= STOPPING ALL POLLING BEFORE APPLYING =========');
-
+  
   // 1. Use GlobalPollingManager master kill switch
   if (window.GlobalPollingManager && window.GlobalPollingManager.stopAllPolling) {
     console.log('[APPLY-AI] Calling GlobalPollingManager.stopAllPolling()...');
     const result = window.GlobalPollingManager.stopAllPolling();
     console.log('[APPLY-AI] GlobalPollingManager stopped:', result);
   }
-
+  
   // 2. Stop AI Assistant polling specifically
   if (window.aiAssistant) {
     console.log('[APPLY-AI] Stopping AI Assistant polling...');
@@ -6025,7 +7258,7 @@ async function applyAllSelectedFromAI() {
       window.aiAssistant.agentState.jobId = null;
     }
   }
-
+  
   // 3. Clear any lingering job IDs from localStorage
   try {
     const charlesState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
@@ -6033,115 +7266,118 @@ async function applyAllSelectedFromAI() {
       console.log('[APPLY-AI] Clearing CHARLES jobId:', charlesState.jobId);
       charlesState.jobId = null;
       charlesState.jobIdTimestamp = null;
-      localStorage.setItem('charles_agent_state', JSON.JSON.stringify(charlesState));
+      localStorage.setItem('charles_agent_state', JSON.stringify(charlesState));
     }
   } catch (e) {
     console.error('[APPLY-AI] Error clearing localStorage:', e);
   }
-
+  
   console.log('[APPLY-AI] Polling cleanup complete, now applying selections...');
-
+  
   // Collect selected deliverables
   const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
   let firstDelivCode = null;
   let firstCompName = null;
-
+  
   for (const delivCb of delivCheckboxes) {
     const delivCode = delivCb.dataset.code;
-
+    
     // Track first selected deliverable
     if (!firstDelivCode) {
       firstDelivCode = delivCode;
     }
-
+    
     // Add deliverable to selection if not already there
     if (!selectionStore.deliverables.has(delivCode)) {
       await selectDeliverable(delivCode);
     }
-
+    
     // Mark as AI-suggested for tracking
     APB.step2.aiSuggestedCodes.add(delivCode);
-
+    
     // Collect selected components for this deliverable
     const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]:checked`);
     const selectedComps = new Set();
-
+    
     for (const compCb of compCheckboxes) {
       const compTitle = compCb.dataset.comp;
       selectedComps.add(compTitle);
-
+      
       // Track first component
       if (!firstCompName && delivCode === firstDelivCode) {
         firstCompName = compTitle;
       }
-
+      
       // Ensure component is hydrated
       if (!selectionStore.componentsByDeliv.get(delivCode)?.has(compTitle)) {
         await hydrateComponentsFor(delivCode);
       }
-
+      
       // Collect selected tasks for this component
       const taskCheckboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compTitle}"]:checked`);
       const selectedTasks = new Set();
-
+      
       for (const taskCb of taskCheckboxes) {
         selectedTasks.add(taskCb.dataset.task);
       }
-
+      
       // Store selected tasks
       if (selectedTasks.size > 0) {
         const key = `${delivCode}::${compTitle}`;
-        selectionStore.l2ByComponent.set(key, selectedTasks);
+        selectionStore.l3ByComponent.set(key, selectedTasks);
       }
     }
-
+    
     // Store selected components in both selectionStore and S2 (for compatibility)
     if (selectedComps.size > 0) {
       selectionStore.componentsByDeliv.set(delivCode, selectedComps);
       S2.selectedComponentsByCode[delivCode] = selectedComps;
     }
   }
-
+  
   // FIX: Fetch L2 tasks for ALL selected deliverables (not just the first one)
   const allSelectedDelivs = Array.from(selectionStore.deliverables);
-
+  
   for (const delivCode of allSelectedDelivs) {
     // Get components for this deliverable
     const components = selectionStore.componentsByDeliv.get(delivCode);
-
+    
     if (components && components.size > 0) {
       const componentArray = Array.from(components);
-
+      
       try {
         // Fetch L2 tasks in bulk for all selected components of this deliverable
-        const res = await fetch('/api/l2/bulk', {
+        const res = await fetch('/api/step2/l3/bulk', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.JSON.stringify({
+          body: JSON.stringify({
             deliverable: delivCode,
             components: componentArray
           })
         });
-
+        
         if (res.ok) {
-          const l2Data = await res.json();
-          // FIX: Handle l2_by_component structure from API
-          const tasksData = l2Data.l2_by_component || l2Data;
-
+          const l3Data = await res.json();
+          
+          // FIX: Handle l3_by_component structure from API
+          const tasksData = l3Data.l3_by_component || l3Data;
+          
           // Store L2 tasks for each component
           for (const [compName, tasks] of Object.entries(tasksData)) {
             const key = `${delivCode}::${compName}`;
-            if (!selectionStore.l2ByComponent.has(key)) {
-              selectionStore.l2ByComponent.set(key, new Set());
+            if (!selectionStore.l3ByComponent.has(key)) {
+              selectionStore.l3ByComponent.set(key, new Set());
             }
-            const existingTasks = selectionStore.l2ByComponent.get(key);
-
+            const existingTasks = selectionStore.l3ByComponent.get(key);
+            
             // Handle array of tasks properly
             if (Array.isArray(tasks)) {
               tasks.forEach(task => {
                 // Ensure we always get a string value, not an object
-                let taskName = task;
-                if (typeof task === 'object' && task) {
+                let taskName;
+                if (typeof task === 'string') {
+                  taskName = task;
+                } else if (task && typeof task === 'object') {
                   // Extract string from object - check all possible property names
                   taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
                   // If still no valid string, try converting to string
@@ -6156,14 +7392,14 @@ async function applyAllSelectedFromAI() {
               });
             }
           }
-
+          
           // Auto-activate first component if available
           if (firstDelivCode && firstCompName) {
             S2.activeComponentName = firstCompName;
             // Trigger component panel refresh to show L2 tasks immediately
-            await refreshL2Panel();
+            await refreshL3Panel();
           }
-
+          
           console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(tasksData));
         }
       } catch (error) {
@@ -6172,16 +7408,16 @@ async function applyAllSelectedFromAI() {
     } else {
       // Edge case: deliverable has no components, use "general" fallback
       try {
-        const generalTasks = await api(`/api/l2?deliverable=${encodeURIComponent(delivCode)}&component=general`);
+        const generalTasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=general`);
         if (generalTasks && generalTasks.length > 0) {
           // Store as "general" component
           const key = `${delivCode}::general`;
-          selectionStore.l2ByComponent.set(key, new Set(generalTasks));
-
+          selectionStore.l3ByComponent.set(key, new Set(generalTasks));
+          
           // Also update the component map to have "general"
           selectionStore.componentsByDeliv.set(delivCode, new Set(['general']));
           S2.selectedComponentsByCode[delivCode] = new Set(['general']);
-
+          
           console.log(`Fetched L2 tasks for ${delivCode} (general fallback):`, generalTasks.length);
         }
       } catch (error) {
@@ -6189,13 +7425,13 @@ async function applyAllSelectedFromAI() {
       }
     }
   }
-
+  
   // Set the active deliverable and component for UI (first selected)
   if (firstDelivCode) {
     // Set in both APB.step2 and S2 to ensure consistency
     APB.step2.activeDeliverableCode = firstDelivCode;
     S2.activeDeliverableCode = firstDelivCode;
-
+    
     const components = selectionStore.componentsByDeliv.get(firstDelivCode);
     if (components && components.size > 0) {
       firstCompName = firstCompName || Array.from(components)[0];
@@ -6203,7 +7439,7 @@ async function applyAllSelectedFromAI() {
       S2.activeComponentName = firstCompName;
     }
   }
-
+  
   // Update all panels properly
   if (window.renderDeliverablesPanel) renderDeliverablesPanel();
   if (window.renderComponentsPanel) {
@@ -6211,22 +7447,23 @@ async function applyAllSelectedFromAI() {
       await renderComponentsPanel();
     }
   }
-
-  // FIX: Render L2 panel to display the first component's L2 tasks
+  
+  // FIX: Render L3 panel to display the first component's L2 tasks
   if (firstDelivCode && firstCompName) {
-    // Use renderL2Panel which displays L2 tasks in the third column
-    if (window.renderL2Panel) {
-      await renderL2Panel();
+    // Use renderL3Panel which displays L2 tasks in the third column
+    if (window.renderL3Panel) {
+      await renderL3Panel();
     } else if (window.renderTasksPanel) {
       // Fallback to renderTasksPanel if available
-      await renderTasksPanel(`${firstDelivCode}::${firstCompName}`);
+      const componentKey = `${firstDelivCode}::${firstCompName}`;
+      await renderTasksPanel(componentKey);
     }
   }
-
+  
   // Update summary and counts
   updateSummaryCounts();
   if (window.renderSummary) renderSummary();
-
+  
   // Update all "Add to Selection" buttons to show they've been added
   document.querySelectorAll('.ai-deliverable').forEach(div => {
     const code = div.dataset.delivCode;
@@ -6239,7 +7476,7 @@ async function applyAllSelectedFromAI() {
       }
     }
   });
-
+  
   alert('Selected items have been added to your manual selection!');
 }
 
@@ -6247,58 +7484,58 @@ async function applyAllSelectedFromAI() {
 async function renderTasksPanel(componentKey) {
   const taskList = document.getElementById('s2-task-list');
   if (!taskList) return;
-
+  
   if (!componentKey && APB.step2.activeComponentName && APB.step2.activeDeliverableCode) {
     componentKey = `${APB.step2.activeDeliverableCode}::${APB.step2.activeComponentName}`;
   }
-
+  
   if (!componentKey) {
-    taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view tasks</p>';
+    taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its tasks</p>';
     document.getElementById('s2-tasks-active-component').textContent = 'Select a component';
     return;
   }
-
+  
   // Parse component key
   const [delivCode, compName] = componentKey.split('::');
-
+  
   // Update active component display
   document.getElementById('s2-tasks-active-component').textContent = `${compName}`;
-
+  
   // Get available tasks for this component
-  const availableTasks = selectionStore.l2ByComponent.get(componentKey) || new Set();
-  const selectedTasks = selectionStore.l2ByComponent.get(componentKey) || new Set();
-
+  const availableTasks = selectionStore.l3ByComponent.get(componentKey) || new Set();
+  const selectedTasks = selectionStore.l3ByComponent.get(componentKey) || new Set();
+  
   if (availableTasks.size === 0) {
     // Fetch tasks if not loaded
     try {
-      const tasks = await api(`/api/l2?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(compName)}`);
+      const tasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=${encodeURIComponent(compName)}`);
       tasks.forEach(task => availableTasks.add(task));
-      selectionStore.l2ByComponent.set(key, availableTasks);
+      selectionStore.l3ByComponent.set(componentKey, availableTasks);
     } catch (e) {
       console.error('Error fetching tasks:', e);
       taskList.innerHTML = '<p style="color: #ef4444; text-align: center; padding: 20px;">Error loading tasks</p>';
       return;
     }
   }
-
+  
   // Render task checkboxes
   if (availableTasks.size === 0) {
     taskList.innerHTML = '<p style="color: var(--muted); text-align: center; padding: 20px;">No tasks available for this component</p>';
     return;
   }
-
+  
   const tasksHtml = Array.from(availableTasks).map(task => {
     // FIX: Extract task name if it's an object
     let taskName = task;
     if (typeof task === 'object' && task) {
-      taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
+      taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || String(task);
     }
     if (!taskName || taskName === '[object Object]') return ''; // Skip invalid entries
-
-    const isAiRecommended = isTaskAIRecommended(delivCode, compName, taskName);
+    
+    const isAiRecommended = window.lastAIPlan && isTaskAIRecommended(delivCode, compName, taskName);
     const isChecked = selectedTasks.has(taskName);
     const taskColor = isAiRecommended ? '#10b981' : '#6b7280';
-
+    
     return `
       <label style="display: flex; align-items: start; gap: 8px; padding: 8px; border-radius: 4px; cursor: pointer; hover:background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.05);">
         <input type="checkbox" 
@@ -6308,42 +7545,42 @@ async function renderTasksPanel(componentKey) {
                ${isChecked ? 'checked' : ''}
                style="margin-top: 2px; cursor: pointer;">
         <div style="flex: 1;">
-          <span style="color: ${taskColor}; font-size: 0.9em;">${taskName}</span>
+          <span style="color: ${taskColor}; font-size: 0.9em;">${task}</span>
           ${isAiRecommended ? '<span style="margin-left: 8px; font-size: 0.75em; color: #10b981; background: rgba(16,185,129,0.1); padding: 2px 6px; border-radius: 3px;">AI ✓</span>' : ''}
         </div>
       </label>
     `;
   }).join('');
-
+  
   taskList.innerHTML = tasksHtml;
-
+  
   // Add event listeners to checkboxes
   taskList.querySelectorAll('.task-checkbox').forEach(cb => {
     cb.addEventListener('change', (e) => {
       const task = e.target.dataset.task;
       const compKey = e.target.dataset.component;
-
-      if (!selectionStore.l2ByComponent.has(compKey)) {
-        selectionStore.l2ByComponent.set(compKey, new Set());
+      
+      if (!selectionStore.l3ByComponent.has(compKey)) {
+        selectionStore.l3ByComponent.set(compKey, new Set());
       }
-
+      
       if (e.target.checked) {
-        selectionStore.l2ByComponent.get(compKey).add(task);
+        selectionStore.l3ByComponent.get(compKey).add(task);
       } else {
-        selectionStore.l2ByComponent.get(compKey).delete(task);
+        selectionStore.l3ByComponent.get(compKey).delete(task);
       }
-
+      
       updateTasksSummary();
     });
   });
-
+  
   updateTasksSummary();
 }
 
 // Helper to check if a task was AI-recommended
 function isTaskAIRecommended(delivCode, compName, taskName) {
   if (!window.lastAIPlan) return false;
-
+  
   const depts = window.lastAIPlan.suggestions_by_department || {};
   for (const dept of Object.values(depts)) {
     for (const deliv of dept) {
@@ -6364,9 +7601,9 @@ function updateTasksSummary() {
   let totalTasks = 0;
   let aiTasks = 0;
   let manualTasks = 0;
-
+  
   // Count all selected tasks
-  for (const [compKey, tasks] of selectionStore.l2ByComponent.entries()) {
+  for (const [compKey, tasks] of selectionStore.l3ByComponent.entries()) {
     const [delivCode, compName] = compKey.split('::');
     for (const task of tasks) {
       totalTasks++;
@@ -6377,23 +7614,23 @@ function updateTasksSummary() {
       }
     }
   }
-
+  
   // Update counts
   const summaryTasks = document.getElementById('s2-summary-tasks');
   const summaryAiTasks = document.getElementById('s2-summary-ai-tasks');
   const summaryManualTasks = document.getElementById('s2-summary-manual-tasks');
-
+  
   if (summaryTasks) summaryTasks.textContent = totalTasks;
   if (summaryAiTasks) summaryAiTasks.textContent = aiTasks;
   if (summaryManualTasks) summaryManualTasks.textContent = manualTasks;
-
+  
   // Update details list
   const detailsDiv = document.getElementById('s2-selected-tasks-details');
   if (detailsDiv) {
     if (totalTasks === 0) {
       detailsDiv.innerHTML = '<div style="color: var(--muted); text-align: center; padding: 20px; font-size: 0.85em;">No tasks selected yet</div>';
     } else {
-      const detailsHtml = Array.from(selectionStore.l2ByComponent.entries())
+      const detailsHtml = Array.from(selectionStore.l3ByComponent.entries())
         .filter(([_, tasks]) => tasks.size > 0)
         .map(([compKey, tasks]) => {
           const [delivCode, compName] = compKey.split('::');
@@ -6415,12 +7652,12 @@ function updateTasksSummary() {
 }
 
 // Wire up tasks panel buttons
-document.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', () => {
   // Task panel buttons
   const taskSelectAll = document.getElementById('s2-task-selectall');
   const taskClear = document.getElementById('s2-task-clear');
   const taskAiFilter = document.getElementById('s2-task-ai-filter');
-
+  
   if (taskSelectAll) {
     taskSelectAll.addEventListener('click', () => {
       document.querySelectorAll('.task-checkbox').forEach(cb => {
@@ -6429,7 +7666,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
   }
-
+  
   if (taskClear) {
     taskClear.addEventListener('click', () => {
       document.querySelectorAll('.task-checkbox').forEach(cb => {
@@ -6438,7 +7675,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     });
   }
-
+  
   if (taskAiFilter) {
     taskAiFilter.addEventListener('click', () => {
       document.querySelectorAll('.task-checkbox').forEach(cb => {
@@ -6490,10 +7727,10 @@ function renderAISuggestionsPanel(dCode, ai) {
     </div>
   `).join("");
 
-  const l2html = Object.entries(ai.l2_by_component || {}).map(([comp, tasks]) => `
+  const l3html = Object.entries(ai.l3_by_component || {}).map(([comp, tasks]) => `
     <details class="ai-group" style="margin:8px 0;">
       <summary style="cursor:pointer;font-weight:600;padding:4px 0;">${comp}</summary>
-      <ul class="ai-l2" style="margin:4px 0 0 20px;list-style:disc;">
+      <ul class="ai-l3" style="margin:4px 0 0 20px;list-style:disc;">
         ${tasks.map(t => `<li style="padding:2px 0;">${t.label}${t.why ? ` — <span class="muted" style="font-size:0.85em;">${t.why}</span>` : ""}</li>`).join("")}
       </ul>
     </details>
@@ -6517,54 +7754,48 @@ function renderAISuggestionsPanel(dCode, ai) {
     </div>
 
     <div class="ai-section">
-      <h4 style="margin:8px 0;">GPT‑5 Suggested L2 (per component)</h4>
-      ${l2html || "<div class='muted'>No task suggestions.</div>"}
+      <h4 style="margin:8px 0;">GPT‑5 Suggested L3 (per component)</h4>
+      ${l3html || "<div class='muted'>No task suggestions.</div>"}
     </div>
   `;
 
   host.onclick = async (e) => {
-    try {
-      const btn = e.target.closest("[data-ai-act]");
-      if (!btn) return;
-      const act = btn.getAttribute("data-ai-act");
-      const d = btn.getAttribute("data-d");
-      const compsPicked = (ai.components || []).map(x => x.name);
+    const btn = e.target.closest("[data-ai-act]");
+    if (!btn) return;
+    const act = btn.getAttribute("data-ai-act");
+    const d = btn.getAttribute("data-d");
+    const compsPicked = (ai.components || []).map(x => x.name);
 
-      if (act === "replace") {
-        S2.selectedComponentsByCode[d] = new Set();
-        selectionStore.componentsByDeliv.set(d, new Set());
-        for (const key of Array.from(selectionStore.l2ByComponent.keys())) {
-          if (key.startsWith(d + "::")) {
-            selectionStore.l2ByComponent.delete(key);
-          }
+    if (act === "replace") {
+      S2.selectedComponentsByCode[d] = new Set();
+      selectionStore.componentsByDeliv.set(d, new Set());
+      for (const key of Array.from(selectionStore.l3ByComponent.keys())) {
+        if (key.startsWith(d + "::")) {
+          selectionStore.l3ByComponent.delete(key);
         }
       }
-
-      for (const c of compsPicked) {
-        if (!S2.selectedComponentsByCode[d]) {
-          S2.selectedComponentsByCode[d] = new Set();
-        }
-        S2.selectedComponentsByCode[d].add(c);
-        await hydrateL2For(d, c);
-      }
-
-      if (ai.l2_by_component) {
-        for (const [comp, items] of Object.entries(ai.l2_by_component)) {
-          const key = `${d}::${comp}`;
-          if (!selectionStore.l2ByComponent.has(key)) {
-            selectionStore.l2ByComponent.set(key, new Set());
-          }
-          const existingTasks = selectionStore.l2ByComponent.get(key);
-          items.forEach(t => existingTasks.add(t.label));
-        }
-      }
-
-      await refreshComponentsPanel();
-      updateSummaryCounts();
-    } catch (error) {
-      console.error('[AI SUGGESTIONS] Error applying AI suggestions:', error);
-      alert(`An error occurred while applying AI suggestions. Please try again.`);
     }
+    
+    for (const c of compsPicked) {
+      if (!S2.selectedComponentsByCode[d]) {
+        S2.selectedComponentsByCode[d] = new Set();
+      }
+      S2.selectedComponentsByCode[d].add(c);
+      await hydrateL3For(d, c);
+    }
+    
+    if (ai.l3_by_component) {
+      for (const [comp, items] of Object.entries(ai.l3_by_component)) {
+        const key = `${d}::${comp}`;
+        if (!selectionStore.l3ByComponent.has(key)) {
+          selectionStore.l3ByComponent.set(key, new Set());
+        }
+        items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
+      }
+    }
+    
+    await refreshComponentsPanel();
+    updateSummaryCounts();
   };
 }
 
@@ -6603,7 +7834,7 @@ async function reconcileAndRender(aiLabels, selectedCodes) {
     const res = await fetch('/api/reconcile', {
       method: 'POST', 
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify({
+      body: JSON.stringify({
         summary_deliverables: aiLabels,
         db_selected_deliverable_codes: selectedCodes,
         rfp_text: window.APP?.rfpText || ''
@@ -6640,9 +7871,9 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
     // Create persistent toggle button (never disappears)
     if (sug.code) {
       const isSel = APB.step2.selectedCodes.has(sug.code);
-
+      
       const toggleBtn = document.createElement('button');
-      toggleBtn.className = 'btn-suggest';
+      toggleBtn.className = 'btn-sm btn-suggest';
       toggleBtn.dataset.code = sug.code;
       toggleBtn.dataset.mode = isSel ? 'remove' : 'add';
       toggleBtn.textContent = isSel ? 'Added • Remove' : 'Add';
@@ -6657,7 +7888,7 @@ function renderNewAISuggestions(add = [], del = [], unchanged = []) {
   };
 
   root.innerHTML = '';
-
+  
   if (!add.length && !del.length && !unchanged.length) {
     root.innerHTML += '<div style="opacity:.7;">Run analysis to see suggestions.</div>';
     return;
@@ -6693,13 +7924,18 @@ function s2onAdd(code) {
   if (!code) return;
   S2.selectedCodes.add(code);
   // AI-suggested deliverables default to ALL components unless user manually edits
-  if (!S2.selectedComponentsByCode[code]) {
-    S2.selectedComponentsByCode[code] = 'ALL';
+  if (!S2.selectedComponentsMap[code]) {
+    S2.selectedComponentsMap[code] = 'ALL';
   }
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
-
+  
   // Sync with new Step 2 UI state
+  if (window.step2PickerState) {
+    window.step2PickerState.selected.add(code);
+  }
+  
+  // Update new Step 2 UI
   if (window.step2State) {
     window.step2State.currentDeliverable = code;
     if (window.populateComponentsDeliverableDropdown) {
@@ -6712,7 +7948,7 @@ function s2onAdd(code) {
       window.updateStep2Summary();
     }
   }
-
+  
   // Refresh suggestions to update badges
   initAISummaryAndSuggestions();
 }
@@ -6721,12 +7957,18 @@ function s2onAdd(code) {
 function s2onRemove(code) {
   if (!code) return;
   S2.selectedCodes.delete(code);
-  S2.selectedComponentsByCode[code] = undefined; // Remove custom component selection
+  S2.selectedComponentsMap[code] = undefined;
   s2RenderLeft();
   s2RenderRight(S2.els.search?.value || '');
-
+  
   // Sync with new Step 2 UI state
+  if (window.step2PickerState) {
+    window.step2PickerState.selected.delete(code);
+  }
+  
+  // Update new Step 2 UI
   if (window.step2State) {
+    // If we're removing the currently active deliverable, clear it and reset panels
     if (window.step2State.currentDeliverable === code) {
       window.step2State.currentDeliverable = null;
       if (window.renderComponentsPanel) {
@@ -6740,10 +7982,1522 @@ function s2onRemove(code) {
       window.updateStep2Summary();
     }
   }
-
+  
   // Refresh suggestions to update badges
   initAISummaryAndSuggestions();
 }
+
+// ================================================================================
+// Centralized Step 2 Functions - Single Source of Truth (APB.step2)
+// ================================================================================
+
+// Toggle suggested deliverable (persistent button - never removes row)
+// TASK 5: Wire AI Add/Remove buttons to centralized selectionStore with auto-hydration
+async function toggleSuggestedDeliverable(rowEl, code, add) {
+  const btn = rowEl.querySelector('.btn-suggest');
+  if (!btn) return;
+  
+  if (add) {
+    // Use centralized selectDeliverable with auto-hydration
+    await selectDeliverable(code);
+    APB.step2.aiSuggestedCodes.add(code); // Track as AI-suggested
+    APB.step2.activeDeliverableCode = code;
+    btn.textContent = 'Added • Remove';
+    btn.dataset.mode = 'remove';
+    btn.style.background = 'var(--danger)';
+  } else {
+    // Use centralized deselectDeliverable with cleanup
+    await deselectDeliverable(code);
+    if (APB.step2.activeDeliverableCode === code) {
+      APB.step2.activeDeliverableCode = null;
+    }
+    btn.textContent = 'Add';
+    btn.dataset.mode = 'add';
+    btn.style.background = '';
+  }
+  
+  await refreshComponentsPanel();
+  updateSummaryCounts();
+  
+  // Refresh AI suggestions to update other buttons
+  initAISummaryAndSuggestions();
+}
+
+// Render deliverables panel with Selected on top, then Other (Task 1.5: with search filter)
+function renderDeliverablesPanel() {
+  const list = APB.step2.allDeliverables;
+  const filter = (APB.step2.filters.deliverables || '').toLowerCase();
+  const selected = [], other = [];
+  
+  list.forEach(d => {
+    const code = String(d.Deliverable_Code);
+    const name = (d.Deliverable || '').toLowerCase();
+    const category = (d.Category || '').toLowerCase();
+    
+    // Apply search filter
+    if (filter && !name.includes(filter) && !category.includes(filter) && !code.toLowerCase().includes(filter)) {
+      return; // Skip items that don't match filter
+    }
+    
+    if (APB.step2.selectedCodes.has(code)) {
+      selected.push(d);
+    } else {
+      other.push(d);
+    }
+  });
+  
+  const host = APB.step2.els.listRight;
+  if (!host) return;
+  
+  let html = '';
+  
+  // Render Selected group
+  if (selected.length > 0) {
+    html += '<div style="font-weight:600;padding:8px;color:#ffffff;background:rgba(139,92,246,0.15);border-bottom:1px solid rgba(255,255,255,0.1);">Selected</div>';
+    selected.forEach(d => {
+      const code = String(d.Deliverable_Code);
+      const isActive = APB.step2.activeDeliverableCode === code;
+      const isRetainer = pricingData.deliverableTypes.get(code) === 'RETAINER';
+      const retainerMonths = pricingData.retainers.get(code) || 12;
+      
+      html += `
+        <div class="deliv-row" data-code="${code}" style="background:${isActive ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.03)'};border-left:${isActive ? '3px solid var(--accent)' : '3px solid transparent'};">
+          <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+            <input type="checkbox" class="deliv-checkbox" data-code="${code}" checked data-visible="1" />
+            <span>${d.Deliverable}</span>
+            ${isRetainer ? '<span style="background:#10b981;color:white;padding:2px 6px;border-radius:3px;font-size:0.75em;font-weight:600;">RETAINER</span>' : ''}
+            <button onclick="event.stopPropagation(); removeDeliverableX('${code}')" style="margin-left:auto;background:none;border:none;color:var(--danger);cursor:pointer;font-size:1.2em;padding:0 8px;">×</button>
+            <small style="opacity:.75">${d.Category || ''}</small>
+          </label>
+          
+          <!-- ISSUE 3 FIX: Retainer Options -->
+          <div style="display:flex;gap:12px;align-items:center;padding:4px 8px 8px 32px;background:rgba(0,0,0,0.1);border-top:1px solid rgba(255,255,255,0.05);">
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.85em;cursor:pointer;">
+              <input type="checkbox" 
+                     class="retainer-toggle" 
+                     data-code="${code}" 
+                     ${isRetainer ? 'checked' : ''}
+                     onchange="toggleRetainerType('${code}', this.checked)"
+                     style="cursor:pointer;">
+              <span style="color:${isRetainer ? '#10b981' : 'var(--muted)'};">Retainer</span>
+            </label>
+            
+            <div class="retainer-months-wrap" data-code="${code}" style="display:${isRetainer ? 'flex' : 'none'};align-items:center;gap:4px;">
+              <span style="font-size:0.85em;color:var(--muted);">Months:</span>
+              <input type="number" 
+                     class="retainer-months" 
+                     data-code="${code}"
+                     value="${retainerMonths}"
+                     min="1" 
+                     max="24"
+                     onchange="updateRetainerMonths('${code}', this.value)"
+                     style="width:50px;padding:2px 4px;border:1px solid rgba(255,255,255,0.2);border-radius:3px;background:rgba(0,0,0,0.2);">
+            </div>
+            
+            <button onclick="event.stopPropagation(); suggestRetainerConfig('${code}')" 
+                    style="margin-left:auto;background:#3b82f6;color:white;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:0.8em;">
+              AI Suggest
+            </button>
+          </div>
+        </div>
+      `;
+    });
+  }
+  
+  // Render Other group
+  if (other.length > 0) {
+    html += '<div style="font-weight:600;padding:8px;color:var(--muted);margin-top:8px;">Other</div>';
+    other.forEach(d => {
+      const code = String(d.Deliverable_Code);
+      html += `
+        <label class="row deliv-row" data-code="${code}" style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+          <input type="checkbox" class="deliv-checkbox" data-code="${code}" data-visible="1" />
+          <span>${d.Deliverable}</span>
+          <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+        </label>
+      `;
+    });
+  }
+  
+  if (!html) {
+    html = '<div style="opacity:.7;padding:8px;text-align:center;">No deliverables match your search</div>';
+  }
+  
+  host.innerHTML = html;
+  
+  // Attach checkbox handlers
+  host.querySelectorAll('.deliv-checkbox').forEach(cb => {
+    cb.addEventListener('change', e => {
+      e.stopPropagation(); // Prevent row click from triggering
+      onDeliverableToggle(e.target.dataset.code, e.target.checked);
+    });
+  });
+  
+  // Attach row click handlers to set active deliverable (preview only)
+  host.querySelectorAll('.deliv-row').forEach(row => {
+    row.addEventListener('click', async (e) => {
+      // Only trigger if clicking the row itself, not the checkbox or button
+      if (e.target.classList.contains('deliv-checkbox')) return;
+      if (e.target.tagName === 'BUTTON') return;
+      
+      const code = row.dataset.code;
+      const checkbox = row.querySelector('.deliv-checkbox');
+      
+      // Row click = preview only (do not change selection)
+      // Only show components if the deliverable is actually selected
+      if (checkbox.checked) {
+        APB.step2.activeDeliverableCode = code;
+        renderDeliverablesPanel(); // Re-render to update active highlight
+        await refreshComponentsPanel();
+      }
+      // If not selected, row click does nothing (checkbox is the only way to select)
+    });
+  });
+}
+
+// Deliverable checkbox toggle handler
+async function onDeliverableToggle(code, checked) {
+  if (checked) {
+    await selectDeliverable(code);
+    
+    const hasComponents = S2.selectedComponentsByCode[code] && S2.selectedComponentsByCode[code].size > 0;
+    
+    if (AUTO_SUGGEST_ON_SELECT && !hasComponents) {
+      if (USE_GPT_FOR_AUTOSUGGEST) {
+        try {
+          // STEP 1: Get weighted rule matches as pre-filter context
+          const rfpText = APB.step2.rfpText || document.getElementById('rfpText')?.value || '';
+          let weightedContext = null;
+          
+          if (rfpText) {
+            try {
+              const weightsRes = await fetch('/api/step2/ai/weights', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rfp_text: rfpText })
+              });
+              if (weightsRes.ok) {
+                weightedContext = await weightsRes.json();
+              }
+            } catch (err) {
+              console.warn('Weighted pre-filter unavailable, proceeding without:', err);
+            }
+          }
+          
+          // STEP 2: Call GPT-5 with weighted context for smarter suggestions
+          const exclude = [];
+          const requestBody = {
+            deliverable_code: code,
+            include_l3: true,
+            top_components: 6,
+            top_l3_per_component: 20,
+            exclude_labels: exclude
+          };
+          
+          // Include weighted matches as context for GPT-5
+          if (weightedContext && weightedContext.deliverables) {
+            requestBody.weighted_context = weightedContext.deliverables
+              .filter(d => d.deliverable_code === code)
+              .map(d => ({
+                match_percent: d.match_percent,
+                top_components: (weightedContext.components && weightedContext.components[code]) || [],
+                top_tasks: (weightedContext.tasks && weightedContext.tasks[code]) || []
+              }))[0] || null;
+          }
+          
+          const res = await fetch("/api/step2/ai/suggest", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(requestBody)
+          });
+          const ai = await res.json();
+
+          renderAISuggestionsPanel(code, ai);
+
+          if (!S2.selectedComponentsByCode[code]) {
+            S2.selectedComponentsByCode[code] = new Set();
+          }
+          
+          for (const c of (ai.components || []).map(x => x.name)) {
+            S2.selectedComponentsByCode[code].add(c);
+            await hydrateL3For(code, c);
+          }
+          
+          if (ai.l3_by_component) {
+            for (const [comp, items] of Object.entries(ai.l3_by_component)) {
+              const key = `${code}::${comp}`;
+              if (!selectionStore.l3ByComponent.has(key)) {
+                selectionStore.l3ByComponent.set(key, new Set());
+              }
+              items.forEach(t => selectionStore.l3ByComponent.get(key).add(t.label));
+            }
+          }
+        } catch (error) {
+          console.error('GPT auto-suggest error:', error);
+        }
+      } else {
+        try {
+          const response = await fetch('/api/step2/suggest/components', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deliverable_code: code, limit: 6 })
+          });
+          
+          const suggested = await response.json();
+          
+          if (suggested && suggested.length > 0) {
+            if (!S2.selectedComponentsByCode[code]) {
+              S2.selectedComponentsByCode[code] = new Set();
+            }
+            
+            suggested.forEach(comp => {
+              S2.selectedComponentsByCode[code].add(comp);
+            });
+            
+            await Promise.all(suggested.map(comp => hydrateL3For(code, comp)));
+          }
+        } catch (error) {
+          console.error('Auto-suggest components error:', error);
+        }
+      }
+    }
+  } else {
+    await deselectDeliverable(code);
+  }
+  
+  renderDeliverablesPanel();
+  await refreshComponentsPanel();
+  updateSummaryCounts();
+  
+  initAISummaryAndSuggestions();
+}
+
+// Task 1.5: Remove deliverable via X button
+window.removeDeliverableX = async function(code) {
+  await deselectDeliverable(code);
+  renderDeliverablesPanel();
+  await refreshComponentsPanel();
+  updateSummaryCounts();
+  initAISummaryAndSuggestions();
+}
+
+// Refresh components panel for active deliverable
+async function refreshComponentsPanel() {
+  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
+  if (!code) {
+    renderComponentsEmptyState();
+    return;
+  }
+  
+  const { complexity, tier } = APB.step2;
+  
+  try {
+    const res = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${encodeURIComponent(complexity)}&tier=${encodeURIComponent(tier)}`);
+    const json = await res.json();
+    
+    renderComponentsChecklist(code, json.items || []);
+  } catch (e) {
+    console.error('Error loading components:', e);
+    renderComponentsEmptyState('Error loading components');
+  }
+}
+
+// Get active deliverable code (first selected one if no explicit active)
+function getActiveDeliverableCode() {
+  if (APB.step2.activeDeliverableCode && APB.step2.selectedCodes.has(APB.step2.activeDeliverableCode)) {
+    return APB.step2.activeDeliverableCode;
+  }
+  const codes = Array.from(APB.step2.selectedCodes);
+  return codes.length > 0 ? codes[0] : null;
+}
+
+// Render components checklist
+function renderComponentsChecklist(code, items) {
+  const listEl = document.getElementById('s2-comp-list');
+  if (!listEl) return;
+  
+  if (items.length === 0) {
+    listEl.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 8px;">No components available</p>';
+    return;
+  }
+  
+  // Initialize selection if not exists
+  if (!APB.step2.selectedComponentsByCode[code]) {
+    APB.step2.selectedComponentsByCode[code] = new Set(items.map(c => c.name));
+  }
+  
+  const selectedSet = APB.step2.selectedComponentsByCode[code];
+  
+  listEl.innerHTML = items.map(comp => `
+    <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+      <input type="checkbox" class="comp-checkbox" data-comp="${comp.name}" 
+             ${selectedSet.has(comp.name) ? 'checked' : ''} />
+      <span style="font-size:0.9em;">${comp.name}</span>
+    </label>
+  `).join('');
+  
+  // Attach handlers
+  listEl.querySelectorAll('.comp-checkbox').forEach(cb => {
+    cb.addEventListener('change', async (e) => {
+      const compName = e.target.dataset.comp;
+      const key = `${code}::${compName}`;
+      
+      if (e.target.checked) {
+        selectedSet.add(compName);
+        // Clear and refetch L3 tasks when component is reselected (fixes Task 3)
+        selectionStore.l3ByComponent.delete(key);
+        await hydrateL3For(code, compName);
+      } else {
+        selectedSet.delete(compName);
+        // Remove L3 tasks when component is deselected
+        selectionStore.l3ByComponent.delete(key);
+      }
+      
+      // Sync with ScenarioManager if it exists and has an active scenario
+      if (window.ScenarioManager && window.ScenarioManager.getCurrentScenario()) {
+        const currentScenario = window.ScenarioManager.getCurrentScenario();
+        if (currentScenario && currentScenario.items) {
+          // Find the deliverable in the scenario
+          const delivItem = currentScenario.items.find(item => 
+            item.deliverable_code === code || 
+            item.deliverable === code
+          );
+          if (delivItem) {
+            // Update components for this deliverable
+            delivItem.components = Array.from(selectedSet);
+            delivItem.included_components = Array.from(selectedSet);
+            
+            // Trigger a scenario update to notify subscribers
+            window.ScenarioManager.setActiveScenario(currentScenario);
+          }
+        }
+      }
+      
+      updateSummaryCounts();
+    });
+  });
+}
+
+// Render empty state for components
+function renderComponentsEmptyState(message = 'Select a deliverable to view components') {
+  const listEl = document.getElementById('s2-comp-list');
+  if (listEl) {
+    listEl.innerHTML = `<p style="color:var(--muted);text-align:center;padding:40px 8px;">${message}</p>`;
+  }
+}
+
+// Update summary counts and render chips with remove buttons
+function updateSummaryCounts() {
+  const delivCount = APB.step2.selectedCodes.size;
+  
+  // Count components
+  let compCount = 0;
+  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSet]) => {
+    if (APB.step2.selectedCodes.has(code)) {
+      compCount += compSet.size;
+    }
+  });
+  
+  // Count L3 - only for selected components (fixes Task 4)
+  let l3Count = 0;
+  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
+    const [code, compName] = key.split('::');
+    // Only count if deliverable is selected AND component is selected
+    if (APB.step2.selectedCodes.has(code)) {
+      const compSet = APB.step2.selectedComponentsByCode[code];
+      if (compSet && compSet.has(compName)) {
+        l3Count += l3Set.size;
+      }
+    }
+  });
+  
+  // Update DOM with counts
+  const delivEl = document.getElementById('s2-summary-deliverables');
+  const compEl = document.getElementById('s2-summary-components');
+  const l3El = document.getElementById('s2-summary-l3');
+  
+  if (delivEl) delivEl.textContent = delivCount;
+  if (compEl) compEl.textContent = compCount;
+  if (l3El) l3El.textContent = l3Count;
+  
+  // Render detailed chips below counts
+  renderSummaryChips();
+  
+  // Enable/disable Proceed to Pricing button
+  const proceedBtn = document.querySelector('#btnProceedPricing, [data-proceed-pricing]');
+  if (proceedBtn) {
+    proceedBtn.disabled = delivCount === 0;
+  }
+}
+
+// Render summary chips with hierarchical L3 display: Deliverable → Component → L3
+function renderSummaryChips() {
+  const container = document.getElementById('s2-summary-status');
+  if (!container) return;
+  
+  let html = '';
+  
+  // Group by Deliverable → Component → L3
+  APB.step2.selectedCodes.forEach(delivCode => {
+    const deliv = APB.step2.allDeliverables.find(d => String(d.Deliverable_Code) === delivCode);
+    const delivName = deliv ? (deliv.Deliverable || delivCode) : delivCode;
+    
+    // Start deliverable group
+    html += `<div style="margin-bottom:16px;padding:8px;border-left:3px solid rgba(139,92,246,0.5);background:rgba(139,92,246,0.05);">`;
+    
+    // Deliverable header with remove button
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <strong style="font-size:0.9em;color:var(--accent);">${delivName}</strong>
+      <button onclick="removeDeliverableFromSummary('${delivCode}')" 
+              style="background:rgba(239,68,68,0.2);border:none;color:var(--danger);cursor:pointer;padding:4px 8px;border-radius:4px;font-size:0.75em;">
+        Remove All
+      </button>
+    </div>`;
+    
+    // Get components for this deliverable
+    const compSelection = APB.step2.selectedComponentsByCode[delivCode];
+    let compSet;
+    
+    // Normalize component selection to Set
+    if (compSelection === 'ALL') {
+      // Don't show individual components for ALL sentinel
+      compSet = new Set();
+    } else if (compSelection instanceof Set) {
+      compSet = compSelection;
+    } else if (typeof compSelection === 'object' && compSelection !== null) {
+      compSet = new Set(Object.keys(compSelection));
+    } else {
+      compSet = new Set();
+    }
+    
+    // Render each component and its L3 items
+    compSet.forEach(compName => {
+      const key = `${delivCode}::${compName}`;
+      const l3Set = APB.step2.selectedL3ByKey[key] || new Set();
+      
+      if (l3Set.size > 0) {
+        // Component label with reset and remove buttons
+        html += `<div style="margin-top:8px;padding-left:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:0.8em;color:var(--muted);">${compName}</span>
+            <div style="display:flex;gap:6px;">
+              <button onclick="resetL3ForComponent('${delivCode}', '${compName}')" 
+                      style="background:rgba(139,92,246,0.15);border:none;color:var(--accent);cursor:pointer;padding:2px 8px;border-radius:4px;font-size:0.7em;"
+                      title="Restore all L3 subtasks for this component">
+                ↻ Reset
+              </button>
+              <button onclick="removeComponentFromSummary('${delivCode}', '${compName}')" 
+                      style="background:none;border:none;color:var(--danger);cursor:pointer;padding:2px 6px;font-size:0.7em;">
+                Remove
+              </button>
+            </div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;padding-left:8px;">`;
+        
+        // L3 chips for this component
+        l3Set.forEach(l3Name => {
+          const escapedKey = key.replace(/'/g, "\\'");
+          const escapedL3 = l3Name.replace(/'/g, "\\'");
+          html += `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:rgba(16,185,129,0.2);border-radius:12px;font-size:0.7em;">
+            ${l3Name}
+            <button onclick="removeL3FromSummary('${escapedKey}', '${escapedL3}')" 
+                    style="background:none;border:none;color:var(--danger);cursor:pointer;padding:0;font-size:1.2em;line-height:1;">×</button>
+          </span>`;
+        });
+        
+        html += `</div></div>`;
+      }
+    });
+    
+    html += `</div>`;
+  });
+  
+  if (html === '') {
+    html = '<div style="text-align:center;color:var(--muted);font-size:0.85em;padding:20px;">No deliverables selected</div>';
+  }
+  
+  container.innerHTML = html;
+}
+
+// Cascading Remove Handlers (Task 2)
+
+// Remove deliverable from summary - cascades to all components and L3
+window.removeDeliverableFromSummary = async function(code) {
+  await deselectDeliverable(code);
+  renderDeliverablesPanel();
+  await refreshComponentsPanel();
+  updateSummaryCounts();
+  initAISummaryAndSuggestions();
+}
+
+// Remove component from summary - cascades to its L3 items
+window.removeComponentFromSummary = function(delivCode, compName) {
+  const key = `${delivCode}::${compName}`;
+  
+  // Remove L3 for this component
+  if (APB.step2.selectedL3ByKey[key]) {
+    delete APB.step2.selectedL3ByKey[key];
+  }
+  
+  // Remove component from selection
+  const compSet = APB.step2.selectedComponentsByCode[delivCode];
+  if (compSet instanceof Set) {
+    compSet.delete(compName);
+    
+    // If no components left, remove deliverable
+    if (compSet.size === 0) {
+      APB.step2.selectedCodes.delete(delivCode);
+      delete APB.step2.selectedComponentsByCode[delivCode];
+    }
+  }
+  
+  // Re-render panels
+  renderDeliverablesPanel();
+  if (APB.step2.activeDeliverableCode === delivCode) {
+    refreshComponentsPanel();
+  }
+  updateSummaryCounts();
+}
+
+// Remove single L3 from summary - with cleanup
+window.removeL3FromSummary = function(key, l3Name) {
+  const l3Set = APB.step2.selectedL3ByKey[key];
+  if (!l3Set) return;
+  
+  // Remove the L3 item
+  l3Set.delete(l3Name);
+  
+  const [delivCode, compName] = key.split('::');
+  
+  // If no L3 left for this component, remove the component
+  if (l3Set.size === 0) {
+    delete APB.step2.selectedL3ByKey[key];
+    
+    const compSet = APB.step2.selectedComponentsByCode[delivCode];
+    if (compSet instanceof Set) {
+      compSet.delete(compName);
+      
+      // If no components left, remove deliverable
+      if (compSet.size === 0) {
+        APB.step2.selectedCodes.delete(delivCode);
+        delete APB.step2.selectedComponentsByCode[delivCode];
+      }
+    }
+  }
+  
+  // Re-render panels
+  renderDeliverablesPanel();
+  if (APB.step2.activeDeliverableCode === delivCode && APB.step2.activeComponentName === compName) {
+    renderL3Panel(delivCode, compName);
+  }
+  updateSummaryCounts();
+}
+
+// Reset L3 subtasks for a component - refetches all from server
+window.resetL3ForComponent = async function(delivCode, compName) {
+  const key = `${delivCode}::${compName}`;
+  
+  // Clear the cached L3 for this component
+  selectionStore.l3ByComponent.delete(key);
+  
+  // Refetch L3 from server
+  await hydrateL3For(delivCode, compName);
+  
+  // Update the summary display
+  updateSummaryCounts();
+}
+
+// Component clicked - load L3 panel
+window.onComponentClicked = async function onComponentClicked(componentName) {
+  const code = APB.step2.activeDeliverableCode || getActiveDeliverableCode();
+  if (!code) return;
+  
+  APB.step2.activeComponentName = componentName;
+  
+  try {
+    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(code)}&component_name=${encodeURIComponent(componentName)}`);
+    const json = await res.json();
+    
+    const items = (json.items || json.l3 || []).map(item => 
+      typeof item === 'string' ? item : (item.Task_Label || item.name || '')
+    );
+    
+    renderL3Checklist(code, componentName, items);
+  } catch (e) {
+    console.error('Error loading L3:', e);
+    const l3ListEl = document.getElementById('s2-l3-list');
+    if (l3ListEl) {
+      l3ListEl.innerHTML = '<p style="color:#f88;text-align:center;padding:40px 8px;">Error loading subtasks</p>';
+    }
+  }
+}
+
+// Render L3 checklist
+function renderL3Checklist(code, componentName, items) {
+  const listEl = document.getElementById('s2-l3-list');
+  if (!listEl) return;
+  
+  if (items.length === 0) {
+    listEl.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px 8px;">No L3 subtasks</p>';
+    return;
+  }
+  
+  const key = `${code}::${componentName}`;
+  
+  // Initialize selection
+  if (!APB.step2.selectedL3ByKey[key]) {
+    APB.step2.selectedL3ByKey[key] = new Set(items);
+  }
+  
+  const selectedSet = APB.step2.selectedL3ByKey[key];
+  
+  listEl.innerHTML = items.map(label => `
+    <label style="display:flex;gap:8px;align-items:center;padding:6px 8px;cursor:pointer;">
+      <input type="checkbox" class="l3-checkbox" data-label="${label}" 
+             ${selectedSet.has(label) ? 'checked' : ''} />
+      <span style="font-size:0.9em;">${label}</span>
+    </label>
+  `).join('');
+  
+  // Attach handlers
+  listEl.querySelectorAll('.l3-checkbox').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const label = e.target.dataset.label;
+      if (e.target.checked) {
+        selectedSet.add(label);
+      } else {
+        selectedSet.delete(label);
+      }
+      updateSummaryCounts();
+    });
+  });
+}
+
+// Retainer toggle handler
+async function onToggleRetainers(e) {
+  const enabled = e.target.checked;
+  window.APP = window.APP || {};
+  
+  if (!enabled) {
+    window.APP.retainers = [];
+    renderRetainerPanel([]);
+    return;
+  }
+
+  // Get current selection from S2
+  const selectedCodes = Array.from(S2.selectedCodes);
+  
+  if (selectedCodes.length === 0) {
+    alert('Please select deliverables first before enabling retainers.');
+    e.target.checked = false;
+    return;
+  }
+
+  const payload = {
+    rfp_text: window.APP.rfpText || '',
+    deliverable_codes: selectedCodes
+  };
+
+  try {
+    const res = await fetch('/api/retainer_detect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    const rec = await res.json(); // { retainers: [{deliverable_code, suggested_months, ...}] }
+
+    // Persist and render
+    window.APP.retainers = (rec.retainers || []).map(r => ({
+      deliverable_code: r.deliverable_code,
+      months: r.suggested_months || 12
+    }));
+    
+    renderRetainerPanel(window.APP.retainers);
+  } catch (error) {
+    console.error('Error detecting retainers:', error);
+    alert(`Failed to detect retainers: ${error.message}`);
+    e.target.checked = false;
+  }
+}
+
+// Render the retainer configuration panel
+function renderRetainerPanel(retainers) {
+  const retainerConfig = document.getElementById('retainer-config');
+  const retainerListControls = document.getElementById('retainer-list-controls');
+  
+  if (!retainerConfig || !retainerListControls) {
+    console.warn('Retainer config elements not found');
+    return;
+  }
+
+  if (!retainers || retainers.length === 0) {
+    retainerConfig.style.display = 'none';
+    retainerListControls.innerHTML = '';
+    return;
+  }
+
+  retainerConfig.style.display = 'block';
+  
+  // Create input fields for each retainer using defensive labelFor() lookup
+  retainerListControls.innerHTML = retainers.map(r => {
+    const delivName = labelFor(r.deliverable_code);
+    return `
+      <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
+        <label style="flex: 1; font-weight: 500;">${delivName}</label>
+        <input 
+          type="number" 
+          min="1" 
+          max="60" 
+          value="${r.months}" 
+          data-code="${r.deliverable_code}"
+          class="retainer-months-input"
+          style="width: 80px; padding: 6px; border: 1px solid var(--muted); border-radius: 4px; background: var(--bg); color: var(--fg);"
+        />
+        <span style="color: var(--muted); font-size: 0.9em;">months</span>
+      </div>
+    `;
+  }).join('');
+
+  // Update retainer months when inputs change
+  retainerListControls.querySelectorAll('.retainer-months-input').forEach(input => {
+    input.addEventListener('change', e => {
+      const code = e.target.dataset.code;
+      const months = parseInt(e.target.value) || 12;
+      const retainerIdx = window.APP.retainers.findIndex(r => r.deliverable_code === code);
+      if (retainerIdx >= 0) {
+        window.APP.retainers[retainerIdx].months = months;
+      }
+    });
+  });
+}
+
+async function onSuggest(){
+  // Updated to work with new Step 2 system
+  // Show Step 2 first
+  const step2 = document.querySelector("#step2");
+  if (step2) {
+    step2.style.display = "block";
+    step2.scrollIntoView({ behavior: "smooth" });
+  }
+  
+  // Then run AI analysis
+  await onRunReconcile();
+}
+
+// UI behaviors from blueprint
+// Legacy functions (still used in some templates - bridge to centralized state)
+function onRemove(code) {
+  selectedCodes = selectedCodes.filter(c => c !== code);
+  if (!removedCodes.includes(code)) {
+    removedCodes = [...removedCodes, code];
+  }
+  // Sync to centralized state and re-render
+  APB.step2.selectedCodes.delete(code);
+  delete APB.step2.selectedComponentsByCode[code];
+  if (APB.step2.activeDeliverableCode === code) {
+    APB.step2.activeDeliverableCode = null;
+  }
+  renderDeliverablesPanel();
+  refreshComponentsPanel();
+  updateSummaryCounts();
+  initAISummaryAndSuggestions();
+}
+
+function onRestore(code) {
+  removedCodes = removedCodes.filter(c => c !== code);
+  if (!selectedCodes.includes(code)) {
+    selectedCodes = [...selectedCodes, code];
+  }
+  // Sync to centralized state and re-render
+  APB.step2.selectedCodes.add(code);
+  APB.step2.activeDeliverableCode = code;
+  renderDeliverablesPanel();
+  refreshComponentsPanel();
+  updateSummaryCounts();
+  initAISummaryAndSuggestions();
+}
+
+function onAdd(code) {
+  removedCodes = removedCodes.filter(c => c !== code); // un-soft-delete if needed
+  if (!selectedCodes.includes(code)) {
+    selectedCodes = [...selectedCodes, code];
+  }
+  if (!addedCodes.includes(code)) {
+    addedCodes = [...addedCodes, code];
+  }
+  // Sync to centralized state and re-render
+  APB.step2.selectedCodes.add(code);
+  APB.step2.activeDeliverableCode = code;
+  renderDeliverablesPanel();
+  refreshComponentsPanel();
+  updateSummaryCounts();
+  initAISummaryAndSuggestions();
+}
+
+function selectedDeliverables(){
+  // Updated to use new state model
+  return selectedCodes;
+}
+
+// Open components bubble dialog for a deliverable
+async function openComponentsBubble(deliv) {
+  const dlg = document.getElementById('componentsDialog');
+  if (!dlg) return;
+  
+  document.getElementById('compTitle').textContent = `Components – ${deliv.deliverable}`;
+  const box = document.getElementById('componentsContainer');
+  box.innerHTML = 'Loading…';
+  
+  try {
+    const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(deliv.code)}`);
+    const data = await r.json();
+    const comps = data.items || [];
+    
+    if (comps.length === 0) {
+      box.innerHTML = '<p style="color: var(--muted);">No components available.</p>';
+      dlg.showModal();
+      return;
+    }
+    
+    box.innerHTML = comps.map(c =>
+      `<label style="display: block; margin: 8px 0; cursor: pointer;">
+        <input class="compChk" type="checkbox" data-name="${c.name}" checked>
+        ${c.name} <small style="color: var(--muted);">(${Math.round(c.hours)} h)</small>
+      </label>`
+    ).join('');
+    
+    // Default: all selected, so delete key (backend includes all)
+    delete S2.selectedComponentsMap[deliv.code];
+    
+    document.getElementById('selectAllComps').onclick = () => {
+      for (const chk of box.querySelectorAll('.compChk')) chk.checked = true;
+      // All selected: delete key to signal backend to include all
+      delete S2.selectedComponentsMap[deliv.code];
+    };
+    
+    document.getElementById('unselectAllComps').onclick = () => {
+      for (const chk of box.querySelectorAll('.compChk')) chk.checked = false;
+      // None selected: empty object
+      S2.selectedComponentsMap[deliv.code] = {};
+    };
+    
+    box.addEventListener('change', () => {
+      const checked = [...box.querySelectorAll('.compChk')].filter(c => c.checked).map(c => c.dataset.name);
+      if (checked.length === comps.length) {
+        // All selected: delete key to signal backend to include all
+        delete S2.selectedComponentsMap[deliv.code];
+      } else if (checked.length === 0) {
+        // None selected: empty object
+        S2.selectedComponentsMap[deliv.code] = {};
+      } else {
+        // Partial selection: store as object with null values
+        S2.selectedComponentsMap[deliv.code] = Object.fromEntries(checked.map(n => [n, null]));
+      }
+    });
+    
+    dlg.showModal();
+  } catch (e) {
+    console.error('Error loading components:', e);
+    box.innerHTML = '<p style="color: red;">Error loading components.</p>';
+    dlg.showModal();
+  }
+}
+
+// Populate select element and remove duplicates
+function populateSelect(selectEl, items) {
+  if (!selectEl) return;
+  const unique = [...new Set(items)];
+  selectEl.innerHTML = '';
+  unique.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = opt.textContent = v;
+    selectEl.appendChild(opt);
+  });
+}
+
+// Auto-fill project name from uploaded file
+async function defaultProjectName() {
+  try {
+    const r = await fetch('/api/last_upload_name');
+    const data = await r.json();
+    const el = document.getElementById('projectName');
+    if (data.project_name_default && el && !el.value) {
+      el.value = data.project_name_default;
+    }
+  } catch (e) {
+    console.error('Error fetching default project name:', e);
+  }
+}
+
+// Initialize Step 2 UI when DOM is ready
+document.addEventListener('DOMContentLoaded', function() {
+  // Call boot to initialize everything
+  boot();
+  
+  // Note: renderStep2UI removed - now using centralized renderDeliverablesPanel
+});
+
+// ========== NEW STEP 2 UI (4-Column Layout) ==========
+
+// State for new Step 2 UI
+const step2State = {
+  currentDeliverable: null,     // Currently selected deliverable for viewing components
+  currentComponent: null,        // Currently selected component for viewing L3 subtasks
+  selectedL3Map: {},             // { deliverableCode: { componentName: Set([l3labels...]) } }
+};
+window.step2State = step2State;
+
+// Expose functions globally
+window.updateStep2Summary = updateStep2Summary;
+window.renderComponentsPanel = renderComponentsPanel;
+window.renderL3Panel = renderL3Panel;
+
+// Update summary panel with current selection counts
+function updateStep2Summary() {
+  const delivCount = window.step2PickerState?.selected?.size || 0;
+  const delivEl = document.getElementById('s2-summary-deliverables');
+  if (delivEl) delivEl.textContent = delivCount;
+  
+  // Count total components selected across all deliverables
+  let compCount = 0;
+  const selectedCodes = Array.from(window.step2PickerState?.selected || []);
+  selectedCodes.forEach(code => {
+    const rawSel = selectedComponentsMap[code];
+    if (!rawSel || rawSel === '__ALL__' || rawSel === 'ALL') {
+      // All components selected
+      compCount += (componentDataCache[code] || []).length;
+    } else if (rawSel instanceof Set) {
+      compCount += rawSel.size;
+    } else if (Array.isArray(rawSel)) {
+      compCount += rawSel.length;
+    } else if (typeof rawSel === 'object') {
+      compCount += Object.keys(rawSel).length;
+    }
+  });
+  const compEl = document.getElementById('s2-summary-components');
+  if (compEl) compEl.textContent = compCount;
+  
+  // Count L3 subtasks
+  let l3Count = 0;
+  Object.values(step2State.selectedL3Map).forEach(compMap => {
+    Object.values(compMap).forEach(l3Set => {
+      if (l3Set instanceof Set) l3Count += l3Set.size;
+      else if (Array.isArray(l3Set)) l3Count += l3Set.length;
+    });
+  });
+  const l3El = document.getElementById('s2-summary-l3');
+  if (l3El) l3El.textContent = l3Count;
+  
+  // Update status message
+  const statusEl = document.getElementById('s2-summary-status');
+  if (statusEl) {
+    if (delivCount === 0) {
+      statusEl.textContent = 'No deliverables selected';
+      statusEl.style.color = 'var(--muted)';
+    } else {
+      statusEl.textContent = `${delivCount} deliverable${delivCount > 1 ? 's' : ''} ready`;
+      statusEl.style.color = 'var(--accent)';
+    }
+  }
+}
+
+
+// Render Components panel - aggregates ALL components from ALL selected deliverables
+async function renderComponentsPanel() {
+  const listEl = document.getElementById('s2-comp-list');
+  const btnAll = document.getElementById('s2-comp-selectall');
+  const btnClear = document.getElementById('s2-comp-clear');
+  
+  if (!listEl) return;
+  
+  const selectedCodes = Array.from(selectionStore.deliverables);
+  
+  if (selectedCodes.length === 0) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select deliverables to view components</p>';
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
+    return;
+  }
+  
+  // Aggregate all components from all selected deliverables
+  const allComponents = [];
+  for (const delivCode of selectedCodes) {
+    // Ensure components are hydrated
+    if (!selectionStore.componentsByDeliv.has(delivCode)) {
+      await hydrateComponentsFor(delivCode);
+    }
+    
+    const compSet = selectionStore.componentsByDeliv.get(delivCode);
+    if (compSet && compSet.size > 0) {
+      compSet.forEach(compName => {
+        allComponents.push({
+          delivCode,
+          delivLabel: labelFor(delivCode),
+          compName
+        });
+      });
+    }
+  }
+  
+  if (allComponents.length === 0) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No components available</p>';
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
+    return;
+  }
+  
+  // Apply search filter
+  const searchFilter = (APB.step2.filters.components || '').toLowerCase();
+  const filteredComponents = searchFilter 
+    ? allComponents.filter(c => 
+        c.compName.toLowerCase().includes(searchFilter) ||
+        c.delivLabel.toLowerCase().includes(searchFilter)
+      )
+    : allComponents;
+  
+  if (btnAll) btnAll.disabled = false;
+  if (btnClear) btnClear.disabled = false;
+  
+  // Render checkboxes with deliverable badges
+  const activeKey = `${S2.activeDeliverableCode}::${S2.activeComponentName}`;
+  
+  listEl.innerHTML = filteredComponents.map(comp => {
+    const key = `${comp.delivCode}::${comp.compName}`;
+    const isSelected = S2.selectedComponentsByCode[comp.delivCode]?.has?.(comp.compName) || false;
+    const isActive = key === activeKey;
+    const isVisible = !searchFilter || (
+      comp.compName.toLowerCase().includes(searchFilter) ||
+      comp.delivLabel.toLowerCase().includes(searchFilter)
+    );
+    
+    return `
+      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px; ${isActive ? 'background:rgba(139,92,246,0.2); border:1px solid var(--accent);' : ''}" 
+             class="comp-checkbox-label"
+             data-deliv="${comp.delivCode}" 
+             data-comp="${comp.compName}">
+        <input type="checkbox" 
+               data-deliv="${comp.delivCode}" 
+               data-comp="${comp.compName}"
+               data-visible="${isVisible ? '1' : '0'}"
+               ${isSelected ? 'checked' : ''}
+               style="cursor:pointer;"/>
+        <span style="font-size:0.9em; ${isActive ? 'color:var(--accent);' : ''}">${comp.compName}</span>
+        <span style="margin-left:auto; opacity:.6; font-size:0.75em; padding:2px 6px; background:rgba(255,255,255,.1); border-radius:3px;">${comp.delivLabel}</span>
+      </label>
+    `;
+  }).join('');
+  
+  // Add click listeners for component selection (sets active component)
+  listEl.querySelectorAll('.comp-checkbox-label').forEach(label => {
+    label.addEventListener('click', async e => {
+      if (e.target.type === 'checkbox') return; // Let checkbox handle its own click
+      
+      const delivCode = label.getAttribute('data-deliv');
+      const compName = label.getAttribute('data-comp');
+      
+      // Set as active component
+      S2.activeDeliverableCode = delivCode;
+      S2.activeComponentName = compName;
+      
+      // Re-render components to show active state
+      renderComponentsPanel();
+      
+      // Update L2 tasks panel - use onComponentClicked to fetch and display L3 tasks
+      if (window.onComponentClicked) {
+        await onComponentClicked(compName);
+      } else if (window.renderL3Panel) {
+        await renderL3Panel();
+      }
+    });
+  });
+  
+  // Add change listeners for checkboxes
+  listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', e => {
+      e.stopPropagation(); // Don't trigger the label click
+      const delivCode = e.target.getAttribute('data-deliv');
+      const compName = e.target.getAttribute('data-comp');
+      
+      // Ensure the deliverable has a Set in selectedComponentsByCode
+      if (!S2.selectedComponentsByCode[delivCode]) {
+        S2.selectedComponentsByCode[delivCode] = new Set();
+      } else if (!(S2.selectedComponentsByCode[delivCode] instanceof Set)) {
+        S2.selectedComponentsByCode[delivCode] = new Set(
+          Array.isArray(S2.selectedComponentsByCode[delivCode]) 
+            ? S2.selectedComponentsByCode[delivCode]
+            : Object.keys(S2.selectedComponentsByCode[delivCode] || {})
+        );
+      }
+      
+      if (e.target.checked) {
+        S2.selectedComponentsByCode[delivCode].add(compName);
+        
+        // Also set as active component when checked
+        S2.activeDeliverableCode = delivCode;
+        S2.activeComponentName = compName;
+        renderComponentsPanel(); // Re-render to show active state
+        // Update L2 tasks - use onComponentClicked to fetch and display L3 tasks
+        if (window.onComponentClicked) {
+          onComponentClicked(compName);
+        } else if (window.renderL3Panel) {
+          renderL3Panel(); // Fallback to old method
+        }
+      } else {
+        S2.selectedComponentsByCode[delivCode].delete(compName);
+      }
+      
+      if (window.updateStep2Summary) updateStep2Summary();
+    });
+  });
+  
+  if (window.updateStep2Summary) updateStep2Summary();
+}
+
+
+// ISSUE FIX 5: Add hydrateL3For function to fetch L3 tasks for a specific component
+async function hydrateL3For(delivCode, compName) {
+  const key = `${delivCode}::${compName}`;
+  
+  // Skip if already hydrated
+  if (selectionStore.l3ByComponent.has(key)) {
+    return;
+  }
+  
+  try {
+    // Fetch L3 tasks for this specific component
+    const res = await fetch(`/api/l3_for?deliverable_code=${encodeURIComponent(delivCode)}&component_name=${encodeURIComponent(compName)}`);
+    
+    if (!res.ok) {
+      console.warn(`Failed to fetch L3 for ${key}`);
+      return;
+    }
+    
+    const data = await res.json();
+    const l3Items = data.items || [];
+    
+    // Store L3 tasks in selectionStore - ensure strings only
+    if (l3Items.length > 0) {
+      const l3Set = new Set(l3Items.map(item => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') {
+          const name = item.name || item.Task_Label || item.task_label || item.title || item.label || '';
+          if (name && typeof name === 'string') return name;
+        }
+        return null;
+      }).filter(name => name && name !== '[object Object]'));
+      selectionStore.l3ByComponent.set(key, l3Set);
+      
+      // Also update S2 selectedL3ByKey for compatibility
+      if (S2.selectedL3ByKey) {
+        S2.selectedL3ByKey[key] = l3Set;
+      }
+    }
+  } catch (err) {
+    console.error(`Error hydrating L3 for ${key}:`, err);
+  }
+}
+
+// Export the function globally
+window.hydrateL3For = hydrateL3For;
+
+// Render L2 Tasks panel - shows tasks for the active component
+async function renderL3Panel() {
+  const listEl = document.getElementById('s2-l3-list');
+  const btnAll = document.getElementById('s2-l3-selectall');
+  const btnClear = document.getElementById('s2-l3-clear');
+  
+  if (!listEl) return;
+  
+  // Check if we have an active component selected
+  const activeDeliv = S2.activeDeliverableCode;
+  const activeComp = S2.activeComponentName;
+  
+  if (!activeDeliv || !activeComp) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its L2 tasks</p>';
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
+    return;
+  }
+  
+  const key = `${activeDeliv}::${activeComp}`;
+  
+  // Ensure L3 is hydrated for this component
+  if (!selectionStore.l3ByComponent.has(key)) {
+    await hydrateL3For(activeDeliv, activeComp);
+  }
+  
+  const l3Set = selectionStore.l3ByComponent.get(key);
+  const allL3 = [];
+  
+  if (l3Set && l3Set.size > 0) {
+    l3Set.forEach(l3Item => {
+      // FIX: Extract task name if it's an object
+      let l3Name = l3Item;
+      if (typeof l3Item === 'object' && l3Item) {
+        l3Name = l3Item.Task_Label || l3Item.task_label || l3Item.name || l3Item.title || l3Item.label || '';
+      }
+      // Only add valid string names
+      if (l3Name && typeof l3Name === 'string' && l3Name !== '[object Object]') {
+        allL3.push({
+          delivCode: activeDeliv,
+          delivLabel: labelFor(activeDeliv),
+          compName: activeComp,
+          l3Name,
+          key
+        });
+      }
+    });
+  }
+  
+  if (allL3.length === 0) {
+    listEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">No L2 tasks available for this component</p>';
+    if (btnAll) btnAll.disabled = true;
+    if (btnClear) btnClear.disabled = true;
+    return;
+  }
+  
+  // Apply search filter
+  const searchFilter = (APB.step2.filters.l3 || '').toLowerCase();
+  const filteredL3 = searchFilter
+    ? allL3.filter(l => 
+        l.l3Name.toLowerCase().includes(searchFilter)
+      )
+    : allL3;
+  
+  if (btnAll) btnAll.disabled = filteredL3.length > 0;
+  if (btnClear) btnClear.disabled = filteredL3.length === 0;
+  
+  // Render checkboxes for L2 tasks
+  listEl.innerHTML = filteredL3.map(item => {
+    const isSelected = S2.selectedL3ByKey[item.key]?.has?.(item.l3Name) || false;
+    const isVisible = !searchFilter || item.l3Name.toLowerCase().includes(searchFilter);
+    
+    return `
+      <label style="display:flex; gap:8px; align-items:center; padding:6px 8px; cursor:pointer; border-radius:4px; ${isSelected ? 'background:rgba(139,92,246,0.1);' : ''}" 
+             class="l3-checkbox-label">
+        <input type="checkbox" 
+               data-key="${item.key}" 
+               data-l3="${item.l3Name}"
+               data-visible="${isVisible ? '1' : '0'}"
+               ${isSelected ? 'checked' : ''}
+               style="cursor:pointer;"/>
+        <span style="font-size:0.9em; ${isSelected ? 'color:var(--accent);' : ''}">${item.l3Name}</span>
+      </label>
+    `;
+  }).join('');
+  
+  // Add change listeners
+  listEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const key = e.target.getAttribute('data-key');
+      const l3Name = e.target.getAttribute('data-l3');
+      
+      // Ensure the key exists in selectedL3ByKey (will use Proxy)
+      if (!S2.selectedL3ByKey[key]) {
+        S2.selectedL3ByKey[key] = new Set();
+      } else if (!(S2.selectedL3ByKey[key] instanceof Set)) {
+        S2.selectedL3ByKey[key] = new Set(
+          Array.isArray(S2.selectedL3ByKey[key]) 
+            ? S2.selectedL3ByKey[key]
+            : Object.keys(S2.selectedL3ByKey[key] || {})
+        );
+      }
+      
+      if (e.target.checked) {
+        S2.selectedL3ByKey[key].add(l3Name);
+        e.target.parentElement.style.background = 'rgba(139,92,246,0.1)';
+      } else {
+        S2.selectedL3ByKey[key].delete(l3Name);
+        e.target.parentElement.style.background = '';
+      }
+      
+      if (window.updateStep2Summary) updateStep2Summary();
+    });
+  });
+  
+  if (window.updateStep2Summary) updateStep2Summary();
+}
+
+// Wire up new Step 2 UI controls
+document.addEventListener('DOMContentLoaded', function() {
+  // Task 1.5: Deliverables search filter
+  const delivSearch = document.getElementById('s2-deliv-search');
+  if (delivSearch) {
+    delivSearch.addEventListener('input', debounce(e => {
+      APB.step2.filters.deliverables = e.target.value.toLowerCase();
+      renderDeliverablesPanel();
+    }, 200));
+  }
+  
+  // Components panel controls
+  const compSearch = document.getElementById('s2-comp-search');
+  const compBtnAll = document.getElementById('s2-comp-selectall');
+  const compBtnClear = document.getElementById('s2-comp-clear');
+  
+  // Components search filter
+  if (compSearch) {
+    compSearch.addEventListener('input', debounce(e => {
+      APB.step2.filters.components = e.target.value.toLowerCase();
+      renderComponentsPanel();
+    }, 200));
+  }
+  
+  // Components All button - select only visible checkboxes
+  if (compBtnAll) {
+    compBtnAll.addEventListener('click', async () => {
+      const visibleBoxes = document.querySelectorAll('#s2-comp-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const delivCode = cb.getAttribute('data-deliv');
+        const compName = cb.getAttribute('data-comp');
+        
+        if (!S2.selectedComponentsByCode[delivCode]) {
+          S2.selectedComponentsByCode[delivCode] = new Set();
+        }
+        S2.selectedComponentsByCode[delivCode].add(compName);
+        cb.checked = true;
+      });
+      
+      // ISSUE FIX 5: Ensure L3 tasks are fetched and displayed after Smart Apply
+      // Hydrate L3 tasks for all selected components
+      const hydratePromises = [];
+      for (const [delivCode, compSet] of Object.entries(S2.selectedComponentsByCode)) {
+        if (compSet instanceof Set && compSet.size > 0) {
+          for (const compName of compSet) {
+            if (window.hydrateL3For) {
+              hydratePromises.push(hydrateL3For(delivCode, compName));
+            }
+          }
+        }
+      }
+      
+      // Wait for all L3 hydrations to complete
+      if (hydratePromises.length > 0) {
+        await Promise.all(hydratePromises);
+      }
+      
+      if (window.updateStep2Summary) updateStep2Summary();
+      if (window.renderL3Panel) renderL3Panel();
+    });
+  }
+  
+  if (compBtnClear) {
+    compBtnClear.addEventListener('click', () => {
+      const visibleBoxes = document.querySelectorAll('#s2-comp-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const delivCode = cb.getAttribute('data-deliv');
+        const compName = cb.getAttribute('data-comp');
+        
+        if (S2.selectedComponentsByCode[delivCode]) {
+          S2.selectedComponentsByCode[delivCode].delete(compName);
+        }
+        cb.checked = false;
+      });
+      
+      if (window.updateStep2Summary) updateStep2Summary();
+      if (window.renderL3Panel) renderL3Panel();
+    });
+  }
+  
+  // Components Suggest button - AI suggests relevant components
+  const compBtnSuggest = document.getElementById('s2-comp-suggest');
+  if (compBtnSuggest) {
+    compBtnSuggest.addEventListener('click', async () => {
+      const activeDeliv = APB.step2.activeDeliverableCode || Array.from(selectionStore.deliverables)[0];
+      if (!activeDeliv) {
+        alert('Please select a deliverable first');
+        return;
+      }
+      
+      try {
+        compBtnSuggest.disabled = true;
+        compBtnSuggest.textContent = 'Suggesting...';
+        
+        const response = await fetch('/api/step2/suggest/components', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deliverable_code: activeDeliv, limit: 6 })
+        });
+        
+        const suggested = await response.json();
+        
+        if (suggested && suggested.length > 0) {
+          if (!S2.selectedComponentsByCode[activeDeliv]) {
+            S2.selectedComponentsByCode[activeDeliv] = new Set();
+          }
+          
+          // Add suggested components to selection
+          suggested.forEach(comp => {
+            S2.selectedComponentsByCode[activeDeliv].add(comp);
+          });
+          
+          // Hydrate L3 for each suggested component
+          await Promise.all(suggested.map(comp => hydrateL3For(activeDeliv, comp)));
+          
+          await renderComponentsPanel();
+          updateSummaryCounts();
+        } else {
+          alert('No component suggestions available for this deliverable');
+        }
+      } catch (error) {
+        console.error('Suggest components error:', error);
+        alert('Failed to get suggestions. Please try again.');
+      } finally {
+        compBtnSuggest.disabled = false;
+        compBtnSuggest.textContent = 'Suggest';
+      }
+    });
+  }
+  
+  // L3 panel controls
+  const l3Search = document.getElementById('s2-l3-search');
+  const l3BtnAll = document.getElementById('s2-l3-selectall');
+  const l3BtnClear = document.getElementById('s2-l3-clear');
+  
+  // L3 search filter
+  if (l3Search) {
+    l3Search.addEventListener('input', debounce(e => {
+      APB.step2.filters.l3 = e.target.value.toLowerCase();
+      renderL3Panel();
+    }, 200));
+  }
+  
+  // L3 All button - select only visible checkboxes
+  if (l3BtnAll) {
+    l3BtnAll.addEventListener('click', async () => {
+      const visibleBoxes = document.querySelectorAll('#s2-l3-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const key = cb.getAttribute('data-key');
+        const l3Name = cb.getAttribute('data-l3');
+        
+        if (!S2.selectedL3ByKey[key]) {
+          S2.selectedL3ByKey[key] = new Set();
+        }
+        S2.selectedL3ByKey[key].add(l3Name);
+        cb.checked = true;
+      });
+      
+      if (window.updateStep2Summary) updateStep2Summary();
+    });
+  }
+  
+  if (l3BtnClear) {
+    l3BtnClear.addEventListener('click', () => {
+      const visibleBoxes = document.querySelectorAll('#s2-l3-list input[type="checkbox"][data-visible="1"]');
+      visibleBoxes.forEach(cb => {
+        const key = cb.getAttribute('data-key');
+        const l3Name = cb.getAttribute('data-l3');
+        
+        if (S2.selectedL3ByKey[key]) {
+          S2.selectedL3ByKey[key].delete(l3Name);
+        }
+        cb.checked = false;
+      });
+      
+      if (window.updateStep2Summary) updateStep2Summary();
+    });
+  }
+});
 
 // ---- Step 2 Deliverables Picker (search + select/clear + apply) ----
 (function(){
@@ -6763,7 +9517,7 @@ function s2onRemove(code) {
     options: null,                 // { deliverables, scenario_templates, bundles, ... }
     selected: new Set(),           // selected deliverable codes
   };
-
+  
   // Expose state globally for reconciliation sync
   window.step2PickerState = state;
 
@@ -6821,7 +9575,7 @@ function s2onRemove(code) {
       alert('Pick at least one deliverable.');
       return;
     }
-
+    
     // If no build context, create a basic payload
     if (!window.__lastBuildPayload) {
       window.__lastBuildPayload = {
@@ -6837,12 +9591,12 @@ function s2onRemove(code) {
         project_start: null
       };
     }
-
+    
     const payload = { ...window.__lastBuildPayload, selected_deliverable_codes: selectedCodes };
     const r = await fetch('/api/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.JSON.stringify(payload)
+      body: JSON.stringify(payload)
     });
     const scenarios = await r.json();
     // keep for future edits
@@ -6859,7 +9613,7 @@ function s2onRemove(code) {
     // reseed selection from newly built scenarios
     seedFromCurrentScenarios(scenarios);
     renderList(el.search.value);
-
+    
     // Sync with global state for other workflows
     window.selectedCodes = Array.from(state.selected);
     if (window.appState) window.appState.selectedCodes = window.selectedCodes;
@@ -6897,7 +9651,7 @@ function s2onRemove(code) {
     if (window.updateStep2Summary) updateStep2Summary();
     if (window.populateComponentsDeliverableDropdown) populateComponentsDeliverableDropdown();
   };
-
+  
   // 7) Public function to update Step 2 picker from external selection (e.g., reconciliation)
   window.updateStep2PickerSelection = function updateStep2PickerSelection(selectedCodes) {
     state.selected.clear();
@@ -6907,57 +9661,1019 @@ function s2onRemove(code) {
   };
 })();
 
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+async function onSearchDeliverables() {
+  const query = document.querySelector("#searchBox").value;
+  const results = document.querySelector("#searchResults");
+  
+  if (!query.trim()) {
+    results.innerHTML = "";
+    return;
+  }
+  
+  try {
+    const data = await api(`/api/search_deliverables?q=${encodeURIComponent(query)}`);
+    results.innerHTML = "";
+    
+    (data.items || []).forEach(item => {
+      const isSelected = selectedCodes.includes(item.Deliverable_Code);
+      const resultItem = el(`
+        <div class="row ${isSelected ? 'selected' : ''}">
+          <div>
+            <strong>${item.Deliverable}</strong> 
+            <small class="badge">${item.Category}</small>
+          </div>
+          ${isSelected ? '<span class="already-selected">✓</span>' : 
+            `<button onclick="onAdd('${item.Deliverable_Code}')" class="add-btn">Add</button>`}
+        </div>
+      `);
+      results.append(resultItem);
+    });
+  } catch (err) {
+    results.innerHTML = `<div class="error">Search error: ${err.message}</div>`;
+  }
+}
+
+// Removed broken buildScenarios function - using buildScenariosAB from index.html instead
+
+// onBuild function removed - using buildScenariosAB from index.html instead
+
+// Helper function to render budget pill
+function renderBudgetPill(el, scenarioTotalsPrice, clientBudget) {
+  const budget = Number(clientBudget || 0);
+  el.innerHTML = "";
+  el.className = "budget-pill";
+  if (!budget || !scenarioTotalsPrice) return;
+
+  const delta = budget - scenarioTotalsPrice;
+  const pct = scenarioTotalsPrice / budget;
+  const span = document.createElement("span");
+
+  if (delta >= 0) {
+    span.textContent = `Under budget by $${delta.toLocaleString()} (${(100*(1-pct)).toFixed(1)}%)`;
+    el.classList.add("under");
+  } else {
+    span.textContent = `Over budget by $${Math.abs(delta).toLocaleString()} (${(100*(pct-1)).toFixed(1)}%)`;
+    el.classList.add("over");
+  }
+  el.appendChild(span);
+}
+
+function renderScenarios(data){
+  const box = document.querySelector("#scenarios");
+  box.innerHTML = "";
+  ["A","B"].forEach(key => {
+    const scn = data[key];
+    const head = `
+      <h3>Scenario ${key} <span class="badge">${scn.pricing_mode}${scn.pricing_mode==='Per_Resource' ? ' · ' + scn.rate_band : ''}</span>
+        ${scn.pricing_mode==='Flat_Blended' ? `<span class="badge">${Number(scn.blended_rate||0).toFixed(0)}/hr</span>`:''}
+      </h3>
+      <div><strong>Total Hours:</strong> ${Number(scn.totals.hours).toFixed(2)} &nbsp; <strong>Total Price:</strong> ${currency(scn.totals.price)}</div>
+    `;
+    const wrap = el(`<div class="scenario">${head}<div></div></div>`);
+
+    scn.items.forEach(d => {
+      const tgPills = d.included_task_groups.map(tg => `<span class="pill">${tg}</span>`).join(" ");
+      const rows = (d.hours_by_role||[]).map(r => `
+        <tr><td>${r.Resource_Title} <small class="badge">${r.Seniority}</small></td><td>${Number(r.Hours).toFixed(2)}</td></tr>
+      `).join("");
+      const sched = (d.schedule||[]).map(s => `
+        <tr><td>${s.task_group}</td><td>${s.start_date}</td><td>${s.end_date}</td><td>${s.duration_days}</td></tr>
+      `).join("");
+      const card = el(`
+        <div class="card" style="background:#0f141d;">
+          <h4>${d.deliverable} <span class="badge">${d.category}</span> <span class="badge">${d.complexity}×${d.tier}</span></h4>
+          <div class="inline">${tgPills}</div>
+          <table class="tbl"><thead><tr><th>Role</th><th>Hours</th></tr></thead><tbody>${rows || '<tr><td colspan="2">No hours</td></tr>'}</tbody></table>
+          <div class="inline"><strong>Deliverable Total Hours:</strong> ${Number(d.total_hours).toFixed(2)} &nbsp; <strong>Price:</strong> ${currency(d.price)}</div>
+          <details>
+            <summary>Timeline (auto)</summary>
+            <table class="tbl"><thead><tr><th>Task Group</th><th>Start</th><th>End</th><th>Days</th></tr></thead><tbody>${sched || '<tr><td colspan="4">No schedule</td></tr>'}</tbody></table>
+          </details>
+        </div>
+      `);
+      wrap.append(card);
+    });
+
+    box.append(wrap);
+  });
+
+  document.querySelector("#totA").innerText = currency(data.A.totals.price);
+  document.querySelector("#totB").innerText = currency(data.B.totals.price);
+}
+
+async function onExport(which){
+  if(!SCENARIOS){ alert("Build scenarios first."); return; }
+  const res = await fetch("/api/export", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({scenario: SCENARIOS[which]})
+  });
+  if(!res.ok){ alert("Export failed"); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `workfront_export_${which}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Component Selection Functionality
+async function openComponentPicker(code, name) {
+  try {
+    const complexity = document.querySelector('#complexity')?.value || 'Advanced';
+    const tier = document.querySelector('#tier')?.value || 'T2_MediumVolume';
+    
+    const response = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(code)}&complexity=${complexity}&tier=${tier}`);
+    const data = await response.json();
+    const components = data.items || [];
+    
+    if (components.length === 0) {
+      alert(`No components found for ${name}`);
+      return;
+    }
+    
+    // Check if this deliverable has been customized before
+    // If not, initialize with undefined (not an empty Set) to indicate "use all defaults"
+    const hasCustomSelection = selectedComponentsMap[code] && selectedComponentsMap[code] instanceof Set;
+    
+    // Create modal
+    const modal = el(`
+      <div id="component-modal" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
+        <div style="background: var(--card); padding: 24px; border-radius: 8px; max-width: 500px; width: 90%; max-height: 80%; overflow-y: auto;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h3 style="margin: 0;">Components for ${name}</h3>
+            <button onclick="closeComponentPicker()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
+          </div>
+          <p style="font-size: 14px; color: var(--muted); margin-bottom: 16px;">Select which components to include in your estimate:</p>
+          <div id="component-list"></div>
+          <div style="margin-top: 16px; display: flex; gap: 8px; justify-content: flex-end;">
+            <button onclick="closeComponentPicker()" class="btn-primary">Done</button>
+          </div>
+        </div>
+      </div>
+    `);
+    
+    document.body.appendChild(modal);
+    
+    // Populate component list with auto-apply on change
+    const list = document.getElementById('component-list');
+    components.forEach(comp => {
+      // Default to checked if no custom selection exists, otherwise check if component is in the Set
+      const isSelected = hasCustomSelection ? selectedComponentsMap[code].has(comp.name) : true;
+      const item = el(`
+        <label style="display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid var(--border); margin-bottom: 4px; border-radius: 4px; cursor: pointer;">
+          <input type="checkbox" data-component="${comp.name}" ${isSelected ? 'checked' : ''}>
+          <div style="flex: 1;">
+            <div style="font-weight: 500;">${comp.name}</div>
+            <div style="font-size: 12px; color: var(--muted);">${comp.hours} hours</div>
+          </div>
+        </label>
+      `);
+      
+      // Auto-apply changes when checkbox changes
+      const checkbox = item.querySelector('input[type="checkbox"]');
+      checkbox.addEventListener('change', (e) => {
+        // Initialize Set with ALL components when user makes first change
+        if (!selectedComponentsMap[code] || !(selectedComponentsMap[code] instanceof Set)) {
+          selectedComponentsMap[code] = new Set(components.map(c => c.name));
+        }
+        
+        if (e.target.checked) {
+          selectedComponentsMap[code].add(comp.name);
+        } else {
+          selectedComponentsMap[code].delete(comp.name);
+        }
+        
+        // IMPORTANT: Keep the empty Set in the map (don't delete the key)
+        // This ensures empty Sets are sent as {} in the payload, not "__ALL__"
+        
+        // Also ensure S2.selectedComponentsMap is updated (should be same reference but being defensive)
+        if (S2.selectedComponentsMap) {
+          S2.selectedComponentsMap[code] = selectedComponentsMap[code];
+        }
+        
+        // Optionally refresh the display to update component count
+        if (window.renderYourSelection) {
+          renderYourSelection();
+        }
+      });
+      
+      list.appendChild(item);
+    });
+    
+  } catch (error) {
+    console.error('Error loading components:', error);
+    alert('Error loading components. Please try again.');
+  }
+}
+
+function closeComponentPicker() {
+  const modal = document.getElementById('component-modal');
+  if (modal) modal.remove();
+}
+
+function saveComponentSelection(code) {
+  const modal = document.getElementById('component-modal');
+  const checkboxes = modal.querySelectorAll('input[type="checkbox"]');
+  
+  selectedComponentsMap[code] = new Set();
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      selectedComponentsMap[code].add(cb.dataset.component);
+    }
+  });
+  
+  closeComponentPicker();
+  renderYourSelection(); // Refresh the display to show component count
+}
+
+// Timeline functionality
+function getScenario(letter) {
+  return window.appState?.scenarios?.[letter];
+}
+
+// Timeline rendering function removed - using the one in index.html to avoid conflicts
+
+function enableTimelineDnD(letter) {
+  const body = document.getElementById('tl-body');
+  if (!body) {
+    console.log("Timeline body not available for DnD setup");
+    return;
+  }
+  let dragEl = null;
+
+  body.querySelectorAll('.tl-row').forEach(row => {
+    row.addEventListener('dragstart', e => {
+      dragEl = row;
+      e.dataTransfer.effectAllowed = 'move';
+      row.classList.add('dragging');
+    });
+    row.addEventListener('dragend', () => row.classList.remove('dragging'));
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      const after = getDragAfterElement(body, e.clientY);
+      if (!after) body.appendChild(dragEl);
+      else body.insertBefore(dragEl, after);
+    });
+  });
+
+  function getDragAfterElement(container, y) {
+    const els = [...container.querySelectorAll('.tl-row:not(.dragging)')];
+    return els.reduce((closest, child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
+    }, { offset: Number.NEGATIVE_INFINITY }).element;
+  }
+
+  // Save + recompute schedule
+  document.getElementById('timeline-controls')?.querySelector('#tl-save')?.remove();
+  const btn = document.createElement('button');
+  btn.id = 'tl-save'; btn.textContent = 'Save Order';
+  btn.onclick = async () => {
+    const scenario = getScenario(letter);
+    if (!scenario) return;
+
+    // Get ordered deliverable codes from UI
+    const rows = [...body.querySelectorAll('.tl-row')];
+    const codes = rows.map(tr => tr.dataset.dcode);
+    
+    // Build included_map from current scenario items
+    const includedMap = Object.fromEntries(
+      scenario.items.map(item => [item.deliverable_code, item.included_task_groups ?? []])
+    );
+
+    // Get knobs from current scenario (these are the authoritative values)
+    const knobs = {
+      project_start: scenario.project_start,
+      complexity: scenario.items[0]?.complexity,  // Use first item's complexity as default
+      tier: scenario.items[0]?.tier,  // Use first item's tier as default
+      use_slack: scenario.use_slack,
+      slack_after_internal: scenario.slack_after_internal,
+      slack_after_client: scenario.slack_after_client,
+      slack_global_pct: scenario.slack_global_pct
+    };
+
+    const payload = {
+      scenario_letter: letter,
+      deliverable_codes: codes,
+      included_map: includedMap,
+      project_start: knobs.project_start,
+      complexity: knobs.complexity,
+      tier: knobs.tier,
+      use_slack: knobs.use_slack,
+      slack_after_internal: knobs.slack_after_internal,
+      slack_after_client: knobs.slack_after_client,
+      slack_global_pct: knobs.slack_global_pct
+    };
+
+    const res = await fetch('/api/reorder_timeline', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    }).then(r => r.json());
+
+    // Replace local items with server-persisted order + dates
+    if (res.items && window.appState.scenarios[letter]) {
+      window.appState.scenarios[letter] = {
+        ...window.appState.scenarios[letter],
+        items: res.items,
+        user_order: codes,
+        manual_order_locked: true
+      };
+    }
+    renderTimeline(letter);
+  };
+  document.getElementById('timeline-controls')?.appendChild(btn);
+}
+
+function renderTimelineStatus(letter) {
+  const scen = getScenario(letter);
+  const box = document.getElementById('timeline-status');
+  if (!box) {
+    console.log("Timeline status element not available");
+    return;
+  }
+  if (!scen) { box.innerHTML = ''; return; }
+
+  // Sum days by deliverable
+  const stats = (scen.items || []).map(d => {
+    const days = (d.schedule || []).reduce((n,s)=>n+(s.duration_days||0),0);
+    return { label: d.deliverable, days };
+  });
+  const total = stats.reduce((n,s)=>n+s.days,0) || 1;
+  const rows = stats
+    .sort((a,b)=>b.days-a.days)
+    .map(s => {
+      const pct = Math.round((100*s.days)/total);
+      return `<div class="stat">
+        <div class="label">${s.label}</div>
+        <div class="bar"><span style="width:${pct}%"></span></div>
+        <div class="pct">${pct}%</div>
+      </div>`;
+    }).join('');
+  box.innerHTML = `<h4>Time Allocation (Scenario ${letter})</h4>${rows}`;
+}
+
+function selectTimeline(letter) {
+  // Call the timeline rendering function from index.html
+  if (window.renderTimeline) {
+    window.renderTimeline(letter);
+  }
+  document.querySelectorAll('[data-timeline-sel]')
+    .forEach(btn => btn.classList.toggle('active', btn.dataset.timelineSel === letter));
+}
+
+// Event delegation for timeline controls
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-timeline-sel]');
+  if (!btn) return;
+  selectTimeline(btn.dataset.timelineSel);  // 'A' or 'B'
+});
+
+// ---- S2 Functions (GPT 5 Pro Implementation) ----
+
+// ---- Load options and render deliverables panel ----
+async function s2LoadDeliverables() {
+  const r = await fetch('/api/options');   // server returns deliverables + templates
+  const data = await r.json();
+  APB.step2.allDeliverables = data.deliverables || [];
+  S2.allDeliverables = data.deliverables || [];
+  
+  // Build code→deliverable index for fast lookups
+  DELIV_INDEX = {};
+  DELIV_INDEX_LO = {};
+  for (const d of (data.deliverables || [])) {
+    const code = String(d.Deliverable_Code).trim();
+    DELIV_INDEX[code] = d;
+    DELIV_INDEX_LO[key(code)] = d;
+  }
+  
+  // Render with centralized state
+  renderDeliverablesPanel();
+  updateSummaryCounts();
+  
+  // Wire Select All button
+  const btnSelectAll = APB.step2.els.btnSelectAll;
+  if (btnSelectAll) {
+    btnSelectAll.onclick = () => {
+      APB.step2.allDeliverables.forEach(d => {
+        APB.step2.selectedCodes.add(String(d.Deliverable_Code));
+      });
+      renderDeliverablesPanel();
+      refreshComponentsPanel();
+      updateSummaryCounts();
+    };
+  }
+  
+  // Wire Clear button
+  const btnClear = APB.step2.els.btnClear;
+  if (btnClear) {
+    btnClear.onclick = () => {
+      APB.step2.selectedCodes.clear();
+      APB.step2.selectedComponentsByCode = {};
+      APB.step2.selectedL3ByKey = {};
+      APB.step2.activeDeliverableCode = null;
+      APB.step2.activeComponentName = null;
+      renderDeliverablesPanel();
+      renderComponentsEmptyState();
+      updateSummaryCounts();
+    };
+  }
+}
+
+function s2RenderRight(filter) {
+  const host = S2.els.listRight;
+  if (!host) return;
+  const q = (filter || '').toLowerCase();
+  const items = S2.allDeliverables.filter(d =>
+    !q ||
+    String(d.Deliverable).toLowerCase().includes(q) ||
+    String(d.Category || '').toLowerCase().includes(q) ||
+    String(d['Service Department'] || '').toLowerCase().includes(q) ||
+    String(d.Deliverable_Code).toLowerCase().includes(q)
+  );
+  
+  // Group by Service Department
+  const DEPT_ORDER = ['Strategy', 'Creative', 'Content', 'Production', 'Technology', 'PM', 'Other'];
+  const grouped = {};
+  items.forEach(d => {
+    const dept = d['Service Department'] || 'Other';
+    if (!grouped[dept]) grouped[dept] = [];
+    grouped[dept].push(d);
+  });
+  
+  // Sort departments by defined order
+  const sortedDepts = Object.keys(grouped).sort((a, b) => {
+    const aIdx = DEPT_ORDER.indexOf(a);
+    const bIdx = DEPT_ORDER.indexOf(b);
+    return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
+  });
+  
+  // Render grouped deliverables
+  const html = sortedDepts.map(dept => {
+    const deptItems = grouped[dept].sort((a, b) => {
+      const sortA = a.Sort_Order ?? 999;
+      const sortB = b.Sort_Order ?? 999;
+      if (sortA !== sortB) return sortA - sortB;
+      return (a.Deliverable || '').localeCompare(b.Deliverable || '');
+    });
+    
+    const deptHeader = `<div style="font-weight:600; padding:8px 8px 4px; color:#ffffff; border-top:1px solid rgba(255,255,255,0.1); margin-top:4px; background:rgba(139,92,246,0.15);">${dept}</div>`;
+    const deptRows = deptItems.map(d => `
+      <label class="row" data-deliv-row="1" data-search="${(d.Deliverable + ' ' + (d.Category || '') + ' ' + (d['Service Department'] || '')).toLowerCase()}" 
+             style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+        <input type="checkbox" class="s2chk"
+          data-code="${d.Deliverable_Code}"
+          data-name="${d.Deliverable}"
+          data-cat="${d.Category}"
+          ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+        <span>${d.Deliverable}</span>
+        <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+      </label>
+    `).join('');
+    return deptHeader + deptRows;
+  }).join('');
+  
+  host.innerHTML = html || '<div style="opacity:.7;padding:8px">No deliverables</div>';
+
+  host.querySelectorAll('.s2chk').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const code = e.target.dataset.code, name = e.target.dataset.name, cat = e.target.dataset.cat;
+      if (e.target.checked) {
+        S2.selectedCodes.add(code);
+        S2.selectedMeta.set(code, {name, category: cat});
+        
+        // Sync with new Step 2 UI state
+        if (window.step2PickerState) {
+          window.step2PickerState.selected.add(code);
+        }
+        
+        // Update new Step 2 UI - set as current and populate components
+        if (window.step2State) {
+          window.step2State.currentDeliverable = code;
+          if (window.populateComponentsDeliverableDropdown) {
+            window.populateComponentsDeliverableDropdown();
+          }
+          if (window.renderComponentsPanel) {
+            window.renderComponentsPanel(code);
+          }
+          if (window.updateStep2Summary) {
+            window.updateStep2Summary();
+          }
+        }
+      } else {
+        S2.selectedCodes.delete(code);
+        S2.selectedMeta.delete(code);
+        
+        // Sync with new Step 2 UI state
+        if (window.step2PickerState) {
+          window.step2PickerState.selected.delete(code);
+        }
+        
+        // Update new Step 2 UI
+        if (window.step2State && window.step2State.currentDeliverable === code) {
+          window.step2State.currentDeliverable = null;
+          if (window.renderComponentsPanel) {
+            window.renderComponentsPanel(null);
+          }
+        }
+        
+        // Always update dropdown and summary when any deliverable is removed
+        if (window.populateComponentsDeliverableDropdown) {
+          window.populateComponentsDeliverableDropdown();
+        }
+        if (window.updateStep2Summary) {
+          window.updateStep2Summary();
+        }
+      }
+      s2RenderLeft();
+    });
+  });
+}
+
+S2.els.search?.addEventListener('input', e => s2RenderRight(e.target.value));
+S2.els.btnSelectAll?.addEventListener('click', () => {
+  S2.allDeliverables.forEach(d => {
+    const code = String(d.Deliverable_Code);
+    S2.selectedCodes.add(code);
+    S2.selectedMeta.set(code, {name: d.Deliverable, category: d.Category});
+    // Sync with new Step 2 UI state
+    if (window.step2PickerState) {
+      window.step2PickerState.selected.add(code);
+    }
+  });
+  s2RenderRight(S2.els.search?.value || '');
+  s2RenderLeft();
+  
+  // Update new Step 2 UI
+  if (window.populateComponentsDeliverableDropdown) {
+    window.populateComponentsDeliverableDropdown();
+  }
+  if (window.updateStep2Summary) {
+    window.updateStep2Summary();
+  }
+});
+S2.els.btnClear?.addEventListener('click', () => {
+  S2.selectedCodes.clear();
+  S2.selectedMeta.clear();
+  s2RenderRight(S2.els.search?.value || '');
+  s2RenderLeft();
+  
+  // Sync with new Step 2 UI state
+  if (window.step2PickerState) {
+    window.step2PickerState.selected.clear();
+  }
+  
+  // Update new Step 2 UI
+  if (window.step2State) {
+    window.step2State.currentDeliverable = null;
+  }
+  if (window.renderComponentsPanel) {
+    window.renderComponentsPanel(null);
+  }
+  if (window.populateComponentsDeliverableDropdown) {
+    window.populateComponentsDeliverableDropdown();
+  }
+  if (window.updateStep2Summary) {
+    window.updateStep2Summary();
+  }
+});
+
+// ---- Left panel ("Your Selection") with Components… buttons ----
+function s2RenderLeft() {
+  const host = S2.els.yourSel;
+  if (!host) return;
+  const rows = Array.from(S2.selectedCodes).map(code => {
+    // Use helper functions for consistent lookup with defensive fallback
+    const name = labelFor(code);
+    const category = categoryFor(code);
+    const selectedComps = S2.selectedComponentsMap[code] || new Set();
+    const compCountText = selectedComps.size > 0 ? ` (${selectedComps.size})` : ' (all)';
+    return `
+      <div class="selection-item">
+        <div class="selection-item-left">
+          <div class="selection-item-name">${name}</div>
+          <div class="selection-item-category">${category || ''}</div>
+        </div>
+        <div class="selection-item-right">
+          <button class="btn-component s2-comp" data-code="${code}" data-name="${name.replace(/'/g, "\\'")}">Components...${compCountText}</button>
+          <button class="btn-remove s2-remove" data-code="${code}">×</button>
+        </div>
+      </div>`;
+  });
+  host.innerHTML = rows.join('') || '<p style="color: var(--muted);">No deliverables selected yet.</p>';
+
+  host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
+    const code = e.target.dataset.code;
+    S2.selectedCodes.delete(code);
+    S2.selectedMeta.delete(code);
+    s2RenderRight(S2.els.search?.value || '');
+    s2RenderLeft();
+  }));
+
+  host.querySelectorAll('.s2-comp').forEach(btn => btn.addEventListener('click', e => {
+    s2OpenComponents(e.target.dataset.code, e.target.dataset.name);
+  }));
+}
+
+// ---- Components drawer ----
+async function s2OpenComponents(code, name) {
+  const compUrl = `/api/components_for?deliverable_code=${encodeURIComponent(code)}`;
+  const res = await fetch(compUrl);
+  const data = await res.json();
+  const items = data.items || [];
+  
+  // Handle different types: "__ALL__" sentinel, Set, object/dict, or undefined
+  let current;
+  const stored = S2.selectedComponentsMap[code];
+  if (!stored || stored === "__ALL__") {
+    // Default to all components selected
+    current = new Set(items.map(c => c.name));
+    S2.selectedComponentsMap[code] = current;
+  } else if (stored instanceof Set) {
+    current = stored;
+  } else if (typeof stored === 'object') {
+    // Convert object/dict keys to Set
+    current = new Set(Object.keys(stored));
+    S2.selectedComponentsMap[code] = current;
+  } else {
+    // Fallback: select all by default
+    current = new Set(items.map(c => c.name));
+    S2.selectedComponentsMap[code] = current;
+  }
+  
+  if (!S2.els.compDrawer) {
+    alert('Component picker UI not mounted (add #compDrawer).');
+    return;
+  }
+  S2.els.compTitle.textContent = `Components — ${name}`;
+  S2.els.compList.innerHTML = items.map(c => `
+    <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+      <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}"
+        ${current.has(c.name) ? 'checked' : ''}/>
+      <span>${c.name}</span>
+      <small style="margin-left:auto;opacity:.75">${Math.round(c.hours)}h</small>
+    </label>`).join('') || '<div style="opacity:.7;padding:8px">No components for this deliverable.</div>';
+  S2.els.compDrawer.classList.remove('hidden');
+
+  S2.els.compList.querySelectorAll('.s2compchk').forEach(chk => {
+    chk.addEventListener('change', e => {
+      const c = e.target.dataset.code, n = e.target.dataset.name;
+      if (!S2.selectedComponentsMap[c]) S2.selectedComponentsMap[c] = new Set();
+      e.target.checked ? S2.selectedComponentsMap[c].add(n) : S2.selectedComponentsMap[c].delete(n);
+    });
+  });
+  
+  // Store the deliverable code on the drawer for the close handler
+  S2.els.compDrawer.setAttribute('data-active-code', code);
+}
+
+// Component drawer close handler - saves selection and updates UI
+S2.els.compDone?.addEventListener('click', () => {
+  const delivCode = S2.els.compDrawer.getAttribute('data-active-code');
+  if (delivCode) {
+    const checked = Array.from(S2.els.compList.querySelectorAll('input[type="checkbox"]:checked'))
+      .map(x => x.dataset.name)
+      .filter(Boolean);
+    
+    // Save using setComponentsFor (removes key if empty = "all")
+    setComponentsFor(delivCode, checked);
+    
+    // Re-render the left panel to update the component count button
+    s2RenderLeft();
+  }
+  S2.els.compDrawer.classList.add('hidden');
+});
+
+// Select All button handler
+document.getElementById('compSelectAll')?.addEventListener('click', () => {
+  const checkboxes = S2.els.compList.querySelectorAll('input[type="checkbox"]');
+  const delivCode = S2.els.compDrawer.getAttribute('data-active-code');
+  if (!S2.selectedComponentsMap[delivCode]) S2.selectedComponentsMap[delivCode] = new Set();
+  checkboxes.forEach(chk => {
+    chk.checked = true;
+    S2.selectedComponentsMap[delivCode].add(chk.dataset.name);
+  });
+});
+
+// Unselect All button handler
+document.getElementById('compUnselectAll')?.addEventListener('click', () => {
+  const checkboxes = S2.els.compList.querySelectorAll('input[type="checkbox"]');
+  const delivCode = S2.els.compDrawer.getAttribute('data-active-code');
+  if (!S2.selectedComponentsMap[delivCode]) S2.selectedComponentsMap[delivCode] = new Set();
+  checkboxes.forEach(chk => {
+    chk.checked = false;
+    S2.selectedComponentsMap[delivCode].delete(chk.dataset.name);
+  });
+});
+
+// ---- Build Scenarios directly from Step 2 ----
+async function s2ApplyAndBuild() {
+  const codes = Array.from(S2.selectedCodes);
+  if (!codes.length) { alert('Please select at least one deliverable.'); return; }
+
+  // gather knobs (fallbacks keep it working even if Step 1 controls are untouched)
+  const pricingMode  = document.querySelector('#pricingMode')?.value || 'Flat_Blended';
+  const blendedRate  = Number(document.querySelector('#blendedRate')?.value || 195);
+  const rateBand     = document.querySelector('#rateBand')?.value || 'Standard_US';
+  const useSlack     = (document.querySelector('#useSlack')?.checked ?? true);
+  const slackI       = Number(document.querySelector('#slackAfterInternal')?.value || 1);
+  const slackC       = Number(document.querySelector('#slackAfterClient')?.value   || 2);
+  const slackPct     = Number(document.querySelector('#slackGlobalPct')?.value     || 0.05);
+  const projectStart = document.querySelector('#projectStart')?.value || null;
+  const scenA        = document.querySelector('#scenarioA')?.value || 'MED_LOW';
+
+  // Convert component selections to proper format (handle "__ALL__" sentinel)
+  const compMap = {};
+  codes.forEach(code => {
+    const compSet = S2.selectedComponentsMap[code];
+    
+    if (compSet instanceof Set && compSet.size > 0) {
+      // User has selected specific components - convert Set to object
+      const dict = Object.create(null);
+      compSet.forEach(label => { dict[label] = null; });
+      compMap[code] = dict;
+    } else if (compSet && typeof compSet === 'object' && !(compSet instanceof Set)) {
+      // Already in object format
+      compMap[code] = compSet;
+    } else {
+      // No specific components selected - send "__ALL__" sentinel
+      compMap[code] = "__ALL__";
+    }
+  });
+
+  const payload = {
+    selected_deliverable_codes: codes,
+    selected_components_map: compMap,
+    scenario_a: { mode: 'template', scenario_key: scenA },
+    pricing_mode: pricingMode,
+    blended_rate: pricingMode === 'Flat_Blended' ? blendedRate : undefined,
+    rate_band: rateBand,
+    use_slack: useSlack,
+    slack_after_internal: slackI,
+    slack_after_client: slackC,
+    slack_global_pct: slackPct,
+    project_start: projectStart
+  };
+
+  const res = await fetch('/api/build', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(r => r.json());
+
+  window.__lastBuild = res; // enable downstream pricing/export
+  // Optional: update any pricing/summary widgets here
+  // s2RenderTotals(res); // if you have one
+}
+
+// Bind buttons
+S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
+
+// ========== XML Export Functions ==========
+async function exportXMLScenario(letter) {
+  // ISSUE FIX 2: Include edited scenario in XML export to preserve manual edits
+  // Get the actual edited scenario to preserve manual changes
+  const scenario = SCENARIOS?.[letter];
+  if (!scenario) {
+    alert('Please build a scenario first before exporting');
+    return;
+  }
+  
+  // Check if anchors should be included
+  const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
+  
+  // Build endpoint with query parameter
+  const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+  
+  // Get project name and pricing mode
+  const projectName = document.getElementById('projectName')?.value || 
+                     document.getElementById('projectNameInput')?.value || 
+                     'Project Export';
+  const pricingMode = document.getElementById('pricingMode')?.value || 'Flat_Blended';
+  
+  try {
+    // Send scenario data in the body to ensure edited values are preserved
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_name: projectName,
+        pricing_mode: pricingMode,
+        scenario: scenario,  // Include the full edited scenario
+        add_anchors: addAnchors
+      })
+    });
+    
+    if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+    
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${projectName}_Scenario_${letter}.xml`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`XML export failed: ${err.message}`);
+  }
+}
+
+// Wire up XML export button (Scenario A only)
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('btn-export-xml-a')?.addEventListener('click', () => exportXMLScenario('A'));
+  
+  // Auto-clear when RFP textarea content is typed
+  const rfpTextarea = document.getElementById('rfpText');
+  if (rfpTextarea) {
+    let hasCleared = false; // Track if we've already cleared for this typing session
+    
+    rfpTextarea.addEventListener('input', async (e) => {
+      // Only clear once when user starts typing, not on every keystroke
+      if (!hasCleared && e.target.value.length > 0) {
+        hasCleared = true;
+        console.log('[AUTO-CLEAR] New RFP text entered, clearing old session data...');
+        
+        // Clear all localStorage and sessionStorage
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            localStorage.removeItem(key);
+          }
+        }
+        for (const key of Object.keys(sessionStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            sessionStorage.removeItem(key);
+          }
+        }
+        
+        // Clear in-memory state
+        if (window.APP) {
+          window.APP.summary = null;
+          window.APP.rfpText = null;
+        }
+        if (window.APB && window.APB.step2) {
+          window.APB.step2.rfpText = null;
+        }
+        
+        // Start fresh session
+        const newSessionId = SessionManager.startNewSession();
+        
+        // Clear server-side cache
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: newSessionId })
+          });
+        } catch (err) {
+          console.warn('[AUTO-CLEAR] Failed to clear server cache:', err);
+        }
+      }
+      
+      // Reset the flag when textarea is cleared
+      if (e.target.value.length === 0) {
+        hasCleared = false;
+      }
+    });
+  }
+  
+  // Initialize image analysis toggle from localStorage
+  const analyzeToggle = document.getElementById('analyzeImagesToggle');
+  if (analyzeToggle) {
+    // Load saved preference (default true)
+    const savedPreference = localStorage.getItem('apb.analyzeImages');
+    if (savedPreference !== null) {
+      analyzeToggle.checked = savedPreference === 'true';
+    }
+    
+    // Save preference when changed
+    analyzeToggle.addEventListener('change', (e) => {
+      localStorage.setItem('apb.analyzeImages', e.target.checked);
+      console.log('[Image Analysis] Preference saved:', e.target.checked);
+    });
+  }
+  
+  // Display selected file names when files are chosen AND auto-clear old data
+  const fileInput = document.getElementById('rfpFile');
+  const filesList = document.getElementById('selected-files-list');
+  if (fileInput && filesList) {
+    fileInput.addEventListener('change', async (e) => {
+      const files = e.target.files;
+      if (files && files.length > 0) {
+        const names = Array.from(files).map(f => f.name).join(', ');
+        filesList.textContent = `Selected: ${names}`;
+        filesList.style.color = 'var(--accent)';
+        
+        // AUTO-CLEAR: Automatically clear old data when new file is selected
+        console.log('[AUTO-CLEAR] New file selected, clearing old session data...');
+        
+        // Clear all localStorage and sessionStorage
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            localStorage.removeItem(key);
+          }
+        }
+        for (const key of Object.keys(sessionStorage)) {
+          if (key.startsWith('apb.') || key.startsWith('apb:') || key === 'rfp_text') {
+            sessionStorage.removeItem(key);
+          }
+        }
+        
+        // Clear in-memory state
+        if (window.APP) {
+          window.APP.summary = null;
+          window.APP.rfpText = null;
+        }
+        if (window.APB && window.APB.step2) {
+          window.APB.step2.rfpText = null;
+        }
+        
+        // Start fresh session
+        const newSessionId = SessionManager.startNewSession();
+        
+        // Clear server-side cache
+        try {
+          await fetch('/api/clear_session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: newSessionId })
+          });
+        } catch (err) {
+          console.warn('[AUTO-CLEAR] Failed to clear server cache:', err);
+        }
+        
+        console.log('[AUTO-CLEAR] Session cleared, ready for new RFP analysis');
+      } else {
+        filesList.textContent = '';
+      }
+    });
+  }
+});
+
 // ========== New Features: Import, Second Scenario, Final Ship ==========
 
 // Import Previous Project functionality
 document.addEventListener('DOMContentLoaded', () => {
   const importBtn = document.getElementById('btnImportProject');
   const importFile = document.getElementById('importFile');
-
+  
   if (importBtn && importFile) {
     importBtn.addEventListener('click', () => {
       importFile.click();
     });
-
+    
     importFile.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
-
+      
       const formData = new FormData();
       formData.append('file', file);
-
+      
       try {
         importBtn.textContent = 'Importing...';
         importBtn.disabled = true;
-
+        
         const response = await fetch('/api/project/import', {
           method: 'POST',
           body: formData
         });
-
+        
         const result = await response.json();
-
+        
         if (result.success) {
           alert(`✅ Project imported successfully!\n\nProject: ${result.project_name}\nDeliverables: ${result.deliverables_count}\nTotal Hours: ${result.total_hours}\nTotal Price: $${result.total_price}`);
-
+          
           // Store imported scenario and refresh UI
           if (result.import_id && result.scenario) {
             window.SCENARIOS = window.SCENARIOS || {};
             window.SCENARIOS.imported = result.scenario;
-
+            
             // Populate Step 2 with imported deliverables
             if (result.scenario.items) {
               const codes = result.scenario.items.map(item => item.deliverable_code);
               codes.forEach(code => {
                 if (S2.selectedCodes) S2.selectedCodes.add(code);
               });
-
+              
               // Refresh Step 2 display
               if (typeof s2RenderDelivs === 'function') {
                 s2RenderDelivs();
               }
             }
-
+            
             // Show Step 2
             document.getElementById('step2').style.display = 'block';
           }
@@ -6973,48 +10689,48 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
+  
   // Build Second Scenario functionality
   const buildSecondBtn = document.getElementById('btn-build-second-scenario');
   const compareBtn = document.getElementById('btn-compare-versions');
   const versionList = document.getElementById('version-list');
   const versionItems = document.getElementById('version-items');
-
+  
   if (buildSecondBtn) {
     buildSecondBtn.addEventListener('click', async () => {
       if (!window.SCENARIOS || !window.SCENARIOS.A) {
-        alert('Please build a scenario first before creating a second version.');
+        alert('Please build Scenario A first before creating a second version.');
         return;
       }
-
+      
       try {
         buildSecondBtn.textContent = 'Creating Version 2...';
         buildSecondBtn.disabled = true;
-
+        
         const response = await fetch('/api/scenario/duplicate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.JSON.stringify({
+          body: JSON.stringify({
             scenario_id: 'scenario_a',
             scenario_data: window.SCENARIOS.A,
             version_name: 'Version 2 - Alternative'
           })
         });
-
+        
         const result = await response.json();
-
+        
         if (result.success) {
           alert(`✅ Version 2 created successfully!\n\nVersion ID: ${result.version_id}\nYou can now modify this version independently.`);
-
+          
           // Store the new version
-          window.SCENARIOS.A_version2 = window.SCENARIOS.A; // Store as a copy, modifications will be separate
-
+          window.SCENARIOS[`A_${result.version_id}`] = window.SCENARIOS.A;
+          
           // Update version list display
           if (versionList && versionItems) {
             versionList.style.display = 'block';
             versionItems.innerHTML += `
               <div style="padding: 8px; margin: 4px 0; background: rgba(255,255,255,0.05); border-radius: 4px;">
-                <strong>Version 2 - Alternative</strong> - Created ${new Date().toLocaleDateString()}
+                <strong>${result.version_name}</strong> - Created ${new Date(result.created_date).toLocaleDateString()}
               </div>
             `;
           }
@@ -7027,13 +10743,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
+  
   if (compareBtn) {
     compareBtn.addEventListener('click', async () => {
       try {
         const response = await fetch('/api/scenario/versions/scenario_a');
         const result = await response.json();
-
+        
         if (result.versions && result.versions.length > 0) {
           let versionInfo = 'Available Versions:\n\n';
           versionInfo += 'Version 1 (Original)\n';
@@ -7049,31 +10765,31 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
+  
   // Final Ship functionality
   const finalShipBtn = document.getElementById('btn-final-ship');
   const finalShipStatus = document.getElementById('final-ship-status');
   const finalShipDownloads = document.getElementById('final-ship-downloads');
-
+  
   if (finalShipBtn) {
     finalShipBtn.addEventListener('click', async () => {
       if (!window.SCENARIOS || !window.SCENARIOS.A) {
         alert('Please build at least Scenario A before final shipping.');
         return;
       }
-
+      
       const projectName = document.getElementById('projectName')?.value || 
                           sessionStorage.getItem('apb.uploadTitle') || 
                           'Project Export';
-
+      
       const confirmShip = confirm(`🚢 FINAL SHIP CONFIRMATION\n\nThis will:\n• Lock all scenario data\n• Generate comprehensive exports\n• Prevent further edits\n\nProject: ${projectName}\n\nProceed with final ship?`);
-
+      
       if (!confirmShip) return;
-
+      
       try {
         finalShipBtn.textContent = 'Processing Final Ship...';
         finalShipBtn.disabled = true;
-
+        
         const payload = {
           scenario_a: window.SCENARIOS.A,
           scenario_b: window.SCENARIOS.B || null,
@@ -7081,21 +10797,21 @@ document.addEventListener('DOMContentLoaded', () => {
           project_name: projectName,
           notes: 'Final ship from UI'
         };
-
+        
         const response = await fetch('/api/project/final_ship', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.JSON.stringify(payload)
+          body: JSON.stringify(payload)
         });
-
+        
         const result = await response.json();
-
+        
         if (result.success) {
           // Show success status
           if (finalShipStatus) {
             finalShipStatus.style.display = 'block';
           }
-
+          
           // Add download links
           if (finalShipDownloads) {
             finalShipDownloads.innerHTML = `
@@ -7104,11 +10820,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span style="color: var(--muted);">Ship ID: ${result.ship_id}</span>
               </div>
               <div style="margin-top: 8px; font-size: 0.85em; color: var(--muted);">
-                Shipped on ${new Date(result.shipped_date).toLocaleDateString()}
+                Shipped on ${new Date(result.shipped_date).toLocaleString()}
               </div>
             `;
           }
-
+          
           // Disable editing controls
           finalShipBtn.style.display = 'none';
           document.querySelectorAll('#step3 button, #step4 button').forEach(btn => {
@@ -7116,7 +10832,7 @@ document.addEventListener('DOMContentLoaded', () => {
               btn.disabled = true;
             }
           });
-
+          
           alert(`✅ PROJECT SHIPPED SUCCESSFULLY!\n\nShip ID: ${result.ship_id}\nAll data has been locked and exported.\n\nYou can download the complete package using the link provided.`);
         } else {
           alert('❌ Final ship failed: ' + (result.detail || result.message || 'Unknown error'));
@@ -7138,16 +10854,16 @@ function toggleSessionInfo() {
   const sessionInfo = document.getElementById('session-info');
   if (sessionInfo) {
     sessionInfo.style.display = sessionInfo.style.display === 'none' ? 'block' : 'none';
-
+    
     // Update session display
     if (sessionInfo.style.display === 'block' && window.ScenarioManager) {
       const sessionIdDisplay = document.getElementById('session-id-display');
       const lastSavedDisplay = document.getElementById('last-saved-display');
-
+      
       if (sessionIdDisplay) {
         sessionIdDisplay.textContent = window.ScenarioManager.state.sessionId || 'None';
       }
-
+      
       if (lastSavedDisplay) {
         if (window.ScenarioManager.state.lastSaved) {
           const date = new Date(window.ScenarioManager.state.lastSaved);
@@ -7164,14 +10880,14 @@ function startNewSession() {
   if (confirm('Start a new session? This will clear all current data.')) {
     // Clear current data and start fresh
     SessionManager.startNewSession();
-
+    
     // Clear ScenarioManager state
     if (window.ScenarioManager) {
       window.ScenarioManager.clear();
       window.ScenarioManager.state.sessionId = SessionManager.getCurrentSessionId();
       window.ScenarioManager.saveToBackend();
     }
-
+    
     // Reload the page to start fresh
     window.location.reload();
   }
@@ -7196,15 +10912,14 @@ window.toggleSessionInfo = toggleSessionInfo;
 window.startNewSession = startNewSession;
 window.clearAllData = clearAllData;
 
-// Commented out because boot function doesn't exist
-// window.addEventListener("load", boot);
+window.addEventListener("load", boot);
 
 // LEARN button functionality (Learning Brain integration)
 (function attachLearn(){
   const btn = document.getElementById('learnBtn');
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    const rfpText = (window.APP?.rfpText) || "";
+    const rfpText = (window.APB?.step2?.rfpText) || "";
     const selected = Array.from(window.APB?.step2?.selectedCodes || []);
     const components = (window.APB?.selectionStore?.componentsByDeliv)
       ? Object.fromEntries(window.APB.selectionStore.componentsByDeliv) : {};
@@ -7212,7 +10927,7 @@ window.clearAllData = clearAllData;
       const res = await fetch("/api/brain/learn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.JSON.stringify({
+        body: JSON.stringify({
           rfp_text: rfpText,
           selected_deliverables: selected,
           components_by_deliv: components,
@@ -7227,153 +10942,3 @@ window.clearAllData = clearAllData;
     }
   });
 })();
-
-// ================================================================================
-// Step 2: Deliverables Panel Rendering
-// ================================================================================
-
-/**
- * Renders the deliverables panel in Step 2
- * Reads from APB.step2.allDeliverables and renders into #s2-deliv-list
- * Honors APB.step2.selectedCodes for checkbox states
- */
-window.renderDeliverablesPanel = function() {
-  console.log('[renderDeliverablesPanel] Starting render...');
-  
-  const container = document.getElementById('s2-deliv-list');
-  if (!container) {
-    console.warn('[renderDeliverablesPanel] Container #s2-deliv-list not found');
-    return;
-  }
-
-  const deliverables = APB.step2.allDeliverables || [];
-  const selectedCodes = APB.step2.selectedCodes || new Set();
-  
-  console.log('[renderDeliverablesPanel] Rendering', deliverables.length, 'deliverables');
-  console.log('[renderDeliverablesPanel] Selected codes:', selectedCodes.size);
-
-  if (deliverables.length === 0) {
-    container.innerHTML = '<p style="color: var(--muted); text-align: center; padding: 40px 20px; font-size: 0.9em;">No deliverables available. Click "Analyze with AI" to get started.</p>';
-    return;
-  }
-
-  // Separate selected and unselected deliverables
-  const selected = [];
-  const unselected = [];
-  
-  deliverables.forEach(deliv => {
-    const code = deliv.deliverable_code || deliv.code;
-    if (selectedCodes.has(code)) {
-      selected.push(deliv);
-    } else {
-      unselected.push(deliv);
-    }
-  });
-
-  // Build HTML - selected first, then unselected
-  let html = '';
-  
-  // Render selected deliverables
-  if (selected.length > 0) {
-    html += '<div style="margin-bottom: 12px;">';
-    html += '<div style="font-size: 0.75em; color: var(--accent); font-weight: 600; padding: 4px 8px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; margin-bottom: 6px;">✓ SELECTED (' + selected.length + ')</div>';
-    selected.forEach(deliv => {
-      html += renderDeliverableRow(deliv, true);
-    });
-    html += '</div>';
-  }
-
-  // Render unselected deliverables
-  if (unselected.length > 0) {
-    html += '<div>';
-    if (selected.length > 0) {
-      html += '<div style="font-size: 0.75em; color: var(--muted); font-weight: 600; padding: 4px 8px; background: rgba(255, 255, 255, 0.03); border-radius: 4px; margin-bottom: 6px;">AVAILABLE (' + unselected.length + ')</div>';
-    }
-    unselected.forEach(deliv => {
-      html += renderDeliverableRow(deliv, false);
-    });
-    html += '</div>';
-  }
-
-  container.innerHTML = html;
-  
-  // Attach event listeners to checkboxes
-  attachDeliverableCheckboxListeners();
-  
-  console.log('[renderDeliverablesPanel] Render complete');
-};
-
-/**
- * Renders a single deliverable row
- */
-function renderDeliverableRow(deliv, isSelected) {
-  const code = escapeHtml(deliv.deliverable_code || deliv.code || '');
-  const name = escapeHtml(deliv.deliverable || deliv.name || code);
-  const dept = escapeHtml(deliv.service_department || deliv.department || '');
-  
-  return `
-    <div class="deliv-row" data-code="${code}" style="padding: 6px 8px; margin-bottom: 4px; border-radius: 4px; background: ${isSelected ? 'rgba(139, 92, 246, 0.1)' : 'rgba(255,255,255,0.02)'}; border: 1px solid ${isSelected ? 'rgba(139, 92, 246, 0.3)' : 'rgba(255,255,255,0.05)'}; cursor: pointer; transition: all 0.2s;">
-      <label style="display: flex; align-items: start; gap: 8px; cursor: pointer; width: 100%;">
-        <input 
-          type="checkbox" 
-          class="deliv-checkbox" 
-          data-code="${code}"
-          ${isSelected ? 'checked' : ''}
-          style="margin-top: 2px; cursor: pointer; flex-shrink: 0;"
-        />
-        <div style="flex: 1; min-width: 0;">
-          <div style="font-size: 0.9em; font-weight: 500; color: var(--text); margin-bottom: 2px;">${name}</div>
-          ${dept ? `<div style="font-size: 0.75em; color: var(--muted);">${dept}</div>` : ''}
-        </div>
-      </label>
-    </div>
-  `;
-}
-
-/**
- * Attach change event listeners to deliverable checkboxes
- */
-function attachDeliverableCheckboxListeners() {
-  const checkboxes = document.querySelectorAll('.deliv-checkbox');
-  
-  checkboxes.forEach(checkbox => {
-    checkbox.addEventListener('change', function(e) {
-      e.stopPropagation();
-      const code = this.dataset.code;
-      const isChecked = this.checked;
-      
-      console.log('[Deliverable Toggle]', code, isChecked ? 'selected' : 'unselected');
-      
-      // Update selection store
-      if (isChecked) {
-        APB.step2.selectedCodes.add(code);
-      } else {
-        APB.step2.selectedCodes.delete(code);
-      }
-      
-      // Re-render to update grouping
-      window.renderDeliverablesPanel();
-      
-      // Update summary counts
-      if (typeof updateSummaryCounts === 'function') {
-        updateSummaryCounts();
-      }
-      
-      // Sync with ScenarioManager if available
-      if (window.ScenarioManager && window.ScenarioManager.updateSelection) {
-        window.ScenarioManager.updateSelection({
-          deliverables: Array.from(APB.step2.selectedCodes)
-        });
-      }
-    });
-  });
-}
-
-/**
- * Helper function to escape HTML for safe rendering
- */
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}

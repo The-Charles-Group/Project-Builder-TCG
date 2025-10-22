@@ -1,0 +1,304 @@
+Below are copy‑paste patches to make the left panel populate and to add the component picker. These use the server you shipped in your v2.8 build (it already exposes the deliverables list and export plumbing). 
+
+v2.8 prod
+
+A) Front‑end patch (Step 2): make selection show on the left and build
+
+Add this to static/app.js (or your main JS). It’s defensive about element IDs, so it will work with your current markup.
+
+// ---- Step 2 state ----
+const S2 = {
+  allDeliverables: [],                // from /api/options
+  selectedCodes: new Set(),           // codes the user checked
+  selectedMeta: new Map(),            // code -> {name, category}
+  selectedComponentsMap: {},          // code -> Set(component names)
+  els: {
+    listRight: document.querySelector('#s2-deliv-list, #deliverableList'),
+    search: document.querySelector('#s2-deliv-search, #delivSearch'),
+    btnApply: document.querySelector('#s2-apply, #applySelection, #btnApplySelection'),
+    btnSelectAll: document.querySelector('#s2-deliv-selectall, #delivSelectAll'),
+    btnClear: document.querySelector('#s2-deliv-clear, #delivClear'),
+    yourSel: document.querySelector('#s2-your-list, #yourSelection, #yourSelectionList'),
+    compDrawer: document.getElementById('compDrawer'),
+    compList: document.getElementById('compList'),
+    compTitle: document.getElementById('compTitle'),
+    compDone: document.getElementById('compDone'),
+  }
+};
+
+// ---- Load options and render right-hand list ----
+async function s2LoadDeliverables() {
+  const r = await fetch('/api/options');   // server returns deliverables + templates
+  const data = await r.json();
+  S2.allDeliverables = data.deliverables || [];
+  s2RenderRight('');
+}
+
+function s2RenderRight(filter) {
+  const host = S2.els.listRight;
+  if (!host) return;
+  const q = (filter || '').toLowerCase();
+  const items = S2.allDeliverables.filter(d =>
+    !q ||
+    String(d.Deliverable).toLowerCase().includes(q) ||
+    String(d.Category || '').toLowerCase().includes(q) ||
+    String(d.Deliverable_Code).toLowerCase().includes(q)
+  );
+  host.innerHTML = items.map(d => `
+    <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+      <input type="checkbox" class="s2chk"
+        data-code="${d.Deliverable_Code}"
+        data-name="${d.Deliverable}"
+        data-cat="${d.Category}"
+        ${S2.selectedCodes.has(String(d.Deliverable_Code)) ? 'checked' : ''}/>
+      <span>${d.Deliverable}</span>
+      <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
+    </label>
+  `).join('') || '<div style="opacity:.7;padding:8px">No deliverables</div>';
+
+  host.querySelectorAll('.s2chk').forEach(cb => {
+    cb.addEventListener('change', e => {
+      const code = e.target.dataset.code, name = e.target.dataset.name, cat = e.target.dataset.cat;
+      if (e.target.checked) {
+        S2.selectedCodes.add(code);
+        S2.selectedMeta.set(code, {name, category: cat});
+      } else {
+        S2.selectedCodes.delete(code);
+        S2.selectedMeta.delete(code);
+      }
+      s2RenderLeft();
+    });
+  });
+}
+
+S2.els.search?.addEventListener('input', e => s2RenderRight(e.target.value));
+S2.els.btnSelectAll?.addEventListener('click', () => {
+  S2.allDeliverables.forEach(d => {
+    S2.selectedCodes.add(String(d.Deliverable_Code));
+    S2.selectedMeta.set(String(d.Deliverable_Code), {name: d.Deliverable, category: d.Category});
+  });
+  s2RenderRight(S2.els.search?.value || '');
+  s2RenderLeft();
+});
+S2.els.btnClear?.addEventListener('click', () => {
+  S2.selectedCodes.clear();
+  S2.selectedMeta.clear();
+  s2RenderRight(S2.els.search?.value || '');
+  s2RenderLeft();
+});
+
+// ---- Left panel ("Your Selection") with Components… buttons ----
+function s2RenderLeft() {
+  const host = S2.els.yourSel;
+  if (!host) return;
+  const rows = Array.from(S2.selectedCodes).map(code => {
+    const meta = S2.selectedMeta.get(code) || {name: code, category: ''};
+    return `
+      <div class="row" style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.06)">
+        <strong>${meta.name}</strong>
+        <small style="opacity:.75">${meta.category || ''}</small>
+        <button class="btn small s2-comp" data-code="${code}" data-name="${meta.name}" style="margin-left:auto">Components…</button>
+        <button class="btn small s2-remove" data-code="${code}">✕</button>
+      </div>`;
+  });
+  host.innerHTML = rows.join('') || '<div style="opacity:.7;padding:8px">No deliverables selected yet.</div>';
+
+  host.querySelectorAll('.s2-remove').forEach(btn => btn.addEventListener('click', e => {
+    const code = e.target.dataset.code;
+    S2.selectedCodes.delete(code);
+    S2.selectedMeta.delete(code);
+    s2RenderRight(S2.els.search?.value || '');
+    s2RenderLeft();
+  }));
+
+  host.querySelectorAll('.s2-comp').forEach(btn => btn.addEventListener('click', e => {
+    s2OpenComponents(e.target.dataset.code, e.target.dataset.name);
+  }));
+}
+
+// ---- Components drawer ----
+async function s2OpenComponents(code, name) {
+  const compUrl = `/api/components_for?deliverable_code=${encodeURIComponent(code)}`;
+  const res = await fetch(compUrl);
+  const data = await res.json();
+  const items = data.items || [];
+  const current = S2.selectedComponentsMap[code] || new Set();
+  if (!S2.els.compDrawer) {
+    alert('Component picker UI not mounted (add #compDrawer).');
+    return;
+  }
+  S2.els.compTitle.textContent = `Components — ${name}`;
+  S2.els.compList.innerHTML = items.map(c => `
+    <label class="row" style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
+      <input type="checkbox" class="s2compchk" data-code="${code}" data-name="${c.name}"
+        ${current.has(c.name) ? 'checked' : ''}/>
+      <span>${c.name}</span>
+      <small style="margin-left:auto;opacity:.75">${Math.round(c.hours)}h</small>
+    </label>`).join('') || '<div style="opacity:.7;padding:8px">No components for this deliverable.</div>';
+  S2.els.compDrawer.classList.remove('hidden');
+
+  S2.els.compList.querySelectorAll('.s2compchk').forEach(chk => {
+    chk.addEventListener('change', e => {
+      const c = e.target.dataset.code, n = e.target.dataset.name;
+      if (!S2.selectedComponentsMap[c]) S2.selectedComponentsMap[c] = new Set();
+      e.target.checked ? S2.selectedComponentsMap[c].add(n) : S2.selectedComponentsMap[c].delete(n);
+    });
+  });
+}
+S2.els.compDone?.addEventListener('click', () => S2.els.compDrawer.classList.add('hidden'));
+
+// ---- Build Scenarios directly from Step 2 ----
+async function s2ApplyAndBuild() {
+  const codes = Array.from(S2.selectedCodes);
+  if (!codes.length) { alert('Please select at least one deliverable.'); return; }
+
+  // gather knobs (fallbacks keep it working even if Step 1 controls are untouched)
+  const pricingMode  = document.querySelector('#pricingMode')?.value || 'Flat_Blended';
+  const blendedRate  = Number(document.querySelector('#blendedRate')?.value || 195);
+  const rateBand     = document.querySelector('#rateBand')?.value || 'Standard_US';
+  const useSlack     = (document.querySelector('#useSlack')?.checked ?? true);
+  const slackI       = Number(document.querySelector('#slackAfterInternal')?.value || 1);
+  const slackC       = Number(document.querySelector('#slackAfterClient')?.value   || 2);
+  const slackPct     = Number(document.querySelector('#slackGlobalPct')?.value     || 0.05);
+  const projectStart = document.querySelector('#projectStart')?.value || null;
+  const scenA        = document.querySelector('#scenarioA')?.value || 'MED_LOW';
+  const scenB        = document.querySelector('#scenarioB')?.value || 'MED_HIGH';
+
+  const compMap = Object.fromEntries(Object.entries(S2.selectedComponentsMap)
+                      .map(([k, set]) => [k, Array.from(set || [])]));
+
+  const payload = {
+    selected_deliverable_codes: codes,
+    selected_components_map: compMap,                        // <-- NEW
+    scenario_a: { mode: 'template', scenario_key: scenA },
+    scenario_b: { mode: 'template', scenario_key: scenB },
+    pricing_mode: pricingMode,
+    blended_rate: pricingMode === 'Flat_Blended' ? blendedRate : undefined,
+    rate_band: rateBand,
+    use_slack: useSlack,
+    slack_after_internal: slackI,
+    slack_after_client: slackC,
+    slack_global_pct: slackPct,
+    project_start: projectStart
+  };
+
+  const res = await fetch('/api/build', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }).then(r => r.json());
+
+  window.__lastBuild = res; // enable downstream pricing/export
+  // Optional: update any pricing/summary widgets here
+  // s2RenderTotals(res); // if you have one
+}
+
+// Bind buttons
+S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
+
+// Initialize
+s2LoadDeliverables();
+
+
+Minimal HTML you need for the component drawer (place anywhere near Step 2):
+
+<div id="compDrawer" class="drawer hidden" style="position:fixed;right:20px;top:20px;width:420px;height:70vh;background:#111;border:1px solid #333;border-radius:8px;padding:12px;display:none;">
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+    <strong id="compTitle" style="flex:1">Components</strong>
+    <button id="compDone" class="btn small">Done</button>
+  </div>
+  <div id="compList" style="height:calc(70vh - 70px);overflow:auto;border:1px solid #222;border-radius:6px"></div>
+</div>
+<script>
+  // show/hide helpers for the inline styles above
+  const _drawer = document.getElementById('compDrawer');
+  if (_drawer) {
+    _drawer.classList.add('hidden');
+    Object.defineProperty(_drawer.classList, 'remove', { value: function(){ _drawer.style.display='block'; DOMTokenList.prototype.remove.apply(this, arguments);} });
+    Object.defineProperty(_drawer.classList, 'add',    { value: function(){ _drawer.style.display='none';  DOMTokenList.prototype.add.apply(this, arguments);} });
+  }
+</script>
+
+
+After this, checking boxes on the right immediately populates Your Selection on the left; click Components… to pick sub‑tasks; click Apply selection to build on the spot.
+
+B) Back‑end patch: expose components and honor them in Build
+
+If you haven’t added these yet, paste them into your v2.8 server (same file that defines /api/options and /api/build). The signatures match your current DB helpers and column names. 
+
+v2.8 prod
+
+1) List components for a deliverable
+@app.get("/api/components_for")
+def api_components_for(deliverable_code: str, complexity: str="Advanced", tier: str="T2_MediumVolume"):
+    if not DB.loaded: DB.load()
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)]
+    comp_names = sorted(c for c in set(sub.get("Component", "").astype(str)) if c and c!="nan")
+    included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+    scen_col = DB._scenario_col(complexity, tier)
+    # hours per component (fallback if helper isn't present)
+    try:
+        hours_map = DB.hours_by_component(deliverable_code, included, scen_col)
+    except Exception:
+        g = (sub[sub["task_group"].isin(included)]
+             .groupby("Component")[scen_col].sum(numeric_only=True))
+        hours_map = {k: float(v) for k, v in g.items()}
+    return {"items": [{"name": c, "hours": float(hours_map.get(c, 0.0))} for c in comp_names]}
+
+2) Accept per‑deliverable components in /api/build
+
+Add to your Pydantic payload:
+
+from typing import Dict, List, Optional
+class BuildPayload(BaseModel):
+    ...
+    selected_components_map: Optional[Dict[str, List[str]]] = None
+
+
+Thread it into the build loop:
+
+comp_map = {str(k): [str(x) for x in (v or [])] for (k,v) in (payload.selected_components_map or {}).items()}
+
+...
+selected_components = comp_map.get(str(code)) or None
+out = _scenario_for_deliverable(
+    code, cat, spec_resolved,
+    pricing_mode, blended_rate, rate_band,
+    use_slack, slack_i, slack_c, slack_pct, project_start,
+    scenario_letter=letter, retainer_months=months,
+    selected_components=selected_components,        # <-- NEW
+)
+
+
+…and update _scenario_for_deliverable:
+
+def _scenario_for_deliverable(..., selected_components: list[str] | None = None):
+    ...
+    scen_col = DB._scenario_col(complexity, tier)
+    if selected_components:
+        frames = []
+        for comp in selected_components:
+            fr = DB.hours_by_role_for_component(deliv_code, comp, included, scen_col)
+            if fr is not None and not fr.empty:
+                frames.append(fr)
+        hrs_by_role = (pd.concat(frames, ignore_index=True)
+                        if frames else pd.DataFrame(columns=["Resource_Title","Seniority","Hours"]))
+        if not hrs_by_role.empty:
+            hrs_by_role = hrs_by_role.groupby(["Resource_Title","Seniority"], as_index=False)["Hours"].sum()
+    else:
+        hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
+    ...
+
+C) Why the XML looked “flat” in v2.8
+
+Until the left panel + build path are wired, the exporter only receives a shallow scenario (just deliverables). That produces a flat MSPDI with 5 tasks (project + 4 deliverables) and no children/assignments—exactly what’s in the 9/29 file. 
+
+Casa-Dragones-Digital-MKT-RFP -…
+
+
+When the scenario includes components/tasks (like v2.7), you get a deep, indented WBS with many tasks and resources, as seen in the 9/23 file. 
+
+v2.8 prod
+
+Your current v2.8 server already has the Workfront column order (including Service Department) and the DB plumbing to expand hours/schedule once the scenario includes components. 
+
+v2.8 prod

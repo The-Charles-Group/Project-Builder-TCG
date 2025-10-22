@@ -1,0 +1,146 @@
+Backend (FastAPI) — make timestamp mandatory in EST and base the title on the uploaded filename
+
+1) Imports + one global (near the other imports):
+
+from zoneinfo import ZoneInfo  # Python 3.9+
+LAST_UPLOAD_FILENAME: str | None = None
+
+
+2) Remember the last uploaded filename in both upload endpoints:
+
+@app.post("/api/suggest_by_file")
+async def api_suggest_by_file(file: UploadFile = File(...)):
+    ...
+    recs = DB.suggest_deliverables_from_text(text or "")
+    # NEW: remember for default project name
+    global LAST_UPLOAD_FILENAME
+    LAST_UPLOAD_FILENAME = file.filename
+    return {"suggested": recs, "filename": file.filename}
+
+@app.post("/api/summarize_by_file", response_model=RfpSummary)
+async def api_summarize_by_file(file: UploadFile = File(...)):
+    content = await file.read()
+    ...
+    # NEW: remember for default project name
+    global LAST_UPLOAD_FILENAME
+    LAST_UPLOAD_FILENAME = file.filename
+    return ai_summarize_rfp_text(text)
+
+
+(These are the same routes you already have; we’re just adding the LAST_UPLOAD_FILENAME line. )
+
+3) Add helpers (put these near your other helpers such as _safe_filename):
+
+def _upload_title_default() -> str | None:
+    """Base title from the most recent uploaded file (sans extension), sanitized."""
+    if not LAST_UPLOAD_FILENAME:
+        return None
+    base = os.path.splitext(os.path.basename(LAST_UPLOAD_FILENAME))[0]
+    return _safe_filename(base)
+
+def _est_stamp_for_filename() -> str:
+    """
+    Eastern time, 12-hour with AM/PM. Use dot instead of colon because
+    ':' is illegal in filenames on Windows.
+    Example: 2025-09-13 09.30AM EST
+    """
+    now_est = datetime.datetime.now(ZoneInfo("America/New_York"))
+    return now_est.strftime("%Y-%m-%d %I.%M%p EST")
+
+def _export_basename(project_name: str, scenario_label: str | None = None) -> str:
+    """Project - Workfront_Export - [Scenario?] - 2025-09-13 09.30AM EST"""
+    title = _safe_filename(project_name or "Proposal")
+    parts = [title, "Workfront_Export"]
+    if scenario_label:
+        parts.append(_safe_filename(scenario_label))
+    parts.append(_est_stamp_for_filename())
+    return " - ".join(parts)
+
+
+Note: _safe_filename already strips unsafe characters, so the dot in 09.30AM is cross‑platform safe.
+
+4) Change /api/export to always use the EST timestamp and the uploaded filename convention
+
+Replace the filename‑building block in your existing api_export:
+
+@app.post("/api/export")
+def api_export(payload: ExportPayload):
+    ...
+    # OLD:
+    # project_name = payload.project_name or f"Proposal {datetime.date.today().isoformat()}"
+    # base_parts = [project_name, (payload.scenario_label or "").strip(), "Workfront Export"]
+    # base = " - ".join([p for p in base_parts if p])
+    # if payload.add_timestamp:
+    #     base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
+
+    # NEW:
+    project_name = (payload.project_name
+                    or _upload_title_default()
+                    or f"Proposal {datetime.date.today().isoformat()}")
+
+    base = _export_basename(project_name, payload.scenario_label)  # always adds EST timestamp
+
+    fmt = (payload.file_format or "csv").lower()
+    if fmt == "csv":
+        out_path = f"{base}.csv"
+        df.to_csv(out_path, index=False)
+        return FileResponse(out_path, filename=os.path.basename(out_path), media_type="text/csv")
+
+    # xlsx
+    try:
+        out_path = f"{base}.xlsx"
+        with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+            df.to_excel(xw, index=False)
+            _apply_number_formats(xw.sheets[list(xw.sheets.keys())[0]], df)
+        return FileResponse(
+            out_path, filename=os.path.basename(out_path),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as ex:
+        raise HTTPException(400, "XLSX export requires 'openpyxl'.") from ex
+
+
+This replaces the 24‑hour optional timestamp with an always‑on EST, 12‑hour stamp and changes "Workfront Export" to "Workfront_Export". Your route and response remain the same.
+
+5) Do the same for /api/export_workbook (A & B in one file):
+
+@app.post("/api/export_workbook")
+def api_export_workbook(payload: ExportWorkbookPayload):
+    ...
+    project = (payload.project_name
+               or _upload_title_default()
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
+    base = _export_basename(project, "Scenarios A & B")  # includes EST timestamp
+    out_path = f"{base}.xlsx"
+    ...
+    return FileResponse(
+        out_path, filename=os.path.basename(out_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+Front‑end (small UX tweak)
+
+Remove the “Add timestamp” checkbox from the HTML (server now always adds EST time), and stop sending it from JS:
+
+<!-- Remove this:
+<label><input type="checkbox" id="export-add-ts"> Add timestamp</label>
+-->
+
+function getExportPrefs() {
+  return {
+    file_format: (document.getElementById('export-format')?.value || 'xlsx').toLowerCase(),
+    project_name: document.getElementById('project-name')?.value || ''
+  };
+}
+
+
+Default the “Project name” field to the uploaded filename when Stage 1 finishes (you already receive filename from /api/suggest_by_file):
+
+// After /api/suggest_by_file returns { suggested, filename }
+appState.uploadFilename = res.filename || appState.uploadFilename;
+const base = (appState.uploadFilename || '').replace(/\.[^.]+$/, ''); // strip extension only
+const projectInput = document.getElementById('project-name');
+if (projectInput && !projectInput.value) projectInput.value = base;
+
+
+The backend will still use the uploaded name if someone clears the field, because we also stored it server‑side (see LAST_UPLOAD_FILENAME). The browser will accept the server‑suggested filename thanks to Content‑Disposition being exposed via CORS.

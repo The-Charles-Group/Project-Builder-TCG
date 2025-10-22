@@ -1,0 +1,45 @@
+NFO:     172.31.80.194:42920 - "GET /api/l3_for?deliverable_code=DEL-0032&component_name=Ad-Platform%20Reporting HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42914 - "GET /api/l3_for?deliverable_code=DEL-0032&component_name=Dashboard%20Analytics HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/l3_for?deliverable_code=DEL-0032&component_name=KPI%20Monitoring HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42886 - "GET /api/l3_for?deliverable_code=DEL-0032&component_name=Reporting%20%26%20Ad-Tagging%20Support HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/l3_for?deliverable_code=DEL-0032&component_name=Reconcilliation%20%26%20Media%20Budget%20Authorization HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/components?deliverable=DEL-0043 HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/l3_for?deliverable_code=DEL-0043&component_name=Planning%2C%20Strategy%20%26%20UX HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/components?deliverable=DEL-0025 HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Campaign%20Set%20Up HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42932 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Influencer%20Assets HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42886 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Creative%20Production%20Assistance HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Creative%20Brief%20Development%20%26%20Influencer%20Direction HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42936 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Creator%20Briefing HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42950 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Influencer%20Sourcing%2C%20Contracting%20%26%20Management HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42886 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Influencer%20Spend%20Agreements HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Influencer-Specific%20Performance%20Recap%20Report HTTP/1.1" 200 OK
+INFO:     172.31.80.194:42886 - "GET /api/l3_for?deliverable_code=DEL-0025&component_name=Influencer%2FCreator%20Research%20%26%20Sourcing HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "POST /api/step2/l3/bulk HTTP/1.1" 200 OK
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:41756 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found

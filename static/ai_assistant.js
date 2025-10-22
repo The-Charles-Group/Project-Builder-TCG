@@ -26,7 +26,7 @@ class AIAssistant {
             selectedDeliverables: [],
             currentStep: 'step1',
             formValues: {},
-            analysisMode: 'deep',
+            analysisMode: 'fast',
             jobId: null,
             lastError: null,
             stateHistory: []
@@ -100,19 +100,14 @@ class AIAssistant {
                 const state = JSON.parse(savedState);
                 if (state && state.jobId) {
                     const jobIdAge = state.jobIdTimestamp ? (Date.now() - state.jobIdTimestamp) : Infinity;
-                    const thirtyMinutes = 30 * 60 * 1000; // 30 minutes - increased from 5
+                    const fiveMinutes = 5 * 60 * 1000; // 5 minutes
                     
-                    // Only clear if job is truly stale (older than 30 minutes)
-                    if (jobIdAge > thirtyMinutes) {
-                        console.log('[CHARLES] Found truly stale job ID on init, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                    if (jobIdAge > fiveMinutes) {
+                        console.log('[CHARLES] Found stale job ID on init, clearing:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
                         state.jobId = null;
                         state.jobIdTimestamp = null;
                         localStorage.setItem('charles_agent_state', JSON.stringify(state));
                         this.agentState.jobId = null;
-                    } else {
-                        console.log('[CHARLES] Preserving active job ID:', state.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
-                        // Preserve the job ID if it's recent
-                        this.agentState.jobId = state.jobId;
                     }
                 }
             } catch (e) {
@@ -120,9 +115,9 @@ class AIAssistant {
             }
         }
         
-        // Don't immediately clear polling interval - let it continue if there's an active job
-        if (this.currentPollInterval && !this.agentState.jobId) {
-            console.log('[CHARLES] Clearing poll interval as no active job');
+        // Clear any existing polling interval
+        if (this.currentPollInterval) {
+            console.log('[CHARLES] Clearing existing poll interval on init');
             clearInterval(this.currentPollInterval);
             this.currentPollInterval = null;
         }
@@ -174,7 +169,7 @@ class AIAssistant {
             selectedDeliverables: [],
             currentStep: 'step1',
             formValues: {},
-            analysisMode: 'deep',
+            analysisMode: 'fast',
             jobId: null,
             lastError: null,
             stateHistory: []
@@ -280,33 +275,31 @@ class AIAssistant {
                 this.navigateToStep(latestState.currentStep);
             }
             
-            // CRITICAL FIX: NEVER auto-resume job polling on page load
-            // This prevents zombie polling loops for dead/expired jobs
-            // If a user refreshes during analysis, they should start a new analysis
+            // Restore job ID if analysis was in progress and not stale
+            // CRITICAL: Check multiple conditions to prevent auto-resume of dead jobs
+            const isTransitioningToPricing = window.isTransitioningToPricing || false;
             
-            if (latestState.jobId) {
-                console.log('[CHARLES] Found job ID in localStorage:', latestState.jobId);
-                console.log('[CHARLES] NOT auto-resuming job polling (user must start new analysis if needed)');
-                
-                // Clear the job ID completely - don't restore it
+            // NEVER auto-resume job polling if skipJobRestore is true
+            if (this.skipJobRestore) {
+                console.log('[CHARLES] skipJobRestore=true, NOT resuming any job polling');
                 this.agentState.jobId = null;
+            } else if (latestState.jobId && !isTransitioningToPricing) {
+                const jobIdAge = latestState.jobIdTimestamp ? (Date.now() - latestState.jobIdTimestamp) : Infinity;
+                const fiveMinutes = 5 * 60 * 1000; // 5 minutes in milliseconds
                 
-                // Also clear it from localStorage to prevent future attempts
-                const savedState = JSON.parse(localStorage.getItem('charles_agent_state') || '{}');
-                if (savedState) {
-                    savedState.jobId = null;
-                    savedState.jobIdTimestamp = null;
-                    // Clear from stateHistory too
-                    if (savedState.stateHistory && Array.isArray(savedState.stateHistory)) {
-                        savedState.stateHistory.forEach(historyItem => {
-                            if (historyItem.jobId) {
-                                historyItem.jobId = null;
-                                historyItem.jobIdTimestamp = null;
-                            }
-                        });
-                    }
-                    localStorage.setItem('charles_agent_state', JSON.stringify(savedState));
+                if (jobIdAge < fiveMinutes) {
+                    console.log('[CHARLES] Restoring job ID:', latestState.jobId, 'Age:', Math.floor(jobIdAge/1000), 'seconds');
+                    this.agentState.jobId = latestState.jobId;
+                    // Resume tracking
+                    this.trackAnalysisJob(latestState.jobId, true);
+                } else {
+                    console.log('[CHARLES] Job ID is stale (older than 5 minutes), not restoring:', latestState.jobId);
+                    // Clear the stale jobId
+                    this.agentState.jobId = null;
                 }
+            } else if (isTransitioningToPricing) {
+                console.log('[CHARLES] Transitioning to pricing - NOT resuming job polling');
+                this.agentState.jobId = null;
             }
             
             this.addMessage('✅ Previous state restored successfully', 'assistant');
@@ -708,11 +701,9 @@ class AIAssistant {
             }
         };
         
-        // Start polling with setInterval
         this.currentPollInterval = setInterval(async () => {
             try {
                 pollCount++;
-                console.log(`[CHARLES] Polling attempt ${pollCount} for job ${jobId}`);
                 
                 if (pollCount > maxPolls) {
                     console.log('[CHARLES] Max polls reached, cleaning up');
@@ -762,10 +753,9 @@ class AIAssistant {
                     1000
                 );
                 
-                // Handle 410 Gone (zombie job blocked) or 404 - STOP IMMEDIATELY
-                if (response.status === 410 || response.status === 404) {
-                    const statusText = response.status === 410 ? 'expired and blocked by server' : 'not found';
-                    console.log(`[CHARLES] Job ${jobId} ${statusText} (${response.status}), stopping polling immediately`);
+                // Handle 404 - job not found - STOP IMMEDIATELY
+                if (response.status === 404) {
+                    console.log(`[CHARLES] Job ${jobId} not found (404), stopping polling immediately`);
                     
                     // Call cleanup to stop polling and clear the job ID from everywhere
                     cleanup();
@@ -796,12 +786,8 @@ class AIAssistant {
                         }
                     }
                     
-                    const userMessage = response.status === 410
-                        ? '❌ Analysis job has expired and was blocked by the server. Please start a new analysis.'
-                        : '❌ Analysis job not found. It may have expired or been deleted. Please try uploading your document again.';
-                    
-                    this.addMessage(userMessage, 'assistant');
-                    this.updateProgress(100, statusText, response.status === 410 ? 'Job expired and blocked' : 'Analysis job no longer exists');
+                    this.addMessage('❌ Analysis job not found. It may have expired or been deleted. Please try uploading your document again.', 'assistant');
+                    this.updateProgress(100, 'Job not found', 'Analysis job no longer exists');
                     return;
                 }
                 
@@ -856,19 +842,12 @@ class AIAssistant {
                             taskMonitor.updateTask(4, 'in_progress');
                         }
                         
-                        // Count deliverables from the correct path
-                        let deliverableCount = 0;
-                        if (status.result?.plan?.suggestions_by_department) {
-                            const suggestions = status.result.plan.suggestions_by_department;
-                            for (const dept in suggestions) {
-                                deliverableCount += suggestions[dept].length;
-                            }
-                        }
+                        const deliverableCount = status.data?.deliverables?.length || status.deliverables_count || 0;
                         this.addMessage(`✅ Analysis complete! Found ${deliverableCount} deliverables. Loading into app...`, 'assistant');
                         
-                        // Load the analysis results into the app - use result, not data
-                        if (status.result) {
-                            await this.loadAnalysisResults(status.result);
+                        // Load the analysis results into the app
+                        if (status.data) {
+                            await this.loadAnalysisResults(status.data);
                             
                             // Navigate to Step 2
                             await this.navigateToStep('step2');
@@ -2827,24 +2806,15 @@ class AIAssistant {
     async loadAnalysisResults(data) {
         this.addMessage('📥 Loading deliverables into the application...', 'assistant');
         
-        // Count deliverables from the correct structure
-        let deliverableCount = 0;
-        let deliverables = [];
-        if (data.plan?.suggestions_by_department) {
-            const suggestions = data.plan.suggestions_by_department;
-            for (const dept in suggestions) {
-                deliverableCount += suggestions[dept].length;
-                deliverables = deliverables.concat(suggestions[dept]);
-            }
-        }
-        
         // Call the global function to load data
         if (typeof window.loadScenarioData === 'function') {
             window.loadScenarioData(data);
             await this.delay(1000);
-            this.addMessage(`✅ Loaded ${deliverableCount} deliverables`, 'assistant');
+            this.addMessage(`✅ Loaded ${data.deliverables?.length || 0} deliverables`, 'assistant');
         } else {
             // Fallback - directly manipulate the UI
+            const deliverables = data.deliverables || [];
+            
             // Store in window for app to use
             window.analysisResults = data;
             window.availableDeliverables = deliverables;
@@ -4309,77 +4279,29 @@ class AIAssistant {
         const hideOverlay = this.showAgentWorking(`Triggering ${mode} analysis...`);
         
         try {
-            // Get RFP text from various sources
-            const rfpTextEl = document.getElementById('rfpText');
-            const rfpText = rfpTextEl?.value || window.APP?.rfpText || '';
-            
-            if (!rfpText) {
-                this.addMessage('❌ No RFP text found. Please upload or paste an RFP first.', 'assistant');
-                this.completeOperation(operationId);
-                return;
-            }
-            
-            // Map mode to tier
-            const tierMap = {
-                'fast': 'mini',
-                'deep': 'thinking'
-            };
-            const tier = tierMap[mode] || 'thinking';
-            
-            // Generate session ID for cache isolation
-            const sessionId = window.APP_STATE?.sessionId || 'charles_' + Date.now();
-            
-            // Call the API directly
-            console.log('[CHARLES] Calling /api/ai/analyze with mode:', mode);
-            const response = await this.retryWithBackoff(
-                async () => {
-                    const res = await fetch('/api/ai/analyze', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ 
-                            request_text: rfpText,
-                            strictness: 'balanced',
-                            tier: tier,
-                            mode: mode,
-                            session_id: sessionId
-                        })
-                    });
-                    
-                    if (!res.ok) {
-                        const error = await res.text();
-                        throw new Error(`API error: ${res.status} - ${error}`);
-                    }
-                    
-                    return res;
-                },
-                3,
-                2000
-            );
-            
-            const jobInfo = await response.json();
-            console.log('[CHARLES] Got job info:', jobInfo);
-            
-            if (jobInfo.job_id) {
-                // Save job ID and track it
-                this.agentState.jobId = jobInfo.job_id;
-                this.saveState();
+            // Find and click the analyze button
+            const analyzeBtn = document.querySelector(`[data-mode="${mode}"]`);
+            if (analyzeBtn) {
+                this.simulateClick(analyzeBtn);
                 
-                this.addMessage(`✅ Analysis started. Job ID: ${jobInfo.job_id}. Tracking progress...`, 'assistant');
+                // Wait for analysis to start
+                await this.delay(1000);
                 
-                console.log('[CHARLES] Starting job tracking for:', jobInfo.job_id);
-                
-                // Start tracking the job - DO NOT AWAIT, let it run in background
-                this.trackAnalysisJob(jobInfo.job_id).then(() => {
-                    console.log('[CHARLES] Job tracking completed for:', jobInfo.job_id);
-                }).catch(err => {
-                    console.error('[CHARLES] Job tracking error:', err);
-                });
-                
+                // Check if a job was started
+                const jobIdMatch = document.body.textContent.match(/Job ID: ([\w-]+)/);
+                if (jobIdMatch) {
+                    const jobId = jobIdMatch[1];
+                    await this.trackAnalysisJob(jobId);
+                } else {
+                    // Wait and hope for the best
+                    await this.delay(3000);
+                    this.addMessage('✅ Analysis triggered. Check Step 2 for results.', 'assistant');
+                }
                 // Complete the operation successfully
                 this.completeOperation(operationId);
             } else {
                 this.completeOperation(operationId);
-                throw new Error('No job ID returned from API');
+                throw new Error('Analyze button not found');
             }
         } catch (error) {
             this.completeOperation(operationId);

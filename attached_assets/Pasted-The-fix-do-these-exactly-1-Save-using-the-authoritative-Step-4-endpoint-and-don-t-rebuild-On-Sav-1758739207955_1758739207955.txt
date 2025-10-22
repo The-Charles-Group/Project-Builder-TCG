@@ -1,0 +1,110 @@
+The fix (do these exactly)
+1) Save using the authoritative Step‑4 endpoint and don’t rebuild
+
+On Save Order, post to /api/reorder_timeline and then replace your local Scenario items with the response. Do not call /api/build again and don’t client‑sort.
+
+async function saveTimelineOrder(letter: 'A'|'B', rows: Row[], knobs: {
+  project_start?: string,
+  complexity: string,
+  tier: string,
+  use_slack: boolean,
+  slack_after_internal: number,
+  slack_after_client: number,
+  slack_global_pct: number
+}) {
+  // Persist exact UI order using deliverable **codes**
+  const codes = rows.map(r => r.deliverable_code);
+  const includedMap = Object.fromEntries(
+    rows.map(r => [r.deliverable_code, r.included_task_groups ?? []])
+  );
+
+  const payload = {
+    scenario_letter: letter,
+    deliverable_codes: codes,
+    included_map: includedMap,
+    project_start: knobs.project_start,            // ← pass this to avoid “today” fallback
+    complexity: knobs.complexity,
+    tier: knobs.tier,
+    use_slack: knobs.use_slack,
+    slack_after_internal: knobs.slack_after_internal,
+    slack_after_client: knobs.slack_after_client,
+    slack_global_pct: knobs.slack_global_pct
+  };
+
+  const res = await fetch('/api/reorder_timeline', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+
+  // Replace local items with server‑persisted order + dates
+  setScenario(s => ({
+    ...s,
+    [letter]: {
+      ...s[letter],
+      items: data.items,
+      user_order: codes,
+      manual_order_locked: true
+    }
+  }));
+}
+
+
+Why this works:
+
+/api/reorder_timeline sequences the deliverables in the order you send, recalculates the schedule, and persists the items in memory in that exact order. It returns the new items so your UI can render without re-sorting.
+
+The endpoint anchors the first deliverable to project_start if provided; otherwise it falls back to the scenario’s start or today — which is why explicitly passing project_start prevents date drift.
+
+2) Don’t immediately call /api/build after saving
+
+/api/build always re-sorts to the default phase order (_sort_deliverables(...)), which undoes your manual order. Keep the current scenario in memory and render from the items returned by the save call.
+
+3) Turn off any client-side sort for the Step‑4 table
+
+If you’re using TanStack/Table (or similar), disable sorting for this grid or clear sort state right after saveTimelineOrder:
+
+// Example: ensure table preserves server order
+const table = useReactTable({ data: items, columns, manualSorting: true, state: { sorting: [] } });
+// Or simply remove sort handlers on Start/End columns for Step‑4.
+
+
+Any local .sort(...) or table default sort will appear as “snapping back.”
+
+4) (Optional but recommended) Lock the order server-side
+
+If you want the server to remember that this is a user‑chosen order (so later AI re‑scans don’t reorder), add two lines to the end of /api/reorder_timeline where it persists the scenario:
+
+scen["user_order"] = codes
+scen["manual_order_locked"] = True
+
+
+This ties into the existing logic in suggest_by_text that preserves user order when manual_order_locked is true.
+
+Useful endpoints (already in v2.7)
+
+Save order & recompute schedules: POST /api/reorder_timeline (authoritative Step‑4 save).
+
+Pack from scratch (same idea, also persists & returns items): POST /api/timeline/pack (returns items and project_start).
+
+Export reads your Step‑4 order verbatim: export builder does not re-sort; it iterates items in the exact order persisted by Step‑4.
+
+Quick cURL to sanity‑check the server
+curl -s localhost:5000/api/reorder_timeline \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "scenario_letter":"A",
+    "project_start":"2025-09-24",
+    "deliverable_codes":["DEL-010","DEL-020","DEL-030"],
+    "included_map":{},
+    "complexity":"Advanced",
+    "tier":"T2_MediumVolume",
+    "use_slack":true,
+    "slack_after_internal":1,
+    "slack_after_client":2,
+    "slack_global_pct":0.0
+  }' | jq '.items | map({code:.deliverable_code, start, end})'
+
+
+You should see the items in the exact order you posted, with sequential start/end anchored to project_start

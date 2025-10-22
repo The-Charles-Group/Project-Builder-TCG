@@ -1,0 +1,59 @@
+4) Run with production settings (still on Replit)
+
+Update .replit (or your run command) to use uvicorn’s optimized stack. On Replit you typically run one worker:
+# inside .replit
+run = "python -m uvicorn main:app --host 0.0.0.0 --port 8000 --loop uvloop --http httptools"
+If you later add Gunicorn: gunicorn main:app -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:8000
+
+Install uvicorn[standard] to pull in uvloop & httptools.
+
+5) E2E test: Upload RFP and verify SOW‑like plan (Playwright)
+
+FILE: tests/e2e_upload_rfp.spec.ts
+import { test, expect } from "@playwright/test";
+const APP = process.env.APP_URL || "https://tcg-agency-project-builder-v2dot8dot1.replit.app/";
+
+test("Uncommon Schools RFP flows through to plan + pricing", async ({ page }) => {
+  await page.goto(APP, { waitUntil: "domcontentloaded" });
+
+  // Step 1: Upload the RFP PDF
+  const fileChooserPromise = page.waitForEvent('filechooser');
+  await page.getByText(/Upload Your RFP/i).click();
+  const chooser = await fileChooserPromise;
+  await chooser.setFiles("./attached_assets/FINAL Uncommon Schools - May 2025 Media Agency RFP.pdf");
+
+  // Kick off analyze (Fast mode first, then Deep if needed)
+  await page.getByRole('button', { name: /Analyze with AI/i }).click();
+
+  // Basic progress UI expectation
+  await expect(page.getByText(/Analyzing/i)).toBeVisible({ timeout: 120000 });
+
+  // Wait for deliverables to appear
+  await page.waitForSelector('text=Creative Strategy / Campaign Plan Deck', { timeout: 240000 });
+
+  // Spot‑check a few key deliverables & sections
+  for (const text of [
+    "Creative Strategy / Campaign Plan Deck",
+    "Paid Media Planning",
+    "Paid Media Buying & Activation",
+    "Reporting",
+    "Competitive Landscape Analysis",
+    "Qualitative Research",
+    "Meetings"
+  ]) {
+    await expect(page.getByText(text)).toBeVisible();
+  }
+
+  // Verify pricing table populated (presence check)
+  await expect(page.locator('[data-testid="pricing-table"]')).toBeVisible();
+});
+
+setInputFiles() is the canonical way to upload a file in Playwright; if your UI wraps the <input type="file"> in a label, bind to the input directly. 
+Runebook
++2
+Software Testing Tutorials |
++2
+
+Run:
+npx playwright test tests/e2e_upload_rfp.spec.ts
+# or: APP_URL="http://localhost:8000" npx playwright test

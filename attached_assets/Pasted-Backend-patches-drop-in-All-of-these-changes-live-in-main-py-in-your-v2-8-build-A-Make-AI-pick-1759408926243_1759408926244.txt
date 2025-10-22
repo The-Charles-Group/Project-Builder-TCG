@@ -1,0 +1,173 @@
+Backend patches (drop‑in)
+
+All of these changes live in main.py in your v2.8 build.
+
+A) Make AI picks always carry components into scenarios & export
+
+At the very top of your WBS/pricing builder, ensure we inflate components whenever the selection is missing or "__ALL__":
+
+# inside build_wbs_with_pricing(...) or just before you derive per-deliverable rows
+scenario = _inflate_components_if_missing(scenario)
+
+
+This helper already exists and treats {"__ALL__": None} as “include everything”; it also normalizes empty lists to all components.
+
+When building each item, always call _scenario_for_deliverable with selected_components from the UI for that deliverable. The function already supports both formats (list or dict) and will use default hours for None.
+
+B) Apply retainer months to hours (no more “0 hours”)
+
+Right after you compute task_hours for a component’s tasks (where you add rows for each leaf task), multiply by retainer_months if the deliverable is listed in the retainer map:
+
+# pseudo-context inside the WBS row assembly
+retainer_months = int((deliverable_retainer_map or {}).get(deliv_code, 0) or 0)
+hours = float(task_hours)
+
+if retainer_months > 0:
+    hours *= retainer_months  # repeat monthly workload
+
+
+Your retainer detector is already wiring months; we’re just applying it during row creation.
+
+C) XML hierarchy and Workfront‑friendly flags
+
+Your converter builds MSPDI from a WBS dataframe. Make sure the converter sets:
+
+Summary=1 for any WBS_ID that is a parent of other rows, Summary=0 otherwise.
+
+OutlineLevel = depth from root based on Parent_WBS_ID.
+
+No assignments on summary rows (assign only at leaf tasks).
+
+The export route already uses three key steps: inflate → build WBS → convert. This change belongs in the “convert” step where you walk the parent/child relationships from Parent_WBS_ID.
+
+D) Duration consistency (hours vs days)
+
+If you want “days” in Workfront, round durations to multiples of 480 minutes (8h day) when emitting MSPDI. The easiest way: when you compute task duration from hours, do:
+
+minutes = int(round(hours * 60))
+minutes = (minutes + 479) // 480 * 480  # snap to 1-day blocks
+
+
+That stops Workfront from rendering 1.875d as “15h”.
+
+E) Project name default
+
+Expose the sanitized upload name to the UI (already done):
+
+@app.get("/api/last_upload_name")
+def api_last_upload_name():
+    return {"project_name_default": _upload_title_default() or ""}
+
+
+This exists—wire it on the client (below).
+
+Front‑end patches (Step 1 → Step 4)
+1) Step 1 “Analyze with AI” → spinner + suggestions
+
+Add a throbber and tie it to both /api/summarize_by_file and /api/suggest_by_file (you’re already remembering the filename there):
+
+<div id="ai-busy" class="busy" hidden aria-busy="true"></div>
+
+.busy{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.35);z-index:9999}
+.busy::after{content:"";width:46px;height:46px;border-radius:50%;
+border:6px solid #98a2b3;border-top-color:#4c8bf7;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+async function analyzeWithAI(file) {
+  document.getElementById('ai-busy').hidden = false;
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const res = await fetch('/api/suggest_by_file', { method:'POST', body:fd });
+    const data = await res.json();
+    // 1) Paint AI Summary/Suggestions column
+    paintAiSuggestions(data.suggested || []);
+    // 2) Pre-fill Step 3 project name
+    const defRes = await fetch('/api/last_upload_name');
+    const defName = (await defRes.json()).project_name_default || '';
+    document.querySelector('#projectNameInput').value = defName;
+  } finally {
+    document.getElementById('ai-busy').hidden = true;
+  }
+}
+
+
+/api/suggest_by_file already sets LAST_UPLOAD_FILENAME; /api/last_upload_name returns the sanitized default for Step 3.
+
+2) Step 2 left column — search, names, and default components
+
+Search. Wire the search box back to /api/search_deliverables:
+
+const search = document.querySelector('#s2-deliv-search');
+search.addEventListener('input', async e => {
+  const q = e.target.value.trim();
+  const res = await fetch(`/api/search_deliverables?q=${encodeURIComponent(q)}`);
+  const {items} = await res.json();
+  renderDeliverablePicker(items);
+});
+
+
+This endpoint is live.
+
+Show names, not codes. When you render the middle (“Your Selection”), map code → label using the dataset you already loaded from /api/options:
+
+const codeToName = new Map(options.deliverables.map(d => [String(d.Deliverable_Code), d.Deliverable]));
+function renderSelected(list) {
+  el.innerHTML = '';
+  for (const code of list) {
+    const label = codeToName.get(String(code)) || String(code);
+    el.append(childRow(label /* …buttons */));
+  }
+}
+
+
+Components modal defaults. When opening the “Components…” dialog for a deliverable, set every checkbox checked by default the first time (or when the selection object is empty):
+
+function openComponents(delivCode){
+  const current = selectedComponentsMap[delivCode] || null;
+  for (const cb of dialog.querySelectorAll('input[type=checkbox]')) {
+    cb.checked = (current == null) ? true : !!current[cb.value];
+  }
+}
+
+
+And add Select all / Unselect all header buttons inside the dialog.
+
+3) Step 2 → Step 3 payload (the critical part)
+
+When the user clicks Apply selection (or Proceed to Pricing), send both:
+
+selected_deliverable_codes: string[]
+
+selected_components_map: { [deliverable_code: string]: null | { [component_name: string]: number|null } }
+
+Use null or omit the deliverable key entirely to mean ALL components (that triggers the server’s _inflate_components_if_missing). That’s the key to avoid “flat” export for AI‑added items.
+
+4) Step 3 pricing — deduped options, project name default, retainers
+
+Populate Pricing mode and Rate band options from /api/options instead of hard-coded arrays. That removes the duplicates and respects the v3 set.
+
+On page load (or after Step 1), call /api/last_upload_name and set the Project name field.
+
+When the green Use retainers switch is on, build a retainer_months_map like:
+
+// Example shape: { "DEL-0024": 12, "DEL-0036": 6 }
+const retainers = {};
+for (const row of document.querySelectorAll('.retainer-row')) {
+  const code = row.dataset.deliverableCode;
+  const months = parseInt(row.querySelector('input[type=number]').value, 10) || 0;
+  if (months > 0) retainers[code] = months;
+}
+
+
+…and include it in the same /api/build and /api/export payloads:
+
+{
+  "retainer_months_map": { "DEL-0036": 6, "DEL-0024": 12 }
+}
+
+
+The server-side multiplier patch (B) then makes the hours increase instead of dropping to zero.
+
+“Service Department” grouping (Ross’ note)
+
+Your /api/options already includes Service Department and a Sort_Order column on each deliverable; use those to group the left column (Strategy, Creative, Content, etc.) and sort within groups. That matches how you want Workfront to read once imported.

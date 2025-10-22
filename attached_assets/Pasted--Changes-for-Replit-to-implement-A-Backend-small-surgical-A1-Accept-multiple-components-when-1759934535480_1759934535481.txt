@@ -1,0 +1,164 @@
+🔧 Changes for Replit to implement
+A) Backend (small, surgical)
+
+A1. Accept multiple components when asking for L3.
+
+We already have api_l3_for(deliverable_code, component) and /api/step2/l3. Expand it so component can be a string or a list. Merge results and return a flat, de‑duplicated list. (Backwards compatible — existing single‑component calls keep working.)
+
+# models (co-locate with other Pydantic models)
+class L3Request(BaseModel):
+    deliverable_code: str
+    component: Union[str, List[str]]  # NEW: can be one or many
+
+# route (augment existing /api/step2/l3)
+@app.post("/api/step2/l3")
+def api_l3_for_bulk(p: L3Request):
+    if not DB.loaded:
+        DB.load()
+    comps = p.component if isinstance(p.component, list) else [p.component]
+    out: set[str] = set()
+    for c in comps:
+        for task in DB.l3_for_component(p.deliverable_code, c):
+            out.add(str(task))
+    return {"deliverable_code": p.deliverable_code, "components": comps, "l3": sorted(out)}
+
+
+You already have the Step 2 component/L3 plumbing and DB accessors; this change is just widening the accepted payload and union‑ing results. (See the existing Step 2 endpoints and models near the Step 3 BuildPayload definitions.)
+
+A2. Never hard‑fail “Refresh AI Suggestions” when RFP_TEXT_CACHE is empty.
+
+If RFP_TEXT_CACHE is None, re‑call the summarize endpoint with the last uploaded file content/string; otherwise use the cached string. (You already have the cache and upload plumbing.)
+
+A3. Keep passing L3 into pricing/build.
+
+The server already supports selected_l3_map in the Step 3 BuildPayload. Ensure the front‑end now fills it (see front‑end changes below).
+
+B) Front‑end (Step 2)
+
+Assume these live in static/ (the app serves that directory already).
+
+B1. Wire up controlled state for the three panels + summary.
+
+Create a single selectionState object in JS:
+
+const selectionState = {
+  // deliverable codes
+  selectedDeliverables: new Set(),
+
+  // per deliverable -> Set of component names
+  selectedComponents: new Map(),
+
+  // per deliverable -> Map(component -> Set of L3 task labels)
+  selectedL3: new Map(),
+
+  // filter text for the 3 search inputs
+  filters: { deliverables: '', components: '', l3: '' }
+};
+
+
+B2. Deliverables panel
+
+Search bar: on input, set selectionState.filters.deliverables and re‑render the list by filtering the cached deliverables array (client‑side filtering — don’t call the server for this).
+
+On checkbox change: update selectedDeliverables. When the first item is added, auto‑load Components (B3).
+
+Selected section on top: render checked items under a “Selected” header; everything else under “Other” with a scrollbar (as in your screenshot).
+
+B3. Components panel
+
+Replace the current “select a deliverable first” placeholder with a scrollable list of checkboxes of all components across the currently selected deliverables (grouped by deliverable; group header sticky).
+
+Populate components by calling the existing endpoint for each selected deliverable (/api/step2/components?deliverable=<code>) and caching results client‑side, then union/group in the view.
+
+Search bar: on input, set filters.components and filter the rendered list.
+
+All / Clear buttons:
+
+All → put every visible (post‑filter) component into selectedComponents.get(deliv) for each deliverable group currently shown.
+
+Clear → clear the selectedComponents sets for the currently selected deliverables.
+
+On any component checkbox change, refresh L3 (B4).
+
+B4. L3 (subtasks) panel
+
+Remove the auto‑selected single‑component behavior.
+
+Render a scrollable, multi‑select list of L3 for the union of the checked components.
+
+Implementation: call the new bulk L3 endpoint once per deliverable with the array of selected components (component: string[]). Merge & sort. (If no components are selected yet, show the existing placeholder message.)
+
+The panel has its own search bar (filters.l3) and All/Clear that operate against the visible (post‑filter) L3 list.
+
+On any L3 checkbox change, update selectedL3.
+
+No dropdowns here anymore; the UX mirrors the Components list exactly (checkboxes + search + All/Clear).
+
+B5. Summary (right column) shows L3, not L2
+
+For each selected deliverable, show chips for each selected L3 (grouped by the component they came from).
+
+Each chip has an “x” to remove it (update selectedL3 and uncheck in the list).
+
+Provide a small “Remove component” link in each component group (which clears all L3 under that component and unchecks the component).
+
+B6. Proceed to pricing payload
+
+When the user clicks Proceed to Pricing, send:
+
+const selected_components_map = {};
+const selected_l3_map = {};
+
+for (const deliv of selectionState.selectedDeliverables) {
+  const comps = Array.from(selectionState.selectedComponents.get(deliv) || []);
+  selected_components_map[deliv] = comps;
+
+  const perComp = selectionState.selectedL3.get(deliv) || new Map();
+  selected_l3_map[deliv] = {};
+  for (const [comp, l3set] of perComp.entries()) {
+    selected_l3_map[deliv][comp] = Array.from(l3set || []);
+  }
+}
+
+await fetch('/api/build', {
+  method: 'POST',
+  headers: {'Content-Type':'application/json'},
+  body: JSON.stringify({
+    /* existing fields… */
+    selected_components_map,
+    selected_l3_map
+  })
+});
+
+
+The server models already include selected_components_map and selected_l3_map, so this connects Step 2 → Step 3 cleanly.
+
+B7. Fix “All” / “Clear” click targets
+
+If the buttons are inside a <form>, set type="button" or call event.preventDefault(); then wire explicit onclick handlers to the functions from B3/B4. (Right now those buttons are present but not bound.)
+
+B8. Make search bars actually filter
+
+For all three search inputs, debounce (100–150 ms) and filter client‑side from the cached arrays. Do not re‑request from the server on every keystroke — only when the deliverables/selected components change.
+
+C) Step 4 timeline (day math sanity)
+
+Your XML export already writes a Mon–Fri working calendar (DayType 1=Sun & 7=Sat are non‑working; 2–6 are working). That’s correct.
+
+What’s off is the UI display math for duration and end date (you caught a Saturday end). Use business‑day math in the front‑end timeline:
+
+function addBusinessDays(start, days){
+  const d = new Date(start);
+  let added = 0;
+  while (added < days) {
+    d.setDate(d.getDate()+1);
+    const dow = d.getDay();  // 0 Sun … 6 Sat
+    if (dow !== 0 && dow !== 6) added++;
+  }
+  return d;
+}
+
+
+Use this to compute Step 4 End and Duration (days) so it matches the export calendar.
+
+Do not count weekends; (holiday support can be added later by injecting an isHoliday(date) guard).

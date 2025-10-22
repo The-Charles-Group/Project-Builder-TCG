@@ -3,46 +3,21 @@
 ## Overview
 This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
-## Recent Changes
-
-### October 2025 - AI Analysis UI Bug Fix
-**Issue**: The "Analyze w AI" button in Step 1 appeared to do nothing when clicked, even though backend analysis was working correctly.
-
-**Root Cause**: The frontend was calling `window.renderDeliverablesPanel()` to display analysis results, but this function was never implemented in the codebase.
-
-**Fix**: Implemented the missing `renderDeliverablesPanel()` function in `static/app.js` (lines 7243-7382) with:
-- Proper rendering of deliverables from `APB.step2.allDeliverables` into `#s2-deliv-list` container
-- XSS-safe HTML generation using `escapeHtml()` for all user-controlled fields (code, name, department)
-- Checkbox event handlers for deliverable selection/deselection
-- Visual grouping with selected items displayed at the top
-- Integration with `ScenarioManager` for state synchronization
-
-**Security**: All user-controlled strings are sanitized via `escapeHtml()` before DOM insertion to prevent XSS attacks.
-
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
 ## Development Principles
 **CRITICAL**: This project follows strict development principles documented in `DEVELOPMENT_PRINCIPLES.md`:
 - **Never destroy functionality to simplify code** - Always debug and fix the root cause
-- **Preserve all user features** - Component selections, L2 tasks, retainers, state management, etc.
+- **Preserve all user features** - Component selections, L3 tasks, retainers, state management, etc.
 - **Build additional code if needed** - Add more logic/features to solve problems properly
 - **Debug thoroughly before changing** - Identify root causes with comprehensive logging
 - **Test completely** - Verify all features work after fixes
-
-## Naming Conventions
-**Hierarchy Levels**: The system uses a 3-level hierarchy for project structure:
-- **Deliverables** (Level 0): Top-level project deliverables (e.g., "Social Media Campaign", "Website Redesign")
-- **Components/L1** (Level 1): Sub-components within deliverables (e.g., "Content Strategy", "Visual Design")
-- **Tasks/L2** (Level 2): Individual tasks within components (e.g., "Create Mood Board", "Design Hero Section")
-
-All code, API endpoints, and documentation use L1 for components and L2 for tasks to maintain consistency.
 
 ## System Architecture
 
 ### Backend Architecture
 - **Framework**: FastAPI (Python) for the REST API.
-- **Static File Serving**: Root route (`@app.get("/")`) serves index.html from static directory; static files mounted at `/static` endpoint.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data.
 - **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
@@ -74,8 +49,7 @@ All code, API endpoints, and documentation use L1 for components and L2 for task
 - Supports file uploads for RFP documents and Excel configuration files.
 - Uses JSON for configuration data and calculated scenario responses.
 - Serves static files for frontend assets.
-- Includes endpoints for weighted AI suggestions, bulk L2 task retrieval, and scenario refetching.
-- **Key API Endpoints**: `/api/l2`, `/api/step2/l2`, `/api/step2/l2/bulk` for L2 task operations.
+- Includes endpoints for weighted AI suggestions, bulk L3 task retrieval, and scenario refetching.
 
 ### Database Configuration
 - **Automatic Switching**: Automatic database switching based on the environment (Replit's built-in PostgreSQL for development, separate production database when published).

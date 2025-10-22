@@ -1,0 +1,232 @@
+What this does (quick)
+
+Flat_Blended: every deliverable/task uses the same blended rate (from the scenario or default); Price = Hours × Rate.
+
+Per_Resource: for each deliverable / component / task we sum hours by role+seniority, join to Role_Rate_Card, apply the Rate_Bands multiplier, compute Price = Σ(hours×rate×multiplier), and set Rate = Price / Hours (weighted effective).
+
+1) Add DB helpers (paste into AgencyDB)
+def role_rates_table(self, rate_band: str = "Standard_US") -> pd.DataFrame:
+    """Rate card with band multiplier applied + normalized Seniority."""
+    band = self.rate_bands[self.rate_bands["Band_Name"] == rate_band]
+    mult = float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
+    rc = self.role_rate_card[["Resource_Title", "Seniority", "Rate_USD"]].copy()
+    # normalize seniority if you added _canonical_seniority() earlier
+    if "Seniority" in rc.columns:
+        try:
+            rc["Seniority"] = rc["Seniority"].astype(str).fillna("").apply(self._canonical_seniority)
+        except Exception:
+            rc["Seniority"] = rc["Seniority"].astype(str).fillna("")
+    rc["Rate_USD"] = rc["Rate_USD"].astype(float) * mult
+    return rc
+
+def price_for_hours_by_role(self, hrs_by_role: pd.DataFrame, rate_band: str) -> tuple[float, pd.DataFrame]:
+    """Return (price_total, merged_breakdown) for a df with columns: Resource_Title, Seniority, Hours."""
+    if hrs_by_role is None or hrs_by_role.empty:
+        return (0.0, pd.DataFrame(columns=["Resource_Title","Seniority","Hours","Rate_USD","Price"]))
+    rc = self.role_rates_table(rate_band)
+    merged = hrs_by_role.merge(rc, on=["Resource_Title","Seniority"], how="left")
+    merged["Hours"] = merged["Hours"].fillna(0.0).astype(float)
+    merged["Rate_USD"] = merged["Rate_USD"].fillna(0.0).astype(float)
+    merged["Price"] = merged["Hours"] * merged["Rate_USD"]
+    return float(merged["Price"].sum()), merged
+
+def hours_by_role_for_component(self, deliverable_code: str, component: str,
+                                included_tgs: list[str], scenario_col: str) -> pd.DataFrame:
+    sub = self.all_rows[
+        (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+        (self.all_rows["task_group"].astype(str).isin([str(x) for x in included_tgs]))
+    ].copy()
+    sub["Component"] = sub.get("Component", "").astype(str).fillna("").str.strip()
+    if (component or "").strip() and component != "General":
+        sub = sub[sub["Component"] == component]
+    else:
+        sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
+    if sub.empty:
+        return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+    g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
+    return g.rename(columns={scenario_col: "Hours"})
+
+def hours_by_role_for_component_task(self, deliverable_code: str, component: str,
+                                     task_group: str, scenario_col: str) -> pd.DataFrame:
+    sub = self.all_rows[
+        (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+        (self.all_rows["task_group"].astype(str) == str(task_group))
+    ].copy()
+    sub["Component"] = sub.get("Component", "").astype(str).fillna("").str.strip()
+    if (component or "").strip() and component != "General":
+        sub = sub[sub["Component"] == component]
+    else:
+        sub = sub[(sub["Component"] == "") | (sub["Component"] == "General")]
+    if sub.empty:
+        return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+    g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
+    return g.rename(columns={scenario_col: "Hours"})
+
+
+These use the exact v4 tables your app already loads—All_Task_Rows, Role_Rate_Card, and Rate_Bands.
+
+2) Put Rate/Price into the export (deliverable + component + task rows)
+
+Update your WBS builder to compute Rate_USD and Price_USD.
+If you’re already using the 3‑level WBS (Project → Deliverable → Component → Task) we added earlier, just replace the row creation bits with this pricing-aware version:
+
+def _eff_rate(price: float, hours: float) -> float:
+    return round(price / hours, 2) if hours and hours > 0 else 0.0
+
+def build_wbs_dataframe_from_scenario(scenario: dict, project_name: str) -> pd.DataFrame:
+    """
+    Adds Rate_USD and Price_USD at deliverable/component/task level.
+    Flat_Blended -> uses blended_rate
+    Per_Resource -> weighted effective per level
+    """
+    rows = []
+    pricing_mode = (scenario.get("pricing_mode") or "Flat_Blended").strip()
+    rate_band    = (scenario.get("rate_band") or "Standard_US").strip()
+    blended_rate = scenario.get("blended_rate")
+    if blended_rate is None:
+        # fallback to default from Pricing_Settings already loaded in v2
+        ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
+        blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 185.0  # v2 default. :contentReference[oaicite:3]{index=3}
+    blended_rate = float(blended_rate)
+
+    # project parent
+    rows.append({
+        "Project_Name": project_name, "WBS_ID": "1", "Parent_WBS_ID": "",
+        "Task_Name": project_name, "Deliverable": "", "Component": "Project", "Task": "",
+        "Role": "", "Seniority": "", "Planned_Hours": "", "Start_Offset_Days": 0, "Duration_Days": "",
+        "Dependencies": "", "Assignee_External_ID": "", "Notes": "",
+        "Rate_USD": "", "Price_USD": ""
+    })
+
+    items = scenario.get("items", [])
+    order_map = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
+
+    def deliv_key(d):
+        tgs = [str(x) for x in d.get("included_task_groups", [])]
+        idxs = [order_map.get(tg, 999) for tg in tgs]
+        return (min(idxs) if idxs else 999, str(d.get("deliverable","")))
+
+    items_sorted = sorted(items, key=deliv_key)
+
+    day_cursor = 0
+    prev_deliv_wbs = ""
+
+    for i, d in enumerate(items_sorted, start=1):
+        dcode = str(d["deliverable_code"])
+        scen_col = d["scenario_col"]
+        included = [str(x) for x in d.get("included_task_groups", [])]
+
+        # schedule offsets/durations by task_group
+        schedule = d.get("schedule", [])
+        tg_order = sorted(included, key=lambda tg: order_map.get(tg, 999))
+        duration_by_tg = {str(t["task_group"]): int(t["duration_days"]) for t in schedule}
+        offset_by_tg = {}
+        run = 0
+        for tg in tg_order:
+            offset_by_tg[tg] = run
+            run += int(duration_by_tg.get(tg, 1))
+        total_deliv_duration = run
+
+        # hours (rounded at parent level)
+        parent_hours = int(round(float(d.get("total_hours", 0.0))))
+        # price/rate at deliverable
+        if pricing_mode == "Flat_Blended":
+            deliv_rate = blended_rate
+            deliv_price = round(parent_hours * deliv_rate, 2)
+        else:
+            hrs_by_role_deliv = DB.hours_by_role_for_deliverable(dcode, tg_order, scen_col)
+            deliv_price, _ = DB.price_for_hours_by_role(hrs_by_role_deliv, rate_band)
+            deliv_price = round(deliv_price, 2)
+            deliv_rate  = _eff_rate(deliv_price, parent_hours)
+
+        wbs_deliv = f"1.{i}"
+        rows.append({
+            "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": "1",
+            "Task_Name": str(d.get("deliverable","")), "Deliverable": str(d.get("deliverable","")),
+            "Component": "", "Task": "", "Role": "", "Seniority": "",
+            "Planned_Hours": parent_hours, "Start_Offset_Days": day_cursor, "Duration_Days": total_deliv_duration,
+            "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": f'{d.get("complexity","")}/{d.get("tier","")}',
+            "Rate_USD": round(deliv_rate, 2), "Price_USD": round(deliv_price, 2)
+        })
+
+        # components (use your existing components_for_deliverable helper)
+        comps = DB.components_for_deliverable(dcode, tg_order)
+        # split parent hours to components the same way you already do
+        comp_hours_map = DB.hours_by_component(dcode, tg_order, scen_col)
+        # round component hours so they sum to parent
+        comp_hours_rounded = _largest_remainder(parent_hours, comp_hours_map)
+        prev_comp_wbs = ""
+
+        for j, comp in enumerate(comps, start=1):
+            # which tgs belong to this component (in process order)
+            tg_hours_in_comp = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)
+            tg_in_comp = [tg for tg in tg_order if tg in tg_hours_in_comp.keys()]
+            if not tg_in_comp:
+                continue
+
+            comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp)
+            comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
+            comp_hours = int(comp_hours_rounded.get(comp, 0))
+
+            if pricing_mode == "Flat_Blended":
+                comp_rate = blended_rate
+                comp_price = round(comp_hours * comp_rate, 2)
+            else:
+                hrs_by_role_comp = DB.hours_by_role_for_component(dcode, comp, tg_in_comp, scen_col)
+                comp_price, _ = DB.price_for_hours_by_role(hrs_by_role_comp, rate_band)
+                comp_price = round(comp_price, 2)
+                comp_rate  = _eff_rate(comp_price, comp_hours)
+
+            wbs_comp = f"{wbs_deliv}.{j}"
+            rows.append({
+                "Project_Name": project_name, "WBS_ID": wbs_comp, "Parent_WBS_ID": wbs_deliv,
+                "Task_Name": comp, "Deliverable": str(d.get("deliverable","")),
+                "Component": comp, "Task": "", "Role": "", "Seniority": "",
+                "Planned_Hours": comp_hours, "Start_Offset_Days": day_cursor + comp_offset, "Duration_Days": comp_duration,
+                "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs), "Assignee_External_ID": "", "Notes": "",
+                "Rate_USD": round(comp_rate, 2), "Price_USD": round(comp_price, 2)
+            })
+
+            # tasks under the component
+            prev_task_wbs = ""
+            # distribute component rounded hours across tasks (largest remainder)
+            tg_hours_map = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
+            tg_hours_rounded = _largest_remainder(comp_hours, tg_hours_map)
+
+            for k, tg in enumerate(tg_in_comp, start=1):
+                dur = int(duration_by_tg.get(tg, 1))
+                role, sen = DB.dominant_role_for_component_task(dcode, comp, tg, scen_col)
+
+                # pricing per task
+                if pricing_mode == "Flat_Blended":
+                    task_rate = blended_rate
+                    task_hours = int(tg_hours_rounded.get(tg, 0))
+                    task_price = round(task_hours * task_rate, 2)
+                else:
+                    hrs_by_role_task = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
+                    tprice, _ = DB.price_for_hours_by_role(hrs_by_role_task, rate_band)
+                    task_price = round(tprice, 2)
+                    task_hours = int(tg_hours_rounded.get(tg, 0))
+                    task_rate  = _eff_rate(task_price, task_hours)
+
+                wbs_task = f"{wbs_comp}.{k}"
+                label = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
+                rows.append({
+                    "Project_Name": project_name, "WBS_ID": wbs_task, "Parent_WBS_ID": wbs_comp,
+                    "Task_Name": label, "Deliverable": str(d.get("deliverable","")),
+                    "Component": comp, "Task": label, "Role": role, "Seniority": sen,
+                    "Planned_Hours": task_hours, "Start_Offset_Days": day_cursor + offset_by_tg[tg], "Duration_Days": dur,
+                    "Dependencies": (wbs_comp if k == 1 else prev_task_wbs), "Assignee_External_ID": "", "Notes": "",
+                    "Rate_USD": round(task_rate, 2), "Price_USD": round(task_price, 2)
+                })
+                prev_task_wbs = wbs_task
+
+            prev_comp_wbs = wbs_comp
+
+        day_cursor += total_deliv_duration
+        prev_deliv_wbs = wbs_deliv
+
+    return pd.DataFrame(rows)
+
+
+This reuses the same scenario object your /api/build already returns (it includes pricing_mode, rate_band, blended_rate). We’re just computing Rate_USD and Price_USD at each level from v4 data.

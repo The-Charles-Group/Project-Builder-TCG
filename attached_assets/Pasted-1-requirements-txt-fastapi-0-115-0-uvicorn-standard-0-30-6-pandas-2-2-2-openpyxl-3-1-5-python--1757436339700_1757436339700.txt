@@ -1,0 +1,891 @@
+1) requirements.txt
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pandas==2.2.2
+openpyxl==3.1.5
+python-multipart==0.0.9
+pdfplumber==0.11.4
+python-docx==1.1.2
+numpy==1.26.4
+jinja2==3.1.4
+
+2) main.py (FastAPI backend)
+import os, re, io, math, json, datetime
+from typing import List, Optional, Dict, Any
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+import pandas as pd
+import numpy as np
+
+# ---------- App & CORS ----------
+app = FastAPI(title="Agency Project Builder", version="1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_headers=["*"],
+    allow_methods=["*"],
+)
+
+# Serve static frontend
+if not os.path.exists("static"):
+    os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ---------- Helper: DB Loader ----------
+class AgencyDB:
+    def __init__(self):
+        self.loaded = False
+        self.src = None
+        # DataFrames
+        self.all_rows = None                # All_Task_Rows
+        self.deliverables = None            # Deliverable_Index
+        self.b_rules = None                 # Bundle_Rules_Table
+        self.b_defaults = None              # Bundle_Scenario_Defaults
+        self.b_by_deliv = None              # Bundles_By_Deliverable
+        self.b_hours_by_role = None         # Bundles_Hours_By_Role
+        self.role_rate_card = None          # Role_Rate_Card
+        self.rate_matrix = None             # Role_Rate_Matrix
+        self.rate_bands = None              # Rate_Bands
+        self.timeline_params = None         # Timeline_Params
+        self.timeline_scaling = None        # Timeline_Scaling
+        self.timeline_weighting = None      # Timeline_Weighting
+        self.slack_settings = None          # Slack_Settings
+        self.pricing_settings = None        # Pricing_Settings
+        self.scenario_templates = None      # Scenario_Templates
+        self.ui_options = None              # UI_Options
+        self.rfp_rules = None               # RFP_Matching_Rules
+
+    def _scenario_col(self, complexity: str, tier: str) -> str:
+        return f"{complexity}__{tier}_Hours"
+
+    def load(self):
+        # Try Excel v4, else CSV bundle
+        xlsx_name = "Replit_App_DB_READABLE_FullRows_v4.xlsx"
+        csv_dir  = "Replit_App_DB_READABLE_FullRows_v4_csvs"
+        if os.path.exists(xlsx_name):
+            xls = pd.ExcelFile(xlsx_name)
+            read = lambda sh: pd.read_excel(xlsx_name, sheet_name=sh)
+            self.src = xlsx_name
+        elif os.path.exists(csv_dir):
+            def read_csv(sh):
+                path = os.path.join(csv_dir, f"{sh}.csv")
+                if not os.path.exists(path):
+                    raise FileNotFoundError(path)
+                return pd.read_csv(path)
+            read = read_csv
+            self.src = csv_dir
+        else:
+            raise FileNotFoundError(
+                "Upload 'Replit_App_DB_READABLE_FullRows_v4.xlsx' or folder 'Replit_App_DB_READABLE_FullRows_v4_csvs/'."
+            )
+
+        # Load sheets
+        self.all_rows          = read("All_Task_Rows")
+        self.deliverables      = read("Deliverable_Index")
+        self.b_rules           = read("Bundle_Rules_Table")
+        self.b_defaults        = read("Bundle_Scenario_Defaults")
+        self.b_by_deliv        = read("Bundles_By_Deliverable")
+        self.b_hours_by_role   = read("Bundles_Hours_By_Role")
+        self.role_rate_card    = read("Role_Rate_Card")
+        self.rate_matrix       = read("Role_Rate_Matrix")
+        self.rate_bands        = read("Rate_Bands")
+        self.timeline_params   = read("Timeline_Params")
+        self.timeline_scaling  = read("Timeline_Scaling")
+        self.timeline_weighting= read("Timeline_Weighting")
+        self.slack_settings    = read("Slack_Settings")
+        self.pricing_settings  = read("Pricing_Settings")
+        self.scenario_templates= read("Scenario_Templates")
+        self.ui_options        = read("UI_Options")
+        self.rfp_rules         = read("RFP_Matching_Rules")
+
+        # Normalize
+        for c in ["Deliverable_Code","Deliverable","Category"]:
+            if c in self.deliverables.columns:
+                self.deliverables[c] = self.deliverables[c].astype(str)
+
+        self.loaded = True
+        return True
+
+    # ---------- RFP parsing via rules ----------
+    def suggest_deliverables_from_text(self, text: str) -> List[Dict[str, Any]]:
+        if not text:
+            return []
+        suggestions = {}
+        for _, row in self.rfp_rules.iterrows():
+            patt = str(row["Regex_Keywords"])
+            deliverable = str(row["Map_To_Deliverable"])
+            try:
+                if re.search(patt, text, flags=re.IGNORECASE):
+                    suggestions[deliverable] = suggestions.get(deliverable, 0) + 1
+            except re.error:
+                # Skip malformed regex
+                continue
+        # Map suggestions to Deliverable_Code if present
+        out = []
+        for dname, hits in sorted(suggestions.items(), key=lambda x: -x[1]):
+            match = self.deliverables[self.deliverables["Deliverable"]==dname]
+            if not match.empty:
+                for _, r in match.iterrows():
+                    out.append({
+                        "deliverable_code": r["Deliverable_Code"],
+                        "deliverable": r["Deliverable"],
+                        "category": r.get("Category",""),
+                        "confidence": hits
+                    })
+        return out
+
+    # ---------- Bundle helpers ----------
+    def included_task_groups(self, category: str, bundle: str) -> List[str]:
+        sub = self.b_rules[(self.b_rules["Category"]==category) & (self.b_rules["Bundle"]==bundle)]
+        if sub.empty:
+            return []
+        sub = sub.sort_values("Sort_Order")
+        return [str(x) for x in sub["Task_Group"].tolist()]
+
+    def default_complexity_tier_for_bundle(self, bundle: str) -> (str, str):
+        row = self.b_defaults[self.b_defaults["Bundle"]==bundle]
+        if row.empty:
+            return ("Advanced","T2_MediumVolume")
+        r = row.iloc[0]
+        return str(r["Default_Complexity"]), str(r["Default_Tier"])
+
+    # ---------- Pricing ----------
+    def blended_price(self, total_hours: float, blended_rate: float) -> float:
+        return float(total_hours) * float(blended_rate)
+
+    def per_resource_price(self, hrs_by_role: pd.DataFrame, rate_band: str="Standard_US") -> float:
+        # hrs_by_role columns: Resource_Title, Seniority, Hours
+        band = self.rate_bands[self.rate_bands["Band_Name"]==rate_band]
+        mult = float(band["Rate_Multiplier"].iloc[0]) if not band.empty else 1.0
+        # join to rate card
+        rc = self.role_rate_card[["Resource_Title","Seniority","Rate_USD"]].copy()
+        merged = hrs_by_role.merge(rc, on=["Resource_Title","Seniority"], how="left")
+        merged["Rate_USD"] = merged["Rate_USD"].fillna(0)
+        merged["Price"] = merged["Hours"] * merged["Rate_USD"] * mult
+        return float(merged["Price"].sum())
+
+    # ---------- Hours aggregation ----------
+    def scenario_hours_col(self, complexity: str, tier: str) -> str:
+        col = self._scenario_col(complexity, tier)
+        if col not in self.all_rows.columns:
+            raise HTTPException(400, f"Scenario column not found: {col}")
+        return col
+
+    def hours_by_role_for_deliverable(
+        self, deliverable_code: str, included_task_groups: List[str], scenario_col: str
+    ) -> pd.DataFrame:
+        sub = self.all_rows[
+            (self.all_rows["Deliverable_Code"].astype(str)==str(deliverable_code)) &
+            (self.all_rows["task_group"].isin(included_task_groups))
+        ]
+        if sub.empty:
+            return pd.DataFrame(columns=["Resource_Title","Seniority","Hours"])
+        g = sub.groupby(["Resource_Title","Seniority"], as_index=False)[scenario_col].sum()
+        g = g.rename(columns={scenario_col:"Hours"})
+        return g
+
+    # ---------- Timeline ----------
+    def task_group_duration_days(self, task_group: str, complexity: str, tier: str, use_slack: bool,
+                                 slack_after_internal: int, slack_after_client: int, slack_global_pct: float) -> float:
+        # Base nominal
+        tp = self.timeline_params[self.timeline_params["Task_Group"]==task_group]
+        if tp.empty:
+            return 0.0
+        base = float(tp["Nominal_Duration_Days"].iloc[0])
+
+        # Scaling
+        cw = self.timeline_weighting[self.timeline_weighting["Task_Group"]==task_group]
+        wc = float(cw["Weight_Complexity"].iloc[0]) if not cw.empty else 0.6
+        wt = float(cw["Weight_Tier"].iloc[0])        if not cw.empty else 0.4
+
+        cm = self.timeline_scaling[(self.timeline_scaling["Scale_Type"]=="Complexity") &
+                                   (self.timeline_scaling["Key"]==complexity)]
+        tm = self.timeline_scaling[(self.timeline_scaling["Scale_Type"]=="Tier") &
+                                   (self.timeline_scaling["Key"]==tier)]
+        cmult = float(cm["Multiplier"].iloc[0]) if not cm.empty else 1.0
+        tmult = float(tm["Multiplier"].iloc[0]) if not tm.empty else 1.0
+
+        dur = base * (1 + (cmult - 1)*wc) * (1 + (tmult - 1)*wt)
+        if use_slack and slack_global_pct > 0:
+            dur *= (1.0 + float(slack_global_pct))
+        return max(1.0, round(dur, 2))
+
+    def build_schedule(self, deliverable_code: str, included_task_groups: List[str],
+                       complexity: str, tier: str,
+                       use_slack: bool, slack_after_internal: int, slack_after_client: int, slack_global_pct: float,
+                       project_start: Optional[str]=None) -> List[Dict[str, Any]]:
+        # Order task groups by a sensible default from Timeline_Params appearance
+        order_map = {tg:i for i, tg in enumerate(self.timeline_params["Task_Group"].tolist())}
+        tgs = sorted(included_task_groups, key=lambda x: order_map.get(x, 999))
+
+        # Start date
+        if project_start:
+            start_date = datetime.datetime.strptime(project_start, "%Y-%m-%d").date()
+        else:
+            start_date = datetime.date.today()
+
+        cursor_day = 0
+        rows = []
+        for tg in tgs:
+            dur = self.task_group_duration_days(tg, complexity, tier, use_slack,
+                                                slack_after_internal, slack_after_client, slack_global_pct)
+            start = start_date + datetime.timedelta(days=cursor_day)
+            end   = start + datetime.timedelta(days=math.ceil(dur))
+            rows.append({
+                "task_group": tg,
+                "start_date": str(start),
+                "end_date": str(end),
+                "duration_days": math.ceil(dur)
+            })
+            cursor_day += math.ceil(dur)
+
+            # Slack after reviews
+            if use_slack and tg == "internal_review":
+                cursor_day += int(slack_after_internal)
+            if use_slack and tg == "client_review":
+                cursor_day += int(slack_after_client)
+
+        return rows
+
+DB = AgencyDB()
+
+# ---------- Pydantic models ----------
+class SuggestPayload(BaseModel):
+    rfp_text: str
+
+class ScenarioSpec(BaseModel):
+    mode: str                               # "template" or "bundle"
+    # if mode == "template"
+    scenario_key: Optional[str] = None      # e.g., "MED_LOW" or "MED_HIGH"
+    complexity: Optional[str] = None        # override complexity
+    tier: Optional[str] = None              # override tier
+    # if mode == "bundle"
+    bundle: Optional[str] = None            # Express/Good/Better/Best
+
+class BuildPayload(BaseModel):
+    selected_deliverable_codes: List[str]
+    scenario_a: ScenarioSpec
+    scenario_b: ScenarioSpec
+    pricing_mode: str                       # "Flat_Blended" or "Per_Resource"
+    blended_rate: Optional[float] = None
+    rate_band: Optional[str] = "Standard_US"
+    use_slack: bool = True
+    slack_after_internal: int = 1
+    slack_after_client: int = 2
+    slack_global_pct: float = 0.05
+    project_start: Optional[str] = None     # "YYYY-MM-DD"
+
+class ExportPayload(BaseModel):
+    scenario: Dict[str, Any]                # a scenario dict returned from /api/build
+
+# ---------- Routes ----------
+@app.get("/", response_class=HTMLResponse)
+def root():
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/api/load")
+def api_load():
+    if not DB.loaded:
+        DB.load()
+    return {"ok": True, "src": DB.src}
+
+@app.get("/api/options")
+def api_options():
+    if not DB.loaded:
+        DB.load()
+    # Extract dropdown lists
+    complexities = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Complexity"]["Key"].tolist()
+    tiers        = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].tolist()
+    rate_bands   = DB.rate_bands["Band_Name"].tolist()
+    pricing_modes= ["Flat_Blended","Per_Resource"]
+    # Bundles per category
+    bundles = DB.b_defaults["Bundle"].tolist()
+    # Deliverables
+    deliverables = DB.deliverables[["Deliverable_Code","Deliverable","Category"]].to_dict(orient="records")
+    # Scenario templates
+    scenario_templates = DB.scenario_templates.to_dict(orient="records")
+    return {
+        "complexities": complexities,
+        "tiers": tiers,
+        "rate_bands": rate_bands,
+        "pricing_modes": pricing_modes,
+        "bundles": bundles,
+        "deliverables": deliverables,
+        "scenario_templates": scenario_templates,
+        "pricing_settings": DB.pricing_settings.to_dict(orient="records"),
+        "slack_settings": DB.slack_settings.to_dict(orient="records"),
+    }
+
+@app.post("/api/suggest_by_text")
+def api_suggest(payload: SuggestPayload):
+    if not DB.loaded:
+        DB.load()
+    recs = DB.suggest_deliverables_from_text(payload.rfp_text or "")
+    return {"suggested": recs}
+
+def _resolve_scenario(spec: ScenarioSpec, category: str) -> Dict[str, Any]:
+    if spec.mode == "template":
+        # either use key or explicit complexity/tier
+        if spec.scenario_key:
+            s = DB.scenario_templates[DB.scenario_templates["Scenario_Key"]==spec.scenario_key]
+            if not s.empty:
+                c = str(s["Complexity"].iloc[0]); t = str(s["Tier"].iloc[0])
+                return {"mode":"template","complexity":c,"tier":t,"scenario_key":spec.scenario_key}
+        # fallback to provided complexity/tier
+        return {"mode":"template","complexity":spec.complexity or "Advanced","tier":spec.tier or "T2_MediumVolume","scenario_key":spec.scenario_key or "CUSTOM"}
+    elif spec.mode == "bundle":
+        # use bundle defaults
+        b = spec.bundle or "Better"
+        c,t = DB.default_complexity_tier_for_bundle(b)
+        return {"mode":"bundle","bundle":b,"complexity":c,"tier":t}
+    else:
+        raise HTTPException(400, f"Unknown scenario mode: {spec.mode}")
+
+def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, Any],
+                              pricing_mode: str, blended_rate: Optional[float], rate_band: str,
+                              use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
+                              project_start: Optional[str]) -> Dict[str, Any]:
+    # Which task groups to include?
+    if spec["mode"] == "bundle":
+        included = DB.included_task_groups(category, spec["bundle"])
+    else:
+        # Template mode: include all task_groups that exist in data for this deliverable (collapsed to unique)
+        sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(deliv_code)]
+        included = sorted(set(sub["task_group"].dropna().astype(str).tolist()))
+
+    complexity, tier = spec["complexity"], spec["tier"]
+    scen_col = DB.scenario_hours_col(complexity, tier)
+    hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
+    total_hours = float(hrs_by_role["Hours"].sum()) if not hrs_by_role.empty else 0.0
+
+    # Price
+    if pricing_mode == "Flat_Blended":
+        if blended_rate is None:
+            # default from Pricing_Settings
+            ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
+            blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
+        price = DB.blended_price(total_hours, blended_rate)
+    else:
+        price = DB.per_resource_price(hrs_by_role, rate_band=rate_band or "Standard_US")
+
+    # Schedule
+    schedule = DB.build_schedule(
+        deliv_code, included, complexity, tier, use_slack, slack_i, slack_c, slack_pct, project_start
+    )
+
+    return {
+        "deliverable_code": deliv_code,
+        "included_task_groups": included,
+        "complexity": complexity,
+        "tier": tier,
+        "scenario_col": scen_col,
+        "hours_by_role": hrs_by_role.to_dict(orient="records"),
+        "total_hours": total_hours,
+        "price": round(price, 2),
+        "schedule": schedule
+    }
+
+@app.post("/api/build")
+def api_build(payload: BuildPayload):
+    if not DB.loaded:
+        DB.load()
+
+    # Prepare UI intent
+    pricing_mode = payload.pricing_mode
+    blended_rate = payload.blended_rate
+    rate_band    = payload.rate_band or "Standard_US"
+
+    # Slack/timeline
+    use_slack = bool(payload.use_slack)
+    slack_i   = int(payload.slack_after_internal)
+    slack_c   = int(payload.slack_after_client)
+    slack_pct = float(payload.slack_global_pct or 0)
+    project_start = payload.project_start
+
+    # Build scenarios
+    scenarios = {}
+    for letter, spec_in in [("A", payload.scenario_a), ("B", payload.scenario_b)]:
+        per_deliv = []
+        price_sum = 0.0
+        hours_sum = 0.0
+        for code in payload.selected_deliverable_codes:
+            row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str)==str(code)]
+            if row.empty: 
+                continue
+            cat = str(row["Category"].iloc[0])
+            spec_resolved = _resolve_scenario(spec_in, cat)
+            out = _scenario_for_deliverable(
+                code, cat, spec_resolved,
+                pricing_mode, blended_rate, rate_band,
+                use_slack, slack_i, slack_c, slack_pct, project_start
+            )
+            # Add names for readability
+            out["deliverable"] = str(row["Deliverable"].iloc[0])
+            out["category"]    = cat
+            per_deliv.append(out)
+            price_sum += out["price"]
+            hours_sum += out["total_hours"]
+
+        scenarios[letter] = {
+            "pricing_mode": pricing_mode,
+            "rate_band": rate_band,
+            "blended_rate": blended_rate,
+            "use_slack": use_slack,
+            "slack_after_internal": slack_i,
+            "slack_after_client": slack_c,
+            "slack_global_pct": slack_pct,
+            "project_start": project_start,
+            "items": per_deliv,
+            "totals": {"hours": round(hours_sum,2), "price": round(price_sum,2)}
+        }
+
+    return scenarios
+
+@app.post("/api/export")
+def api_export(payload: ExportPayload):
+    """
+    Export a Workfront Fusion CSV from a single scenario payload.
+    Each row: Deliverable → Task_Group lines with rolled-up planned hours (per role not required by Workfront WBS).
+    """
+    if not DB.loaded:
+        DB.load()
+    scenario = payload.scenario
+    rows = []
+    # Create a simple WBS: 1.x for deliverables, 1.x.y for tasks
+    project_name = f"Proposal {datetime.date.today().isoformat()}"
+    for i, d in enumerate(scenario.get("items", []), start=1):
+        wbs_id = f"1.{i}"
+        rows.append({
+            "Project_Name": project_name,
+            "WBS_ID": wbs_id,
+            "Parent_WBS_ID": "1",
+            "Task_Name": d["deliverable"],
+            "Deliverable": d["deliverable"],
+            "Component": "",
+            "Task": "",
+            "Role": "",
+            "Seniority": "",
+            "Planned_Hours": d["total_hours"],
+            "Start_Offset_Days": 0,
+            "Duration_Days": sum([x["duration_days"] for x in d["schedule"]]),
+            "Dependencies": "",
+            "Assignee_External_ID": "",
+            "Notes": f"{d['complexity']} / {d['tier']}"
+        })
+        # children by task_group
+        for j, t in enumerate(d["schedule"], start=1):
+            rows.append({
+                "Project_Name": project_name,
+                "WBS_ID": f"{wbs_id}.{j}",
+                "Parent_WBS_ID": wbs_id,
+                "Task_Name": t["task_group"],
+                "Deliverable": d["deliverable"],
+                "Component": "",
+                "Task": t["task_group"],
+                "Role": "",
+                "Seniority": "",
+                "Planned_Hours": "",     # (optional: prorate hours by task_group if needed)
+                "Start_Offset_Days": "", # handled by Fusion or further logic
+                "Duration_Days": t["duration_days"],
+                "Dependencies": "",
+                "Assignee_External_ID": "",
+                "Notes": ""
+            })
+    df = pd.DataFrame(rows)
+    out_path = "workfront_export.csv"
+    df.to_csv(out_path, index=False)
+    return FileResponse(out_path, filename=out_path, media_type="text/csv")
+
+# ---------- Run locally in Replit ----------
+# In Replit, set the "run" command to: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+3) static/index.html (three‑stage UI)
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Agency Project Builder</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <header>
+    <h1>Agency Project Builder</h1>
+    <div class="sub">RFP → Scenarios → Timeline → Workfront Export</div>
+  </header>
+
+  <main>
+    <!-- STEP 1: Intake -->
+    <section class="card">
+      <h2>Step 1 – Intake</h2>
+      <div class="grid">
+        <div>
+          <label>RFP / Brief (paste text)</label>
+          <textarea id="rfpText" placeholder="Paste RFP text here... (or leave blank and pick deliverables manually)"></textarea>
+          <button id="btnSuggest" class="ghost">Suggest deliverables</button>
+          <div id="suggestions" class="pillbox"></div>
+        </div>
+        <div>
+          <label>Deliverables (select)</label>
+          <div id="deliverableList" class="listbox"></div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Pricing Mode</label>
+          <select id="pricingMode"></select>
+          <div id="blendedWrap" class="inline">
+            <label>Blended Rate ($/hr)</label>
+            <input id="blendedRate" type="number" step="1" min="1" value="185"/>
+          </div>
+          <div id="bandWrap" class="inline">
+            <label>Rate Band</label>
+            <select id="rateBand"></select>
+          </div>
+        </div>
+
+        <div>
+          <label>Scenario Type</label>
+          <div class="inline">
+            <input type="radio" id="useTemplates" name="scnType" value="template" checked/>
+            <label for="useTemplates">Use Templates (MED_LOW & MED_HIGH)</label>
+          </div>
+          <div class="inline">
+            <input type="radio" id="useBundles" name="scnType" value="bundle"/>
+            <label for="useBundles">Use Bundles (Express/Good/Better/Best)</label>
+          </div>
+
+          <div id="templateRow" class="inline">
+            <label>Scenario A (template)</label>
+            <select id="scenarioA"></select>
+            <label>Scenario B (template)</label>
+            <select id="scenarioB"></select>
+          </div>
+
+          <div id="bundleRow" class="inline hidden">
+            <label>Scenario A Bundle</label>
+            <select id="bundleA">
+              <option>Express</option><option selected>Better</option><option>Good</option><option>Best</option>
+            </select>
+            <label>Scenario B Bundle</label>
+            <select id="bundleB">
+              <option>Express</option><option>Good</option><option selected>Better</option><option>Best</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Timeline Options</label>
+          <div class="inline">
+            <input type="checkbox" id="useSlack" checked/>
+            <label for="useSlack">Add Slack Between Reviews</label>
+          </div>
+          <div class="inline">
+            <label>Slack After Internal Review (days)</label>
+            <input id="slackInternal" type="number" min="0" step="1" value="1"/>
+            <label>Slack After Client Review (days)</label>
+            <input id="slackClient" type="number" min="0" step="1" value="2"/>
+          </div>
+          <div class="inline">
+            <label>Global Slack %</label>
+            <input id="slackGlobal" type="number" min="0" max="0.5" step="0.01" value="0.05"/>
+            <label>Project Start</label>
+            <input id="projectStart" type="date"/>
+          </div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btnBuild">Build Scenarios</button>
+      </div>
+    </section>
+
+    <!-- STEP 2: Scenarios -->
+    <section class="card">
+      <h2>Step 2 – Compare & Tweak</h2>
+      <div id="scenarios" class="scenarios"></div>
+      <div class="hint">Tip: Un/check task groups inside each deliverable to re-run quickly (client side). For authoritative totals, rebuild via the button above.</div>
+    </section>
+
+    <!-- STEP 3: Export -->
+    <section class="card">
+      <h2>Step 3 – Finalize & Export</h2>
+      <div class="grid">
+        <div class="totals">
+          <div><strong>Scenario A Total</strong>: <span id="totA">$0</span></div>
+          <div><strong>Scenario B Total</strong>: <span id="totB">$0</span></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="btnExportA" class="ghost">Export Scenario A → Workfront (CSV)</button>
+        <button id="btnExportB" class="ghost">Export Scenario B → Workfront (CSV)</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
+4) static/style.css (clean, modern)
+:root{
+  --bg:#0f1117; --card:#151a22; --text:#e6eaf2; --muted:#9aa4b2;
+  --accent:#6aa3ff; --accent2:#3ddc97; --border:#232a35;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,Segoe UI,Roboto,Helvetica,Arial}
+header{padding:24px 28px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#121620,#0f1117)}
+header h1{margin:0 0 4px;font-size:20px}
+header .sub{color:var(--muted);font-size:13px}
+main{max-width:1200px;margin:20px auto;padding:0 16px 64px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;margin:14px 0}
+h2{margin:0 0 12px}
+label{display:block;margin:8px 0 6px;color:var(--muted)}
+textarea{width:100%;min-height:140px;border-radius:8px;border:1px solid var(--border);background:#0b0e13;color:var(--text);padding:10px}
+input,select{border-radius:8px;border:1px solid var(--border);background:#0b0e13;color:var(--text);padding:8px}
+.inline{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.grid{display:grid;gap:16px;grid-template-columns:1fr 1fr}
+@media (max-width:900px){ .grid{grid-template-columns:1fr} }
+
+button{padding:10px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#08121e;cursor:pointer;font-weight:600}
+button.ghost{background:transparent;color:var(--accent)}
+button:disabled{opacity:.6;cursor:not-allowed}
+.actions{margin-top:14px;display:flex;gap:12px;flex-wrap:wrap}
+
+.pillbox{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
+.pill{border:1px solid var(--border);background:#0b0e13;border-radius:999px;padding:6px 10px;color:var(--muted)}
+.pill .hit{color:#fff;margin-left:6px}
+.listbox{border:1px dashed var(--border);border-radius:8px;padding:10px;max-height:280px;overflow:auto;background:#0b0e13}
+.row{display:flex;align-items:center;gap:10px;padding:6px 8px;border-bottom:1px dashed #1d2430}
+.row:last-child{border-bottom:none}
+.row small{color:var(--muted)}
+
+.hidden{display:none}
+.scenarios{display:grid;gap:16px;grid-template-columns:1fr 1fr}
+.scenario{border:1px solid var(--border);border-radius:10px;padding:12px;background:#0b0e13}
+.scenario h3{margin:0 0 8px}
+.tbl{width:100%;border-collapse:collapse;margin-top:8px}
+.tbl th,.tbl td{border-bottom:1px solid #1a2030;padding:8px;text-align:left;font-size:13px}
+.tbl th{color:var(--muted);font-weight:600}
+.badge{display:inline-block;background:#1b2331;border:1px solid #2b3648;color:#b7c2d1;border-radius:6px;padding:3px 6px;margin-left:6px;font-size:12px}
+.totals{display:flex;gap:24px}
+.hint{color:var(--muted);font-size:12px;margin-top:10px}
+
+5) static/app.js (front‑end logic)
+let OPTIONS = null;       // cached /api/options
+let SCENARIOS = null;     // last built scenarios (A & B)
+let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
+
+async function api(path, opts={}) {
+  const res = await fetch(path, {headers:{"Content-Type":"application/json"}, ...opts});
+  if(!res.ok){ throw new Error(await res.text()); }
+  const ct = res.headers.get("content-type") || "";
+  if(ct.includes("application/json")) return res.json();
+  return res.text();
+}
+
+function el(html){ const t=document.createElement('template'); t.innerHTML=html.trim(); return t.content.firstChild; }
+
+function currency(n){ return `$${Number(n||0).toLocaleString()}`; }
+
+async function boot() {
+  await api("/api/load");
+  OPTIONS = await api("/api/options");
+  // Populate dropdowns
+  const pricingMode = document.querySelector("#pricingMode");
+  OPTIONS.pricing_modes.forEach(m => pricingMode.append(el(`<option>${m}</option>`)));
+  const rateBand = document.querySelector("#rateBand");
+  OPTIONS.rate_bands.forEach(b => rateBand.append(el(`<option>${b}</option>`)));
+  // Scenario templates
+  const sA = document.querySelector("#scenarioA");
+  const sB = document.querySelector("#scenarioB");
+  OPTIONS.scenario_templates.forEach(s => {
+    sA.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
+    sB.append(el(`<option value="${s.Scenario_Key}">${s.Scenario_Key} (${s.Complexity}×${s.Tier})</option>`));
+  });
+  // Defaults: MED_LOW / MED_HIGH
+  if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_LOW")) sA.value="MED_LOW";
+  if(OPTIONS.scenario_templates.find(x => x.Scenario_Key==="MED_HIGH")) sB.value="MED_HIGH";
+
+  // Deliverables list
+  DELIVERABLES = OPTIONS.deliverables;
+  renderDeliverableList(DELIVERABLES);
+
+  // Pricing default blended
+  const ps = OPTIONS.pricing_settings.find(x => x.Key==="Default_Blended_Rate");
+  if(ps) document.querySelector("#blendedRate").value = ps.Default;
+
+  // Slack defaults
+  const ss = Object.fromEntries(OPTIONS.slack_settings.map(x => [x.Key, x.Default]));
+  document.querySelector("#useSlack").checked = !!ss["Use_Slack"];
+  document.querySelector("#slackInternal").value = ss["Slack_After_Internal_Review_Days"] ?? 1;
+  document.querySelector("#slackClient").value   = ss["Slack_After_Client_Review_Days"] ?? 2;
+  document.querySelector("#slackGlobal").value   = ss["Slack_Global_Percent"] ?? 0.05;
+
+  // UI wiring
+  document.querySelector("#btnSuggest").onclick = onSuggest;
+  document.querySelector("#btnBuild").onclick   = onBuild;
+  document.querySelector("#pricingMode").onchange = onPricingModeChanged;
+  document.querySelector("#useTemplates").onchange = onScenarioTypeChanged;
+  document.querySelector("#useBundles").onchange   = onScenarioTypeChanged;
+  document.querySelector("#btnExportA").onclick = () => onExport('A');
+  document.querySelector("#btnExportB").onclick = () => onExport('B');
+  onPricingModeChanged();
+}
+
+function onPricingModeChanged(){
+  const mode = document.querySelector("#pricingMode").value;
+  document.querySelector("#blendedWrap").classList.toggle("hidden", mode!=="Flat_Blended");
+  document.querySelector("#bandWrap").classList.toggle("hidden", mode!=="Per_Resource");
+}
+
+function onScenarioTypeChanged(){
+  const useTemplates = document.querySelector("#useTemplates").checked;
+  document.querySelector("#templateRow").classList.toggle("hidden", !useTemplates);
+  document.querySelector("#bundleRow").classList.toggle("hidden", useTemplates);
+}
+
+function renderDeliverableList(items){
+  const box = document.querySelector("#deliverableList");
+  box.innerHTML = "";
+  items.forEach(d => {
+    const id = `deliv_${d.Deliverable_Code}`;
+    box.append(el(`
+      <div class="row">
+        <input type="checkbox" id="${id}" data-code="${d.Deliverable_Code}"/>
+        <label for="${id}"><strong>${d.Deliverable}</strong> <small class="badge">${d.Category}</small></label>
+      </div>
+    `));
+  });
+}
+
+async function onSuggest(){
+  const txt = document.querySelector("#rfpText").value || "";
+  const data = await api("/api/suggest_by_text", {method:"POST", body:JSON.stringify({rfp_text:txt})});
+  const sugg = document.querySelector("#suggestions");
+  sugg.innerHTML = "";
+  (data.suggested || []).forEach(s => {
+    sugg.append(el(`<span class="pill">${s.deliverable}<span class="hit">+${s.confidence}</span></span>`));
+    // pre-check matching deliverables
+    const elx = document.querySelector(`#deliv_${s.deliverable_code}`);
+    if(elx) elx.checked = true;
+  });
+}
+
+function selectedDeliverables(){
+  return Array.from(document.querySelectorAll("#deliverableList input[type=checkbox]:checked"))
+    .map(x => x.dataset.code);
+}
+
+async function onBuild(){
+  const codes = selectedDeliverables();
+  if(codes.length===0){ alert("Select at least one deliverable."); return; }
+
+  const pricingMode = document.querySelector("#pricingMode").value;
+  const blendedRate = Number(document.querySelector("#blendedRate").value || 0) || null;
+  const rateBand    = document.querySelector("#rateBand").value;
+
+  const useSlack    = document.querySelector("#useSlack").checked;
+  const slackInternal = Number(document.querySelector("#slackInternal").value || 0);
+  const slackClient   = Number(document.querySelector("#slackClient").value || 0);
+  const slackGlobal   = Number(document.querySelector("#slackGlobal").value || 0);
+  const projectStart  = document.querySelector("#projectStart").value || null;
+
+  // Scenario specs
+  const useTemplates = document.querySelector("#useTemplates").checked;
+  let specA, specB;
+  if(useTemplates){
+    specA = {mode:"template", scenario_key: document.querySelector("#scenarioA").value};
+    specB = {mode:"template", scenario_key: document.querySelector("#scenarioB").value};
+  } else {
+    specA = {mode:"bundle", bundle: document.querySelector("#bundleA").value};
+    specB = {mode:"bundle", bundle: document.querySelector("#bundleB").value};
+  }
+
+  const payload = {
+    selected_deliverable_codes: codes,
+    scenario_a: specA,
+    scenario_b: specB,
+    pricing_mode: pricingMode,
+    blended_rate: blendedRate,
+    rate_band: rateBand,
+    use_slack: useSlack,
+    slack_after_internal: slackInternal,
+    slack_after_client: slackClient,
+    slack_global_pct: slackGlobal,
+    project_start: projectStart
+  };
+
+  const res = await api("/api/build", {method:"POST", body:JSON.stringify(payload)});
+  SCENARIOS = res;
+  renderScenarios(res);
+}
+
+function renderScenarios(data){
+  const box = document.querySelector("#scenarios");
+  box.innerHTML = "";
+  ["A","B"].forEach(key => {
+    const scn = data[key];
+    const head = `
+      <h3>Scenario ${key} <span class="badge">${scn.pricing_mode}${scn.pricing_mode==='Per_Resource' ? ' · ' + scn.rate_band : ''}</span>
+        ${scn.pricing_mode==='Flat_Blended' ? `<span class="badge">${Number(scn.blended_rate||0).toFixed(0)}/hr</span>`:''}
+      </h3>
+      <div><strong>Total Hours:</strong> ${Number(scn.totals.hours).toFixed(2)} &nbsp; <strong>Total Price:</strong> ${currency(scn.totals.price)}</div>
+    `;
+    const wrap = el(`<div class="scenario">${head}<div></div></div>`);
+
+    scn.items.forEach(d => {
+      const tgPills = d.included_task_groups.map(tg => `<span class="pill">${tg}</span>`).join(" ");
+      const rows = (d.hours_by_role||[]).map(r => `
+        <tr><td>${r.Resource_Title} <small class="badge">${r.Seniority}</small></td><td>${Number(r.Hours).toFixed(2)}</td></tr>
+      `).join("");
+      const sched = (d.schedule||[]).map(s => `
+        <tr><td>${s.task_group}</td><td>${s.start_date}</td><td>${s.end_date}</td><td>${s.duration_days}</td></tr>
+      `).join("");
+      const card = el(`
+        <div class="card" style="background:#0f141d;">
+          <h4>${d.deliverable} <span class="badge">${d.category}</span> <span class="badge">${d.complexity}×${d.tier}</span></h4>
+          <div class="inline">${tgPills}</div>
+          <table class="tbl"><thead><tr><th>Role</th><th>Hours</th></tr></thead><tbody>${rows || '<tr><td colspan="2">No hours</td></tr>'}</tbody></table>
+          <div class="inline"><strong>Deliverable Total Hours:</strong> ${Number(d.total_hours).toFixed(2)} &nbsp; <strong>Price:</strong> ${currency(d.price)}</div>
+          <details>
+            <summary>Timeline (auto)</summary>
+            <table class="tbl"><thead><tr><th>Task Group</th><th>Start</th><th>End</th><th>Days</th></tr></thead><tbody>${sched || '<tr><td colspan="4">No schedule</td></tr>'}</tbody></table>
+          </details>
+        </div>
+      `);
+      wrap.append(card);
+    });
+
+    box.append(wrap);
+  });
+
+  document.querySelector("#totA").innerText = currency(data.A.totals.price);
+  document.querySelector("#totB").innerText = currency(data.B.totals.price);
+}
+
+async function onExport(which){
+  if(!SCENARIOS){ alert("Build scenarios first."); return; }
+  const res = await fetch("/api/export", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({scenario: SCENARIOS[which]})
+  });
+  if(!res.ok){ alert("Export failed"); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `workfront_export_${which}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+window.addEventListener("load", boot);

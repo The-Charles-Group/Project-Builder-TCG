@@ -39,12 +39,6 @@
     
     // Create fallback UI that's always available
     createFallbackUI() {
-      // DOM-ready guard: if body doesn't exist yet, wait for DOMContentLoaded
-      if (!document.body) {
-        document.addEventListener('DOMContentLoaded', () => this.createFallbackUI());
-        return;
-      }
-      
       // Check if already exists
       if (document.getElementById('error-recovery-fallback')) {
         return;
@@ -271,12 +265,6 @@
     
     // Detect if UI is stuck
     detectStuckState() {
-      // Don't check if AI analysis is running - avoid false positives
-      if (window.AI_ANALYSIS_IN_PROGRESS) {
-        console.log('[ErrorRecovery] Skipping stuck detection - AI analysis in progress');
-        return false;
-      }
-      
       // Check if main content is visible
       const mainContent = document.querySelector('main, .container, #app, body > header + *');
       const hasVisibleContent = mainContent && mainContent.offsetHeight > 0;
@@ -443,12 +431,6 @@
     
     // Recover from error
     recoverFromError() {
-      // Check if AI analysis is running - DO NOT INTERRUPT
-      if (window.AI_ANALYSIS_IN_PROGRESS) {
-        console.log('[ErrorRecovery] Skipping recovery - AI analysis in progress');
-        return;
-      }
-      
       console.log('[ErrorRecovery] Attempting recovery...');
       this.isRecovering = true;
       
@@ -484,12 +466,6 @@
     
     // Force recovery by clearing data and reloading
     forceRecovery() {
-      // Check if AI analysis is running - DO NOT INTERRUPT
-      if (window.AI_ANALYSIS_IN_PROGRESS) {
-        console.log('[ErrorRecovery] Skipping force recovery - AI analysis in progress');
-        return;
-      }
-      
       console.log('[ErrorRecovery] Forcing recovery...');
       
       // Clear all local storage

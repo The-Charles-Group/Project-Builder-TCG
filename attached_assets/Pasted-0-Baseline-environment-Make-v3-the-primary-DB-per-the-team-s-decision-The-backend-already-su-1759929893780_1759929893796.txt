@@ -1,0 +1,240 @@
+0) Baseline & environment
+
+Make v3 the primary DB (per the team’s decision).
+
+The backend already supports a primary/secondary DB switch with the env var APB_PRIMARY_DB_VERSION (defaults to "v4"). Set it to "v3" in Replit Secrets so v3 becomes primary and v4 is used for overlay/fallback.
+
+v3 and v4 file discovery helpers are in the server (_find_v3_path, _find_v4_path). Keep both present so we can still overlay missing sheets from v4 while running “v3‑primary”.
+
+Replit action: Add a Secret APB_PRIMARY_DB_VERSION=v3, restart the repl.
+
+1) Step 2 — Select & Configure Deliverables
+1.1 Fix state sync so Add populates Components & L3 immediately
+
+Cause: There are two selection stores being updated out of sync (you observed this: “it says fixed” but the panels didn’t refresh).
+
+Fix approach (frontend):
+
+Use one source of truth, e.g., selectedState = { deliverables:Set<string>, components:Set<string>, l3:Set<string> } in a single store (React useReducer/Zustand or vanilla singleton).
+
+Wire all “Add”, checkbox toggles, “Select all”, “Clear” to dispatch into that one store. On changes, recompute the filtered lists for Columns 2 and 3 and re-render.
+
+Acceptance criteria
+
+Clicking Add next to an AI‑suggested deliverable instantly:
+
+Pins that deliverable into the Selected section (top of Column 1).
+
+Auto‑loads its Components (Column 2) checked by default.
+
+Auto‑loads all L3 under those components (Column 3) checked by default.
+
+1.2 Multi‑select L3 + show chosen L3 in the right panel
+
+Current L3 panel lets only one L3 show—change to multi‑select with checkboxes, exactly like Components.
+
+The Summary (Column 4) currently lists L2 components; change it to list L3 Subtasks (chips). Keep Deliverables as the first group, Components optional (collapsed), and L3 chips always visible with counts.
+
+1.3 Replace the dropdowns with searchable inputs
+
+Replace Column‑2 “Select a deliverable first…” and Column‑3 “Select a component first…” dropdowns with search bars (same style as Column‑1). Typing filters the checkbox list.
+
+Debounce input (150–250ms) and filter client‑side.
+
+1.4 All / Clear buttons
+
+In Columns 2 and 3, wire All to check all visible rows (honors current search filter), and Clear to uncheck all visible.
+
+Make sure the small All/Clear buttons update the Summary counts live.
+
+1.5 Deliverables search bar + “Selected on top”
+
+Fix the filter handler so typing in Column‑1 narrows the list.
+
+Keep the Selected section sticky at the top (already visible in your latest screenshot) and move any newly selected item there immediately.
+
+Provide an X to remove a selected deliverable; when removed, the AI panel should show its Add button again (see 1.7).
+
+1.6 “Proceed to Pricing” becomes enabled only when there is ≥1 deliverable selected
+
+Guard the button state off selectedState.deliverables.size.
+
+1.7 AI Suggestions panel behavior
+
+Don’t require re‑upload on Refresh AI Suggestions. The server tracks the last uploaded filename in LAST_UPLOAD_FILENAME; use it when suggestions are requested to avoid the “No RFP text in memory” modal you’re seeing.
+
+If the user removes a deliverable that came from AI, show its Add button in the AI panel again.
+
+Keep Copy / Hide on the AI Summary panel as you already designed (hide collapses the summary body but not the header).
+
+QA script for Step 2
+
+Upload RFP → Suggestions appear; click Add on 2–3 deliverables → Column‑2 auto‑fills with components (checked) and Column‑3 with all L3 (checked).
+
+Use Deliverables search; All, Clear work in Columns 2/3; Summary shows correct counts and lists L3 chips.
+
+Remove a deliverable → it drops from Selected; AI shows Add again.
+
+Refresh AI Suggestions → no error modals; still uses the same uploaded RFP.
+
+2) Step 3 — Pricing
+2.1 Deduplicate dropdown options
+
+The Pricing mode and Rate band menus have dupes—dedupe on render by array .filter((v,i,a)=>a.indexOf(v)===i).
+
+2.2 Blended rate default = 195 with edit support
+
+Keep 195 as default but persist per session; reflect changes in the totals.
+
+2.3 Scenario budgets for A, B, and C
+
+The backend already defines Scenario multipliers for A/B/C (SCENARIO_MULT)—ensure these actually apply to hours/QA/PM and feed into Budget Analysis for all three scenario cards (not A only).
+
+Add a Client budget (USD) field to Scenario B and Scenario C cards (mirroring Scenario A), and compute variance the same way.
+
+2.4 “0 hour” regression on “Build Scenarios”
+
+Root cause: selection → component → L3 mapping wasn’t persisted or was re‑filtered to none before build. With the Step‑2 single store and “all selected by default”, pass the exact set of L3 to the pricing builder; if no L3 exist for a given component, fall back to its role‑hour mix from DB. Also ensure string normalization for codes (avoid NaN keys). The DB loader already normalizes code/text columns to strings; keep that call earlier in the pipeline.
+
+2.5 Project name
+
+The XML should use the Project name field from Step 3—never the scenario label. (See Step‑5 XML fixes below.)
+
+QA script for Step 3
+
+Toggle Rate band/Pricing mode (no duplicates), change blended rate, watch both scenario cards update.
+
+Enter budgets for A, B, C → all three show green/red variance badges.
+
+Click Build Scenarios A & B and Build Scenario C → totals remain consistent; no deliverable shows 0 hours unless genuinely zero.
+
+3) Step 4 — Timeline
+3.1 Add the Scenario C button
+
+Same behavior/markup as A/B, binds to the scenario‑C array.
+
+3.2 Business‑day math (no weekends, 9–5, respect holidays)
+
+Bug: End dates can land on Saturdays, and durations are off (e.g., 10/13 → 10/22 displayed as 7).
+
+Fix: Use working‑day math on the server when building timelines and again in post_export for XML:
+
+Use numpy.busday_offset/busday_count with a calendar that excludes Saturday and Sunday and includes a US/MX holiday list. (Numpy is already imported in the server.)
+
+Store per‑project StartDate (Step 3 field) and compute (start, end, durationDays) with end exclusive or inclusive consistently; recommend end exclusive so durationDays = busday_count(start, end). Add +1 if you prefer inclusive display—be consistent on XML too.
+
+XML calendar fix: your exported <Calendars> mark Saturday (DayType=6) as working—that’s why Workfront shows weekends. Change DayType 6 to <DayWorking>0</DayWorking>. (See your exports where DayType 6 is 1.)
+
+3.3 Task dependencies
+
+Current XML wires many tasks in parallel; instead, for each Deliverable:
+
+Insert invisible [DEL‑####] START and [DEL‑####] END.
+
+Set each component/L3 chain as FS (finish‑to‑start) within its lane.
+
+Link the last L3 to [DEL‑####] END.
+This preserves overlap within a deliverable (where appropriate) but avoids “everything starts at project day 1”.
+
+QA script for Step 4
+
+Build A/B/C and toggle between them: the grid updates, “Save Order” works.
+
+No end date is Sat/Sun; durations reflect business days.
+
+Change the project start date (Step 3) → timeline recomputes accordingly.
+
+4) Step 5 — Export XML
+4.1 Project name and first task
+
+Set <Project><Name> to the Project name field from Step 3, not “Project from Scenario A.” (Your exports show both patterns; fix to always use the form field.)
+
+The first row task should always be “Project Summary”, not the project name. Create a summary parent task (ID 1) named Project Summary, then nest deliverable summary rows under it. (Your current first task is often the project name.)
+
+4.2 Business calendar in XML
+
+Ensure the “Standard” calendar uses Mon–Fri working, Sat/Sun non‑working (fix DayType=6 to 0), 08:00–12:00 / 13:00–17:00 as you already do.
+
+4.3 Remove [nan] START/END and broken WBS
+
+Those appear when a deliverable code/title is missing or cast to NaN. The server already normalizes critical columns to strings in the DB loader—call that before any joins/mapping and guard against empty labels with fallbacks (e.g., deliverable.title || 'Unnamed Deliverable').
+
+4.4 Include Service Department and roles in the CSV/XLSX Workfront export
+
+The Workfront column order includes “Service Department” (exact header). Keep this column populated from v3 (All_Task_Rows) mapping.
+
+4.5 Export Scenarios A, B, and C
+
+Add Export XML A · B · C buttons; each exports its own file with the correct name prefix (e.g., …_Scenario_C … .xml).
+
+Zip “Export All” if all three are built successfully.
+
+QA script for Step 5
+
+Export each scenario; open the XML and confirm:
+
+<Name> equals the Step‑3 project name; Task #1 is Project Summary.
+
+<WeekDays> show DayType 6 and 7 as non‑working. (No Saturday end dates in Workfront.)
+
+No [nan] START/END] rows; WBS/OutlineNumber are sequential.
+
+5) Scenario‑builder quality (rates & multipliers)
+
+Ensure the A/B/C multipliers get applied to all role‑hour lines (including QA/PM adders) and the resulting price is sum(hours × role_rate) ± scenario effects. The server already defines SCENARIO_MULT; enforce it in the pricing builder and not only in the UI math.
+
+If Workfront totals differ, ensure the rate band mapping selects the correct column in the rate card and that seniority normalization in the loader (_normalize_rate_card_seniority) is run before pricing.
+
+6) Retainers (Step 3 toggle)
+
+You previously saw a 500 on checking the retainers box. Add null‑safety when no deliverables are in the retainer set and validate month counts before multiplying hours; return HTTP 400 with a clear message if invalid, not a 500.
+
+7) Timeline math sanity check (the “7 days from 10/13 to 10/22” example)
+
+With Mon–Fri working days, 2025‑10‑13 (Mon) → 2025‑10‑22 (Wed) is 8 business days (13–17 = 5, 20–22 = 3). The UI showing 7 means you’re counting end‑exclusive yet displaying as inclusive (or you used 9–17 = 7 hours/day logic for duration). Adopt busday_count and display that number; align XML. (See 3.2.)
+
+8) What to test, in order (full pass)
+
+Upload RFP → Refresh AI Suggestions (no modal errors).
+
+Step 2: click Add on suggestions → Selected pins to top; Components and L3 pre‑checked.
+
+Use searches in all three columns; All/Clear work; Summary shows L3 chips.
+
+Remove and re‑add deliverables from AI and manually—everything stays in sync.
+
+Step 3: set budgets for A, B, C; change rate band & blended rate; totals and variance update.
+
+Build A, B, C. No “0 hour” rows except when truly zero.
+
+Step 4: A, B, C buttons exist; dates avoid weekends; durations reflect business days; “Save order” sticks.
+
+Step 5: Export A, B, C; verify:
+
+<Name> = project name (not “Scenario A”).
+
+First task = Project Summary.
+
+Saturday is non‑working in calendar.
+
+No [nan] labels.
+
+Service Department column present in tabular export.
+
+9) Small code pointers the agent will see in this repo
+
+DB loader & env flag for v3 primary and scenario math scaffolding: look for PRIMARY = os.getenv("APB_PRIMARY_DB_VERSION", "v4")… and SCENARIO_MULT in the API server.
+
+String normalizations to avoid NaN labels (deliverable/component names) already exist in the loader; keep them earlier in the flow.
+
+Workfront columns include Service Department (keep populated).
+
+Post‑export calendar: fix DayType 6 to non‑working (you can do this in post_export.post_process_xml which is already imported).
+
+Calendar in prior exports currently marks Saturday as working—this is why Workfront schedules into weekends.
+
+Final notes for the agent
+
+Please implement the single state store for Step‑2 selections and wire every button/checkbox to it; the UI bugs you see (no L3, All/Clear inert, search not filtering, chips not updating) all come from divergent stores and conditional rendering.
+
+After shipping, run the 8‑step full pass above and attach three fresh XMLs (A/B/C) plus screenshots of Step‑2 Summary (showing L3 chips), Step‑3 budgets for A/B/C, and Step‑4 timelines where no end dates are Sat/Sun.

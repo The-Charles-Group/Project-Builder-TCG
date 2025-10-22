@@ -1,0 +1,78 @@
+[/api/scenarios] Found codes in field: selectedDeliverableCodes
+[/api/scenarios] Building with 17 codes, pricing_mode=Flat_Blended, rate_band=Nearshore_Value
+DEBUG: api_build called with 17 deliverables
+DEBUG Build: Component map processed: {'DEL-0034': {'Brand Narrative': None, 'Brand Values Statement and or Proposition': None, 'Brand Vision Statement': None, 'Key Pillars': None}, 'DEL-0036': {'Brand Approach for Campaign Period': None, 'Content Plan': None, 'Content Production Shoot Approach': None, 'Content Production Shot List Review & Guidance': None, 'Content Types across Full Funnel': None, 'High-Fidelity Paid Media Mock-Ups': None, 'Messaging Framework (by Audience)': None, 'Platform/Channel Approach': None, 'Social Templates': None, 'Voice & Tone': None}, 'DEL-0037': {'Planning Working Session': None}, 'DEL-0009': {"Brand Do's & Dont's": None, 'Photo & Video Direction': None}, 'DEL-0011': {'Media Assets': None, 'Photo / Video Direction': None}, 'DEL-0016': {'Awareness Assets (Paid)': None, 'Conversion Assets (Paid)': None, 'National Pinterest assets (Paid)': None, 'National Spotify Audio (Paid)': None, 'Regional Pinterest assets (Paid)': None, 'Regional Spotify Audio (Paid)': None, 'Resize Assets': None, 'Unique Assets': None}, 'DEL-0008': {'Graphic & Copy Messaging Cornerstones': None}, 'DEL-0017': {}, 'DEL-0027': {'Media Activation': None, 'Media Buying': None}, 'DEL-0028': {'Paid Media Kick-off Meeting': None, 'Platform Access & Setup': None}, 'DEL-0029': {'Channel & Vendor Evaluation': None, 'Media Planning Deck': None, 'Paid Media Plan': None}, 'DEL-0030': {'Audience Research': None, 'Identification of Media Needs': None, 'Paid Media & Paid Creative Audit': None, 'Paid Media Recommendations': None, 'Target Audience & Demographics': None}, 'DEL-0031': {'Budget Management & Optimization': None, 'Campaign-Level Optimization': None, 'Execution & Monitoring': None}, 'DEL-0032': {'Ad-Platform Reporting': None, 'Campaign Reporting (Bi-Weekly)': None, 'Campaign Reporting (Quarterly)': None, 'Campaign Tracking': None, 'Dashboard Analytics': None, 'Reconcilliation & Media Budget Authorization': None, 'Reporting & Ad-Tagging Support': None}, 'DEL-0033': {'Discovery Session & Access': None}, 'DEL-0043': {'Planning, Strategy & UX': None}, 'DEL-0025': {'Campaign Set Up': None, 'Creative Brief Development & Influencer Direction': None, 'Creative Production Assistance': None, 'Influencer Sourcing, Contracting & Management': None}}
+DEBUG Build: Code 'DEL-0034' -> Name 'Brand Positioning Strategy' (Category: deck_strategy)
+DEBUG Component processing for DEL-0034: {'Brand Narrative': None, 'Brand Values Statement and or Proposition': None, 'Brand Vision Statement': None, 'Key Pillars': None}
+DEBUG Build: Added to scenario - deliverable field: 'Brand Positioning Strategy')
+DEBUG Build: Code 'DEL-0036' -> Name 'Creative Strategy / Campaign Plan Deck' (Category: deck_strategy)
+DEBUG Component processing for DEL-0036: {'Brand Approach for Campaign Period': None, 'Content Plan': None, 'Content Production Shoot Approach': None, 'Content Production Shot List Review & Guidance': None, 'Content Types across Full Funnel': None, 'High-Fidelity Paid Media Mock-Ups': None, 'Messaging Framework (by Audience)': None, 'Platform/Channel Approach': None, 'Social Templates': None, 'Voice & Tone': None}
+DEBUG Build: Added to scenario - deliverable field: 'Creative Strategy / Campaign Plan Deck')
+DEBUG Build: Code 'DEL-0037' -> Name 'Project Kickoff' (Category: general)
+DEBUG Component processing for DEL-0037: {'Planning Working Session': None}
+DEBUG Build: Added to scenario - deliverable field: 'Project Kickoff')
+DEBUG Build: Code 'DEL-0009' -> Name 'Brand Style & Usage Guidelines' (Category: guidelines)
+DEBUG Component processing for DEL-0009: {"Brand Do's & Dont's": None, 'Photo & Video Direction': None}
+DEBUG Build: Added to scenario - deliverable field: 'Brand Style & Usage Guidelines')
+DEBUG Build: Code 'DEL-0011' -> Name 'Campaign Strategy' (Category: deck_strategy)
+DEBUG Component processing for DEL-0011: {'Media Assets': None, 'Photo / Video Direction': None}
+DEBUG Build: Added to scenario - deliverable field: 'Campaign Strategy')
+DEBUG Build: Code 'DEL-0016' -> Name 'Paid Media Assets' (Category: assets)
+DEBUG Component processing for DEL-0016: {'Awareness Assets (Paid)': None, 'Conversion Assets (Paid)': None, 'National Pinterest assets (Paid)': None, 'National Spotify Audio (Paid)': None, 'Regional Pinterest assets (Paid)': None, 'Regional Spotify Audio (Paid)': None, 'Resize Assets': None, 'Unique Assets': None}
+DEBUG Build: Added to scenario - deliverable field: 'Paid Media Assets')
+DEBUG Build: Code 'DEL-0008' -> Name 'Brand Identity Development' (Category: development)
+DEBUG Component processing for DEL-0008: {'Graphic & Copy Messaging Cornerstones': None}
+DEBUG Build: Added to scenario - deliverable field: 'Brand Identity Development')
+DEBUG Build: Code 'DEL-0017' -> Name 'Social Assets' (Category: general)
+DEBUG Build: Added to scenario - deliverable field: 'Social Assets')
+DEBUG Build: Code 'DEL-0027' -> Name 'Paid Media Buying & Activation' (Category: general)
+DEBUG Component processing for DEL-0027: {'Media Activation': None, 'Media Buying': None}
+DEBUG Build: Added to scenario - deliverable field: 'Paid Media Buying & Activation')
+DEBUG Build: Code 'DEL-0028' -> Name 'Paid Media Onboarding' (Category: general)
+DEBUG Component processing for DEL-0028: {'Paid Media Kick-off Meeting': None, 'Platform Access & Setup': None}
+DEBUG Build: Added to scenario - deliverable field: 'Paid Media Onboarding')
+DEBUG Build: Code 'DEL-0029' -> Name 'Paid Media Planning' (Category: deck_strategy)
+DEBUG Component processing for DEL-0029: {'Channel & Vendor Evaluation': None, 'Media Planning Deck': None, 'Paid Media Plan': None}
+DEBUG Build: Added to scenario - deliverable field: 'Paid Media Planning')
+DEBUG Build: Code 'DEL-0030' -> Name 'Paid Media Strategy' (Category: deck_strategy)
+DEBUG Component processing for DEL-0030: {'Audience Research': None, 'Identification of Media Needs': None, 'Paid Media & Paid Creative Audit': None, 'Paid Media Recommendations': None, 'Target Audience & Demographics': None}
+DEBUG Build: Added to scenario - deliverable field: 'Paid Media Strategy')
+DEBUG Build: Code 'DEL-0031' -> Name 'Paid Media Trafficking & Performance' (Category: general)
+DEBUG Component processing for DEL-0031: {'Budget Management & Optimization': None, 'Campaign-Level Optimization': None, 'Execution & Monitoring': None}
+DEBUG Build: Added to scenario - deliverable field: 'Paid Media Trafficking & Performance')
+DEBUG Build: Code 'DEL-0032' -> Name 'Reporting' (Category: reporting)
+DEBUG Component processing for DEL-0032: {'Ad-Platform Reporting': None, 'Campaign Reporting (Bi-Weekly)': None, 'Campaign Reporting (Quarterly)': None, 'Campaign Tracking': None, 'Dashboard Analytics': None, 'Reconcilliation & Media Budget Authorization': None, 'Reporting & Ad-Tagging Support': None}
+DEBUG Build: Added to scenario - deliverable field: 'Reporting')
+DEBUG Build: Code 'DEL-0033' -> Name 'Web Analytics Audit' (Category: development)
+DEBUG Component processing for DEL-0033: {'Discovery Session & Access': None}
+DEBUG Build: Added to scenario - deliverable field: 'Web Analytics Audit')
+DEBUG Build: Code 'DEL-0043' -> Name 'Content Planning & Creative Design' (Category: deck_strategy)
+DEBUG Component processing for DEL-0043: {'Planning, Strategy & UX': None}
+DEBUG Build: Added to scenario - deliverable field: 'Content Planning & Creative Design')
+DEBUG Build: Code 'DEL-0025' -> Name 'Social Content Creator Production Management' (Category: production)
+DEBUG Component processing for DEL-0025: {'Campaign Set Up': None, 'Creative Brief Development & Influencer Direction': None, 'Creative Production Assistance': None, 'Influencer Sourcing, Contracting & Management': None}
+DEBUG Build: Added to scenario - deliverable field: 'Social Content Creator Production Management')
+INFO:     172.31.80.194:56892 - "POST /api/scenarios HTTP/1.1" 200 OK
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found
+INFO:     172.31.80.194:56892 - "GET /api/ai/jobs/642a96bd-f94b-440e-b865-d160839a57c0 HTTP/1.1" 404 Not Found

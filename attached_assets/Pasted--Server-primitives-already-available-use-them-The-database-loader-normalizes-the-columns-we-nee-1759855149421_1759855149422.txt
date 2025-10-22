@@ -1,0 +1,219 @@
+🔧 Server primitives already available (use them)
+
+The database loader normalizes the columns we need across v3/v4, so we can filter by:
+
+Deliverable_Code, Component, and Task_Label (fallbacks handled).
+
+PRIMARY flag determines v3 vs v4 at load; don’t change it here.
+
+We already carry a global LAST_UPLOAD_FILENAME for Step 5 defaults. Keep it; don’t repurpose it for Step 2 state.
+
+These normalizers are why we can safely build Step 2 lookups off all_rows without special casing sheet variants. (See _normalize_component_column(), _normalize_task_label_column(), and _normalize_v3_service_department().)
+
+🧱 Backend: add two tiny endpoints for Step 2 (deterministic, stateless)
+
+File: the FastAPI app (same module where app = FastAPI(...) lives).
+
+Components for selected deliverables
+
+@app.post("/api/step2/components")
+async def step2_components(payload: dict):
+    """
+    payload = {"deliverables": ["deck_strategy", "production", ...]}
+    returns = {
+      "deck_strategy": ["brief", "art_direction", "internal_review", ...],
+      "production": ["prepro_coord", "shoot", "post", ...],
+    }
+    """
+    codes = [str(c).strip() for c in payload.get("deliverables", [])]
+    if not getattr(app.state, "db", None):
+        app.state.db = AgencyDB(); app.state.db.load()
+    df = app.state.db.all_rows.copy()
+
+    out = {}
+    for code in codes:
+        subset = df[df["Deliverable_Code"] == code]
+        comps = (
+            subset["Component"]
+            .fillna("").astype(str).str.strip()
+            .replace({"nan": ""})
+            .tolist()
+        )
+        comps = sorted({c for c in comps if c})
+        out[code] = comps or ["general"]
+    return JSONResponse(out)
+
+
+L3 subtasks for a deliverable + component
+
+@app.post("/api/step2/l3")
+async def step2_l3(payload: dict):
+    """
+    payload = {"deliverable": "deck_strategy", "component": "brief"}
+    returns = ["deck_build", "internal_review", "client_review", ...]
+    """
+    dcode = str(payload.get("deliverable", "")).strip()
+    comp  = str(payload.get("component", "")).strip()
+    if not getattr(app.state, "db", None):
+        app.state.db = AgencyDB(); app.state.db.load()
+    df = app.state.db.all_rows.copy()
+
+    rows = df[(df["Deliverable_Code"] == dcode) & (df["Component"] == comp)]
+    # Prefer Task_Label (normalized), fallback to task_group if empty
+    label_col = "Task_Label"
+    if label_col not in rows.columns or rows[label_col].eq("").all():
+        label_col = "task_group" if "task_group" in rows.columns else None
+
+    tasks = []
+    if label_col:
+        tasks = rows[label_col].fillna("").astype(str).str.strip().tolist()
+    tasks = sorted({t for t in tasks if t})
+
+    return JSONResponse(tasks)
+
+
+Both endpoints rely on the normalized columns provided by the loader you already have. (See the normalizers mentioned above.)
+
+Do not add any hidden caching or alternate sources of truth here. They must be pure functions of the DB to keep Step 2 predictable.
+
+🧭 Frontend: make one source of truth for Step 2 selection & wire it to the new endpoints
+
+Where: Step 2 script/module (the panel that renders Deliverables / Components / L3 Subtasks and the AI box).
+
+Create a tiny store (module‑level or React context) and use it everywhere in Step 2:
+
+type Step2Store = {
+  selectedDeliverables: Set<string>;              // deliverable codes
+  componentsByDeliverable: Map<string, string[]>;// code -> component names
+  selectedComponents: Map<string, Set<string>>;   // code -> Set(components)
+  l3ByKey: Map<string, string[]>;                 // `${code}|${component}` -> L3 list
+  selectedL3: Map<string, Set<string>>;           // `${code}|${component}` -> Set(L3)
+};
+
+const step2: Step2Store = {
+  selectedDeliverables: new Set(),
+  componentsByDeliverable: new Map(),
+  selectedComponents: new Map(),
+  l3ByKey: new Map(),
+  selectedL3: new Map(),
+};
+
+A. Wire AI “Add” and left‑column checkbox to the SAME functions
+async function addDeliverable(code: string) {
+  if (step2.selectedDeliverables.has(code)) return;
+
+  step2.selectedDeliverables.add(code);
+  // Fetch components for ALL currently selected deliverables
+  const body = { deliverables: Array.from(step2.selectedDeliverables) };
+  const res = await fetch("/api/step2/components", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  // Update components cache and default selections (none pre‑selected)
+  Object.entries(data).forEach(([dcode, comps]) => {
+    step2.componentsByDeliverable.set(dcode, comps as string[]);
+    if (!step2.selectedComponents.has(dcode)) {
+      step2.selectedComponents.set(dcode, new Set());
+    }
+  });
+
+  renderDeliverablesList();     // pins selected to top + checkmarks
+  renderComponentsPanel();      // dropdown defaults to the first selected deliverable
+  renderAISuggestedBox();       // flips “Add” ➜ “Added” + “Remove”
+  renderSummary();              // counts in the blue Summary box
+}
+
+function removeDeliverable(code: string) {
+  step2.selectedDeliverables.delete(code);
+  step2.componentsByDeliverable.delete(code);
+  step2.selectedComponents.delete(code);
+
+  // purge any cached L3 for this deliverable
+  [...step2.l3ByKey.keys()].forEach(k => { if (k.startsWith(code + "|")) step2.l3ByKey.delete(k); });
+  [...step2.selectedL3.keys()].forEach(k => { if (k.startsWith(code + "|")) step2.selectedL3.delete(k); });
+
+  renderDeliverablesList();
+  renderComponentsPanel();  // resets if nothing selected
+  renderL3Panel(true);      // clear
+  renderAISuggestedBox();   // “Add” button reappears
+  renderSummary();
+}
+
+
+Hook both UI surfaces (AI “Add” buttons and the left‑column checkboxes) to only addDeliverable / removeDeliverable. No other code is allowed to mutate selection.
+
+B. Components panel behavior
+
+Dropdown always lists currently selected deliverables.
+
+On change (or immediately after first “Add”), it loads the component chips for that deliverable (from componentsByDeliverable.get(code)).
+
+All / Clear toggles act on selectedComponents.get(code) and update Summary counts immediately.
+
+When a component chip is clicked, load L3:
+
+async function ensureL3Loaded(code: string, component: string) {
+  const key = `${code}|${component}`;
+  if (step2.l3ByKey.has(key)) return;
+
+  const res = await fetch("/api/step2/l3", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({ deliverable: code, component })
+  });
+  const tasks = await res.json();
+  step2.l3ByKey.set(key, tasks);
+  if (!step2.selectedL3.has(key)) step2.selectedL3.set(key, new Set());
+  renderL3Panel();
+  renderSummary();
+}
+
+C. L3 panel behavior
+
+All / Clear toggles work per key = code|component.
+
+Ticking/unticking L3 updates selectedL3.get(key) and Summary counts in real time.
+
+D. Pin selected deliverables to the top of the left column
+
+Sort function applied before rendering:
+
+function sortDeliverablesForRender(items: {code:string; label:string;}[]) {
+  return items.sort((a,b) => {
+    const aSel = step2.selectedDeliverables.has(a.code) ? 0 : 1;
+    const bSel = step2.selectedDeliverables.has(b.code) ? 0 : 1;
+    return aSel - bSel || a.label.localeCompare(b.label);
+  });
+}
+
+E. “Refresh AI Suggestions” must NEVER show “Upload RFP first” in Step 2
+
+Current check likely looks for a volatile rfpText variable. Replace that guard with:
+
+OK if either rfpText or analysis.summary exists in app state or a cached analysis exists for the current session. If not found, call the same endpoint Step 1 uses to read the last analysis for this session/upload.
+
+Do not block the refresh button just because rfpText isn’t present in RAM. Persist Step 1’s analysis in app state or localStorage and accept refresh calls without forcing a re‑upload.
+
+🚦Step‑to‑Step plumbing (don’t regress)
+
+Proceed to Pricing (Step 3):
+
+Payload must include only what the user selected:
+
+deliverables: string[] (codes in selectedDeliverables)
+
+components: Record<deliverableCode, string[]> (from selectedComponents)
+
+l3: Record<deliverableCode, Record<component, string[]>> (from selectedL3)
+
+Existing pricing uses normalized DB columns—safe to map hours/rates by code→component→task. (The hours columns are already harmonized by the loader.)
+
+Timeline (Step 4):
+
+When user Save Order, include the current Step 2 filter state in the same request so the server builds durations for exactly these deliverable → component → L3 sets.
+
+(Note: The export calendar already encodes 8‑hour weekdays with weekends off—MinutesPerDay=480 and Standard calendar Sunday/Saturday non‑working. Keep it. If we need holidays next, we’ll add <Exceptions> to the calendar.)
+
+Export (Step 5):
+
+Keep writing <Name> from the Project name field (already fixed in recent exports). Ensure top‑level task row #1 = “Project Summary”, not the project name. (You previously saw “Project from Scenario A”—that came from older exports and has been updated in later XMLs.)

@@ -1,0 +1,159 @@
+The surgical fixes
+A. Keep the hierarchy/indentation
+
+What to do
+Derive OutlineLevel from WBS_ID depth (1 = project, 2 = deliverable, 3 = component, 4+ = leaf), and set Summary=1 for rows that have children. Also write OutlineNumber/WBS so Workfront has both the level and the numbering.
+
+Where to change
+In your XML builder (in the exporter script), when you loop tasks:
+
+# PSEUDO-CODE inside the loop that emits <Task> ...
+wbs = row["WBS_ID"]  # e.g. '1.2.3'
+outline_level = wbs.count('.') + 1
+
+ET.SubElement(task, "OutlineLevel").text = str(outline_level)
+ET.SubElement(task, "WBS").text = wbs
+ET.SubElement(task, "OutlineNumber").text = wbs
+
+has_children = any(child_parent == row["WBS_ID"] for child_parent in df["Parent_WBS_ID"])
+ET.SubElement(task, "Summary").text = "1" if has_children else "0"
+
+
+This corrects the flat outline you see in Workfront. (Your current XML often sets deliverables to OutlineLevel=1, which prevents indentation. Proof in your exports.)
+
+Your Excel schema already contains WBS_ID and Parent_WBS_ID (see the WF_COLUMNS contract), so deriving outline is deterministic.
+
+B. Emit real Step‑4 dates (Mon–Fri) and durations in days
+
+What to do
+Use the app’s waterfall to compute each deliverable’s Start/Finish and then anchor children under their parent window. We’ll keep “days” by converting to minutes using the app’s calendar (MinutesPerDay=480).
+
+Where to change
+
+In the server (v2.6), Step 4 already has:
+
+Business‑day helpers and a compute_waterfall_schedule() that rounds up durations and increments by Mon–Fri.
+
+STEP4_SCHEDULE to persist the last schedule per scenario.
+
+Use that map during export: when creating each task, look up its deliverable code and use that start/end instead of the static project start. Set ConstraintType=StartNoEarlierThan (4) and ConstraintDate to the computed start to stop Workfront from drifting earlier.
+
+Convert Duration_Days → minutes:
+
+MINUTES_PER_DAY = 480  # matches XML header and calendar
+dur_days = int(math.ceil(max(1, float(row["Duration_Days"]))))
+ET.SubElement(task, "Duration").text = f"PT{dur_days * MINUTES_PER_DAY}M"
+
+
+Apply the business‑day deliverable window:
+
+deliverable_code = row["Deliverable_Code"]
+win = STEP4_SCHEDULE.get(current_scenario, {}).get("map", {}).get(deliverable_code)
+
+if win:
+    # 08:00 and 16:59:59 match your production constants
+    start_dt  = datetime.datetime.combine(win["start"], BUSINESS_START_TIME)
+    finish_dt = datetime.datetime.combine(win["end"],   BUSINESS_END_TIME)
+
+    ET.SubElement(task, "Start").text  = start_dt.isoformat()
+    ET.SubElement(task, "Finish").text = finish_dt.isoformat()
+
+    # Keep tasks from starting earlier than the scheduled window
+    ET.SubElement(task, "ConstraintType").text = "4"   # StartNoEarlierThan
+    ET.SubElement(task, "ConstraintDate").text = start_dt.isoformat()
+
+
+(Those constants and scheduler are already in your v2.6 app module.)
+
+Why “hours” still show in Workfront? Because its Duration column renders hours even if you send days. We are still sending the correct days semantics by using 480 minutes/day and a Mon–Fri calendar. (Both headers are already in the XML.)
+
+C. Recompute project summary start/finish from children (no more “8 hours”)
+
+What to do
+After all tasks are created, set the project summary row’s Start = earliest child Start and Finish = latest child Finish. Let Workfront infer its duration.
+
+Where to change
+Right before writing the final <Project>, scan all tasks you collected:
+
+proj_task = tasks_by_uid[root_uid]
+child_starts  = [t.start for t in all_tasks if t.uid != root_uid]
+child_finishes= [t.finish for t in all_tasks if t.uid != root_uid]
+
+proj_task.Start  = min(child_starts).isoformat()
+proj_task.Finish = max(child_finishes).isoformat()
+proj_task.Summary = "1"
+# Do NOT force Duration on the project summary; let the importer compute it from children.
+
+
+This removes the “8 hours” or “1207 hours” surprises on the top row. Your current files show both extremes depending on which exporter path ran.
+
+D. Put predecessors back (and normalize summary links)
+
+What to do
+For each task with a Dependencies value (WBS IDs separated by comma/semicolon), add <PredecessorLink> with Type 1 (Finish‑to‑Start). If a dependency points to a summary, re‑wire it to the last leaf beneath that summary; likewise if the successor is a summary, re‑wire to the first leaf under it. This matches your documented behavior.
+
+Where to change
+In the exporter after you’ve built wbs → uid and parent → [children] maps:
+
+def last_leaf_under(wbs):
+    cur = wbs
+    while cur in children_by_parent and children_by_parent[cur]:
+        cur = children_by_parent[cur][-1]  # last child in order
+    return cur
+
+def first_leaf_under(wbs):
+    cur = wbs
+    while cur in children_by_parent and children_by_parent[cur]:
+        cur = children_by_parent[cur][0]   # first child in order
+    return cur
+
+for row in df.itertuples():
+    succ_wbs = row.WBS_ID
+    succ_uid = uid_by_wbs[ first_leaf_under(succ_wbs) ]
+    deps = parse_deps(row.Dependencies)  # split by , or ;
+
+    for dep in deps:
+        pred_wbs = last_leaf_under(dep)
+        pred_uid = uid_by_wbs[pred_wbs]
+
+        link = ET.SubElement(task_xml_by_uid[succ_uid], "PredecessorLink")
+        ET.SubElement(link, "PredecessorUID").text = str(pred_uid)
+        ET.SubElement(link, "Type").text = "1"        # FS
+        ET.SubElement(link, "CrossProject").text = "0"
+
+
+Your earlier sample (Casa Dragones 10:08AM) already demonstrates the correct <PredecessorLink> structure—this restores that behavior in the new pipeline.
+
+E. Make Step‑4 reorder drive the export
+
+What to do
+When the Step‑4 “Save Order” API is called, we already persist STEP4_SCHEDULE. Use that store during export (see B above). If no schedule exists (fresh page refresh), recompute it from the Step‑4 rows just before export using the same compute_waterfall_schedule() helper.
+
+Where to change
+
+Ensure the Step‑4 handler writes STEP4_SCHEDULE[scenario] = compute_waterfall_schedule(...).
+
+In the XML exporter, try STEP4_SCHEDULE; if missing, call the same function using the current scenario’s deliverables, durations, and order. (Both utilities live in v2.6.)
+
+F. Keep the retainer block visible even after Step‑2 deletions
+
+What to do
+When building the Stage‑3 payload, if the set of “selected deliverables” becomes empty because the user ticked “Delete (AI detected)” in Step 2, fall back to the last built scenario (A) to populate the retainer candidates, and keep the component visible.
+
+Where to change
+In your Step‑3 route/view model, wrap the retainer candidate computation:
+
+cands = selected_deliverables or last_built_scenario_deliverables
+retainer_candidates = detect_retainer_opportunities(cands)
+ui["retainer"].visible = bool(retainer_candidates)  # keep visible when cands exists
+
+
+(Your WF export sheets already include the month fields; WF_COLUMNS has Duration_Days and optional Start_Offset_Days we leverage for retainers too.)
+
+Why “Hours” show in Workfront (and how to “see” days)
+
+We are sending durations in days × 480 minutes and a Mon–Fri calendar (MinutesPerDay=480, WeekDays Mon–Fri working). Workfront displays the Duration column in hours by design, but timeline math remains day‑based. Your exported headers already set these values.
+
+If you want Workfront’s UI to read like Step 4:
+
+Keep using day windows (B above). The Start/Due dates will match the Step‑4 table in your app (e.g., 15/33/7/26/50‑day windows from your screenshot), and the Gantt will align to business days.

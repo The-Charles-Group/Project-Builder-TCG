@@ -1,0 +1,525 @@
+// ai_planner_integrated.mjs
+// One-file intelligence layer for your Project Builder.
+// Modes:
+//  - Programmatic: import and call analyzeText(...)
+//  - Router: mountRoutes(app) to add /api/ai/analyze and /api/ai/catalog/reload
+//  - Standalone: RUN_STANDALONE=true node ai_planner_integrated.mjs
+
+import fs from "node:fs";
+import path from "node:path";
+import http from "node:http";
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const REASONING_MODEL = process.env.AI_REASONING_MODEL || "gpt-5-pro";
+const EMBEDDING_MODEL = "text-embedding-3-large";
+
+const DEPARTMENTS = [
+  "Creative",
+  "Strategy",
+  "Paid Media",
+  "Content",
+  "Technology",
+  "Integrated Marketing Management",
+];
+const LEVELS = ["deliverable","component","task"];
+
+// -------------------------- OpenAI minimal client ----------------------------
+const OPENAI_BASE = "https://api.openai.com/v1";
+async function openai(path, body) {
+  if (!OPENAI_API_KEY) throw new Error("Missing OPENAI_API_KEY");
+  const res = await fetch(`${OPENAI_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+async function embedMany(texts) {
+  if (!texts || texts.length===0) return [];
+  const r = await openai("/embeddings", { model: EMBEDDING_MODEL, input: texts });
+  return r.data.map(d=>d.embedding);
+}
+async function llmStructured({messages, schema, max_output_tokens=2200}) {
+  const r = await openai("/responses", {
+    model: REASONING_MODEL,
+    input: messages,
+    response_format: { type:"json_schema", json_schema:{ name:"Out", schema, strict:true }},
+    max_output_tokens
+  });
+  const t = (r.output_text||"").trim();
+  return JSON.parse(t);
+}
+
+// --------------------------- Utility helpers --------------------------------
+const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+const uniq = (a)=>Array.from(new Set(a));
+const norm = (s="")=>s.toLowerCase().replace(/[^a-z0-9\s\-\&\/\+]/g," ");
+const tok  = (s="")=>norm(s).split(/\s+/).filter(Boolean);
+function cosine(a,b){let d=0,na=0,nb=0;for(let i=0;i<a.length;i++){d+=a[i]*b[i];na+=a[i]*a[i];nb+=b[i]*b[i]}return(!na||!nb)?0:d/(Math.sqrt(na)*Math.sqrt(nb));}
+function sentenceSplit(text){return text.split(/(?<=[\.\?\!])\s+(?=[A-Z0-9])/g).filter(s=>s.trim());}
+function lexicalScore(text, cand){
+  const r = new Set(tok(text));
+  const c = new Set(tok([cand.title,cand.description,(cand.keywords||[]).join(" ")].join(" ")));
+  let overlap=0; for(const t of c) if (r.has(t)) overlap++;
+  const deptHit = r.has(cand.dept.toLowerCase().split(" ")[0])?0.05:0;
+  return Math.min(1,(overlap/Math.max(4,c.size))+deptHit);
+}
+
+// ----------------------- Catalog & loader (from ZIP/XML) ---------------------
+/** In-memory catalog (overwritten when you load your ZIP). */
+let CATALOG = []; // Deliverable[] with components[] and l2[] as in our previous message.
+
+// Fallback seed so the engine runs even before you load your DB:
+CATALOG = CATALOG.length ? CATALOG : [
+  // (Minimal paid/strategy/content/tech examples to make first run work.)
+  { id:"pm_planning", dept:"Paid Media", title:"Paid Media Planning", base_hours:28,
+    keywords:["media plan","paid search","paid social","YouTube","Pinterest","programmatic"],
+    components:[ { id:"pm_plan", title:"Paid Media Plan", base_hours:14, l2:[{id:"spec",title:"Spec Page Build",base_hours:2}] } ] },
+  { id:"pm_buy_activate", dept:"Paid Media", title:"Paid Media Buying & Activation", base_hours:24,
+    depends_on:["pm_planning"], components:[{id:"activation",title:"Media Activation",base_hours:16}] },
+  { id:"pm_traffic_perf", dept:"Paid Media", title:"Paid Media Trafficking & Performance", base_hours:30,
+    depends_on:["pm_buy_activate"], components:[{id:"exec",title:"Execution & Monitoring",base_hours:12}] },
+  { id:"pm_reporting", dept:"Paid Media", title:"Paid Media Reporting", base_hours:18,
+    components:[{id:"biweekly",title:"Campaign Reporting (Bi-Weekly)",base_hours:10}] },
+  { id:"strategy_campaign", dept:"Strategy", title:"Creative Strategy / Campaign Plan Deck", base_hours:24,
+    components:[{id:"brand_approach",title:"Brand Approach",base_hours:10}] },
+  { id:"creative_paid_assets", dept:"Creative", title:"Paid Media Assets / Ad Assets", base_hours:22,
+    components:[{id:"awareness",title:"Awareness Assets",base_hours:10}] },
+  { id:"content_plan", dept:"Content", title:"Content Plan (Organic Social)", base_hours:16,
+    components:[{id:"org_plan",title:"Organic Social Plan",base_hours:8}] },
+  { id:"tech_analytics_audit", dept:"Technology", title:"Web Analytics Audit", base_hours:14,
+    components:[{id:"audit",title:"Audit",base_hours:6, l2:[{id:"event_map",title:"Event/Conversion Mapping",base_hours:4}]}] },
+  { id:"imm_reporting", dept:"Integrated Marketing Management", title:"Integrated Reporting (Organic + Paid)", base_hours:10,
+    components:[{id:"monthly_org",title:"Monthly Organic Social Report",base_hours:4}] }
+];
+
+// ZIP loader
+export async function loadCatalogZip(zipPath, options={}) {
+  const { default: AdmZip } = await import("adm-zip");
+  const { XMLParser } = await import("fast-xml-parser");
+  const zip = new AdmZip(zipPath);
+  const entries = zip.getEntries();
+
+  /** Aggregate any deliverable-like payloads we find in JSON/XML/CSV. */
+  const parsedBlocks = [];
+  const xmlParser = new XMLParser({ ignoreAttributes:false, attributeNamePrefix:"@", allowBooleanAttributes:true });
+
+  for (const e of entries) {
+    if (e.isDirectory) continue;
+    const name = e.entryName;
+    const data = e.getData().toString("utf8").trim();
+    if (!data) continue;
+
+    if (name.toLowerCase().endsWith(".json")) {
+      try { parsedBlocks.push(JSON.parse(data)); } catch {}
+    } else if (name.toLowerCase().endsWith(".xml")) {
+      try { parsedBlocks.push(xmlParser.parse(data)); } catch {}
+    } else if (name.toLowerCase().endsWith(".csv")) {
+      parsedBlocks.push(csvToJsonGuess(data)); // very basic CSV parser below
+    }
+  }
+
+  // Heuristic mapper: try to find arrays of deliverables in mixed blobs.
+  const mapped = [];
+  for (const block of parsedBlocks) {
+    findDeliverableArrays(block).forEach(arr=>{
+      for (const raw of arr) {
+        const d = coerceDeliverable(raw);
+        if (d && DEPARTMENTS.includes(d.dept)) mapped.push(d);
+      }
+    });
+  }
+  if (!mapped.length) throw new Error("Could not map any deliverables from ZIP. Adjust key hints in coerceDeliverable().");
+
+  // Dedup by id+title
+  const uniqMap = new Map();
+  for (const d of mapped) {
+    const key = (d.id||"") + "::" + d.title;
+    if (!uniqMap.has(key)) uniqMap.set(key, d);
+  }
+  CATALOG = Array.from(uniqMap.values());
+  return { ok:true, deliverables: CATALOG.length };
+}
+
+// CSV → JSON (very lightweight)
+function csvToJsonGuess(csv) {
+  const lines = csv.split(/\r?\n/).filter(Boolean);
+  if (lines.length<2) return [];
+  const headers = lines[0].split(",").map(h=>h.trim());
+  return lines.slice(1).map(l=>{
+    const parts = l.split(","); const obj={};
+    headers.forEach((h,i)=> obj[h]=parts[i]?.trim());
+    return obj;
+  });
+}
+
+// Crawl any object for arrays of objects that look like deliverables
+function findDeliverableArrays(any) {
+  const results = [];
+  (function walk(node){
+    if (!node) return;
+    if (Array.isArray(node) && node.length && typeof node[0]==="object") {
+      // Heuristic: an element with dept/service and title/name is likely a deliverable list
+      const kset = new Set(Object.keys(node[0]||{}).map(s=>s.toLowerCase()));
+      if ([...kset].some(k=>/dept|department|service/.test(k)) && [...kset].some(k=>/title|name/.test(k))) {
+        results.push(node);
+      }
+    } else if (typeof node==="object") {
+      for (const v of Object.values(node)) walk(v);
+    }
+  })(any);
+  return results;
+}
+
+// Coerce arbitrary JSON-ish node into our Deliverable shape
+function coerceDeliverable(raw) {
+  // flexible getters
+  const g = (obj, keys, d=null)=> {
+    for (const k of keys) {
+      const v = obj?.[k]; if (v!=null) return v;
+      // try case-insensitive
+      const hit = Object.keys(obj||{}).find(x=>x.toLowerCase()===k.toLowerCase());
+      if (hit) return obj[hit];
+    }
+    return d;
+  };
+
+  const dept = g(raw, ["dept","department","service","serviceDept","service_department"]);
+  const title = g(raw, ["title","name","deliverable","deliverable_title"]);
+  if (!dept || !title) return null;
+
+  const d = {
+    id: String(g(raw, ["id","deliverable_id","slug"], `${dept}:${title}`)).replace(/\s+/g,"_").toLowerCase(),
+    dept: normalizeDept(String(dept)),
+    title: String(title),
+    description: g(raw, ["description","desc","notes"], ""),
+    keywords: (g(raw, ["keywords","tags"], [])||[]).map(String),
+    base_hours: numish(g(raw, ["base_hours","hours","estimated_hours"], 8)),
+    depends_on: arrish(g(raw, ["depends_on","dependencies"], [])).map(String),
+    components: []
+  };
+  // components can be under many names
+  const comps = arrish(g(raw, ["components","component","items","children","parts"], []));
+  for (const c of comps) {
+    const ct = g(c, ["title","name"], null);
+    if (!ct) continue;
+    const comp = {
+      id: String(g(c, ["id","component_id","slug"], ct)).replace(/\s+/g,"_").toLowerCase(),
+      title: String(ct),
+      description: g(c, ["description","desc","notes"], ""),
+      keywords: (g(c, ["keywords","tags"], [])||[]).map(String),
+      base_hours: numish(g(c, ["base_hours","hours","estimated_hours"], 4)),
+      l2: []
+    };
+    const tasks = arrish(g(c, ["tasks","task","l2","subtasks","children","steps"], []));
+    for (const t of tasks) {
+      const tt = g(t, ["title","name"], null); if (!tt) continue;
+      comp.l2.push({
+        id: String(g(t, ["id","task_id","slug"], tt)).replace(/\s+/g,"_").toLowerCase(),
+        title: String(tt),
+        description: g(t, ["description","desc","notes"], ""),
+        keywords: (g(t, ["keywords","tags"], [])||[]).map(String),
+        base_hours: numish(g(t, ["base_hours","hours","estimated_hours"], 2))
+      });
+    }
+    d.components.push(comp);
+  }
+  return d;
+}
+function normalizeDept(s){
+  const x = s.toLowerCase();
+  if (x.includes("paid")) return "Paid Media";
+  if (x.includes("integrated")) return "Integrated Marketing Management";
+  if (x.includes("strategy")) return "Strategy";
+  if (x.includes("creative")) return "Creative";
+  if (x.includes("content")) return "Content";
+  if (x.includes("tech") || x.includes("dev") || x.includes("web")) return "Technology";
+  // default to Strategy if unknown (but filtered later)
+  return "Strategy";
+}
+const numish = (v, d=0)=> isFinite(Number(v)) ? Number(v) : d;
+const arrish = (v)=> Array.isArray(v) ? v : (v==null ? [] : [v]);
+
+// ------------------------- Summarize the request ------------------------------
+async function summarizeRequest(requestText) {
+  const schema = {
+    type:"object",
+    properties:{
+      summary:{type:"string"},
+      goals:{type:"array",items:{type:"string"}},
+      channels:{type:"array",items:{type:"string"}},
+      markets:{type:"array",items:{type:"string"}},
+      compliance:{type:"array",items:{type:"string"}},
+      languages:{type:"array",items:{type:"string"}},
+      timeline_weeks:{type:"number"},
+      budget_tier:{type:"string",enum:["unknown","scrappy","moderate","premium"]},
+      complexity:{type:"string",enum:["low","medium","high"]},
+      risk_flags:{type:"array",items:{type:"string"}}
+    },
+    required:["summary","goals","channels","markets","complexity"]
+  };
+  const messages = [
+    { role:"system", content:"You are a senior agency PM/strategist for digital marketing, creative, paid media, content, tech/web. Extract actionable signals." },
+    { role:"user", content:[
+      { type:"text", text:"REQUEST TEXT:\n"+requestText },
+      { type:"text", text:"Summarize (<=120 words) and extract: goals, channels, markets, compliance, languages, timeline_weeks (if any), budget_tier, complexity, and risk_flags." }
+    ]}
+  ];
+  return llmStructured({messages, schema});
+}
+
+// --------------------------- Recall candidates --------------------------------
+function flattenCatalog(catalog){
+  const out=[];
+  for (const d of catalog) {
+    out.push({ id:d.id, level:"deliverable", dept:d.dept, title:d.title, description:d.description, keywords:d.keywords||[] });
+    for (const c of (d.components||[])) {
+      out.push({ id:`${d.id}::${c.id}`, parentId:d.id, level:"component", dept:d.dept, title:c.title, description:c.description, keywords:c.keywords||[] });
+      for (const t of (c.l2||[])) {
+        out.push({ id:`${d.id}::${c.id}::${t.id}`, parentId:`${d.id}::${c.id}`, level:"task", dept:d.dept, title:t.title, description:t.description, keywords:t.keywords||[] });
+      }
+    }
+  }
+  return out.filter(x=>DEPARTMENTS.includes(x.dept));
+}
+function expandPrereqs(selectedIds, catalog) {
+  const map = new Map(catalog.map(d=>[d.id,d]));
+  const need = new Set(selectedIds); let changed=true;
+  while (changed) {
+    changed=false;
+    for (const id of Array.from(need)) {
+      const d = map.get(id);
+      (d?.depends_on||[]).forEach(dep=>{
+        if (!need.has(dep)) { need.add(dep); changed=true; }
+      });
+    }
+  }
+  return Array.from(need);
+}
+async function recallCandidates(requestText, catalog){
+  const items = flattenCatalog(catalog);
+  const texts = items.map(c=>`${c.dept} • ${c.level} • ${c.title} :: ${c.description||""} :: ${(c.keywords||[]).join(",")}`);
+  const [reqEmb, ...candEmb] = await embedMany([requestText, ...texts]);
+  const scored = items.map((c,i)=>{
+    const emb = cosine(reqEmb, candEmb[i]);
+    const lex = lexicalScore(requestText, c);
+    const recall = 0.70*emb + 0.30*lex;
+    return { ...c, embScore:emb, lexScore:lex, recall };
+  });
+  const topDeliverables = scored.filter(x=>x.level==="deliverable").sort((a,b)=>b.recall-a.recall).slice(0,40);
+  const topComponents  = scored.filter(x=>x.level==="component").sort((a,b)=>b.recall-a.recall).slice(0,60);
+  const topTasks       = scored.filter(x=>x.level==="task").sort((a,b)=>b.recall-a.recall).slice(0,80);
+  return { candidates:[...topDeliverables,...topComponents,...topTasks], allScored:scored };
+}
+
+// ----------------------------- Evidence & Re-score ----------------------------
+function bestEvidence(requestText, candidate, k=3) {
+  const sents = sentenceSplit(requestText);
+  const scored = sents.map(s=>({ s, score: lexicalScore(s, candidate)})).sort((a,b)=>b.score-a.score);
+  return scored.slice(0,k).filter(x=>x.score>0).map(x=>x.s.trim());
+}
+async function rescoreWithLLM(summary, candidates, requestText) {
+  const schema = {
+    type:"object",
+    properties:{ items:{ type:"array", items:{
+      type:"object",
+      properties:{
+        id:{type:"string"},
+        dept:{type:"string", enum:DEPARTMENTS},
+        level:{type:"string", enum:LEVELS},
+        relevance:{type:"number", minimum:0, maximum:100},
+        confidence:{type:"number", minimum:0, maximum:1},
+        why:{type:"string"},
+        risks:{type:"string"}
+      },
+      required:["id","dept","level","relevance","confidence","why"]
+    } } },
+    required:["items"]
+  };
+
+  const chunkSize=50, out=[];
+  for (let i=0;i<candidates.length;i+=chunkSize) {
+    const chunk = candidates.slice(i,i+chunkSize).map(c=>({
+      id:c.id, dept:c.dept, level:c.level, title:c.title, desc:c.description||"", evidence:bestEvidence(requestText, c, 3)
+    }));
+    const messages = [
+      { role:"system", content:"You are a senior agency PM/strategist across Creative, Strategy, Paid Media, Content, Technology, Integrated Marketing Management. Score how necessary each candidate is to satisfy the request. Penalize boilerplate." },
+      { role:"user", content:[
+        { type:"text", text:`REQUEST SUMMARY:\n${summary.summary}\n\nGOALS:\n- ${summary.goals?.join("\n- ")}` },
+        { type:"text", text:`CHANNELS: ${summary.channels?.join(", ")} | MARKETS: ${summary.markets?.join(", ")} | COMPLIANCE: ${summary.compliance?.join(", ")}` },
+        { type:"text", text:`CANDIDATES (${chunk.length}):\n${JSON.stringify(chunk, null, 2)}` }
+      ]}
+    ];
+    const r = await llmStructured({messages, schema, max_output_tokens: 1800});
+    out.push(...r.items);
+    await sleep(150);
+  }
+  return out;
+}
+
+// ----------------------------- Fusion & Calibration --------------------------
+function fuseAndCalibrate(candidates, llmScores, strictness="balanced") {
+  const map = new Map(llmScores.map(x=>[x.id,x]));
+  const W = { emb:0.15, lex:0.10, recall:0.10, llm:0.55, hist:0.10 };
+  const histPrior = 0.65;
+
+  const fused = candidates.map(c=>{
+    const l = map.get(c.id);
+    const llm = l ? l.relevance/100 : 0;
+    const raw = W.emb*c.embScore + W.lex*c.lexScore + W.recall*c.recall + W.llm*llm + W.hist*histPrior;
+    const calibrated = 1/(1+Math.exp(-(2.2*raw-1.1)));
+    const gates = { high:0.70, balanced:0.58, recall:0.48 };
+    return { ...c, llm:l||null, fused_score:raw, calibrated_confidence:calibrated, pass: calibrated>=gates[strictness] };
+  });
+  return fused;
+}
+
+// ---------------------------- Compose plan & totals ---------------------------
+function multipliersFromSummary(sum){
+  const ch=(sum.channels||[]).length, mk=(sum.markets||[]).length, comp=(sum.compliance||[]).length;
+  let complexity=1.0; if(sum.complexity==="high") complexity=1.35; else if(sum.complexity==="medium") complexity=1.15;
+  const channelMulti = ch>4?1.25: ch>2?1.12: 1.0;
+  const marketMulti = mk>1?1.18: 1.0;
+  const complianceMulti = comp>0?1.08: 1.0;
+  return { complexity, channelMulti, marketMulti, complianceMulti };
+}
+function plannedHours(base, m){ return Math.round((base*m.complexity*m.channelMulti*m.marketMulti*m.complianceMulti)*10)/10; }
+function composePlan(fused, summary, strictness="balanced") {
+  const pass = fused.filter(x=>x.pass);
+  const dels=pass.filter(x=>x.level==="deliverable");
+  const comps=pass.filter(x=>x.level==="component");
+  const tasks=pass.filter(x=>x.level==="task");
+  const prereqs = expandPrereqs(dels.map(d=>d.id), CATALOG);
+  const include = new Set([...dels.map(d=>d.id), ...prereqs]);
+
+  const m = multipliersFromSummary(summary);
+  const byDept = {};
+  for (const d of CATALOG) {
+    if (!DEPARTMENTS.includes(d.dept)) continue;
+    if (!include.has(d.id)) continue;
+    if (!byDept[d.dept]) byDept[d.dept]=[];
+
+    const scored = dels.find(x=>x.id===d.id);
+    const delHours = plannedHours(d.base_hours||8, m);
+    const compOut = (d.components||[]).map(c=>{
+      const cid = `${d.id}::${c.id}`;
+      const sc = comps.find(x=>x.id===cid);
+      if (!sc || !sc.pass) return null;
+      const tOut = (c.l2||[]).map(t=>{
+        const tid = `${d.id}::${c.id}::${t.id}`;
+        const ts = tasks.find(x=>x.id===tid);
+        return {
+          id: tid, title: t.title,
+          calibrated_confidence: ts?.calibrated_confidence ?? 0.50,
+          why: ts?.llm?.why || "Core subtask for selected component.",
+          planned_hours: plannedHours(t.base_hours||2, m),
+        };
+      });
+      return {
+        id: cid, title: c.title,
+        calibrated_confidence: sc.calibrated_confidence,
+        why: sc.llm?.why || "",
+        planned_hours: plannedHours(c.base_hours||4, m),
+        tasks: tOut
+      };
+    }).filter(Boolean);
+
+    const milestones = [
+      { name:"Kickoff", offset_days:0 },
+      { name:"Plan/Strategy Complete", offset_days: Math.ceil((delHours||8)/6) },
+      { name:"Launch/Activations", offset_days: Math.ceil((delHours||8)/6)+5 },
+      { name:"First Report", offset_days: Math.ceil((delHours||8)/6)+14 }
+    ];
+
+    byDept[d.dept].push({
+      id:d.id, level:"deliverable", title:d.title,
+      calibrated_confidence: scored?.calibrated_confidence ?? 0.6,
+      why: scored?.llm?.why || "", risks: scored?.llm?.risks || "",
+      planned_hours: delHours, components: compOut, milestones
+    });
+  }
+
+  let total=0;
+  for (const dept of Object.values(byDept)) {
+    for (const del of dept) {
+      total += del.planned_hours||0;
+      for (const c of del.components||[]) {
+        total += c.planned_hours||0;
+        for (const t of c.tasks||[]) total += t.planned_hours||0;
+      }
+    }
+  }
+  return { summary, strictness, totals:{ planned_hours_total: Math.round(total*10)/10 }, suggestions_by_department: byDept };
+}
+
+// ----------------------------- Public API ------------------------------------
+export async function analyzeText(request_text, { strictness="balanced" }={}) {
+  const summary = await summarizeRequest(request_text);
+  const { candidates } = await recallCandidates(request_text, CATALOG);
+  const llmScores = await rescoreWithLLM(summary, candidates, request_text);
+  const fused = fuseAndCalibrate(candidates, llmScores, strictness);
+  const plan = composePlan(fused, summary, strictness);
+  return { auto_run:true, message:"Summary + AI Suggestions generated.", plan,
+           diagnostics:{ candidates_considered:candidates.length } };
+}
+
+// ------------------------- Optional HTTP routes -------------------------------
+export async function mountRoutes(app, base="/api/ai") {
+  // expects an Express-like app with app.use(express.json()), app.post(path, handler)
+  app.post(`${base}/analyze`, async (req,res)=>{
+    try {
+      const { request_text, strictness } = req.body||{};
+      if (!request_text) return res.status(400).json({ error:"Provide { request_text }" });
+      const result = await analyzeText(request_text, { strictness });
+      res.json(result);
+    } catch (e) { console.error(e); res.status(500).json({ error:String(e.message||e) }); }
+  });
+  app.post(`${base}/catalog/reload`, async (req,res)=>{
+    try {
+      const { zipPath } = req.body||{};
+      if (!zipPath) return res.status(400).json({ error:"Provide { zipPath }" });
+      const r = await loadCatalogZip(zipPath);
+      res.json(r);
+    } catch (e) { console.error(e); res.status(500).json({ error:String(e.message||e) }); }
+  });
+  app.get(`${base}/health`, (_req,res)=> res.json({ ok:true, deliverables: CATALOG.length }));
+}
+
+// ------------------------ Standalone (sidecar) mode ---------------------------
+if (process.env.RUN_STANDALONE === "true") {
+  const PORT = process.env.PORT || 3000;
+
+  // Optional: load DB ZIP at boot
+  if (process.env.CATALOG_ZIP && fs.existsSync(process.env.CATALOG_ZIP)) {
+    loadCatalogZip(process.env.CATALOG_ZIP).then(r=>console.log("Catalog loaded:", r))
+    .catch(e=>console.error("Catalog load failed:", e.message));
+  }
+
+  const server = http.createServer(async (req,res)=>{
+    try {
+      if (req.method==="GET" && req.url==="/health") {
+        res.writeHead(200, {"Content-Type":"application/json"}); return res.end(JSON.stringify({ ok:true, deliverables: CATALOG.length }));
+      }
+      if (req.method==="POST" && req.url==="/analyze") {
+        const body = await readBody(req); const { request_text, strictness="balanced" } = body;
+        if (!request_text) return sendErr(res,400,"Provide { request_text }");
+        const result = await analyzeText(request_text, { strictness });
+        return sendJson(res, result);
+      }
+      if (req.method==="POST" && req.url==="/catalog/reload") {
+        const body = await readBody(req); const { zipPath } = body;
+        if (!zipPath) return sendErr(res,400,"Provide { zipPath }");
+        const r = await loadCatalogZip(zipPath); return sendJson(res, r);
+      }
+      sendErr(res,404,"Not found");
+    } catch (e) { console.error(e); sendErr(res,500,String(e.message||e)); }
+  });
+  server.listen(PORT, ()=> console.log(`AI Planner sidecar listening on :${PORT}`));
+}
+function readBody(req){return new Promise((res,rej)=>{let d="";req.on("data",c=>d+=c);req.on("end",()=>{try{res(d?JSON.parse(d):{})}catch(e){rej(e)}});});}
+function sendJson(res,obj){res.writeHead(200,{"Content-Type":"application/json"});res.end(JSON.stringify(obj));}
+function sendErr(res,code,msg){res.writeHead(code,{"Content-Type":"application/json"});res.end(JSON.stringify({error:msg}));}

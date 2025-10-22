@@ -1,0 +1,275 @@
+What “merge tasks per resource” is (so we can disable it cleanly)
+
+In v2.6 the MSPDI converter collapses sibling leaf tasks that share the same parent and same name into the parent as multi‑role assignments. That logic is guarded by merge_identical_children: bool = True and lives in the convert_excel_to_mspdi function (search for “NEW: merge siblings…”).【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+Later in the same function, dependency normalization reads from by_wbs; currently by_wbs is created inside that if merge_identical_children: block, so simply flipping the flag to False would make by_wbs undefined. We’ll fix that, too.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+v2.7 already calls the converter with merge_identical_children=False at the API layer, but its converter lives in mspdi.py. We’ll make the converter default to no merge as well, and keep the same by_wbs fix there for safety.【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】
+
+Minimal patch for v2.6 (keep Steps 1–5 intact)
+
+Goal: no merging of tasks per resource, while preserving all other v2.6 behavior.
+
+1) Default the converter to no merge
+
+File: where convert_excel_to_mspdi is defined (v2.6 code)
+Change: set default to False and keep the param (safe no‑op if clients still send it)
+
+ def convert_excel_to_mspdi(
+     input_xlsx: str,
+     output_xml: str,
+     sheet_name: str = "Scenario A",
+     start_date_mode: str = "next_monday",
+     fixed_start_iso: Optional[str] = None,
+     hours_per_day: float = 8.0,
+     calendar_blocks: List[Tuple[str, str]] = [("08:00:00","12:00:00"), ("13:00:00","17:00:00")],
+     roles_split_rule: str = "even",
+     role_weights: Optional[Dict[str, float]] = None,
+     preserve_predecessors: str = "normalize",
+     allow_unassigned: bool = True,
+     include_audits: bool = True,
+     audits_dir: Optional[str] = None,
+-    merge_identical_children: bool = True
++    merge_identical_children: bool = False
+ ) -> Dict[str, int]:
+
+
+Why: the toggle currently defaults on in v2.6.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+2) Always define by_wbs (prevents NameError when merge is disabled)
+
+File: same (convert_excel_to_mspdi)
+Change: create by_wbs before dependency normalization, not just inside the merge block.
+
+Locate this section:
+
+# --- NEW: merge siblings with the same name into their parent as multi-assignments
+prealloc_by_parent_wbs: Dict[str, Dict[str, float]] = {}
+removed_child_wbs: Set[str] = set()
+
+if merge_identical_children:
+    # index helpers
+    by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+    ...
+
+
+Add a global map right before dependency normalization:
+
+-        # If we merged anything, drop the children now
++        # If we merged anything, drop the children now
+         if removed_child_wbs:
+             rows = [r for r in rows if r["WBS"] not in removed_child_wbs]
+
++        # Build a universal WBS index (needed even when merge is OFF)
++        by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+
+
+This ensures the later check:
+
+if actual_pred not in by_wbs or actual_succ not in by_wbs:
+    continue
+
+
+still works with merge off.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+3) Force API exports to pass False (ignore any incoming toggle)
+
+File(s): v2.6 export endpoints
+
+Replace the merge_identical_children argument in both XML export endpoints to a hardcoded False:
+
+/api/export_xml — change the call site from payload‑driven to false.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+-            merge_identical_children=payload.merge_identical_children
++            merge_identical_children=False
+
+
+/api/export_workbook_xml — do the same for both Scenario A and B conversions.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+-            merge_identical_children=payload.merge_identical_children
++            merge_identical_children=False
+
+
+Optional (non‑breaking): you can leave the Pydantic field in your payload models; it will simply be ignored by the backend. No UI changes required.
+
+4) (Optional) Update comments/stats so they don’t imply merge is active
+
+The code returns stats including "tasks_merged": len(removed_child_wbs) — this will just be 0 now. That’s fine to keep. If you want, edit any comments that say “with multi‑resource merge” in the endpoints to avoid confusion.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+Patch for v2.7
+
+v2.7’s API already calls the converter with merge_identical_children=False【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】. However, the converter lives in mspdi.py (imported via from mspdi import convert_excel_to_mspdi). Make the converter itself default to no merge and include the same by_wbs fix, so other internal call sites can’t accidentally re‑enable it.
+
+In mspdi.py:
+
+Change the function signature default to merge_identical_children: bool = False (same diff as in v2.6).
+
+Ensure by_wbs = {…} is defined after any potential child removal and before dependency normalization, exactly as shown above.
+
+The v2.7 endpoints you uploaded already pin the flag to False for:
+
+/api/export_xml【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】
+
+/api/export_workbook_xml (both Scenario A/B)【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】
+
+No other changes needed in v2.7.
+
+⚠️ Heads‑up on one non‑merge difference (only if you want strict parity)
+
+If you want v2.7 to behave identically to v2.6 beyond merging, note the default WBS ordering helper differs:
+
+v2.6 _wbs_order_mode() defaults to "ui"【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+v2.7 _wbs_order_mode() defaults to "timeline"【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】
+
+You did not ask to change this, so I’m leaving it as is. If you want strict parity with v2.6, change v2.7’s default return to "ui".
+
+Quick smoke test (1 minute)
+
+Use a tiny scenario where a component has two child tasks with the same task name but different roles and non‑zero hours.
+
+Export to XML via /api/export_xml.
+
+Open the XML and confirm:
+
+Each child remains a separate <Task> (i.e., no collapse into the parent).
+
+"tasks_merged" in X-Export-Stats is 0.
+
+Dependencies render without errors (no NameError from by_wbs), and PredecessorLinks are present for non‑hierarchy edges.
+(The PredecessorLink injection is unaffected by this change.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】)
+
+Copy‑paste snippets for Replit’s Agent
+
+Find & replace (v2.6 and in v2.7’s mspdi.py):
+
+merge_identical_children: bool = True → merge_identical_children: bool = False【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+In both XML export endpoints, replace
+merge_identical_children=payload.merge_identical_children → merge_identical_children=False【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】
+
+Insert (once in converter after removing children):
+
+# Build a universal WBS index (needed even when merge is OFF)
+by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+
+
+Place immediately after:
+
+if removed_child_wbs:
+    rows = [r for r in rows if r["WBS"] not in removed_child_wbs]
+
+
+so that the later dependency normalization that checks by_wbs keeps working.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+Why this is safe
+
+We don’t touch Steps 1–5 (WBS building, pricing, retainer repetition, etc.). All of that logic remains as in v2.6; we only change how the final XML exporter treats siblings (no collapse).【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+The dependency normalization still runs because by_wbs now exists regardless of the merge toggle.【
+
+v2.6 prod (XML, Retainer, Merge)
+
+】
+
+v2.7 already passes False at the API boundary; we simply make the converter itself default to no‑merge for defense in depth.【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】【
+
+v2.7 prod (XML,Retainer, No Mer…
+
+】

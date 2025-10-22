@@ -1,0 +1,43 @@
+# Agency Project Builder — Replit Agent Playbook (Single File)
+
+> **Purpose**: Apply performance fixes, stabilize AI analysis, and add repeatable E2E tests so the public app at  
+> **https://tcg-agency-project-builder-v2dot8dot1.replit.app/** can accept the **“FINAL Uncommon Schools – May 2025 Media Agency RFP.pdf”** and produce a pricing/scope **aligned to** the attached SOW (**UCS25_EXTERNAL_10.1.25_SOW_CAMPAIGN_STRATEGY_PAID_MEDIA_RETAINER_UNCOMMON_SCHOOLS_.pdf**).  
+> This file is written for the Replit Agent. Execute tasks in order.
+
+---
+
+## 0) TL;DR (Agent Checklist)
+
+1) **Install deps** (uvicorn[standard], httpx, pandas, openpyxl, pydantic, playwright (optional), locust (optional)).  
+2) **Backend Upgrades**
+   - Add **startup/lifespan preload** for rules & options (Excel → in‑memory cache / pickle).  
+   - Reuse **one global `httpx.AsyncClient`** across requests.  
+   - Memoize **embeddings** with a tiny **SQLite cache**.  
+   - Add a **“Fast” mode** (lexical/TF‑IDF only) and keep “Deep” mode (LLM re‑scoring).  
+   - Use **/api/ai/analyze** + **/api/ai/status/{job}** for progress; show stages & % in UI.
+3) **Frontend**
+   - Wire Analyze button to call **/api/ai/analyze**, then **poll /api/ai/status**; render incremental progress.
+4) **E2E Test** (Playwright): upload the Uncommon Schools RFP and verify core deliverables are selected and pricing appears.  
+5) **Load Test** (Locust): hit **/api/step2/ai/weights** and build endpoints with 1–5 concurrent users; confirm p95 < 2.5s (Fast mode).
+6) **Acceptance**: Confirm SOW‑like plan includes (examples) **Campaign Plan Deck (DEL‑0036)**, **Paid Media Planning (DEL‑0029)**, **Paid Media Buying & Activation (DEL‑0027)**, **Reporting (DEL‑0032 or DEL‑0024)**, **Competitive Landscape (DEL‑0035)**, **Qualitative Research (DEL‑0038)**, **Meetings (DEL‑0002)** with reasonable hours/fees.
+
+---
+
+## 1) Install / upgrade dependencies
+
+> Keep Replit’s environment lean, but enable production‑grade ASGI & HTTP client behavior.
+
+```bash
+# Python server deps
+pip install -U "uvicorn[standard]" fastapi httpx pandas openpyxl pydantic "python-multipart"
+
+# Optional but recommended:
+pip install -U orjson aiolimiter
+
+# Testing tools
+pip install -U pytest pytest-asyncio
+pip install -U playwright
+python -m playwright install --with-deps
+
+# Load testing
+pip install -U locust

@@ -1,0 +1,279 @@
+✅ Fixes by step (copy/paste patches)
+1) Step 2 – Component bubble, Select/Unselect all, AI column, and buttons
+Frontend (static)
+
+Add a popover “bubble” for components with “Select all / Unselect all”, and a right‑side AI column that shows: (a) AI Suggestions from Step 1, (b) a Summary box with Copy + Hide, and two buttons: Proceed to pricing and Refresh AI suggestions.
+
+static/index.html – add the popover + right column container (minimal markup; style as you wish):
+
+<!-- Step 2 layout -->
+<div id="step2" class="step">
+  <div class="columns">
+    <div class="left">
+      <!-- your deliverable list here -->
+      <ul id="deliverablesList"></ul>
+    </div>
+
+    <div class="right">
+      <div class="panel">
+        <h3>AI Suggestions</h3>
+        <div id="aiSuggestions"></div>
+        <button id="refreshAiBtn" type="button">Refresh AI suggestions</button>
+      </div>
+
+      <div class="panel">
+        <h3>Summary</h3>
+        <textarea id="aiSummary" rows="10" readonly></textarea>
+        <div class="row">
+          <button id="copySummaryBtn" type="button">Copy</button>
+          <button id="hideSummaryBtn" type="button">Hide</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <button id="proceedToPricingBtn" class="primary" type="button">Proceed to pricing</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Component bubble -->
+  <dialog id="componentsDialog">
+    <form method="dialog">
+      <h3 id="compTitle">Components</h3>
+      <div class="controls">
+        <button id="selectAllComps" type="button">Select all</button>
+        <button id="unselectAllComps" type="button">Unselect all</button>
+      </div>
+      <div id="componentsContainer"></div>
+      <div class="row">
+        <button value="close">Close</button>
+      </div>
+    </form>
+  </dialog>
+</div>
+
+
+static/app.js – key logic for Step 2:
+
+// ---- state holders
+const state = {
+  rfpText: "",
+  summaryDeliverables: [],            // from Step 1
+  suggestedAI: [],                    // from Step 1
+  selectedDeliverableCodes: [],
+  // components selected per deliverable; "__ALL__" means include all server-side
+  selectedComponentsMap: {}           // { [deliverable_code]: "__ALL__" | {CompName: hoursOverride?} }
+};
+
+// Load AI suggestions (right column)
+async function loadAiColumn() {
+  const aiDiv = document.getElementById('aiSuggestions');
+  aiDiv.innerHTML = state.suggestedAI.map(s => `• ${s.label}`).join('<br>');
+  document.getElementById('aiSummary').value =
+    state.summaryDeliverables.map(s => `• ${s}`).join('\n');
+}
+
+// Refresh AI suggestions based on latest RFP input
+document.getElementById('refreshAiBtn').onclick = async () => {
+  const r = await fetch('/api/suggest_by_text', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ rfp_text: state.rfpText || "" })
+  });
+  const data = await r.json();
+  state.suggestedAI = (data.suggested || []).map(d => ({
+    code: d.deliverable_code, label: d.deliverable
+  }));
+  loadAiColumn();
+};
+
+// Summary copy/hide
+document.getElementById('copySummaryBtn').onclick = async () => {
+  await navigator.clipboard.writeText(document.getElementById('aiSummary').value);
+};
+document.getElementById('hideSummaryBtn').onclick = () => {
+  const el = document.getElementById('aiSummary');
+  el.style.display = (el.style.display === 'none' ? '' : 'none');
+};
+
+// Open components bubble when a deliverable is chosen
+async function openComponentsBubble(deliv) {
+  const dlg = document.getElementById('componentsDialog');
+  document.getElementById('compTitle').textContent = `Components – ${deliv.deliverable}`;
+  const box = document.getElementById('componentsContainer');
+  box.innerHTML = 'Loading…';
+  // ask backend for components; fallback handled server-side
+  const r = await fetch(`/api/components_for?deliverable_code=${encodeURIComponent(deliv.code)}`);
+  const data = await r.json();
+  const comps = data.items || [];
+  // build checkboxes
+  box.innerHTML = comps.map(c =>
+    `<label><input class="compChk" type="checkbox" data-name="${c.name}" checked> ${c.name} <small>(${Math.round(c.hours)} h)</small></label>`
+  ).join('<br>');
+  // default is ALL selected
+  state.selectedComponentsMap[deliv.code] = "__ALL__";
+
+  document.getElementById('selectAllComps').onclick = () => {
+    for (const chk of box.querySelectorAll('.compChk')) chk.checked = true;
+    state.selectedComponentsMap[deliv.code] = "__ALL__";
+  };
+  document.getElementById('unselectAllComps').onclick = () => {
+    for (const chk of box.querySelectorAll('.compChk')) chk.checked = false;
+    state.selectedComponentsMap[deliv.code] = {}; // none selected
+  };
+  box.addEventListener('change', () => {
+    const checked = [...box.querySelectorAll('.compChk')].filter(c => c.checked).map(c => c.dataset.name);
+    state.selectedComponentsMap[deliv.code] = checked.length === comps.length
+      ? "__ALL__"
+      : Object.fromEntries(checked.map(n => [n, null])); // no custom hours; null=use defaults
+  });
+
+  dlg.showModal();
+}
+
+// attach handler to your deliverables list (call openComponentsBubble when selected)
+
+
+Why this matters
+When you pass "__ALL__" for a deliverable’s components, the backend already treats it as “include everything” safely in /api/build (it normalizes "__ALL__" → {} meaning all) and also inflates items on export if something is missing.
+
+2) Step 3 – Defaults, duplicates, retainer 500, and “Project name = file name”
+a) Default blended rate = 195 (server fallback)
+
+Change the fallback default from 185 → 195 where pricing is computed if the UI doesn’t send a rate:
+
+main.py — in build_wbs_with_pricing:
+
+-        blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 185.0
++        blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
+
+
+(If you also want the audit endpoint to use 195 when no rate is provided, change the same fallback in /api/audit_pricing where it computes the default blended rate.)
+
+b) Project name auto-fills from uploaded file
+
+You already have /api/last_upload_name that returns a sanitized default. Call it when Step 3 renders and prefill your input:
+
+async function defaultProjectName() {
+  const r = await fetch('/api/last_upload_name');
+  const data = await r.json();
+  const el = document.getElementById('projectName');
+  if (data.project_name_default && el && !el.value) {
+    el.value = data.project_name_default;
+  }
+}
+
+
+Route reference:
+
+c) Remove duplicate entries in “Pricing mode” and “Rate band”
+
+This is a front‑end issue (you’re appending options without clearing). Do this when populating selects:
+
+function populateSelect(selectEl, items) {
+  const unique = [...new Set(items)];
+  selectEl.innerHTML = '';                     // <-- clear first (fixes duplicates)
+  unique.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = opt.textContent = v;
+    selectEl.appendChild(opt);
+  });
+}
+// usage:
+populateSelect(document.getElementById('pricingMode'), ['Flat_Blended','Per_Resource']);
+populateSelect(document.getElementById('rateBand'), ['Standard_US','Premium_US','Nearshore_Value']);
+
+
+The API correctly returns just two pricing modes and three bands; de-duping on the client prevents stacking on re-renders.
+
+d) 500 when ticking “retainers”
+
+If your UI sometimes sends malformed months (e.g., "", null, or "6" as a string), the current comprehension can raise, returning a 500. Add a safe parser and reuse it in all three places you compute ret_map.
+
+main.py – add helper near other helpers:
+
+def _safe_retainer_map(retainers) -> dict[str,int]:
+    out = {}
+    for r in (retainers or []):
+        code = (getattr(r, "deliverable_code", "") or (r.get("deliverable_code") if isinstance(r, dict) else "")).strip()
+        raw = getattr(r, "months", None) if not isinstance(r, dict) else r.get("months")
+        try:
+            m = int(raw) if raw is not None else 0
+        except Exception:
+            m = 0
+        m = max(1, min(12, m)) if m > 0 else 0
+        if code:
+            out[code] = m
+    return out
+
+
+Then replace the existing ret_map = { ... } lines with:
+
+- ret_map = {r.deliverable_code: max(1, min(12, int(r.months))) for r in (payload.retainers or []) if str(r.deliverable_code).strip()}
++ ret_map = _safe_retainer_map(payload.retainers)
+
+
+Do this in:
+
+/api/build
+
+/api/build_scenario_c (the override map line)
+
+any “preview build/auto build” path where you use the same pattern (your preview path uses it too).
+
+This prevents the Internal Server Error modal you showed when checking the retainer box.
+
+e) Proceed to pricing (front‑end payload)
+
+When the user clicks Proceed to pricing, send a build payload that includes:
+
+pricing_mode, rate_band, blended_rate (prefill 195 if empty)
+
+selected deliverable codes
+
+selected_components_map (use "__ALL__" when “Select all” is active)
+
+document.getElementById('proceedToPricingBtn').onclick = async () => {
+  const blended = Number(document.getElementById('blendedRate').value || 195);
+  const payload = {
+    selected_deliverable_codes: state.selectedDeliverableCodes,
+    selected_components_map: state.selectedComponentsMap,    // "__ALL__" handled server-side
+    pricing_mode: document.getElementById('pricingMode').value,
+    rate_band: document.getElementById('rateBand').value,
+    blended_rate: blended,
+    scenario_a: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' },
+    scenario_b: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' },
+    retainers: collectRetainers(), // [{deliverable_code, months}]
+    use_slack: true,
+    slack_after_internal: 1,
+    slack_after_client: 2,
+    slack_global_pct: 0.05,
+    project_start: null
+  };
+  const r = await fetch('/api/build', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if (!r.ok) { const msg = await r.text(); alert(`Build failed: ${msg}`); return; }
+  const scenarios = await r.json();
+  // ... render Step 3 using scenarios.A/B
+};
+
+3) Step 5 – XML must include components, tasks, subtasks
+What happened & fix
+
+Your current export pipeline will include components/tasks only if they’re present in the build’s internal structure or resolvable from the DB. In your XML I only see flat deliverables, which means no components were produced for the selected deliverables during build. I added a server‑side fallback so export always creates components/tasks even when the DB function returns nothing.
+
+main.py — in build_wbs_with_pricing where components are added, insert a fallback right after:
+
+comps = DB.components_for_deliverable(dcode, tg_order)
+# --- NEW robust fallback if DB returns no components ---
+if not comps:
+    sub = DB.all_rows[DB.all_rows["Deliverable_Code"].astype(str)==str(dcode)]
+    if not sub.empty:
+        # Use distinct Component values; if blank, synthesize one
+        comps = sorted({str(x) for x in sub["Component"].dropna().astype(str) if str(x).strip() and str(x).strip() != "nan"})
+    if not comps:
+        comps = ["Work Package"]  # last-resort single component
+
+
+(Place this in both places you build components for pricing/WBS; your code has the block once in this function.)
+
+That fallback guarantees at least one component node under every deliverable. Because the code then creates month-by-month task rows for each task group under each component, your XML will now include component and task rows (and role rows for per‑resource pricing). See the existing task‑row generation just below that block.

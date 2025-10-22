@@ -1,0 +1,306 @@
+“do‑this‑next” set of changes for Replit to implement so Step 2 behaves the way you want, and the downstream parts stay correct.
+
+What to change (Step 2)
+1) Show L3 Subtasks in the 4th column (Summary), not L2 Components
+
+Goal: Live, deduped list of everything the user has chosen at the L3 level, grouped by Deliverable → Component → L3, with remove (“x”) actions.
+
+Frontend state (one source of truth):
+
+type SelectionState = {
+  selectedDeliverables: Set<string>;                  // D codes
+  selectedComponentsByDeliverable: Map<string, Set<string>>;          // D -> Set<L2>
+  selectedL3ByDeliverableComponent: Map<string, Map<string, Set<string>>>; // D -> L2 -> Set<L3>
+};
+
+
+Summary panel render (column 4):
+
+// Summary.tsx
+function Summary({ state, onRemove }: {
+  state: SelectionState;
+  onRemove: (level:'D'|'L2'|'L3', d:string, l2?:string, l3?:string)=>void;
+}) {
+  return (
+    <div>
+      {[...state.selectedDeliverables].map(d => (
+        <div key={d} className="summary-group">
+          <div className="summary-deliverable">
+            <span>{labelForDeliverable(d)}</span>
+            <button onClick={() => onRemove('D', d)}>×</button>
+          </div>
+          {[...(state.selectedComponentsByDeliverable.get(d) ?? new Set())].map(l2 => (
+            <div key={d+'|'+l2} className="summary-component">
+              <span>{labelForComponent(l2)}</span>
+              <button onClick={() => onRemove('L2', d, l2)}>×</button>
+            </div>
+          ))}
+          {/* L3 list */}
+          {[...(state.selectedL3ByDeliverableComponent.get(d)?.entries() ?? [])].map(([l2, l3set]) => (
+            <div key={d+'|'+l2+'|l3'} className="summary-l3">
+              {[...l3set].map(l3 => (
+                <span key={d+'|'+l2+'|'+l3} className="chip">
+                  {labelForL3(l3)}
+                  <button onClick={() => onRemove('L3', d, l2, l3)}>×</button>
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+Remove handler must cascade:
+
+Removing a Deliverable clears its Components and L3.
+
+Removing a Component clears its L3, leaves the Deliverable.
+
+Removing an L3 removes only that L3; if Component ends up empty, remove the Component; if Deliverable ends up empty, remove the Deliverable.
+
+2) All / Clear buttons in columns 2 & 3 must work
+
+Column 2 (Components)
+
+function selectAllComponentsForDeliverable(d:string) {
+  const allL2 = getAllComponentsForDeliverable(d); // from DB
+  state.selectedDeliverables.add(d);
+  state.selectedComponentsByDeliverable.set(d, new Set(allL2));
+  // Optional default: also preselect all L3 for all L2 (see 3 below)
+  setState(clone(state));
+}
+function clearAllComponentsForDeliverable(d:string) {
+  state.selectedComponentsByDeliverable.delete(d);
+  state.selectedL3ByDeliverableComponent.delete(d);
+  // If no L2 and no L3 remain for d, optionally remove deliverable
+  setState(clone(state));
+}
+
+
+Column 3 (L3 Subtasks)
+
+function selectAllL3ForComponent(d:string, l2:string) {
+  const allL3 = getAllL3ForDeliverableComponent(d, l2); // from DB
+  if (!state.selectedL3ByDeliverableComponent.has(d))
+    state.selectedL3ByDeliverableComponent.set(d, new Map());
+  state.selectedL3ByDeliverableComponent.get(d)!.set(l2, new Set(allL3));
+  // Ensure parent deliverable / component are present:
+  state.selectedDeliverables.add(d);
+  if (!state.selectedComponentsByDeliverable.has(d))
+    state.selectedComponentsByDeliverable.set(d, new Set());
+  state.selectedComponentsByDeliverable.get(d)!.add(l2);
+  setState(clone(state));
+}
+function clearAllL3ForComponent(d:string, l2:string) {
+  state.selectedL3ByDeliverableComponent.get(d)?.delete(l2);
+  if (state.selectedL3ByDeliverableComponent.get(d)?.get(l2)?.size === 0) {
+    state.selectedComponentsByDeliverable.get(d)?.delete(l2);
+  }
+  setState(clone(state));
+}
+
+
+Wire the “All” / “Clear” buttons:
+
+Column 2 “All/Clear” calls the deliverable‑scoped functions above using the currently active deliverable.
+
+Column 3 “All/Clear” calls the component‑scoped functions using the active deliverable + active component.
+
+3) Show all L2 and all L3 by default after a deliverable is checked (still with tickboxes)
+
+When a deliverable is selected (via AI “Add” or manual checkbox), immediately:
+
+Populate Components panel with all its L2 and check them all.
+
+Populate L3 panel with all L3 for the first component (or show “Choose component…” if you prefer), and also pre‑check all of them.
+
+The user can uncheck down from there.
+
+Implementation detail:
+
+function onDeliverableChecked(d:string, checked:boolean) {
+  if (!checked) { /* remove cascades as above */ return; }
+  // Preselect L2 and L3:
+  const l2s = getAllComponentsForDeliverable(d);
+  state.selectedDeliverables.add(d);
+  state.selectedComponentsByDeliverable.set(d, new Set(l2s));
+  for (const l2 of l2s) {
+    const l3s = getAllL3ForDeliverableComponent(d, l2);
+    if (!state.selectedL3ByDeliverableComponent.has(d))
+      state.selectedL3ByDeliverableComponent.set(d, new Map());
+    state.selectedL3ByDeliverableComponent.get(d)!.set(l2, new Set(l3s));
+  }
+  setState(clone(state));
+}
+
+4) Replace the dropdowns in columns 2 & 3 with search bars
+
+Column 2 search filters the L2 list within the currently selected deliverable.
+
+Column 3 search filters the L3 list within the currently selected component.
+
+Minimal searchable combobox:
+
+function SearchInput({placeholder, value, onChange}:{placeholder:string,value:string,onChange:(v:string)=>void}) {
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={e=>onChange(e.target.value)}
+      placeholder={placeholder}
+      className="apb-input"
+    />
+  );
+}
+
+
+Use useMemo to derive filtered lists:
+
+const filteredL2 = useMemo(
+  () => allL2.filter(x => x.label.toLowerCase().includes(l2Query.toLowerCase())),
+  [allL2, l2Query]
+);
+const filteredL3 = useMemo(
+  () => allL3.filter(x => x.label.toLowerCase().includes(l3Query.toLowerCase())),
+  [allL3, l3Query]
+);
+
+
+Also fix the Deliverables search bar the same way if it’s not filtering—bind the input to a deliverableQuery and filter the list before rendering.
+
+5) “AI Suggestions → Add” must hydrate columns 2 & 3 immediately
+
+When the user clicks Add in the AI panel:
+
+Call the same onDeliverableChecked(deliverable, true) used by manual ticking (above).
+
+Scroll focus to Components panel so the user sees the effect.
+
+If an AI-suggested deliverable is removed, the Add button should re‑appear in the AI panel. That means your AI panel items need to read from selectedDeliverables to decide to show Add (if not selected) or “Selected” (if selected).
+
+6) Counters in the Summary card
+
+Deliverables: state.selectedDeliverables.size
+
+Components: sum of sizes of selectedComponentsByDeliverable
+
+L3 Subtasks: total of all L3 sets across D→L2 maps
+Update live whenever state changes.
+
+What to change (Step 3 → Step 5 integrity)
+7) Respect L3 filters in pricing & export
+
+The server build already calculates hours by Deliverable / Component / Task. When L3 is used, constrain the query with the selected L3 list:
+
+# server-side pseudo
+if selected_l3 and len(selected_l3):
+    scope = scope[scope['Task_Label'].isin(selected_l3)]
+
+
+Make sure the payload sent from Step 2 → Step 3 includes:
+
+{
+  "deliverables": ["deck_strategy", ...],
+  "componentsByDeliverable": { "deck_strategy": ["activation_ideas", ...] },
+  "l3ByDeliverableComponent": { "deck_strategy": { "activation_ideas": ["idea_writeups", "internal_review", ...] } }
+}
+
+
+This guarantees hours, pricing, Step 4 timelines, and Step 5 XML only include the L3 the user kept.
+
+Step 4: timelines and business days (two fixes)
+
+End date is landing on Saturdays.
+That’s because the exported calendar currently marks Saturday as a working day. In your MSP XML builder, set Saturday to non‑working (DayType 6 → DayWorking 0) and keep 8–12 & 13–17 for Mon–Fri only. (You can see Saturday is flagged working in your current XML calendars—DayType 6 ... DayWorking 1—switch that to 0.)
+
+Duration shows “7” for 10/13→10/22
+Compute business days inclusive, then display “Duration (business days)”.
+
+function addBusinessDays(start: Date, days: number, holidays: Set<string>) {
+  const d = new Date(start);
+  let added = 0;
+  while (added < days) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay(); // 0=Sun ... 6=Sat
+    const isWeekend = dow === 0 || dow === 6;
+    const isHoliday = holidays.has(d.toISOString().slice(0,10));
+    if (!isWeekend && !isHoliday) added++;
+  }
+  return d;
+}
+function businessDaysInclusive(start: Date, end: Date, holidays: Set<string>) {
+  let d = new Date(start), count = 0;
+  while (d <= end) {
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6 && !holidays.has(d.toISOString().slice(0,10))) count++;
+    d.setDate(d.getDate()+1);
+  }
+  return count;
+}
+
+
+Change the Step 4 column title to “Duration (business days)” and use the inclusive function above.
+
+XML calendar note for Replit: set Saturday non‑working wherever you write <WeekDay><DayType>6</DayType><DayWorking>0</DayWorking>...</WeekDay> instead of 1.
+
+Small but important UX details to include now
+
+Keep “Selected” deliverables section pinned at the top of column 1; everything else below under “Other.”
+
+Persist RFP text in memory across step changes (and expose a “Refresh AI Suggestions” that uses it without complaining you haven’t uploaded—if RFP is missing, dim the button and show a non‑modal inline tip rather than an alert).
+
+Disable “All / Clear” when there is no active deliverable (col 2) or component (col 3), and add tooltips (“Choose a deliverable first” / “Choose a component first”).
+
+QA checklist (please run these exact checks)
+
+AI “Add” → Components panel populates and all L2 are checked; choosing any L2 shows L3 and they’re checked.
+
+All / Clear (col 2): toggles all visible L2; Summary updates; L3 cascades correctly.
+
+All / Clear (col 3): toggles L3 for the active L2; Summary updates.
+
+Search bars (cols 2 & 3): typing filters lists; “All” operates on filtered results.
+
+Summary (col 4): shows Deliverable chip(s), Component chip(s), and individual L3 chips; removing an L3 chip updates counts and unchecks that item in col 3.
+
+Proceed to Pricing → Step 3: totals reflect only selected L3.
+
+Step 4 timeline: end dates fall on weekdays; durations display business days.
+
+Step 5 XML import to Workfront:
+
+Project name uses the Step 3 project name field.
+
+First task row is “Project Summary”, not the project name.
+
+Dates line up (Mon–Fri calendar).
+
+Where to touch in code (guide for Replit’s agent)
+
+Frontend (React/Svelte/Vue—use your actual file names):
+
+Step2/DeliverablesPanel.* – searchable list + “Selected” group.
+
+Step2/ComponentsPanel.* – replace dropdown with search input; add All/Clear handlers.
+
+Step2/L3Panel.* – replace dropdown with search input; add All/Clear handlers.
+
+Step2/SummaryPanel.* – render L3 chips grouped by D→L2; wire remove callbacks.
+
+state/selectionStore.* – implement SelectionState and the cascade helpers above.
+
+Server / pricing pipeline:
+
+Wherever you filter scope by Deliverable/Component, add an optional L3 (Task_Label) whitelist filter before computing hours & rates.
+
+Ensure the Step 2 → Step 3 payload now contains the l3ByDeliverableComponent map.
+
+Timeline & export:
+
+Step 4 computation: switch to business‑day math.
+
+XML writer: set Saturday non‑working and keep Mon–Fri with two working blocks (08:00–12:00, 13:00–17:00).
+(Your current calendar marks Saturday as working; flip it to non‑working.)

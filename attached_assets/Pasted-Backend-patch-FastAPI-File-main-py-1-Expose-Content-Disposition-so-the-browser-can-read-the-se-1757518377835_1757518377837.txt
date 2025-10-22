@@ -1,0 +1,234 @@
+Backend patch (FastAPI)
+
+File: main.py
+
+1) Expose Content-Disposition so the browser can read the server‑suggested filename
+
+Replace your CORS init with the expose_headers param:
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_headers=["*"],
+    allow_methods=["*"],
+    expose_headers=["Content-Disposition"],  # <-- add this
+)
+
+
+2) Extend the export payload & add filename/format handling
+
+Add fields so the client can request CSV or XLSX and pass a project name.
+
+# --- Extend your model ---
+class ExportPayload(BaseModel):
+    scenario: Dict[str, Any]
+    project_name: Optional[str] = None       # e.g., "Casa Dragones"
+    file_format: Optional[str] = "csv"       # "csv" or "xlsx"
+    scenario_label: Optional[str] = None     # e.g., "Scenario A"
+    add_timestamp: Optional[bool] = False    # include yyyymmdd-HHMM in filename?
+
+
+3) Helper to sanitize filenames
+def _safe_filename(s: str) -> str:
+    s = (s or "Proposal").strip()
+    # Replace characters that are invalid on Windows/macOS
+    s = re.sub(r'[\\/:*?"<>|]+', '-', s)
+    # Collapse whitespace
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+4) Update /api/export to honor format + naming
+
+Replace the entire api_export function with:
+
+@app.post("/api/export")
+def api_export(payload: ExportPayload):
+    """
+    Export a Workfront file (CSV or XLSX) from a single scenario payload.
+    The 'Project_Name' column is set to payload.project_name if provided.
+    The download filename is derived from project/scenario.
+    """
+    if not DB.loaded:
+        DB.load()
+
+    scenario = payload.scenario or {}
+    project_name = payload.project_name or f"Proposal {datetime.date.today().isoformat()}"
+    project_name = _safe_filename(project_name)
+
+    # Optional scenario tag used in the download filename (not inside the sheet itself)
+    scen_label = _safe_filename(payload.scenario_label or "")
+
+    # Build rows (same as before, but use project_name param)
+    rows = []
+    for i, d in enumerate(scenario.get("items", []), start=1):
+        wbs_id = f"1.{i}"
+        rows.append({
+            "Project_Name": project_name,
+            "WBS_ID": wbs_id,
+            "Parent_WBS_ID": "1",
+            "Task_Name": d["deliverable"],
+            "Deliverable": d["deliverable"],
+            "Component": "",
+            "Task": "",
+            "Role": "",
+            "Seniority": "",
+            "Planned_Hours": d["total_hours"],
+            "Start_Offset_Days": 0,
+            "Duration_Days": sum([x["duration_days"] for x in d["schedule"]]),
+            "Dependencies": "",
+            "Assignee_External_ID": "",
+            "Notes": f"{d['complexity']} / {d['tier']}"
+        })
+        for j, t in enumerate(d["schedule"], start=1):
+            rows.append({
+                "Project_Name": project_name,
+                "WBS_ID": f"{wbs_id}.{j}",
+                "Parent_WBS_ID": wbs_id,
+                "Task_Name": t["task_group"],
+                "Deliverable": d["deliverable"],
+                "Component": "",
+                "Task": t["task_group"],
+                "Role": "",
+                "Seniority": "",
+                "Planned_Hours": "",
+                "Start_Offset_Days": "",
+                "Duration_Days": t["duration_days"],
+                "Dependencies": "",
+                "Assignee_External_ID": "",
+                "Notes": ""
+            })
+
+    df = pd.DataFrame(rows)
+
+    # File naming
+    parts = [p for p in [project_name, scen_label, "Workfront Export"] if p]
+    base = " - ".join(parts)
+    if payload.add_timestamp:
+        base += " - " + datetime.datetime.now().strftime("%Y%m%d-%H%M")
+
+    fmt = (payload.file_format or "csv").lower().strip()
+    if fmt not in ("csv", "xlsx"):
+        raise HTTPException(400, "file_format must be 'csv' or 'xlsx'.")
+
+    if fmt == "csv":
+        out_path = f"{base}.csv"
+        df.to_csv(out_path, index=False)
+        return FileResponse(out_path, filename=out_path, media_type="text/csv")
+
+    # XLSX
+    try:
+        out_path = f"{base}.xlsx"
+        # engine='openpyxl' required for xlsx writes
+        df.to_excel(out_path, index=False, engine="openpyxl")
+        return FileResponse(
+            out_path,
+            filename=out_path,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as ex:
+        raise HTTPException(400, "XLSX export requires 'openpyxl'. Add it to requirements.txt and redeploy.") from ex
+
+
+requirements.txt: add
+
+openpyxl
+
+
+This builds the content exactly like your current export, but returns the file with a descriptive name and in your requested format. The current implementation’s behavior (always workfront_export.csv) is replaced.
+
+Frontend patch
+
+File: static/index.html
+
+1) Add a “Project name” field (auto‑prefilled from upload) and an “Export format” selector
+
+Place “Project name” in Step 1 so the PM can set/confirm it once, and the app will use it everywhere (export + the Project_Name column). Add an export format control and a timestamp toggle in Step 2.
+
+<!-- Step 1: add this input alongside Pricing mode / Rate band -->
+<label style="min-width:320px;">Project name:
+  <input id="projectName" type="text" placeholder="e.g., Casa Dragones" />
+</label>
+
+<!-- Step 2: add export format and timestamp toggle near the export buttons -->
+<div class="row" style="margin-top:10px;">
+  <label>Export format:
+    <select id="exportFormat">
+      <option value="csv">CSV (.csv)</option>
+      <option value="xlsx">Excel (.xlsx)</option>
+    </select>
+  </label>
+  <label><input id="exportTimestamp" type="checkbox" /> Add timestamp</label>
+  <button id="btnExportA">Export Scenario A</button>
+  <button id="btnExportB">Export Scenario B</button>
+</div>
+
+2) When an RFP is uploaded, prefill Project name from the file name
+
+Update your existing autoBuildFromUpload() to capture the server-returned filename from /api/suggest_by_file and prefill:
+
+<script>
+  async function autoBuildFromUpload() {
+    const fileEl = document.getElementById('rfpFile');
+    const fd = new FormData();
+    fd.append('file', fileEl.files[0]);
+
+    const resp = await fetch('/api/suggest_by_file', { method: 'POST', body: fd });
+    const j = await resp.json();
+
+    const suggested = j.suggested || [];
+    const baseName = (j.filename || '').replace(/\.[^.]+$/, '').trim();
+    if (baseName && !document.getElementById('projectName').value) {
+      document.getElementById('projectName').value = baseName; // e.g., "Casa Dragones"
+    }
+
+    await buildFromSuggestions(suggested);
+  }
+</script>
+
+
+(If the PM pasted text, they can type the project name manually.)
+
+3) Export buttons: send project_name, file_format, scenario_label, add_timestamp to /api/export, and use the server’s filename
+
+Replace your current export handler(s) with:
+
+<script>
+  async function exportScenario(letter) {
+    if (!latestScenarios || !latestScenarios[letter]) return;
+
+    const fmt = document.getElementById('exportFormat').value || 'csv';
+    const projectName = document.getElementById('projectName').value || '';
+    const addTs = document.getElementById('exportTimestamp').checked;
+
+    const res = await fetch('/api/export', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        scenario: latestScenarios[letter],
+        project_name: projectName,
+        file_format: fmt,
+        scenario_label: `Scenario ${letter}`,
+        add_timestamp: addTs
+      })
+    });
+
+    // Use the filename suggested by the server (Content-Disposition)
+    const cd = res.headers.get('content-disposition') || '';
+    const m = cd.match(/filename="?([^"]+)"?/i);
+    const suggestedName = m ? m[1] : `workfront_export.${fmt}`;
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = suggestedName;      // do NOT hardcode "workfront_export.csv"
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  document.getElementById('btnExportA').onclick = () => exportScenario('A');
+  document.getElementById('btnExportB').onclick = () => exportScenario('B');
+</script>
+
+
+Note: We stopped hard‑coding the download name on the client. Your current code sets a.download = 'workfront_export.csv', which overrides whatever the server wants to use. The change above respects the server-provided filename, so “Casa Dragones - Scenario A - Workfront Export.xlsx” comes through as‑is.

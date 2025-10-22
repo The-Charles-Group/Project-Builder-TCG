@@ -1,0 +1,230 @@
+I’m writing this as “actions for the Replit agent,” with concrete file edits and why each is needed.
+
+1) Step 4 — Add a Scenario C timeline tab and wire it up
+
+Root cause: the frontend only renders A & B and never calls the server to build/pack a sequential schedule for C. The backend already supports C everywhere (we added /api/build_scenario_c and the generic /api/reorder_timeline accepts a scenario_letter A/B/C).
+
+1.1 HTML (Step 4 tabs)
+
+File: static/index.html
+Change: add a Scenario C tab next to the existing two.
+
+<!-- Step 4 — Timeline -->
+<div class="btn-group" id="timelineTabs">
+  <button id="btnTimelineA" class="btn btn-secondary">Scenario A</button>
+  <button id="btnTimelineB" class="btn btn-secondary">Scenario B</button>
+  <button id="btnTimelineC" class="btn btn-secondary">Scenario C</button> <!-- NEW -->
+  <button id="btnSaveOrder"  class="btn btn-primary">Save Order</button>
+</div>
+<table id="timelineTable" class="table table-dark">
+  <!-- rows injected by JS -->
+</table>
+
+1.2 JS state: keep C just like A & B
+
+File: static/app.js (or wherever Step 4 state lives)
+
+Add C to the in‑memory scenarios and track the active tab:
+
+const state = {
+  scenarios: { A: null, B: null, C: null },   // include C
+  timelineActive: 'A',
+  // ...other state
+};
+
+
+When Step 3 finishes, persist what the server returns:
+
+Build A & B:
+
+// response from /api/build
+state.scenarios.A = resp.A;
+state.scenarios.B = resp.B;
+
+
+Build C (button “Build Scenario C”):
+
+// response from /api/build_scenario_c
+state.scenarios.C = resp.C; // resp has { C: {...} }
+// optional: jump user to C timeline immediately
+state.timelineActive = 'C';
+ensureTimeline('C');
+
+
+/api/build_scenario_c is already implemented server‑side and returns { "C": { ... } }.
+
+1.3 JS: add tab handlers for A, B, C
+document.getElementById('btnTimelineA').onclick = () => { state.timelineActive = 'A'; ensureTimeline('A'); };
+document.getElementById('btnTimelineB').onclick = () => { state.timelineActive = 'B'; ensureTimeline('B'); };
+document.getElementById('btnTimelineC').onclick = () => { state.timelineActive = 'C'; ensureTimeline('C'); }; // NEW
+
+1.4 JS: ensure we have a sequential schedule for the active scenario
+
+The server packs deliverables sequentially (start = day after previous end) when you call /api/reorder_timeline — include scenario_letter: 'A'|'B'|'C'. It was already coded to accept C.
+
+Add this helper (call it from the handlers above and after any build completes):
+
+async function ensureTimeline(letter) {
+  const scen = state.scenarios[letter];
+  const table = document.getElementById('timelineTable');
+  table.innerHTML = '';
+
+  if (!scen || !Array.isArray(scen.items) || !scen.items.length) {
+    table.innerHTML = `<tr><td colspan="4">Build Scenario ${letter} in Step 3 to see a timeline.</td></tr>`;
+    return;
+  }
+
+  // Current order preference: user_order > ai_order > as-built
+  const want = (scen.user_order && scen.user_order.length)
+    ? scen.user_order
+    : (scen.ai_order && scen.ai_order.length)
+      ? scen.ai_order
+      : scen.items.map(it => String(it.deliverable_code));
+
+  const includedMap = {};
+  scen.items.forEach(it => { includedMap[String(it.deliverable_code)] = it.included_task_groups || []; });
+
+  const payload = {
+    scenario_letter: letter,
+    deliverable_codes: want,
+    included_map: includedMap,
+    project_start: scen.project_start,
+    complexity: scen.complexity || 'Advanced',
+    tier: scen.tier || 'T2_MediumVolume',
+    use_slack: !!scen.use_slack,
+    slack_after_internal: Number(scen.slack_after_internal ?? 1),
+    slack_after_client: Number(scen.slack_after_client ?? 2),
+    slack_global_pct: Number(scen.slack_global_pct ?? 0)
+  };
+
+  const res = await fetch('/api/reorder_timeline', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    console.error(err);
+    table.innerHTML = `<tr><td colspan="4">Unable to build timeline for Scenario ${letter}.</td></tr>`;
+    return;
+  }
+  const data = await res.json();
+
+  // Persist packed scenario (server returns items + full scenario)
+  if (data.scenario) state.scenarios[letter] = data.scenario;
+
+  // Render rows
+  const items = data.items || scen.items;
+  const rows = items.map(d => {
+    const sched = d.schedule || [];
+    const start = sched.length ? sched[0].start_date : '';
+    const end   = sched.length ? sched[sched.length - 1].end_date : '';
+    const duration = sched.reduce((s,r) => s + Number(r.duration_days||0), 0);
+    return `<tr>
+      <td>${d.deliverable}</td>
+      <td>${start}</td>
+      <td>${end}</td>
+      <td style="text-align:right">${duration}</td>
+    </tr>`;
+  }).join('');
+  table.innerHTML = `
+    <thead>
+      <tr><th>DELIVERABLE</th><th>START</th><th>END</th><th>DURATION (DAYS)</th></tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  `;
+}
+
+1.5 JS: make Save Order send the active letter (A, B, or C)
+
+(so the manual drag/drop persists for C too)
+
+document.getElementById('btnSaveOrder').onclick = async () => {
+  const letter = state.timelineActive;         // 'A' | 'B' | 'C'
+  const newOrder = readCurrentTableOrder();    // your existing table -> array of deliverable_codes
+  const scen = state.scenarios[letter];
+  const includedMap = {};
+  scen.items.forEach(it => { includedMap[String(it.deliverable_code)] = it.included_task_groups || []; });
+
+  const res = await fetch('/api/reorder_timeline', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      scenario_letter: letter,
+      deliverable_codes: newOrder,
+      included_map: includedMap,
+      project_start: scen.project_start,
+      complexity: scen.complexity || 'Advanced',
+      tier: scen.tier || 'T2_MediumVolume',
+      use_slack: !!scen.use_slack,
+      slack_after_internal: Number(scen.slack_after_internal ?? 1),
+      slack_after_client: Number(scen.slack_after_client ?? 2),
+      slack_global_pct: Number(scen.slack_global_pct ?? 0)
+    })
+  });
+  const data = await res.json();
+  if (data.scenario) state.scenarios[letter] = data.scenario;
+  ensureTimeline(letter);
+};
+
+
+The server endpoint packs the sequential dates and saves manual_order_locked = True in the scenario, regardless of letter.
+
+2) Step 2 — Remove/hide the “Apply” box
+
+Since components are auto‑selected by default, remove that UI:
+
+HTML: delete the “Apply” panel markup or set style="display:none" on its wrapper (commonly #apply-panel or similar).
+
+JS: remove any listeners that try to “apply” component picks globally (they’re redundant now).
+
+No backend change needed.
+
+3) Exports — Put the Project Name at the top, and make Row #1 Project Summary (not the project name)
+
+Why: Workfront should read the project title from the Project_Name column, while the first task row should be a distinct “Project Summary”. Right now the first row uses Task_Name = project_name. Change it to "Project Summary". The code that emits that row is in build_wbs_with_pricing(...).
+
+3.1 Backend patch
+
+File: your FastAPI server (same file where build_wbs_with_pricing lives)
+
+Locate the top‑level project row and replace it with:
+
+# project parent row — ensures a proper Project Summary task
+rows.append({
+    "Row_ID": "",
+    "Deliverable_Code": "",
+    "Task_Code": "",
+    "Service_Department": "",
+    "Deliverable": "",
+    "Project_Name": project_name,     # <-- stays the actual project name (e.g., Casa-Dragones-Digital)
+    "WBS_ID": "1",
+    "Parent_WBS_ID": "",
+    "Task_Name": "Project Summary",   # <-- always this literal text
+    "Component": "",                  # leave blank for the summary row
+    "Task": "",
+    "Role": "",
+    "Seniority": "",
+    "Planned_Hours": 0,
+    "Start_Offset_Days": 0,
+    "Duration_Days": 0,
+    "Dependencies": "",
+    "Assignee_External_ID": "",
+    "Notes": "",
+    "Rate_USD": "",
+    "Price_USD": ""
+})
+
+3.2 (Optional) Export workbook all‑in‑one (A, B and C)
+
+You already have POST /api/export_workbook_abc that writes three sheets and formats numbers. Hook a UI button Export XLSX A+B+C to call it.
+
+4) Step 4 — Add Export XML (Scenario C) and Export XML A/B/C
+
+Your XML export route accepts a scenario payload and uses the canonical column order before writing MSPDI. Use the same payload you send for A/B, just passing letter 'C' and the C scenario object.
+
+For “Export XML A B C”, call the export once per letter (or add a combined ZIP if you prefer later).
+(The Excel 3‑sheet export is already available as a single call.)
+
+5) Budget analysis on Scenario C (confirmation)
+
+You already compute budget_info for C in /api/build_scenario_c and for A/B in /api/build. If the UI shows the green budget chip for A but not for B/C, bind the same renderer to state.scenarios.B?.budget_info and state.scenarios.C?.budget_info.

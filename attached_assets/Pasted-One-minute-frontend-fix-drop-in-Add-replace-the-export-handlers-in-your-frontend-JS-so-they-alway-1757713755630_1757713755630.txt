@@ -1,0 +1,77 @@
+One‑minute frontend fix (drop‑in)
+
+Add/replace the export handlers in your frontend JS so they always download the blob and use the server‑provided filename:
+
+<script>
+async function downloadBlobFromPost(url, payload) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => String(res.status));
+    alert(`Export failed: ${res.status} — ${msg}`);
+    return;
+  }
+  const blob = await res.blob();
+
+  // Read filename from Content-Disposition if present
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = /filename="?([^"]+)"?/i.exec(cd);
+  const filename = m ? m[1] : (payload.scenario_label || 'Scenario') + '.' + (payload.file_format || 'csv');
+
+  const urlObj = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = urlObj;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(urlObj);
+}
+
+function getExportPrefs() {
+  // Adjust selectors to your UI; these are typical IDs.
+  const fmt = (document.querySelector('#export-format')?.value || 'xlsx').toLowerCase();
+  const addTs = !!document.querySelector('#export-add-ts')?.checked;
+  const project = document.querySelector('#project-name')?.value || 'Proposal';
+  return { file_format: fmt, add_timestamp: addTs, project_name: project };
+}
+
+async function exportScenario(letter) {
+  const scen = (window.appState?.scenarios && window.appState.scenarios[letter]) || null;
+  if (!scen || !scen.items || !scen.items.length) {
+    alert('Build scenarios first (Stage 3).');
+    return;
+  }
+  const prefs = getExportPrefs();
+  await downloadBlobFromPost('/api/export', {
+    scenario: scen,
+    project_name: prefs.project_name,
+    file_format: prefs.file_format,        // 'csv' or 'xlsx'
+    scenario_label: `Scenario ${letter}`,
+    add_timestamp: prefs.add_timestamp
+  });
+}
+
+async function exportWorkbookAB() {
+  const prefs = getExportPrefs();
+  await downloadBlobFromPost('/api/export_workbook', {
+    scenario_a: window.appState?.scenarios?.A || {items:[]},
+    scenario_b: window.appState?.scenarios?.B || {items:[]},
+    project_name: prefs.project_name,
+    sheet_name_a: 'Scenario A',
+    sheet_name_b: 'Scenario B',
+    add_timestamp: prefs.add_timestamp
+  });
+}
+
+// Wire up buttons (adjust IDs to match your HTML)
+document.getElementById('btn-export-a')?.addEventListener('click', () => exportScenario('A'));
+document.getElementById('btn-export-b')?.addEventListener('click', () => exportScenario('B'));
+document.getElementById('btn-export-ab')?.addEventListener('click', exportWorkbookAB);
+</script>
+
+
+This matches how the backend is designed to be used (POST returns a file; frontend reads Content‑Disposition and saves it).

@@ -1,0 +1,434 @@
+Backend changes (FastAPI)
+
+File: main.py (or your current app entry)
+
+1) Improve suggest_deliverables_from_text (more useful review in Step 2)
+
+Add matched keywords so the PM can see why something was picked, and add a safe fallback that scans deliverable names if the RFP_Matching_Rules sheet is empty.
+
+# --- Replace the current method inside class AgencyDB ---
+
+def suggest_deliverables_from_text(self, text: str) -> List[Dict[str, Any]]:
+    """
+    Returns a list of suggestions: [{
+        deliverable_code, deliverable, category, confidence, matches: [matched_keywords...]
+    }]
+    Strategy:
+      1) Use RFP_Matching_Rules (Regex_Keywords -> Map_To_Deliverable).
+      2) If no rule hits and/or rules table empty, fallback: match deliverable names in text.
+    """
+    if not text:
+        return []
+
+    text = str(text)
+    suggestions: Dict[str, Dict[str, Any]] = {}
+
+    # (1) Rule-based pass (preferred)
+    for _, row in self.rfp_rules.iterrows():
+        patt = str(row.get("Regex_Keywords", "") or "")
+        target = str(row.get("Map_To_Deliverable", "") or "")
+        if not patt or not target:
+            continue
+        try:
+            hits = re.findall(patt, text, flags=re.IGNORECASE)
+        except re.error:
+            continue
+        if not hits:
+            continue
+        match_df = self.deliverables[self.deliverables["Deliverable"] == target]
+        if match_df.empty:
+            continue
+        for __, r in match_df.iterrows():
+            code = str(r["Deliverable_Code"])
+            entry = suggestions.setdefault(code, {
+                "deliverable_code": code,
+                "deliverable": str(r["Deliverable"]),
+                "category": str(r.get("Category", "")),
+                "confidence": 0,
+                "matches": []
+            })
+            entry["confidence"] += len(hits)
+            # Store a few unique matched tokens for UX
+            uniq = list({str(h).lower() for h in hits if str(h).strip()})
+            entry["matches"].extend([m for m in uniq if m not in entry["matches"]])
+
+    # (2) Fallback: check if deliverable names appear in-text (very light heuristic)
+    if not suggestions:
+        for _, r in self.deliverables.iterrows():
+            name = str(r["Deliverable"])
+            code = str(r["Deliverable_Code"])
+            if not name:
+                continue
+            # token containment (case-insensitive)
+            if re.search(r"\b" + re.escape(name) + r"\b", text, flags=re.IGNORECASE):
+                suggestions[code] = {
+                    "deliverable_code": code,
+                    "deliverable": name,
+                    "category": str(r.get("Category", "")),
+                    "confidence": 1,
+                    "matches": [name]
+                }
+
+    # Rank by confidence desc, then by deliverable
+    out = list(suggestions.values())
+    out.sort(key=lambda x: (-x["confidence"], x["deliverable"]))
+    return out
+
+
+This preserves the existing /api/suggest_by_text contract while enriching each item with a matches array for Step 2 review.
+
+2) Add a one‑shot endpoint: POST /api/auto_build
+
+So Step 1 can be: paste RFP → click Generate → get scenarios built from AI picks (no manual selection UI).
+
+# --- Add new model next to the other Pydantic models ---
+class AutoBuildPayload(BaseModel):
+    rfp_text: str
+    scenario_a: ScenarioSpec
+    scenario_b: ScenarioSpec
+    pricing_mode: str                       # "Flat_Blended" or "Per_Resource"
+    blended_rate: Optional[float] = None
+    rate_band: Optional[str] = "Standard_US"
+    use_slack: bool = True
+    slack_after_internal: int = 1
+    slack_after_client: int = 2
+    slack_global_pct: float = 0.05
+    project_start: Optional[str] = None     # "YYYY-MM-DD"
+
+
+# --- Add the new route below /api/build ---
+@app.post("/api/auto_build")
+def api_auto_build(payload: AutoBuildPayload):
+    if not DB.loaded:
+        DB.load()
+
+    # 1) Get AI suggestions
+    suggestions = DB.suggest_deliverables_from_text(payload.rfp_text or "")
+    selected_codes = [s["deliverable_code"] for s in suggestions]
+
+    # 2) If nothing matched, return an empty set so frontend can prompt to add
+    if not selected_codes:
+        return {
+            "suggested": suggestions,
+            "scenarios": {
+                "A": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
+                "B": {"items": [], "totals": {"hours": 0.0, "price": 0.0}},
+            }
+        }
+
+    # 3) Reuse the same logic as /api/build to assemble scenarios
+    #    (We inline the essential parts to keep it simple.)
+    def _build_for(selected_deliverable_codes, scen_spec):
+        per_deliv = []
+        price_sum = 0.0
+        hours_sum = 0.0
+        for code in selected_deliverable_codes:
+            row = DB.deliverables[DB.deliverables["Deliverable_Code"].astype(str) == str(code)]
+            if row.empty:
+                continue
+            cat = str(row["Category"].iloc[0])
+            spec_resolved = _resolve_scenario(scen_spec, cat)
+            out = _scenario_for_deliverable(
+                code, cat, spec_resolved,
+                payload.pricing_mode, payload.blended_rate, payload.rate_band or "Standard_US",
+                bool(payload.use_slack), int(payload.slack_after_internal), int(payload.slack_after_client),
+                float(payload.slack_global_pct or 0), payload.project_start
+            )
+            out["deliverable"] = str(row["Deliverable"].iloc[0])
+            out["category"] = cat
+            per_deliv.append(out)
+            price_sum += out["price"]
+            hours_sum += out["total_hours"]
+        return {
+            "pricing_mode": payload.pricing_mode,
+            "rate_band": payload.rate_band or "Standard_US",
+            "blended_rate": payload.blended_rate,
+            "use_slack": bool(payload.use_slack),
+            "slack_after_internal": int(payload.slack_after_internal),
+            "slack_after_client": int(payload.slack_after_client),
+            "slack_global_pct": float(payload.slack_global_pct or 0),
+            "project_start": payload.project_start,
+            "items": per_deliv,
+            "totals": {"hours": round(hours_sum, 2), "price": round(price_sum, 2)}
+        }
+
+    scenarios = {
+        "A": _build_for(selected_codes, payload.scenario_a),
+        "B": _build_for(selected_codes, payload.scenario_b),
+    }
+
+    return {"suggested": suggestions, "scenarios": scenarios}
+
+
+Returns both the AI-picked deliverables (with matches) and fully built Scenarios A & B.
+
+Step 2 can then add/remove deliverables and call the existing /api/build using the edited list.
+
+Frontend changes (2‑step UX)
+
+File: static/index.html (keep your styles; below is a minimal skeleton to demonstrate the flow)
+
+Replace the first-step deliverable selector with an RFP textarea + “Generate from RFP” button.
+Second step shows the suggested picks and allows adding more before regenerating.
+
+<!-- Minimal skeleton: keep or merge into your existing layout -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Agency Project Builder</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    .step { border: 1px solid #eee; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .chip { padding: 6px 10px; border: 1px solid #ddd; border-radius: 999px; cursor: pointer; }
+    .chip.removable { background: #f8f8f8; }
+    .muted { color: #666; font-size: 0.9em; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+    textarea { width: 100%; min-height: 140px; }
+    input[type="text"] { padding: 8px; width: 280px; }
+    button { padding: 8px 12px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #eee; padding: 8px; text-align: left; }
+    .totals { margin-top: 8px; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+  <h1>Agency Project Builder</h1>
+
+  <!-- Step 1: Paste RFP / brief -->
+  <section class="step" id="step1">
+    <h2>Step 1 — Paste the RFP / Brief</h2>
+    <textarea id="rfpText" placeholder="Paste the RFP, agency brief, or request here..."></textarea>
+    <div class="row" style="margin-top:8px;">
+      <label>Pricing mode:
+        <select id="pricingMode">
+          <option value="Flat_Blended">Flat_Blended</option>
+          <option value="Per_Resource">Per_Resource</option>
+        </select>
+      </label>
+      <label>Blended rate:
+        <input id="blendedRate" type="number" step="1" placeholder="(optional, e.g., 185)" />
+      </label>
+      <label>Rate band:
+        <input id="rateBand" type="text" value="Standard_US" />
+      </label>
+      <button id="btnGenerate">Generate from RFP</button>
+    </div>
+    <p class="muted">This will auto‑identify deliverables & build Scenarios A and B.</p>
+  </section>
+
+  <!-- Step 2: Review & Edit -->
+  <section class="step" id="step2" style="display:none;">
+    <h2>Step 2 — Review & Edit Deliverables</h2>
+    <div>
+      <strong>AI‑picked deliverables:</strong>
+      <div class="chips" id="selectedChips"></div>
+      <div class="muted" id="whyPicks"></div>
+    </div>
+    <div style="margin-top:10px;">
+      <input type="text" id="addBox" placeholder="Add another deliverable..." />
+      <button id="btnAdd">Add</button>
+      <button id="btnRegenerate">Regenerate with Edits</button>
+      <button id="btnExportA">Export Scenario A CSV</button>
+    </div>
+
+    <h3 style="margin-top:16px;">Scenario A</h3>
+    <div id="scenarioA"></div>
+
+    <h3 style="margin-top:16px;">Scenario B</h3>
+    <div id="scenarioB"></div>
+  </section>
+
+  <script>
+    // Simple client state
+    let allDeliverables = [];   // from /api/options
+    let selectedCodes = [];     // working set in Step 2
+    let latestScenarios = null; // last response.scenarios
+
+    async function loadOptions() {
+      const res = await fetch('/api/options');
+      const data = await res.json();
+      allDeliverables = data.deliverables || [];
+    }
+
+    function codeToName(code) {
+      const r = allDeliverables.find(d => d.Deliverable_Code === code);
+      return r ? r.Deliverable : code;
+    }
+
+    function renderChips() {
+      const wrap = document.getElementById('selectedChips');
+      wrap.innerHTML = '';
+      selectedCodes.forEach(code => {
+        const chip = document.createElement('span');
+        chip.className = 'chip removable';
+        chip.textContent = codeToName(code);
+        chip.title = `Remove ${code}`;
+        chip.onclick = () => {
+          selectedCodes = selectedCodes.filter(c => c !== code);
+          renderChips();
+        };
+        wrap.appendChild(chip);
+      });
+    }
+
+    function renderWhy(suggested) {
+      const why = document.getElementById('whyPicks');
+      if (!suggested || !suggested.length) { why.textContent = ''; return; }
+      const lines = suggested.map(s => {
+        const m = (s.matches && s.matches.length) ? ` • matches: ${s.matches.slice(0,5).join(', ')}` : '';
+        return `${s.deliverable}${m}`;
+      });
+      why.textContent = 'Why these picks?  ' + lines.join('  |  ');
+    }
+
+    function renderScenario(targetId, scenario) {
+      const root = document.getElementById(targetId);
+      if (!scenario || !scenario.items) { root.innerHTML = '<p>(No data)</p>'; return; }
+      let html = `
+        <div class="totals">Totals — Hours: ${scenario.totals.hours}, Price: $${scenario.totals.price.toLocaleString()}</div>
+        <table>
+          <thead><tr><th>Deliverable</th><th>Hours</th><th>Price</th><th>Tasks</th></tr></thead>
+          <tbody>
+      `;
+      scenario.items.forEach(it => {
+        const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
+        html += `<tr>
+          <td>${it.deliverable}</td>
+          <td>${it.total_hours}</td>
+          <td>$${it.price.toLocaleString()}</td>
+          <td>${tasks}</td>
+        </tr>`;
+      });
+      html += `</tbody></table>`;
+      root.innerHTML = html;
+    }
+
+    async function autoBuildFromRFP() {
+      const rfpText = document.getElementById('rfpText').value;
+      const pricingMode = document.getElementById('pricingMode').value;
+      const blendedRateStr = document.getElementById('blendedRate').value;
+      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+
+      // defaults: use templates (you can wire real UI for choosing)
+      const payload = {
+        rfp_text: rfpText,
+        scenario_a: { mode: "template", scenario_key: "MED_LOW" },
+        scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+        pricing_mode: pricingMode,
+        blended_rate: blendedRate,
+        rate_band: rateBand,
+        use_slack: true,
+        slack_after_internal: 1,
+        slack_after_client: 2,
+        slack_global_pct: 0.05
+      };
+
+      const res = await fetch('/api/auto_build', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+
+      // Suggested → Step 2 state
+      const suggested = data.suggested || [];
+      selectedCodes = suggested.map(s => s.deliverable_code);
+      latestScenarios = data.scenarios || null;
+
+      renderChips();
+      renderWhy(suggested);
+      if (latestScenarios) {
+        renderScenario('scenarioA', latestScenarios.A);
+        renderScenario('scenarioB', latestScenarios.B);
+      }
+      document.getElementById('step2').style.display = 'block';
+      window.scrollTo({ top: document.getElementById('step2').offsetTop, behavior: 'smooth' });
+    }
+
+    async function regenerateWithEdits() {
+      const pricingMode = document.getElementById('pricingMode').value;
+      const blendedRateStr = document.getElementById('blendedRate').value;
+      const blendedRate = blendedRateStr ? Number(blendedRateStr) : null;
+      const rateBand = document.getElementById('rateBand').value || 'Standard_US';
+
+      const payload = {
+        selected_deliverable_codes: selectedCodes,
+        scenario_a: { mode: "template", scenario_key: "MED_LOW" },
+        scenario_b: { mode: "template", scenario_key: "MED_HIGH" },
+        pricing_mode: pricingMode,
+        blended_rate: blendedRate,
+        rate_band: rateBand,
+        use_slack: true,
+        slack_after_internal: 1,
+        slack_after_client: 2,
+        slack_global_pct: 0.05
+      };
+
+      const res = await fetch('/api/build', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const scenarios = await res.json();
+      latestScenarios = scenarios || null;
+      renderScenario('scenarioA', latestScenarios.A);
+      renderScenario('scenarioB', latestScenarios.B);
+    }
+
+    function addDeliverableFromBox() {
+      const box = document.getElementById('addBox');
+      const q = box.value.trim().toLowerCase();
+      if (!q) return;
+      // naive search across known deliverables
+      const match = allDeliverables.find(d =>
+        d.Deliverable.toLowerCase().includes(q) || d.Deliverable_Code.toLowerCase() === q
+      );
+      if (match && !selectedCodes.includes(match.Deliverable_Code)) {
+        selectedCodes.push(match.Deliverable_Code);
+        renderChips();
+      }
+      box.value = '';
+    }
+
+    document.getElementById('btnGenerate').onclick = autoBuildFromRFP;
+    document.getElementById('btnRegenerate').onclick = regenerateWithEdits;
+    document.getElementById('btnAdd').onclick = addDeliverableFromBox;
+
+    document.getElementById('btnExportA').onclick = async () => {
+      if (!latestScenarios || !latestScenarios.A) return;
+      const res = await fetch('/api/export', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ scenario: latestScenarios.A })
+      });
+      // Force download
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'workfront_export.csv'; a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    loadOptions();
+  </script>
+</body>
+</html>
+
+
+What changed vs. v2’s UX:
+
+Removed the initial deliverable selector entirely.
+
+Added an RFP text area and a Generate from RFP action that calls the new /api/auto_build.
+
+Step 2 shows:
+
+Chips for the selected deliverables (click a chip to remove).
+
+A quick‑add box to include any deliverable that wasn’t auto‑picked.
+
+Regenerate with Edits calls existing /api/build with the edited list.
+
+One‑click CSV export using existing /api/export.

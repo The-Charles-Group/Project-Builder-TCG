@@ -1,0 +1,120 @@
+Minimal front‑end wiring to unblock you now
+
+Goal: On Analyze, seed the left panel with a real (Average) plan and store selectedCodes so Step 3 can build.
+
+After you finish /api/summarize_by_file, call /api/auto_build once with the same RFP text and your current Step‑3 knobs (pricing mode, rates, etc.). Use its suggestions to populate the left panel and set selectedCodes.
+
+// after summarize succeeds and you have rfpText
+const auto = await fetch('/api/auto_build', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    rfp_text: rfpText,                        // same text used for summarize
+    pricing_mode: 'Flat_Blended',             // or UI value
+    blended_rate: 195,                        // or UI value
+    rate_band: 'Standard_US',
+    use_slack: true,
+    slack_after_internal: 1,
+    slack_after_client: 2,
+    slack_global_pct: 0.05,
+    project_start: null,
+    scenario_a: { mode:'template', complexity:'Advanced', tier:'T2_MediumVolume' },
+    scenario_b: { mode:'template', complexity:'Advanced', tier:'T2_MediumVolume' }
+  })
+}).then(r => r.json());
+
+// Seed the left panel + app state
+const suggestedCodes = (auto.scenarios?.A?.items || []).map(i => i.deliverable_code);
+appState.selectedCodes = suggestedCodes;               // <-- critical for Step 3
+renderLeftPanel(auto.scenarios.A.items, auto.scenarios.A.totals);
+
+
+auto_build is explicitly designed for this bootstrap step and uses the same core builder as /api/build under the hood.
+
+Call /api/reconcile using those codes, so the middle panel lines up with the left panel:
+
+const recon = await fetch('/api/reconcile', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/json'},
+  body: JSON.stringify({
+    summary_deliverables: aiSummary.deliverables.map(d => d.label),
+    db_selected_deliverable_codes: appState.selectedCodes   // pass codes, not names
+  })
+}).then(r => r.json());
+
+renderReconcile(recon); // shows Add / Delete preselected
+
+
+(Passing codes prevents the server from silently deriving a different set — that’s the mismatch you’re seeing.)
+
+When the user clicks “Apply Selection” (middle panel), compute the final codes:
+
+function applySelection() {
+  const curr = new Set(appState.selectedCodes);
+  // add checked
+  for (const s of recon.add)    if (isCheckedAdd(s.code))    curr.add(s.code);
+  // delete checked
+  for (const s of recon.delete) if (isCheckedDel(s.code))    curr.delete(s.code);
+  appState.selectedCodes = [...curr];
+  // Optionally, rebuild the left panel pricing with /api/build (Average)
+}
+
+Step 3 — make the Build button work
+
+Wire the button to post the non‑empty appState.selectedCodes to /api/build:
+
+async function buildScenariosAB() {
+  if (!appState.selectedCodes || appState.selectedCodes.length === 0) {
+    alert('No deliverables selected. Please complete Stage 2 first.');
+    return;
+  }
+
+  const payload = {
+    selected_deliverable_codes: appState.selectedCodes,          // <- required
+    pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
+    blended_rate: getBlendedRateFromUI(),                        // number or null
+    rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
+    use_slack: getUseSlackFromUI(),
+    slack_after_internal: getSlackInternalFromUI(),
+    slack_after_client: getSlackClientFromUI(),
+    slack_global_pct: getSlackPctFromUI(),
+    project_start: getProjectStartFromUI() || null,
+    scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
+    scenario_b: getScenarioSpecBFromUI()
+  };
+
+  const resp = await fetch('/api/build', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  const scenarios = await resp.json();
+  renderScenario('A', scenarios.A);
+  renderScenario('B', scenarios.B);
+}
+
+
+/api/build returns { A: {...}, B: {...} } with items and totals; that’s what you render in the Step 3 cards.
+
+Result: The Step‑3 “Build” call will succeed, which then enables Step 4 (timeline) and Step 5 (export).
+
+Optional backend hardening (keeps panels in sync)
+
+Add the exact selection the reconciler used to its response so the UI can mirror it even if the UI forgot to pass codes:
+
+# at top with other models
+class ReconcileResult(BaseModel):
+    add: list[ReconcileSuggestion]
+    delete: list[ReconcileSuggestion]
+    unchanged: list[str]
+    db_used_codes: list[str] = []      # NEW
+    db_used_labels: list[str] = []     # NEW
+
+# inside /api/reconcile, before return:
+db_used_labels = [db_deliv_map.get(c, c) for c in sel_codes]
+return ReconcileResult(add=add, delete=delete, unchanged=sorted(set(unchanged)),
+                       db_used_codes=sel_codes, db_used_labels=db_used_labels)
+
+
+Now the left panel can always populate from db_used_codes if it’s empty in your UI state. (You already have the reconcile scaffolding; this just exposes what it used.)

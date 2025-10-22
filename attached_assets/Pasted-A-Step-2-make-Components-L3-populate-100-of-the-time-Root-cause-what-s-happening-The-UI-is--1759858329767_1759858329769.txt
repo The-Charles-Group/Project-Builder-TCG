@@ -1,0 +1,244 @@
+A) Step 2 — make Components & L3 populate 100% of the time
+Root‑cause (what’s happening)
+
+The UI is tracking selections in two places (AI panel vs. Deliverables column). When you click Add in the AI box, it updates one state bucket but the Components/L3 panels are reading from a different one — net effect: the “Select a deliverable first…” gate never opens.
+
+When you uncheck a deliverable that came from AI, the AI list is never told to re‑show its Add button for that item.
+
+The Step 2 page loses the RFP text after navigation/refresh, so Refresh AI Suggestions thinks there’s “No RFP text in memory,” even though you can’t reach Step 2 without having uploaded/pasted one. The backend only persists the last filename, not the RFP body, so the panel truly has nothing to re‑use if the front‑end doesn’t cache it.
+
+Required UI changes (React/Vue/TS – adapt to your stack)
+
+One source of truth for selection:
+
+Create a single selection store for Step 2:
+
+type SelectionState = {
+  deliverables: Set<string>; // deliverableCode
+  components: Set<string>;   // `${deliverableCode}::${componentCode}`
+  l3: Set<string>;           // `${deliverableCode}::${componentCode}::${subtaskCode}`
+}
+
+
+Keep it in a top‑level Step 2 provider (or Zustand/Redux atom) so AI panel and three columns read/write the same object.
+
+Wire the AI “Add” buttons to the same store:
+
+function addFromAISuggestion(deliverableCode: string) {
+  selection.deliverables.add(deliverableCode);
+  // ensure components panel wakes up
+  setActiveDeliverable(deliverableCode);
+  loadComponentsFor(deliverableCode); // same loader the left column uses
+  ui.flash('components');             // optional: focus panel
+}
+
+function removeDeliverable(deliverableCode: string) {
+  // remove L2/L3 that belong to it
+  for (const key of Array.from(selection.components)) {
+    if (key.startsWith(deliverableCode + '::')) selection.components.delete(key);
+  }
+  for (const key of Array.from(selection.l3)) {
+    if (key.startsWith(deliverableCode + '::')) selection.l3.delete(key);
+  }
+  selection.deliverables.delete(deliverableCode);
+  // tell AI list it can re‑show the Add button
+  aiState.markAsUnselected(deliverableCode);
+}
+
+
+Populate Components & L3 immediately:
+
+On selection.deliverables change, call:
+
+useEffect(() => {
+  if (!activeDeliverable && selection.deliverables.size) {
+    setActiveDeliverable([...selection.deliverables][0]);
+  }
+  if (activeDeliverable) loadComponentsFor(activeDeliverable); // fetch once, cache
+}, [selection.deliverables, activeDeliverable]);
+
+
+When any component checkbox flips on, load its L3:
+
+function onToggleComponent(deliverableCode: string, componentCode: string, checked: boolean) {
+  const key = `${deliverableCode}::${componentCode}`;
+  if (checked) {
+    selection.components.add(key);
+    if (!l3Cache[key]) loadL3For(deliverableCode, componentCode);
+  } else {
+    selection.components.delete(key);
+    // remove its L3 children too
+    for (const k of Array.from(selection.l3)) if (k.startsWith(key + '::')) selection.l3.delete(k);
+  }
+}
+
+
+Pin “Selected” deliverables to the top of the list:
+
+Keep the left column grouped into:
+
+Selected (drive from selection.deliverables, always shown first)
+
+Other (every deliverable not selected)
+
+When you tick/untick, move items between the two groups in memory rather than re‑querying.
+
+Buttons that must work consistently:
+
+All / Clear (Deliverables / Components / L3) must operate on the single selection store. “Clear” also empties the dependent sets:
+
+Clear Deliverables ⇒ also clear Components & L3
+
+Clear Components ⇒ also clear L3
+
+Summary card counters
+Bind to the single source:
+
+summary.deliverables = selection.deliverables.size;
+summary.components   = selection.components.size;
+summary.l3           = selection.l3.size;
+
+B) Make “Refresh AI Suggestions” reliable
+The bug
+
+After navigation/refresh, the AI card says “No RFP text in memory”. That’s because the server only remembers the last upload filename, not the RFP text itself; the Step 2 panel must supply the text again.
+
+Fix (front‑end only; minimal change)
+
+When Step 1 finishes, persist the cleaned RFP text in localStorage:
+
+localStorage.setItem('apb.rfpText.v1', rfpPlainText);
+
+
+In Step 2, on mount:
+
+const persisted = localStorage.getItem('apb.rfpText.v1');
+if (persisted) aiState.setRfpText(persisted);
+
+
+Make the Refresh AI Suggestions button call your AI endpoint with this rfpText payload when present; do not block the click with the “No RFP” alert if localStorage has it.
+
+(Optional server assist): If you prefer a server cache, add /api/session/rfp with in‑memory store keyed by a client GUID; but the above localStorage approach is simpler and stateless.
+
+C) Acceptance tests (what I expect to see in your build)
+
+From a clean page load (no Step 1 open), Step 2 shows the AI panel populated (because the RFP text persisted), and the Add button immediately:
+
+Click Add on an AI suggestion ⇒ Components list instantly populates for that deliverable.
+
+Tick one component ⇒ L3 Subtasks dropdown and list instantly populate for that component.
+
+Uncheck the same deliverable in the left column ⇒ it disappears from Selected, all child components/L3 are cleared, and the AI panel’s Add button for that deliverable re‑appears.
+
+All / Clear controls on each panel update the counters on the Summary card correctly.
+
+Proceed to Pricing is enabled as soon as at least one component is selected; otherwise disabled.
+
+D) Keep Step 3 → 5 flowing (two quick items you asked for before)
+
+1) Project name & “Project Summary” in exports
+
+In the XML exporter, set <Project><Name> to the exact Project name field from Step 3 (e.g., Casa‑Dragones‑Digital‑MKT‑RFP), and make Task row #1 be “Project Summary” (summary task), not the project name. Several of your current exports still set the project name to “Project from Scenario A”; that needs to be the <Name>, not the first task.
+
+2) Working‑days only calendar in XML
+
+Your exports currently mark Saturday as a working day (DayType 6 with DayWorking 1) which makes timelines include weekends. Change DayType 6 to DayWorking 0 so only Mon–Fri are working days (minutes/day keep at 480 = 9–5 with a 1‑hour lunch). You can see Saturday is currently marked working in the generated calendars.
+
+(If you also want US holidays, add non‑working exceptions for the standard dates when building the <Calendars> node.)
+
+Drop‑in snippets you can paste (adjust filenames)
+1) Step 2 state (one source of truth)
+// selectionStore.ts
+import { create } from 'zustand';
+
+type SelectionState = {
+  deliverables: Set<string>;
+  components: Set<string>;
+  l3: Set<string>;
+  clearAll: () => void;
+  addDeliverable: (code: string) => void;
+  removeDeliverable: (code: string) => void;
+  toggleComponent: (d: string, c: string, on: boolean) => void;
+  toggleL3: (d: string, c: string, t: string, on: boolean) => void;
+};
+
+export const useSelection = create<SelectionState>((set, get) => ({
+  deliverables: new Set(),
+  components: new Set(),
+  l3: new Set(),
+  clearAll: () => set({ deliverables: new Set(), components: new Set(), l3: new Set() }),
+  addDeliverable: (d) => set(s => ({ ...s, deliverables: new Set(s.deliverables).add(d) })),
+  removeDeliverable: (d) => set(s => {
+    const deliv = new Set(s.deliverables); deliv.delete(d);
+    const comps = new Set([...s.components].filter(k => !k.startsWith(d + '::')));
+    const l3    = new Set([...s.l3].filter(k => !k.startsWith(d + '::')));
+    return { ...s, deliverables: deliv, components: comps, l3 };
+  }),
+  toggleComponent: (d, c, on) => set(s => {
+    const key = `${d}::${c}`;
+    const comps = new Set(s.components);
+    if (on) comps.add(key); else {
+      comps.delete(key);
+      // drop their subtasks
+      const l3 = new Set([...s.l3].filter(k => !k.startsWith(key + '::')));
+      return { ...s, components: comps, l3 };
+    }
+    return { ...s, components: comps };
+  }),
+  toggleL3: (d, c, t, on) => set(s => {
+    const key = `${d}::${c}::${t}`;
+    const l3 = new Set(s.l3);
+    on ? l3.add(key) : l3.delete(key);
+    return { ...s, l3 };
+  })
+}));
+
+2) AI panel hooks it up
+// AISuggestionsPanel.tsx
+import { useSelection } from './selectionStore';
+
+function AISuggestionRow({ deliverable }) {
+  const addDeliverable = useSelection(s => s.addDeliverable);
+  const isSelected = useSelection(s => s.deliverables.has(deliverable.code));
+  return (
+    <div className="ai-row">
+      <span>{deliverable.name}</span>
+      {!isSelected ? (
+        <button onClick={() => addDeliverable(deliverable.code)}>Add</button>
+      ) : (
+        <span className="tag">selected</span>
+      )}
+    </div>
+  );
+}
+
+3) Persist RFP text so Refresh AI Suggestions always works
+// After Step 1 finishes parsing the RFP:
+localStorage.setItem('apb.rfpText.v1', rfpPlainText);
+
+// In Step 2 mount:
+const cached = localStorage.getItem('apb.rfpText.v1');
+if (cached) {
+  aiState.setRfpText(cached);
+  // wire Refresh button:
+  // onClick={() => fetch('/api/ai/suggest', { method:'POST', body: JSON.stringify({ rfpText: cached }) })}
+}
+
+4) XML calendar (Mon–Fri only)
+
+Make sure the XML builder emits:
+
+<WeekDay><DayType>1</DayType><DayWorking>0</DayWorking></WeekDay> <!-- Sunday -->
+<WeekDay><DayType>2</DayType><DayWorking>1</DayWorking> ... </WeekDay> <!-- Monday -->
+...
+<WeekDay><DayType>6</DayType><DayWorking>0</DayWorking></WeekDay> <!-- Saturday NOW non‑working -->
+<WeekDay><DayType>7</DayType><DayWorking>0</DayWorking></WeekDay> <!-- Sunday -->
+
+
+(Your current exports mark DayType 6 as working; switch it to 0.)
+
+5) Project name & first row
+
+Exporter: set <Project><Name> = projectName from Step 3.
+
+Create Task #1 with Name = "Project Summary", Summary = 1, parent of all top‑level tasks. Your older exports hard‑code “Project from Scenario A” as the <Name> which is what Workfront shows now; replace it with the actual project name.

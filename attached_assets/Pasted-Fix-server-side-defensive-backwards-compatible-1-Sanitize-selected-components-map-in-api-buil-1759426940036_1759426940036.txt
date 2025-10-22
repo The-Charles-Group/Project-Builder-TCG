@@ -1,0 +1,72 @@
+Fix (server‑side, defensive & backwards‑compatible)
+1) Sanitize selected_components_map in /api/build
+
+Treat <= 0 custom hours as “not selected” (drop them); keep None to mean “use default hours for that component.”
+
+File: main.py (your FastAPI file)
+Locate: the “Build component selection map (supports both formats)” block in /api/build.
+
+Replace that elif isinstance(v, dict): branch with:
+
+    elif isinstance(v, dict):
+        # New format: {"component": hours or None}
+        # Sanitize: treat <= 0 as "unselected" (drop); keep None to mean "use default hours"
+        cleaned: dict[str, Optional[float]] = {}
+        for name, hours in v.items():
+            try:
+                if hours is None:
+                    cleaned[str(name)] = None
+                else:
+                    h = float(hours)
+                    if h > 0:
+                        cleaned[str(name)] = h
+                    # <= 0 -> dropped (unselected)
+            except Exception:
+                # ignore bad values
+                continue
+        comp_map[str(k)] = cleaned
+
+
+This prevents accidental “all selected but all at 0h” payloads from ever reaching the calculator. (This is directly under the area that prints DEBUG Build: Component map processed: ....)
+
+2) Safe fallback in _scenario_for_deliverable(...)
+
+If we do get a per‑component selection and the sum of hours after scaling is 0, fall back to the deliverable‑level hours rather than returning a zeroed deliverable.
+
+File: same file
+Locate: _scenario_for_deliverable(...) in the “Handle component‑level selection” branch.
+
+Add immediately after building/combining hrs_by_role:
+
+        # NEW: if the selected components sum to 0 hours (e.g., front-end sent 0s),
+        # fall back to the deliverable-level hours to avoid a zeroed deliverable.
+        if hrs_by_role.empty or float(hrs_by_role["Hours"].sum()) <= 0.0:
+            print(f"DEBUG {deliv_code}: component selection totals 0h -> fallback to deliverable defaults")
+            hrs_by_role = DB.hours_by_role_for_deliverable(deliv_code, included, scen_col)
+
+
+Why here? Because monthly_hours_int is computed right after this block and is derived from hrs_by_role’s sum; stopping the 0 here prevents the cascade into price.
+
+3) Extra guard in the WBS builder (export path)
+
+If an item arrives with hours_by_role present but totaling 0, recompute from DB (we already do this when the array is empty; we extend that to the “sum==0” case).
+
+File: same file
+Locate: build_wbs_with_pricing(...) where we currently do:
+
+hrs_df = pd.DataFrame(d.get("hours_by_role") or [])
+if hrs_df.empty:
+    scen_col_resolved = DB.scenario_hours_col(...)
+    hrs_df = DB.hours_by_role_for_deliverable(...)
+
+
+Update to:
+
+hrs_df = pd.DataFrame(d.get("hours_by_role") or [])
+if hrs_df.empty or float(hrs_df.get("Hours", pd.Series([], dtype=float)).sum()) <= 0.0:
+    scen_col_resolved = DB.scenario_hours_col(d.get("complexity","Advanced"), d.get("tier","T2_MediumVolume"))
+    hrs_df = DB.hours_by_role_for_deliverable(dcode, included, scen_col_resolved)
+    d["hours_by_role"] = hrs_df.to_dict("records")
+
+
+This makes exports resilient even if an older scenario slipstreams a 0‑hour item.

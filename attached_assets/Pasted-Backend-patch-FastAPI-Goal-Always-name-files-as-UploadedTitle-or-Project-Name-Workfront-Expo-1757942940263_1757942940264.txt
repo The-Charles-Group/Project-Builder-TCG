@@ -1,0 +1,166 @@
+Backend patch (FastAPI)
+
+Goal: Always name files as
+<UploadedTitle or Project Name> - Workfront_Export - YYYY‑MM‑DD hh.mmAM EST.xlsx
+(and “Scenarios A & B” for the workbook). No opt‑in checkbox; always in EST; 12‑hour clock; Windows‑safe (no :).
+
+Add imports + a small global near the top:
+
+from zoneinfo import ZoneInfo  # Python 3.9+
+LAST_UPLOAD_FILENAME: str | None = None
+
+
+Remember the uploaded filename (so exports have a default title) in both upload endpoints:
+
+@app.post("/api/suggest_by_file")
+async def api_suggest_by_file(file: UploadFile = File(...)):
+    ...
+    global LAST_UPLOAD_FILENAME
+    LAST_UPLOAD_FILENAME = file.filename
+    return {"suggested": recs, "filename": file.filename}
+
+@app.post("/api/summarize_by_file", response_model=RfpSummary)
+async def api_summarize_by_file(file: UploadFile = File(...)):
+    ...
+    global LAST_UPLOAD_FILENAME
+    LAST_UPLOAD_FILENAME = file.filename
+    return ai_summarize_rfp_text(text)
+
+
+(These are the same routes you already have; we’re just persisting the filename the UI already receives. )
+
+Helpers for EST timestamp + title extraction (place with your other helpers):
+
+def _upload_title_default() -> str | None:
+    """Base title from most recent upload, sans extension, sanitized."""
+    if not LAST_UPLOAD_FILENAME:
+        return None
+    base = os.path.splitext(os.path.basename(LAST_UPLOAD_FILENAME))[0]
+    return _safe_filename(base)
+
+def _est_stamp_for_filename() -> str:
+    """
+    Eastern Time, 12-hour clock with AM/PM.
+    Use '.' instead of ':' to be Windows-safe.
+    Example: 2025-09-13 09.30AM EST
+    """
+    now_est = datetime.datetime.now(ZoneInfo("America/New_York"))
+    return now_est.strftime("%Y-%m-%d %I.%M%p EST")
+
+def _export_basename(project_name: str, scenario_label: str | None = None) -> str:
+    """<Title> - Workfront_Export - [Scenario?] - <EST time>"""
+    title = _safe_filename(project_name or "Proposal")
+    parts = [title, "Workfront_Export"]
+    if scenario_label:
+        parts.append(_safe_filename(scenario_label))
+    parts.append(_est_stamp_for_filename())
+    return " - ".join(parts)
+
+
+Make /api/export always use the EST format + uploaded title; return a clean basename in Content‑Disposition:
+
+@app.post("/api/export")
+def api_export(payload: ExportPayload):
+    if not DB.loaded:
+        DB.load()
+
+    project_name = (payload.project_name
+                    or _upload_title_default()
+                    or f"Proposal {datetime.date.today().isoformat()}")
+
+    df = build_wbs_dataframe_from_scenario(payload.scenario or {}, project_name)
+    df = _ensure_v3_ae_columns(df)  # already in your code
+
+    base = _export_basename(project_name, payload.scenario_label)  # always adds EST timestamp
+
+    fmt = (payload.file_format or "csv").lower()
+    if fmt == "csv":
+        out_path = f"{base}.csv"
+        df.to_csv(out_path, index=False)
+        return FileResponse(out_path,
+                            filename=os.path.basename(out_path),  # <-- basename only
+                            media_type="text/csv")
+
+    try:
+        out_path = f"{base}.xlsx"
+        with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+            df.to_excel(xw, index=False)
+            _apply_number_formats(xw.sheets[list(xw.sheets.keys())[0]], df)
+        return FileResponse(out_path,
+                            filename=os.path.basename(out_path),  # <-- basename only
+                            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as ex:
+        raise HTTPException(400, "XLSX export requires 'openpyxl'.") from ex
+
+
+(The current route builds "Workfront Export" with an optional timestamp and passes filename=out_path; we’re changing it to EST, always on, underscore, and basename to ensure the browser picks the right name. )
+
+Do the same for /api/export_workbook:
+
+@app.post("/api/export_workbook")
+def api_export_workbook(payload: ExportWorkbookPayload):
+    if not DB.loaded:
+        DB.load()
+
+    project = (payload.project_name
+               or _upload_title_default()
+               or f"Proposal {datetime.date.today().isoformat()}").strip()
+
+    dfA = build_wbs_dataframe_from_scenario(payload.scenario_a or {}, project)
+    dfB = build_wbs_dataframe_from_scenario(payload.scenario_b or {}, project)
+
+    base = _export_basename(project, "Scenarios A & B")
+    out_path = f"{base}.xlsx"
+    with pd.ExcelWriter(out_path, engine="openpyxl") as xw:
+        dfA.to_excel(xw, sheet_name=_safe_sheet_name("Scenario A"), index=False)
+        dfB.to_excel(xw, sheet_name=_safe_sheet_name("Scenario B"), index=False)
+    return FileResponse(out_path,
+                        filename=os.path.basename(out_path),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+CORS is already configured to expose Content‑Disposition, so the front‑end can read the filename header.
+
+Front‑end (tiny cleanups)
+
+Remove the “Add timestamp” checkbox from the UI and from any payloads you send; the server now always adds EST time.
+
+Default the “Project name” field to the uploaded filename after Stage 1 finishes (you already receive filename from /api/suggest_by_file):
+
+appState.uploadFilename = res.filename || appState.uploadFilename;
+const base = (appState.uploadFilename || '').replace(/\.[^.]+$/, '');
+const el = document.querySelector('#project-name');
+if (el && !el.value) el.value = base;   // users can still override
+
+
+(The backend will also default to the last uploaded filename if the field is blank, so you’re covered either way. )
+
+Make the download code robust (handles RFC 5987 filename*= and normal filename=):
+
+function parseFilenameFromCD(cd, fallback) {
+  if (!cd) return fallback;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+  if (star) return decodeURIComponent(star[1]);
+  const quoted = /filename="?([^"]+)"?/i.exec(cd);
+  if (quoted) return quoted[1];
+  return fallback;
+}
+
+async function downloadBlobFromPost(url, payload, fallbackName) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    alert(`Export failed: ${res.status} — ${await res.text().catch(()=>res.statusText)}`);
+    return;
+  }
+  const blob = await res.blob();
+  const filename = parseFilenameFromCD(res.headers.get('Content-Disposition'), fallbackName);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename || fallbackName || 'Workfront_Export.xlsx';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+}

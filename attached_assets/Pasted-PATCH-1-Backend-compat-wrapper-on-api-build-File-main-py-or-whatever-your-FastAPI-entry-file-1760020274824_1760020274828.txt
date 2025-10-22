@@ -1,0 +1,111 @@
+PATCH 1 — Backend (compat wrapper on /api/build)
+
+File: main.py (or whatever your FastAPI entry file is)
+
+What this does
+
+Keeps everything you already compute.
+
+Returns both shapes so old/new frontends keep working:
+
+Top‑level A/B keys, and
+
+scenarios: { A, B }
+
+Adds a tiny GET /api/scenarios so the UI can always re-fetch current scenarios if needed.
+
+(No behavior changes to pricing, schedule, components, or L3—purely response‑shape + tiny helper.)
+
+Find the end of api_build (right after you update _CURRENT_SCENARIOS). Replace the existing return … with the block below, or if you prefer, just overwrite the whole tail section.
+
+# ... after building scenarios[letter] for A and B and updating globals ...
+
+# Store scenarios globally for reordering (already present in your file)
+global _CURRENT_SCENARIOS
+_CURRENT_SCENARIOS.update(scenarios)
+
+# If client budget logic exists above, keep it as-is.
+# -- no changes needed here --
+
+# >>> NEW: Return a compatibility envelope so both UIs work
+# Old UIs expect top-level A/B; newer UIs expect {scenarios: {...}}
+# We return both.
+resp = {
+    "ok": True,
+    "scenarios": scenarios,   # NEW wrapper for newer UI handlers
+    **scenarios               # Keep A/B at the top level for older UI handlers
+}
+return resp
+
+
+You can see where the scenarios are built and _CURRENT_SCENARIOS is updated right before the return (we’re not touching any of that logic):
+
+Add this tiny helper route anywhere in your routes section (optional but useful for resiliency if the UI wants to refetch the last build):
+
+@app.get("/api/scenarios")
+def api_get_scenarios():
+    # Return what's in memory so Step 4 can recover even if a previous build
+    # had a transient parsing issue on the client.
+    return {
+        "ok": True,
+        "scenarios": _current_scenarios() if callable(globals().get("_current_scenarios")) else (_CURRENT_SCENARIOS or {})
+    }
+
+
+Nothing else in the build engine is changed. All the behavior around component inflation / WBS building / schedules is preserved (e.g., _inflate_components_if_missing used by exports and WBS builders).
+
+PATCH 2 — Frontend (defensive parsing + step transition)
+
+File: static/app.js (vanilla JS)
+
+What this does
+
+Makes the “Build” click handler tolerant to both response shapes.
+
+Ensures we always put scenarios into app state and then show Step 4.
+
+Find your Step‑3 “Build” click handler. Replace the success branch with this robust parser:
+
+async function onClickBuild() {
+  // ... existing code that assembles build payload ...
+  const res = await fetch('/api/build', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const msg = await res.text().catch(() => '');
+    throw new Error(`Build failed (${res.status}): ${msg}`);
+  }
+
+  const json = await res.json();
+
+  // Accept both shapes:
+  // - { scenarios: { A, B }, A: {...}, B: {...}, ok: true }
+  // - { A, B }
+  const scenarios = json.scenarios || {
+    A: json.A,
+    B: json.B
+  };
+
+  if (!scenarios || !scenarios.A || !scenarios.B) {
+    console.warn('Build response', json);
+    throw new Error('Malformed build response: missing scenarios A/B');
+  }
+
+  // Save to client state
+  window.APP_STATE = window.APP_STATE || {};
+  window.APP_STATE.scenarios = scenarios;
+
+  // (Optional) pick default view
+  window.APP_STATE.activeScenario = window.APP_STATE.activeScenario || 'A';
+
+  // Enable / show Step 4
+  renderStep4Timeline();     // your existing function to draw the timeline grid
+  showStep(4);               // your existing step switcher
+}
+
+
+If your Step‑4 renderer expects timelines to be available on each item, it already is, because schedules are computed in _scenario_for_deliverable via DB.build_schedule during the build.
+If your timeline view ever fetches from the server instead of using memory, you can also add a fallback call to /api/scenarios (the helper route above).

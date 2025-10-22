@@ -13,7 +13,7 @@
       ...window.ScenarioStore.state,
       selectedDeliverables: new Set(),
       selectedComponents: {},
-      selectedL2Tasks: {},
+      selectedL3Tasks: {},
       sessionId: null,
       rfpText: '',
       buildPayload: null, // Last payload sent to /api/scenarios
@@ -106,8 +106,8 @@
           if (scenario.state.selectedComponents) {
             this.state.selectedComponents = scenario.state.selectedComponents;
           }
-          if (scenario.state.selectedL2Tasks) {
-            this.state.selectedL2Tasks = scenario.state.selectedL2Tasks;
+          if (scenario.state.selectedL3Tasks) {
+            this.state.selectedL3Tasks = scenario.state.selectedL3Tasks;
           }
           
           // Restore other state
@@ -157,7 +157,7 @@
               deliverables: this.state.deliverables,
               selectedDeliverables: Array.from(this.state.selectedDeliverables || []),
               selectedComponents: this.state.selectedComponents,
-              selectedL2Tasks: this.state.selectedL2Tasks,
+              selectedL3Tasks: this.state.selectedL3Tasks,
               totals: this.state.totals,
               blendedRate: this.state.blendedRate,
               rfpText: this.state.rfpText,
@@ -327,16 +327,16 @@
     },
     
     // Set deliverables from Step 2 selections
-    setSelectedDeliverables(codes, components = {}, l2Tasks = {}) {
+    setSelectedDeliverables(codes, components = {}, l3Tasks = {}) {
       this.state.selectedDeliverables = new Set(codes);
       this.state.selectedComponents = components;
-      this.state.selectedL2Tasks = l2Tasks;
+      this.state.selectedL3Tasks = l3Tasks;
       this.state.updatedAt = new Date().toISOString();
       
       console.log('[ScenarioManager] Updated selections:', {
         deliverables: codes.length,
         components: Object.keys(components).length,
-        l2Tasks: Object.keys(l2Tasks).length
+        l3Tasks: Object.keys(l3Tasks).length
       });
       
       this.emit();
@@ -344,37 +344,13 @@
     
     // Update deliverables from API response
     updateDeliverablesFromAPI(apiResponse) {
-      if (!apiResponse) {
-        console.warn('[ScenarioManager] No API response provided');
-        return;
-      }
+      if (!apiResponse) return;
       
-      console.log('[ScenarioManager] Processing API response:', apiResponse);
-      
-      // Try to extract scenario from response
       const scenario = apiResponse.scenarios?.A || apiResponse.scenario || apiResponse;
-      console.log('[ScenarioManager] Extracted scenario:', scenario);
-      
-      // Validate scenario exists and has items
-      if (!scenario) {
-        console.error('[ScenarioManager] Could not extract scenario from API response');
-        alert('Build failed: Invalid API response structure');
+      if (!scenario || !scenario.items) {
+        console.warn('[ScenarioManager] Invalid API response format:', apiResponse);
         return;
       }
-      
-      if (!scenario.items) {
-        console.error('[ScenarioManager] Scenario missing items array:', scenario);
-        alert('Build failed: Scenario data is incomplete');
-        return;
-      }
-      
-      if (!Array.isArray(scenario.items)) {
-        console.error('[ScenarioManager] Scenario items is not an array:', typeof scenario.items);
-        alert('Build failed: Invalid scenario data format');
-        return;
-      }
-      
-      console.log('[ScenarioManager] Valid scenario with', scenario.items.length, 'items');
       
       // Store the API response for reference
       this.state.apiResponse = apiResponse;
@@ -436,7 +412,7 @@
     buildScenarioPayload() {
       const codes = Array.from(this.state.selectedDeliverables);
       const selectedComponentsPayload = this.state.selectedComponents;
-      const l3Payload = this.state.selectedL2Tasks;
+      const l3Payload = this.state.selectedL3Tasks;
       
       // Get retainer configuration from pricingData if available
       const retainersPayload = [];
@@ -628,7 +604,7 @@
       this.state.deliverables = [];
       this.state.selectedDeliverables.clear();
       this.state.selectedComponents = {};
-      this.state.selectedL2Tasks = {};
+      this.state.selectedL3Tasks = {};
       this.state.totals = { 
         hours: 0, 
         oneTimeCost: 0, 

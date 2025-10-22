@@ -1,98 +1,8 @@
-// Global Polling Manager with SingleFlightPoller
+// Global Polling Manager
 // Centralized management of all intervals and timeouts to prevent memory leaks and phantom polling
 
 (function() {
   'use strict';
-  
-  // SingleFlight Poller for job watching
-  const _watchers = new Map();
-  
-  class JobWatcher {
-    constructor(jobId, onUpdate, opts = {}) {
-      this.jobId = jobId;
-      this.onUpdate = onUpdate;
-      this.interval = Math.max(400, opts.intervalMs || 600);
-      this.maxInterval = Math.max(this.interval, opts.maxIntervalMs || 2000);
-      this.controller = new AbortController();
-      this._cancelled = false;
-      this._timer = null;
-      this._tick = this._tick.bind(this);
-      this._schedule = this._schedule.bind(this);
-      this._schedule(this.interval);
-    }
-
-    async _tick() {
-      if (this._cancelled) return;
-      const url = `/api/ai/jobs/${encodeURIComponent(this.jobId)}`;
-      try {
-        const res = await fetch(url, {
-          signal: this.controller.signal,
-          headers: { 'Accept': 'application/json' }
-        });
-        if (!res.ok) throw new Error(`Polling failed ${res.status}`);
-        const data = await res.json();
-        
-        // Normalize a few common "done" shapes
-        const done =
-          data.status?.toLowerCase?.() === 'complete' ||
-          data.completed === true ||
-          data.done === true ||
-          (Array.isArray(data.deliverables) && data.deliverables.length > 0 && data.progress === 100);
-        
-        this.onUpdate(data, done);
-        if (done) {
-          this.cancel();
-          return;
-        }
-      } catch (err) {
-        if (this._cancelled) return;
-        // Backoff on transient errors
-        this.interval = Math.min(this.maxInterval, Math.floor(this.interval * 1.5));
-      }
-      this._schedule(this.interval);
-    }
-
-    _schedule(ms) {
-      if (this._cancelled) return;
-      clearTimeout(this._timer);
-      this._timer = setTimeout(() => {
-        // ensure the tick runs after paint
-        if ('requestIdleCallback' in window) {
-          requestIdleCallback(() => this._tick(), { timeout: ms });
-        } else {
-          requestAnimationFrame(() => this._tick());
-        }
-      }, ms);
-    }
-
-    cancel() {
-      if (this._cancelled) return;
-      this._cancelled = true;
-      clearTimeout(this._timer);
-      try { this.controller.abort(); } catch {}
-      _watchers.delete(this.jobId);
-    }
-  }
-
-  // JobPoller API
-  window.JobPoller = {
-    watch(jobId, onUpdate, opts = {}) {
-      // cancel any existing watcher for this job
-      const existing = _watchers.get(jobId);
-      if (existing) existing.cancel();
-      const w = new JobWatcher(jobId, onUpdate, opts);
-      _watchers.set(jobId, w);
-      return w;
-    },
-    cancel(jobId) {
-      const w = _watchers.get(jobId);
-      if (w) w.cancel();
-    },
-    cancelAll() {
-      for (const [id, w] of _watchers.entries()) w.cancel();
-      _watchers.clear();
-    }
-  };
   
   const GlobalPollingManager = {
     intervals: new Map(),
@@ -197,13 +107,9 @@
     },
     
     // Stop ALL polling - Master kill switch
-    stopAllPolling(permanent = false) {
+    stopAllPolling() {
       console.warn('[PollingManager] 🛑 STOPPING ALL POLLING');
-      
-      // Only permanently shutdown if explicitly requested
-      if (permanent) {
-        this.isShuttingDown = true;
-      }
+      this.isShuttingDown = true;
       
       // Clear all intervals
       let clearedIntervals = 0;
@@ -276,13 +182,9 @@
         clearInterval(window.pollingIntervalId);
         window.pollingIntervalId = null;
       }
-      // CRITICAL: Do NOT stop AI analysis polling if it's protected
-      if (window.aiAnalysisInterval && !window.PROTECTED_AI_POLLING) {
-        console.log('[PollingManager] Clearing aiAnalysisInterval (not protected)');
+      if (window.aiAnalysisInterval) {
         clearInterval(window.aiAnalysisInterval);
         window.aiAnalysisInterval = null;
-      } else if (window.PROTECTED_AI_POLLING) {
-        console.log('[PollingManager] ⚠️ NOT clearing aiAnalysisInterval - it is PROTECTED');
       }
       if (window.progressInterval) {
         clearInterval(window.progressInterval);
@@ -322,12 +224,6 @@
       };
     },
     
-    // Resume polling after cleanup
-    resumePolling() {
-      this.isShuttingDown = false;
-      console.log('[PollingManager] ✅ Polling resumed - new intervals/timeouts allowed');
-    },
-    
     // Enable debug logging
     enableDebug() {
       this.debugMode = true;
@@ -351,60 +247,25 @@
       window.setInterval = (callback, delay, ...args) => {
         const stackTrace = new Error().stack;
         const caller = stackTrace.split('\n')[2] || 'unknown';
-        const callbackStr = callback.toString();
         
-        // CRITICAL: Always allow AI analysis polling, even during shutdown
-        const isAIAnalysisPolling = callbackStr.includes('pollAIAnalysis') || 
-                                     callbackStr.includes('job_id') ||
-                                     callbackStr.includes('jobId') ||
-                                     caller.includes('analyzeRFP') ||
-                                     caller.includes('AI') ||
-                                     window.PROTECTED_AI_POLLING === true;
-        
-        if (this.isShuttingDown && !isAIAnalysisPolling) {
+        if (this.isShuttingDown) {
           console.warn('[PollingManager] Blocked setInterval during shutdown from:', caller);
           return null;
         }
         
-        if (isAIAnalysisPolling) {
-          console.log('[PollingManager] ✅ Allowing AI Analysis polling (protected)');
-        }
-        
         const intervalId = originalSetInterval.call(window, callback, delay, ...args);
         
-        // Store in a global tracking array (but mark protected ones)
+        // Store in a global tracking array
         if (!window.__allIntervals) {
           window.__allIntervals = new Set();
         }
-        if (!window.__protectedIntervals) {
-          window.__protectedIntervals = new Set();
-        }
-        
         window.__allIntervals.add(intervalId);
-        if (isAIAnalysisPolling) {
-          window.__protectedIntervals.add(intervalId);
-        }
         
         if (this.debugMode) {
-          console.log('[PollingManager] Native interval created:', intervalId, 'from:', caller, 'protected:', isAIAnalysisPolling);
+          console.log('[PollingManager] Native interval created:', intervalId, 'from:', caller);
         }
         
         return intervalId;
-      };
-      
-      // CRITICAL: Override clearInterval to never clear protected intervals
-      window.clearInterval = (intervalId) => {
-        if (window.__protectedIntervals && window.__protectedIntervals.has(intervalId) && window.PROTECTED_AI_POLLING) {
-          console.warn('[PollingManager] ⚠️ Blocked attempt to clear protected AI polling interval:', intervalId);
-          return; // Don't clear it
-        }
-        if (window.__allIntervals) {
-          window.__allIntervals.delete(intervalId);
-        }
-        if (window.__protectedIntervals) {
-          window.__protectedIntervals.delete(intervalId);
-        }
-        return originalClearInterval.call(window, intervalId);
       };
       
       // Track interval clearing
@@ -417,31 +278,11 @@
       
       // Track all timeouts globally
       window.setTimeout = (callback, delay, ...args) => {
-        // CRITICAL: Check for protected AI polling FIRST
-        if (window.PROTECTED_AI_POLLING || (callback && callback.toString().includes('pollAIAnalysis'))) {
-          console.log('[PollingManager] Allowing protected AI polling');
-          return originalSetTimeout.call(window, callback, delay, ...args);
-        }
-        
-        const stackTrace = new Error().stack;
-        const caller = stackTrace.split('\n')[2] || 'unknown';
-        const callbackStr = callback.toString();
-        
-        // CRITICAL: Always allow AI analysis polling, even during shutdown
-        const isAIAnalysisPolling = callbackStr.includes('pollAIAnalysis') || 
-                                     callbackStr.includes('job_id') ||
-                                     callbackStr.includes('jobId') ||
-                                     caller.includes('analyzeRFP') ||
-                                     caller.includes('AI') ||
-                                     window.PROTECTED_AI_POLLING === true;
-        
-        if (this.isShuttingDown && delay > 100 && !isAIAnalysisPolling) { // Allow short timeouts for cleanup and AI polling
+        if (this.isShuttingDown && delay > 100) { // Allow short timeouts for cleanup
+          const stackTrace = new Error().stack;
+          const caller = stackTrace.split('\n')[2] || 'unknown';
           console.warn('[PollingManager] Blocked setTimeout during shutdown from:', caller);
           return null;
-        }
-        
-        if (isAIAnalysisPolling) {
-          console.log('[PollingManager] ✅ Allowing AI Analysis timeout (protected)');
         }
         
         const timeoutId = originalSetTimeout.call(window, callback, delay, ...args);
@@ -518,7 +359,6 @@
       window.GlobalPollingManager = this;
       window.stopAllPolling = () => this.stopAllPolling();
       window.pollingStatus = () => this.getStatus();
-      window.resumePolling = () => this.resumePolling();  // CRITICAL: Expose resumePolling
       
       console.log('[PollingManager] Initialized - Use window.stopAllPolling() to stop everything');
     }

@@ -9,10 +9,9 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
 from ai_weighted_matcher import score_rfp
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Body
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
@@ -178,15 +177,6 @@ async def lifespan(app: FastAPI):
     app.state._cleanup_task = asyncio.create_task(periodic_cleanup())
     print("[STARTUP] Background job cleanup task started")
     
-    # 6) Start staging session cleanup task (every hour)
-    async def periodic_staging_cleanup():
-        while True:
-            await asyncio.sleep(3600)  # Every hour
-            await cleanup_old_staging_sessions()
-    
-    app.state._staging_cleanup_task = asyncio.create_task(periodic_staging_cleanup())
-    print("[STARTUP] Background staging cleanup task started (runs every hour)")
-    
     # Final status summary
     if app.state.gpt5_available:
         print("[STARTUP] ✅ Agency Project Builder ready with full GPT-5 intelligence!")
@@ -208,48 +198,10 @@ async def lifespan(app: FastAPI):
         app.state._cleanup_task.cancel()
         print("[SHUTDOWN] Cleanup task cancelled")
     
-    if hasattr(app.state, "_staging_cleanup_task"):
-        app.state._staging_cleanup_task.cancel()
-        print("[SHUTDOWN] Staging cleanup task cancelled")
-    
     print("[SHUTDOWN] ✅ Cleanup complete")
 
 # ---------- App & CORS ----------
 app = FastAPI(title="Agency Project Builder", version="1.0", lifespan=lifespan)
-
-# ---------- Zombie Job Detection System ----------
-# Track 404 counts per job ID to detect and block zombie polling
-ZOMBIE_JOB_404_COUNTS: Dict[str, int] = {}
-ZOMBIE_JOB_BLOCKLIST: Set[str] = set()
-ZOMBIE_JOB_THRESHOLD = 10  # Block after 10 consecutive 404s
-ZOMBIE_JOB_CLEANUP_INTERVAL = 3600  # Clean up tracking data after 1 hour
-
-def check_and_block_zombie_job(job_id: str) -> bool:
-    """
-    Track 404 counts for job IDs and block excessive polling.
-    Returns True if job should be blocked (410 Gone).
-    """
-    # Check if already blocked
-    if job_id in ZOMBIE_JOB_BLOCKLIST:
-        return True
-    
-    # Increment 404 count
-    ZOMBIE_JOB_404_COUNTS[job_id] = ZOMBIE_JOB_404_COUNTS.get(job_id, 0) + 1
-    
-    # Check if threshold exceeded
-    if ZOMBIE_JOB_404_COUNTS[job_id] >= ZOMBIE_JOB_THRESHOLD:
-        ZOMBIE_JOB_BLOCKLIST.add(job_id)
-        print(f"[ZOMBIE DETECTOR] Job {job_id} blocked after {ZOMBIE_JOB_404_COUNTS[job_id]} 404s")
-        return True
-    
-    return False
-
-def reset_zombie_tracking(job_id: str):
-    """Reset tracking for a job ID (call when job is found)"""
-    if job_id in ZOMBIE_JOB_404_COUNTS:
-        del ZOMBIE_JOB_404_COUNTS[job_id]
-    if job_id in ZOMBIE_JOB_BLOCKLIST:
-        ZOMBIE_JOB_BLOCKLIST.remove(job_id)
 
 # ---------- Wire Job Runner from sitecustomize ----------
 import sys
@@ -319,215 +271,6 @@ async def agent_status_endpoint():
             "export_project"
         ]
     }
-
-# Global store for uploaded PDF files (session -> files mapping)
-UPLOADED_PDF_FILES = {}
-
-# ---------- File Staging System ----------
-# Storage directory for staged files
-STAGED_ROOT = "./staging"
-
-# FileMeta structure for tracking staged files
-@dataclass
-class FileMeta:
-    file_id: str  # UUID
-    filename: str  # Original filename
-    size: int  # File size in bytes
-    mime_type: str  # MIME type
-    upload_time: float  # Timestamp
-    file_path: str  # Path to file on disk
-    
-    def to_dict(self):
-        """Convert to dictionary for JSON responses"""
-        return {
-            "file_id": self.file_id,
-            "filename": self.filename,
-            "size": self.size,
-            "mime_type": self.mime_type,
-            "uploaded_at": datetime.datetime.fromtimestamp(self.upload_time, tz=ZoneInfo("America/New_York")).isoformat(),
-            "file_path": self.file_path
-        }
-
-# Global store for staged files: session_id -> List[FileMeta]
-STAGED_FILES: Dict[str, List[FileMeta]] = {}
-
-# File validation constants
-ALLOWED_EXTENSIONS = {'pdf', 'docx', 'txt'}
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB in bytes
-STAGING_SESSION_TTL = 6 * 3600  # 6 hours in seconds
-
-# MIME type mapping
-MIME_TYPES = {
-    'pdf': 'application/pdf',
-    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'txt': 'text/plain'
-}
-
-def sanitize_filename(filename: str) -> str:
-    """
-    Sanitize filename to prevent path traversal attacks.
-    Removes path separators and dangerous characters.
-    """
-    # Remove path components
-    filename = os.path.basename(filename)
-    # Remove dangerous characters but keep spaces, dots, underscores, hyphens
-    filename = re.sub(r'[^a-zA-Z0-9._\- ]', '', filename)
-    # Prevent hidden files
-    filename = filename.lstrip('.')
-    # Prevent empty filename
-    if not filename:
-        filename = "unnamed_file"
-    return filename
-
-def get_file_extension(filename: str) -> str:
-    """Extract and validate file extension"""
-    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
-    return ext if ext in ALLOWED_EXTENSIONS else ''
-
-def validate_file_size(size: int) -> bool:
-    """Check if file size is within limits"""
-    return 0 < size <= MAX_FILE_SIZE
-
-def get_mime_type(extension: str) -> str:
-    """Get MIME type from file extension"""
-    return MIME_TYPES.get(extension, 'application/octet-stream')
-
-async def cleanup_old_staging_sessions():
-    """
-    Remove staging sessions older than STAGING_SESSION_TTL (6 hours).
-    Called periodically by background task.
-    """
-    current_time = time.time()
-    sessions_to_remove = []
-    
-    for session_id, files in STAGED_FILES.items():
-        if not files:
-            # Empty session, mark for removal
-            sessions_to_remove.append(session_id)
-            continue
-        
-        # Check oldest file in session
-        oldest_upload = min(f.upload_time for f in files)
-        session_age = current_time - oldest_upload
-        
-        if session_age > STAGING_SESSION_TTL:
-            sessions_to_remove.append(session_id)
-    
-    # Remove old sessions
-    for session_id in sessions_to_remove:
-        files_deleted = 0
-        
-        # Delete files from disk
-        if session_id in STAGED_FILES:
-            for file_meta in STAGED_FILES[session_id]:
-                try:
-                    if os.path.exists(file_meta.file_path):
-                        os.remove(file_meta.file_path)
-                        files_deleted += 1
-                except Exception as e:
-                    print(f"[STAGE CLEANUP] Error deleting file {file_meta.file_path}: {e}")
-            
-            # Remove session directory
-            session_dir = os.path.join(STAGED_ROOT, session_id)
-            try:
-                if os.path.exists(session_dir):
-                    # Remove any remaining files
-                    for filename in os.listdir(session_dir):
-                        try:
-                            os.remove(os.path.join(session_dir, filename))
-                        except Exception:
-                            pass
-                    # Remove directory
-                    os.rmdir(session_dir)
-            except Exception as e:
-                print(f"[STAGE CLEANUP] Error removing session directory {session_dir}: {e}")
-            
-            # Remove from metadata
-            del STAGED_FILES[session_id]
-            print(f"[STAGE CLEANUP] Removed session {session_id} ({files_deleted} files, age: {session_age/3600:.1f}h)")
-
-@app.post("/api/upload_file")
-async def upload_file_endpoint(files: List[UploadFile] = File(...)):
-    """Endpoint to store uploaded PDF files for GPT-5 Vision API processing."""
-    try:
-        import base64
-        session_id = str(uuid.uuid4())
-        stored_files = []
-        filenames = []
-        extracted_text = ""  # For backwards compatibility
-        
-        for file in files:
-            content = await file.read()
-            filename = file.filename or "unknown"
-            filenames.append(filename)
-            
-            file_ext = filename.split('.')[-1].lower() if '.' in filename else ''
-            
-            if file_ext == 'pdf':
-                # Store complete PDF as base64 for GPT-5 Vision API
-                base64_content = base64.b64encode(content).decode('utf-8')
-                stored_files.append({
-                    'filename': filename,
-                    'content_base64': base64_content,
-                    'content_type': 'application/pdf',
-                    'size': len(content)
-                })
-                print(f"[UPLOAD] Stored PDF {filename} ({len(content)} bytes) for GPT-5 Vision")
-                
-                # Try to extract text for preview/fallback
-                try:
-                    text = _extract_text_from_upload(content, filename)
-                    extracted_text += text + "\n\n"
-                except:
-                    pass
-                    
-            elif file_ext == 'docx':
-                # For DOCX, extract text
-                try:
-                    text = _extract_text_from_upload(content, filename)
-                    stored_files.append({
-                        'filename': filename,
-                        'text': text,
-                        'content_type': 'text/plain'
-                    })
-                    extracted_text += text + "\n\n"
-                except:
-                    print(f"[UPLOAD] Failed to extract from {filename}")
-                    
-            else:
-                # For text files
-                try:
-                    text = content.decode('utf-8')
-                except:
-                    text = content.decode('latin-1', errors='ignore')
-                stored_files.append({
-                    'filename': filename,
-                    'text': text,
-                    'content_type': 'text/plain'
-                })
-                extracted_text += text + "\n\n"
-        
-        # Store files in global dictionary
-        UPLOADED_PDF_FILES[session_id] = stored_files
-        
-        # Store text in cache for backwards compatibility
-        global RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, LAST_UPLOAD_FILENAME
-        RFP_TEXT_CACHE_FILE = extracted_text
-        RFP_TEXT_CACHE = extracted_text  
-        LAST_UPLOAD_FILENAME = filenames[0] if filenames else "upload"
-        
-        print(f"[UPLOAD] Session {session_id}: Stored {len(stored_files)} files")
-        
-        return {
-            "success": True,
-            "text": extracted_text,  # For backwards compatibility
-            "session_id": session_id,  # NEW: Session ID for GPT-5 Vision processing
-            "filenames": filenames,
-            "char_count": len(extracted_text)
-        }
-    except Exception as e:
-        print(f"[UPLOAD] Error: {e}")
-        raise HTTPException(400, f"Failed to process files: {str(e)}")
 
 @app.post("/api/upload_rfp")
 async def upload_rfp_endpoint(
@@ -618,374 +361,6 @@ async def upload_rfp_endpoint(
         print(f"[UPLOAD] Error processing file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ---------- File Staging Endpoints ----------
-
-@app.post("/api/stage/upload")
-async def stage_upload_endpoint(
-    files: List[UploadFile] = File(...),
-    session_id: Optional[str] = Form(None)
-):
-    """
-    Stage files without extracting text.
-    Files are saved to disk for later batch processing.
-    """
-    try:
-        # Generate or validate session_id
-        if not session_id:
-            session_id = str(uuid.uuid4())
-        
-        # Create session directory
-        session_dir = os.path.join(STAGED_ROOT, session_id)
-        os.makedirs(session_dir, exist_ok=True)
-        
-        # Initialize session in STAGED_FILES if not exists
-        if session_id not in STAGED_FILES:
-            STAGED_FILES[session_id] = []
-        
-        uploaded_files = []
-        errors = []
-        
-        for file in files:
-            try:
-                # Validate filename
-                if not file.filename:
-                    errors.append({"filename": "unknown", "error": "No filename provided"})
-                    continue
-                
-                # Sanitize filename
-                safe_filename = sanitize_filename(file.filename)
-                
-                # Extract and validate extension
-                ext = get_file_extension(safe_filename)
-                if not ext:
-                    errors.append({"filename": file.filename, "error": f"Invalid file type. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"})
-                    continue
-                
-                # Read file content
-                content = await file.read()
-                file_size = len(content)
-                
-                # Validate file size
-                if not validate_file_size(file_size):
-                    size_mb = file_size / (1024 * 1024)
-                    errors.append({"filename": file.filename, "error": f"File too large ({size_mb:.1f}MB). Max: 20MB"})
-                    continue
-                
-                # Generate unique file ID and path
-                file_id = str(uuid.uuid4())
-                file_path = os.path.join(session_dir, f"{file_id}.{ext}")
-                
-                # Save file to disk
-                with open(file_path, 'wb') as f:
-                    f.write(content)
-                
-                # Get MIME type
-                mime_type = get_mime_type(ext)
-                
-                # Create FileMeta
-                file_meta = FileMeta(
-                    file_id=file_id,
-                    filename=safe_filename,
-                    size=file_size,
-                    mime_type=mime_type,
-                    upload_time=time.time(),
-                    file_path=file_path
-                )
-                
-                # Add to session
-                STAGED_FILES[session_id].append(file_meta)
-                uploaded_files.append(file_meta.to_dict())
-                
-                print(f"[STAGE] Uploaded {safe_filename} ({file_size} bytes) -> {file_path}")
-                
-            except Exception as file_error:
-                errors.append({"filename": file.filename, "error": str(file_error)})
-        
-        response = {
-            "success": len(uploaded_files) > 0,
-            "session_id": session_id,
-            "files": uploaded_files,
-            "total_uploaded": len(uploaded_files),
-            "total_failed": len(errors)
-        }
-        
-        if errors:
-            response["errors"] = errors
-        
-        return response
-        
-    except Exception as e:
-        print(f"[STAGE] Upload error: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
-@app.get("/api/stage/list")
-async def stage_list_endpoint(session_id: str):
-    """
-    List all staged files for a session.
-    """
-    if session_id not in STAGED_FILES:
-        return {
-            "success": True,
-            "session_id": session_id,
-            "files": [],
-            "total": 0
-        }
-    
-    files = [meta.to_dict() for meta in STAGED_FILES[session_id]]
-    
-    return {
-        "success": True,
-        "session_id": session_id,
-        "files": files,
-        "total": len(files)
-    }
-
-@app.delete("/api/stage/file/{file_id}")
-async def stage_delete_file_endpoint(file_id: str, session_id: str):
-    """
-    Remove a specific staged file from disk and metadata.
-    """
-    if session_id not in STAGED_FILES:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    # Find the file
-    file_meta = None
-    file_index = None
-    for i, meta in enumerate(STAGED_FILES[session_id]):
-        if meta.file_id == file_id:
-            file_meta = meta
-            file_index = i
-            break
-    
-    if not file_meta:
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    # Delete from disk
-    try:
-        if os.path.exists(file_meta.file_path):
-            os.remove(file_meta.file_path)
-            print(f"[STAGE] Deleted file: {file_meta.file_path}")
-    except Exception as e:
-        print(f"[STAGE] Error deleting file {file_meta.file_path}: {e}")
-    
-    # Remove from metadata
-    STAGED_FILES[session_id].pop(file_index)
-    
-    return {
-        "success": True,
-        "message": f"File {file_meta.filename} deleted",
-        "file_id": file_id
-    }
-
-@app.delete("/api/stage/clear")
-async def stage_clear_endpoint(session_id: str):
-    """
-    Clear all staged files for a session.
-    """
-    if session_id not in STAGED_FILES:
-        return {
-            "success": True,
-            "message": "Session not found or already empty",
-            "files_deleted": 0
-        }
-    
-    files_deleted = 0
-    
-    # Delete all files from disk
-    for file_meta in STAGED_FILES[session_id]:
-        try:
-            if os.path.exists(file_meta.file_path):
-                os.remove(file_meta.file_path)
-                files_deleted += 1
-        except Exception as e:
-            print(f"[STAGE] Error deleting file {file_meta.file_path}: {e}")
-    
-    # Remove session directory if empty
-    session_dir = os.path.join(STAGED_ROOT, session_id)
-    try:
-        if os.path.exists(session_dir) and not os.listdir(session_dir):
-            os.rmdir(session_dir)
-            print(f"[STAGE] Removed empty session directory: {session_dir}")
-    except Exception as e:
-        print(f"[STAGE] Error removing session directory: {e}")
-    
-    # Clear metadata
-    del STAGED_FILES[session_id]
-    
-    return {
-        "success": True,
-        "message": f"Cleared {files_deleted} files",
-        "files_deleted": files_deleted
-    }
-
-@app.post("/api/stage/extract")
-async def stage_extract_endpoint(session_id: str = Form(...)):
-    """
-    Extract and return text from all staged files for a session.
-    This is used by the main "Analyze with AI" button to get text from staged files.
-    """
-    # Handle both form-encoded and JSON requests
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id is required")
-    
-    print(f"[STAGE EXTRACT] Received request for session: {session_id}")
-    print(f"[STAGE EXTRACT] Available sessions: {list(STAGED_FILES.keys())}")
-    print(f"[STAGE EXTRACT] Session exists: {session_id in STAGED_FILES}")
-    
-    if session_id not in STAGED_FILES or not STAGED_FILES[session_id]:
-        print(f"[STAGE EXTRACT DEBUG] No files found for session {session_id}")
-        return {
-            "success": False,
-            "text": "",
-            "files_count": 0,
-            "message": "No staged files found"
-        }
-    
-    print(f"[STAGE EXTRACT DEBUG] Found {len(STAGED_FILES[session_id])} files in session")
-    
-    combined_text = ""
-    extraction_errors = []
-    files_processed = 0
-    
-    for file_meta in STAGED_FILES[session_id]:
-        try:
-            print(f"[STAGE EXTRACT DEBUG] Processing file: {file_meta.filename}, path: {file_meta.file_path}")
-            
-            # Read file from disk
-            with open(file_meta.file_path, 'rb') as f:
-                content = f.read()
-            
-            print(f"[STAGE EXTRACT DEBUG] Read {len(content)} bytes from {file_meta.filename}")
-            
-            # Extract text using the existing helper function
-            text = _extract_text_from_upload(content, file_meta.filename)
-            
-            print(f"[STAGE EXTRACT DEBUG] Extracted {len(text)} chars from {file_meta.filename}")
-            
-            if text.strip():
-                combined_text += f"\n\n=== {file_meta.filename} ===\n\n{text}"
-                files_processed += 1
-                print(f"[STAGE EXTRACT] Extracted {len(text)} chars from {file_meta.filename}")
-            else:
-                print(f"[STAGE EXTRACT DEBUG] Warning: Empty text extracted from {file_meta.filename}")
-            
-        except Exception as e:
-            extraction_errors.append(f"Error extracting {file_meta.filename}: {str(e)}")
-            print(f"[STAGE EXTRACT] Error for {file_meta.filename}: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    result = {
-        "success": True,
-        "text": combined_text.strip(),
-        "files_count": files_processed,
-        "total_files": len(STAGED_FILES[session_id]),
-        "errors": extraction_errors if extraction_errors else None
-    }
-    
-    print(f"[STAGE EXTRACT DEBUG] Returning result: success={result['success']}, files_count={result['files_count']}, text_length={len(result['text'])}")
-    
-    return result
-
-@app.post("/api/analysis/start")
-async def analysis_start_endpoint(
-    background_tasks: BackgroundTasks,
-    session_id: str = Form(...),
-    mode: str = Form("fast"),
-    tier: str = Form("auto"),
-    strictness: str = Form("normal")
-):
-    """
-    Extract text from ALL staged files and start analysis job.
-    """
-    # Validate session exists
-    if session_id not in STAGED_FILES or not STAGED_FILES[session_id]:
-        raise HTTPException(status_code=404, detail="No staged files found for session")
-    
-    # Extract text from all staged files
-    combined_text = ""
-    extraction_errors = []
-    
-    for file_meta in STAGED_FILES[session_id]:
-        try:
-            # Read file from disk
-            with open(file_meta.file_path, 'rb') as f:
-                content = f.read()
-            
-            # Extract text based on file type
-            ext = file_meta.file_path.rsplit('.', 1)[-1].lower()
-            text = ""
-            
-            if ext == 'txt':
-                text = content.decode('utf-8', errors='ignore')
-            elif ext == 'pdf' and PdfReader:
-                pdf_reader = PdfReader(io.BytesIO(content))
-                for page in pdf_reader.pages:
-                    text += page.extract_text() + "\n"
-            elif ext == 'docx' and Document:
-                doc = Document(io.BytesIO(content))
-                for paragraph in doc.paragraphs:
-                    text += paragraph.text + "\n"
-            else:
-                extraction_errors.append(f"Cannot extract text from {file_meta.filename}")
-                continue
-            
-            combined_text += f"\n\n=== {file_meta.filename} ===\n\n{text}"
-            print(f"[STAGE] Extracted {len(text)} chars from {file_meta.filename}")
-            
-        except Exception as e:
-            extraction_errors.append(f"Error extracting {file_meta.filename}: {str(e)}")
-            print(f"[STAGE] Extraction error for {file_meta.filename}: {e}")
-    
-    if not combined_text.strip():
-        raise HTTPException(status_code=400, detail="No text could be extracted from staged files")
-    
-    # Generate job ID
-    job_id = f"staged_{session_id}_{int(time.time())}"
-    
-    # Initialize job tracking
-    AI_JOB_STORE[job_id] = AIAnalysisJob(
-        job_id=job_id,
-        status=AIJobStatus.PENDING,
-        total_chunks=0,
-        processed_chunks=0,
-        current_stage="Starting analysis of staged files..."
-    )
-    
-    # Load database if needed
-    if not app.state.db.loaded:
-        app.state.db.load()
-    
-    # Start background analysis
-    background_tasks.add_task(
-        _run_analysis_background,
-        job_id,
-        combined_text.strip(),
-        app.state.db,
-        strictness,
-        tier,
-        mode,
-        None,  # client will be created
-        session_id
-    )
-    
-    print(f"[STAGE] Started analysis job {job_id} for session {session_id}")
-    
-    response = {
-        "success": True,
-        "job_id": job_id,
-        "session_id": session_id,
-        "files_processed": len(STAGED_FILES[session_id]),
-        "text_length": len(combined_text),
-        "mode": mode,
-        "message": f"Analysis started with {len(STAGED_FILES[session_id])} files"
-    }
-    
-    if extraction_errors:
-        response["warnings"] = extraction_errors
-    
-    return response
-
 # ---------- AI Planner Integration (AgencyDB) ----------
 from ai_planner_agencydb import (
     mount_routes_agencydb,
@@ -1007,20 +382,10 @@ async def get_agencydb_job_status(job_id: str):
     """
     # Check if job exists in AI_JOB_STORE
     if job_id not in AI_JOB_STORE:
-        # ZOMBIE DETECTION: Check if this job should be blocked
-        if check_and_block_zombie_job(job_id):
-            # Return 410 Gone to force even old clients to stop polling
-            raise HTTPException(
-                status_code=410, 
-                detail=f"Job {job_id} has expired and polling has been terminated. Please start a new analysis."
-            )
         # Also check sitecustomize job store if available
         try:
             from sitecustomize import _JOBS
             if job_id in _JOBS:
-                # ZOMBIE DETECTION: Reset tracking since job was found
-                reset_zombie_tracking(job_id)
-                
                 job = _JOBS[job_id]
                 progress = 0.0
                 if job.total_batches:
@@ -1057,9 +422,6 @@ async def get_agencydb_job_status(job_id: str):
         # Use globals() to access it
         job_store = globals().get('JOB_STORE', {})
         if job_id in job_store:
-            # ZOMBIE DETECTION: Reset tracking since job was found
-            reset_zombie_tracking(job_id)
-            
             job = job_store[job_id]
             
             # Map JobStatus to expected format
@@ -1090,9 +452,6 @@ async def get_agencydb_job_status(job_id: str):
         try:
             from app_perf.stream import SSE_JOB_STORE, StreamJobStatus
             if job_id in SSE_JOB_STORE:
-                # ZOMBIE DETECTION: Reset tracking since job was found
-                reset_zombie_tracking(job_id)
-                
                 job = SSE_JOB_STORE[job_id]
                 
                 # Map StreamJobStatus to expected format
@@ -1128,20 +487,12 @@ async def get_agencydb_job_status(job_id: str):
     # Get job from AI_JOB_STORE
     job = AI_JOB_STORE[job_id]
     
-    # ZOMBIE DETECTION: Reset tracking since job was found
-    reset_zombie_tracking(job_id)
-    
-    # BUGFIX: Use job.progress as primary source, only fall back to chunk calculation if progress wasn't set
-    if hasattr(job, 'progress') and job.progress > 0:
-        # Use explicitly set progress from _update_job()
-        progress = job.progress
-    elif job.total_chunks > 0:
-        # Fall back to chunk-based calculation only if no explicit progress
+    # Calculate progress percentage
+    progress = 0
+    if job.total_chunks > 0:
         progress = int((job.processed_chunks / job.total_chunks) * 100)
     elif job.status == AIJobStatus.COMPLETED:
         progress = 100
-    else:
-        progress = 0
     
     # Map internal status to expected format
     status_map = {
@@ -1163,21 +514,14 @@ async def get_agencydb_job_status(job_id: str):
     
     # Add deliverables data if job is completed
     if job.status == AIJobStatus.COMPLETED and job.result:
-        # FIXED: Frontend expects "result", not "data"
-        response["result"] = job.result
+        response["data"] = job.result
         # Also include deliverable count for UI display
         delivs_count = 0
         if isinstance(job.result, dict):
-            # FIXED: The deliverables are inside job.result["plan"]["suggestions_by_department"]
-            if "plan" in job.result and "suggestions_by_department" in job.result["plan"]:
-                for dept, delivs in job.result["plan"]["suggestions_by_department"].items():
-                    if isinstance(delivs, list):
-                        delivs_count += len(delivs)
+            for dept, delivs in job.result.items():
+                if isinstance(delivs, list):
+                    delivs_count += len(delivs)
         response["deliverables_count"] = delivs_count
-        
-        # LOG for debugging
-        if delivs_count > 0:
-            print(f"[JOB STATUS] Returning completed job with {delivs_count} deliverables in {len(job.result.get('plan', {}).get('suggestions_by_department', {}))} departments")
     
     # Add error if job failed
     if job.status == AIJobStatus.FAILED and job.error:
@@ -1193,24 +537,6 @@ async def get_ai_job_status_alias(job_id: str):
     Provides backward compatibility for app.js polling
     """
     return await get_agencydb_job_status(job_id)
-
-@app.get("/api/ai/jobs/{job_id}/debug")
-async def debug_job_result(job_id: str):
-    """Debug endpoint to inspect raw job result structure"""
-    if job_id not in AI_JOB_STORE:
-        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
-    
-    job = AI_JOB_STORE[job_id]
-    
-    return {
-        "job_id": job.job_id,
-        "status": job.status.value,
-        "has_result": job.result is not None,
-        "result_type": type(job.result).__name__ if job.result else None,
-        "result_keys": list(job.result.keys()) if isinstance(job.result, dict) else None,
-        "deliverables_count": len(job.result.get("plan", {}).get("suggestions_by_department", {})) if isinstance(job.result, dict) else 0,
-        "sample_department": list(job.result.get("plan", {}).get("suggestions_by_department", {}).keys())[:1] if isinstance(job.result, dict) else []
-    }
 
 # ---------- Industry Template System Import ----------
 from luxury_fashion_template import (
@@ -1357,9 +683,6 @@ class FileSizeMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(FileSizeMiddleware)
 
-# Add GZip middleware for smaller JSON responses
-app.add_middleware(GZipMiddleware, minimum_size=1000)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1372,12 +695,6 @@ app.add_middleware(
 if not os.path.exists("static"):
     os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Serve main application frontend
-@app.get("/")
-async def root():
-    """Serve the main application interface"""
-    return FileResponse("static/index.html")
 
 # Include AI weights router
 from routes_weights_fastapi import router as weights_router
@@ -3322,18 +2639,8 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
     Defensive fallback: if scenario items lack included_task_groups/components,
     auto-expand from DB so exports never go flat.
     Handles both empty lists and "__ALL__" sentinel values.
-    
-    NEW: Per-item inflation - only inflates items without explicit L2 selections.
-    This allows mixed scenarios with both filtered and unfiltered deliverables.
     """
-    
-    # Process each item individually - only inflate items without explicit L2 selections
     for item in scenario.get("items", []):
-        # Skip inflation for items that have explicit L2 selections
-        if item.get("_has_l2_selections"):
-            print(f"[INFLATE] Skipping item {item.get('deliverable_code', 'unknown')} - has explicit L2 selections")
-            continue
-        
         dcode = str(item.get("deliverable_code") or item.get("Deliverable_Code") or "").strip()
         if not dcode:
             continue
@@ -3353,7 +2660,6 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
             # Derive all task groups for this deliverable from DB
             included = DB.task_groups_for_deliverable(dcode)
             item["included_task_groups"] = included
-            print(f"[INFLATE] Inflated item {dcode} with {len(included)} task groups (no explicit L2 selections)")
             # Also convert "__ALL__" sentinel to empty dict for downstream code
             if comp_map == "__ALL__":
                 item["included_task_groups_map"] = {}
@@ -3366,10 +2672,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     Flat_Blended -> uses blended_rate
     Per_Resource -> weighted effective per level
     """
-    # Safety rail: Hard limit on WBS size to prevent browser freeze
-    MAX_WBS_ROWS = 12000
-    row_count_by_deliverable = {}  # Track rows per deliverable code
-    
     # PATCH A: Ensure components are inflated for AI picks (handle "__ALL__" sentinel)
     scenario = _inflate_components_if_missing(scenario)
     
@@ -3578,23 +2880,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Price_USD": round(deliv_price, 2),
                 "Type": deliverable_type  # NEW: Add Type column
             })
-            
-            # Track row count by deliverable
-            if dcode:
-                row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
-            
-            # Check if we've exceeded the limit after each deliverable
-            if len(rows) > MAX_WBS_ROWS:
-                # Build error message with worst offenders
-                sorted_offenders = sorted(row_count_by_deliverable.items(), key=lambda x: x[1], reverse=True)
-                top_offenders = sorted_offenders[:5]
-                
-                error_msg = f"WBS too large ({len(rows)} rows > {MAX_WBS_ROWS} limit). "
-                error_msg += "Top contributors: "
-                error_msg += ", ".join([f"{code} ({count} rows)" for code, count in top_offenders])
-                error_msg += ". Please select fewer deliverables or reduce L2 task selections."
-                
-                raise HTTPException(status_code=400, detail=error_msg)
 
             comps = DB.components_for_deliverable(dcode, tg_order)
             # Robust fallback if DB returns no components
@@ -3650,10 +2935,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Rate_USD": round(comp_rate if pricing_mode=="Flat_Blended" else _eff_rate(comp_price, comp_hours_total_display or 0), 2),
                     "Price_USD": round(comp_price, 2)
                 })
-                
-                # Track component row
-                if dcode:
-                    row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
 
                 # --- Tasks under the component ---
                 # Per-month target hours for each task group, then repeat Month 01..N
@@ -3690,10 +2971,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
                             "Assignee_External_ID": "", "Notes": ""
                         })
-                        
-                        # Track task row
-                        if dcode:
-                            row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
 
                         # Role rows for this task in this month
                         hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
@@ -3758,23 +3035,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                                 "Rate_USD": round(role_rate, 2),
                                 "Price_USD": row_price
                             })
-                            
-                            # Track role row
-                            if dcode:
-                                row_count_by_deliverable[dcode] = row_count_by_deliverable.get(dcode, 0) + 1
-                            
-                            # Check limit after each role row (most granular level)
-                            if len(rows) > MAX_WBS_ROWS:
-                                sorted_offenders = sorted(row_count_by_deliverable.items(), key=lambda x: x[1], reverse=True)
-                                top_offenders = sorted_offenders[:5]
-                                
-                                error_msg = f"WBS too large ({len(rows)} rows > {MAX_WBS_ROWS} limit). "
-                                error_msg += "Top contributors: "
-                                error_msg += ", ".join([f"{code} ({count} rows)" for code, count in top_offenders])
-                                error_msg += ". Please select fewer deliverables or reduce L2 task selections."
-                                
-                                raise HTTPException(status_code=400, detail=error_msg)
-                            
                             prev_role_wbs = wbs_role
 
                         prev_task_last_wbs = prev_role_wbs or wbs_task
@@ -3811,9 +3071,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         df["Price_USD"] = (df["Planned_Hours"] * df["Rate_USD"]).round(0).astype(int)
     else:
         df["Price_USD"] = 0
-    
-    # Log successful WBS build for monitoring
-    print(f"[WBS] Built WBS with {len(rows)} rows from {len(scenario.get('items', []))} deliverables")
 
     return df
 
@@ -3863,8 +3120,8 @@ class BuildPayload(BaseModel):
     retainers: Optional[List[RetainerSelection]] = []
     # NEW: component-level selection per deliverable (supports multiple formats including "__ALL__" sentinel)
     selected_components_map: Optional[Dict[str, Union[str, List[str], Dict[str, Optional[float]]]]] = None
-    # NEW: L2 subtask selection per deliverable and component
-    selected_l2_map: Optional[Dict[str, Dict[str, List[str]]]] = None  # { "<Deliverable_Code>": { "<Component_Name>": ["<Task_Label>", ...] } }
+    # NEW: L3 subtask selection per deliverable and component
+    selected_l3_map: Optional[Dict[str, Dict[str, List[str]]]] = None  # { "<Deliverable_Code>": { "<Component_Name>": ["<Task_Label>", ...] } }
 
 class AutoBuildPayload(BaseModel):
     rfp_text: str
@@ -4001,8 +3258,8 @@ class ReorderPayload(BaseModel):
     complexity: str = "Advanced"
     tier: str = "T2_MediumVolume"
 
-# A1: L2 Request model for bulk component queries
-class L2Request(BaseModel):
+# A1: L3 Request model for bulk component queries
+class L3Request(BaseModel):
     deliverable_code: str
     component: Union[str, List[str]]  # can be one or many components
 
@@ -4438,7 +3695,7 @@ class ClearSessionPayload(BaseModel):
     session_id: str
 
 @app.post("/api/clear_session")
-async def clear_session(payload: ClearSessionPayload = Body(default=ClearSessionPayload(session_id=""))):
+async def clear_session(payload: ClearSessionPayload):
     """Clear all session-specific data including embedding cache"""
     session_id = payload.session_id
     
@@ -4553,9 +3810,9 @@ def list_components(deliverable: str):
     )
     return sorted([c for c in comps if c])
 
-@app.get("/api/l2")
-def list_l2(deliverable: str, component: str):
-    """Return all L2 tasks for a given deliverable and component."""
+@app.get("/api/l3")
+def list_l3(deliverable: str, component: str):
+    """Return all L3 tasks for a given deliverable and component."""
     if not DB.loaded:
         DB.load()
     df = DB.all_rows
@@ -4710,9 +3967,9 @@ def api_components_for(deliverable_code: str, complexity: str="Advanced", tier: 
     
     return {"items": [{"name": c, "hours": float(hours_map.get(c, 0.0))} for c in comp_names]}
 
-@app.get("/api/l2_for")
-def api_l2_for(deliverable_code: str, component_name: str):
-    """List L2 subtasks (Task_Label) for a deliverable and component."""
+@app.get("/api/l3_for")
+def api_l3_for(deliverable_code: str, component_name: str):
+    """List L3 subtasks (Task_Label) for a deliverable and component."""
     if not DB.loaded: DB.load()
     
     try:
@@ -4737,7 +3994,7 @@ def api_l2_for(deliverable_code: str, component_name: str):
         
         return {"items": [{"Task_Label": label} for label in task_labels]}
     except Exception as e:
-        print(f"Error in api_l2_for: {e}")
+        print(f"Error in api_l3_for: {e}")
         return {"items": []}
 
 # ============================================================================
@@ -4774,16 +4031,16 @@ async def step2_components(payload: dict):
     
     return out
 
-@app.post("/api/step2/l2")
-async def step2_l2(p: L2Request):
+@app.post("/api/step2/l3")
+async def step2_l3(p: L3Request):
     """
-    Returns L2 subtasks for a deliverable + component(s).
+    Returns L3 subtasks for a deliverable + component(s).
     Supports both single component and multiple components (bulk query).
     
     Single: {"deliverable_code": "deck_strategy", "component": "brief"}
     Bulk: {"deliverable_code": "deck_strategy", "component": ["brief", "art_direction"]}
     
-    Returns merged, deduplicated list of L2 tasks.
+    Returns merged, deduplicated list of L3 tasks.
     """
     if not DB.loaded:
         DB.load()
@@ -4816,13 +4073,13 @@ async def step2_l2(p: L2Request):
     return {
         "deliverable_code": dcode,
         "components": comps,
-        "l2": sorted(out)
+        "l3": sorted(out)
     }
 
-@app.post("/api/step2/l2/bulk")
-async def step2_l2_bulk(payload: dict):
+@app.post("/api/step2/l3/bulk")
+async def step2_l3_bulk(payload: dict):
     """
-    Returns L2 subtasks grouped by component (not merged).
+    Returns L3 subtasks grouped by component (not merged).
     payload: {"deliverable": "deck_strategy", "components": ["brief","art_direction",...]}
     returns: {"brief": ["deck_build","internal_review",...], "art_direction": [...]}
     
@@ -4898,15 +4155,15 @@ def suggest_components(req: SuggestComponentsReq):
     return JSONResponse(out)
 
 
-# --- Suggest L2 tasks for one or more components (dedupe-aware) ---
-class SuggestL2Req(BaseModel):
+# --- Suggest L3 tasks for one or more components (dedupe-aware) ---
+class SuggestL3Req(BaseModel):
     deliverable_code: str
     components: List[str]
     exclude_labels: Optional[List[str]] = None
     limit_per_component: Optional[int] = 20
 
-@app.post("/api/step2/suggest/l2")
-def suggest_l2(req: SuggestL2Req):
+@app.post("/api/step2/suggest/l3")
+def suggest_l3(req: SuggestL3Req):
     if not DB.loaded:
         DB.load()
     d = str(req.deliverable_code)
@@ -4952,9 +4209,9 @@ OPENAI_MODEL = "gpt-5"  # Use GPT-5 model directly
 
 class AISuggestReq(BaseModel):
     deliverable_code: str
-    include_l2: bool = True
+    include_l3: bool = True
     top_components: int = 6
-    top_l2_per_component: int = 12
+    top_l3_per_component: int = 12
     rfp_text: str | None = None
     exclude_labels: List[str] | None = None
     weighted_context: dict | None = None  # Pre-filter context from weighted rules
@@ -4990,8 +4247,8 @@ def _component_catalog_for_deliverable(db: AgencyDB, dcode: str, max_tasks_per_c
         out[comp] = top
     return out
 
-def _rules_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
-                                  top_components: int, top_l2: int,
+def _rules_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
+                                  top_components: int, top_l3: int,
                                   exclude: set[str]) -> dict:
     """Deterministic fallback using frequency + RFP overlaps."""
     catalog = _component_catalog_for_deliverable(db, dcode, 100)
@@ -5007,7 +4264,7 @@ def _rules_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
 
     comp_ranked = [c for c,_ in sorted(comp_scores.items(), key=lambda x: (-x[1], x[0]))][:top_components]
 
-    l2_pick: Dict[str, List[dict]] = {}
+    l3_pick: Dict[str, List[dict]] = {}
     for c in comp_ranked:
         tasks = catalog.get(c, [])
         t_scores = []
@@ -5017,17 +4274,17 @@ def _rules_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
                 continue
             s = 1 + sum(tok in key for tok in toks) * 2
             t_scores.append((lab, s))
-        t_sorted = [lab for lab,_ in sorted(t_scores, key=lambda x: (-x[1], x[0]))][:top_l2]
-        l2_pick[c] = [{"label": lab, "why": "Rule-based relevance"} for lab in t_sorted]
+        t_sorted = [lab for lab,_ in sorted(t_scores, key=lambda x: (-x[1], x[0]))][:top_l3]
+        l3_pick[c] = [{"label": lab, "why": "Rule-based relevance"} for lab in t_sorted]
 
     return {
         "source": "rules",
         "components": [{"name": c, "score": float(comp_scores.get(c, 0)), "why": "High frequency + RFP keyword overlap"} for c in comp_ranked],
-        "l2_by_component": l2_pick
+        "l3_by_component": l3_pick
     }
 
-def _gpt_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
-                                top_components: int, top_l2: int,
+def _gpt_pick_components_and_l3(db: AgencyDB, dcode: str, rfp: str,
+                                top_components: int, top_l3: int,
                                 exclude: set[str], weighted_context: dict = None) -> dict:
     catalog = _component_catalog_for_deliverable(db, dcode, 60)
     drow = db.deliverables[db.deliverables["Deliverable_Code"].astype(str)==str(dcode)]
@@ -5052,7 +4309,7 @@ def _gpt_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
         "deliverable": {"code": dcode, "name": dname},
         "catalog": [{"component": c, "tasks": catalog[c]} for c in sorted(catalog.keys())],
         "top_components": top_components,
-        "top_l2_per_component": top_l2,
+        "top_l3_per_component": top_l3,
         "exclude_labels": sorted(list(exclude)),
         "instructions": instructions,
         "return_schema": {
@@ -5070,7 +4327,7 @@ def _gpt_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
                         "required": ["name"]
                     }
                 },
-                "l2_by_component": {
+                "l3_by_component": {
                     "type": "object",
                     "additionalProperties": {
                         "type": "array",
@@ -5086,7 +4343,7 @@ def _gpt_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
                 },
                 "rationale_summary": {"type":"string"}
             },
-            "required": ["components","l2_by_component"]
+            "required": ["components","l3_by_component"]
         }
     }
 
@@ -5119,15 +4376,15 @@ def _gpt_pick_components_and_l2(db: AgencyDB, dcode: str, rfp: str,
     for c in comps:
         c.setdefault("why","Selected by GPT‑5 for RFP fit")
         c.setdefault("score", 0.9)
-    l2 = data.get("l2_by_component") or {}
-    for k, arr in l2.items():
+    l3 = data.get("l3_by_component") or {}
+    for k, arr in l3.items():
         for item in arr:
             item.setdefault("why","GPT‑5 rationale")
 
     return {
         "source": "gpt",
         "components": comps[:top_components],
-        "l2_by_component": {k: v[:top_l2] for k,v in l2.items()},
+        "l3_by_component": {k: v[:top_l3] for k,v in l3.items()},
         "rationale_summary": data.get("rationale_summary","")
     }
 
@@ -5141,8 +4398,8 @@ def ai_suggest(req: AISuggestReq):
     exclude = { (x or "").strip().lower() for x in (req.exclude_labels or []) }
 
     try:
-        payload = _gpt_pick_components_and_l2(
-            db, d, rfp, req.top_components, req.top_l2_per_component, 
+        payload = _gpt_pick_components_and_l3(
+            db, d, rfp, req.top_components, req.top_l3_per_component, 
             exclude, weighted_context=req.weighted_context
         )
         payload["model_used"] = OPENAI_MODEL
@@ -5150,7 +4407,7 @@ def ai_suggest(req: AISuggestReq):
             payload["used_weighted_prefilter"] = True
     except Exception as e:
         print(f"GPT suggest fallback to rules: {e}")
-        payload = _rules_pick_components_and_l2(db, d, rfp, req.top_components, req.top_l2_per_component, exclude)
+        payload = _rules_pick_components_and_l3(db, d, rfp, req.top_components, req.top_l3_per_component, exclude)
         payload["model_used"] = "rules"
 
     return JSONResponse(payload)
@@ -5745,18 +5002,12 @@ def _scenario_for_deliverable(deliv_code: str, category: str, spec: Dict[str, An
                               pricing_mode: str, blended_rate: Optional[float], rate_band: str,
                               use_slack: bool, slack_i: int, slack_c: int, slack_pct: float,
                               project_start: Optional[str], scenario_letter: str,
-                              retainer_months: int = 0, 
-                              selected_components: Optional[Union[List[str], Dict[str, Optional[float]]]] = None,
-                              selected_l2_tasks: Optional[List[str]] = None) -> Dict[str, Any]:
+                              retainer_months: int = 0, selected_components: Optional[Union[List[str], Dict[str, Optional[float]]]] = None) -> Dict[str, Any]:
     # Extract base code for database lookups (handles expanded codes like 'DEL-0027-Google_Ads')
     base_code = extract_base_deliverable_code(deliv_code)
     
     # Which task groups to include?
-    if selected_l2_tasks:
-        # User explicitly selected L2 tasks in Step 2 - use only those
-        included = selected_l2_tasks
-        print(f"DEBUG {base_code}: Using L2 task selections: {included}")
-    elif spec["mode"] == "bundle":
+    if spec["mode"] == "bundle":
         included = DB.included_task_groups(category, spec["bundle"])
     else:
         # Template mode: include all task_groups that exist in data for this deliverable (collapsed to unique)
@@ -6102,20 +5353,6 @@ def api_build(payload: BuildPayload):
             comp_map[str(k)] = {}
     
     print(f"DEBUG Build: Component map processed: {comp_map}")
-    
-    # Build L2 task group selection map from payload
-    l2_map = {}
-    if payload.selected_l2_map:
-        for deliv_code, component_tasks in payload.selected_l2_map.items():
-            # component_tasks is {"Component Name": ["task1", "task2", ...]}
-            # Extract unique task group names across all components
-            all_task_groups = set()
-            for comp_name, task_list in component_tasks.items():
-                if isinstance(task_list, list):
-                    all_task_groups.update(task_list)
-            l2_map[str(deliv_code)] = sorted(all_task_groups) if all_task_groups else None
-        
-        print(f"DEBUG Build: L2 task map processed: {l2_map}")
 
     # Build Scenario A only (B/C removed for simplicity)
     scenarios = {}
@@ -6152,24 +5389,14 @@ def api_build(payload: BuildPayload):
             # If not found, also try with base code as fallback
             months = int(ret_map.get(code, ret_map.get(base_code, 0)))
             selected_components_dict = comp_map.get(str(code), comp_map.get(str(base_code), {}))
-            
-            # Get L2 task selections for this deliverable (try both original code and base code)
-            selected_l2_for_deliverable = l2_map.get(str(code)) or l2_map.get(str(base_code))
-            
             out = _scenario_for_deliverable(
                 code, cat, spec_resolved,
                 pricing_mode, blended_rate, rate_band,
                 use_slack, slack_i, slack_c, slack_pct, project_start,
                 scenario_letter=letter,
-                retainer_months=months,
-                selected_components=selected_components_dict,
-                selected_l2_tasks=selected_l2_for_deliverable
+                retainer_months=months,   # NEW
+                selected_components=selected_components_dict  # NEW
             )
-            
-            # NEW: Mark this item if it has explicit L2 selections
-            if selected_l2_for_deliverable:
-                out["_has_l2_selections"] = True
-            
             # Add names for readability
             out["deliverable"] = deliverable_name
             out["category"]    = cat
@@ -6534,10 +5761,10 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         # Build scenario items from selection
         items = []
         
-        # Parse selection structure: {deliverable_codes: [...], components_map: {...}, l2_map: {...}}
+        # Parse selection structure: {deliverable_codes: [...], components_map: {...}, l3_map: {...}}
         deliverable_codes = selection.get('deliverable_codes', [])
         components_map = selection.get('components_map', {})
-        l2_map = selection.get('l2_map', {})
+        l3_map = selection.get('l3_map', {})
         
         # For now, just use the existing /api/build logic to generate items
         # We'll call the existing scenario builder and store the result in SCENARIO_STORE
@@ -6547,7 +5774,7 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         build_payload_dict = {
             "deliverable_codes": deliverable_codes,
             "selected_components": components_map,
-            "selected_l2": l2_map,
+            "selected_l3": l3_map,
             "pricing_mode": payload.pricing_mode or "Flat_Blended",
             "blended_rate": payload.blended_rate or 195,
             "rate_band": payload.rate_band or "Standard_US",
@@ -6586,14 +5813,14 @@ async def api_build_scenario(payload: BuildScenarioPayload):
                 if not component_name or component_name == "":
                     continue
                 
-                # Get L2 tasks for this deliverable/component
-                l2_tasks = l2_map.get(deliv_code, {}).get(component_name, [])
+                # Get L3 tasks for this deliverable/component
+                l3_tasks = l3_map.get(deliv_code, {}).get(component_name, [])
                 
                 # Get rows for this deliverable/component
                 comp_rows = db_rows[db_rows['Component'] == component_name]
                 
-                if not l2_tasks:
-                    # No specific L2 tasks selected, use defaults from DB
+                if not l3_tasks:
+                    # No specific L3 tasks selected, use defaults from DB
                     for _, row in comp_rows.iterrows():
                         task_label = row.get('Task_Label', '')
                         if not task_label:
@@ -6615,8 +5842,8 @@ async def api_build_scenario(payload: BuildScenarioPayload):
                             "Service Department": row.get('Service Department', '')
                         })
                 else:
-                    # User selected specific L2 tasks
-                    for task_label in l2_tasks:
+                    # User selected specific L3 tasks
+                    for task_label in l3_tasks:
                         # Find the corresponding row in DB
                         task_rows = comp_rows[comp_rows['Task_Label'] == task_label]
                         if not task_rows.empty:
@@ -7243,12 +6470,13 @@ def api_post_scenarios(payload: dict):
             payload.get("componentsMap")
         )
         
-        selected_l2_map = (
-            payload.get("selected_l2_map") or 
+        selected_l3_map = (
+            payload.get("selected_l3_map") or 
+            payload.get("selectedL3Map") or 
+            payload.get("l3Map") or
+            payload.get("selected_l2_map") or
             payload.get("selectedL2Map") or
-            payload.get("l2Map") or
-            payload.get("selectedL3Map") or  # BACKWARDS COMPATIBILITY: old L3 naming
-            payload.get("l3Map")             # BACKWARDS COMPATIBILITY: old L3 naming
+            payload.get("l2Map")
         )
         
         # Log what we're building with
@@ -7269,7 +6497,7 @@ def api_post_scenarios(payload: dict):
             client_budget_usd=client_budget_usd,
             retainers=payload.get("retainers", []),
             selected_components_map=selected_components_map,
-            selected_l2_map=selected_l2_map
+            selected_l3_map=selected_l3_map
         )
         
         # Call the existing build logic

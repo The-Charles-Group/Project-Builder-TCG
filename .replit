@@ -98,6 +98,3 @@ externalPort = 8099
 [deployment]
 deploymentTarget = "autoscale"
 run = ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
-
-[objectStorage]
-defaultBucketID = "replit-objstore-e4df4816-12b6-41c6-8da1-a3f9247f9c19"

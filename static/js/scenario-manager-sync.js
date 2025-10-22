@@ -13,9 +13,6 @@
     // Enhanced state with sync metadata
     state: {
       ...(originalScenarioManager.state || {}),
-      // Backwards compatibility: migrate selectedL3Tasks → selectedL2Tasks
-      selectedL2Tasks: (originalScenarioManager.state?.selectedL2Tasks) || 
-                       (originalScenarioManager.state?.selectedL3Tasks) || {},
       lastModified: Date.now(),
       lastSyncedAt: null,
       syncVersion: 0,
@@ -43,13 +40,6 @@
     // Initialize real-time sync
     initRealTimeSync() {
       console.log('[ScenarioSync] Initializing real-time sync');
-      
-      // Normalize state to ensure selectedL2Tasks is always defined
-      if (!this.state.selectedL2Tasks) {
-        // Backwards compatibility: migrate from selectedL3Tasks if it exists
-        this.state.selectedL2Tasks = this.state.selectedL3Tasks || {};
-        console.log('[ScenarioSync] Normalized selectedL2Tasks from selectedL3Tasks');
-      }
       
       // Set up Page Visibility API
       this.setupVisibilityHandling();
@@ -300,7 +290,7 @@
           selections: {
             deliverables: Array.from(this.state.selectedDeliverables || []),
             components: this.state.selectedComponents || {},
-            l2Tasks: this.state.selectedL2Tasks || {}
+            l3Tasks: this.state.selectedL3Tasks || {}
           },
           timestamp: Date.now(),
           checksum: this.calculateChecksum()
@@ -414,8 +404,8 @@
           if (selections.components) {
             this.state.selectedComponents = selections.components;
           }
-          if (selections.l2Tasks) {
-            this.state.selectedL2Tasks = selections.l2Tasks;
+          if (selections.l3Tasks) {
+            this.state.selectedL3Tasks = selections.l3Tasks;
           }
         }
         
