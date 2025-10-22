@@ -416,6 +416,8 @@ class TimelineScheduler:
     
     def calculate_critical_path(self, tasks: List[WorkstreamTask]) -> List[str]:
         """Calculate critical path using CPM algorithm"""
+        print(f"[Scheduler] calculate_critical_path() called with {len(tasks)} tasks")
+        
         # Build adjacency list for dependencies
         predecessors = defaultdict(list)
         successors = defaultdict(list)
@@ -425,7 +427,10 @@ class TimelineScheduler:
                 predecessors[dep.successor].append(dep.predecessor)
                 successors[dep.predecessor].append(dep.successor)
         
+        print(f"[Scheduler] Built adjacency lists: {len(predecessors)} tasks with predecessors, {len(successors)} tasks with successors")
+        
         # Forward pass - calculate earliest start/finish times
+        print(f"[Scheduler] Starting forward pass...")
         earliest_start = {}
         earliest_finish = {}
         
@@ -435,9 +440,21 @@ class TimelineScheduler:
                 earliest_start[task.id] = task.start_date
                 earliest_finish[task.id] = task.end_date
         
+        print(f"[Scheduler] Forward pass: {len(earliest_start)} tasks with no predecessors")
+        
         # Process remaining tasks
         processed = set(earliest_start.keys())
+        max_iterations = len(tasks) * 2  # Safety limit
+        iteration = 0
+        
         while len(processed) < len(tasks):
+            iteration += 1
+            if iteration > max_iterations:
+                print(f"[Scheduler] WARNING: Forward pass exceeded max iterations ({max_iterations}), breaking to prevent infinite loop")
+                print(f"[Scheduler] Processed {len(processed)}/{len(tasks)} tasks")
+                break
+            
+            progress_made = False
             for task in tasks:
                 if task.id in processed:
                     continue
@@ -458,13 +475,28 @@ class TimelineScheduler:
                         earliest_finish[task.id] = task.end_date
                     
                     processed.add(task.id)
+                    progress_made = True
+            
+            # If we made no progress in this iteration, we have circular dependencies
+            if not progress_made:
+                print(f"[Scheduler] WARNING: Forward pass stuck with {len(processed)}/{len(tasks)} tasks processed - likely circular dependencies")
+                # Add remaining tasks with default values to prevent crash
+                for task in tasks:
+                    if task.id not in processed:
+                        earliest_start[task.id] = task.start_date
+                        earliest_finish[task.id] = task.end_date
+                        processed.add(task.id)
+                break
+        
+        print(f"[Scheduler] Forward pass complete: processed {len(processed)}/{len(tasks)} tasks in {iteration} iterations")
         
         # Backward pass - calculate latest start/finish times
         # Check if we have any tasks to process
         if not earliest_finish:
-            print("[TIMELINE] Warning: No tasks with finish times found, returning empty critical path")
+            print("[Scheduler] Warning: No tasks with finish times found, returning empty critical path")
             return []
         
+        print(f"[Scheduler] Starting backward pass...")
         project_end = max(earliest_finish.values())
         latest_start = {}
         latest_finish = {}
@@ -475,9 +507,21 @@ class TimelineScheduler:
                 latest_finish[task.id] = project_end
                 latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
         
+        print(f"[Scheduler] Backward pass: {len(latest_finish)} tasks with no successors")
+        
         # Process remaining tasks in reverse
         processed = set(latest_finish.keys())
+        max_iterations = len(tasks) * 2  # Safety limit
+        iteration = 0
+        
         while len(processed) < len(tasks):
+            iteration += 1
+            if iteration > max_iterations:
+                print(f"[Scheduler] WARNING: Backward pass exceeded max iterations ({max_iterations}), breaking to prevent infinite loop")
+                print(f"[Scheduler] Processed {len(processed)}/{len(tasks)} tasks")
+                break
+            
+            progress_made = False
             for task in reversed(tasks):
                 if task.id in processed:
                     continue
@@ -497,8 +541,23 @@ class TimelineScheduler:
                         latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
                     
                     processed.add(task.id)
+                    progress_made = True
+            
+            # If we made no progress in this iteration, we have circular dependencies
+            if not progress_made:
+                print(f"[Scheduler] WARNING: Backward pass stuck with {len(processed)}/{len(tasks)} tasks processed - likely circular dependencies")
+                # Add remaining tasks with default values to prevent crash
+                for task in tasks:
+                    if task.id not in processed:
+                        latest_finish[task.id] = project_end
+                        latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
+                        processed.add(task.id)
+                break
+        
+        print(f"[Scheduler] Backward pass complete: processed {len(processed)}/{len(tasks)} tasks in {iteration} iterations")
         
         # Identify critical path - tasks with zero slack
+        print(f"[Scheduler] Calculating slack and identifying critical path...")
         critical_path = []
         for task in tasks:
             if task.id in earliest_start and task.id in latest_start:
@@ -509,6 +568,8 @@ class TimelineScheduler:
                 task.earliest_start = earliest_start[task.id]
                 task.latest_start = latest_start[task.id]
         
+        print(f"[Scheduler] Critical path identified: {len(critical_path)} tasks on critical path")
+        print(f"[Scheduler] calculate_critical_path() COMPLETE")
         return critical_path
     
     async def optimize_timeline(
