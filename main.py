@@ -68,8 +68,11 @@ def load_database_with_pickle_cache():
             print(f"[STARTUP] Found timestamped v4 database: {xlsx_path}")
     
     if not xlsx_path:
-        print("[STARTUP] No database file found, will use mock data")
-        return None
+        print("[STARTUP] No database file found, creating mock database")
+        db = AgencyDB()
+        db._create_mock_data()
+        db.loaded = True
+        return db
         
     pkl_path = xlsx_path + ".pkl"
     
@@ -81,18 +84,44 @@ def load_database_with_pickle_cache():
             with open(pkl_path, "rb") as f:
                 db = pickle.load(f)
             print(f"[STARTUP] Pickle cache loaded in {(time.time()-start)*1000:.1f}ms")
-            return db
+            
+            # Validate that pickle has real data, not mock data
+            if (db.all_rows is not None and 
+                not db.all_rows.empty and 
+                len(db.all_rows) > 10 and  # Mock data has only 3 rows
+                'Component' in db.all_rows.columns):
+                print(f"[STARTUP] Pickle validated: {len(db.all_rows)} rows with normalized columns")
+                return db
+            else:
+                print(f"[STARTUP][WARN] Pickle cache invalid (mock data or missing columns), regenerating...")
+                os.remove(pkl_path)  # Delete invalid cache
         except Exception as e:
             print(f"[STARTUP][WARN] Failed to load pickle cache: {e}")
+            try:
+                os.remove(pkl_path)  # Delete corrupted cache
+            except:
+                pass
     
     # Load from Excel and save to pickle
     print(f"[STARTUP] Loading database from {xlsx_path} (first boot, will cache)")
     start = time.time()
-    db = AgencyDB()  # This will be available when function is called
-    db.load()
-    print(f"[STARTUP] Excel loaded in {(time.time()-start)*1000:.1f}ms")
+    db = AgencyDB()
+    try:
+        db.load()
+        print(f"[STARTUP] Excel loaded in {(time.time()-start)*1000:.1f}ms")
+        
+        # Validate loaded database has proper columns
+        if not (db.all_rows is not None and not db.all_rows.empty and 'Component' in db.all_rows.columns):
+            print(f"[STARTUP][ERROR] Database loaded but missing required columns, using mock data")
+            db._create_mock_data()
+            db.loaded = True
+    except Exception as e:
+        print(f"[STARTUP][ERROR] Failed to load Excel database: {e}, using mock data")
+        db._create_mock_data()
+        db.loaded = True
+        return db  # Return mock database, don't try to pickle it
     
-    # Save to pickle for next boot
+    # Save valid database to pickle for next boot
     try:
         with open(pkl_path, "wb") as f:
             pickle.dump(db, f)
