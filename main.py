@@ -3159,6 +3159,7 @@ class BuildPayload(BaseModel):
     slack_global_pct: float = 0.05
     project_start: Optional[str] = None     # ISO8601 format (e.g., "2025-10-06T09:00:00" or "YYYY-MM-DD")
     client_budget_usd: Optional[float] = None  # Client budget for budget analysis
+    project_name: Optional[str] = None      # Project name from frontend input for exports
     # NEW: monthly retainers selected on the second screen
     retainers: Optional[List[RetainerSelection]] = []
     # NEW: component-level selection per deliverable (supports multiple formats including "__ALL__" sentinel)
@@ -5406,6 +5407,11 @@ def api_build(payload: BuildPayload):
     slack_pct = float(payload.slack_global_pct or 0)
     project_start = payload.project_start
     client_budget_usd = payload.client_budget_usd
+    
+    # Project name for exports - use payload or fall back to upload title
+    project_name = (payload.project_name or 
+                   _upload_title_default() or 
+                   f"Proposal {datetime.date.today().isoformat()}").strip()
 
     # Build retainer map
     ret_map = _safe_retainer_map(payload.retainers)
@@ -5541,6 +5547,7 @@ def api_build(payload: BuildPayload):
             "slack_after_client": slack_c,
             "slack_global_pct": slack_pct,
             "project_start": project_start,
+            "project_name": project_name,  # Store project name for exports
             "items": per_deliv,
             "totals": {"hours": int(hours_sum), "price": int(price_sum)}
         }

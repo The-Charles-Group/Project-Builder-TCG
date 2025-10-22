@@ -4447,6 +4447,7 @@ async function buildFromCurrentSelection() {
     slack_global_pct: window.getSlackPctFromUI?.() || 0.05,
     project_start: window.getProjectStartFromUI?.() || null,
     client_budget_usd: window.getClientBudgetFromUI?.() || null,
+    project_name: document.getElementById('projectName')?.value || null,
     scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
     retainers: retainersPayload
   };
@@ -8044,11 +8045,16 @@ document.addEventListener('DOMContentLoaded', function() {
         slack_after_internal: 1,
         slack_after_client: 2,
         slack_global_pct: 0.05,
-        project_start: null
+        project_start: null,
+        project_name: document.getElementById('projectName')?.value || null
       };
     }
     
-    const payload = { ...window.__lastBuildPayload, selected_deliverable_codes: selectedCodes };
+    const payload = { 
+      ...window.__lastBuildPayload, 
+      selected_deliverable_codes: selectedCodes,
+      project_name: document.getElementById('projectName')?.value || window.__lastBuildPayload.project_name || null
+    };
     const r = await fetch('/api/build', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -8883,7 +8889,8 @@ async function s2ApplyAndBuild() {
     slack_after_internal: slackI,
     slack_after_client: slackC,
     slack_global_pct: slackPct,
-    project_start: projectStart
+    project_start: projectStart,
+    project_name: document.getElementById('projectName')?.value || null
   };
 
   const res = await fetch('/api/build', {
@@ -8907,11 +8914,6 @@ async function exportXMLScenario(letter) {
   // Build endpoint with query parameter - using GET to match backend endpoint
   const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
   
-  // Get project name for filename
-  const projectName = document.getElementById('projectName')?.value || 
-                     document.getElementById('projectNameInput')?.value || 
-                     'Project Export';
-  
   try {
     // Backend uses stored _CURRENT_SCENARIOS data and validates there
     const response = await fetch(endpoint, {
@@ -8927,7 +8929,7 @@ async function exportXMLScenario(letter) {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${projectName}_Scenario_${letter}.xml`;
+    // Let browser use backend's Content-Disposition filename - don't override
     a.click();
     window.URL.revokeObjectURL(url);
   } catch (err) {
