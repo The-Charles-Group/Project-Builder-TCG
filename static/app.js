@@ -5247,6 +5247,51 @@ function renderAIPlan(aiPlan) {
   const summary = plan.summary || {};
   const suggestionsByDept = plan.suggestions_by_department || {};
   
+  // Check if we have weighted deliverables to display
+  const hasWeightedData = aiPlan.weighted_deliverables || plan.weighted_deliverables || 
+                          (plan.deliverables && plan.deliverables.length > 0);
+  
+  // If we have weighted deliverables, render them using the TCGWeights system
+  if (hasWeightedData && window.TCGWeights) {
+    console.log('[AI Analysis] Checking for weighted deliverables to display');
+    
+    // Prepare weighted data format for TCGWeights
+    let weightedData = aiPlan.weighted_deliverables || plan.weighted_deliverables;
+    
+    // Convert suggestions_by_department to weighted format if needed
+    if (!weightedData && plan.deliverables) {
+      console.log('[AI Analysis] Converting deliverables to weighted format');
+      const deliverables = [];
+      
+      // Flatten all department suggestions into weighted format
+      if (suggestionsByDept) {
+        for (const [dept, deptDelivs] of Object.entries(suggestionsByDept)) {
+          for (const deliv of (deptDelivs || [])) {
+            deliverables.push({
+              deliverable_code: deliv.deliverable_code || deliv.code,
+              title: deliv.title,
+              department: dept,
+              match_percent: Math.round((deliv.calibrated_confidence || 0) * 100),
+              tfidf_similarity: deliv.tfidf_similarity || deliv.calibrated_confidence,
+              direct_match: deliv.direct_match || false,
+              matched_keywords: deliv.matched_keywords || []
+            });
+          }
+        }
+      }
+      
+      weightedData = { deliverables };
+    }
+    
+    // Show the weighted suggestions container
+    const weightsContainer = document.getElementById('step2-ai-weights-container');
+    if (weightsContainer && weightedData && weightedData.deliverables && weightedData.deliverables.length > 0) {
+      weightsContainer.style.display = 'block';
+      window.TCGWeights.render('#step2-ai-weights', weightedData);
+      console.log(`[AI Analysis] Rendered ${weightedData.deliverables.length} weighted deliverables`);
+    }
+  }
+  
   // Render summary panel
   const summaryPanel = document.getElementById('ai-summary-panel');
   if (summaryPanel) {
