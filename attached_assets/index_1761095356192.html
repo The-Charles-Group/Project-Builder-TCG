@@ -1,0 +1,3167 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Agency Project Builder</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/static_weights.css" />
+  <!-- Frappe Gantt Library -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
+  <!-- AI Assistant -->
+  <script src="/static/ai_assistant.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Agency Project Builder</h1>
+    <div class="sub">Build project estimates from RFPs with 2‑step AI assistance</div>
+  </header>
+
+  <main>
+    <!-- Step 1: Upload RFP -->
+    <section class="card" id="step1">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2 style="margin: 0;">Step 1 — Upload Your RFP / Brief</h2>
+        <button id="btnClearAllData" onclick="clearAllDataWithConfirmation()" 
+                style="background: #dc2626; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+          🗑️ Clear All Data
+        </button>
+      </div>
+      
+      <!-- Fast/Deep Mode Selector -->
+      <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #6366f1; font-size: 1.1em;">⚡ Analysis Mode</h3>
+        <div style="display: flex; gap: 12px;">
+          <button id="mode-fast" class="mode-btn mode-active" 
+                  onclick="setAnalysisMode('fast')"
+                  style="flex: 1; padding: 12px; background: #10b981; color: white; border: 2px solid #10b981; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;">
+            🚀 Fast Mode
+            <div style="font-size: 0.8em; font-weight: normal; margin-top: 4px;">Quick analysis (~150 deliverables)<br>Uses GPT-5 Mini • 30-60 seconds</div>
+          </button>
+          <button id="mode-deep" class="mode-btn"
+                  onclick="setAnalysisMode('deep')"
+                  style="flex: 1; padding: 12px; background: white; color: #6366f1; border: 2px solid #6366f1; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;">
+            🧠 Deep Mode
+            <div style="font-size: 0.8em; font-weight: normal; margin-top: 4px;">Comprehensive analysis (500+ deliverables)<br>Uses GPT-5 Thinking • 2-5 minutes</div>
+          </button>
+        </div>
+        <input type="hidden" id="analysis-mode" value="fast">
+      </div>
+      
+      <!-- Industry Template Selector -->
+      <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(217, 70, 239, 0.1), rgba(139, 92, 246, 0.1)); border: 1px solid rgba(217, 70, 239, 0.2); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #d946ef; font-size: 1.1em;">🏢 Industry Template</h3>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <select id="industry-selector" style="flex: 1; padding: 10px; background: #1a1a1a; color: white; border: 1px solid #4a5568; border-radius: 6px; font-size: 0.95em;">
+            <option value="">Select Industry (Optional)</option>
+            <option value="luxury_fashion">Luxury & Fashion</option>
+            <option value="beauty">Beauty & Cosmetics</option>
+            <option value="real_estate">Real Estate</option>
+            <option value="retail">Retail</option>
+            <option value="lifestyle">Lifestyle</option>
+            <option value="tech">Technology</option>
+          </select>
+          <button id="btn-apply-template" class="btn-sm" style="background: #d946ef; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; display: none;">
+            Apply Template
+          </button>
+        </div>
+        <div id="industry-info" style="margin-top: 8px; font-size: 0.85em; color: var(--muted); display: none;">
+          <div id="industry-description"></div>
+        </div>
+      </div>
+      
+      <!-- Paste option -->
+      <label for="rfpText">RFP Content</label>
+      <textarea id="rfpText" placeholder="Paste the RFP, agency brief, or request here..."></textarea>
+
+      <div style="margin:8px 0; text-align:center; color:var(--muted);">— or —</div>
+
+      <!-- Upload option -->
+      <label for="rfpFile">Upload File</label>
+      <input id="rfpFile" type="file" accept=".pdf,.docx,.txt,.md" multiple />
+      <div id="selected-files-list" style="margin-top: 8px; font-size: 0.85em; color: var(--muted);"></div>
+      
+      <!-- Import Previous Project -->
+      <div style="margin: 16px 0; padding: 12px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 6px;">
+        <label style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-weight: 600; color: #3b82f6;">📂 Import Previous Project</span>
+          <button id="btnImportProject" class="btn-sm" style="background: #3b82f6; color: white; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer;">
+            Import XML/Excel
+          </button>
+        </label>
+        <div style="font-size: 0.85em; color: var(--muted);">
+          Load a previously exported project from Excel or MS Project XML file
+        </div>
+        <input id="importFile" type="file" accept=".xlsx,.xls,.xml" style="display: none;" />
+      </div>
+      
+      <!-- Image Analysis Toggle -->
+      <div style="margin: 12px 0; padding: 8px 12px; background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 6px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9em;">
+          <input type="checkbox" id="analyzeImagesToggle" checked style="width: auto; margin: 0;">
+          <span>Analyze images with AI Vision (GPT-5)</span>
+        </label>
+        <div style="margin-top: 4px; font-size: 0.8em; color: var(--muted); padding-left: 28px;">
+          Smart two-tier analysis: Quick scan for relevance, then deep analysis of diagrams/charts only
+        </div>
+      </div>
+      
+      <!-- Image Analysis Progress Bar -->
+      <div id="image-progress-container" style="display: none; margin: 16px 0; padding: 12px; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <strong style="color: var(--accent); font-size: 0.95em;">🔍 Analyzing Images with AI Vision</strong>
+          <span id="image-progress-percentage" style="font-weight: 600; color: var(--accent);">0%</span>
+        </div>
+        <div style="width: 100%; height: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden; margin-bottom: 8px;">
+          <div id="image-progress-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #667eea, #764ba2); transition: width 0.3s ease;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.85em; color: var(--muted);">
+          <span id="image-progress-status">Preparing...</span>
+          <span id="image-progress-eta"></span>
+        </div>
+        <div id="image-progress-errors" style="margin-top: 8px; padding: 8px; background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: 4px; color: #fca5a5; font-size: 0.85em; display: none;"></div>
+      </div>
+      
+      <div class="actions">
+        <button id="btnAnalyze">Analyze with AI</button>
+      </div>
+      <div class="hint">Upload your RFP to get AI-powered analysis and reconciliation. <br><small>File uploads: Max 20MB per file • Supports PDF, DOCX, TXT, MD • Multiple files supported</small></div>
+    </section>
+
+    <!-- Step 2: Deliverable Selection (Restructured) -->
+    <section class="card" id="step2" style="display:none;">
+      <h2>Step 2 — Select & Configure Deliverables</h2>
+      
+      <!-- DEPRECATED: Old weighted AI button (hidden - now using GPT-5 Pro planner) -->
+      <div style="margin-bottom: 16px; display: none; gap: 12px; align-items: center;">
+        <button id="btn-ask-ai-weights" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+          🤖 Ask AI for Deliverable Suggestions
+        </button>
+        <small style="color: var(--muted);">Get AI-powered recommendations based on your RFP (using weighted matching)</small>
+      </div>
+
+      <!-- Weighted Suggestions Display (initially hidden) -->
+      <div id="step2-ai-weights-container" style="margin-bottom: 20px; display: none;">
+        <div style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 16px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0; color: var(--accent);">📊 Weighted AI Match Results</h3>
+            <button id="btn-close-weights" class="btn-sm">✕ Close</button>
+          </div>
+          <div id="step2-ai-weights"></div>
+        </div>
+      </div>
+      
+      <!-- NEW: AI Planner Panel (GPT-5 Pro) -->
+      <div class="ai-analysis-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h3 style="margin: 0; color: var(--accent);">🧠 GPT-5 Pro AI Planner</h3>
+          <span style="font-size: 0.85em; color: var(--muted);">Evidence-backed • Reasoning-powered</span>
+        </div>
+        
+        <!-- AI Summary Panel -->
+        <div id="ai-summary-panel">
+          <p style="color: var(--muted); font-size: 0.9em; margin: 0;">Click "Analyze with AI" above to get summary + suggestions in one call.</p>
+        </div>
+        
+        <!-- AI Suggestions Panel -->
+        <div id="ai-suggestions-panel">
+        </div>
+      </div>
+      
+      <!-- Selection Grid (3 Columns) -->
+      <div class="selection-grid" style="display: grid; grid-template-columns: 1fr 1fr 350px; gap: 16px; margin-bottom: 20px;">
+        
+        <!-- Column 1: Deliverables (Level 1) -->
+        <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
+          <h3 style="font-size: 1em; margin: 0 0 12px 0;">1️⃣ Deliverables</h3>
+          <input id="s2-deliv-search" type="search" placeholder="Search…" autocomplete="off" 
+                 style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <button id="s2-deliv-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">All</button>
+            <button id="s2-deliv-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Clear</button>
+          </div>
+          <div id="s2-deliv-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;"></div>
+        </div>
+
+        <!-- Column 2: Components (Level 2) -->
+        <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="font-size: 1em; margin: 0;">2️⃣ Components</h3>
+            <button id="s2-comp-suggest" type="button" class="btn-ghost" style="font-size:0.85em;" title="AI suggest relevant components">Suggest</button>
+          </div>
+          <input id="s2-comp-search" type="search" placeholder="Search components…" autocomplete="off" 
+                 style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <button id="s2-comp-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">All</button>
+            <button id="s2-comp-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Clear</button>
+          </div>
+          <div id="s2-comp-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;">
+            <p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a deliverable to view components</p>
+          </div>
+        </div>
+
+        <!-- Column 3: L2 Tasks (Level 3) -->
+        <div class="selection-panel" style="border: 1px solid #2a2a2a; border-radius: 8px; padding: 12px; background: rgba(255,255,255,0.02);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="font-size: 1em; margin: 0;">3️⃣ L2 Tasks</h3>
+            <button id="s2-l3-suggest" type="button" class="btn-ghost" style="font-size:0.85em;" title="AI suggest relevant tasks">Suggest</button>
+          </div>
+          <input id="s2-l3-search" type="search" placeholder="Search tasks…" autocomplete="off" 
+                 style="width:100%; margin-bottom:8px; padding:6px 10px; border:1px solid #2a2a2a; border-radius:4px; background:#1a1a1a; color:#fff; font-size: 0.9em;">
+          <div style="display:flex; gap:6px; margin-bottom:8px;">
+            <button id="s2-l3-selectall" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">All</button>
+            <button id="s2-l3-clear" type="button" class="btn-sm" style="flex:1; font-size:0.85em;">Clear</button>
+          </div>
+          <div id="s2-l3-list" style="border:1px solid #2a2a2a; border-radius:6px; height:400px; overflow:auto; padding: 6px;">
+            <p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its L2 tasks</p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Selection Summary Panel -->
+      <div style="margin-top: 24px; padding: 16px; background: rgba(139, 92, 246, 0.05); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px;">
+        <h3 style="font-size: 1.1em; margin: 0 0 12px 0; color: var(--accent);">📋 Selection Summary</h3>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; text-align: center;">
+          <div>
+            <div style="font-size: 2em; font-weight: bold; color: var(--accent);" id="s2-summary-deliverables">0</div>
+            <div style="color: var(--muted); font-size: 0.9em;">Deliverables</div>
+          </div>
+          <div>
+            <div style="font-size: 2em; font-weight: bold; color: var(--accent2);" id="s2-summary-components">0</div>
+            <div style="color: var(--muted); font-size: 0.9em;">Components</div>
+          </div>
+          <div>
+            <div style="font-size: 2em; font-weight: bold; color: #10b981;" id="s2-summary-l3">0</div>
+            <div style="color: var(--muted); font-size: 0.9em;">L2 Tasks</div>
+          </div>
+        </div>
+        
+        <!-- ADD GLOBAL RETAINER BUTTON -->
+        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(139, 92, 246, 0.15); text-align: center;">
+          <button id="btn-global-retainer-suggest" onclick="askAIForRetainerSuggestions()" 
+                  style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            🤖 AI Suggest Retainer Items
+          </button>
+        </div>
+        
+        <!-- XML Export Options -->
+        <div style="margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.85em;">
+            <input type="checkbox" id="toggle-anchors" style="cursor: pointer;">
+            <span title="Include START/END milestone anchors for each deliverable in XML exports">Include Start/End anchors in XML</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="actions" style="margin-top: 20px;">
+        <button id="btnProceedToStep3" class="btn-primary">Proceed to Pricing</button>
+        <button id="learnBtn" type="button" style="background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-left: 10px;">LEARN (opt-in)</button>
+      </div>
+    </section>
+
+    <!-- Stage 2: AI Analysis & Reconciliation (Original) -->
+    <section id="stage2" style="display:none;">
+      <h2>Stage 2 — AI Analysis & Reconciliation</h2>
+      
+      <div class="stage2-grid">
+        <!-- Left Panel: Database Plan (Average Scenario) -->
+        <section id="left-panel">
+          <h3>Database Plan — Average</h3>
+          <div id="left-list"></div>
+          <div id="left-total"></div>
+        </section>
+
+        <!-- Middle Panel: Reconcile -->
+        <section id="middle-panel">
+          <h3>Reconcile</h3>
+          
+          <h4>Add (left-out)</h4>
+          <form id="add-form"></form>
+          
+          <h4>Delete (not relevant)</h4>
+          <form id="del-form" class="danger"></form>
+          
+          <h4>Unchanged</h4>
+          <div id="unchanged-list"></div>
+          
+          <button id="apply-btn">Apply Selection</button>
+        </section>
+
+        <!-- Right Panel: AI Summary -->
+        <section id="right-panel">
+          <h3>AI Summary</h3>
+          <div id="wordcount"></div>
+          <pre id="summary"></pre>
+          
+          <!-- Retainer Suggestions -->
+          <div id="retainer-hints" style="margin-top: 16px; display: none;">
+            <h4 style="color: var(--accent2); margin-bottom: 8px;">🔄 Retainer Opportunities Detected</h4>
+            <div id="retainer-list" class="hint"></div>
+            <p class="hint" style="font-size: 12px; margin-top: 8px;">
+              These deliverables appear suitable for ongoing monthly engagements. You can specify retainer months in Step 3.
+            </p>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- Step 3: Pricing -->
+    <section class="card" id="step3" style="display:none;">
+      <h2>Step 3 — Pricing Configuration</h2>
+      
+      <!-- Build Scenario Panel - MOVED TO TOP -->
+      <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h3 style="margin: 0 0 8px 0; color: var(--accent2); font-size: 1.1em;">🚀 Build Your Scenario First</h3>
+            <p style="color: var(--muted); font-size: 0.85em; margin: 0;">
+              Create your initial pricing scenario based on selected deliverables. This is required before using AI optimization features.
+            </p>
+          </div>
+          <button id="btnBuild" class="btn-primary" style="background: var(--accent2); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1.1em;">
+            Build Scenario
+          </button>
+        </div>
+      </div>
+      
+      <!-- Project Configuration Grid -->
+      <div class="grid" style="margin-bottom:20px;">
+        <div>
+          <label for="projectStart">Project start</label>
+          <input id="projectStart" type="datetime-local" />
+          <small style="color: var(--muted); display: block; margin-top: 4px;">Defaults to next Monday 09:00 local</small>
+        </div>
+        <div>
+          <label for="projectName">Project name</label>
+          <input id="projectName" type="text" placeholder="e.g., Casa Dragones" />
+        </div>
+        <div>
+          <label for="clientBudget">Client budget (USD)</label>
+          <input id="clientBudget" type="number" step="1000" placeholder="e.g., 150000" />
+        </div>
+        <div>
+          <label for="pricingMode">Pricing mode</label>
+          <select id="pricingMode">
+            <option value="Flat_Blended">Flat_Blended</option>
+            <option value="Per_Resource">Per_Resource</option>
+          </select>
+        </div>
+        <div>
+          <label for="blendedRate">Blended rate (optional)</label>
+          <input id="blendedRate" type="number" step="1" value="195" placeholder="195" />
+        </div>
+        <div>
+          <label for="rateBand">Rate band</label>
+          <select id="rateBand">
+            <!-- Options populated from API -->
+          </select>
+        </div>
+        <div>
+          <label for="complexity">Complexity</label>
+          <select id="complexity">
+            <!-- Options populated from API -->
+          </select>
+        </div>
+        <div>
+          <label for="volumeTier">Volume tier</label>
+          <select id="volumeTier">
+            <!-- Options populated from API -->
+          </select>
+        </div>
+      </div>
+
+
+      <!-- Pricing Details Table -->
+      <div class="pricing-table-container" style="margin-bottom: 20px;">
+        <h3 style="font-size: 1.1em; margin-bottom: 12px; color: var(--text);">📊 Deliverable Pricing Details</h3>
+        <div id="pricing-table-wrapper" style="background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto;">
+          <table id="pricing-details-table" style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid var(--border);">
+                <th style="padding: 8px; text-align: left; color: var(--muted);">Deliverable / Component</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Type</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Months</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Hours</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Rate</th>
+                <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
+                <th style="padding: 8px; text-align: left; color: var(--muted);">Resources</th>
+              </tr>
+            </thead>
+            <tbody id="pricing-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- Re-build Scenario Button -->
+        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+          <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
+                  style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            🔄 Re-build Scenario
+          </button>
+        </div>
+      </div>
+
+      <!-- Enhanced Summary Panel -->
+      <div class="pricing-summary-panel" style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+        <!-- One-Time Deliverables -->
+        <div style="background: rgba(106, 163, 255, 0.08); border: 1px solid rgba(106, 163, 255, 0.2); border-radius: 8px; padding: 16px;">
+          <h4 style="margin: 0 0 12px 0; color: var(--accent); font-size: 1em;">📦 One-Time Deliverables</h4>
+          <div id="one-time-summary">
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Items:</span>
+              <strong id="one-time-count" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Total Hours:</span>
+              <strong id="one-time-hours" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0 0 0;">
+              <span style="color: var(--text); font-weight: 500;">Total Cost:</span>
+              <strong id="one-time-cost" style="color: var(--accent); font-size: 1.1em;">$0</strong>
+            </div>
+          </div>
+        </div>
+
+        <!-- Monthly Retainer Services -->
+        <div style="background: rgba(61, 220, 151, 0.08); border: 1px solid rgba(61, 220, 151, 0.2); border-radius: 8px; padding: 16px;">
+          <h4 style="margin: 0 0 12px 0; color: var(--accent2); font-size: 1em;">🔄 Monthly Retainer Services</h4>
+          <div id="retainer-summary">
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Items:</span>
+              <strong id="retainer-count" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Monthly Hours:</span>
+              <strong id="retainer-monthly-hours" style="color: var(--text);">0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
+              <span style="color: var(--muted); font-size: 0.9em;">Monthly Cost:</span>
+              <strong id="retainer-monthly-cost" style="color: var(--text);">$0</strong>
+            </div>
+            <div style="display: flex; justify-content: space-between; padding: 8px 0 0 0;">
+              <span style="color: var(--text); font-weight: 500;">Annual Cost:</span>
+              <strong id="retainer-annual-cost" style="color: var(--accent2); font-size: 1.1em;">$0</strong>
+            </div>
+            <div id="retainer-items-list" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); max-height: 150px; overflow-y: auto;">
+              <!-- List of retainer items -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Grand Total -->
+      <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(106, 163, 255, 0.1)); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 20px; text-align: center;">
+        <h4 style="margin: 0 0 8px 0; color: var(--text);">Grand Total</h4>
+        <div style="font-size: 2em; font-weight: bold; color: var(--accent);" id="grand-total-cost">$0</div>
+        <small style="color: var(--muted);" id="grand-total-breakdown">One-time + 12 months retainer</small>
+      </div>
+
+      <div class="scenarios">
+        <div class="scenario">
+          <h3>Project Scenario</h3>
+          <div id="scenarioA">(No data)</div>
+        </div>
+      </div>
+
+      <!-- AI Pricing Assistant Panel - MOVED AFTER SCENARIO TABLE -->
+      <div class="ai-pricing-panel" style="background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px; padding: 16px; margin-top: 20px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; color: var(--accent); font-size: 1.1em;">🤖 AI Pricing Assistant</h3>
+          <div style="display: flex; gap: 12px;">
+            <button id="btn-ai-suggest-type" onclick="analyzeProjectRetainer()" 
+                    style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+              🤖 AI Suggest Type
+            </button>
+            <button id="btn-ai-optimize-pricing" class="btn-primary" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
+              Optimize All Pricing
+            </button>
+          </div>
+        </div>
+        <p style="color: var(--muted); font-size: 0.85em; margin-top: 8px; margin-bottom: 0;">
+          After building your scenario, use AI to suggest deliverable types (Project vs Retainer) and optimize pricing based on budget constraints.
+        </p>
+      </div>
+
+      <div class="inline">
+        <button id="btn-export-pricing" class="btn-secondary">Export Pricing Details</button>
+      </div>
+    </section>
+
+    <!-- AI Redistribution Modal -->
+    <div id="redistribution-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000;">
+      <div class="modal-content" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--card); border: 1px solid var(--accent); border-radius: 12px; padding: 24px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h3 style="margin: 0; color: var(--accent);">🤖 AI Hour Redistribution</h3>
+          <button onclick="closeRedistributionModal()" style="background: transparent; border: none; color: var(--text); font-size: 1.5em; cursor: pointer;">×</button>
+        </div>
+        <div id="redistribution-content">
+          <!-- AI suggestions will be populated here -->
+        </div>
+        <div style="display: flex; gap: 12px; justify-content: flex-end; margin-top: 20px;">
+          <button onclick="applyRedistribution()" class="btn-primary">Apply Changes</button>
+          <button onclick="closeRedistributionModal()" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Monthly Hours Grid Modal -->
+    <div id="monthly-hours-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 1000;">
+      <div class="modal-content" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--card); border: 1px solid var(--accent2); border-radius: 12px; padding: 24px; width: 90%; max-width: 800px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h3 style="margin: 0; color: var(--accent2);">📅 Configure Monthly Hours</h3>
+          <button onclick="closeMonthlyHoursModal()" style="background: transparent; border: none; color: var(--text); font-size: 1.5em; cursor: pointer;">×</button>
+        </div>
+        <div id="monthly-hours-content">
+          <!-- Monthly hours grid will be populated here -->
+        </div>
+        <div style="display: flex; gap: 12px; justify-content: space-between; margin-top: 20px;">
+          <button onclick="aiSuggestMonthlyDistribution()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">
+            🤖 AI Suggest Distribution
+          </button>
+          <div style="display: flex; gap: 12px;">
+            <button onclick="saveMonthlyHours()" class="btn-primary">Save</button>
+            <button onclick="closeMonthlyHoursModal()" class="btn-secondary">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: Project Timeline & Scheduling -->
+    <section class="card" id="step4" style="display:none;">
+      <h2>Step 4 — Project Timeline & Scheduling</h2>
+      
+      <!-- Timeline Controls & AI Actions -->
+      <div id="timeline-controls" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+        <div style="display:flex; gap:12px; align-items:center;">
+          <!-- View Mode Selector -->
+          <label style="display:flex; align-items:center; gap:6px;">
+            <span style="font-size:0.9em; color:var(--muted);">View:</span>
+            <select id="gantt-view-mode" style="padding:6px 10px; border-radius:6px;">
+              <option value="Quarter Day">Quarter Day</option>
+              <option value="Half Day">Half Day</option>
+              <option value="Day" selected>Day</option>
+              <option value="Week">Week</option>
+              <option value="Month">Month</option>
+            </select>
+          </label>
+          
+          <!-- Optimization Mode -->
+          <label style="display:flex; align-items:center; gap:6px;">
+            <span style="font-size:0.9em; color:var(--muted);">Optimize for:</span>
+            <select id="timeline-optimization" style="padding:6px 10px; border-radius:6px;">
+              <option value="balanced" selected>Balanced</option>
+              <option value="speed">Speed (Fastest Delivery)</option>
+              <option value="quality">Quality (More Time)</option>
+              <option value="cost">Cost (Resource Efficiency)</option>
+            </select>
+          </label>
+        </div>
+        
+        <!-- AI Actions -->
+        <div style="display:flex; gap:12px;">
+          <button id="btn-generate-timeline" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:10px 20px; border:none; border-radius:6px; cursor:pointer; font-weight:600;">
+            🤖 Generate AI Timeline
+          </button>
+          <button id="btn-toggle-reasoning" class="ghost" style="padding:10px 16px;">
+            📊 AI Reasoning
+          </button>
+          <button id="btn-save-timeline" class="btn-sm" style="display:none;">Save Changes</button>
+        </div>
+      </div>
+      
+      <!-- Loading Indicator -->
+      <div id="timeline-loading" style="display:none; text-align:center; padding:40px;">
+        <div style="display:inline-block; padding:20px; background:rgba(139,92,246,0.1); border-radius:12px;">
+          <div style="font-size:2em; animation:pulse 1.5s infinite;">⚡</div>
+          <p style="margin:12px 0 0; color:var(--accent);">AI is optimizing your project timeline...</p>
+          <p style="margin:6px 0 0; font-size:0.9em; color:var(--muted);">Analyzing dependencies and resource allocation</p>
+        </div>
+      </div>
+      
+      <!-- Main Timeline Container (with AI Reasoning Panel) -->
+      <div style="display:flex; gap:16px; position:relative;">
+        <!-- Gantt Chart Container -->
+        <div id="gantt-container" style="flex:1; min-height:400px; background:#0b0e13; border:1px solid var(--border); border-radius:8px; padding:16px; overflow:auto;">
+          <!-- Fallback Table (shown when Gantt not loaded) -->
+          <table id="tl-table" class="table-compact" style="width:100%; display:none;">
+            <thead>
+              <tr><th>Deliverable</th><th>Start</th><th>End</th><th>Duration</th></tr>
+            </thead>
+            <tbody id="tl-body"></tbody>
+          </table>
+          
+          <!-- Gantt Chart SVG will be rendered here -->
+          <svg id="gantt"></svg>
+        </div>
+        
+        <!-- AI Reasoning Panel (initially hidden) -->
+        <div id="ai-reasoning-panel" style="width:350px; display:none; background:rgba(139,92,246,0.05); border:1px solid rgba(139,92,246,0.2); border-radius:8px; padding:16px; max-height:600px; overflow-y:auto;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+            <h3 style="margin:0; color:var(--accent); font-size:1.1em;">🧠 AI Timeline Analysis</h3>
+            <button onclick="document.getElementById('ai-reasoning-panel').style.display='none'" class="btn-sm" style="padding:4px 8px;">×</button>
+          </div>
+          
+          <!-- Overall Strategy -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Strategy</h4>
+            <p id="ai-strategy" style="font-size:0.85em; color:var(--muted); line-height:1.4;">Waiting for AI analysis...</p>
+          </div>
+          
+          <!-- Confidence Score -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Confidence</h4>
+            <div style="display:flex; align-items:center; gap:10px;">
+              <div style="flex:1; height:8px; background:rgba(255,255,255,0.1); border-radius:4px; overflow:hidden;">
+                <div id="ai-confidence-bar" style="width:75%; height:100%; background:linear-gradient(90deg, #667eea, #764ba2);"></div>
+              </div>
+              <span id="ai-confidence-text" style="font-size:0.9em; color:var(--accent); font-weight:600;">75%</span>
+            </div>
+          </div>
+          
+          <!-- Critical Path -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Critical Path</h4>
+            <p id="ai-critical-path" style="font-size:0.85em; color:var(--muted); line-height:1.4;">Identifying critical tasks...</p>
+          </div>
+          
+          <!-- Task Dependencies -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Key Dependencies</h4>
+            <ul id="ai-dependencies" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Loading...</li>
+            </ul>
+          </div>
+          
+          <!-- Optimization Notes -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Optimization Notes</h4>
+            <ul id="ai-optimization" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Loading...</li>
+            </ul>
+          </div>
+          
+          <!-- Parallel Opportunities -->
+          <div class="reasoning-section" style="margin-bottom:20px;">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Parallel Work Opportunities</h4>
+            <ul id="ai-parallel" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Analyzing...</li>
+            </ul>
+          </div>
+          
+          <!-- Risk Factors -->
+          <div class="reasoning-section">
+            <h4 style="color:var(--text); font-size:0.95em; margin:0 0 8px;">Risk Factors</h4>
+            <ul id="ai-risks" style="list-style:none; padding:0; margin:0;">
+              <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Evaluating risks...</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Timeline Metadata -->
+      <div id="timeline-metadata" style="margin-top:16px; padding:12px; background:rgba(255,255,255,0.02); border-radius:6px; display:none;">
+        <div style="display:flex; justify-content:space-around; text-align:center;">
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Total Duration</div>
+            <div id="meta-duration" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Tasks</div>
+            <div id="meta-tasks" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Critical Tasks</div>
+            <div id="meta-critical" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+          <div>
+            <div style="color:var(--muted); font-size:0.85em;">Departments</div>
+            <div id="meta-departments" style="color:var(--text); font-weight:600;">-</div>
+          </div>
+        </div>
+      </div>
+      
+      <style>
+        /* Gantt Chart Custom Styles */
+        #gantt .gantt-container {
+          font-family: system-ui, -apple-system, sans-serif;
+          font-size: 13px;
+        }
+        #gantt .bar {
+          cursor: move;
+        }
+        #gantt .bar-progress {
+          opacity: 0.8;
+        }
+        /* Department-based colors */
+        #gantt .dept-strategy .bar { fill: #667eea !important; }
+        #gantt .dept-creative .bar { fill: #f56565 !important; }
+        #gantt .dept-paid-media .bar { fill: #48bb78 !important; }
+        #gantt .dept-content .bar { fill: #ed8936 !important; }
+        #gantt .dept-technology .bar { fill: #4299e1 !important; }
+        #gantt .dept-integrated-marketing-management .bar { fill: #9f7aea !important; }
+        
+        /* Critical path highlighting */
+        #gantt .critical-path .bar {
+          stroke: #fbbf24 !important;
+          stroke-width: 2px !important;
+        }
+        
+        /* Animation */
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.5; }
+        }
+        
+        /* Timeline controls */
+        #timeline-controls button.active {
+          font-weight: 700;
+          text-decoration: underline;
+        }
+        
+        /* Fallback table styles */
+        #tl-body .tl-row { cursor: move; }
+        #tl-body .tl-row.dragging { opacity: .6; outline: 2px dashed #aaa; }
+        
+        /* Timeline workstream headers */
+        .workstream-header {
+          background: rgba(139, 92, 246, 0.1);
+          border-left: 3px solid var(--accent);
+        }
+        .workstream-header td {
+          padding: 10px 12px;
+          font-size: 0.95em;
+          color: var(--accent);
+        }
+        
+        /* Retainer task styling */
+        .retainer-task {
+          background: rgba(34, 197, 94, 0.05);
+          border-left: 2px solid #22c55e;
+        }
+        .retainer-task td:first-child::after {
+          content: ' (monthly)';
+          color: var(--muted);
+          font-size: 0.85em;
+        }
+        
+        /* Milestone marker styling */
+        .milestone-task {
+          background: rgba(251, 191, 36, 0.05);
+          border-left: 2px solid #fbbf24;
+          font-weight: 600;
+        }
+        
+        /* Critical path highlighting */
+        .critical-path {
+          background: rgba(251, 191, 36, 0.08);
+          position: relative;
+        }
+        .critical-path::before {
+          content: '⚡';
+          position: absolute;
+          left: -20px;
+          color: #fbbf24;
+        }
+        
+        /* AI reasoning panel */
+        #ai-reasoning-panel {
+          animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+          from { 
+            transform: translateX(20px); 
+            opacity: 0; 
+          }
+          to { 
+            transform: translateX(0); 
+            opacity: 1; 
+          }
+        }
+        
+        /* Timeline loading animation */
+        #timeline-loading {
+          animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        
+        /* Gantt container improvements */
+        #gantt-container {
+          position: relative;
+          min-height: 500px;
+        }
+        #gantt-container::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: linear-gradient(180deg, transparent 0%, rgba(139, 92, 246, 0.03) 100%);
+          pointer-events: none;
+          z-index: 0;
+        }
+        
+        /* Timeline metadata styling */
+        #timeline-metadata {
+          border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+        #timeline-metadata > div > div > div:first-child {
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          font-size: 0.75em;
+        }
+      </style>
+      
+      <!-- Resource Risk Management Table -->
+      <div id="resource-risk-section" style="margin-top: 30px; padding: 20px; background: var(--card); border-radius: 8px; display: none;">
+        <h3 style="color: var(--text); margin-bottom: 16px;">⚠️ Resource Risk Management</h3>
+        <div id="resource-risk-summary" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 6px; padding: 12px; margin-bottom: 16px;">
+          <div style="font-size: 0.9em; color: var(--text);">
+            <strong>Risk Summary:</strong> <span id="risk-summary-text">No resource conflicts detected</span>
+          </div>
+        </div>
+        
+        <table id="resource-risk-table" style="width: 100%; border-collapse: separate; border-spacing: 0;">
+          <thead>
+            <tr style="background: var(--bg); border-bottom: 2px solid var(--border);">
+              <th style="padding: 12px; text-align: left;">Resource/Vendor</th>
+              <th style="padding: 12px; text-align: left;">Waiting Period</th>
+              <th style="padding: 12px; text-align: right;">Idle Time Cost</th>
+              <th style="padding: 12px; text-align: center;">Risk Level</th>
+              <th style="padding: 12px; text-align: left;">Recommendation</th>
+            </tr>
+          </thead>
+          <tbody id="resource-risk-tbody">
+            <!-- Populated dynamically -->
+          </tbody>
+        </table>
+        
+        <div style="margin-top: 16px; padding: 12px; background: rgba(139, 92, 246, 0.05); border-radius: 6px;">
+          <div style="font-size: 0.85em; color: var(--muted);">
+            <strong>💡 Tip:</strong> Red arrows (🔴→) in the Gantt chart indicate resources at risk due to waiting periods. Consider redistributing work to minimize idle time costs.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 5: Export -->
+    <section class="card" id="step5" style="display:none;">
+      <h2>Step 5 — Export</h2>
+      <div class="inline" style="margin-bottom:16px;">
+        <label>Export format:
+          <select id="export-format">
+            <option value="xlsx" selected>Excel (.xlsx)</option>
+            <option value="csv">CSV (.csv)</option>
+          </select>
+        </label>
+      </div>
+      <div class="inline">
+        <button id="btn-export-a">Export Excel</button>
+      </div>
+      
+      <div class="inline" style="margin-top: 8px;">
+        <small style="color: var(--muted); display: block; margin-bottom: 4px;">📊 Microsoft Project XML Export:</small>
+        <button id="btn-export-xml-a">Export XML</button>
+      </div>
+      
+      <!-- Final Ship Section -->
+      <div style="margin-top: 32px; padding: 20px; background: linear-gradient(135deg, rgba(220, 38, 38, 0.1), rgba(239, 68, 68, 0.1)); border: 2px solid rgba(220, 38, 38, 0.3); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #ef4444;">🚢 Final Ship - Lock & Export All</h3>
+        <p style="color: var(--muted); font-size: 0.9em; margin-bottom: 16px;">
+          This will finalize your project, lock all data, and generate comprehensive exports including all scenarios, pricing, and timeline data.
+        </p>
+        <button id="btn-final-ship" style="background: linear-gradient(135deg, #dc2626, #ef4444); color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1em;">
+          🔒 Final Ship Project
+        </button>
+        <div id="final-ship-status" style="margin-top: 12px; display: none;">
+          <div style="padding: 12px; background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 6px;">
+            <strong style="color: #22c55e;">✅ Project Shipped Successfully!</strong>
+            <div id="final-ship-downloads" style="margin-top: 8px;"></div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Build Second Scenario Section -->
+      <div style="margin-top: 24px; padding: 20px; background: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(16, 185, 129, 0.1)); border: 2px solid rgba(5, 150, 105, 0.3); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #10b981;">🔄 Build Alternative Scenarios</h3>
+        <p style="color: var(--muted); font-size: 0.9em; margin-bottom: 16px;">
+          Create alternative versions of your project while preserving the original. Compare different approaches side-by-side.
+        </p>
+        <div style="display: flex; gap: 12px;">
+          <button id="btn-build-second-scenario" style="background: #059669; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Create Version 2
+          </button>
+          <button id="btn-compare-versions" style="background: #0891b2; color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Compare Versions
+          </button>
+        </div>
+        <div id="version-list" style="margin-top: 16px; display: none;">
+          <h4 style="color: var(--accent); margin-bottom: 8px;">Available Versions:</h4>
+          <div id="version-items"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+
+  <script>
+    // --- Safe DOM helpers ---
+    const $ = (id) => document.getElementById(id);
+    const setHTML = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
+    const setText  = (id, text) => { const el = $(id); if (el) el.textContent = text; };
+
+    // Ensure Stage-2 containers exist so we never write into null nodes
+    function ensureStage2Dom() {
+      const targets = {
+        'left-list':   '#left-panel',
+        'left-total':  '#left-panel',
+        'add-form':    '#middle-panel',
+        'del-form':    '#middle-panel',
+        'summary':     '#right-panel',
+        'wordcount':   '#right-panel'
+      };
+      for (const [id, parentSel] of Object.entries(targets)) {
+        if (!$(id)) {
+          const parent = document.querySelector(parentSel) || document.body;
+          const tag = (id === 'summary') ? 'pre' : (id.endsWith('form') ? 'form' : 'div');
+          const el = document.createElement(tag);
+          el.id = id;
+          parent.appendChild(el);
+        }
+      }
+    }
+    document.addEventListener('DOMContentLoaded', ensureStage2Dom);
+
+    // App state management
+    const appState = {
+      selectedCodes: [],        // critical for Step 3 build
+      currentRfpText: '',       // current RFP content
+      aiSummary: null,          // AI analysis results
+      reconciliation: null,     // reconciliation results
+      leftPanelScenario: null,  // scenario data for left panel
+      scenarios: null           // built scenarios (moved to appState)
+    };
+    
+    // Legacy compatibility alias for latestScenarios
+    window.appState = window.appState || {};
+    Object.defineProperty(window, 'latestScenarios', {
+      get() { return window.appState.scenarios; },
+      set(v) { window.appState.scenarios = v; }
+    });
+    
+    // Global data
+    let allDeliverables = [];   // from /api/options
+
+    async function loadOptions() {
+      const res = await fetch('/api/options');
+      const data = await res.json();
+      allDeliverables = data.deliverables || [];
+      
+      // Populate dropdowns
+      populateDropdown('rateBand', data.rate_bands || [], 'Standard_US');
+      populateDropdown('complexity', data.complexities || [], 'Advanced');
+      populateDropdown('volumeTier', data.tiers || [], 'T2_MediumVolume');
+    }
+
+    function populateDropdown(elementId, options, defaultValue) {
+      const select = document.getElementById(elementId);
+      if (!select) return;
+      
+      select.innerHTML = '';
+      options.forEach(option => {
+        const optEl = document.createElement('option');
+        optEl.value = option;
+        optEl.textContent = option;
+        if (option === defaultValue) optEl.selected = true;
+        select.appendChild(optEl);
+      });
+    }
+
+    function codeToName(code) {
+      // Use labelFor if available (from app.js), otherwise use local defensive lookup
+      if (typeof labelFor === 'function') {
+        return labelFor(code);
+      }
+      // Fallback: local defensive lookup with case-insensitive matching
+      const exact = allDeliverables.find(d => String(d.Deliverable_Code).trim() === String(code).trim());
+      if (exact) return exact.Deliverable;
+      const lower = String(code).trim().toLowerCase();
+      const caseInsensitive = allDeliverables.find(d => String(d.Deliverable_Code).trim().toLowerCase() === lower);
+      return caseInsensitive ? caseInsensitive.Deliverable : code;
+    }
+
+    // Stage 2: AI Analysis
+    async function analyzeRfp() {
+      const fileEl = document.getElementById('rfpFile');
+      const textArea = document.getElementById('rfpText');
+      
+      if (fileEl.files && fileEl.files.length > 0) {
+        await analyzeFromFile();
+      } else if (textArea.value.trim()) {
+        await analyzeFromText();
+      } else {
+        alert('Please provide RFP content either by uploading a file or pasting text.');
+        return;
+      }
+    }
+
+    async function analyzeFromFile() {
+      const fileEl = document.getElementById('rfpFile');
+      const btn = document.getElementById('btnAnalyze');
+      
+      btn.disabled = true;
+      btn.textContent = 'Analyzing...';
+
+      try {
+        ensureStage2Dom();
+
+        const fd = new FormData();
+        fd.append('file', fileEl.files[0]);
+
+        // 1) AI Summary (right panel, GPT-5 only)
+        const sum = await fetch('/api/summarize_by_file', { method: 'POST', body: fd }).then(r => r.json());
+        appState.aiSummary = sum;
+
+        setText('wordcount', `${sum.word_count}/500 words`);
+        setText('summary', sum.summary_text);
+
+        // 2) DB suggestions (left) strictly from rules
+        const sugg = await fetch('/api/suggest_by_file', { method: 'POST', body: fd }).then(r => r.json());
+        const selectedCodes = (sugg?.suggested || []).map(s => s.deliverable_code);
+        appState.selectedCodes = selectedCodes;
+        
+        // Store retainer suggestions
+        appState.retainerSuggestions = (sugg?.suggested || []).filter(s => s.retainer_hint);
+        displayRetainerHints(appState.retainerSuggestions);
+        
+        // Auto-populate project name field from uploaded filename
+        appState.uploadFilename = sugg.filename || appState.uploadFilename;
+        const base = (appState.uploadFilename || '').replace(/\.[^.]+$/, ''); // strip extension only
+        const projectInput = document.getElementById('projectName');
+        if (projectInput && !projectInput.value) projectInput.value = base;
+
+        // 3) Build Average scenario now to populate left panel with pricing
+        const scenarios = await fetch('/api/build', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            selected_deliverable_codes: selectedCodes,
+            pricing_mode: 'Flat_Blended',
+            blended_rate: 195,
+            rate_band: 'Standard_US',
+            scenario_a: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
+            scenario_b: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'}
+          })
+        }).then(r => r.json());
+
+        // Render left panel (Average = Scenario A)
+        renderLeftPanel(scenarios.A.items || [], scenarios.A.totals || {price_total:0});
+
+        // 4) Reconcile (middle panel) using AI labels vs selected codes
+        const aiLabels = (sum.deliverables || []).map(d => d.label);
+        const recon = await fetch('/api/reconcile', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            summary_deliverables: aiLabels,
+            db_selected_deliverable_codes: appState.selectedCodes    // keep panels in sync
+          })
+        }).then(r => r.json());
+
+        // --- NEW: auto-adopt AI "ADD" when DB gave nothing ---
+        if ((!appState.selectedCodes?.length) && (recon.add?.length)) {
+          appState.selectedCodes = recon.add.map(s => s.code);
+        }
+
+        appState.reconciliation = recon;
+        renderReconcile(recon);
+
+        // Set project name from filename
+        const baseName = (fileEl.files[0].name || '').replace(/\.[^.]+$/, '').trim();
+        if (baseName && !$('projectName').value) {
+          $('projectName').value = baseName;
+        }
+
+        // Show Step 2 (deliverable selection) instead of Stage 2
+        $('step2').style.display = 'block';
+        $('step2').scrollIntoView({ behavior: 'smooth' });
+        
+        // Initialize Step 2 picker with the built scenarios
+        if (window.initStep2DeliverablePicker) {
+          await window.initStep2DeliverablePicker(scenarios);
+        }
+        
+        // Sync merged RFP text to frontend state for Step 2 AI features
+        try {
+          const cacheRes = await fetch('/api/rfp/cache');
+          if (cacheRes.ok) {
+            const cacheData = await cacheRes.json();
+            if (cacheData.text) {
+              if (window.APB?.step2) {
+                window.APB.step2.rfpText = cacheData.text;
+              }
+              sessionStorage.setItem('apb.rfp_text', cacheData.text);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not sync RFP cache to frontend:', e);
+        }
+        
+      } catch (error) {
+        alert('Error analyzing file: ' + error.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Analyze with AI';
+      }
+    }
+
+    async function analyzeFromText() {
+      const textArea = document.getElementById('rfpText');
+      const btn = document.getElementById('btnAnalyze');
+      
+      appState.currentRfpText = textArea.value.trim();
+      
+      btn.disabled = true;
+      btn.textContent = 'Analyzing...';
+
+      try {
+        // Call AI Summary endpoint
+        const summaryRes = await fetch('/api/summarize', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ rfp_text: appState.currentRfpText })
+        });
+        
+        if (!summaryRes.ok) {
+          throw new Error(`AI Analysis failed: ${summaryRes.status}`);
+        }
+
+        appState.aiSummary = await summaryRes.json();
+
+        await performReconciliation();
+        
+      } catch (error) {
+        alert('Error analyzing text: ' + error.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Analyze with AI';
+      }
+    }
+
+    async function performReconciliation() {
+      try {
+        // Get suggestions for retainer hints
+        const suggRes = await fetch('/api/suggest_by_text', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ rfp_text: appState.currentRfpText })
+        });
+        
+        if (suggRes.ok) {
+          const suggData = await suggRes.json();
+          appState.retainerSuggestions = (suggData?.suggested || []).filter(s => s.retainer_hint);
+          displayRetainerHints(appState.retainerSuggestions);
+        }
+
+        // Step 1: Call /api/auto_build to seed the left panel with a real Average plan
+        const auto = await fetch('/api/auto_build', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            rfp_text: appState.currentRfpText,
+            pricing_mode: 'Flat_Blended',
+            blended_rate: 195,
+            rate_band: 'Standard_US',
+            use_slack: true,
+            slack_after_internal: 1,
+            slack_after_client: 2,
+            slack_global_pct: 0.05,
+            project_start: null,
+            scenario_a: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' },
+            scenario_b: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' }
+          })
+        });
+        
+        if (!auto.ok) {
+          throw new Error(`Auto build failed: ${auto.status}`);
+        }
+
+        const autoData = await auto.json();
+        
+        // Step 2: Seed the left panel + app state
+        const suggestedCodes = (autoData.scenarios?.A?.items || []).map(i => i.deliverable_code);
+        appState.selectedCodes = suggestedCodes;  // <-- critical for Step 3
+        appState.leftPanelScenario = autoData.scenarios.A;
+        
+        // Step 3: Call /api/reconcile using those codes so middle panel lines up with left
+        const recon = await fetch('/api/reconcile', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            summary_deliverables: appState.aiSummary.deliverables.map(d => d.label),
+            db_selected_deliverable_codes: appState.selectedCodes   // pass codes, not names
+          })
+        });
+        
+        if (!recon.ok) {
+          throw new Error(`Reconciliation failed: ${recon.status}`);
+        }
+
+        appState.reconciliation = await recon.json();
+        
+        // Update Stage 2 panels
+        updateRightPanel();
+        renderLeftPanel(autoData.scenarios.A.items, autoData.scenarios.A.totals);
+        renderReconcile(appState.reconciliation);
+        
+        // Show Step 2 (deliverable selection) instead of Stage 2
+        document.getElementById('step2').style.display = 'block';
+        document.getElementById('step2').scrollIntoView({ behavior: 'smooth' });
+        
+        // Initialize Step 2 picker with the built scenarios
+        if (window.initStep2DeliverablePicker) {
+          await window.initStep2DeliverablePicker(autoData.scenarios);
+        }
+        
+        // Sync RFP text to frontend state for Step 2 AI features
+        try {
+          const cacheRes = await fetch('/api/rfp/cache');
+          if (cacheRes.ok) {
+            const cacheData = await cacheRes.json();
+            if (cacheData.text) {
+              if (window.APB?.step2) {
+                window.APB.step2.rfpText = cacheData.text;
+              }
+              sessionStorage.setItem('apb.rfp_text', cacheData.text);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not sync RFP cache to frontend:', e);
+        }
+        
+      } catch (error) {
+        alert('Error performing reconciliation: ' + error.message);
+      }
+    }
+
+    // Stage 2: Panel Updates
+    function updateRightPanel() {
+      if (!appState.aiSummary) return;
+      
+      document.getElementById('wordcount').textContent = `${appState.aiSummary.word_count}/500 words`;
+      document.getElementById('summary').textContent = appState.aiSummary.summary_text;
+    }
+    
+    async function updateLeftPanel() {
+      if (!dbSelection || dbSelection.length === 0) {
+        document.getElementById('left-list').innerHTML = '<p>No deliverables selected</p>';
+        document.getElementById('left-total').textContent = 'Total: $0';
+        return;
+      }
+      
+      try {
+        // Build average scenario using existing logic
+        const avgSpec = { mode: "template", complexity: "Advanced", tier: "T2_MediumVolume" };
+        const payload = {
+          selected_deliverable_codes: dbSelection.map(s => s.deliverable_code),
+          scenario_a: avgSpec,
+          scenario_b: avgSpec,
+          pricing_mode: "Flat_Blended",
+          rate_band: "Standard_US",
+          use_slack: true,
+          slack_after_internal: 1,
+          slack_after_client: 2,
+          slack_global_pct: 0.05
+        };
+        
+        const res = await fetch('/api/build', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        
+        if (!res.ok) throw new Error('Failed to build average scenario');
+        
+        const scenarios = await res.json();
+        const avgScenario = scenarios.A;
+        
+        // Render left panel
+        let html = '';
+        if (avgScenario.items && avgScenario.items.length > 0) {
+          html = '<ul>';
+          avgScenario.items.forEach(item => {
+            html += `<li>${item.deliverable} - $${item.price.toLocaleString()}</li>`;
+          });
+          html += '</ul>';
+        } else {
+          html = '<p>No items</p>';
+        }
+        
+        document.getElementById('left-list').innerHTML = html;
+        document.getElementById('left-total').textContent = 
+          `Total: $${avgScenario.totals ? avgScenario.totals.price.toLocaleString() : '0'}`;
+          
+      } catch (error) {
+        console.error('Error updating left panel:', error);
+        document.getElementById('left-list').innerHTML = '<p>Error loading data</p>';
+        document.getElementById('left-total').textContent = 'Total: $0';
+      }
+    }
+    
+    function updateMiddlePanel() {
+      if (!reconciliation) return;
+      
+      // Render ADD checkboxes (pre-checked)
+      const addForm = document.getElementById('add-form');
+      addForm.innerHTML = '';
+      reconciliation.add.forEach((item, index) => {
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.preselect;
+        checkbox.value = item.code;
+        checkbox.name = 'add';
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(`${item.label} - ${item.reason}`));
+        addForm.appendChild(label);
+      });
+      
+      if (reconciliation.add.length === 0) {
+        addForm.innerHTML = '<p>No suggestions to add</p>';
+      }
+      
+      // Render DELETE checkboxes (pre-checked, in red)
+      const delForm = document.getElementById('del-form');
+      delForm.innerHTML = '';
+      reconciliation.delete.forEach((item, index) => {
+        const label = document.createElement('label');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.preselect;
+        checkbox.value = item.code;
+        checkbox.name = 'delete';
+        
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(`${item.label} - ${item.reason}`));
+        delForm.appendChild(label);
+      });
+      
+      if (reconciliation.delete.length === 0) {
+        delForm.innerHTML = '<p>No suggestions to remove</p>';
+      }
+      
+      // Render UNCHANGED items
+      const unchangedDiv = document.getElementById('unchanged-list');
+      if (reconciliation.unchanged && reconciliation.unchanged.length > 0) {
+        unchangedDiv.innerHTML = '<strong>Unchanged:</strong> ' + reconciliation.unchanged.join(', ');
+      } else {
+        unchangedDiv.innerHTML = '<em>No unchanged items</em>';
+      }
+    }
+
+    // Apply Selection (keeps Step 3 happy)
+    function applySelection() {
+      const curr = new Set(appState.selectedCodes || []);
+      document.querySelectorAll('#add-form input.add:checked').forEach(cb => curr.add(cb.dataset.code));
+      document.querySelectorAll('#del-form input.del:checked').forEach(cb => curr.delete(cb.dataset.code));
+      
+      const updatedSelection = [...curr];
+      
+      // Sync with all selection state systems
+      appState.selectedCodes = updatedSelection;
+      window.selectedCodes = updatedSelection;
+      
+      // Sync with Step 2 picker state if available
+      if (window.updateStep2PickerSelection) {
+        window.updateStep2PickerSelection(updatedSelection);
+      } else if (window.step2PickerState) {
+        // Direct state update as fallback
+        window.step2PickerState.selected.clear();
+        updatedSelection.forEach(code => window.step2PickerState.selected.add(code));
+      }
+      
+      console.log("Reconciliation applied - updated selection:", updatedSelection);
+      // Optionally, re-build Average to refresh left panel total after changes
+      rebuildLeftPanelWithNewSelection();
+      
+      // Update retainer controls for Step 3
+      updateRetainerControls();
+      
+      // Show Stage 3
+      $('step3').style.display = 'block';
+      $('step3').scrollIntoView({ behavior: 'smooth' });
+    }
+    
+    async function rebuildLeftPanelWithNewSelection() {
+      if (appState.selectedCodes.length === 0) {
+        setHTML('left-list', '<em>No deliverables selected</em>');
+        setText('left-total', 'Total: $0');
+        return;
+      }
+      
+      try {
+        // Prepare component selections for left panel rebuild
+        const selectedComponentsPayload = Object.fromEntries(
+          Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
+        );
+        
+        const payload = {
+          selected_deliverable_codes: appState.selectedCodes,
+          selected_components_map: selectedComponentsPayload,
+          pricing_mode: 'Flat_Blended',
+          blended_rate: 195,
+          rate_band: 'Standard_US',
+          scenario_a: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' },
+          scenario_b: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' }
+        };
+        
+        const res = await fetch('/api/build', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        
+        if (res.ok) {
+          const scenarios = await res.json();
+          renderLeftPanel(scenarios.A.items, scenarios.A.totals);
+        }
+      } catch (error) {
+        console.error('Error rebuilding left panel:', error);
+      }
+    }
+    
+    function displayBudgetInfo(scenarios) {
+      const clientBudget = getClientBudgetFromUI();
+      if (!clientBudget) return;
+      
+      // Helper function to render budget pill for a scenario
+      function renderBudgetPill(scenario) {
+        if (!scenario || !scenario.budget_info) return '';
+        
+        const budgetInfo = scenario.budget_info;
+        const delta = budgetInfo.budget_delta || 0;
+        const pct = budgetInfo.coverage_pct || 0;
+        const deltaPct = ((delta / clientBudget) * 100).toFixed(1);
+        
+        let html = '<div style="margin: 16px 0; padding: 12px; border-radius: 6px; background: rgba(255,255,255,0.05);">';
+        html += '<strong>Budget Analysis:</strong> ';
+        if (delta > 0) {
+          html += `<span style="color: #ef4444;">Over budget by $${Math.abs(delta).toLocaleString()} (${Math.abs(deltaPct)}%)</span>`;
+        } else {
+          html += `<span style="color: #10b981;">Under budget by $${Math.abs(delta).toLocaleString()} (${Math.abs(deltaPct)}%)</span>`;
+        }
+        html += '</div>';
+        return html;
+      }
+      
+      // Display budget info for Scenario A
+      if (scenarios.A) {
+        const scenarioADiv = document.getElementById('scenarioA');
+        if (scenarioADiv) {
+          const existing = scenarioADiv.querySelector('.budget-info');
+          if (existing) existing.remove();
+          const html = renderBudgetPill(scenarios.A);
+          if (html) {
+            const div = document.createElement('div');
+            div.className = 'budget-info';
+            div.innerHTML = html;
+            scenarioADiv.insertBefore(div, scenarioADiv.firstChild);
+          }
+        }
+      }
+    }
+    
+    // Helper functions to read Step 3 form values
+    function getPricingModeFromUI() {
+      return document.getElementById('pricingMode')?.value || 'Flat_Blended';
+    }
+    
+    function getBlendedRateFromUI() {
+      const value = document.getElementById('blendedRate')?.value;
+      return value ? parseFloat(value) : 195;
+    }
+    
+    function getRateBandFromUI() {
+      return document.getElementById('rateBand')?.value || 'Nearshore_Value';
+    }
+    
+    function getClientBudgetFromUI() {
+      const value = document.getElementById('clientBudget')?.value;
+      return value ? parseFloat(value) : null;
+    }
+    
+    function getComplexityFromUI() {
+      return document.getElementById('complexity')?.value || 'Advanced';
+    }
+    
+    function getVolumeTierFromUI() {
+      return document.getElementById('volumeTier')?.value || 'T2_MediumVolume';
+    }
+    
+    function getProjectStartFromUI() {
+      const value = document.getElementById('projectStart')?.value;
+      return value || new Date().toISOString().split('T')[0];
+    }
+    
+    function getUseSlackFromUI() {
+      // Check if slack checkbox exists and is checked
+      const slackCheckbox = document.getElementById('useSlack') || document.querySelector('input[type="checkbox"][name="slack"]');
+      return slackCheckbox ? slackCheckbox.checked : true;
+    }
+    
+    function getSlackInternalFromUI() {
+      const value = document.getElementById('slackInternal')?.value;
+      return value ? parseFloat(value) : 7;
+    }
+    
+    function getSlackClientFromUI() {
+      const value = document.getElementById('slackClient')?.value;
+      return value ? parseFloat(value) : 14;
+    }
+    
+    function getSlackPctFromUI() {
+      const value = document.getElementById('slackPct')?.value;
+      return value ? parseFloat(value) : 10;
+    }
+    
+    function getScenarioSpecAFromUI() {
+      return {
+        mode: 'custom',
+        complexity: getComplexityFromUI(),
+        tier: getVolumeTierFromUI()
+      };
+    }
+    
+    // Step 3 — make the Build button work (as specified)
+    async function buildScenariosAB() {
+      // Make this function globally accessible
+      window.buildScenariosAB = buildScenariosAB;
+      
+      console.log('[BUILD] Starting buildScenariosAB()...');
+      
+      // Check all possible sources of selected deliverables
+      const selectedFromAppState = appState.selectedCodes || [];
+      const selectedFromGlobal = window.selectedCodes || [];
+      const selectedFromScenarios = window.SCENARIOS ? 
+        Object.values(window.SCENARIOS).flatMap(s => (s.items || []).map(i => i.deliverable_code)) : [];
+      const allSelected = [...new Set([...selectedFromAppState, ...selectedFromGlobal, ...selectedFromScenarios])];
+      
+      console.log("[BUILD] Validation:", { 
+        selectedFromAppState, 
+        selectedFromGlobal, 
+        selectedFromScenarios, 
+        allSelected,
+        count: allSelected.length 
+      });
+      
+      if (allSelected.length === 0) {
+        alert('No deliverables selected. Please complete Step 2 first.');
+        return;
+      }
+      
+      // Sync the selection to ensure consistency
+      appState.selectedCodes = allSelected;
+      window.selectedCodes = allSelected;
+
+      // Include retainers if toggle is enabled (new system)
+      const retainersEnabled = document.querySelector('#retainersToggle')?.checked || false;
+      const retainers = retainersEnabled ? (window.APP?.retainers || []) : [];
+
+      // Prepare component selections for payload
+      const selectedComponentsPayload = Object.fromEntries(
+        Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
+      );
+      
+      const payload = {
+        selected_deliverable_codes: appState.selectedCodes,          // <- required
+        selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
+        pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
+        blended_rate: getBlendedRateFromUI(),                        // number or null
+        rate_band: getRateBandFromUI(),                              // e.g., 'Standard_US'
+        use_slack: getUseSlackFromUI(),
+        slack_after_internal: getSlackInternalFromUI(),
+        slack_after_client: getSlackClientFromUI(),
+        slack_global_pct: getSlackPctFromUI(),
+        project_start: getProjectStartFromUI() || null,
+        client_budget_usd: getClientBudgetFromUI() || null,
+        scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
+        retainers: retainers  // Include retainer data from new toggle system
+      };
+
+      console.log('[BUILD] Sending payload to /api/build:', payload);
+
+      try {
+        const resp = await fetch('/api/build', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        if (!resp.ok) {
+          const errorText = await resp.text().catch(() => resp.statusText);
+          console.error('[BUILD] API Error:', resp.status, errorText);
+          alert(`Build failed (${resp.status}): ${errorText}`);
+          return;
+        }
+
+        const json = await resp.json();
+        console.log('[BUILD] API Response:', json);
+        
+        const scenarios = json.scenarios || {};
+        
+        // Validate scenario structure
+        if (!scenarios || !scenarios.A) {
+          console.error('[BUILD] Invalid scenario structure:', json);
+          alert('Invalid build response: missing scenario A');
+          return;
+        }
+        
+        // Validate scenario A has required fields
+        if (!scenarios.A.items || !Array.isArray(scenarios.A.items)) {
+          console.error('[BUILD] Scenario A missing items:', scenarios.A);
+          alert('Invalid scenario A: missing items array');
+          return;
+        }
+        
+        console.log('[BUILD] Successfully built scenarios:', {
+          scenarioA_items: scenarios.A.items.length,
+          scenarioA_total: scenarios.A.totals
+        });
+        
+        // CRITICAL FIX: Store scenarios globally for timeline and export
+        window.appState = window.appState || {};
+        appState.scenarios = scenarios;      // canonical
+        window.latestScenarios = scenarios;  // legacy alias (works with older code)
+        
+        // FIX #1: Set window.SCENARIOS (THIS WAS MISSING!)
+        window.SCENARIOS = scenarios;
+        console.log('[BUILD] Set window.SCENARIOS:', window.SCENARIOS);
+        
+        // FIX #2: Save scenarios to localStorage for persistence between steps
+        try {
+          // Ensure session ID is preserved
+          const sessionId = window.APB?.sessionId || 
+                          localStorage.getItem('current_session_id') || 
+                          'default_session';
+          
+          // Save session ID for consistency
+          localStorage.setItem('current_session_id', sessionId);
+          
+          const storageKey = `scenarios_${sessionId}`;
+          localStorage.setItem(storageKey, JSON.stringify(scenarios));
+          // Also save without session ID as fallback
+          localStorage.setItem('latest_scenarios', JSON.stringify(scenarios));
+          console.log('[BUILD] Saved scenarios to localStorage with key:', storageKey);
+          console.log('[BUILD] Session ID preserved:', sessionId);
+        } catch (err) {
+          console.error('[BUILD] Failed to save scenarios to localStorage:', err);
+        }
+        
+        // FIX #3: Update pricing display with the scenario data
+        if (typeof updatePricingDisplay === 'function' && scenarios.A) {
+          updatePricingDisplay(scenarios.A);
+          console.log('[BUILD] Updated pricing display with scenario A');
+        } else {
+          console.warn('[BUILD] updatePricingDisplay function not found or no scenario A');
+        }
+        
+        // FIX #3: Call updateAIButtonStates to update button states (THIS WAS MISSING!)
+        if (typeof updateAIButtonStates === 'function') {
+          updateAIButtonStates();
+          console.log('[BUILD] Called updateAIButtonStates()');
+        } else {
+          console.warn('[BUILD] updateAIButtonStates function not found');
+        }
+        
+        // Render scenario A
+        if (typeof renderScenario === 'function') {
+          renderScenario('scenarioA', scenarios.A);
+          console.log('[BUILD] Rendered scenario A');
+        } else {
+          console.warn('[BUILD] renderScenario function not found');
+        }
+        
+        // Display budget information if provided
+        if (typeof displayBudgetInfo === 'function') {
+          displayBudgetInfo(scenarios);
+        }
+        
+        // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
+        const step5 = document.getElementById('step5');
+        if (step5) {
+          step5.style.display = 'block';
+          console.log('[BUILD] Showed Step 5');
+        }
+        
+        // Only show Step 4 if the timeline elements are ready
+        const step4 = document.getElementById('step4');
+        if (step4 && typeof showStep4 === 'function') {
+          showStep4('A');
+          console.log('[BUILD] Showed Step 4 with scenario A');
+        }
+        
+        console.log('[BUILD] Build process completed successfully!');
+        
+      } catch (error) {
+        console.error('[BUILD] Unexpected error:', error);
+        alert(`Build failed: ${error.message}`);
+      }
+    }
+    
+    // Legacy function name for backward compatibility
+    const buildScenariosLegacy = buildScenariosAB;
+    
+    // Function to rebuild scenario with updated pricing parameters
+    async function rebuildScenario() {
+      console.log('[REBUILD] Starting scenario rebuild with updated parameters...');
+      
+      // Simply call the main build function which now reads all parameters correctly
+      await buildScenariosAB();
+      
+      // Update the pricing table if it exists
+      if (typeof updatePricingTable === 'function') {
+        updatePricingTable();
+      }
+      
+      // Update the pricing summary
+      if (typeof updatePricingSummary === 'function') {
+        updatePricingSummary();
+      }
+      
+      console.log('[REBUILD] Scenario rebuild complete');
+    }
+    
+    // Make it globally accessible
+    window.rebuildScenario = rebuildScenario;
+
+    // Function to update pricing display with scenario data
+    function updatePricingDisplay(scenario) {
+      console.log('[PRICING] Updating display with scenario:', scenario);
+      
+      if (!scenario || !scenario.items) {
+        console.error('[PRICING] No scenario items to display');
+        return;
+      }
+      
+      // Clear existing table
+      const tbody = document.getElementById('pricing-tbody');
+      if (!tbody) {
+        console.error('[PRICING] pricing-tbody element not found');
+        return;
+      }
+      tbody.innerHTML = '';
+      
+      // Counters for summary
+      let oneTimeCount = 0, oneTimeHours = 0, oneTimeCost = 0;
+      let retainerCount = 0, retainerMonthlyHours = 0, retainerMonthlyCost = 0;
+      
+      // Process each deliverable
+      scenario.items.forEach((item, idx) => {
+        const isRetainer = item.is_retainer || item.retainer;
+        
+        // Main deliverable row
+        const delivRow = document.createElement('tr');
+        delivRow.style.cssText = 'border-bottom: 1px solid var(--border);';
+        delivRow.innerHTML = `
+          <td style="padding: 10px; font-weight: 500; color: var(--text);">
+            ${item.deliverable || item.deliverable_name || 'Unknown'}
+          </td>
+          <td style="padding: 10px; text-align: center; color: var(--muted);">
+            ${isRetainer ? '🔄 Retainer' : '📦 One-Time'}
+          </td>
+          <td style="padding: 10px; text-align: center; color: var(--text);">
+            ${Math.round(item.total_hours || 0)}
+          </td>
+          <td style="padding: 10px; text-align: center; color: var(--text);">
+            $${Math.round(item.effective_rate || item.blended_rate || scenario.blended_rate || 0)}
+          </td>
+          <td style="padding: 10px; text-align: right; color: var(--accent); font-weight: 500;">
+            $${(item.price || 0).toLocaleString()}
+          </td>
+          <td style="padding: 10px; color: var(--muted); font-size: 0.9em;">
+            ${item.department || '-'}
+          </td>
+        `;
+        tbody.appendChild(delivRow);
+        
+        // Add components if any
+        if (item.components && item.components.length > 0) {
+          item.components.forEach(comp => {
+            const compRow = document.createElement('tr');
+            compRow.style.cssText = 'background: rgba(0,0,0,0.2);';
+            compRow.innerHTML = `
+              <td style="padding: 8px 8px 8px 32px; color: var(--muted); font-size: 0.9em;">
+                └─ ${comp.name || comp.component || 'Component'}
+              </td>
+              <td style="padding: 8px; text-align: center;">-</td>
+              <td style="padding: 8px; text-align: center; color: var(--muted);">
+                ${Math.round(comp.hours || 0)}
+              </td>
+              <td style="padding: 8px; text-align: center;">-</td>
+              <td style="padding: 8px; text-align: right;">-</td>
+              <td style="padding: 8px;">-</td>
+            `;
+            tbody.appendChild(compRow);
+          });
+        }
+        
+        // Update summary counters
+        if (isRetainer) {
+          retainerCount++;
+          retainerMonthlyHours += item.monthly_hours || 0;
+          retainerMonthlyCost += item.monthly_price || 0;
+        } else {
+          oneTimeCount++;
+          oneTimeHours += item.total_hours || 0;
+          oneTimeCost += item.price || 0;
+        }
+      });
+      
+      // Update One-Time summary
+      document.getElementById('one-time-count').textContent = oneTimeCount;
+      document.getElementById('one-time-hours').textContent = Math.round(oneTimeHours);
+      document.getElementById('one-time-cost').textContent = `$${oneTimeCost.toLocaleString()}`;
+      
+      // Update Retainer summary
+      document.getElementById('retainer-count').textContent = retainerCount;
+      document.getElementById('retainer-monthly-hours').textContent = Math.round(retainerMonthlyHours);
+      document.getElementById('retainer-monthly-cost').textContent = `$${retainerMonthlyCost.toLocaleString()}`;
+      const annualRetainerCost = retainerMonthlyCost * 12;
+      document.getElementById('retainer-annual-cost').textContent = `$${annualRetainerCost.toLocaleString()}`;
+      
+      // Calculate and display grand total
+      const grandTotal = oneTimeCost + annualRetainerCost;
+      const grandTotalEl = document.getElementById('grand-total-amount');
+      if (grandTotalEl) {
+        grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
+      }
+      
+      // Update grand total display with duration
+      const grandTotalDisplay = document.getElementById('grand-total-display');
+      if (grandTotalDisplay) {
+        grandTotalDisplay.innerHTML = `
+          <div style="font-size: 2em; font-weight: bold; color: var(--accent); margin-bottom: 8px;">
+            $${grandTotal.toLocaleString()}
+          </div>
+          <div style="color: var(--muted); font-size: 0.9em;">
+            One-time + 12 months retainer
+          </div>
+        `;
+      }
+      
+      console.log('[PRICING] Display updated successfully');
+    }
+    
+    // Make it globally accessible
+    window.updatePricingDisplay = updatePricingDisplay;
+
+    // Legacy functions removed - replaced by Stage 2 workflow
+
+    // Legacy function removed
+
+    // Legacy function removed
+
+    // Safe to run multiple times; never redeclares
+    window.parseFilenameFromContentDisposition = window.parseFilenameFromContentDisposition || function (hdr, fallback) {
+      if (!hdr) return fallback;
+      const m = /filename\*?=(?:UTF-8''|")?([^\"\;]+)/i.exec(hdr);
+      try { return decodeURIComponent(m?.[1] || '').replace(/\s+/g,' ').trim(); } catch { return (m?.[1]||'').trim(); }
+    };
+
+    async function downloadFromEndpoint(url, payload, fallbackName = 'Workfront_Export.xlsx') {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+
+      // If the server returned an error (e.g., missing openpyxl), show message
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        alert(`Export failed: ${res.status} — ${text}`);
+        return;
+      }
+
+      // Read the file as a Blob and honor the server-suggested name
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') || '';
+      const filename = window.parseFilenameFromContentDisposition(cd, fallbackName);
+
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = filename;
+      a.target = '_blank';   // safer in some embedded contexts
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(href);
+    }
+
+    function getProjectName() {
+      return (document.querySelector('#projectName')?.value || '').trim();
+    }
+    function getFileFormat() {
+      // If you expose CSV/XLSX in a select; default to xlsx
+      const v = document.querySelector('#export-format')?.value || 'xlsx';
+      return v.toLowerCase();
+    }
+    window.getScenario = window.getScenario || function(letter) {
+      const s = (window.appState?.scenarios || {})[letter];
+      return (s && Array.isArray(s.items) && s.items.length) ? s : null;
+    };
+
+    async function onExportScenario(letter) {
+      const scen = window.getScenario(letter);
+      if (!scen) { alert('Build scenarios first.'); return; }
+
+      const payload = {
+        scenario: scen,
+        project_name: getProjectName(),
+        file_format: getFileFormat(),
+        scenario_label: `Scenario ${letter}`
+      };
+      await downloadFromEndpoint('/api/export', payload, `Workfront_Export_Scenario_${letter}.xlsx`);
+    }
+
+
+    // XML Export Functions (Task 4.5: Use new individual scenario endpoints)
+    async function onExportXMLScenario(letter) {
+      const scen = window.getScenario(letter);
+      if (!scen) { alert(`Build Scenario ${letter} first.`); return; }
+
+      // Use new GET endpoints for individual scenarios
+      const endpoint = `/api/export/xml/${letter.toLowerCase()}`;
+      try {
+        const response = await fetch(endpoint);
+        if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Project_Scenario_${letter}.xml`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      } catch (error) {
+        alert(`Error exporting Scenario ${letter}: ${error.message}`);
+      }
+    }
+
+
+    // Legacy function removed - use Step 5 exports instead
+
+    // Number formatting functions - guarded global assignments
+    window.fmtInt = window.fmtInt || function(n){ return (Math.round(Number(n)||0)).toLocaleString(); };
+    window.fmtUSD0 = window.fmtUSD0 || function(n){ return '$' + window.fmtInt(n); };
+    window.fmtUSD2 = window.fmtUSD2 || function(n){ return '$' + (Number(n)||0).toFixed(2); };
+    window.fmtUSD = window.fmtUSD || (n => Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n));
+
+    // ISSUE 4 FIX: Enhanced scenario rendering function with editable pricing
+    function renderScenario(targetId, scenario) {
+      if (!scenario || !scenario.items || !scenario.items.length) {
+        document.getElementById(targetId).innerHTML = '<p>(No data)</p>';
+        return;
+      }
+      
+      // Store scenario globally for editing
+      window[`currentScenario_${targetId}`] = scenario;
+      
+      // Check for retainer items
+      const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
+      const hasRetainers = retainerItems.length > 0;
+      
+      let html = `<div class="totals" id="${targetId}-totals">Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
+      
+      if (hasRetainers) {
+        const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
+        const oneTimeTotal = scenario.totals.price - retainerTotal;
+        html += `
+          <div style="margin-top: 8px; padding: 8px; background: var(--card); border-radius: 4px; border-left: 3px solid var(--accent2); font-size: 12px;">
+            <strong style="color: var(--accent2);">💼 Breakdown:</strong>
+            ${oneTimeTotal > 0 ? ` One-time: ${window.fmtUSD0(oneTimeTotal)} •` : ''}
+            Retainers: ${window.fmtUSD0(retainerTotal)} (${retainerItems.length} deliverable${retainerItems.length > 1 ? 's' : ''})
+          </div>
+        `;
+      }
+      
+      html += `</div>
+        <table id="${targetId}-table">
+          <thead><tr>
+            <th>Deliverable</th>
+            <th>Hours</th>
+            <th>Rate (USD)</th>
+            <th>Price (USD)</th>
+            <th>Cadence</th>
+            <th>Tasks</th>
+            <th style="width: 80px;">Actions</th>
+          </tr></thead>
+          <tbody>
+      `;
+      scenario.items.forEach((it, idx) => {
+        const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
+        const rate = (typeof it.effective_rate !== 'undefined') ? it.effective_rate : (it.total_hours ? (it.price/it.total_hours) : 0);
+        
+        let deliverableName = it.deliverable;
+        if (it.retainer_months && it.retainer_months > 1) {
+          const monthlyPrice = Math.round(it.price / it.retainer_months);
+          deliverableName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${it.retainer_months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
+        }
+        
+        // Determine cadence based on retainer months
+        let cadenceValue = 'One-Time';
+        if (it.retainer_months) {
+          if (it.retainer_months === 1) cadenceValue = 'Monthly';
+          else if (it.retainer_months === 3) cadenceValue = 'Quarterly';
+          else if (it.retainer_months === 6) cadenceValue = 'Semi-Annual';
+          else if (it.retainer_months === 12) cadenceValue = 'Annual';
+          else cadenceValue = `Monthly (${it.retainer_months}mo)`;
+        }
+        
+        html += `<tr data-row="${idx}" data-deliverable="${it.deliverable_code || it.deliverable}">
+          <td>${deliverableName}</td>
+          <td class="editable-hours" data-field="hours" data-original="${it.total_hours}">
+            <span class="display-value">${window.fmtInt(it.total_hours)}</span>
+            <input type="number" class="edit-input" style="display:none;width:80px;padding:4px;" min="0" max="9999" value="${it.total_hours}">
+          </td>
+          <td class="editable-rate" data-field="rate" data-original="${rate}">
+            <span class="display-value">${window.fmtUSD2(rate)}</span>
+            <input type="number" class="edit-input" style="display:none;width:100px;padding:4px;" min="0" max="999999" step="0.01" value="${rate}">
+          </td>
+          <td class="calculated-price">${window.fmtUSD0(it.price)}</td>
+          <td class="editable-cadence">
+            <select class="cadence-select" data-deliverable="${it.deliverable_code || it.deliverable}" 
+                    style="background: var(--card); color: var(--text); border: 1px solid var(--border); 
+                           border-radius: 4px; padding: 4px 8px; font-size: 0.9em; cursor: pointer;"
+                    onchange="updateCadence('${targetId}', ${idx}, this.value)">
+              <option value="One-Time" ${cadenceValue === 'One-Time' ? 'selected' : ''}>One-Time</option>
+              <option value="Monthly" ${cadenceValue === 'Monthly' ? 'selected' : ''}>Monthly</option>
+              <option value="Quarterly" ${cadenceValue === 'Quarterly' ? 'selected' : ''}>Quarterly</option>
+              <option value="Semi-Annual" ${cadenceValue === 'Semi-Annual' ? 'selected' : ''}>Semi-Annual</option>
+              <option value="Annual" ${cadenceValue === 'Annual' ? 'selected' : ''}>Annual</option>
+            </select>
+          </td>
+          <td style="font-size:0.85em;color:var(--muted);">${tasks}</td>
+          <td class="actions">
+            <button onclick="editPricingRow('${targetId}', ${idx})" class="edit-btn" style="background:#3b82f6;color:white;border:none;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:0.85em;">
+              ✏️ Edit
+            </button>
+            <button onclick="savePricingRow('${targetId}', ${idx})" class="save-btn" style="display:none;background:#10b981;color:white;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:0.85em;margin-right:4px;">
+              Save
+            </button>
+            <button onclick="cancelPricingEdit('${targetId}', ${idx})" class="cancel-btn" style="display:none;background:#ef4444;color:white;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:0.85em;">
+              Cancel
+            </button>
+          </td>
+        </tr>`;
+      });
+      html += `
+          </tbody>
+        </table>
+      `;
+      document.getElementById(targetId).innerHTML = html;
+    }
+    
+    // Function to handle cadence changes
+    function updateCadence(targetId, rowIndex, newCadence) {
+      const scenario = window[`currentScenario_${targetId}`];
+      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
+      
+      const item = scenario.items[rowIndex];
+      const deliverableCode = item.deliverable_code || item.deliverable;
+      
+      // Update retainer_months based on cadence selection
+      let months = 0;
+      if (newCadence === 'Monthly') months = 1;
+      else if (newCadence === 'Quarterly') months = 3;
+      else if (newCadence === 'Semi-Annual') months = 6;
+      else if (newCadence === 'Annual') months = 12;
+      
+      // Update the item's retainer_months
+      item.retainer_months = months;
+      
+      // Update pricingData if available
+      if (window.pricingData) {
+        if (months > 0) {
+          window.pricingData.deliverableTypes.set(deliverableCode, 'RETAINER');
+          window.pricingData.retainers.set(deliverableCode, months);
+        } else {
+          window.pricingData.deliverableTypes.set(deliverableCode, 'PROJECT');
+          window.pricingData.retainers.delete(deliverableCode);
+        }
+      }
+      
+      // Recalculate pricing if needed
+      const monthlyPrice = months > 0 ? Math.round(item.price / months) : 0;
+      
+      // Update display
+      const row = document.querySelector(`#${targetId}-table tr[data-row="${rowIndex}"]`);
+      const deliverableCell = row.querySelector('td:first-child');
+      
+      // Update deliverable name display
+      let baseName = item.deliverable;
+      if (months > 0) {
+        baseName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
+      }
+      deliverableCell.innerHTML = baseName;
+      
+      // Update totals display if needed
+      updateScenarioTotals(targetId);
+      
+      console.log(`Updated ${deliverableCode} cadence to ${newCadence} (${months} months)`);
+    }
+    
+    // Helper function to update scenario totals display
+    function updateScenarioTotals(targetId) {
+      const scenario = window[`currentScenario_${targetId}`];
+      if (!scenario) return;
+      
+      const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 0);
+      const hasRetainers = retainerItems.length > 0;
+      const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
+      const oneTimeTotal = scenario.totals.price - retainerTotal;
+      
+      const totalsDiv = document.getElementById(`${targetId}-totals`);
+      if (totalsDiv) {
+        let html = `Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
+        
+        if (hasRetainers) {
+          html += `
+            <div style="margin-top: 8px; padding: 8px; background: var(--card); border-radius: 4px; border-left: 3px solid var(--accent2); font-size: 12px;">
+              <strong style="color: var(--accent2);">💼 Breakdown:</strong>
+              ${oneTimeTotal > 0 ? ` One-time: ${window.fmtUSD0(oneTimeTotal)} •` : ''}
+              Retainers: ${window.fmtUSD0(retainerTotal)} (${retainerItems.length} deliverable${retainerItems.length > 1 ? 's' : ''})
+            </div>
+          `;
+        }
+        
+        totalsDiv.innerHTML = html;
+      }
+    }
+    
+    // ISSUE 4: Functions for editing pricing table
+    function editPricingRow(targetId, rowIndex) {
+      const table = document.getElementById(`${targetId}-table`);
+      const row = table.querySelector(`tr[data-row="${rowIndex}"]`);
+      
+      // Hide display values, show inputs
+      row.querySelectorAll('.display-value').forEach(el => el.style.display = 'none');
+      row.querySelectorAll('.edit-input').forEach(el => el.style.display = 'block');
+      
+      // Toggle buttons
+      row.querySelector('.edit-btn').style.display = 'none';
+      row.querySelector('.save-btn').style.display = 'inline-block';
+      row.querySelector('.cancel-btn').style.display = 'inline-block';
+    }
+    
+    function cancelPricingEdit(targetId, rowIndex) {
+      const table = document.getElementById(`${targetId}-table`);
+      const row = table.querySelector(`tr[data-row="${rowIndex}"]`);
+      
+      // Reset input values to original
+      row.querySelectorAll('.edit-input').forEach(input => {
+        const cell = input.parentElement;
+        const original = cell.dataset.original;
+        input.value = original;
+      });
+      
+      // Show display values, hide inputs
+      row.querySelectorAll('.display-value').forEach(el => el.style.display = 'block');
+      row.querySelectorAll('.edit-input').forEach(el => el.style.display = 'none');
+      
+      // Toggle buttons
+      row.querySelector('.edit-btn').style.display = 'inline-block';
+      row.querySelector('.save-btn').style.display = 'none';
+      row.querySelector('.cancel-btn').style.display = 'none';
+    }
+    
+    async function savePricingRow(targetId, rowIndex) {
+      const table = document.getElementById(`${targetId}-table`);
+      const row = table.querySelector(`tr[data-row="${rowIndex}"]`);
+      const scenario = window[`currentScenario_${targetId}`];
+      const item = scenario.items[rowIndex];
+      
+      // Get new values
+      const newHours = parseFloat(row.querySelector('.editable-hours .edit-input').value) || 0;
+      const newRate = parseFloat(row.querySelector('.editable-rate .edit-input').value) || 0;
+      
+      // Validate
+      if (newHours < 0 || newHours > 9999) {
+        alert('Hours must be between 0 and 9999');
+        return;
+      }
+      if (newRate < 0 || newRate > 999999) {
+        alert('Rate must be between 0 and 999999');
+        return;
+      }
+      
+      // Show loading state
+      row.querySelector('.save-btn').textContent = 'Saving...';
+      row.querySelector('.save-btn').disabled = true;
+      
+      try {
+        // Calculate new price
+        const newPrice = Math.round(newHours * newRate);
+        
+        // Update the scenario item
+        item.total_hours = newHours;
+        item.effective_rate = newRate;
+        item.price = newPrice;
+        
+        // For complex deliverables with components, redistribute hours
+        if (item.components && item.components.length > 0) {
+          const res = await fetch('/api/pricing/redistribute-hours', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              deliverable_name: item.deliverable,
+              deliverable_code: item.deliverable_code || item.deliverable,
+              new_total_hours: newHours,
+              components: item.components.map(comp => ({
+                name: comp.component,
+                current_hours: comp.hours
+              })),
+              use_ai: true
+            })
+          });
+          
+          if (res.ok) {
+            const data = await res.json();
+            // Update component hours from redistribution
+            if (data.suggested_distribution) {
+              data.suggested_distribution.forEach(dist => {
+                const comp = item.components.find(c => c.component === dist.name);
+                if (comp) {
+                  comp.hours = dist.new_hours;
+                }
+              });
+            }
+          }
+        }
+        
+        // Update display values
+        row.querySelector('.editable-hours .display-value').textContent = window.fmtInt(newHours);
+        row.querySelector('.editable-rate .display-value').textContent = window.fmtUSD2(newRate);
+        row.querySelector('.calculated-price').textContent = window.fmtUSD0(newPrice);
+        
+        // Update data attributes
+        row.querySelector('.editable-hours').dataset.original = newHours;
+        row.querySelector('.editable-rate').dataset.original = newRate;
+        
+        // Recalculate scenario totals
+        scenario.totals.hours = scenario.items.reduce((sum, it) => sum + it.total_hours, 0);
+        scenario.totals.price = scenario.items.reduce((sum, it) => sum + it.price, 0);
+        
+        // Update totals display
+        const totalsDiv = document.getElementById(`${targetId}-totals`);
+        if (totalsDiv) {
+          const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
+          const hasRetainers = retainerItems.length > 0;
+          
+          let totalsHtml = `Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
+          
+          if (hasRetainers) {
+            const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
+            const oneTimeTotal = scenario.totals.price - retainerTotal;
+            totalsHtml += `
+              <div style="margin-top: 8px; padding: 8px; background: var(--card); border-radius: 4px; border-left: 3px solid var(--accent2); font-size: 12px;">
+                <strong style="color: var(--accent2);">💼 Breakdown:</strong>
+                ${oneTimeTotal > 0 ? ` One-time: ${window.fmtUSD0(oneTimeTotal)} •` : ''}
+                Retainers: ${window.fmtUSD0(retainerTotal)} (${retainerItems.length} deliverable${retainerItems.length > 1 ? 's' : ''})
+              </div>
+            `;
+          }
+          
+          totalsDiv.innerHTML = totalsHtml;
+        }
+        
+        // Exit edit mode
+        row.querySelectorAll('.display-value').forEach(el => el.style.display = 'block');
+        row.querySelectorAll('.edit-input').forEach(el => el.style.display = 'none');
+        
+        // Toggle buttons
+        row.querySelector('.edit-btn').style.display = 'inline-block';
+        row.querySelector('.save-btn').style.display = 'none';
+        row.querySelector('.cancel-btn').style.display = 'none';
+        
+        // Update global state
+        if (window.APP_STATE?.scenarios?.A && targetId === 'scenarioA') {
+          window.APP_STATE.scenarios.A = scenario;
+        }
+        
+      } catch (error) {
+        console.error('Failed to save pricing changes:', error);
+        alert('Failed to save changes. Please try again.');
+      } finally {
+        row.querySelector('.save-btn').textContent = 'Save';
+        row.querySelector('.save-btn').disabled = false;
+      }
+    }
+    
+    window.editPricingRow = editPricingRow;
+    window.cancelPricingEdit = cancelPricingEdit;
+    window.savePricingRow = savePricingRow;
+
+    // Safe render functions using DOM helpers
+    function renderLeftPanel(items, totals) {
+      const rows = (items || []).map(i =>
+        `<div class="row"><span>${i.deliverable}</span><span>$${(i.price_total ?? i.price ?? 0).toLocaleString()}</span></div>`
+      );
+      setHTML('left-list', rows.length ? rows.join('') : '<em>No deliverables selected</em>');
+      setText('left-total', `Total: $${(totals?.price_total ?? totals?.price ?? 0).toLocaleString()}`);
+    }
+
+    function renderReconcile(data) {
+      const addRows = (data.add || []).map(s =>
+        `<label><input type="checkbox" class="add" data-code="${s.code}" checked> ${s.label} – ${s.reason}</label>`
+      );
+      const delRows = (data.delete || []).map(s =>
+        `<label class="danger"><input type="checkbox" class="del" data-code="${s.code}" checked> ${s.label} – ${s.reason}</label>`
+      );
+      setHTML('add-form', addRows.length ? addRows.join('<br>') : '<em>No suggestions to add</em>');
+      setHTML('del-form', delRows.length ? delRows.join('<br>') : '<em>No deletions suggested</em>');
+    }
+
+    // UI state management functions for Step 3 Build
+    function getPricingModeFromUI() {
+      return document.getElementById('pricingMode')?.value || 'Flat_Blended';
+    }
+    
+    function getBlendedRateFromUI() {
+      const val = document.getElementById('blendedRate')?.value;
+      return val ? Number(val) : null;
+    }
+    
+    function getRateBandFromUI() {
+      return document.getElementById('rateBand')?.value || 'Standard_US';
+    }
+    
+    function getUseSlackFromUI() {
+      return true; // default to true
+    }
+    
+    function getSlackInternalFromUI() {
+      return 1; // default
+    }
+    
+    function getSlackClientFromUI() {
+      return 2; // default
+    }
+    
+    function getSlackPctFromUI() {
+      return 0.05; // default
+    }
+    
+    function getProjectStartFromUI() {
+      const input = document.getElementById('projectStart');
+      if (!input || !input.value) return null;
+      try {
+        const dt = new Date(input.value);
+        return dt.toISOString();
+      } catch {
+        return null;
+      }
+    }
+    
+    function getClientBudgetFromUI() {
+      const val = document.getElementById('clientBudget')?.value;
+      return val ? Number(val) : null;
+    }
+    
+    function getScenarioSpecAFromUI() {
+      return {
+        mode: 'template',
+        complexity: document.getElementById('complexity')?.value || 'Advanced',
+        tier: document.getElementById('volumeTier')?.value || 'T2_MediumVolume'
+      };
+    }
+    
+    function getScenarioSpecBFromUI() {
+      return {
+        mode: 'template',
+        complexity: document.getElementById('complexity')?.value || 'Advanced',
+        tier: document.getElementById('volumeTier')?.value || 'T2_MediumVolume'
+      };
+    }
+
+    // Legacy toggle function removed - new export handling in Step 5
+
+    // ——— helpers - guarded global assignments ———
+    window.getScenario = window.getScenario || function(letter){ return (window.appState?.scenarios||{})[letter] || null; };
+    window.setText = window.setText || function (id, t) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = t;
+    };
+    window.setHTML = window.setHTML || function (id, h) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = h;
+    };
+    window.qs = window.qs || ((sel, root=document) => root.querySelector(sel));
+    window.qsa = window.qsa || ((sel, root=document) => [...root.querySelectorAll(sel)]);
+
+    // ——— Business day calculation helpers ———
+    function isWeekend(d) {
+      const day = d.getDay(); // 0=Sun, 6=Sat
+      return day === 0 || day === 6;
+    }
+
+    function addBusinessDays(startDate, days, holidaysSet = new Set()) {
+      let d = new Date(startDate);
+      // If start lands on weekend, roll to Monday
+      while (isWeekend(d) || holidaysSet.has(d.toISOString().slice(0,10))) {
+        d.setDate(d.getDate()+1);
+      }
+      let remaining = Math.max(0, Number(days));
+      while (remaining > 0) {
+        d.setDate(d.getDate()+1);
+        const iso = d.toISOString().slice(0,10);
+        if (!isWeekend(d) && !holidaysSet.has(iso)) {
+          remaining -= 1;
+        }
+      }
+      // End must not be weekend/holiday; roll back to previous business day
+      while (isWeekend(d) || holidaysSet.has(d.toISOString().slice(0,10))) {
+        d.setDate(d.getDate()-1);
+      }
+      return d;
+    }
+
+    // Calculate business days inclusive between start and end (Task 7)
+    function businessDaysInclusive(startDate, endDate, holidaysSet = new Set()) {
+      let d = new Date(startDate);
+      const end = new Date(endDate);
+      let count = 0;
+      
+      while (d <= end) {
+        const iso = d.toISOString().slice(0,10);
+        if (!isWeekend(d) && !holidaysSet.has(iso)) {
+          count++;
+        }
+        d.setDate(d.getDate() + 1);
+      }
+      
+      return count;
+    }
+
+    // ——— Step 4 auto-show helper ———
+    function showStep4(letter = 'A') {
+      // reveal Step 4
+      const s4 = document.getElementById('step4');
+      if (s4) {
+        s4.style.removeProperty('display');    // handles display:none
+        s4.classList.remove('hidden');         // handles .hidden class
+      }
+      // show Scenario C button if C exists
+      const hasC = !!(window.appState?.scenarios?.C?.items?.length);
+      const btnC = document.getElementById('tl-sel-C');
+      if (btnC) btnC.style.display = hasC ? '' : 'none';
+
+      // render and scroll (with safety check for missing timeline elements)
+      try {
+        renderTimeline(letter);                  // uses the renderer we added earlier
+        s4?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (error) {
+        console.log("Timeline rendering skipped:", error.message);
+        // Still scroll to Step 4 even if timeline fails
+        s4?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+
+    // ——— render the timeline for a scenario ———
+    function renderTimeline(letter) {
+      // Also make this function available globally
+      window.renderTimeline = renderTimeline;
+      const scen = window.getScenario(letter);
+      const body = document.getElementById('tl-body');
+      const ganttContainer = document.getElementById('gantt-chart');
+      
+      // Safety check - if timeline elements don't exist, skip rendering
+      if (!body) {
+        console.log("Timeline body element not available, skipping render");
+        return;
+      }
+      
+      document.querySelectorAll('[data-timeline-sel]').forEach(b =>
+        b.classList.toggle('active', b.dataset.timelineSel === letter)
+      );
+      if (!scen || !Array.isArray(scen.items) || !scen.items.length) {
+        window.setHTML('tl-body','<tr><td colspan="4"><em>Build scenarios in Step 3 to see a timeline.</em></td></tr>');
+        if (ganttContainer) ganttContainer.innerHTML = '';
+        return;
+      }
+      
+      // Check for intelligent timeline data
+      if (scen.intelligent_timeline && scen.intelligent_timeline.tasks) {
+        // Use intelligent timeline with parallel tracks and dependencies
+        renderIntelligentTimeline(letter, scen);
+      } else {
+        // Fall back to sequential timeline
+        renderSequentialTimeline(letter, scen);
+      }
+      
+      enableTimelineDnD(letter);
+    }
+    
+    // New function for intelligent timeline rendering
+    function renderIntelligentTimeline(letter, scen) {
+      const body = document.getElementById('tl-body');
+      const ganttContainer = document.getElementById('gantt-chart');
+      const timeline = scen.intelligent_timeline;
+      
+      // Group tasks by workstream for parallel visualization
+      const workstreams = {};
+      timeline.tasks.forEach(task => {
+        const stream = task.workstream || 'General';
+        if (!workstreams[stream]) workstreams[stream] = [];
+        workstreams[stream].push(task);
+      });
+      
+      // Create table rows with workstream grouping
+      let rows = '';
+      Object.keys(workstreams).sort().forEach(stream => {
+        const streamTasks = workstreams[stream];
+        streamTasks.sort((a, b) => new Date(a.start_date) - new Date(b.start_date));
+        
+        rows += `<tr class="workstream-header">
+          <td colspan="4"><strong>${stream}</strong></td>
+        </tr>`;
+        
+        streamTasks.forEach(task => {
+          const start = new Date(task.start_date);
+          const end = new Date(task.end_date);
+          const duration = task.duration_days || businessDaysInclusive(start, end);
+          const phase = task.phase || 'Execution';
+          const isRetainer = task.is_retainer || false;
+          const isMilestone = task.is_milestone || false;
+          const criticalPath = task.critical_path || false;
+          
+          const rowClass = [
+            'tl-row',
+            isRetainer ? 'retainer-task' : '',
+            isMilestone ? 'milestone-task' : '',
+            criticalPath ? 'critical-path' : ''
+          ].filter(Boolean).join(' ');
+          
+          rows += `<tr class="${rowClass}" data-dcode="${task.deliverable_code}" data-task-id="${task.id}">
+            <td>${task.name || task.deliverable_name}${isRetainer ? ' 🔄' : ''}${isMilestone ? ' 🎯' : ''}</td>
+            <td>${task.start_date}</td>
+            <td>${task.end_date}</td>
+            <td>${duration}${isRetainer ? ' (recurring)' : ''}</td>
+          </tr>`;
+        });
+      });
+      
+      window.setHTML('tl-body', rows);
+      
+      // Render Gantt chart if container exists
+      if (ganttContainer && timeline.gantt_data) {
+        renderGanttChart(ganttContainer, timeline.gantt_data, timeline.metadata);
+      }
+      
+      // Show AI reasoning if available
+      if (timeline.reasoning) {
+        displayTimelineReasoning(timeline.reasoning);
+      }
+    }
+    
+    // Fallback sequential timeline rendering
+    function renderSequentialTimeline(letter, scen) {
+      const body = document.getElementById('tl-body');
+      
+      // Get project start date for business day calculation
+      const projectStart = scen.project_start || new Date().toISOString().split('T')[0];
+      // Normalize to first business day (roll forward from weekend if needed)
+      let currentStart = addBusinessDays(new Date(projectStart), 0);
+      
+      const rows = scen.items.map(d => {
+        const sch = d.schedule||[];
+        const days  = sch.reduce((n,s)=>n+(s.duration_days||0),0);
+        
+        // Use business day calculation for accurate dates (no weekends)
+        const start = currentStart.toISOString().split('T')[0];
+        const endDate = addBusinessDays(currentStart, days);
+        const end = endDate.toISOString().split('T')[0];
+        
+        // Calculate actual business days inclusive for display (Task 7)
+        const businessDays = businessDaysInclusive(currentStart, endDate);
+        
+        // Next deliverable starts after this one ends (next business day)
+        currentStart = addBusinessDays(endDate, 1);
+        
+        // Try multiple possible field names for deliverable name
+        const deliverableName = d.deliverable || d.deliverable_name || d.name || d.deliverable_code || 'Unknown Deliverable';
+        
+        return `<tr class="tl-row" draggable="true" data-dcode="${d.deliverable_code}">
+          <td>${deliverableName}</td><td>${start}</td><td>${end}</td><td>${businessDays}</td>
+        </tr>`;
+      }).join('');
+      window.setHTML('tl-body', rows);
+    }
+
+    // ——— drag & drop wiring ———
+    function enableTimelineDnD(letter){
+      const body = document.getElementById('tl-body');
+      let dragEl = null;
+
+      body.querySelectorAll('.tl-row').forEach(row=>{
+        row.addEventListener('dragstart', e => { dragEl=row; row.classList.add('dragging'); });
+        row.addEventListener('dragend',   e => { row.classList.remove('dragging'); dragEl=null; });
+        row.addEventListener('dragover',  e => {
+          e.preventDefault();
+          const after = getAfter(body, e.clientY);
+          if(!after) body.appendChild(row); else if(after!==row) body.insertBefore(row, after);
+        });
+      });
+
+      function getAfter(container, y){
+        const els=[...container.querySelectorAll('.tl-row:not(.dragging)')];
+        return els.reduce((closest, child)=>{
+          const box=child.getBoundingClientRect();
+          const offset = y - (box.top + box.height/2);
+          return (offset<0 && offset>closest.offset) ? {offset, element:child} : closest;
+        }, {offset: -Infinity}).element;
+      }
+
+      // add/refresh Save button
+      let btn = document.getElementById('tl-save');
+      if(!btn){
+        btn = document.createElement('button');
+        btn.id='tl-save'; btn.textContent='Save Order';
+        document.getElementById('timeline-controls').appendChild(btn);
+      }
+      btn.onclick = () => saveTimelineOrder(letter);
+    }
+
+    // ——— persist new order to backend and merge schedules back ———
+    async function saveTimelineOrder(letter){
+      const body = document.getElementById('tl-body');
+      const codes = [...body.querySelectorAll('.tl-row')].map(tr=>tr.dataset.dcode);
+      const scen = window.getScenario(letter) || {};
+      const includedMap = {};
+      (scen.items||[]).forEach(it => includedMap[it.deliverable_code] = it.included_task_groups || []);
+
+      const payload = {
+        scenario_letter: letter,
+        deliverable_codes: codes,
+        included_map: includedMap,
+        use_slack: !!scen.use_slack,
+        slack_after_internal: scen.slack_after_internal ?? 1,
+        slack_after_client:  scen.slack_after_client ?? 2,
+        slack_global_pct:    scen.slack_global_pct ?? 0,
+        project_start:       scen.project_start || null,
+        complexity:          (scen.items?.[0]?.complexity || 'Advanced'),
+        tier:                (scen.items?.[0]?.tier || 'T2_MediumVolume')
+      };
+
+      const response = await fetch('/api/reorder_timeline', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        alert(`Failed to reorder timeline: ${errorText || response.statusText}`);
+        return;
+      }
+      
+      const res = await response.json();
+
+      if(res?.items?.length){
+        const byCode = new Map(res.items.map(i=>[i.deliverable_code, i.schedule]));
+        scen.items = (scen.items||[]).map(it => byCode.has(it.deliverable_code) ? {...it, schedule: byCode.get(it.deliverable_code)} : it);
+        (window.appState.scenarios||{})[letter] = scen;
+        renderTimeline(letter);
+      } else {
+        alert('Reorder did not return schedules. Check backend /api/reorder_timeline.');
+      }
+    }
+
+    // ——— allow clicking A/B/C ———
+    document.addEventListener('click', e=>{
+      const btn = e.target.closest('[data-timeline-sel]');
+      if(btn) renderTimeline(btn.dataset.timelineSel);
+    });
+
+
+    // Event listeners - ensure DOM is loaded first
+    document.addEventListener('DOMContentLoaded', function() {
+      // Note: btnAnalyze is wired in app.js boot() function
+      
+      // Initialize project start date to next Monday 09:00 local
+      const projectStartInput = document.getElementById('projectStart');
+      if (projectStartInput && !projectStartInput.value) {
+        const now = new Date();
+        const dayOfWeek = now.getDay();
+        const daysUntilMonday = (dayOfWeek === 0) ? 1 : (8 - dayOfWeek);
+        const nextMonday = new Date(now);
+        nextMonday.setDate(now.getDate() + daysUntilMonday);
+        nextMonday.setHours(9, 0, 0, 0);
+        const isoLocal = nextMonday.getFullYear() + '-' +
+          String(nextMonday.getMonth() + 1).padStart(2, '0') + '-' +
+          String(nextMonday.getDate()).padStart(2, '0') + 'T' +
+          String(nextMonday.getHours()).padStart(2, '0') + ':' +
+          String(nextMonday.getMinutes()).padStart(2, '0');
+        projectStartInput.value = isoLocal;
+      }
+      
+      const applyBtn = document.getElementById('apply-btn');
+      if (applyBtn) applyBtn.onclick = applySelection;
+      
+      const btnBuild = document.getElementById('btnBuild');
+      if (btnBuild) btnBuild.onclick = buildScenariosAB;
+      
+      // Wire up new pricing buttons
+      const btnExportPricing = document.getElementById('btn-export-pricing');
+      if (btnExportPricing) btnExportPricing.onclick = exportPricingDetails;
+      
+      const btnAiOptimize = document.getElementById('btn-ai-optimize-pricing');
+      if (btnAiOptimize) btnAiOptimize.onclick = optimizeAllPricing;
+      
+      // Wire up Generate AI Timeline button
+      const btnGenerateTimeline = document.getElementById('btn-generate-timeline');
+      if (btnGenerateTimeline) {
+        btnGenerateTimeline.onclick = () => {
+          const letter = document.querySelector('[data-timeline-sel].active')?.dataset?.timelineSel || 'A';
+          generateIntelligentTimeline(letter);
+        };
+      }
+      
+      // Wire up AI Reasoning toggle button
+      const btnToggleReasoning = document.getElementById('btn-toggle-reasoning');
+      if (btnToggleReasoning) {
+        btnToggleReasoning.onclick = () => {
+          const panel = document.getElementById('ai-reasoning-panel');
+          if (panel) {
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+          }
+        };
+      }
+      
+      // Wire up Gantt view mode selector
+      const ganttViewMode = document.getElementById('gantt-view-mode');
+      if (ganttViewMode) {
+        ganttViewMode.onchange = () => {
+          const letter = document.querySelector('[data-timeline-sel].active')?.dataset?.timelineSel || 'A';
+          renderTimeline(letter);
+        };
+      }
+      
+      // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
+    });
+    
+    // Hook up export buttons (Scenario A only)
+    document.querySelector('#btn-export-a')?.addEventListener('click', () => onExportScenario('A'));
+    document.querySelector('#btn-export-xml-a')?.addEventListener('click', () => onExportXMLScenario('A'));
+
+    // Legacy format tracking (remove old handlers)
+    // Note: New export format handling is in Step 5
+
+    // --- Retainer functionality ---
+    function displayRetainerHints(retainerSuggestions) {
+      const hintsDiv = document.getElementById('retainer-hints');
+      const listDiv = document.getElementById('retainer-list');
+      
+      if (!retainerSuggestions || retainerSuggestions.length === 0) {
+        hintsDiv.style.display = 'none';
+        return;
+      }
+      
+      let html = '<ul>';
+      retainerSuggestions.forEach(sugg => {
+        const months = sugg.retainer_months_suggested || 'N/A';
+        html += `<li><strong>${sugg.deliverable}</strong> - Suggested: ${months} months</li>`;
+      });
+      html += '</ul>';
+      
+      listDiv.innerHTML = html;
+      hintsDiv.style.display = 'block';
+    }
+    
+    function updateRetainerControls() {
+      const retainerConfig = document.getElementById('retainer-config');
+      const controlsDiv = document.getElementById('retainer-list-controls');
+      
+      if (!appState.selectedCodes || appState.selectedCodes.length === 0) {
+        retainerConfig.style.display = 'none';
+        return;
+      }
+      
+      // Check if any selected deliverables have retainer suggestions
+      const hasRetainerSuggestions = appState.retainerSuggestions && 
+        appState.retainerSuggestions.some(r => appState.selectedCodes.includes(r.deliverable_code));
+      
+      if (!hasRetainerSuggestions) {
+        retainerConfig.style.display = 'none';
+        return;
+      }
+      
+      retainerConfig.style.display = 'block';
+      
+      let html = '';
+      appState.selectedCodes.forEach(code => {
+        const deliverable = codeToName(code);
+        const suggestion = appState.retainerSuggestions?.find(r => r.deliverable_code === code);
+        const suggestedMonths = suggestion?.retainer_months_suggested || 3;
+        
+        if (suggestion) {
+          html += `
+            <div style="margin-bottom: 12px; padding: 8px; border: 1px solid var(--border); border-radius: 6px;">
+              <label style="display: block; margin-bottom: 4px; font-weight: 600;">${deliverable}</label>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <label style="margin: 0; color: var(--muted);">Retainer months:</label>
+                <input type="number" 
+                       id="retainer-${code}" 
+                       min="1" max="24" 
+                       value="${suggestedMonths}"
+                       style="width: 80px; text-align: center;" />
+                <span style="color: var(--muted); font-size: 12px;">(suggested: ${suggestedMonths})</span>
+              </div>
+            </div>
+          `;
+        }
+      });
+      
+      controlsDiv.innerHTML = html;
+    }
+    
+    function collectRetainerData() {
+      const retainers = [];
+      if (!appState.selectedCodes) return retainers;
+      
+      appState.selectedCodes.forEach(code => {
+        const input = document.getElementById(`retainer-${code}`);
+        if (input && input.value && parseInt(input.value) > 0) {
+          retainers.push({
+            deliverable_code: code,
+            months: parseInt(input.value)
+          });
+        }
+      });
+      
+      return retainers;
+    }
+
+    // Helper function to render Gantt chart using Frappe Gantt
+    function renderGanttChart(container, ganttData, metadata) {
+      if (!ganttData || !ganttData.length) {
+        container.innerHTML = '<p>No Gantt data available</p>';
+        return;
+      }
+      
+      // Clear container
+      container.innerHTML = '';
+      
+      // Create Gantt chart
+      if (typeof Gantt !== 'undefined') {
+        try {
+          const gantt = new Gantt(container, ganttData, {
+            view_mode: metadata?.view_mode || 'Week',
+            date_format: 'YYYY-MM-DD',
+            custom_popup_html: function(task) {
+              return `
+                <div class="details-container">
+                  <h5>${task.name}</h5>
+                  <p>Start: ${task.start}</p>
+                  <p>End: ${task.end}</p>
+                  <p>Duration: ${task.duration} days</p>
+                  ${task.dependencies ? `<p>Dependencies: ${task.dependencies}</p>` : ''}
+                  ${task.workstream ? `<p>Workstream: ${task.workstream}</p>` : ''}
+                </div>
+              `;
+            }
+          });
+        } catch (e) {
+          console.error('Error rendering Gantt chart:', e);
+          container.innerHTML = '<p>Error rendering Gantt chart</p>';
+        }
+      } else {
+        container.innerHTML = '<p>Gantt library not loaded</p>';
+      }
+    }
+    
+    // Helper function to display timeline reasoning
+    function displayTimelineReasoning(reasoning) {
+      const reasoningContainer = document.getElementById('timeline-reasoning');
+      if (!reasoningContainer) return;
+      
+      let html = '<div class="reasoning-panel">';
+      html += '<h4>AI Timeline Analysis</h4>';
+      
+      if (reasoning.phases) {
+        html += '<div class="phases-section"><h5>Project Phases</h5><ul>';
+        reasoning.phases.forEach(phase => {
+          html += `<li><strong>${phase.name}</strong>: ${phase.description}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      if (reasoning.dependencies) {
+        html += '<div class="dependencies-section"><h5>Key Dependencies</h5><ul>';
+        reasoning.dependencies.forEach(dep => {
+          html += `<li>${dep}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      if (reasoning.parallel_opportunities) {
+        html += '<div class="parallel-section"><h5>Parallel Work Opportunities</h5><ul>';
+        reasoning.parallel_opportunities.forEach(opp => {
+          html += `<li>${opp}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      if (reasoning.critical_path) {
+        html += '<div class="critical-path-section"><h5>Critical Path</h5>';
+        html += `<p>${reasoning.critical_path}</p></div>`;
+      }
+      
+      if (reasoning.risks) {
+        html += '<div class="risks-section"><h5>Risk Areas</h5><ul>';
+        reasoning.risks.forEach(risk => {
+          html += `<li>${risk}</li>`;
+        });
+        html += '</ul></div>';
+      }
+      
+      html += '</div>';
+      reasoningContainer.innerHTML = html;
+      reasoningContainer.style.display = 'block';
+    }
+    
+    // Function to generate intelligent timeline
+    async function generateIntelligentTimeline(letter = 'A') {
+      const scen = window.getScenario(letter);
+      if (!scen || !scen.items || !scen.items.length) {
+        alert('Please build scenarios first in Step 3');
+        return;
+      }
+      
+      const btn = document.getElementById('btn-ai-timeline');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Generating Intelligent Timeline...';
+      }
+      
+      try {
+        // Prepare deliverables for timeline generation
+        const deliverables = scen.items.map(item => ({
+          deliverable_code: item.deliverable_code,
+          deliverable_name: item.deliverable || item.deliverable_name,
+          department: item.department || item['Service Department'] || 'Strategy',
+          total_hours: item.hours || item.total_hours || 0,
+          components: item.components || [],
+          is_retainer: item.is_retainer || false,
+          retainer_months: item.retainer_months || 0
+        }));
+        
+        const response = await fetch('/api/ai/generate_timeline', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            deliverables: deliverables,
+            rfp_text: window.APB?.step2?.rfpText || '',
+            project_start: scen.project_start,
+            optimization_mode: 'balanced',
+            use_intelligent_scheduler: true
+          })
+        });
+        
+        if (!response.ok) {
+          throw new Error('Failed to generate timeline');
+        }
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          // Store the intelligent timeline in the scenario
+          scen.intelligent_timeline = result;
+          window.appState.scenarios[letter] = scen;
+          
+          // Re-render the timeline with new data
+          renderTimeline(letter);
+          
+          // Show success message
+          if (btn) {
+            btn.textContent = '✓ Intelligent Timeline Generated';
+            setTimeout(() => {
+              btn.textContent = '🤖 Generate Intelligent Timeline';
+              btn.disabled = false;
+            }, 3000);
+          }
+        } else {
+          throw new Error(result.error || 'Timeline generation failed');
+        }
+        
+      } catch (error) {
+        alert('Error generating timeline: ' + error.message);
+        if (btn) {
+          btn.textContent = '🤖 Generate Intelligent Timeline';
+          btn.disabled = false;
+        }
+      }
+    }
+    
+    // Initialize
+    loadOptions();
+  </script>
+  <!-- Frappe Gantt Library -->
+  <script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
+  <script src="/static/static_weights.js"></script>
+  <script src="/static/app.js?v=5.6" defer></script>
+  <script>
+    // Weighted AI Suggestions Handler
+    document.addEventListener('DOMContentLoaded', () => {
+      const btnAskWeights = document.getElementById('btn-ask-ai-weights');
+      const weightsContainer = document.getElementById('step2-ai-weights-container');
+      const btnCloseWeights = document.getElementById('btn-close-weights');
+      
+      if (btnAskWeights) {
+        btnAskWeights.addEventListener('click', async () => {
+          try {
+            btnAskWeights.disabled = true;
+            btnAskWeights.textContent = '⏳ Analyzing...';
+            
+            // Get RFP text: first from session state, then from backend cache
+            let rfpText = window.APB?.step2?.rfpText || '';
+            
+            if (!rfpText) {
+              // Try to fetch from backend cache
+              const cacheRes = await fetch('/api/rfp/cache');
+              if (cacheRes.ok) {
+                const cacheData = await cacheRes.json();
+                rfpText = cacheData.text || '';
+                
+                // Sync to session state if we got text from cache
+                if (rfpText && window.APB?.step2) {
+                  window.APB.step2.rfpText = rfpText;
+                  sessionStorage.setItem('apb.rfp_text', rfpText);
+                }
+              }
+            }
+            
+            // Validate we have RFP text
+            if (!rfpText || !rfpText.trim()) {
+              // Show inline message instead of blocking
+              weightsContainer.style.display = 'block';
+              const container = weightsContainer.querySelector('#step2-ai-weights');
+              if (container) {
+                container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--muted);">Please enter RFP text in Step 1 to get AI-powered deliverable suggestions.</div>';
+              }
+              btnAskWeights.textContent = '🤖 Ask AI for Deliverable Suggestions';
+              btnAskWeights.disabled = false;
+              return;
+            }
+            
+            // Call weighted AI endpoint
+            const res = await fetch('/api/step2/ai/weights', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ rfp_text: rfpText })
+            });
+            
+            if (!res.ok) throw new Error('Failed to get weighted suggestions');
+            
+            const data = await res.json();
+            
+            // Show and render results
+            weightsContainer.style.display = 'block';
+            TCGWeights.render('#step2-ai-weights', data);
+            
+            btnAskWeights.textContent = '✓ AI Suggestions Loaded';
+            setTimeout(() => {
+              btnAskWeights.textContent = '🤖 Ask AI for Deliverable Suggestions';
+              btnAskWeights.disabled = false;
+            }, 2000);
+            
+          } catch (err) {
+            alert('Error getting AI suggestions: ' + err.message);
+            btnAskWeights.textContent = '🤖 Ask AI for Deliverable Suggestions';
+            btnAskWeights.disabled = false;
+          }
+        });
+      }
+      
+      if (btnCloseWeights) {
+        btnCloseWeights.addEventListener('click', () => {
+          weightsContainer.style.display = 'none';
+        });
+      }
+    });
+  </script>
+  <!-- Initialize CHARLES after everything is loaded -->
+  <script>
+    // Force CHARLES initialization
+    window.addEventListener('load', function() {
+      console.log('[CHARLES] Window load event - attempting initialization...');
+      
+      // Check if AIAssistant class exists
+      if (typeof AIAssistant !== 'undefined') {
+        console.log('[CHARLES] AIAssistant class found');
+        
+        // Check if already initialized
+        if (!window.aiAssistant) {
+          console.log('[CHARLES] Creating new AIAssistant instance...');
+          try {
+            window.aiAssistant = new AIAssistant();
+            console.log('[CHARLES] Successfully created AIAssistant instance');
+          } catch (error) {
+            console.error('[CHARLES] Failed to create AIAssistant:', error);
+          }
+        } else {
+          console.log('[CHARLES] AIAssistant already initialized');
+        }
+      } else {
+        console.error('[CHARLES] AIAssistant class not found - script may not have loaded');
+      }
+      
+      // Verify toggle button exists
+      setTimeout(function() {
+        const toggle = document.getElementById('ai-assistant-toggle');
+        const container = document.getElementById('ai-assistant-container');
+        
+        if (toggle) {
+          console.log('[CHARLES] Toggle button found!');
+        } else if (container) {
+          console.log('[CHARLES] Container found but no toggle button');
+        } else {
+          console.error('[CHARLES] Neither toggle button nor container found');
+          
+          // Create emergency button
+          const emergencyBtn = document.createElement('button');
+          emergencyBtn.style.cssText = `
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            z-index: 99999;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          `;
+          emergencyBtn.innerHTML = '🔮 CHARLES (Emergency)';
+          emergencyBtn.onclick = function() {
+            alert('CHARLES initialization failed. Check console for errors.');
+          };
+          document.body.appendChild(emergencyBtn);
+          console.log('[CHARLES] Created emergency button');
+        }
+      }, 500);
+    });
+  </script>
+</body>
+</html>
