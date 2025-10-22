@@ -5122,45 +5122,66 @@ async function pollAIAnalysis(jobId) {
     }
     
     // Handle completion
-    if (data.status === 'completed' && data.result) {
-      // Stop polling
+    if (data.status === 'completed') {
+      console.log('[AI Analysis] Job completed, checking for result data...', data);
+      
+      // Stop polling first
       if (aiAnalysisInterval) {
         clearInterval(aiAnalysisInterval);
         aiAnalysisInterval = null;
+        console.log('[AI Analysis] Stopped polling interval');
       }
       
       hideAIProgressBar();
       
-      // Store the AI plan results
-      const aiPlanResponse = data.result;
-      window.APP = window.APP || {};
-      window.APP.aiPlan = aiPlanResponse;
-      
-      // Store with session isolation
-      const sessionId = SessionManager.getCurrentSessionId();
-      if (sessionId) {
-        SessionManager.setSessionItem('ai_plan', aiPlanResponse);
+      // Check if we have result data
+      if (data.result) {
+        console.log('[AI Analysis] Found result data with deliverables');
+        
+        // Store the AI plan results
+        const aiPlanResponse = data.result;
+        window.APP = window.APP || {};
+        window.APP.aiPlan = aiPlanResponse;
+        
+        // Store with session isolation
+        const sessionId = SessionManager.getCurrentSessionId();
+        if (sessionId) {
+          SessionManager.setSessionItem('ai_plan', aiPlanResponse);
+        }
+        sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
+        
+        // Show Step 2
+        const step2 = document.getElementById('step2');
+        if (step2) {
+          step2.style.display = 'block';
+          step2.scrollIntoView({ behavior: 'smooth' });
+          console.log('[AI Analysis] Step 2 is now visible');
+        }
+        
+        // Render the AI plan with deliverables
+        renderAIPlan(aiPlanResponse);
+        
+        // Re-enable the analyze button
+        const btnAnalyze = document.querySelector('#btnAnalyze');
+        if (btnAnalyze) {
+          btnAnalyze.disabled = false;
+          btnAnalyze.textContent = 'Analyze with AI';
+        }
+        
+        console.log('[AI Analysis] Successfully completed and displayed deliverables');
+      } else {
+        console.error('[AI Analysis] Job completed but no result data found!', data);
+        alert('Analysis completed but no deliverables were returned. Please try again.');
+        
+        // Re-enable button
+        const btnAnalyze = document.querySelector('#btnAnalyze');
+        if (btnAnalyze) {
+          btnAnalyze.disabled = false;
+          btnAnalyze.textContent = 'Analyze with AI';
+        }
       }
-      sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
       
-      // Show Step 2
-      const step2 = document.getElementById('step2');
-      if (step2) {
-        step2.style.display = 'block';
-        step2.scrollIntoView({ behavior: 'smooth' });
-      }
-      
-      // Render the AI plan with deliverables
-      renderAIPlan(aiPlanResponse);
-      
-      // Re-enable the analyze button
-      const btnAnalyze = document.querySelector('#btnAnalyze');
-      if (btnAnalyze) {
-        btnAnalyze.disabled = false;
-        btnAnalyze.textContent = 'Analyze with AI';
-      }
-      
-      console.log('[AI Analysis] Successfully completed and displayed deliverables');
+      return; // Exit early after handling completion
     }
     
     // Handle failure
