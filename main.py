@@ -514,7 +514,7 @@ async def get_agencydb_job_status(job_id: str):
     
     # Add deliverables data if job is completed
     if job.status == AIJobStatus.COMPLETED and job.result:
-        response["data"] = job.result
+        response["result"] = job.result  # Changed from "data" to "result" for frontend compatibility
         # Also include deliverable count for UI display
         delivs_count = 0
         if isinstance(job.result, dict):
