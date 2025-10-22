@@ -1913,7 +1913,8 @@
       return v.toLowerCase();
     }
     window.getScenario = window.getScenario || function(letter) {
-      const s = (window.appState?.scenarios || {})[letter];
+      // Check window.SCENARIOS first (where build process saves), then fall back to appState.scenarios (legacy)
+      const s = window.SCENARIOS?.[letter] || (window.appState?.scenarios || {})[letter];
       return (s && Array.isArray(s.items) && s.items.length) ? s : null;
     };
 
