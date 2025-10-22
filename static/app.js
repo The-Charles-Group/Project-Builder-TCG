@@ -4754,52 +4754,7 @@ function updateAIProgress(status) {
   }
 }
 
-async function pollAIAnalysis(jobId) {
-  try {
-    const res = await fetch(`/api/ai/jobs/${jobId}`);
-    if (!res.ok) return;
-    
-    const status = await res.json();
-    updateAIProgress(status);
-    
-    if (status.status === 'completed' && status.result) {
-      clearInterval(aiAnalysisInterval);
-      hideAIProgressBar();
-      
-      // Handle completed analysis
-      const aiPlanResponse = status.result;
-      window.APP = window.APP || {};
-      window.APP.aiPlan = aiPlanResponse;
-      sessionStorage.setItem('apb:aiPlan', JSON.stringify(aiPlanResponse));
-      
-      const step2 = document.getElementById('step2');
-      if (step2) {
-        step2.style.display = 'block';
-        step2.scrollIntoView({ behavior: 'smooth' });
-      }
-      
-      renderAIPlan(aiPlanResponse);
-      
-      const btnAnalyze = document.querySelector('#btnAnalyze');
-      if (btnAnalyze) {
-        btnAnalyze.disabled = false;
-        btnAnalyze.textContent = 'Analyze with AI';
-      }
-    } else if (status.status === 'failed') {
-      clearInterval(aiAnalysisInterval);
-      hideAIProgressBar();
-      alert(`AI analysis failed: ${status.error || 'Unknown error'}`);
-      
-      const btnAnalyze = document.querySelector('#btnAnalyze');
-      if (btnAnalyze) {
-        btnAnalyze.disabled = false;
-        btnAnalyze.textContent = 'Analyze with AI';
-      }
-    }
-  } catch (error) {
-    console.error('Error polling AI analysis:', error);
-  }
-}
+// Removed duplicate - see proper implementation below
 
 // Helper function for fetch with retry logic for 502 errors
 async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 2000) {
