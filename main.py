@@ -44,6 +44,8 @@ except Exception:
 def load_database_with_pickle_cache():
     """Cache heavy Excel reads; convert to pickle for subsequent boots"""
     # Import here to avoid circular dependency issues
+    import glob
+    
     # Find the v4 Excel file
     xlsx_paths = [
         "test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx",
@@ -56,6 +58,14 @@ def load_database_with_pickle_cache():
         if os.path.exists(path):
             xlsx_path = path
             break
+    
+    # If not found in standard locations, check attached_assets for timestamped v4 files
+    if not xlsx_path:
+        v4_files = glob.glob("attached_assets/Replit_App_DB_READABLE_FullRows_v4_*.xlsx")
+        if v4_files:
+            # Use the most recent file (highest timestamp)
+            xlsx_path = sorted(v4_files)[-1]
+            print(f"[STARTUP] Found timestamped v4 database: {xlsx_path}")
     
     if not xlsx_path:
         print("[STARTUP] No database file found, will use mock data")
@@ -816,6 +826,10 @@ def _find_v4_path() -> str | None:
     ]:
         if os.path.exists(p):
             return p
+    # Check attached_assets for timestamped v4 files
+    v4_files = glob.glob("attached_assets/Replit_App_DB_READABLE_FullRows_v4_*.xlsx")
+    if v4_files:
+        return sorted(v4_files)[-1]  # Use most recent file
     # Check for CSV bundle directory (canonical and timestamped variants)
     # Filter to only return directories, not ZIP files
     csv_dirs = [d for d in glob.glob("Replit_App_DB_READABLE_FullRows_v4_csvs*") if os.path.isdir(d)]
