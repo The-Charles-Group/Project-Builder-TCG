@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Clear Data Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .test-section {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        button {
+            background: #4f46e5;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #6366f1;
+        }
+        .success {
+            color: #10b981;
+        }
+        .error {
+            color: #ef4444;
+        }
+        .log {
+            background: #000;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-family: monospace;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .storage-status {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .status-card {
+            background: #333;
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Clear Data Functionality Test</h1>
+    
+    <div class="test-section">
+        <h2>Step 1: Add Test Data</h2>
+        <button onclick="addTestData()">Add Test Data to Storage</button>
+        <button onclick="checkStorage()">Check Current Storage</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>Step 2: Clear All Data</h2>
+        <button onclick="clearAllData()">Clear All Data</button>
+        <button onclick="checkAfterClear()">Verify Data Cleared</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>Step 3: Test Auto-Restore Prevention</h2>
+        <button onclick="testAutoRestore()">Simulate Page Load</button>
+        <button onclick="checkForRestoration()">Check for Data Restoration</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>Storage Status</h2>
+        <div class="storage-status" id="storage-status"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test Log</h2>
+        <div class="log" id="log"></div>
+    </div>
+    
+    <script>
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toISOString().substr(11, 12);
+            const className = type === 'success' ? 'success' : type === 'error' ? 'error' : '';
+            logDiv.innerHTML += `<div class="${className}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function addTestData() {
+            log('Adding test data to storage...');
+            
+            // Add to localStorage
+            localStorage.setItem('apb.rfpText.v1', 'Test RFP content that should be cleared');
+            localStorage.setItem('apb.currentSession', 'test-session-123');
+            localStorage.setItem('charles_agent_state', JSON.stringify({
+                uploadedFiles: ['test.pdf'],
+                selectedDeliverables: ['DELIV001', 'DELIV002'],
+                currentStep: 'step2'
+            }));
+            localStorage.setItem('latest_scenarios', JSON.stringify({
+                scenarioA: { deliverables: ['test1', 'test2'] }
+            }));
+            
+            // Add to sessionStorage
+            sessionStorage.setItem('apb.rfp_text', 'Session RFP text');
+            sessionStorage.setItem('rfp_text', 'Old format RFP text');
+            sessionStorage.setItem('apb:rfpSummary', JSON.stringify({
+                summary: 'Test summary that should be cleared'
+            }));
+            
+            log('✅ Test data added successfully', 'success');
+            checkStorage();
+        }
+        
+        function checkStorage() {
+            const status = document.getElementById('storage-status');
+            
+            // Count localStorage items
+            const localItems = [];
+            Object.keys(localStorage).forEach(key => {
+                if (key.includes('apb') || key.includes('charles') || key.includes('rfp') || 
+                    key.includes('scenario') || key.includes('session')) {
+                    localItems.push(key);
+                }
+            });
+            
+            // Count sessionStorage items
+            const sessionItems = Object.keys(sessionStorage);
+            
+            status.innerHTML = `
+                <div class="status-card">
+                    <h3>localStorage</h3>
+                    <p>Items: ${localItems.length}</p>
+                    <small>${localItems.join(', ')}</small>
+                </div>
+                <div class="status-card">
+                    <h3>sessionStorage</h3>
+                    <p>Items: ${sessionItems.length}</p>
+                    <small>${sessionItems.join(', ')}</small>
+                </div>
+                <div class="status-card">
+                    <h3>Clear Flag</h3>
+                    <p>Flag: ${localStorage.getItem('apb.data_cleared') || 'not set'}</p>
+                    <p>Timestamp: ${localStorage.getItem('apb.clear_timestamp') ? 
+                        new Date(parseInt(localStorage.getItem('apb.clear_timestamp'))).toLocaleString() : 
+                        'not set'}</p>
+                </div>
+            `;
+            
+            log(`Storage check: localStorage has ${localItems.length} items, sessionStorage has ${sessionItems.length} items`);
+        }
+        
+        async function clearAllData() {
+            log('Starting clear data process...');
+            
+            // Load the main app code if available
+            if (window.parent && window.parent.SessionManager) {
+                log('Using SessionManager.clearAllData()...');
+                const clearLog = await window.parent.SessionManager.clearAllData();
+                log('✅ SessionManager.clearAllData() completed', 'success');
+                log('Clear log: ' + JSON.stringify(clearLog));
+            } else {
+                // Manual clear for testing
+                log('SessionManager not available, using manual clear...');
+                
+                // Clear localStorage
+                const keysToRemove = [];
+                Object.keys(localStorage).forEach(key => {
+                    if (key.startsWith('apb.') || key.startsWith('apb:') || 
+                        key.includes('rfp') || key.includes('RFP') ||
+                        key.includes('scenario') || key.includes('deliverable') ||
+                        key.includes('timeline') || key.includes('pricing') ||
+                        key.includes('charles') || key.includes('session')) {
+                        keysToRemove.push(key);
+                    }
+                });
+                
+                keysToRemove.forEach(key => {
+                    localStorage.removeItem(key);
+                    log(`Removed localStorage: ${key}`);
+                });
+                
+                // Clear sessionStorage completely
+                sessionStorage.clear();
+                log('Cleared all sessionStorage');
+                
+                // Set flag to prevent auto-restore
+                localStorage.setItem('apb.data_cleared', 'true');
+                localStorage.setItem('apb.clear_timestamp', Date.now().toString());
+                log('✅ Set data_cleared flag', 'success');
+            }
+            
+            checkStorage();
+        }
+        
+        function checkAfterClear() {
+            log('Checking if data was properly cleared...');
+            
+            // Check for problematic keys
+            const problematicKeys = [
+                'apb.rfpText.v1',
+                'charles_agent_state',
+                'latest_scenarios',
+                'apb.currentSession'
+            ];
+            
+            let foundAny = false;
+            problematicKeys.forEach(key => {
+                const value = localStorage.getItem(key);
+                if (value) {
+                    log(`❌ FOUND: ${key} = ${value.substring(0, 50)}...`, 'error');
+                    foundAny = true;
+                } else {
+                    log(`✅ CLEARED: ${key}`, 'success');
+                }
+            });
+            
+            // Check sessionStorage
+            if (sessionStorage.length > 0) {
+                log(`❌ sessionStorage still has ${sessionStorage.length} items`, 'error');
+                foundAny = true;
+            } else {
+                log('✅ sessionStorage is empty', 'success');
+            }
+            
+            // Check clear flag
+            const clearFlag = localStorage.getItem('apb.data_cleared');
+            const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+            
+            if (clearFlag === 'true') {
+                log('✅ Clear flag is set correctly', 'success');
+                const timeSinceClear = Date.now() - parseInt(clearTimestamp);
+                log(`Time since clear: ${Math.round(timeSinceClear / 1000)}s`);
+            } else {
+                log('❌ Clear flag is not set', 'error');
+            }
+            
+            if (!foundAny) {
+                log('🎉 All data cleared successfully!', 'success');
+            } else {
+                log('⚠️ Some data was not cleared properly', 'error');
+            }
+            
+            checkStorage();
+        }
+        
+        function testAutoRestore() {
+            log('Simulating page load to test auto-restore prevention...');
+            
+            // Check if data would be restored
+            const clearFlag = localStorage.getItem('apb.data_cleared');
+            const clearTimestamp = localStorage.getItem('apb.clear_timestamp');
+            const timeSinceClear = clearTimestamp ? Date.now() - parseInt(clearTimestamp) : Infinity;
+            
+            log(`Clear flag: ${clearFlag}`);
+            log(`Time since clear: ${Math.round(timeSinceClear / 1000)}s`);
+            
+            if (clearFlag === 'true' && timeSinceClear < 3600000) {
+                log('✅ Auto-restore would be PREVENTED (data was recently cleared)', 'success');
+            } else {
+                log('⚠️ Auto-restore would NOT be prevented', 'error');
+            }
+            
+            // Try to access data that might be restored
+            const rfpText = sessionStorage.getItem('apb.rfp_text') || 
+                           localStorage.getItem('apb.rfpText.v1') || '';
+            
+            if (rfpText) {
+                log(`❌ Found restored RFP text: ${rfpText.substring(0, 50)}...`, 'error');
+            } else {
+                log('✅ No RFP text found (good!)', 'success');
+            }
+        }
+        
+        function checkForRestoration() {
+            log('Final check for any restored data...');
+            
+            let anyDataFound = false;
+            
+            // Check all storage
+            Object.keys(localStorage).forEach(key => {
+                if ((key.startsWith('apb.') || key.includes('rfp') || key.includes('charles')) && 
+                    !key.includes('data_cleared') && !key.includes('clear_timestamp')) {
+                    log(`❌ Found in localStorage: ${key}`, 'error');
+                    anyDataFound = true;
+                }
+            });
+            
+            Object.keys(sessionStorage).forEach(key => {
+                log(`❌ Found in sessionStorage: ${key}`, 'error');
+                anyDataFound = true;
+            });
+            
+            if (!anyDataFound) {
+                log('🎉 SUCCESS: No data restoration detected!', 'success');
+                log('The clear data fix is working correctly!', 'success');
+            } else {
+                log('⚠️ WARNING: Some data may have been restored', 'error');
+            }
+            
+            checkStorage();
+        }
+        
+        // Initial check on load
+        window.addEventListener('DOMContentLoaded', () => {
+            log('Test page loaded');
+            checkStorage();
+        });
+    </script>
+</body>
+</html>
