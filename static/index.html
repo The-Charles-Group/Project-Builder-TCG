@@ -1937,17 +1937,36 @@
       const scen = window.getScenario(letter);
       if (!scen) { alert(`Build Scenario ${letter} first.`); return; }
 
-      // Use new GET endpoints for individual scenarios
-      const endpoint = `/api/export/xml/${letter.toLowerCase()}`;
+      // Check if anchors should be included
+      const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
+      
+      // Build endpoint with query parameter
+      const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+      
       try {
         const response = await fetch(endpoint);
-        if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+        
+        if (!response.ok) {
+          // Read actual error text from backend for detailed error messages
+          const errorText = await response.text();
+          throw new Error(errorText || `Export failed: ${response.statusText}`);
+        }
+        
+        // Extract filename from Content-Disposition header (backend sets RFP-based name)
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = `Project_Scenario_${letter}.xml`; // Fallback
+        if (contentDisposition) {
+          const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+          if (filenameMatch && filenameMatch[1]) {
+            filename = filenameMatch[1].replace(/['"]/g, '');
+          }
+        }
         
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `Project_Scenario_${letter}.xml`;
+        a.download = filename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
