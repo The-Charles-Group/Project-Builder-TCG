@@ -1277,7 +1277,7 @@ const pricingDataEnhanced = {
   componentTasks: new Map(),    // deliverable_code -> array of tasks
 };
 
-// UNIFIED PRICING TABLE - Comprehensive implementation
+// UNIFIED PRICING TABLE - Fully editable inline version
 function updatePricingTable() {
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
   if (!container || !SCENARIOS) return;
@@ -1290,11 +1290,11 @@ function updatePricingTable() {
     pricingData.originalScenario = JSON.parse(JSON.stringify(scenario));
   }
   
-  // Create comprehensive table HTML structure
+  // Create comprehensive table HTML structure with ALWAYS EDITABLE inputs
   let tableHTML = `
     <div class="unified-pricing-table" style="margin: 20px 0;">
       <h3 style="color: var(--accent); margin-bottom: 16px; font-size: 1.3em;">
-        📊 Unified Pricing Details
+        📊 Unified Pricing Details (Direct Edit)
       </h3>
       
       <table id="pricing-details-table" style="width: 100%; border-collapse: separate; border-spacing: 0; background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -1326,9 +1326,6 @@ function updatePricingTable() {
             </th>
             <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 150px;">
               Tasks
-            </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
-              Actions
             </th>
           </tr>
         </thead>
@@ -1368,7 +1365,7 @@ function updatePricingTable() {
       'background: linear-gradient(90deg, rgba(139,92,246,0.05), rgba(139,92,246,0.02));' : 
       (rowIndex % 2 === 0 ? 'background: rgba(255,255,255,0.01);' : 'background: transparent;');
     
-    // Main deliverable row
+    // Main deliverable row - ALWAYS EDITABLE, no edit mode
     tableHTML += `
       <tr data-deliverable="${item.deliverable_code}" data-row-type="deliverable" 
           style="${rowBg} border-bottom: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;">
@@ -1383,62 +1380,50 @@ function updatePricingTable() {
           </span>
         </td>
         <td style="padding: 8px; text-align: center;">
-          ${isEditing ? 
-            `<select id="cadence-${item.deliverable_code}" 
-                    onchange="updateCadenceType('${item.deliverable_code}', this.value)"
-                    style="padding: 6px 10px; border: 1px solid rgba(139,92,246,0.5); border-radius: 6px; 
-                           background: rgba(139,92,246,0.1); color: var(--text); cursor: pointer; 
-                           font-size: 0.85em; width: 100%;">
-              <option value="ONE_TIME" ${cadenceType === 'ONE_TIME' ? 'selected' : ''}>One-Time</option>
-              <option value="MONTHLY" ${cadenceType === 'MONTHLY' ? 'selected' : ''}>Monthly</option>
-              <option value="QUARTERLY" ${cadenceType === 'QUARTERLY' ? 'selected' : ''}>Quarterly</option>
-              <option value="SEMI_ANNUAL" ${cadenceType === 'SEMI_ANNUAL' ? 'selected' : ''}>Semi-Annual</option>
-            </select>` :
-            `<span class="cadence-badge" style="padding: 4px 12px; border-radius: 20px; font-size: 0.85em; font-weight: 500;
-                   background: ${cadenceType === 'ONE_TIME' ? 'rgba(106,163,255,0.1)' : 'rgba(139,92,246,0.1)'};
-                   color: ${cadenceType === 'ONE_TIME' ? 'var(--accent)' : 'var(--accent2)'};">
-              ${cadenceType.replace('_', '-')}
-            </span>`}
+          <select id="cadence-${item.deliverable_code}" 
+                  onchange="updateCadenceType('${item.deliverable_code}', this.value)"
+                  style="padding: 6px 10px; border: 1px solid rgba(139,92,246,0.5); border-radius: 6px; 
+                         background: rgba(139,92,246,0.1); color: var(--text); cursor: pointer; 
+                         font-size: 0.85em; width: 100%;">
+            <option value="ONE_TIME" ${cadenceType === 'ONE_TIME' ? 'selected' : ''}>One-Time</option>
+            <option value="MONTHLY" ${cadenceType === 'MONTHLY' ? 'selected' : ''}>Monthly</option>
+            <option value="QUARTERLY" ${cadenceType === 'QUARTERLY' ? 'selected' : ''}>Quarterly</option>
+            <option value="SEMI_ANNUAL" ${cadenceType === 'SEMI_ANNUAL' ? 'selected' : ''}>Semi-Annual</option>
+          </select>
         </td>
         <td style="padding: 8px; text-align: center;">
           ${cadenceType !== 'ONE_TIME' ? 
-            (isEditing ?
-              `<input type="number" id="periods-${item.deliverable_code}" value="${periods}" 
-                      min="1" max="36" step="1"
-                      onchange="updatePeriods('${item.deliverable_code}', this.value)"
-                      style="width: 70px; padding: 6px; border: 1px solid rgba(139,92,246,0.3); 
-                             border-radius: 4px; background: rgba(139,92,246,0.05); 
-                             color: var(--text); text-align: center; font-weight: 500;" />` :
-              `<span style="font-weight: 500; color: var(--accent2);">${periods}</span>`) :
+            `<input type="number" id="periods-${item.deliverable_code}" value="${periods}" 
+                    min="1" max="36" step="1"
+                    onchange="updatePeriods('${item.deliverable_code}', this.value)"
+                    style="width: 70px; padding: 6px; border: 1px solid rgba(139,92,246,0.3); 
+                           border-radius: 4px; background: rgba(139,92,246,0.05); 
+                           color: var(--text); text-align: center; font-weight: 500;" />` :
             '<span style="color: var(--muted);">-</span>'}
         </td>
         <td style="padding: 8px; text-align: center;">
-          ${isEditing ?
-            `<input type="number" id="hours-${item.deliverable_code}" value="${customHours}" 
-                    min="0" step="0.5"
-                    onchange="updateCustomHours('${item.deliverable_code}', this.value)"
-                    style="width: 80px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
-                           border-radius: 4px; background: rgba(106,163,255,0.05); 
-                           color: var(--text); text-align: center; font-weight: 500;" />` :
-            `<span style="font-weight: 500;">${customHours}</span>`}
+          <input type="number" id="hours-${item.deliverable_code}" value="${customHours}" 
+                  min="0" step="0.5"
+                  onchange="updateCustomHours('${item.deliverable_code}', this.value)"
+                  style="width: 80px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
+                         border-radius: 4px; background: rgba(106,163,255,0.05); 
+                         color: var(--text); text-align: center; font-weight: 500;" />
         </td>
         <td style="padding: 8px; text-align: center;">
-          ${isEditing ?
-            `<div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
-              <span style="color: var(--muted);">$</span>
-              <input type="number" id="rate-${item.deliverable_code}" value="${customRate}" 
-                     min="0" step="5"
-                     onchange="updateCustomRate('${item.deliverable_code}', this.value)"
-                     style="width: 70px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
-                            border-radius: 4px; background: rgba(106,163,255,0.05); 
-                            color: var(--text); text-align: center; font-weight: 500;" />
-            </div>` :
-            `<span style="font-weight: 500;">$${customRate}</span>`}
+          <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
+            <span style="color: var(--muted);">$</span>
+            <input type="number" id="rate-${item.deliverable_code}" value="${customRate}" 
+                   min="0" step="5"
+                   onchange="updateCustomRate('${item.deliverable_code}', this.value)"
+                   style="width: 70px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
+                          border-radius: 4px; background: rgba(106,163,255,0.05); 
+                          color: var(--text); text-align: center; font-weight: 500;" />
+          </div>
         </td>
-        <td style="padding: 8px; text-align: right; font-weight: 600; color: var(--accent);">
+        <td id="price-period-${item.deliverable_code}" style="padding: 8px; text-align: right; font-weight: 600; color: var(--accent);">
           $${pricePerPeriod.toLocaleString()}
         </td>
-        <td style="padding: 8px; text-align: right; font-weight: 700; font-size: 1.05em; 
+        <td id="total-price-${item.deliverable_code}" style="padding: 8px; text-align: right; font-weight: 700; font-size: 1.05em; 
                    color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
           $${totalPrice.toLocaleString()}
         </td>
@@ -1447,30 +1432,6 @@ function updatePricingTable() {
         </td>
         <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
           ${formatTasksList(tasks)}
-        </td>
-        <td style="padding: 8px; text-align: center;">
-          ${isEditing ?
-            `<div style="display: flex; gap: 4px; justify-content: center;">
-              <button onclick="saveRowEdit('${item.deliverable_code}')"
-                      style="padding: 4px 12px; background: var(--accent2); border: none; 
-                             border-radius: 4px; color: #08121e; cursor: pointer; 
-                             font-size: 0.8em; font-weight: 600;">
-                Save
-              </button>
-              <button onclick="cancelRowEdit('${item.deliverable_code}')"
-                      style="padding: 4px 12px; background: transparent; 
-                             border: 1px solid var(--border); border-radius: 4px; 
-                             color: var(--text); cursor: pointer; font-size: 0.8em;">
-                Cancel
-              </button>
-            </div>` :
-            `<button onclick="enableRowEdit('${item.deliverable_code}')"
-                    style="padding: 6px 16px; background: transparent; 
-                           border: 1px solid var(--accent); border-radius: 6px; 
-                           color: var(--accent); cursor: pointer; font-size: 0.85em; 
-                           font-weight: 500; transition: all 0.2s;">
-              Edit
-            </button>`}
         </td>
       </tr>
     `;
@@ -1907,18 +1868,24 @@ function updateDeliverableType(deliverableCode, type) {
   updatePricingSummary();
 }
 
-// Update custom hours
+// Update custom hours - immediate recalculation
 function updateCustomHours(deliverableCode, hours) {
   const numHours = parseFloat(hours) || 0;
   pricingData.customHours.set(deliverableCode, numHours);
-  updatePricingCalculations();
+  
+  // Immediate update without full re-render
+  updateRowTotals(deliverableCode);
+  updatePricingSummary();
 }
 
-// Update custom rate
+// Update custom rate - immediate recalculation
 function updateCustomRate(deliverableCode, rate) {
   const numRate = parseFloat(rate) || 195;
   pricingData.customRates.set(deliverableCode, numRate);
-  updatePricingCalculations();
+  
+  // Immediate update without full re-render
+  updateRowTotals(deliverableCode);
+  updatePricingSummary();
 }
 
 // Analyze PROJECT vs RETAINER with AI - ENHANCED VERSION
@@ -2579,18 +2546,60 @@ function updateCadenceType(code, cadence) {
     pricingDataEnhanced.periodsCount.set(code, 1);
   }
   
-  // If in edit mode, update the display
-  if (pricingDataEnhanced.editMode.get(code)) {
-    const periodsInput = document.getElementById(`periods-${code}`);
-    if (periodsInput) {
-      periodsInput.value = pricingDataEnhanced.periodsCount.get(code);
-    }
+  // Update periods input immediately
+  const periodsInput = document.getElementById(`periods-${code}`);
+  if (periodsInput) {
+    periodsInput.value = pricingDataEnhanced.periodsCount.get(code);
   }
+  
+  // Recalculate totals immediately
+  updateRowTotals(code);
+  updatePricingSummary();
 }
 
 function updatePeriods(code, periods) {
   const periodsNum = parseInt(periods) || 1;
   pricingDataEnhanced.periodsCount.set(code, Math.max(1, Math.min(36, periodsNum)));
+  
+  // Recalculate totals immediately
+  updateRowTotals(code);
+  updatePricingSummary();
+}
+
+// New helper: Update row totals without full table re-render
+function updateRowTotals(code) {
+  const hours = parseFloat(document.getElementById(`hours-${code}`)?.value) || 0;
+  const rate = parseFloat(document.getElementById(`rate-${code}`)?.value) || 195;
+  const periods = pricingDataEnhanced.periodsCount.get(code) || 1;
+  
+  const pricePerPeriod = hours * rate;
+  const totalPrice = pricePerPeriod * periods;
+  
+  // Update display cells
+  const pricePeriodCell = document.getElementById(`price-period-${code}`);
+  const totalPriceCell = document.getElementById(`total-price-${code}`);
+  
+  if (pricePeriodCell) {
+    pricePeriodCell.textContent = `$${pricePerPeriod.toLocaleString()}`;
+  }
+  
+  if (totalPriceCell) {
+    totalPriceCell.textContent = `$${totalPrice.toLocaleString()}`;
+  }
+  
+  // Update scenario data
+  if (SCENARIOS && SCENARIOS.A) {
+    const item = SCENARIOS.A.items.find(i => i.deliverable_code === code);
+    if (item) {
+      item.total_hours = hours;
+      item.effective_rate = rate;
+      item.price = pricePerPeriod;
+      
+      if (periods > 1) {
+        item.retainer_months = periods;
+      }
+    }
+  }
 }
 
 // Export pricing details
