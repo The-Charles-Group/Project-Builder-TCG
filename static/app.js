@@ -490,8 +490,19 @@ async function askAIForRetainerSuggestions() {
       alert(`✅ Analysis complete!\n\nAll ${codes.length} items are best suited as one-time projects.`);
     }
   } catch (error) {
-    console.error('Failed to get retainer suggestions:', error);
-    alert(`❌ Failed to get AI suggestions.\n\nError: ${error.message}\n\nPlease try again or check console for details.`);
+    console.error('[RETAINER] Failed to get suggestions:', error);
+    
+    // Show user-friendly error message
+    let errorMsg = 'Failed to get AI suggestions.';
+    if (error.message) {
+      errorMsg += `\n\nDetails: ${error.message}`;
+    }
+    errorMsg += '\n\nPlease ensure you have:';
+    errorMsg += '\n• Selected deliverables in Step 2';
+    errorMsg += '\n• Provided RFP text in Step 1';
+    errorMsg += '\n\nCheck the console (F12) for technical details.';
+    
+    alert(`❌ ${errorMsg}`);
   } finally {
     // Reset button
     if (btn) {
