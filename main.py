@@ -2554,15 +2554,25 @@ async def _process_images_background(content: bytes, filename: str, job_id: str,
 
 # ---------- Helper: sanitize filenames ----------
 def _safe_filename(s: str) -> str:
+    import urllib.parse
     s = (s or "Proposal").strip()
+    # Decode URL encoding (%20, etc.) if present
+    try:
+        s = urllib.parse.unquote(s)
+    except:
+        pass
+    # Remove utf-8 prefix if present
+    s = re.sub(r'^utf-8', '', s, flags=re.IGNORECASE)
     # Replace characters that are invalid on Windows/macOS and path separators for security
-    s = re.sub(r'[\\/:*?"<>|]+', '-', s)
+    s = re.sub(r'[\\/:*?"<>|]+', '_', s)
     # Remove any path traversal attempts
     s = re.sub(r'\.\.+', '', s)
     # Only allow alphanumeric, spaces, underscores, hyphens, and dots
     s = re.sub(r'[^A-Za-z0-9 _.-]', '', s)
-    # Collapse whitespace
-    s = re.sub(r'\s+', ' ', s).strip()
+    # Replace spaces with underscores for cleaner filenames
+    s = s.replace(' ', '_')
+    # Collapse multiple underscores
+    s = re.sub(r'_+', '_', s).strip('_')
     # Ensure it's not empty after sanitization
     return s if s else "Proposal"
 
@@ -2575,21 +2585,20 @@ def _upload_title_default() -> str | None:
 
 def _est_stamp_for_filename() -> str:
     """
-    Eastern time, 12-hour with AM/PM. Use dot instead of colon because
-    ':' is illegal in filenames on Windows.
-    Example: 2025-09-13 09.30AM EST
+    Eastern time, 12-hour with AM/PM formatted for clean filenames.
+    Example: 2025-10-23_09-22AM_EST
     """
     now_est = datetime.datetime.now(ZoneInfo("America/New_York"))
-    return now_est.strftime("%Y-%m-%d %I.%M%p EST")
+    return now_est.strftime("%Y-%m-%d_%I-%M%p_EST")
 
 def _export_basename(project_name: str, scenario_label: str | None = None) -> str:
-    """Project - Workfront_Export - [Scenario?] - 2025-09-13 09.30AM EST"""
+    """Project_Workfront_Export_Scenario_A_2025-10-23_09-22AM_EST"""
     title = _safe_filename(project_name or "Proposal")
     parts = [title, "Workfront_Export"]
     if scenario_label:
         parts.append(_safe_filename(scenario_label))
     parts.append(_est_stamp_for_filename())
-    return " - ".join(parts)
+    return "_".join(parts)
 
 def _safe_sheet_name(s: str) -> str:
     # Excel sheet name rules: max 31 chars, no : \ / ? * [ ]
