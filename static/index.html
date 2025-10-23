@@ -580,9 +580,9 @@
       </div>
       
       <!-- Main Timeline Container (with AI Reasoning Panel) -->
-      <div style="display:flex; gap:16px; position:relative;">
+      <div id="timeline-flex-container" style="display:flex; gap:16px; position:relative;">
         <!-- Gantt Chart Container -->
-        <div id="gantt-container" style="flex:1; min-height:400px; background:#0b0e13; border:1px solid var(--border); border-radius:8px; padding:16px; overflow:auto;">
+        <div id="gantt-container" style="flex:1; min-height:700px; background:#0b0e13; border:1px solid var(--border); border-radius:8px; padding:16px; overflow:auto;">
           <!-- Fallback Table (shown when Gantt not loaded) -->
           <table id="tl-table" class="table-compact" style="width:100%; display:none;">
             <thead>
@@ -791,7 +791,7 @@
         /* Gantt container improvements */
         #gantt-container {
           position: relative;
-          min-height: 500px;
+          min-height: 700px;
         }
         #gantt-container::before {
           content: '';
@@ -813,6 +813,17 @@
           text-transform: uppercase;
           letter-spacing: 0.05em;
           font-size: 0.75em;
+        }
+        
+        /* Mobile responsiveness for Gantt chart */
+        @media (max-width: 1200px) {
+          #timeline-flex-container {
+            flex-direction: column !important;
+          }
+          #ai-reasoning-panel {
+            width: 100% !important;
+            max-width: 100% !important;
+          }
         }
       </style>
       
