@@ -144,16 +144,16 @@ def cleanup_ai_jobs():
 # ──────────────────────────────────────────────────────────────────────────────
 # Text Sanitization for LLM Safety
 # ──────────────────────────────────────────────────────────────────────────────
-def sanitize_for_json(text: str, max_length: int = 2000) -> str:
+def sanitize_for_json(text: str, max_length: int = None) -> str:
     """
     Sanitize text to prevent JSON parsing errors in LLM responses.
 
     Args:
         text: Input text to sanitize
-        max_length: Maximum length for LLM token limits (default 2000 chars for GPT-5 context window)
+        max_length: Optional maximum length (None = no limit, process all data)
 
-    NOTE: Truncation is REQUIRED to avoid exceeding LLM API token limits (128k context).
-    For GPT-5 with many items, we must limit individual text fields.
+    NOTE: We handle full data by default. Only apply limits when explicitly needed
+    and documented in the calling context.
     """
     if not text:
         return ""
@@ -166,9 +166,8 @@ def sanitize_for_json(text: str, max_length: int = 2000) -> str:
     text = text.replace('\t', ' ')      # Replace tabs
     # Remove control characters
     text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\r\t')
-    # API TOKEN LIMIT: Must truncate to prevent exceeding context window
-    # With 100+ items in a response, each field must be limited
-    if len(text) > max_length:
+    # Only apply length limit if explicitly requested
+    if max_length is not None and len(text) > max_length:
         # Preserve complete words at boundaries
         truncated = text[:max_length].rsplit(' ', 1)[0] if ' ' in text[:max_length] else text[:max_length]
         return truncated.strip() + "..."
@@ -616,11 +615,11 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
         recall = 0.70 * emb + 0.30 * lex
         cands.append({**it, "embScore": emb, "lexScore": lex, "recall": recall})
 
-    # Generous cuts to feed re-ranker
-    # Keep top candidates but with reasonable limits for processing
-    topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:150]
-    topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:200]
-    topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:250]
+    # Return all candidates sorted by recall score for comprehensive analysis
+    # No artificial limits - let fusion and calibration handle filtering
+    topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)
+    topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)
+    topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)
 
     return topD + topC + topT, cands
 
@@ -701,7 +700,7 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
                     for code in deliv_codes:
                         if code not in explicit_requirements:
                             explicit_requirements[code] = []
-                        explicit_requirements[code].append(bullet[:100])  # Store first 100 chars
+                        explicit_requirements[code].append(bullet)  # Store full requirement text
 
         # Also do a direct phrase search in the entire RFP
         for service_phrase, deliv_codes in SERVICE_MAPPING_NORMALIZED.items():
@@ -985,17 +984,17 @@ async def _process_single_chunk_async(block: List[Dict[str, Any]], chunk_num: in
             "id": sanitize_for_json(c["id"]),
             "dept": c["dept"],
             "level": c["level"],
-            "title": sanitize_for_json(c["title"])[:100],
-            "desc": sanitize_for_json(c.get("desc", ""))[:100],
-            "evidence": [sanitize_for_json(e)[:100] for e in evidence]
+            "title": sanitize_for_json(c["title"]),
+            "desc": sanitize_for_json(c.get("desc", "")),
+            "evidence": [sanitize_for_json(e) for e in evidence]
         })
 
-    # Sanitize summary fields (keep shorter to save tokens)
-    safe_summary = sanitize_for_json(summary.get('summary', ''))[:200]
-    safe_goals = [sanitize_for_json(g)[:50] for g in summary.get("goals", [])][:3]
-    safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])][:3]
-    safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])][:3]
-    safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])][:2]
+    # Sanitize summary fields - process all data
+    safe_summary = sanitize_for_json(summary.get('summary', ''))
+    safe_goals = [sanitize_for_json(g) for g in summary.get("goals", [])]
+    safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])]
+    safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])]
+    safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])]
 
     messages = [
         {"role": "system", "content": """Senior Agency Executive scoring deliverables.
@@ -1642,9 +1641,9 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
 
         # Strategy deliverables → Regional variations + Phases + Audience Segments
         if d_dept == "Strategy":
-            # Regional variations if global (now more aggressive)
+            # Regional variations if global - all regions
             if is_global:
-                for region in regions[:4]:  # Increased from 3 to 4 regions
+                for region in regions:  # All regions for comprehensive coverage
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{region.replace(' ', '_')}"
@@ -1659,7 +1658,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         expansion_count += 1
 
             # Phase variations for ALL strategy deliverables
-            for phase in phases:  # All 4 phases for strategy
+            for phase in phases:  # All phases for comprehensive coverage
                 if expansions_for_this >= max_expansions_per_deliverable:
                     break
                 variant_id = f"{d['id']}-{phase}"
@@ -1675,7 +1674,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
 
             # Add audience segment variations for targeted strategies
             if audience_segments and ('audience' in d_title or 'persona' in d_title or 'target' in d_title or 'segment' in d_title):
-                for segment in audience_segments[:3]:
+                for segment in audience_segments:  # All segments
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{segment.replace(' ', '_')}"
@@ -1691,7 +1690,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
 
             # Add quarterly strategy reviews for annual engagements
             if is_annual and quarters:
-                for quarter in quarters[:4]:  # All quarters for annual
+                for quarter in quarters:  # All quarters
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-Strategy-{quarter}"
@@ -1707,7 +1706,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
 
             # Multi-year variations for long-term engagements
             if is_multiyear and years:
-                for year in years[:2]:
+                for year in years:  # All years
                     if expansions_for_this >= max_expansions_per_deliverable:
                         break
                     variant_id = f"{d['id']}-{year.replace(' ', '_')}"
@@ -2376,11 +2375,11 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             complexity = summary.get("complexity", "medium")
 
             _update_job(job_id, "Stage 2/7: RFP analyzed", 25,
-                        reasoning=f"Identified {goals_count} business goals, {len(channels)} channels ({', '.join(channels[:3])}{'...' if len(channels) > 3 else ''}), {len(markets)} market(s). Complexity: {complexity}")
+                        reasoning=f"Identified {goals_count} business goals, {len(channels)} channels ({', '.join(channels)}), {len(markets)} market(s). Complexity: {complexity}")
         except Exception as e:
             print(f"[ANALYZE WARNING] Summary failed: {e}, using default summary")
             summary = {
-                "summary": request_text[:500],
+                "summary": request_text,  # Process full text
                 "goals": ["Provide comprehensive services"],
                 "channels": ["Digital", "Social", "Traditional"],
                 "markets": ["US"],
@@ -2398,7 +2397,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         _update_job(job_id, "Stage 2/7: Fast mode - skipping summarization...", 20,
                     reasoning="Fast mode active - using keyword-based analysis instead of full GPT-5 summarization for speed")
         summary = {
-            "summary": request_text[:500],
+            "summary": request_text,  # Process full text
             "goals": ["Fast analysis"],
             "channels": ["Digital"],
             "markets": ["US"],
@@ -2424,7 +2423,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     if not candidates:
         # FIXED: If no candidates, use entire catalog as fallback
         print(f"[ANALYZE WARNING] No candidates from recall, using entire catalog")
-        candidates = catalog[:270]  # Top 270 items
+        candidates = catalog  # Use all catalog items
         all_recall = catalog
 
     print(f"[ANALYZE] Found {len(candidates)} candidates")
@@ -2464,7 +2463,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             components = [c for c in candidates if c["level"] == "component" and c.get("parentId") == deliv["id"]]
             components.sort(key=lambda x: x.get("recall", 0), reverse=True)
 
-            for comp in components[:3]:  # Top 3 components per deliverable
+            for comp in components:  # All relevant components
                 llm_scores.append({
                     "id": comp["id"],
                     "level": comp["level"],
@@ -2478,7 +2477,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
                 tasks.sort(key=lambda x: x.get("recall", 0), reverse=True)
 
-                for task in tasks[:2]:  # Top 2 tasks per component
+                for task in tasks:  # All relevant tasks
                     llm_scores.append({
                         "id": task["id"],
                         "level": task["level"],
@@ -2500,16 +2499,16 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         deliverable_candidates.sort(key=lambda x: x.get("recall", 0), reverse=True)
         top_deliverables = deliverable_candidates[:DEEP_TOP_K]
 
-        # Build focused candidate set for LLM
+        # Build focused candidate set for LLM - process all related items
         llm_candidates = []
         for deliv in top_deliverables:
             llm_candidates.append(deliv)
             # Add components and tasks for this deliverable
             components = [c for c in candidates if c["level"] == "component" and c.get("parentId") == deliv["id"]]
-            for comp in components[:5]:  # Up to 5 components per deliverable
+            for comp in components:  # All components for comprehensive analysis
                 llm_candidates.append(comp)
                 tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
-                llm_candidates.extend(tasks[:3])  # Up to 3 tasks per component
+                llm_candidates.extend(tasks)  # All tasks for comprehensive analysis
 
         _update_job(job_id, "Stage 5/7: Deep mode - scoring with GPT-5...", 50,
                     reasoning=f"Sending {len(llm_candidates)} items to GPT-5 Thinking for advanced context-aware relevance analysis")
