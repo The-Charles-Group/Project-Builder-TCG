@@ -15,8 +15,14 @@ import random
 # OpenAI client initialization
 try:
     from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    OPENAI_AVAILABLE = True
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        client = AsyncOpenAI(api_key=api_key)
+        OPENAI_AVAILABLE = True
+    else:
+        print(f"[AI Timeline] No OpenAI API key found, AI features will be disabled")
+        OPENAI_AVAILABLE = False
+        client = None
 except (ImportError, ModuleNotFoundError) as e:
     print(f"[AI Timeline] OpenAI module not installed: {e}")
     OPENAI_AVAILABLE = False
