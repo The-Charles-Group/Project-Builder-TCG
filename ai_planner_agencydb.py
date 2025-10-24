@@ -709,7 +709,6 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
                 for code in deliv_codes:
                     if code not in explicit_requirements:
                         explicit_requirements[code] = []
-                    # Add a note that this was found in the full text
                     explicit_requirements[code].append(f"[Found in RFP: {service_phrase}]")
 
     # Special case: Always check for exact phrase matches in the full RFP
@@ -1422,7 +1421,7 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
         MINIMUM_DELIVERABLES = min(50, env_min)  # Cap at 50 maximum to prevent bloat
         print(f"[AUTO-RESCUE] Using forced minimum from env: {MINIMUM_DELIVERABLES}")
 
-    # FIXED: Always check and ensure minimum deliverables
+    # FIXED: ALWAYS check and ensure minimum deliverables
     if len(passed_delivs) >= MINIMUM_DELIVERABLES:
         print(f"[AUTO-RESCUE] Already have {len(passed_delivs)} deliverables (>= {MINIMUM_DELIVERABLES} for complexity={rfp_complexity})")
         return fused  # Already have enough deliverables
@@ -2380,7 +2379,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         except Exception as e:
             print(f"[ANALYZE WARNING] Summary failed: {e}, using default summary")
             summary = {
-                "summary": request_text[:500],
+                "summary": request_text,
                 "goals": ["Provide comprehensive services"],
                 "channels": ["Digital", "Social", "Traditional"],
                 "markets": ["US"],
@@ -2398,7 +2397,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         _update_job(job_id, "Stage 2/7: Fast mode - skipping summarization...", 20,
                     reasoning="Fast mode active - using keyword-based analysis instead of full GPT-5 summarization for speed")
         summary = {
-            "summary": request_text[:500],
+            "summary": request_text,
             "goals": ["Fast analysis"],
             "channels": ["Digital"],
             "markets": ["US"],
@@ -2605,7 +2604,9 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         plan = compose_plan_from_agencydb(fused, summary, catalog, db, all_recall)
         print(f"[ANALYZE] Plan composed successfully")
     except Exception as e:
-        print(f"[ANALYZE ERROR] Plan composition failed: {e}, using emergency plan")
+        import traceback
+        error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
+        print(f"[ANALYZE ERROR] Plan composition failed: {error_detail}, using emergency plan")
         # Emergency plan - just return top deliverables
         emergency_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
         plan = {

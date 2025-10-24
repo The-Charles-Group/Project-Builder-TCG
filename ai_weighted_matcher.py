@@ -1,4 +1,3 @@
-
 # ai_weighted_matcher.py
 # Self-contained weighted matching engine for Agency Project Builder (L1/L2/L3).
 # Drop this file into your server package and import score_rfp().
@@ -187,37 +186,37 @@ def check_direct_matches(rfp_text: str, deliverable_name: str) -> Tuple[float, L
     """
     rfp_lower = rfp_text.lower()
     deliv_lower = deliverable_name.lower()
-    
+
     # Extract key phrases from deliverable name (2-3 word phrases)
     words = re.findall(r'\b\w+\b', deliv_lower)
-    
+
     matched_keywords = []
     max_boost = 0.0
-    
+
     # Check for exact phrase matches (2-3 word combinations)
     key_phrases = []
-    
+
     # Add 3-word phrases
     for i in range(len(words) - 2):
         phrase = ' '.join(words[i:i+3])
         key_phrases.append((phrase, 95.0))  # Highest confidence for 3-word matches
-    
+
     # Add 2-word phrases
     for i in range(len(words) - 1):
         phrase = ' '.join(words[i:i+2])
         key_phrases.append((phrase, 92.0))  # High confidence for 2-word matches
-    
+
     # Also check single important words (excluding common words)
     stop_words = {'the', 'and', 'or', 'for', 'in', 'on', 'at', 'to', 'a', 'an', 'of', 'with', 'by', 'as'}
     important_words = [(w, 90.0) for w in words if w not in stop_words and len(w) > 3]
     key_phrases.extend(important_words)
-    
+
     # Check if any key phrases appear in the RFP text
     for phrase, boost in key_phrases:
         if phrase and phrase in rfp_lower:
             matched_keywords.append(phrase)
             max_boost = max(max_boost, boost)
-    
+
     # Special handling for common marketing/media terms with variations
     special_mappings = {
         'media planning': ['media plan', 'media strategy', 'paid media planning'],
@@ -228,7 +227,7 @@ def check_direct_matches(rfp_text: str, deliverable_name: str) -> Tuple[float, L
         'influencer marketing': ['influencer campaign', 'influencer outreach', 'influencer partnerships'],
         'content creation': ['content development', 'content production', 'content marketing'],
     }
-    
+
     # Check if deliverable name contains any special term
     for key_term, variations in special_mappings.items():
         if key_term in deliv_lower:
@@ -242,13 +241,13 @@ def check_direct_matches(rfp_text: str, deliverable_name: str) -> Tuple[float, L
                         matched_keywords.append(f"{key_term} (via {variation})")
                         max_boost = max(max_boost, 93.0)
                         break
-    
+
     return max_boost, list(set(matched_keywords))
 
 def normalize_to_percent(scores_dict: Dict[str, Any], min_threshold: float=0.02, rfp_text: str="", deliverable_names: Dict[str, str]=None) -> Dict[str, Any]:
     """
     Normalize scores to percentages with boost for direct keyword matches.
-    
+
     Args:
         scores_dict: Dictionary of deliverable codes to score data
         min_threshold: Minimum score threshold
@@ -258,20 +257,20 @@ def normalize_to_percent(scores_dict: Dict[str, Any], min_threshold: float=0.02,
     vals = [v["score"] for v in scores_dict.values()]
     maxv = max(vals) if vals else 1.0
     out = {}
-    
+
     for code, data in scores_dict.items():
         sc = data["score"]
         base_pct = 0.0 if sc < min_threshold else (sc / maxv) * 100.0
-        
+
         # Check for direct keyword matches if we have deliverable names
         direct_match_boost = 0.0
         matched_keywords = []
-        
+
         if rfp_text and deliverable_names and code in deliverable_names:
             direct_match_boost, matched_keywords = check_direct_matches(
                 rfp_text, deliverable_names[code]
             )
-        
+
         # Apply boost: if there's a direct match and some base relevance
         if direct_match_boost > 0 and base_pct > 15:  # Lower threshold for boosting
             final_pct = max(base_pct, direct_match_boost)
@@ -280,10 +279,10 @@ def normalize_to_percent(scores_dict: Dict[str, Any], min_threshold: float=0.02,
                 final_pct = max(90.0, final_pct)
         else:
             final_pct = base_pct
-        
+
         # Calculate raw TF-IDF score (0-1 scale) from lexical score
         tfidf_score = data.get("l1_parts", {}).get("lex", 0.0)
-        
+
         out[code] = {
             **data, 
             "percent": round(final_pct, 1),
@@ -315,7 +314,7 @@ def score_rfp(rfp_text: str,
     lex_scores = compute_lexical_scores(rfp_text, tfidf_idx)
     rule_hits, rules_why = eval_rules(rfp_text, rules)
     agg = aggregate_scores(index_df, lex_scores, rules, rule_hits, config)
-    
+
     # Build mapping from AI_Index (which has deliverable names and service departments)
     # Get L1 rows only for the mapping
     l1_rows = index_df[index_df["Level"] == "L1"].copy()
@@ -327,7 +326,7 @@ def score_rfp(rfp_text: str,
         dept = str(r.get("Service_Department", ""))
         map_name[code] = (name, dept)
         deliverable_names[code] = name
-    
+
     # If external deliverable_index_df provided, prefer those names (for consistency with main app)
     if deliverable_index_df is not None:
         for _, r in deliverable_index_df.iterrows():
@@ -336,7 +335,7 @@ def score_rfp(rfp_text: str,
             dept = str(r.get("Service_Department", ""))
             map_name[code] = (name, dept)
             deliverable_names[code] = name
-    
+
     # Pass rfp_text and deliverable names for direct match detection
     final = normalize_to_percent(
         agg, 
