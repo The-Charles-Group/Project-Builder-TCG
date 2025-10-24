@@ -688,7 +688,8 @@ class GovernanceFramework:
                 transition_date = datetime.fromisoformat(next_task.start_date)
                 phase_transitions.append((task.department, next_task.department, transition_date))
         
-        for from_dept, to_dept, date in phase_transitions[:3]:  # Limit to first 3 major transitions
+        # Process all major phase transitions
+        for from_dept, to_dept, date in phase_transitions
             # Schedule briefing 1 day before transition
             briefing_date = date - timedelta(days=1)
             while briefing_date.weekday() >= 5:
@@ -757,7 +758,8 @@ class GovernanceFramework:
         # Find major deliverables (those with high hours or critical path)
         major_deliverables = [t for t in self.tasks if t.hours > 30 or t.is_critical]
         
-        for task in major_deliverables[:6]:  # Limit to 6 quality gates
+        # Create quality gates for all major deliverables
+        for task in major_deliverables
             # Schedule quality gate at task completion
             gate_date = datetime.fromisoformat(task.end_date)
             
@@ -1679,8 +1681,9 @@ async def enhance_with_ai_reasoning(
         
         # NOTE: Truncation required for GPT-5 API token limits (128k context window)
         # With prompt and response format, we need to limit input text
-        max_context_chars = 4000  # Increased from 1000 for richer context
-        max_reasoning_chars = 2000  # Increased from 1000 for better analysis
+        # Use larger context for GPT-5 (supports 128k tokens)
+        max_context_chars = 8000  # Sufficient for comprehensive RFPs
+        max_reasoning_chars = 4000  # More reasoning context
         
         rfp_context = rfp_text[:max_context_chars] if rfp_text else 'Standard agency project'
         if rfp_text and len(rfp_text) > max_context_chars:

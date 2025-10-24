@@ -52,21 +52,21 @@ SERVICE_MAPPING = {
     "analytics reporting": ["PM.04", "PM.05", "PM.06", "CS.04"],
     "campaign measurement": ["PM.04", "PM.05", "PM.06", "CS.04"],
     "performance tracking": ["PM.04", "PM.05", "PM.06", "CS.04"],
-    
+
     # Campaign Strategy
     "campaign strategy": ["CS.01", "CS.02", "CS.03", "CS.04"],
     "strategic planning": ["CS.01", "CS.02", "CS.03"],
     "marketing strategy": ["CS.01", "CS.02", "CS.03"],
     "audience strategy": ["CS.01", "CS.02", "CS.03", "PM.01"],
     "audience targeting": ["CS.01", "CS.02", "PM.01", "PM.02"],
-    
+
     # Creative Services
     "creative development": ["CR.01", "CR.02", "CR.03", "CR.04"],
     "creative production": ["CR.01", "CR.02", "CR.03", "CR.04", "CR.05"],
     "content creation": ["CO.01", "CO.02", "CO.03", "CO.04", "CO.05"],
     "social media content": ["CO.01", "CO.02", "CO.03", "CO.04"],
     "video production": ["CR.03", "CR.04", "CR.05", "CO.03"],
-    
+
     # Digital Marketing
     "search engine marketing": ["PM.02", "PM.03", "PM.05"],
     "sem": ["PM.02", "PM.03", "PM.05"],
@@ -75,20 +75,20 @@ SERVICE_MAPPING = {
     "social media advertising": ["PM.01", "PM.02", "PM.03", "CO.02"],
     "programmatic advertising": ["PM.01", "PM.02", "PM.03", "PM.06"],
     "display advertising": ["PM.01", "PM.02", "PM.03", "CR.02"],
-    
+
     # Reporting & Analytics
     "reporting": ["PM.04", "PM.05", "PM.06", "CS.04"],
     "analytics": ["PM.04", "PM.05", "PM.06", "CS.04"],
     "insights": ["CS.03", "CS.04", "PM.05", "PM.06"],
     "measurement": ["PM.04", "PM.05", "PM.06", "CS.04"],
     "optimization": ["PM.05", "PM.06", "CS.04"],
-    
+
     # Integrated Services
     "brand strategy": ["CS.01", "CS.02", "CR.01"],
     "integrated marketing": ["IMM.01", "IMM.02", "IMM.03", "CS.01"],
     "channel planning": ["CS.02", "CS.03", "PM.01", "IMM.02"],
     "media optimization": ["PM.05", "PM.06", "CS.04"],
-    
+
     # Technology Services
     "marketing technology": ["TECH.01", "TECH.02", "TECH.03"],
     "martech": ["TECH.01", "TECH.02", "TECH.03"],
@@ -130,14 +130,14 @@ def cleanup_ai_jobs():
     """Remove expired completed/failed jobs to prevent memory leaks"""
     now = datetime.datetime.now().timestamp()
     to_remove = []
-    
+
     for job_id, job in AI_JOB_STORE.items():
         if job.end_time and (now - job.end_time > AI_JOB_TTL_SECONDS):
             to_remove.append(job_id)
-    
+
     for job_id in to_remove:
         del AI_JOB_STORE[job_id]
-    
+
     if to_remove:
         print(f"[AI JOB CLEANUP] Removed {len(to_remove)} expired jobs")
 
@@ -147,11 +147,11 @@ def cleanup_ai_jobs():
 def sanitize_for_json(text: str, max_length: int = 2000) -> str:
     """
     Sanitize text to prevent JSON parsing errors in LLM responses.
-    
+
     Args:
         text: Input text to sanitize
         max_length: Maximum length for LLM token limits (default 2000 chars for GPT-5 context window)
-    
+
     NOTE: Truncation is REQUIRED to avoid exceeding LLM API token limits (128k context).
     For GPT-5 with many items, we must limit individual text fields.
     """
@@ -178,28 +178,28 @@ def repair_json_response(text: str) -> str:
     """Attempt to repair malformed JSON responses from LLM"""
     if not text:
         return "{}"
-    
+
     # Remove any leading/trailing whitespace
     text = text.strip()
-    
+
     # Fix common issues
     # 1. Remove trailing commas before closing braces/brackets
     text = re.sub(r',(\s*[}\]])', r'\1', text)
-    
+
     # 2. Fix malformed confidence values with spaces (e.g., "confidence":   0" -> "confidence": 0)
     text = re.sub(r'"confidence"\s*:\s*(\s+)(\d+(?:\.\d+)?)', r'"confidence": \2', text)
     text = re.sub(r'"confidence"\s*:\s*([^\d,}\]]+)(?=[,}\]])', r'"confidence": 0', text)
-    
+
     # 3. Fix malformed relevance values
     text = re.sub(r'"relevance"\s*:\s*(\s+)(\d+(?:\.\d+)?)', r'"relevance": \2', text)
     text = re.sub(r'"relevance"\s*:\s*([^\d,}\]]+)(?=[,}\]])', r'"relevance": 0', text)
-    
+
     # 4. Fix missing quotes around string values (common for enum fields)
     text = re.sub(r'("level"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
     text = re.sub(r'("dept"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
     text = re.sub(r'("budget_tier"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
     text = re.sub(r'("complexity"\s*:\s*)([^",}\]]+)(?=[,}\]])', r'\1"\2"', text)
-    
+
     # 5. Attempt to close unclosed strings at end of response
     # Count quotes to see if we have an odd number (unclosed string)
     quote_count = text.count('"') - text.count('\\"')
@@ -216,17 +216,17 @@ def repair_json_response(text: str) -> str:
             else:
                 # It's a value, just close it
                 text = text[:last_quote_pos+1] + '"'
-    
+
     # 6. Fix incomplete objects in arrays (add missing fields with defaults)
     # This is a simplistic approach - just ensure proper closure
     open_braces = text.count('{') - text.count('}')
     open_brackets = text.count('[') - text.count(']')
-    
+
     # If we have unclosed structures, try to close them properly
     if open_braces > 0 or open_brackets > 0:
         # Add closing braces/brackets
         text += '}' * open_braces + ']' * open_brackets
-    
+
     # 7. Final validation - try to parse and fix any remaining issues
     try:
         json.loads(text)
@@ -247,13 +247,13 @@ def repair_json_response(text: str) -> str:
                     if brace_count == 0:
                         last_brace = i
                         break
-            
+
             if last_brace > first_brace:
                 text = text[first_brace:last_brace+1]
             else:
                 # Just close it at the end
                 text = text[first_brace:] + '}'
-        
+
         # If it's an array, handle similarly
         first_bracket = text.find('[')
         if first_bracket >= 0 and (first_brace < 0 or first_bracket < first_brace):
@@ -267,12 +267,12 @@ def repair_json_response(text: str) -> str:
                     if bracket_count == 0:
                         last_bracket = i
                         break
-            
+
             if last_bracket > first_bracket:
                 text = text[first_bracket:last_bracket+1]
             else:
                 text = text[first_bracket:] + ']'
-    
+
     return text
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -296,18 +296,18 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 16384
         error_msg = "[GPT-5] No API key available - cannot process request"
         print(error_msg)
         raise Exception(error_msg)
-    
+
     try:
         # Use the helper from gpt5_helpers - it handles model selection and enforcement
         tier = os.environ.get("AI_TIER", "thinking")  # Default to balanced tier
-        
+
         # Create messages format from prompt
         messages = [
             {"role": "user", "content": prompt}
         ]
-        
+
         print(f"[GPT-5] Calling GPT-5 ({tier} tier) with retry logic enabled...")
-        
+
         # gpt5_json_schema now includes retry logic by default
         result = gpt5_json_schema(
             client=oai,  # Use the global OpenAI client
@@ -317,15 +317,15 @@ def gpt5_json_response(prompt: str, schema: dict, max_output_tokens: int = 16384
             max_output_tokens=max_output_tokens,
             use_retry=True  # Enable retry logic with exponential backoff
         )
-        
+
         # Skip the check for AI_MIN_DELIVERABLES here - this is for individual chunks, not the full response
         # The minimum deliverables check should be done after all chunks are combined
         if "items" in result:
             items = result.get("items", [])
             print(f"[GPT-5 SUCCESS] Received response with {len(items)} items")
-        
+
         return result
-    
+
     except Exception as e:
         # All retries have been exhausted at this point
         error_msg = f"GPT-5 failed after all retry attempts: {str(e)}"
@@ -353,7 +353,7 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
             "complexity": "medium",
             "risk_flags": []
         }
-    
+
     # Convert messages to a single prompt for the helper
     prompt_parts = []
     for msg in messages:
@@ -365,9 +365,9 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
             prompt_parts.append(f"User: {content}")
         elif role == "assistant":
             prompt_parts.append(f"Assistant: {content}")
-    
+
     prompt = "\n\n".join(prompt_parts)
-    
+
     # Use the GPT-5 helper - sitecustomize will enforce GPT-5 automatically
     # FIXED: Use max_output_tokens parameter name to match gpt5_json_response signature
     return gpt5_json_response(prompt, schema, max_output_tokens=max_completion_tokens)
@@ -378,15 +378,15 @@ def chat_json_schema(messages: list, schema: dict, max_completion_tokens: int = 
 def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
     """Convert AgencyDB all_rows DataFrame into AI-ready catalog"""
     items = []
-    
+
     if db.all_rows is None or db.all_rows.empty:
         return items
-    
+
     # Group by deliverable
     for deliv_code, deliv_group in db.all_rows.groupby('Deliverable_Code'):
         if pd.isna(deliv_code) or not str(deliv_code).strip():
             continue
-            
+
         # Get deliverable info from first row
         first_row = deliv_group.iloc[0]
         deliv_name = str(first_row.get('Deliverable', deliv_code))
@@ -395,12 +395,12 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
         if pd.isna(service_dept) or str(service_dept) == 'nan':
             service_dept = 'Strategy'
         service_dept = str(service_dept)
-        
+
         # Normalize department
         dept = _normalize_dept(service_dept)
         if dept not in DEPARTMENTS:
             continue
-        
+
         # Add deliverable to catalog with sanitized text
         deliv_item = {
             "id": str(deliv_code),
@@ -411,13 +411,13 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
             "keywords": _extract_keywords(deliv_name)
         }
         items.append(deliv_item)
-        
+
         # Group by component under this deliverable (v4 uses Component_Task_L1)
         comp_column = 'Component_Task_L1' if 'Component_Task_L1' in db.all_rows.columns else 'Component'
         for comp_name, comp_group in deliv_group.groupby(comp_column):
             if pd.isna(comp_name) or not str(comp_name).strip() or str(comp_name) == 'nan':
                 comp_name = "General"
-            
+
             comp_id = f"{deliv_code}::{comp_name}"
             comp_item = {
                 "id": comp_id,
@@ -429,18 +429,18 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
                 "keywords": _extract_keywords(str(comp_name))
             }
             items.append(comp_item)
-            
+
             # Add all L2 tasks under this component
             for idx, row in comp_group.iterrows():
                 # v4 uses Task_Task_L2, fallback to Task_Label or task_group
                 task_label = str(row.get('Task_Task_L2', row.get('Task_Label', row.get('task_group', 'Task'))))
                 if pd.isna(task_label) or not task_label.strip() or task_label == 'nan':
                     continue
-                
+
                 # v4 uses Estimated_Hours instead of Hours
                 hours = row.get('Estimated_Hours', row.get('Hours', 2.0))
                 base_hours = float(hours) if not pd.isna(hours) else 2.0
-                
+
                 task_id = f"{deliv_code}::{comp_name}::{task_label}"
                 task_item = {
                     "id": task_id,
@@ -453,23 +453,23 @@ def build_catalog_from_agencydb(db) -> List[Dict[str, Any]]:
                     "base_hours": base_hours
                 }
                 items.append(task_item)
-    
+
     return items
 
 def _normalize_dept(s: str) -> str:
     x = (s or "").lower()
     # FIXED: Better department categorization
-    if any(k in x for k in ["paid", "media", "analytics", "sem", "seo", "ppc", "display", "social ads"]): 
+    if any(k in x for k in ["paid", "media", "analytics", "sem", "seo", "ppc", "display", "social ads"]):
         return "Paid Media"
-    if "integrated" in x or "imm" in x: 
+    if "integrated" in x or "imm" in x:
         return "Integrated Marketing Management"
-    if "strategy" in x or "strat" in x or "research" in x or "insights" in x: 
+    if "strategy" in x or "strat" in x or "research" in x or "insights" in x:
         return "Strategy"
-    if any(k in x for k in ["creative", "design", "art", "visual"]): 
+    if any(k in x for k in ["creative", "design", "art", "visual"]):
         return "Creative"
-    if any(k in x for k in ["content", "copy", "editorial", "writing"]): 
+    if any(k in x for k in ["content", "copy", "editorial", "writing"]):
         return "Content"
-    if any(k in x for k in ["tech", "dev", "web", "technology", "engineering", "code", "software"]): 
+    if any(k in x for k in ["tech", "dev", "web", "technology", "engineering", "code", "software"]):
         return "Technology"
     return "Strategy"
 
@@ -502,20 +502,20 @@ def lexical_score(text: str, title: str, desc: str, keywords: List[str], dept: s
     overlap = sum(1 for t in tk_c if t in tk_r)
     dept_hit = 0.05 if dept.lower().split(" ")[0] in tk_r else 0
     base_score = min(1.0, (overlap / max(4, len(tk_c))) + dept_hit)
-    
+
     # FIXED: Add media/advertising keyword boosting
-    media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital', 
+    media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
                      'social', 'analytics', 'reporting', 'planning', 'buying', 'activation',
                      'advertising', 'marketing', 'performance', 'programmatic', 'audience'}
-    
+
     # Check if any media keywords are in the title or keywords
     title_words = set(tokenize(title.lower()))
     keyword_set = set([k.lower() for k in keywords]) if keywords else set()
-    
+
     # NEW: Check for exact phrase matches from SERVICE_MAPPING_NORMALIZED
     text_lower = text.lower()
     title_lower = title.lower() if title else ""
-    
+
     # Check for explicit service phrase matches
     exact_phrase_boost = 1.0
     for service_phrase in SERVICE_MAPPING_NORMALIZED.keys():
@@ -526,7 +526,7 @@ def lexical_score(text: str, title: str, desc: str, keywords: List[str], dept: s
             if phrase_tokens & title_words:
                 exact_phrase_boost = 2.0  # 2.0x boost for exact phrase matches
                 break
-    
+
     # Special handling for "Required Services" section
     if "required services" in text_lower or "specific services required" in text_lower:
         # If this deliverable is mentioned in required services section, boost it
@@ -539,15 +539,15 @@ def lexical_score(text: str, title: str, desc: str, keywords: List[str], dept: s
             # Check if title keywords appear in this section
             if any(word in section_text for word in title_words):
                 exact_phrase_boost = max(exact_phrase_boost, 1.8)  # At least 1.8x boost
-    
+
     # Apply media keyword boost
     media_boost = 1.0
     if title_words & media_keywords or keyword_set & media_keywords:
         media_boost = 1.2  # 1.2x boost for media keywords
-    
+
     # Apply all boosts
     final_score = min(1.0, base_score * media_boost * exact_phrase_boost)
-    
+
     return final_score
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -583,7 +583,7 @@ def summarize_request(request_text: str) -> Dict[str, Any]:
 def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=None, mode: str = "deep", session_id: Optional[str] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     if not catalog:
         return [], []
-    
+
     # FAST MODE: Skip embeddings entirely, use only lexical scoring
     if mode == "fast":
         cands = []
@@ -592,21 +592,22 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
             lex = lexical_score(request_text, it["title"], it.get("desc", ""), it.get("keywords", []), it["dept"])
             # For fast mode, use lexical score as the recall score
             cands.append({**it, "embScore": 0, "lexScore": lex, "recall": lex})
-        
+
         # Select top candidates based on lexical score only
-        topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:80]
-        topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:120]
-        topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:160]
-        
+        # Keep top candidates but with reasonable limits for processing
+        topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:150]
+        topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:200]
+        topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:250]
+
         return topD + topC + topT, cands
-    
+
     # DEEP MODE: Use embeddings + lexical for better accuracy
     texts = [f"{str(i.get('dept',''))} • {str(i.get('level',''))} • {str(i.get('title',''))} :: {str(i.get('desc',''))} :: {', '.join(str(k) for k in i.get('keywords',[]))}" for i in catalog]
-    
+
     # Use cached embed_many with client and session_id for isolation
     embs = embed_many([request_text] + texts, client=client, session_id=session_id)
     req = np.array(embs[0], dtype=np.float32)
-    
+
     cands = []
     for i, it in enumerate(catalog, start=1):
         v = np.array(embs[i], dtype=np.float32)
@@ -614,12 +615,13 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
         lex = lexical_score(request_text, it["title"], it.get("desc", ""), it.get("keywords", []), it["dept"])
         recall = 0.70 * emb + 0.30 * lex
         cands.append({**it, "embScore": emb, "lexScore": lex, "recall": recall})
-    
+
     # Generous cuts to feed re-ranker
-    topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:60]
-    topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:90]
-    topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:120]
-    
+    # Keep top candidates but with reasonable limits for processing
+    topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)[:150]
+    topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)[:200]
+    topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)[:250]
+
     return topD + topC + topT, cands
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -628,17 +630,17 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
 def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
     """
     Extract explicitly requested services from RFP text.
-    Looks for sections like "Specific Services Required", "Required Services", 
+    Looks for sections like "Specific Services Required", "Required Services",
     "Scope of Work", etc., and maps them to deliverable codes.
-    
+
     Returns:
         Dict mapping deliverable codes to explicit requirement phrases
     """
     explicit_requirements = {}
-    
+
     # Convert to lowercase for matching
     rfp_lower = rfp_text.lower()
-    
+
     # Look for key sections that indicate required services
     required_sections = [
         "specific services required",
@@ -650,7 +652,7 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
         "deliverables",
         "key deliverables"
     ]
-    
+
     # Find the section containing required services
     section_text = ""
     for section_marker in required_sections:
@@ -663,13 +665,13 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
                 end_pos = next_section_pos
             section_text = rfp_text[marker_pos:end_pos].lower()
             break
-    
+
     # If we found a required services section, extract bullet points and match to deliverables
     if section_text:
         # Extract bullet points (various formats)
         import re
         bullets = []
-        
+
         # Match different bullet formats
         patterns = [
             r'[•●▪▫◦‣⁃]\s*([^\n•●▪▫◦‣⁃]+)',  # Unicode bullets
@@ -677,21 +679,21 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
             r'[-*]\s*([^\n]+)',  # Dash or asterisk bullets
             r'[a-z]\)\s*([^\n]+)',  # Letter bullets
         ]
-        
+
         for pattern in patterns:
             matches = re.findall(pattern, section_text)
             bullets.extend([m.strip() for m in matches if m.strip()])
-        
+
         # Also check the full RFP for these explicit phrases
         bullets.extend([
             phrase for phrase in SERVICE_MAPPING_NORMALIZED.keys()
             if phrase in rfp_lower
         ])
-        
+
         # Map bullets to deliverable codes
         for bullet in bullets:
             bullet_lower = bullet.lower().strip()
-            
+
             # Check each service mapping
             for service_phrase, deliv_codes in SERVICE_MAPPING_NORMALIZED.items():
                 # Check if the service phrase appears in the bullet point
@@ -700,7 +702,7 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
                         if code not in explicit_requirements:
                             explicit_requirements[code] = []
                         explicit_requirements[code].append(bullet[:100])  # Store first 100 chars
-        
+
         # Also do a direct phrase search in the entire RFP
         for service_phrase, deliv_codes in SERVICE_MAPPING_NORMALIZED.items():
             if service_phrase in rfp_lower:
@@ -709,15 +711,15 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
                         explicit_requirements[code] = []
                     # Add a note that this was found in the full text
                     explicit_requirements[code].append(f"[Found in RFP: {service_phrase}]")
-    
+
     # Special case: Always check for exact phrase matches in the full RFP
     key_phrases_to_check = [
         "paid media buying", "paid media planning", "media buying", "media planning",
         "performance reporting", "analytics", "campaign measurement", "optimization",
-        "campaign strategy", "audience strategy", "creative development", 
+        "campaign strategy", "audience strategy", "creative development",
         "content creation", "social media", "search engine marketing", "sem", "seo"
     ]
-    
+
     for phrase in key_phrases_to_check:
         if phrase in rfp_lower:
             if phrase in SERVICE_MAPPING_NORMALIZED:
@@ -725,11 +727,11 @@ def extract_explicit_requirements(rfp_text: str) -> Dict[str, List[str]]:
                     if code not in explicit_requirements:
                         explicit_requirements[code] = []
                     explicit_requirements[code].append(f"[Explicit: {phrase}]")
-    
+
     print(f"[EXPLICIT MATCH] Found {len(explicit_requirements)} explicitly requested deliverable codes")
     if explicit_requirements:
         print(f"[EXPLICIT MATCH] Sample matches: {list(explicit_requirements.keys())[:5]}")
-    
+
     return explicit_requirements
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -739,34 +741,34 @@ async def analyze_one_batch(batch_data: List[Dict[str, Any]], tier: str = "think
     """
     Analyze a single batch of candidates for the background job runner.
     This is the function that will be called by sitecustomize.py's job runner.
-    
+
     Args:
         batch_data: List containing dicts with keys:
             - candidate: The candidate dict
             - request_text: The RFP text
             - summary: The analysis summary
         tier: Compute tier (mini/thinking/pro)
-    
+
     Returns:
         Dict containing analyzed results for this batch
     """
     if not batch_data:
         return {"items": []}
-    
+
     # Import here to avoid circular dependency
     from sitecustomize import agpt5_json_schema
     from openai import AsyncOpenAI
-    
+
     client = AsyncOpenAI()
-    
+
     # First item contains the shared context
     first_item = batch_data[0]
     request_text = first_item.get("request_text", "")
     summary = first_item.get("summary", {})
-    
+
     # Extract candidates from batch
     candidates = [item["candidate"] for item in batch_data]
-    
+
     schema = {
         "type": "object",
         "properties": {
@@ -792,7 +794,7 @@ async def analyze_one_batch(batch_data: List[Dict[str, Any]], tier: str = "think
         "required": ["items"],
         "additionalProperties": False
     }
-    
+
     # Prepare payload with sanitized data
     payload = []
     for c in candidates:
@@ -805,24 +807,24 @@ async def analyze_one_batch(batch_data: List[Dict[str, Any]], tier: str = "think
             "desc": sanitize_for_json(c.get("desc", "")),
             "evidence": [sanitize_for_json(e) for e in evidence]
         })
-    
+
     # Sanitize summary fields
     safe_summary = sanitize_for_json(summary.get('summary', ''))
     safe_goals = [sanitize_for_json(g) for g in summary.get("goals", [])]
     safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])]
     safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])]
     safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])]
-    
+
     messages = [
-        {"role": "system", "content": """You are a Senior Agency Executive (CEO/President level) with 20+ years experience running successful marketing/advertising/digital agencies. 
+        {"role": "system", "content": """You are a Senior Agency Executive (CEO/President level) with 20+ years experience running successful marketing/advertising/digital agencies.
 You think strategically about:
 - Client value and ROI
-- Resource allocation and team capabilities  
+- Resource allocation and team capabilities
 - Risk management and quality assurance
 - Competitive differentiation and innovation
 - Long-term client relationships
 
-IMPORTANT: Pay special attention to services that are EXPLICITLY REQUESTED in the RFP. 
+IMPORTANT: Pay special attention to services that are EXPLICITLY REQUESTED in the RFP.
 If a service appears directly in a "Required Services" or "Scope of Work" section, it should receive a confidence score of 85-95%.
 
 Score each deliverable/component/task with REALISTIC confidence scores:
@@ -832,17 +834,11 @@ Score each deliverable/component/task with REALISTIC confidence scores:
 - 30-49: Tangentially related, optional, limited value
 - 0-29: Not relevant, would not recommend
 
-Look for explicit mentions like:
-- "Paid media buying" → Paid Media deliverables should score 85+%
-- "Performance reporting" → Reporting deliverables should score 85+%
-- "Campaign strategy" → Strategy deliverables should score 85+%
-- "Analytics" → Analytics deliverables should score 85+%
-
 For TASKS, set select=true ONLY if specifically needed for THIS project. Exclude generic/boilerplate tasks that don't match the specific request.
 Think about the complete project lifecycle, dependencies, and what will actually deliver results for the client."""},
         {"role": "user", "content": f"REQUEST SUMMARY:\n{safe_summary}\n\nGOALS:\n- " + "\n- ".join(safe_goals) + f"\n\nCHANNELS: {', '.join(safe_channels)} | MARKETS: {', '.join(safe_markets)} | COMPLIANCE: {', '.join(safe_compliance)}\n\nCANDIDATES:\n{json.dumps(payload, indent=2)}\n\nIMPORTANT: If the RFP explicitly requests services like 'Paid media buying', 'Performance reporting', 'Campaign measurement', etc., mark those deliverables with confidence 85-95%. Check if the deliverable title contains keywords from the explicit requirements.\n\nProvide realistic confidence scores based on actual relevance. Each item should have a unique, justified confidence level."}
     ]
-    
+
     try:
         # Use sitecustomize's helper for proper GPT-5 JSON response
         result = await agpt5_json_schema(client, messages, schema, tier=tier, max_output_tokens=16384)
@@ -853,18 +849,18 @@ Think about the complete project lifecycle, dependencies, and what will actually
         fallback_items = []
         media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
                          'social', 'analytics', 'reporting', 'planning', 'buying'}
-        
+
         for c in candidates:
             # Calculate fallback confidence: 40% base + (50% * embedding/recall score)
             base_confidence = 0.4
             embedding_bonus = c.get("recall", 0.5) * 0.5
             fallback_confidence = min(0.9, base_confidence + embedding_bonus)
-            
+
             # Apply media keyword boost
             title_words = set(tokenize(c.get("title", "").lower()))
             if title_words & media_keywords:
                 fallback_confidence = min(0.95, fallback_confidence * 1.2)
-            
+
             fallback_items.append({
                 "id": c["id"],
                 "dept": c["dept"],
@@ -886,7 +882,7 @@ def best_evidence(request_text: str, candidate: Dict[str, Any], k: int = 3) -> L
     scored.sort(key=lambda x: x[1], reverse=True)
     return [s for s, score in scored[:k] if score > 0]
 
-async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: List[Dict[str, Any]], 
+async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: List[Dict[str, Any]],
                                           request_text: str, tier: str = "thinking") -> List[Dict[str, Any]]:
     """
     New async LLM re-scoring using the sitecustomize job runner.
@@ -894,7 +890,7 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
     """
     if not candidates:
         return []
-    
+
     # Get the appropriate batch size based on tier - PERFORMANCE FIX: Reduced to prevent GPT-5 errors
     batch_sizes = {
         "mini": 20,  # Reduced from 50 to prevent insufficient items errors
@@ -905,7 +901,7 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
         "accurate": 15  # Increased from 10 to 15 for better efficiency
     }
     batch_size = batch_sizes.get(tier, 15)
-    
+
     # Prepare candidates for job runner
     batch_data = []
     for candidate in candidates:
@@ -914,10 +910,10 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
             "request_text": request_text,
             "summary": summary
         })
-    
+
     # Create batches
     import httpx
-    
+
     # Call the job runner API
     async with httpx.AsyncClient(timeout=60.0) as client:
         # Start the job
@@ -933,13 +929,13 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
         response.raise_for_status()
         job_data = response.json()
         job_id = job_data["job_id"]
-        
+
         # Poll for completion
         while True:
             status_resp = await client.get(f"http://localhost:5000/api/ai/jobs/{job_id}")
             status_resp.raise_for_status()
             status = status_resp.json()
-            
+
             if status["status"] in ("done", "error", "timeout", "canceled"):
                 if status["status"] == "done" and status["result"]:
                     # Flatten the results from all batches
@@ -952,7 +948,7 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
                     # Return empty list on error
                     print(f"[Job Runner Error] Job {job_id} failed with status: {status['status']}")
                     return []
-            
+
             # Wait before polling again
             await asyncio.sleep(1.0)
 
@@ -978,7 +974,7 @@ def is_universal_deliverable(title: str) -> bool:
     ]
     return any(pattern in title_lower for pattern in universal_patterns)
 
-async def _process_single_chunk_async(block: List[Dict[str, Any]], chunk_num: int, total_chunks: int, summary: Dict[str, Any], 
+async def _process_single_chunk_async(block: List[Dict[str, Any]], chunk_num: int, total_chunks: int, summary: Dict[str, Any],
                                       request_text: str, schema: dict, job_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Process a single chunk asynchronously for parallel processing"""
     # Sanitize all text in payload to prevent JSON parsing errors
@@ -993,14 +989,14 @@ async def _process_single_chunk_async(block: List[Dict[str, Any]], chunk_num: in
             "desc": sanitize_for_json(c.get("desc", ""))[:100],
             "evidence": [sanitize_for_json(e)[:100] for e in evidence]
         })
-    
+
     # Sanitize summary fields (keep shorter to save tokens)
     safe_summary = sanitize_for_json(summary.get('summary', ''))[:200]
     safe_goals = [sanitize_for_json(g)[:50] for g in summary.get("goals", [])][:3]
     safe_channels = [sanitize_for_json(c) for c in summary.get('channels', [])][:3]
     safe_markets = [sanitize_for_json(m) for m in summary.get('markets', [])][:3]
     safe_compliance = [sanitize_for_json(c) for c in summary.get('compliance', [])][:2]
-    
+
     messages = [
         {"role": "system", "content": """Senior Agency Executive scoring deliverables.
 Score 90-100: Essential
@@ -1011,7 +1007,7 @@ Score 0-29: Not relevant
 For TASKS, set select=true ONLY if specifically needed."""},
         {"role": "user", "content": f"SUMMARY:\n{safe_summary}\n\nGOALS:\n" + "\n".join(safe_goals) + f"\n\nCANDIDATES:\n{json.dumps(payload, indent=1)}\n\nScore each item."}
     ]
-    
+
     try:
         # Use asyncio.to_thread for synchronous function call - increased tokens to prevent truncation
         r = await asyncio.to_thread(chat_json_schema, messages, schema, max_completion_tokens=8192)
@@ -1039,7 +1035,7 @@ For TASKS, set select=true ONLY if specifically needed."""},
         for c in block:
             # Check if this is a universal deliverable
             is_universal = c["level"] == "deliverable" and is_universal_deliverable(c.get("title", ""))
-            
+
             if is_universal:
                 # Universal deliverables get high scores automatically
                 base_confidence = 0.95
@@ -1054,19 +1050,19 @@ For TASKS, set select=true ONLY if specifically needed."""},
                 relevance_score = int(fallback_confidence * 100)
                 select_item = True if c["level"] == "deliverable" else fallback_confidence > 0.40
                 why_text = f"Embedding match (score: {c.get('recall', 0.5):.2f}, boosted for media keywords)"
-            
+
             # Apply media keyword boost only for non-universal items
             if not is_universal:
                 media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
                                  'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
-                                 'marketing', 'performance', 'programmatic', 'audience', 'content'}
+                                 'marketing', 'performance', 'programmatic', 'audience', 'content', 'activation'}
                 title_words = set(tokenize(c.get("title", "").lower()))
                 keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
-                
+
                 if title_words & media_keywords or keyword_set & media_keywords:
                     fallback_confidence = min(0.95, fallback_confidence * 1.3)
                     relevance_score = min(100, fallback_confidence * 100)
-            
+
             out.append({
                 "id": c["id"],
                 "dept": c["dept"],
@@ -1084,12 +1080,12 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
     if not candidates:
         print("[LLM Re-score] No candidates to score")
         return []
-    
+
     # FIXED: If no OpenAI client, use pure embedding fallback immediately
     if not oai:
         print("[LLM Re-score] No OpenAI client available - using pure embedding fallback for all candidates")
         return _generate_embedding_fallback_scores(candidates, summary)
-    
+
     schema = {
         "type": "object",
         "properties": {
@@ -1115,7 +1111,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         "required": ["items"],
         "additionalProperties": False
     }
-    
+
     # Use tier-based batch sizing - PERFORMANCE FIX: Reduced to prevent GPT-5 errors
     tier = os.environ.get("AI_TIER", "thinking")
     batch_sizes = {
@@ -1127,30 +1123,30 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         "accurate": 15  # Increased from 5 for better parallel processing
     }
     chunk_size = batch_sizes.get(tier, 15)
-    
+
     # Prepare chunks for parallel processing
     chunks = []
     for i in range(0, len(candidates), chunk_size):
         block = candidates[i:i + chunk_size]
         chunk_num = (i // chunk_size) + 1
         chunks.append((block, chunk_num))
-    
+
     total_chunks = len(chunks)
-    
+
     # Update job with total chunks if job_id provided
     if job_id and job_id in AI_JOB_STORE:
         AI_JOB_STORE[job_id].total_chunks = total_chunks
         AI_JOB_STORE[job_id].current_stage = f"Analyzing with GPT-5 in parallel (0/{total_chunks} chunks)"
-    
+
     print(f"[LLM Re-score] Processing {total_chunks} chunks in PARALLEL with chunk_size={chunk_size}")
-    
+
     # PERFORMANCE FIX: Run async event loop for parallel processing
     try:
         loop = asyncio.get_event_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    
+
     # Create tasks for parallel processing
     async def run_parallel():
         tasks = []
@@ -1158,25 +1154,25 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
             # Create async task for each chunk
             task = _process_single_chunk_async(block, chunk_num, total_chunks, summary, request_text, schema, job_id)
             tasks.append(task)
-        
+
         # PERFORMANCE FIX: Process all chunks in parallel
         print(f"[LLM Re-score] Starting parallel processing of {len(tasks)} chunks...")
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Update job progress
         if job_id and job_id in AI_JOB_STORE:
             AI_JOB_STORE[job_id].processed_chunks = total_chunks
             AI_JOB_STORE[job_id].current_stage = f"Completed parallel analysis of {total_chunks} chunks"
-        
+
         return results
-    
+
     # Run the async parallel processing
     chunk_results = loop.run_until_complete(run_parallel())
-    
+
     # Collect all results
     out = []
     failed_chunks = 0
-    
+
     for result in chunk_results:
         if isinstance(result, Exception):
             failed_chunks += 1
@@ -1186,7 +1182,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         else:
             failed_chunks += 1
             print(f"[LLM Re-score WARNING] Unexpected result type: {type(result)}")
-    
+
     # FIXED: If too many chunks failed, ensure we have enough results
     if failed_chunks > total_chunks / 2:
         print(f"[LLM Re-score WARNING] {failed_chunks}/{total_chunks} chunks failed - supplementing with embedding fallback")
@@ -1197,7 +1193,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
                 base_confidence = 0.60  # Higher base for supplemental items
                 embedding_bonus = c.get("recall", 0.5) * 0.35
                 fallback_confidence = min(0.90, base_confidence + embedding_bonus)
-                
+
                 out.append({
                     "id": c["id"],
                     "dept": c["dept"],
@@ -1208,7 +1204,7 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
                     "risks": "Added via supplemental fallback",
                     "select": True if c["level"] == "deliverable" else fallback_confidence > 0.40
                 })
-    
+
     return out
 
 def _generate_embedding_fallback_scores(candidates: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1217,33 +1213,33 @@ def _generate_embedding_fallback_scores(candidates: List[Dict[str, Any]], summar
     print(f"[USER NOTICE] ⚠️ GPT-5 is currently unavailable after multiple retry attempts.")
     print(f"[USER NOTICE] 📊 Using advanced embedding-based analysis as backup to provide recommendations.")
     print(f"[USER NOTICE] ℹ️ Results may be less contextually aware but still based on semantic similarity.")
-    
+
     out = []
     media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
                      'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
                      'marketing', 'performance', 'programmatic', 'audience', 'content', 'activation'}
-    
+
     for c in candidates:
         # High base confidence for pure embedding fallback
         base_confidence = 0.60
         embedding_score = c.get("recall", 0.5)
-        
+
         # Combine base + embedding
         fallback_confidence = min(0.95, base_confidence + (embedding_score * 0.4))
-        
+
         # Apply media keyword boost
         title_words = set(tokenize(c.get("title", "").lower()))
         keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
-        
+
         boost_applied = False
         if title_words & media_keywords or keyword_set & media_keywords:
             fallback_confidence = min(0.95, fallback_confidence * 1.3)
             boost_applied = True
-        
+
         # Deliverables get higher base confidence
         if c["level"] == "deliverable":
             fallback_confidence = max(0.70, fallback_confidence)
-        
+
         out.append({
             "id": c["id"],
             "dept": c["dept"],
@@ -1254,61 +1250,60 @@ def _generate_embedding_fallback_scores(candidates: List[Dict[str, Any]], summar
             "risks": "⚠️ Using embedding-based fallback (GPT-5 unavailable after retries)",
             "select": True if c["level"] == "deliverable" else fallback_confidence > 0.35  # Very low threshold for tasks
         })
-    
+
     print(f"[EMBEDDING FALLBACK] Completed fallback scoring for {len(out)} candidates")
     return out
 
-# [Continued in next message due to length...]
 # ──────────────────────────────────────────────────────────────────────────────
 # Fusion, calibration, AUTO-RELAX & RESCUE
 # ──────────────────────────────────────────────────────────────────────────────
-def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]], strictness: str = "balanced", 
+def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]], strictness: str = "balanced",
                        explicit_requirements: Dict[str, List[str]] = None) -> List[Dict[str, Any]]:
     # FIXED: Handle case where GPT-5 completely failed
     if not llm_scores:
         print("[FUSION WARNING] No LLM scores available - using pure embedding-based fusion")
-    
+
     lookup = {x["id"]: x for x in llm_scores} if llm_scores else {}
-    
+
     # FIXED: Adjust weights when no LLM scores available
     if llm_scores:
         W = {"emb": 0.15, "lex": 0.10, "recall": 0.10, "llm": 0.55, "hist": 0.10}
     else:
         # No LLM scores - weight embeddings and lexical more heavily
         W = {"emb": 0.40, "lex": 0.25, "recall": 0.25, "llm": 0.0, "hist": 0.10}
-    
+
     hist_prior = 0.65
     # FIXED: Balanced thresholds to filter out low-relevance items while keeping good ones
     gates = {"high": 0.35, "balanced": 0.30, "recall": 0.25}  # Reasonable gates to filter noise
-    
+
     # FIXED: Expanded media agency keywords for better matching
-    media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital', 
+    media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
                      'social', 'analytics', 'reporting', 'planning', 'buying', 'activation',
                      'advertising', 'marketing', 'performance', 'programmatic', 'audience',
                      'content', 'agency', 'production', 'design', 'video', 'paid', 'organic'}
-    
+
     out = []
     for c in candidates:
         l = lookup.get(c["id"])
         llm_val = (l["relevance"] / 100.0) if l else 0.0
         llm_select = l.get("select", True) if l else True  # Default to True if no LLM score
-        
+
         # NEW: Check for explicit match FIRST - this overrides all other scoring
         explicit_match = False
         explicit_reason = ""
         if explicit_requirements and c["level"] == "deliverable":
             # Extract deliverable code from ID (format: "PM.01" or similar)
             deliv_code = c["id"].split("::")[0] if "::" in c["id"] else c["id"]
-            
+
             # Check if this deliverable code is in explicit requirements
             if deliv_code in explicit_requirements:
                 explicit_match = True
                 explicit_reason = explicit_requirements[deliv_code][0] if explicit_requirements[deliv_code] else "Explicitly requested in RFP"
                 print(f"[EXPLICIT MATCH] {c['id']}: {explicit_reason}")
-        
+
         # Check if this is a universal deliverable
         is_universal = c.get("level") == "deliverable" and is_universal_deliverable(c.get("title", ""))
-        
+
         # If explicit match found, set high confidence immediately
         if explicit_match:
             raw = 0.90  # High raw score for explicit matches
@@ -1325,67 +1320,67 @@ def fuse_and_calibrate(candidates: List[Dict[str, Any]], llm_scores: List[Dict[s
                 llm_select = True
             else:
                 raw = W["emb"] * c.get("embScore", 0.5) + W["lex"] * c.get("lexScore", 0.5) + W["recall"] * c.get("recall", 0.5) + W["llm"] * llm_val + W["hist"] * hist_prior
-            
+
             # FIXED: Apply more aggressive media keyword boost
             boost_factor = 1.0
             if c.get("title"):
                 title_words = set(tokenize(c["title"].lower()))
                 keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
-                
+
                 # Count keyword matches
                 title_matches = len(title_words & media_keywords)
                 keyword_matches = len(keyword_set & media_keywords)
-                
+
                 if title_matches > 0 or keyword_matches > 0:
                     # More matches = bigger boost
                     boost_factor = min(1.5, 1.2 + (title_matches + keyword_matches) * 0.05)
                     raw = min(1.0, raw * boost_factor)
                     print(f"[FUSION BOOST] {c['id']}: {title_matches} title matches, {keyword_matches} keyword matches, boost={boost_factor:.2f}")
-            
+
             # FIXED: Even gentler calibration curve for 100+ deliverables
             calibrated = 1.0 / (1.0 + math.exp(-(1.5 * raw - 0.7)))  # Further adjusted to 1.5/0.7 for more permissive scoring
-            
+
             # FIXED: For deliverables with no LLM score, boost confidence
             if c["level"] == "deliverable" and not l:
                 calibrated = max(0.50, calibrated)  # Minimum 50% confidence for deliverables
                 print(f"[FUSION RESCUE] Deliverable {c['id']} has no LLM score, boosted to {calibrated:.2f}")
-            
+
             # For tasks: only pass if AI explicitly selected it OR if we have no LLM scores at all
             if c["level"] == "task" and llm_scores and not llm_select:
                 pass_gate = False
             else:
                 # Universal deliverables always pass
                 pass_gate = is_universal or calibrated >= gates.get(strictness, gates["balanced"])
-        
+
         # Log pass/fail decisions for debugging
         if c["level"] == "deliverable":
             status = "PASS" if pass_gate else "FAIL"
             match_status = " [EXPLICIT]" if explicit_match else ""
             print(f"[FUSION] {c['id']}: raw={raw:.3f}, calibrated={calibrated:.3f}, gate={gates.get(strictness, gates['balanced']):.3f} => {status}{match_status}")
-        
+
         out.append({
-            **c, 
-            "llm": l, 
-            "fused_score": raw, 
-            "calibrated_confidence": calibrated, 
-            "pass": pass_gate, 
+            **c,
+            "llm": l,
+            "fused_score": raw,
+            "calibrated_confidence": calibrated,
+            "pass": pass_gate,
             "ai_selected": llm_select,
             "boost_applied": boost_factor > 1.0 if not explicit_match else False,
             "explicit_match": explicit_match,
             "explicit_reason": explicit_reason
         })
-    
+
     # Log summary
     passed_delivs = len([x for x in out if x["level"] == "deliverable" and x["pass"]])
     total_delivs = len([x for x in out if x["level"] == "deliverable"])
     print(f"[FUSION COMPLETE] {passed_delivs}/{total_delivs} deliverables passed (gate={gates.get(strictness, gates['balanced'])})")
-    
+
     return out
 
 def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str, Any]], llm_scores: List[Dict[str, Any]], rfp_complexity: str = "medium", summary: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """FIXED: Aggressively ensure minimum deliverables based on RFP complexity"""
     passed_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
-    
+
     # FIXED: Check if this is a comprehensive RFP
     is_comprehensive = False
     if summary:
@@ -1398,7 +1393,7 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
             len(summary.get("markets", [])) > 2 or
             len(summary.get("channels", [])) > 3
         )
-    
+
     # FIXED: Dynamic minimum based on RFP complexity - 100+ for comprehensive/luxury fashion RFPs
     complexity_minimums = {
         "low": 50,
@@ -1407,7 +1402,7 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
         "luxury_fashion": 100,  # Special case for luxury fashion RFPs
         "comprehensive": 100     # For comprehensive agency RFPs
     }
-    
+
     # Use reasonable minimum deliverables based on RFP complexity
     # This prevents artificially inflating deliverable count with fake ones
     if is_comprehensive:
@@ -1415,50 +1410,50 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
     elif rfp_complexity == "high":
         MINIMUM_DELIVERABLES = 30  # High complexity
     elif rfp_complexity == "medium":
-        MINIMUM_DELIVERABLES = 20  # Medium complexity  
+        MINIMUM_DELIVERABLES = 20  # Medium complexity
     else:
         MINIMUM_DELIVERABLES = 15  # Low complexity
-    
+
     print(f"[AUTO-RESCUE] Using minimum of {MINIMUM_DELIVERABLES} deliverables for {rfp_complexity} complexity")
-    
+
     # Override with environment variable if set (but cap at reasonable limit)
     env_min = int(os.environ.get("AI_FORCE_MIN_DELIVERABLES", "20"))
     if env_min > 0:
         MINIMUM_DELIVERABLES = min(50, env_min)  # Cap at 50 maximum to prevent bloat
         print(f"[AUTO-RESCUE] Using forced minimum from env: {MINIMUM_DELIVERABLES}")
-    
+
     # FIXED: Always check and ensure minimum deliverables
     if len(passed_delivs) >= MINIMUM_DELIVERABLES:
         print(f"[AUTO-RESCUE] Already have {len(passed_delivs)} deliverables (>= {MINIMUM_DELIVERABLES} for complexity={rfp_complexity})")
         return fused  # Already have enough deliverables
-    
+
     # Build maps
     by_id = {x["id"]: x for x in fused}
     llm_map = {x["id"]: x for x in llm_scores}
     recall_map = {x["id"]: x for x in all_recall}
-    
+
     # FIXED: ALWAYS add deliverables to reach minimum, regardless of scores
     needed = MINIMUM_DELIVERABLES - len(passed_delivs)
-    
+
     print(f"[AUTO-RESCUE TRIGGERED AGGRESSIVELY] Only {len(passed_delivs)} deliverables passed, FORCIBLY adding {needed} more to reach minimum of {MINIMUM_DELIVERABLES}")
-    
+
     # Get ALL deliverables and rank them
     deliv_cands = [x for x in all_recall if x["level"] == "deliverable"]
-    
+
     # Exclude already-passed deliverables
     passed_ids = {d["id"] for d in passed_delivs}
     unpassed_delivs = [d for d in deliv_cands if d["id"] not in passed_ids]
-    
+
     # FIXED: Sort by embedding score (always available)
     # Don't care about LLM scores for rescue - just use embedding scores
     unpassed_delivs.sort(key=lambda x: x.get("recall", 0), reverse=True)
-    
+
     print(f"[AUTO-RESCUE] Have {len(unpassed_delivs)} unpassed deliverables to choose from")
-    
+
     # Take top N deliverables to reach minimum
     chosen_delivs = unpassed_delivs[:needed]
     print(f"[AUTO-RESCUE] Selected {len(chosen_delivs)} additional deliverables based on embedding scores")
-    
+
     # Mark chosen deliverables as pass with BOOSTED SCORES to ensure they pass
     for d in chosen_delivs:
         llm_d = llm_map.get(d["id"])
@@ -1469,17 +1464,17 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
         else:
             # FIXED: Boost embedding score to ensure it passes gates
             actual_confidence = max(0.65, min(0.95, d["recall"] * 1.5))  # Boost by 1.5x, min 65%, max 95%
-        
+
         if d["id"] not in by_id:
             fused.append({**d, "llm": llm_d, "calibrated_confidence": actual_confidence, "pass": True, "fused_score": d["recall"], "ai_selected": True})
         else:
             by_id[d["id"]]["pass"] = True
             by_id[d["id"]]["calibrated_confidence"] = max(by_id[d["id"]]["calibrated_confidence"], actual_confidence)
-    
+
     # Pick components/tasks under each chosen deliverable
     comp_cands = [x for x in all_recall if x["level"] == "component"]
     task_cands = [x for x in all_recall if x["level"] == "task"]
-    
+
     for d in chosen_delivs:
         # top components under this deliverable
         comps = [c for c in comp_cands if c.get("parentId") == d["id"]]
@@ -1490,10 +1485,10 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
             # Skip components with very low relevance
             if c["recall"] < 0.25 and (not llm_c or llm_c.get("relevance", 0) < 25):
                 continue
-                
+
             # Use actual LLM confidence if available
             actual_comp_confidence = llm_c.get("confidence", c["recall"]) if llm_c else c["recall"]
-            
+
             if c["id"] not in by_id:
                 fused.append({**c, "llm": llm_c, "calibrated_confidence": actual_comp_confidence, "pass": True, "fused_score": c["recall"], "ai_selected": True})
             else:
@@ -1508,13 +1503,13 @@ def _auto_rescue_if_empty(fused: List[Dict[str, Any]], all_recall: List[Dict[str
                 if llm_t and llm_t.get("select", False):  # Only if AI selected
                     # Use actual LLM confidence for tasks
                     actual_task_confidence = llm_t.get("confidence", t["recall"]) if llm_t else t["recall"]
-                    
+
                     if t["id"] not in by_id:
                         fused.append({**t, "llm": llm_t, "calibrated_confidence": actual_task_confidence, "pass": True, "fused_score": t["recall"], "ai_selected": True})
                     else:
                         by_id[t["id"]]["pass"] = True
                         by_id[t["id"]]["calibrated_confidence"] = max(by_id[t["id"]]["calibrated_confidence"], actual_task_confidence)
-    
+
     return fused
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1535,13 +1530,13 @@ def planned_hours(base: float, m: Dict[str, float]) -> float:
 
 def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]], summary: Dict[str, Any], target_count: int = 100) -> List[Dict[str, Any]]:
     """Expand deliverables for comprehensive RFPs by creating smart variations based on department and type"""
-    
+
     # Get context from summary
     markets = summary.get("markets", ["US"])
     channels = summary.get("channels", ["Digital"])
     timeline_weeks = summary.get("timeline_weeks", 12)
     request_text = summary.get("summary", "").lower()
-    
+
     # Enhanced detection of comprehensive RFP characteristics
     is_luxury = any(term in request_text for term in ['luxury', 'fashion', 'premium', 'haute', 'high-end', 'exclusive', 'couture', 'designer'])
     is_fashion = any(term in request_text for term in ['fashion', 'apparel', 'collection', 'seasonal', 'runway', 'style'])
@@ -1552,33 +1547,33 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
     is_multiyear = timeline_weeks >= 80 or 'multi-year' in request_text or 'annual' in request_text
     is_multiproduct = any(term in request_text for term in ['portfolio', 'multiple products', 'product line', 'collection', 'range'])
     is_comprehensive = summary.get("complexity") == "high" or is_luxury or is_global or is_annual or len(deliverables) < 70
-    
+
     # Force expansion for luxury/comprehensive RFPs
     if not is_comprehensive and len(deliverables) >= target_count:
         return deliverables
-        
+
     print(f"[EXPAND] Comprehensive/Luxury RFP detected - expanding {len(deliverables)} to {target_count}+ deliverables")
     print(f"[EXPAND] Context: luxury={is_luxury}, fashion={is_fashion}, global={is_global}, multichannel={is_multichannel}, annual={is_annual}, multiyear={is_multiyear}")
-    
+
     # Enhanced phases (4 phases for comprehensive coverage)
     phases = ["Discovery", "Launch", "Growth", "Optimization"]
-    
+
     # Enhanced regions - now includes Latin America and more
     if is_global:
         regions = ["North America", "Europe", "Asia-Pacific", "Latin America", "Middle East", "Africa"][:5]
     else:
         regions = markets[:3] if markets else ["US"]
-    
+
     # Quarters and seasons for annual/fashion engagements
     quarters = ["Q1", "Q2", "Q3", "Q4"] if is_annual else []
     seasons = ["Spring", "Summer", "Fall", "Winter"] if is_fashion or is_retail else []
-    
+
     # Fashion collections for luxury/fashion
     collections = ["Spring/Summer", "Fall/Winter", "Resort", "Pre-Fall"] if is_fashion or is_luxury else []
-    
+
     # Audience segments for targeted marketing
     audience_segments = ["Gen Z", "Millennials", "Gen X", "Boomers", "Affluent", "Mass Market"] if is_comprehensive else []
-    
+
     # Products for multi-product launches
     products = []
     if is_multiproduct:
@@ -1586,12 +1581,12 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
             products = ["Menswear", "Womenswear", "Accessories", "Footwear", "Bags"][:4]
         else:
             products = ["Product A", "Product B", "Product C", "Hero Product"][:3]
-    
+
     # Enhanced channels - more specific and aggressive
-    all_channels = ["Instagram", "Facebook", "TikTok", "YouTube", "LinkedIn", "Twitter", 
-                    "Email", "SMS", "Web", "Mobile App", "Print", "TV", "Radio", "OOH", 
+    all_channels = ["Instagram", "Facebook", "TikTok", "YouTube", "LinkedIn", "Twitter",
+                    "Email", "SMS", "Web", "Mobile App", "Print", "TV", "Radio", "OOH",
                     "Events", "Influencer", "Podcast", "Streaming"]
-    
+
     if is_multichannel:
         # Aggressively expand channels
         expanded_channels = []
@@ -1610,41 +1605,41 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
         channels_to_use = list(set(expanded_channels))[:8]  # Unique channels, max 8 for aggressive expansion
     else:
         channels_to_use = channels[:4]
-    
+
     # Platform variations for technology
     platforms = ["Web", "iOS", "Android", "Salesforce", "Adobe", "Shopify", "AWS", "Azure"][:5]
-    
+
     # Annual/year variations for multi-year engagements
     years = []
     if is_multiyear:
         years = ["Year 1", "Year 2", "Year 3"][:3]
-    
+
     # Track unique IDs to prevent duplicates
     seen_ids = set()
     expanded = []
-    
+
     # Add all original deliverables first
     for d in deliverables:
         if d["id"] not in seen_ids:
             expanded.append(d)
             seen_ids.add(d["id"])
-    
+
     # Sort deliverables by confidence/relevance for prioritization
     deliverables_sorted = sorted(deliverables, key=lambda x: x.get("calibrated_confidence", 0.5), reverse=True)
-    
+
     # SMART EXPANSION RULES based on department
     expansion_count = 0
     max_expansions_per_deliverable = 12  # Increased limit for more aggressive expansion
-    
+
     for d in deliverables_sorted:
         if len(expanded) >= target_count * 1.5:  # Increased to 150% to ensure we hit target
             break
-            
+
         d_dept = d.get("dept", "Strategy")
         d_title = d.get("title", "").lower()
         base_confidence = d.get("calibrated_confidence", 0.6)
         expansions_for_this = 0
-        
+
         # Strategy deliverables → Regional variations + Phases + Audience Segments
         if d_dept == "Strategy":
             # Regional variations if global (now more aggressive)
@@ -1662,7 +1657,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Phase variations for ALL strategy deliverables
             for phase in phases:  # All 4 phases for strategy
                 if expansions_for_this >= max_expansions_per_deliverable:
@@ -1677,7 +1672,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     seen_ids.add(variant_id)
                     expansions_for_this += 1
                     expansion_count += 1
-            
+
             # Add audience segment variations for targeted strategies
             if audience_segments and ('audience' in d_title or 'persona' in d_title or 'target' in d_title or 'segment' in d_title):
                 for segment in audience_segments[:3]:
@@ -1693,7 +1688,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Add quarterly strategy reviews for annual engagements
             if is_annual and quarters:
                 for quarter in quarters[:4]:  # All quarters for annual
@@ -1709,7 +1704,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Multi-year variations for long-term engagements
             if is_multiyear and years:
                 for year in years[:2]:
@@ -1725,7 +1720,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-        
+
         # Creative deliverables → Channel-specific versions + Phases + Collections
         elif d_dept == "Creative":
             # Channel-specific versions (more aggressive)
@@ -1742,7 +1737,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     seen_ids.add(variant_id)
                     expansions_for_this += 1
                     expansion_count += 1
-            
+
             # Collection-specific variations for fashion/luxury
             if (is_fashion or is_luxury) and collections:
                 for collection in collections[:3]:
@@ -1758,7 +1753,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Seasonal variations for fashion/retail creative
             if (is_fashion or is_retail) and seasons:
                 for season in seasons[:2]:
@@ -1774,7 +1769,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Add phase variations for creative campaigns
             if 'campaign' in d_title or 'concept' in d_title or True:  # Apply to all creative
                 for phase in phases[:3]:
@@ -1790,7 +1785,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Audience segment variations for creative targeting
             if audience_segments and ('campaign' in d_title or 'creative' in d_title):
                 for segment in audience_segments[:2]:
@@ -1806,7 +1801,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-        
+
         # Content deliverables → Quarterly/Monthly variations + Channels + Products
         elif d_dept == "Content":
             # Quarterly variations for annual engagements (more aggressive)
@@ -1824,7 +1819,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Channel variations for content (more aggressive)
             for channel in channels_to_use[:5]:  # Increased from 3 to 5
                 if expansions_for_this >= max_expansions_per_deliverable:
@@ -1839,7 +1834,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     seen_ids.add(variant_id)
                     expansions_for_this += 1
                     expansion_count += 1
-            
+
             # Product-specific content for multi-product launches
             if products and is_multiproduct:
                 for product in products[:2]:
@@ -1855,7 +1850,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Seasonal content for fashion/retail
             if (is_fashion or is_retail) and seasons:
                 for season in seasons[:2]:
@@ -1871,7 +1866,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Audience-specific content
             if audience_segments and ('content' in d_title or 'story' in d_title or 'editorial' in d_title):
                 for segment in audience_segments[:2]:
@@ -1887,7 +1882,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-        
+
         # Technology deliverables → Platform-specific versions
         elif d_dept == "Technology":
             # Platform-specific variations
@@ -1904,7 +1899,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     seen_ids.add(variant_id)
                     expansions_for_this += 1
                     expansion_count += 1
-            
+
             # Phase variations for tech development
             for phase in ["Development", "Testing", "Deployment"]:
                 if expansions_for_this >= max_expansions_per_deliverable:
@@ -1919,11 +1914,11 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     seen_ids.add(variant_id)
                     expansions_for_this += 1
                     expansion_count += 1
-        
+
         # Paid Media deliverables → Channel + Region combinations + Audience segments
         elif d_dept == "Paid Media":
             # Channel-specific media buying (more aggressive)
-            media_channels = ["Google Ads", "Facebook Ads", "Instagram Ads", "LinkedIn", 
+            media_channels = ["Google Ads", "Facebook Ads", "Instagram Ads", "LinkedIn",
                             "Programmatic", "YouTube", "TikTok Ads", "Amazon Ads", "Spotify Ads"]
             for channel in media_channels[:5]:  # Increased from 3 to 5
                 if expansions_for_this >= max_expansions_per_deliverable:
@@ -1938,7 +1933,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     seen_ids.add(variant_id)
                     expansions_for_this += 1
                     expansion_count += 1
-            
+
             # Regional media variations if global (more aggressive)
             if is_global:
                 for region in regions[:4]:  # Increased from 2 to 4
@@ -1954,7 +1949,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Audience segment targeting for paid media
             if audience_segments:
                 for segment in audience_segments[:3]:
@@ -1970,7 +1965,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Product-specific media campaigns
             if products and is_multiproduct:
                 for product in products[:2]:
@@ -1986,7 +1981,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Quarterly media plans for annual
             if is_annual and quarters:
                 for quarter in quarters[:4]:  # All quarters for annual
@@ -2002,7 +1997,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-            
+
             # Seasonal campaigns for fashion/retail
             if (is_fashion or is_retail) and seasons:
                 for season in seasons[:2]:
@@ -2018,7 +2013,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-        
+
         # Integrated Marketing Management → All phases for coordination
         elif d_dept == "Integrated Marketing Management":
             # All 4 phases for IMM deliverables
@@ -2035,7 +2030,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     seen_ids.add(variant_id)
                     expansions_for_this += 1
                     expansion_count += 1
-            
+
             # Add quarterly reviews for annual
             if is_annual and quarters:
                 for quarter in quarters[:2]:
@@ -2051,20 +2046,20 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         seen_ids.add(variant_id)
                         expansions_for_this += 1
                         expansion_count += 1
-    
+
     # Additional aggressive expansion if still below target
     if len(expanded) < target_count:
         remaining_needed = target_count - len(expanded)
         print(f"[EXPAND] Still need {remaining_needed} more deliverables, adding aggressive variations")
-        
+
         # Add cross-department variations for top deliverables
         for d in deliverables_sorted[:40]:  # Increased from 20 to 40 for more aggressive expansion
             if len(expanded) >= target_count * 1.2:  # Go up to 120 deliverables to ensure we hit 100+
                 break
-                
+
             base_confidence = d.get("calibrated_confidence", 0.6)
             d_title = d.get("title", "").lower()
-            
+
             # Add lifecycle variations
             lifecycle = ["Planning", "Execution", "Optimization", "Reporting", "Analysis", "Review"]
             for stage in lifecycle[:4]:
@@ -2079,7 +2074,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                     expansion_count += 1
                     if len(expanded) >= target_count * 1.2:
                         break
-            
+
             # Add format variations for deliverables that make sense
             if any(term in d_title for term in ['report', 'analysis', 'audit', 'assessment']):
                 formats = ["Executive Summary", "Detailed Report", "Dashboard View", "Presentation"]
@@ -2095,7 +2090,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         expansion_count += 1
                         if len(expanded) >= target_count * 1.2:
                             break
-            
+
             # Add stakeholder variations for strategy/planning deliverables
             if any(term in d_title for term in ['strategy', 'plan', 'roadmap', 'framework']):
                 stakeholders = ["Executive", "Board", "Investor", "Partner"]
@@ -2111,7 +2106,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         expansion_count += 1
                         if len(expanded) >= target_count * 1.2:
                             break
-            
+
             # Add testing/validation variations for campaigns and creative
             if any(term in d_title for term in ['campaign', 'creative', 'content', 'ad']):
                 testing_types = ["A/B Test", "Pilot", "Beta", "Full Launch"]
@@ -2127,7 +2122,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         expansion_count += 1
                         if len(expanded) >= target_count * 1.2:
                             break
-    
+
     # Final catch-all expansion if STILL below target (rare but possible)
     if len(expanded) < target_count:
         print(f"[EXPAND] Final push: need {target_count - len(expanded)} more")
@@ -2149,11 +2144,11 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
                         expansion_count += 1
                         if len(expanded) >= target_count:
                             break
-    
+
     print(f"[EXPAND] Expansion complete: {len(deliverables)} → {len(expanded)} deliverables")
     print(f"[EXPAND] Added {expansion_count} smart variations based on department rules")
     print(f"[EXPAND] Total unique deliverables: {len(seen_ids)}")
-    
+
     return expanded
 
 def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, Any], catalog: List[Dict[str, Any]], db, all_recall: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -2162,7 +2157,7 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
     dels = [x for x in passing if x["level"] == "deliverable"]
     comps_pass = {x["id"]: x for x in passing if x["level"] == "component"}
     tasks_pass = {x["id"]: x for x in passing if x["level"] == "task" and x.get("ai_selected", True)}  # Only AI-selected tasks
-    
+
     # If still nothing after auto-rescue, hard fallback
     if not dels:
         print("[COMPOSE] No deliverables after rescue - using hard fallback")
@@ -2171,38 +2166,38 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         # Take all available deliverables
         dels = topD[:len(topD)]  # Take all available
         print(f"[COMPOSE] Hard fallback: selected {len(dels)} deliverables")
-    
+
     # Expansion now happens in analyze_with_agencydb BEFORE filtering
     # No need to expand here anymore since it's done earlier in the pipeline
-    
+
     by_dept: Dict[str, List[Dict[str, Any]]] = {}
     m = multipliers_from_summary(summary)
-    
+
     # Build deliverable lookup from catalog
     deliv_lookup = {x["id"]: x for x in catalog if x["level"] == "deliverable"}
-    
+
     print(f"[COMPOSE DEBUG] Processing {len(dels)} deliverables")
     print(f"[COMPOSE DEBUG] Deliverable lookup has {len(deliv_lookup)} items")
-    
+
     for d_item in dels:
         deliv_code = d_item["id"]
         deliv_info = deliv_lookup.get(deliv_code, None)
-        
+
         if deliv_info is None:
             # Skip deliverables not in the database catalog (these are fake IDs)
             print(f"[COMPOSE] Skipping unknown deliverable {deliv_code} - not in database catalog")
             continue  # Skip this deliverable entirely instead of creating a fallback
-        
+
         # FIXED: Ensure dept exists with fallback to 'Strategy'
         dept = deliv_info.get("dept", "Strategy")  # Use .get() for safe access
-        
+
         # Validate department and fallback to Strategy if invalid
         if dept not in DEPARTMENTS:
             print(f"[COMPOSE] Deliverable {deliv_code} has invalid/missing dept '{dept}', using Strategy")
             dept = "Strategy"  # Always use Strategy as fallback
-        
+
         by_dept.setdefault(dept, [])
-        
+
         try:
             # Get deliverable base hours from DB
             deliv_rows = db.all_rows[db.all_rows['Deliverable_Code'] == deliv_code]
@@ -2212,20 +2207,20 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
             print(f"[COMPOSE ERROR] Error getting hours for {deliv_code}: {e}")
             d_hours = 8.0
             d_hours_planned = 8.0
-        
+
         # Components
         comp_out = []
         for comp_item in [x for x in catalog if x["level"] == "component" and x.get("parentId") == deliv_code]:
             comp_id = comp_item["id"]
             sc = comps_pass.get(comp_id)
-            
+
             if sc:  # Component passed
                 # Get tasks for this component - ONLY AI-selected ones
                 t_out = []
                 for task_item in [x for x in catalog if x["level"] == "task" and x.get("parentId") == comp_id]:
                     task_id = task_item["id"]
                     ts = tasks_pass.get(task_id)
-                    
+
                     if ts and ts.get("ai_selected", False):  # Only include AI-selected tasks
                         base_hours = task_item.get("base_hours", 2.0)
                         t_out.append({
@@ -2236,11 +2231,11 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
                             "planned_hours": planned_hours(base_hours, m),
                             "ai_selected": True
                         })
-                
+
                 # Calculate component hours
                 comp_rows = deliv_rows[deliv_rows['Component_Task_L1'] == comp_item["title"].split("::")[- 1]]
                 c_hours = comp_rows['Estimated_Hours'].sum() if not comp_rows.empty else 4.0
-                
+
                 comp_out.append({
                     "id": comp_id,
                     "title": comp_item["title"].split("::")[- 1],  # Clean component name
@@ -2249,7 +2244,7 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
                     "planned_hours": planned_hours(c_hours, m),
                     "tasks": t_out
                 })
-        
+
         # Milestones
         milestones = [
             {"name": "Kickoff", "offset_days": 0},
@@ -2257,10 +2252,10 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
             {"name": "Launch/Activations", "offset_days": math.ceil((d_hours_planned or 8) / 6) + 5},
             {"name": "First Report", "offset_days": math.ceil((d_hours_planned or 8) / 6) + 14},
         ]
-        
+
         # FIXED: Ensure title exists with fallback
         deliv_title = deliv_info.get("title", f"Deliverable {deliv_code}")
-        
+
         # Add deliverable to department
         deliverable_entry = {
             "code": deliv_code,  # Real database code (renamed from deliverable_code)
@@ -2278,7 +2273,7 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         }
         by_dept[dept].append(deliverable_entry)
         print(f"[COMPOSE] Added {deliv_code} to {dept} department (total in dept: {len(by_dept[dept])})")
-    
+
     total = 0.0
     for dept_items in by_dept.values():
         for deliv in dept_items:
@@ -2287,7 +2282,7 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
                 total += comp["planned_hours"] or 0.0
                 for t in comp.get("tasks", []):
                     total += t["planned_hours"] or 0.0
-    
+
     return {
         "summary": summary,
         "strictness": AI_STRICTNESS_DEFAULT,
@@ -2310,7 +2305,7 @@ def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks:
         # Calculate progress from chunks if not explicitly set
         if progress_pct is None and job.total_chunks > 0:
             progress_pct = int((job.processed_chunks / job.total_chunks) * 100)
-        
+
         # NEW: Add reasoning visibility for users
         if reasoning:
             job.current_reasoning = reasoning
@@ -2321,7 +2316,7 @@ def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks:
 
 def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None) -> Dict[str, Any]:
     """Main analysis function using AgencyDB with Fast/Deep mode support and session isolation
-    
+
     Args:
         request_text: The RFP or project request text
         db: AgencyDB instance
@@ -2339,16 +2334,16 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     else:
         tier = tier or "thinking"
     mode = mode or "deep"
-    
+
     print(f"[ANALYZE START] Mode: {mode}, Request length: {len(request_text)}, strictness: {strictness}, tier: {tier}")
-    
+
     # Update job status - Stage 1
-    _update_job(job_id, "Stage 1/7: Loading database catalog...", 10, 
+    _update_job(job_id, "Stage 1/7: Loading database catalog...", 10,
                 reasoning="Accessing AgencyDB with 1,900+ deliverables, components, and tasks across 6 departments")
-    
+
     # Build catalog from AgencyDB
     catalog = build_catalog_from_agencydb(db)
-    
+
     if not catalog:
         error_result = {
             "auto_run": True,
@@ -2358,14 +2353,14 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         }
         print(f"[ANALYZE ERROR] Empty catalog")
         return error_result
-    
+
     print(f"[ANALYZE] Built catalog with {len(catalog)} items from AgencyDB")
     deliverable_count = len([x for x in catalog if x["level"] == "deliverable"])
     print(f"[ANALYZE] Catalog contains {deliverable_count} deliverables")
-    
+
     _update_job(job_id, "Stage 1/7: Database loaded", 15,
                 reasoning=f"Found {deliverable_count} deliverables across Strategy, Creative, Content, Paid Media, Technology, and IMM departments")
-    
+
     # Stage 2: Summarize request (skip for Fast mode to save time)
     if mode == "deep":
         _update_job(job_id, "Stage 2/7: Summarizing request with GPT-5...", 20,
@@ -2373,13 +2368,13 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         try:
             summary = summarize_request(request_text)
             print(f"[ANALYZE] Summary generated successfully")
-            
+
             # Extract key insights for reasoning
             goals_count = len(summary.get("goals", []))
             channels = summary.get("channels", [])
             markets = summary.get("markets", [])
             complexity = summary.get("complexity", "medium")
-            
+
             _update_job(job_id, "Stage 2/7: RFP analyzed", 25,
                         reasoning=f"Identified {goals_count} business goals, {len(channels)} channels ({', '.join(channels[:3])}{'...' if len(channels) > 3 else ''}), {len(markets)} market(s). Complexity: {complexity}")
         except Exception as e:
@@ -2414,7 +2409,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             "complexity": "medium",
             "risk_flags": []
         }
-    
+
     # Stage 3: Compute embeddings and find candidates (skip embeddings for Fast mode)
     if mode == 'fast':
         _update_job(job_id, f"Stage 3/7: Finding candidates with keywords...", 30,
@@ -2422,33 +2417,33 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     else:
         _update_job(job_id, f"Stage 3/7: Computing embeddings and similarity scores...", 30,
                     reasoning=f"Generating semantic embeddings for RFP and {len(catalog)} catalog items to find deep pattern matches")
-    
+
     # Pass mode to skip embeddings in Fast mode
     candidates, all_recall = recall_candidates(request_text, catalog, client=client or oai, mode=mode, session_id=session_id)
-    
+
     if not candidates:
         # FIXED: If no candidates, use entire catalog as fallback
         print(f"[ANALYZE WARNING] No candidates from recall, using entire catalog")
         candidates = catalog[:270]  # Top 270 items
         all_recall = catalog
-    
+
     print(f"[ANALYZE] Found {len(candidates)} candidates")
-    
+
     deliv_candidates_count = len([c for c in candidates if c["level"] == "deliverable"])
     _update_job(job_id, f"Stage 3/7: Candidate matching complete", 35,
                 reasoning=f"Matched {deliv_candidates_count} relevant deliverables from semantic analysis - now filtering to top matches")
-    
+
     # Stage 4: Fast vs Deep mode divergence
     if mode == "fast":
         # FAST MODE: No LLM calls, use TF-IDF/lexical scoring only
         _update_job(job_id, "Stage 4/7: Fast mode - scoring with TF-IDF only...", 50,
                     reasoning=f"Fast Mode: Statistically scoring {deliv_candidates_count} deliverables using keyword frequency analysis (no AI)")
-        
+
         # Filter to top FAST_TOP_K deliverables based on lexical+embedding scores
         deliverable_candidates = [c for c in candidates if c["level"] == "deliverable"]
         deliverable_candidates.sort(key=lambda x: x.get("recall", 0), reverse=True)
         top_deliverables = deliverable_candidates[:FAST_TOP_K]
-        
+
         # Generate fake LLM scores for compatibility with fusion logic
         llm_scores = []
         for c in top_deliverables:
@@ -2462,13 +2457,13 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 "select": True,
                 "why": f"Selected based on TF-IDF similarity (score: {c.get('recall', 0):.2f})"
             })
-        
+
         # Add components and tasks for selected deliverables
         for deliv in top_deliverables:
             # Get components for this deliverable
             components = [c for c in candidates if c["level"] == "component" and c.get("parentId") == deliv["id"]]
             components.sort(key=lambda x: x.get("recall", 0), reverse=True)
-            
+
             for comp in components[:3]:  # Top 3 components per deliverable
                 llm_scores.append({
                     "id": comp["id"],
@@ -2478,11 +2473,11 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                     "select": True,
                     "why": "Component selected by TF-IDF similarity"
                 })
-                
+
                 # Get tasks for this component
                 tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
                 tasks.sort(key=lambda x: x.get("recall", 0), reverse=True)
-                
+
                 for task in tasks[:2]:  # Top 2 tasks per component
                     llm_scores.append({
                         "id": task["id"],
@@ -2492,19 +2487,19 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                         "select": True,
                         "why": "Task selected by TF-IDF similarity"
                     })
-        
+
         print(f"[ANALYZE FAST] Generated {len(llm_scores)} scores without LLM")
-        
+
     else:
         # DEEP MODE: Use LLM for intelligent re-ranking
         _update_job(job_id, "Stage 4/7: Deep mode - pre-filtering candidates...", 40,
                     reasoning=f"Deep Mode: Preparing top {DEEP_TOP_K} deliverables for GPT-5 Thinking analysis with deep reasoning")
-        
+
         # Pre-filter to DEEP_TOP_K candidates for LLM scoring
         deliverable_candidates = [c for c in candidates if c["level"] == "deliverable"]
         deliverable_candidates.sort(key=lambda x: x.get("recall", 0), reverse=True)
         top_deliverables = deliverable_candidates[:DEEP_TOP_K]
-        
+
         # Build focused candidate set for LLM
         llm_candidates = []
         for deliv in top_deliverables:
@@ -2515,41 +2510,41 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 llm_candidates.append(comp)
                 tasks = [t for t in candidates if t["level"] == "task" and t.get("parentId") == comp["id"]]
                 llm_candidates.extend(tasks[:3])  # Up to 3 tasks per component
-        
+
         _update_job(job_id, "Stage 5/7: Deep mode - scoring with GPT-5...", 50,
                     reasoning=f"Sending {len(llm_candidates)} items to GPT-5 Thinking for advanced context-aware relevance analysis")
-        
+
         # Wrap LLM scoring in try/except with guaranteed fallback
         try:
             llm_scores = rescore_with_llm_granular(summary, llm_candidates, request_text, job_id)
             print(f"[ANALYZE DEEP] LLM scoring completed, {len(llm_scores)} scores generated")
-            
+
             # Check if we got enough deliverables from LLM
             llm_delivs = [s for s in llm_scores if s["level"] == "deliverable"]
             print(f"[ANALYZE DEEP] LLM returned {len(llm_delivs)} deliverable scores")
-            
+
             if len(llm_delivs) < AI_MIN_DELIVERABLES:
                 print(f"[ANALYZE WARNING] LLM returned only {len(llm_delivs)} deliverables, less than minimum {AI_MIN_DELIVERABLES}")
                 print(f"[ANALYZE] Rescue function WILL be triggered to ensure minimum deliverables")
-                
+
         except Exception as e:
             print(f"[ANALYZE ERROR] LLM scoring failed: {e}")
             print(f"[ANALYZE] Falling back to lexical scores")
             # Generate fallback scores
             llm_scores = _generate_embedding_fallback_scores(llm_candidates, summary)
             print(f"[ANALYZE] Using fallback scores for {len(llm_scores)} candidates")
-    
+
     # Stage 6: Calibrate and fuse scores
     _update_job(job_id, "Stage 6/7: Calibrating scores and selecting deliverables...", 70,
                 reasoning="Combining AI reasoning with statistical analysis to calibrate confidence scores and select final deliverables")
-    
+
     # NEW: Extract explicit requirements from RFP before fusion
     explicit_requirements = extract_explicit_requirements(request_text)
     if explicit_requirements:
         print(f"[ANALYZE] Extracted {len(explicit_requirements)} explicitly requested deliverables from RFP")
     else:
         print(f"[ANALYZE] No explicit requirements found in RFP")
-    
+
     # FIXED: Ensure fusion always happens - now with explicit requirements
     try:
         fused = fuse_and_calibrate(candidates, llm_scores, strictness, explicit_requirements)
@@ -2564,23 +2559,23 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 c["calibrated_confidence"] = 0.65
                 c["ai_selected"] = True
                 fused.append(c)
-    
+
     # AUTO-RELAX & RESCUE - ALWAYS run this
-    # Detect luxury fashion or comprehensive RFPs  
+    # Detect luxury fashion or comprehensive RFPs
     request_lower = request_text.lower()
     is_luxury_fashion = any(term in request_lower for term in ['luxury', 'fashion', 'haute couture', 'premium brand', 'designer'])
     is_comprehensive = any(term in request_lower for term in ['comprehensive', 'full-service', 'integrated', 'complete agency', 'all marketing'])
-    
+
     if is_luxury_fashion:
         rfp_complexity = "luxury_fashion"
     elif is_comprehensive or summary.get("complexity") == "high":
         rfp_complexity = "comprehensive"
     else:
         rfp_complexity = summary.get("complexity", "medium")
-    
+
     print(f"[ANALYZE] Running auto-rescue (autorelax={AI_AUTORELAX}, complexity={rfp_complexity})")
     fused = _auto_rescue_if_empty(fused, all_recall, llm_scores, rfp_complexity, summary)
-    
+
     # EXPANSION FOR COMPREHENSIVE RFPs - DISABLED
     # We no longer artificially expand deliverables with fake variations
     # Only use the actual deliverables from the database
@@ -2591,20 +2586,20 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         len(summary.get("markets", [])) > 2 or
         len(summary.get("channels", [])) > 3
     )
-    
+
     if is_comprehensive_rfp:
         # Get deliverables that passed so far
         passing_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
         print(f"[ANALYZE] Comprehensive RFP detected with {len(passing_delivs)} deliverables (no artificial expansion)")
-    
+
     # Check final deliverable count
     final_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
     print(f"[ANALYZE] After rescue and expansion: {len(final_delivs)} deliverables will be included")
-    
+
     # Stage 7: Compose final plan
     _update_job(job_id, "Stage 7/7: Building final project plan...", 90,
                 reasoning=f"Assembling final project plan with {len([f for f in fused if f.get('pass')])} approved deliverables and their components")
-    
+
     # FIXED: Ensure plan composition always succeeds
     try:
         plan = compose_plan_from_agencydb(fused, summary, catalog, db, all_recall)
@@ -2612,7 +2607,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     except Exception as e:
         print(f"[ANALYZE ERROR] Plan composition failed: {e}, using emergency plan")
         # Emergency plan - just return top deliverables
-        emergency_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]][:25]
+        emergency_delivs = [x for x in fused if x["level"] == "deliverable" and x["pass"]]
         plan = {
             "summary": summary,
             "strictness": strictness,
@@ -2634,13 +2629,13 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
                 } for d in emergency_delivs]
             }
         }
-    
+
     # Count final results
     delivs_in_plan = sum(len(dept_items) for dept_items in plan.get("suggestions_by_department", {}).values())
-    
+
     # Mark job complete
     _update_job(job_id, "Complete!", 100)
-    
+
     result = {
         "auto_run": True,
         "message": f"AI analysis complete ({mode} mode). Selected {delivs_in_plan} deliverables.",
@@ -2658,14 +2653,14 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
             "deep_top_k": DEEP_TOP_K if mode == "deep" else None
         }
     }
-    
+
     # Log cache stats
     try:
         cache_stats = get_cache_stats()
         print(f"[CACHE STATS] {cache_stats}")
     except Exception:
         pass
-    
+
     print(f"[ANALYZE COMPLETE] Mode: {mode}, Deliverables: {delivs_in_plan}, Time: {datetime.datetime.now().timestamp() - (AI_JOB_STORE[job_id].start_time if job_id and job_id in AI_JOB_STORE else datetime.datetime.now().timestamp()):.1f}s")
     return result
 
@@ -2673,13 +2668,13 @@ def _run_analysis_background(job_id: str, request_text: str, db, strictness: str
     """Background task to run AI analysis with Fast/Deep mode support and session isolation"""
     try:
         result = analyze_with_agencydb(request_text, db, strictness, job_id, tier, mode, client, session_id)
-        
+
         if job_id in AI_JOB_STORE:
             # FIXED: Save result BEFORE marking as completed
             AI_JOB_STORE[job_id].result = result
             AI_JOB_STORE[job_id].end_time = datetime.datetime.now().timestamp()
             AI_JOB_STORE[job_id].current_stage = "Complete"
-            
+
             # Log deliverables count for debugging
             delivs_count = 0
             if result and "plan" in result:
@@ -2687,14 +2682,14 @@ def _run_analysis_background(job_id: str, request_text: str, db, strictness: str
                 for dept_delivs in delivs_by_dept.values():
                     delivs_count += len(dept_delivs)
             print(f"[AI JOB {job_id}] Saved {delivs_count} deliverables to job result")
-            
+
             # FIXED: Mark as completed ONLY AFTER saving result
             AI_JOB_STORE[job_id].status = AIJobStatus.COMPLETED
     except Exception as e:
         import traceback
         error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
         print(f"[AI JOB {job_id} ERROR] {error_detail}")
-        
+
         if job_id in AI_JOB_STORE:
             AI_JOB_STORE[job_id].status = AIJobStatus.FAILED
             AI_JOB_STORE[job_id].error = str(e)
@@ -2712,7 +2707,7 @@ class AnalyzeRequest(BaseModel):
 
 def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
     router = APIRouter()
-    
+
     @router.post("/analyze")
     def _analyze(payload: AnalyzeRequest, background_tasks: BackgroundTasks):
         """Start AI analysis as a background job and return job ID immediately"""
@@ -2720,17 +2715,17 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             db = app.state.db
             if not getattr(db, "loaded", False):
                 db.load()
-            
+
             # Clean up old jobs to prevent memory leaks
             cleanup_ai_jobs()
-            
+
             # Create job
             job_id = str(uuid.uuid4())
             AI_JOB_STORE[job_id] = AIAnalysisJob(
                 job_id=job_id,
                 status=AIJobStatus.PENDING
             )
-            
+
             # Start background task with mode, client, and session_id for isolation
             # FIXED: Pass None instead of app.state.http for embedding client
             # embed_many will create its own OpenAI client
@@ -2745,7 +2740,7 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 None,  # Pass None - embed_many will create its own OpenAI client
                 payload.session_id  # Pass session_id for cache isolation
             )
-            
+
             return {
                 "job_id": job_id,
                 "status": "started",
@@ -2756,17 +2751,17 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             error_detail = f"{str(e)}\n\nTraceback:\n{traceback.format_exc()}"
             print(f"[AI PLANNER ERROR] {error_detail}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @router.get("/jobs/{job_id}")
     def _status(job_id: str):
         """Get status of AI analysis job"""
         if job_id not in AI_JOB_STORE:
             raise HTTPException(status_code=404, detail="Job not found")
-        
+
         job = AI_JOB_STORE[job_id]
         now = datetime.datetime.now().timestamp()
         elapsed = now - job.start_time
-        
+
         # Calculate progress percentage
         progress = 0
         eta = None
@@ -2777,7 +2772,7 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 avg_time_per_chunk = elapsed / job.processed_chunks
                 remaining_chunks = job.total_chunks - job.processed_chunks
                 eta = avg_time_per_chunk * remaining_chunks
-        
+
         response = {
             "job_id": job.job_id,
             "status": job.status.value,
@@ -2786,27 +2781,27 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             "elapsed_seconds": round(elapsed, 1),
             "eta_seconds": round(eta, 1) if eta else None
         }
-        
+
         if job.status == AIJobStatus.COMPLETED and job.result:
             response["result"] = job.result
-        
+
         if job.status == AIJobStatus.FAILED and job.error:
             response["error"] = job.error
-        
+
         return response
-    
+
     @router.get("/jobs/{job_id}/result")
     def _result(job_id: str):
         """Get result of completed AI analysis job"""
         if job_id not in AI_JOB_STORE:
             raise HTTPException(status_code=404, detail="Job not found")
-        
+
         job = AI_JOB_STORE[job_id]
         if job.status != AIJobStatus.COMPLETED:
             raise HTTPException(status_code=400, detail=f"Job not completed yet, status: {job.status.value}")
-        
+
         return job.result
-    
+
     @router.get("/health")
     def _health():
         try:
@@ -2826,5 +2821,5 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
             }
         except Exception as e:
             return {"ok": False, "error": str(e)}
-    
+
     app.include_router(router, prefix=base)
