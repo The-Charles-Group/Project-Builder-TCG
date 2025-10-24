@@ -1122,17 +1122,17 @@ def rescore_with_llm_granular(summary: Dict[str, Any], candidates: List[Dict[str
         "additionalProperties": False
     }
 
-    # Use tier-based batch sizing - PERFORMANCE FIX: Reduced to prevent GPT-5 errors
+    # Use tier-based batch sizing - larger batches for fewer chunks
     tier = os.environ.get("AI_TIER", "thinking")
     batch_sizes = {
-        "mini": 18,  # Reduced from 40 to prevent insufficient items errors
-        "thinking": 15,  # Increased from 8 for better efficiency
-        "pro": 15,  # Increased from 5 for better parallel processing
-        "fast": 18,  # Reduced from 40 to prevent errors
-        "balanced": 15,  # Increased from 8 for better efficiency
-        "accurate": 15  # Increased from 5 for better parallel processing
+        "mini": 30,  # Increased for faster processing
+        "thinking": 25,  # Increased for better throughput
+        "pro": 20,  # Balanced for quality
+        "fast": 30,  # Fast mode can handle more
+        "balanced": 25,  # Increased for efficiency
+        "accurate": 20  # Balanced for quality
     }
-    chunk_size = batch_sizes.get(tier, 15)
+    chunk_size = batch_sizes.get(tier, 25)
 
     # Prepare chunks for parallel processing
     chunks = []
