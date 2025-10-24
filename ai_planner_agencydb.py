@@ -615,11 +615,22 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
         recall = 0.70 * emb + 0.30 * lex
         cands.append({**it, "embScore": emb, "lexScore": lex, "recall": recall})
 
-    # Return all candidates sorted by recall score for comprehensive analysis
-    # No artificial limits - let fusion and calibration handle filtering
-    topD = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)
-    topC = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)
-    topT = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)
+    # PERFORMANCE FIX: Limit candidates before GPT-5 to prevent 153+ chunk problem
+    # Use intelligent filtering based on recall score thresholds
+    
+    # For deliverables: Keep top 100 OR all above 0.3 recall (whichever is more)
+    deliverables = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)
+    topD = deliverables[:100] if len(deliverables) > 100 and deliverables[99]["recall"] > 0.3 else deliverables[:150]
+    
+    # For components: Keep top 150 OR all above 0.25 recall
+    components = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)
+    topC = [c for c in components if c["recall"] > 0.25][:150]
+    
+    # For tasks: Keep top 200 OR all above 0.2 recall  
+    tasks = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)
+    topT = [t for t in tasks if t["recall"] > 0.2][:200]
+    
+    print(f"[RECALL] Filtered to {len(topD)} deliverables, {len(topC)} components, {len(topT)} tasks (from {len(cands)} total candidates)")
 
     return topD + topC + topT, cands
 
