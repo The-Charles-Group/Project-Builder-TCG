@@ -31,6 +31,15 @@ task = "shell.exec"
 args = "python -m uvicorn main:app --host 0.0.0.0 --port 5000 --reload --timeout-keep-alive 300 --loop uvloop --http httptools"
 waitForPort = 5000
 
+[[workflows.workflow]]
+name = "Auto-Sync Documentation"
+author = 45860263
+mode = "sequential"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python auto_sync_documentation.py"
+
 [[ports]]
 localPort = 5000
 externalPort = 80

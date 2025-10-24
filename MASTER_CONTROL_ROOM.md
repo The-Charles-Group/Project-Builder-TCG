@@ -1,6 +1,10 @@
 
-# 🎛️ MASTER CONTROL ROOM - Agency Project Builder
+# 🎛️ SYSTEM DESIGN DOCUMENT (SDD) - Agency Project Builder
 **Complete System Architecture & Logic Flow Documentation**
+
+*Also known as: Technical Architecture Documentation, Software Architecture Document (SAD)*
+
+**Auto-Sync Enabled:** This document automatically updates when source code changes are detected.
 
 ---
 
