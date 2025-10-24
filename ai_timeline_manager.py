@@ -15,7 +15,8 @@ import random
 # OpenAI client initialization
 try:
     from openai import AsyncOpenAI
-    api_key = os.getenv("OPENAI_API_KEY")
+    # Support both OPENAI_API_KEY and Open_AI_Key secret names
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("Open_AI_Key")
     if api_key:
         client = AsyncOpenAI(api_key=api_key)
         OPENAI_AVAILABLE = True

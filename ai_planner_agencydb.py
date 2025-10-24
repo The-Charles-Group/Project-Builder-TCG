@@ -15,7 +15,8 @@ from embedding_cache import embed_many, get_cache_stats  # Import embedding cach
 # ──────────────────────────────────────────────────────────────────────────────
 # Config
 # ──────────────────────────────────────────────────────────────────────────────
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+# Support both OPENAI_API_KEY and Open_AI_Key secret names
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("Open_AI_Key")
 REASONING_MODEL = os.environ.get("AI_REASONING_MODEL", "gpt-5-thinking")  # GPT-5 model
 EMBEDDING_MODEL = "text-embedding-3-large"
 

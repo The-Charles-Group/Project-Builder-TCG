@@ -105,7 +105,7 @@ def retry_with_exponential_backoff(
 ) -> Any:
     """
     Retry a function with exponential backoff.
-    
+
     Args:
         func: Function to retry (should be callable with no arguments)
         max_retries: Maximum number of retries (default 3)
@@ -113,33 +113,33 @@ def retry_with_exponential_backoff(
         max_delay: Maximum delay in seconds (default 4.0)
         log_prefix: Prefix for log messages
         raise_on_failure: Whether to raise the last exception or return None
-    
+
     Returns:
         The function result if successful, None if all retries failed and raise_on_failure=False
-    
+
     Raises:
         The last exception encountered if raise_on_failure=True
     """
     last_exception = None
     delay = base_delay
-    
+
     for attempt in range(max_retries + 1):  # +1 for initial attempt
         try:
             if attempt > 0:
                 print(f"[{log_prefix} Retry] Attempt {attempt}/{max_retries} after {delay:.1f}s delay...")
                 time.sleep(delay)
-            
+
             result = func()
-            
+
             if attempt > 0:
                 print(f"[{log_prefix} Success] Recovered after {attempt} retry(ies)")
-            
+
             return result
-            
+
         except Exception as e:
             last_exception = e
             error_msg = str(e)
-            
+
             # Check for specific error types
             if "rate_limit" in error_msg.lower() or "429" in str(e):
                 print(f"[{log_prefix} Rate Limit] Hit rate limit on attempt {attempt + 1}/{max_retries + 1}")
@@ -151,13 +151,13 @@ def retry_with_exponential_backoff(
             else:
                 print(f"[{log_prefix} Error] Attempt {attempt + 1}/{max_retries + 1} failed: {error_msg[:200]}")
                 delay = min(delay * 2, max_delay)
-            
+
             if attempt == max_retries:
                 print(f"[{log_prefix} FAILED] All {max_retries + 1} attempts exhausted. Last error: {error_msg[:500]}")
                 if raise_on_failure:
                     raise last_exception
                 return None
-    
+
     # Should never reach here, but just in case
     if raise_on_failure and last_exception:
         raise last_exception
@@ -199,7 +199,7 @@ def _messages_to_prompt(messages: List[Dict[str, str]]) -> str:
 
 def _extract_output_text(resp: Any) -> str:
     """Best-effort extraction of text from a Responses API object."""
-    
+
     # If response is a dict, handle it directly
     if isinstance(resp, dict):
         # PRIORITY 1: Check output field first - this is where the actual response is
@@ -211,11 +211,11 @@ def _extract_output_text(resp: Any) -> str:
                     # Skip reasoning blocks, look for message/text blocks
                     if item.get("type") == "reasoning":
                         continue
-                    
+
                     # Check for message blocks (GPT-5 response format)
                     if "content" in item and item["content"]:
                         content = item["content"]
-                        
+
                         # If content is a list, extract text from it
                         if isinstance(content, list) and content:
                             for content_item in content:
@@ -236,11 +236,11 @@ def _extract_output_text(resp: Any) -> str:
                         # If content is a string, return it directly
                         elif isinstance(content, str):
                             return content
-                    
+
                     # Check for text type items
                     if item.get("type") == "text" and item.get("content"):
                         return str(item["content"])
-        
+
         # Check for nested choices structure (Chat Completions format)
         if "choices" in resp and isinstance(resp["choices"], list) and resp["choices"]:
             choice = resp["choices"][0]
@@ -248,16 +248,16 @@ def _extract_output_text(resp: Any) -> str:
                 msg = choice["message"]
                 if isinstance(msg, dict) and "content" in msg:
                     return str(msg["content"])
-        
+
         # Check for incomplete response
         if "incomplete_details" in resp:
             # Still try to return any partial text we might have
             if "text" in resp and resp["text"]:
                 return str(resp["text"])
-        
+
         # If we can't find meaningful content, return empty string to trigger retry
         return ""
-    
+
     # Check if response has model_dump method (Pydantic v2)
     if hasattr(resp, "model_dump"):
         try:
@@ -265,7 +265,7 @@ def _extract_output_text(resp: Any) -> str:
             return _extract_output_text(resp_dict)  # Recursive call with dict
         except Exception as e:
             pass  # Fall through to other extraction methods
-    
+
     # Check if response has to_dict method
     if hasattr(resp, "to_dict"):
         print("[DEBUG GPT-5] Response has to_dict method")
@@ -275,7 +275,7 @@ def _extract_output_text(resp: Any) -> str:
             return _extract_output_text(resp_dict)  # Recursive call with dict
         except Exception as e:
             print(f"[DEBUG GPT-5] to_dict failed: {e}")
-    
+
     # First check for direct output_text attribute (new SDK versions)
     txt = getattr(resp, "output_text", None)
     if isinstance(txt, str) and txt.strip():
@@ -283,7 +283,7 @@ def _extract_output_text(resp: Any) -> str:
         return txt
     else:
         print(f"[DEBUG GPT-5] output_text attribute: {txt}")
-    
+
     # Check for text attribute directly
     txt = getattr(resp, "text", None)
     if isinstance(txt, str) and txt.strip():
@@ -291,7 +291,7 @@ def _extract_output_text(resp: Any) -> str:
         return txt
     else:
         print(f"[DEBUG GPT-5] text attribute: {txt}")
-    
+
     # Check for content attribute (GPT-5 Responses API format)
     content = getattr(resp, "content", None)
     if isinstance(content, str) and content.strip():
@@ -299,16 +299,16 @@ def _extract_output_text(resp: Any) -> str:
         return content
     else:
         print(f"[DEBUG GPT-5] content attribute: {content}")
-    
+
     # Check for output attribute (GPT-5 Responses API format)
     output = getattr(resp, "output", None)
     print(f"[DEBUG GPT-5] output attribute type: {type(output)}, value: {output}")
-    
+
     # If output is a string, return it
     if isinstance(output, str) and output.strip():
         print(f"[DEBUG GPT-5] Returning output as string: {output[:200]}")
         return output
-    
+
     # If output is a list, iterate through it
     if isinstance(output, list) and output:
         print(f"[DEBUG GPT-5] Output is list with {len(output)} items")
@@ -329,13 +329,13 @@ def _extract_output_text(resp: Any) -> str:
                             if isinstance(t, str) and t.strip():
                                 print(f"[DEBUG GPT-5] Found text in output[{i}].content[{j}]: {t[:200]}")
                                 return t
-    
+
     # If we still don't have text, check for incomplete status and return empty
     status = getattr(resp, "status", None)
     if status == "incomplete":
         print(f"[DEBUG GPT-5] Response has incomplete status")
         return ""
-    
+
     # Last resort: return the string representation (but this is likely an error)
     print(f"[DEBUG GPT-5] Last resort - returning str(resp): {str(resp)[:500]}")
     return str(resp)
@@ -530,6 +530,19 @@ def patch_openai() -> None:
 # Apply the patch at import time so users don't need to call anything.
 patch_openai()
 
+# Helper function to get the OpenAI client, supporting multiple API key names.
+_CLIENT: Optional[OpenAI] = None
+def _get_openai_client() -> Optional[OpenAI]:
+    """Get or create OpenAI client with proper API key handling."""
+    global _CLIENT
+    if _CLIENT is None:
+        # Support both OPENAI_API_KEY and Open_AI_Key secret names
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("Open_AI_Key")
+        if not api_key:
+            return None
+        _CLIENT = OpenAI(api_key=api_key)
+    return _CLIENT
+
 
 # ---------------------------------------------------------------------------
 # Public helper functions (optional to use from your app)
@@ -555,7 +568,7 @@ def gpt5_json_schema(
 
     # Inject strict JSON schema instruction as a system message.
     messages2 = _inject_json_schema_instruction(messages, json_schema)
-    
+
     def make_request():
         resp = client.responses.create(
             model=model,
@@ -565,7 +578,7 @@ def gpt5_json_schema(
             max_output_tokens=int(max_output_tokens),
         )
         txt = _extract_output_text(resp)
-        
+
         # Try to parse the JSON
         try:
             parsed_result = json.loads(txt)
@@ -574,13 +587,13 @@ def gpt5_json_schema(
             print(f"[GPT-5 JSON Parse Error] Failed to parse response as JSON: {e}")
             print(f"[GPT-5 JSON Parse Error] Response text (first 400 chars): {txt[:400]}")
             raise RuntimeError(f"[GPT‑5 JSON] Expected strict JSON, but failed to parse: {e}\nText: {txt[:400]}")
-        
+
         # Validate result has content (not empty)
         if not parsed_result:
             raise RuntimeError(f"[GPT-5 JSON] Received empty JSON response")
-        
+
         return parsed_result
-    
+
     # Use retry logic if enabled
     if use_retry:
         return retry_with_exponential_backoff(
@@ -605,7 +618,7 @@ def gpt5_text(
     • `use_retry` enables exponential backoff retry logic (default True)
     """
     model = _TIER_TO_MODEL.get(tier, "gpt-5")
-    
+
     def make_request():
         resp = client.responses.create(
             model=model,
@@ -614,13 +627,13 @@ def gpt5_text(
             max_output_tokens=int(max_output_tokens),
         )
         text_result = _extract_output_text(resp)
-        
+
         # Validate result has content
         if not text_result or not text_result.strip():
             raise RuntimeError(f"[GPT-5 Text] Received empty text response")
-        
+
         return text_result
-    
+
     # Use retry logic if enabled
     if use_retry:
         return retry_with_exponential_backoff(
@@ -638,15 +651,19 @@ if __name__ == "__main__":  # pragma: no cover
         print("[sitecustomize] OpenAI SDK not installed; nothing to test.")
     else:
         try:
-            client = openai.OpenAI()
-            ok = gpt5_text(
-                client,
-                messages=[
-                    {"role": "system", "content": "You are concise."},
-                    {"role": "user", "content": "Reply with the single word: READY"},
-                ],
-                tier=os.getenv("AI_TIER", "mini")
-            )
-            print(f"[sitecustomize] Self-test output: {ok!r}")
+            # Use the helper function to get the client
+            client = _get_openai_client()
+            if client:
+                ok = gpt5_text(
+                    client,
+                    messages=[
+                        {"role": "system", "content": "You are concise."},
+                        {"role": "user", "content": "Reply with the single word: READY"},
+                    ],
+                    tier=os.getenv("AI_TIER", "mini")
+                )
+                print(f"[sitecustomize] Self-test output: {ok!r}")
+            else:
+                print("[sitecustomize] OpenAI client could not be initialized (API key missing?).")
         except Exception as e:
             print(f"[sitecustomize] Self-test error: {e}")

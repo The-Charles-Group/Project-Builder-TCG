@@ -179,8 +179,8 @@ async def lifespan(app: FastAPI):
         from gpt5_helpers import gpt5_text
         from openai import OpenAI
         
-        # Check if we have API key
-        api_key = os.environ.get("OPENAI_API_KEY")
+        # Check if we have API key - support both naming conventions
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("Open_AI_Key")
         if api_key:
             try:
                 client = OpenAI(api_key=api_key)
