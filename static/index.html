@@ -48,6 +48,25 @@
         <input type="hidden" id="analysis-mode" value="fast">
       </div>
       
+      <!-- Processing Tier Selector -->
+      <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(217, 70, 239, 0.1), rgba(139, 92, 246, 0.1)); border: 1px solid rgba(217, 70, 239, 0.2); border-radius: 8px;">
+        <h3 style="margin: 0 0 12px 0; color: #d946ef; font-size: 1.1em;">🎯 Processing Tier</h3>
+        <div style="margin-bottom: 8px; font-size: 0.85em; color: var(--muted);">
+          Choose how data is processed in batches. Higher batch sizes = faster processing but may need retries.
+        </div>
+        <select id="processing-tier" style="width: 100%; padding: 10px; background: #1a1a1a; color: white; border: 1px solid #4a5568; border-radius: 6px; font-size: 0.95em;">
+          <option value="mini">Mini - 30 items/batch (fastest, least accurate)</option>
+          <option value="fast">Fast - 30 items/batch (quick processing)</option>
+          <option value="balanced" selected>Balanced - 25 items/batch (recommended)</option>
+          <option value="thinking">Thinking - 25 items/batch (GPT-5 reasoning)</option>
+          <option value="accurate">Accurate - 20 items/batch (highest quality)</option>
+          <option value="pro">Pro - 20 items/batch (maximum precision)</option>
+        </select>
+        <div id="tier-info" style="margin-top: 12px; padding: 10px; background: rgba(139, 92, 246, 0.05); border-radius: 6px; font-size: 0.85em; color: var(--muted);">
+          <strong style="color: var(--accent);">Balanced (25 items/batch):</strong> Optimal balance of speed and accuracy. Best for most projects.
+        </div>
+      </div>
+      
       <!-- Industry Template Selector -->
       <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(217, 70, 239, 0.1), rgba(139, 92, 246, 0.1)); border: 1px solid rgba(217, 70, 239, 0.2); border-radius: 8px;">
         <h3 style="margin: 0 0 12px 0; color: #d946ef; font-size: 1.1em;">🏢 Industry Template</h3>

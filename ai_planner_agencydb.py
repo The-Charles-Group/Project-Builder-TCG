@@ -617,19 +617,19 @@ def recall_candidates(request_text: str, catalog: List[Dict[str, Any]], client=N
 
     # PERFORMANCE FIX: Limit candidates before GPT-5 to prevent 153+ chunk problem
     # Use intelligent filtering based on recall score thresholds
-    
+
     # For deliverables: Keep top 100 OR all above 0.3 recall (whichever is more)
     deliverables = sorted([x for x in cands if x["level"] == "deliverable"], key=lambda z: z["recall"], reverse=True)
     topD = deliverables[:100] if len(deliverables) > 100 and deliverables[99]["recall"] > 0.3 else deliverables[:150]
-    
+
     # For components: Keep top 150 OR all above 0.25 recall
     components = sorted([x for x in cands if x["level"] == "component"], key=lambda z: z["recall"], reverse=True)
     topC = [c for c in components if c["recall"] > 0.25][:150]
-    
+
     # For tasks: Keep top 200 OR all above 0.2 recall  
     tasks = sorted([x for x in cands if x["level"] == "task"], key=lambda z: z["recall"], reverse=True)
     topT = [t for t in tasks if t["recall"] > 0.2][:200]
-    
+
     print(f"[RECALL] Filtered to {len(topD)} deliverables, {len(topC)} components, {len(topT)} tasks (from {len(cands)} total candidates)")
 
     return topD + topC + topT, cands
@@ -901,6 +901,12 @@ async def rescore_with_llm_granular_async(summary: Dict[str, Any], candidates: L
     if not candidates:
         return []
 
+    # Import here to avoid circular dependency
+    from sitecustomize import agpt5_json_schema
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI()
+
     # Get the appropriate batch size based on tier - PERFORMANCE FIX: Reduced to prevent GPT-5 errors
     batch_sizes = {
         "mini": 20,  # Reduced from 50 to prevent insufficient items errors
@@ -1042,6 +1048,10 @@ For TASKS, set select=true ONLY if specifically needed."""},
         print(f"[LLM Re-score ERROR] Chunk {chunk_num}/{total_chunks} failed: {e} - Using aggressive fallback scoring")
         # Fallback scoring for this chunk
         out = []
+        media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
+                         'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
+                         'marketing', 'performance', 'programmatic', 'audience', 'content', 'activation'}
+
         for c in block:
             # Check if this is a universal deliverable
             is_universal = c["level"] == "deliverable" and is_universal_deliverable(c.get("title", ""))
@@ -1063,9 +1073,6 @@ For TASKS, set select=true ONLY if specifically needed."""},
 
             # Apply media keyword boost only for non-universal items
             if not is_universal:
-                media_keywords = {'media', 'campaign', 'brand', 'strategy', 'creative', 'digital',
-                                 'social', 'analytics', 'reporting', 'planning', 'buying', 'advertising',
-                                 'marketing', 'performance', 'programmatic', 'audience', 'content', 'activation'}
                 title_words = set(tokenize(c.get("title", "").lower()))
                 keyword_set = set([k.lower() for k in c.get("keywords", [])]) if c.get("keywords") else set()
 
@@ -2059,8 +2066,7 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
 
     # Additional aggressive expansion if still below target
     if len(expanded) < target_count:
-        remaining_needed = target_count - len(expanded)
-        print(f"[EXPAND] Still need {remaining_needed} more deliverables, adding aggressive variations")
+        print(f"[EXPAND] Still need {target_count - len(expanded)} more deliverables, adding aggressive variations")
 
         # Add cross-department variations for top deliverables
         for d in deliverables_sorted[:40]:  # Increased from 20 to 40 for more aggressive expansion
@@ -2440,7 +2446,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     print(f"[ANALYZE] Found {len(candidates)} candidates")
 
     deliv_candidates_count = len([c for c in candidates if c["level"] == "deliverable"])
-    _update_job(job_id, f"Stage 3/7: Candidate matching complete", 35,
+    _update_job(job_id, "Stage 3/7: Candidate matching complete", 35,
                 reasoning=f"Matched {deliv_candidates_count} relevant deliverables from semantic analysis - now filtering to top matches")
 
     # Stage 4: Fast vs Deep mode divergence
