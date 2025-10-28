@@ -273,7 +273,7 @@
       </div>
 
       <div class="actions" style="margin-top: 20px;">
-        <button id="btnProceedToStep3" class="btn-primary">Proceed to Pricing</button>
+        <button id="btnProceedToStep3" class="btn-primary" onclick="proceedToPricing()">Proceed to Pricing</button>
         <button id="learnBtn" type="button" style="background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-left: 10px;">LEARN (opt-in)</button>
       </div>
     </section>
@@ -1768,6 +1768,54 @@
     
     // Make it globally accessible
     window.rebuildScenario = rebuildScenario;
+
+    // Proceed to Pricing - sync selection state first
+    function proceedToPricing() {
+      console.log('[PROCEED] Syncing selection state before proceeding to Step 3...');
+      
+      // Get current selection from Step 2 picker
+      const selectedDeliverables = window.step2PickerState?.selected 
+        ? Array.from(window.step2PickerState.selected) 
+        : (window.selectedCodes || []);
+      
+      const selectedComponentsMap = window.selectedComponentsMap || {};
+      
+      console.log('[PROCEED] Current selection:', {
+        deliverables: selectedDeliverables.length,
+        components: Object.keys(selectedComponentsMap).length
+      });
+      
+      // Validate we have something selected
+      if (!selectedDeliverables || selectedDeliverables.length === 0) {
+        alert('Please select at least one deliverable before proceeding to pricing.');
+        return;
+      }
+      
+      // Sync to all state systems
+      appState.selectedCodes = selectedDeliverables;
+      window.selectedCodes = selectedDeliverables;
+      
+      // Store in sessionStorage for persistence
+      sessionStorage.setItem('apb.selected_codes', JSON.stringify(selectedDeliverables));
+      sessionStorage.setItem('apb.selected_components_map', JSON.stringify(
+        Object.fromEntries(
+          Object.entries(selectedComponentsMap).map(([k,v]) => [k, Array.from(v || [])])
+        )
+      ));
+      
+      console.log('[PROCEED] Selection synced successfully, showing Step 3');
+      
+      // Show Step 3
+      const step3 = document.getElementById('step3');
+      if (step3) {
+        step3.style.display = 'block';
+        step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } else {
+        console.error('[PROCEED] Step 3 element not found!');
+      }
+    }
+    
+    window.proceedToPricing = proceedToPricing;
 
     // Function to update pricing display with scenario data
     function updatePricingDisplay(scenario) {
