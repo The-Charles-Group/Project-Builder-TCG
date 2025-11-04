@@ -580,6 +580,7 @@ def convert_excel_to_mspdi(
                     has_gantt_end = True
             
             # Apply constraint type
+            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
             if has_gantt_start and has_gantt_end:
                 # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
                 ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
@@ -590,7 +591,6 @@ def convert_excel_to_mspdi(
                 ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
                 ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
                 logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
-            # If neither, don't add constraint (ASAP scheduling by default)
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
@@ -607,7 +607,6 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}IgnoreWarnings" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}ExternalTask" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}Active" % ns).text = "1"
-            ET.SubElement(deliv_task, "{%s}Manual" % ns).text = "0"
             
             # Add custom fields for deliverable
             if add_custom_fields and deliv_code:
@@ -728,7 +727,6 @@ def convert_excel_to_mspdi(
                     ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0H0M0S"
                     ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0H0M0S"
                     ET.SubElement(task, "{%s}Active" % ns).text = "1"
-                    ET.SubElement(task, "{%s}Manual" % ns).text = "0"
                     ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
                     ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
                     
@@ -736,21 +734,35 @@ def convert_excel_to_mspdi(
                     has_gantt_start = "Start_Date" in row.index and pd.notna(row.get("Start_Date"))
                     has_gantt_end = "End_Date" in row.index and pd.notna(row.get("End_Date"))
                     
-                    # Apply constraint type based on Gantt-sourced dates
+                    # Apply constraint type and manual scheduling fields based on Gantt-sourced dates
                     if has_gantt_start and has_gantt_end:
-                        # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
+                        # Both dates from Gantt: Lock BOTH start and finish dates
                         ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
                         ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                        ET.SubElement(task, "{%s}Manual" % ns).text = "1"
+                        # CRITICAL: Add ManualStart, ManualFinish, ManualDuration to lock dates in Workfront
+                        ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
+                        ET.SubElement(task, "{%s}ManualFinish" % ns).text = task_end.isoformat()
+                        # Calculate duration from start to finish dates
+                        duration_minutes = int((task_end - task_start).total_seconds() / 60)
+                        ET.SubElement(task, "{%s}ManualDuration" % ns).text = f"PT{duration_minutes}M"
                         logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                        logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start/finish/duration")
                     elif has_gantt_start:
-                        # Only start date from Gantt: Must Start On
+                        # Only start date from Gantt: Lock start date only
                         ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
                         ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                        ET.SubElement(task, "{%s}Manual" % ns).text = "1"
+                        # CRITICAL: Add ManualStart to lock start date in Workfront
+                        ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
+                        # ManualFinish and ManualDuration not set - will use standard fields
                         logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                        logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start")
                     else:
-                        # No Gantt dates: ASAP scheduling (default)
+                        # No Gantt dates: ASAP scheduling (auto-scheduled)
                         ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"
                         ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                        ET.SubElement(task, "{%s}Manual" % ns).text = "0"
                         logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                     
                     # Add cost if available
