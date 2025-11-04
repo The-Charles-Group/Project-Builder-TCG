@@ -1695,19 +1695,37 @@ function updatePricingSummary() {
     }
   }
   
-  // FIX: Update Grand Total - read from scenarios.A.totals.price
-  const scenarioTotal = (scenario.totals && scenario.totals.price) ? scenario.totals.price : oneTimeCost;
-  const grandTotal = scenarioTotal + (retainerMonthlyCost * 12);
+  // FIX: Update Grand Total - ALWAYS use original unscaled prices
+  // Calculate the original total from items' original prices
+  let originalOneTimeCost = 0;
+  let originalRetainerMonthlyCost = 0;
+  
+  scenario.items.forEach(item => {
+    const isRetainer = item.is_retainer || item.retainer || 
+                      (item.cadence && item.cadence !== 'ONE_TIME');
+    
+    if (isRetainer) {
+      // Use original monthly price if available
+      originalRetainerMonthlyCost += item.original_monthly_price || item.monthly_price || 0;
+    } else {
+      // Use original price if available
+      originalOneTimeCost += item.original_price || item.price || 0;
+    }
+  });
+  
+  // Use original costs for Grand Total
+  const scenarioTotal = originalOneTimeCost;
+  const grandTotal = originalOneTimeCost + (originalRetainerMonthlyCost * 12);
   const grandTotalEl = document.getElementById('grand-total-cost');
   const grandBreakdownEl = document.getElementById('grand-total-breakdown');
   
   if (grandTotalEl) grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
   if (grandBreakdownEl) {
     // Always show scenario total even when retainer is $0
-    if (retainerMonthlyCost > 0) {
-      grandBreakdownEl.textContent = `Scenario total ($${Math.round(scenarioTotal).toLocaleString()}) + 12 months retainer ($${Math.round(retainerMonthlyCost * 12).toLocaleString()})`;
+    if (originalRetainerMonthlyCost > 0) {
+      grandBreakdownEl.textContent = `One-time ($${Math.round(originalOneTimeCost).toLocaleString()}) + 12 months retainer ($${Math.round(originalRetainerMonthlyCost * 12).toLocaleString()})`;
     } else {
-      grandBreakdownEl.textContent = `Scenario total: $${Math.round(scenarioTotal).toLocaleString()}`;
+      grandBreakdownEl.textContent = `One-time total: $${Math.round(originalOneTimeCost).toLocaleString()}`;
     }
   }
 }
@@ -2758,7 +2776,10 @@ async function optimizeAllPricing() {
             }
           });
           
-          // Update totals
+          // Update totals - but preserve original totals for Grand Total calculation
+          if (!scenario.totals.original_price) {
+            scenario.totals.original_price = scenario.totals.price;
+          }
           scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
           scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
           
@@ -2800,14 +2821,31 @@ function performSmartOptimization(scenario, clientBudget) {
   const currentTotal = scenario.totals.price;
   const scaleFactor = clientBudget / currentTotal;
   
-  // Apply scaling to all items
+  // Apply scaling to all items - PRESERVE ORIGINAL PRICES
   scenario.items.forEach(item => {
+    // Preserve original prices before scaling for Grand Total calculation
+    if (!item.original_price) {
+      item.original_price = item.price;
+    }
+    if (!item.original_hours) {
+      item.original_hours = item.total_hours;
+    }
+    if (item.monthly_price && !item.original_monthly_price) {
+      item.original_monthly_price = item.monthly_price;
+    }
+    
     // Scale hours and price proportionally
-    const originalHours = item.total_hours;
-    const originalPrice = item.price;
+    const originalHours = item.original_hours || item.total_hours;
+    const originalPrice = item.original_price || item.price;
     
     item.total_hours = Math.round(originalHours * scaleFactor);
     item.price = Math.round(originalPrice * scaleFactor);
+    
+    // Scale monthly prices for retainers
+    if (item.monthly_price) {
+      const originalMonthlyPrice = item.original_monthly_price || item.monthly_price;
+      item.monthly_price = Math.round(originalMonthlyPrice * scaleFactor);
+    }
     
     // Maintain effective rate
     if (item.total_hours > 0) {
@@ -2815,7 +2853,10 @@ function performSmartOptimization(scenario, clientBudget) {
     }
   });
   
-  // Update totals
+  // Update totals - but preserve original totals for Grand Total calculation
+  if (!scenario.totals.original_price) {
+    scenario.totals.original_price = scenario.totals.price;
+  }
   scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
   scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
   

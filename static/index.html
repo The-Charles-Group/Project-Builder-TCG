@@ -1661,6 +1661,25 @@
           return;
         }
         
+        // CRITICAL: Preserve original prices for Grand Total calculation
+        // When scenario is first built, save the original prices before any budget scaling
+        scenarios.A.items.forEach(item => {
+          if (!item.original_price) {
+            item.original_price = item.price;
+          }
+          if (!item.original_hours) {
+            item.original_hours = item.total_hours;
+          }
+          if (item.monthly_price && !item.original_monthly_price) {
+            item.original_monthly_price = item.monthly_price;
+          }
+        });
+        
+        // Also preserve original totals
+        if (scenarios.A.totals && !scenarios.A.totals.original_price) {
+          scenarios.A.totals.original_price = scenarios.A.totals.price;
+        }
+        
         console.log('[BUILD] Successfully built scenarios:', {
           scenarioA_items: scenarios.A.items.length,
           scenarioA_total: scenarios.A.totals
@@ -1837,9 +1856,13 @@
       }
       tbody.innerHTML = '';
       
-      // Counters for summary
+      // Counters for summary - using ORIGINAL prices for Grand Total
       let oneTimeCount = 0, oneTimeHours = 0, oneTimeCost = 0;
       let retainerCount = 0, retainerMonthlyHours = 0, retainerMonthlyCost = 0;
+      
+      // For Grand Total, use original prices if available, otherwise use current prices
+      let oneTimeCostOriginal = 0;
+      let retainerMonthlyCostOriginal = 0;
       
       // Process each deliverable
       scenario.items.forEach((item, idx) => {
@@ -1896,10 +1919,14 @@
           retainerCount++;
           retainerMonthlyHours += item.monthly_hours || 0;
           retainerMonthlyCost += item.monthly_price || 0;
+          // Use original price if available for Grand Total calculation
+          retainerMonthlyCostOriginal += item.original_monthly_price || item.monthly_price || 0;
         } else {
           oneTimeCount++;
           oneTimeHours += item.total_hours || 0;
           oneTimeCost += item.price || 0;
+          // Use original price if available for Grand Total calculation
+          oneTimeCostOriginal += item.original_price || item.price || 0;
         }
       });
       
@@ -1915,8 +1942,9 @@
       const annualRetainerCost = retainerMonthlyCost * 12;
       document.getElementById('retainer-annual-cost').textContent = `$${annualRetainerCost.toLocaleString()}`;
       
-      // Calculate and display grand total
-      const grandTotal = oneTimeCost + annualRetainerCost;
+      // Calculate and display grand total - ALWAYS use original prices if available
+      const annualRetainerCostOriginal = retainerMonthlyCostOriginal * 12;
+      const grandTotal = oneTimeCostOriginal + annualRetainerCostOriginal;
       const grandTotalEl = document.getElementById('grand-total-amount');
       if (grandTotalEl) {
         grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
