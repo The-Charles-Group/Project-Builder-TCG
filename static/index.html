@@ -580,8 +580,8 @@
           </label>
         </div>
         
-        <!-- AI Actions -->
-        <div style="display:flex; gap:12px;">
+        <!-- AI Actions and Dynamic Buttons -->
+        <div id="timeline-actions" style="display:flex; gap:12px;">
           <button id="btn-generate-timeline" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; padding:10px 20px; border:none; border-radius:6px; cursor:pointer; font-weight:600;">
             🤖 Generate AI Timeline
           </button>
@@ -589,6 +589,8 @@
             📊 AI Reasoning
           </button>
           <button id="btn-save-timeline" class="btn-sm" style="display:none;">Save Changes</button>
+          
+          <!-- Save Order button will be added here dynamically by JavaScript -->
           
           <!-- PDF Download Button -->
           <div id="gantt-pdf-button" style="position:relative; display:none;">
@@ -2790,8 +2792,17 @@
       let btn = document.getElementById('tl-save');
       if(!btn){
         btn = document.createElement('button');
-        btn.id='tl-save'; btn.textContent='Save Order';
-        document.getElementById('timeline-controls').appendChild(btn);
+        btn.id='tl-save'; 
+        btn.textContent='Save Order';
+        btn.style.cssText = 'padding:10px 16px; border-radius:6px; cursor:pointer; font-weight:600;';
+        // Insert before the PDF button container
+        const pdfButton = document.getElementById('gantt-pdf-button');
+        const container = document.getElementById('timeline-actions');
+        if (pdfButton && container) {
+          container.insertBefore(btn, pdfButton);
+        } else {
+          container.appendChild(btn);
+        }
       }
       btn.onclick = () => saveTimelineOrder(letter);
     }
