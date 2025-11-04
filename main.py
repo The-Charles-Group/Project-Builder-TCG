@@ -2793,16 +2793,27 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                    (deliv_code and task_deliv_code == deliv_code) or \
                    (deliv_code and task_id.endswith(deliv_code)):
                     matched = True
-                    # Copy timeline dates into deliverable (check both casing variants)
+                    # Copy timeline dates and duration into deliverable (check all casing variants)
                     start_date = task.get("Start_Date") or task.get("start_date") or task.get("start")
+                    end_date = task.get("End_Date") or task.get("end_date") or task.get("end")
                     start_offset = task.get("Start_Offset_Days") if task.get("Start_Offset_Days") is not None else task.get("start_offset_days")
+                    hours = task.get("hours") or task.get("Hours")
+                    
+                    print(f"[WBS Builder] 🔍 Merging timeline data for '{deliv_name}':")
+                    print(f"  Timeline task has: start={start_date}, end={end_date}, hours={hours}")
                     
                     if start_date:
                         item["Start_Date"] = start_date
-                        print(f"[WBS Builder] ✓ Merged Start_Date={start_date} into {deliv_name}")
+                        print(f"  ✓ Merged Start_Date={start_date}")
+                    if end_date:
+                        item["End_Date"] = end_date
+                        print(f"  ✓ Merged End_Date={end_date}")
                     if start_offset is not None:
                         item["Start_Offset_Days"] = start_offset
-                        print(f"[WBS Builder] ✓ Merged Start_Offset_Days={start_offset} into {deliv_name}")
+                        print(f"  ✓ Merged Start_Offset_Days={start_offset}")
+                    if hours is not None:
+                        item["hours"] = hours
+                        print(f"  ✓ Merged hours={hours}")
                     break
             
             if not matched and deliv_name:
