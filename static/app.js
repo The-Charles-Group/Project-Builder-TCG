@@ -886,12 +886,93 @@ async function initializeGanttChart(tasks = []) {
   }
   
   try {
-    // Initialize Frappe Gantt
+    // Debug: Check if Gantt constructor exists
+    console.log('[GANTT DEBUG] Checking Gantt availability...');
+    console.log('[GANTT DEBUG] typeof Gantt:', typeof Gantt);
+    console.log('[GANTT DEBUG] Gantt constructor:', Gantt);
+    
+    // Debug: Log container and tasks info
+    console.log('[GANTT DEBUG] Container element:', container);
+    console.log('[GANTT DEBUG] Number of tasks:', tasks.length);
+    console.log('[GANTT DEBUG] Task data sample:', tasks.slice(0, 2));
+    
+    // Store reference to event handlers for debugging
+    const eventHandlers = {
+      on_click: function(task) {
+        console.log('[GANTT EVENT] Task clicked:', task);
+      },
+      on_date_change: function(task, start, end) {
+        console.log('[GANTT EVENT] ⚠️ on_date_change fired!');
+        console.log('[GANTT EVENT] Task:', task);
+        console.log('[GANTT EVENT] Task name:', task.name);
+        console.log('[GANTT EVENT] New start:', start);
+        console.log('[GANTT EVENT] New end:', end);
+        
+        // Update the task in our state
+        const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
+        if (taskIndex >= 0) {
+          currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
+          currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
+          console.log('[GANTT EVENT] Updated task in currentTimelineTasks at index', taskIndex);
+        }
+        
+        // Calculate duration in days
+        const durationMs = end - start;
+        const durationDays = Math.ceil(durationMs / (1000 * 60 * 60 * 24));
+        console.log('[GANTT EVENT] Calculated duration in days:', durationDays);
+        
+        // Extract deliverable ID - use deliverable_code field that comes from backend
+        const deliverableId = task.deliverable_code || task.deliverable_id || task.id.split('-')[0] || task.id;
+        console.log('[GANTT EVENT] Extracted deliverable ID:', deliverableId);
+        
+        // Emit gantt:changed event for scenario-store to sync with backend
+        const changePayload = {
+          deliverableId: deliverableId,
+          durationDays: durationDays,
+          start: start.toISOString().split('T')[0],
+          end: end.toISOString().split('T')[0],
+          resources: task.resources || []
+        };
+        
+        console.log('[GANTT EVENT] 🔔 Emitting gantt:changed event with payload:', changePayload);
+        document.dispatchEvent(new CustomEvent('gantt:changed', { detail: changePayload }));
+        
+        // Also try calling GanttBridge directly
+        if (window.GanttBridge && window.GanttBridge.emitChange) {
+          console.log('[GANTT EVENT] 🔔 Also calling GanttBridge.emitChange directly');
+          window.GanttBridge.emitChange(changePayload);
+        }
+        
+        // Show save button
+        const saveBtn = document.getElementById('btn-save-timeline');
+        if (saveBtn) {
+          saveBtn.style.display = '';
+          console.log('[GANTT EVENT] Save button shown');
+        }
+      },
+      on_progress_change: function(task, progress) {
+        console.log('[GANTT EVENT] Task progress changed:', task.name, progress);
+      },
+      on_view_change: function(mode) {
+        console.log('[GANTT EVENT] View mode changed to:', mode);
+      }
+    };
+    
+    // Initialize Frappe Gantt with debug logging
+    console.log('[GANTT DEBUG] Initializing Gantt chart with config...');
     ganttChart = new Gantt(container, tasks, {
+      // CRITICAL: These must be false for events to work!
+      readonly: false,              // Enable editing
+      readonly_dates: false,         // Enable date editing specifically
+      readonly_progress: false,      // Enable progress editing
+      
+      // View and format options
       view_mode: document.getElementById('gantt-view-mode')?.value || 'Day',
       date_format: 'YYYY-MM-DD',
       popup_trigger: 'click',
       language: 'en',
+      
+      // Custom popup HTML
       custom_popup_html: function(task) {
         const start = new Date(task._start);
         const end = new Date(task._end);
@@ -909,48 +990,115 @@ async function initializeGanttChart(tasks = []) {
           </div>
         `;
       },
-      on_click: function(task) {
-        console.log('Task clicked:', task);
-      },
-      on_date_change: function(task, start, end) {
-        console.log('Task date changed:', task.name, start, end);
-        // Update the task in our state
-        const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
-        if (taskIndex >= 0) {
-          currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
-          currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
-        }
-        
-        // Calculate duration in days
-        const durationMs = end - start;
-        const durationDays = Math.ceil(durationMs / (1000 * 60 * 60 * 24));
-        
-        // Extract deliverable ID - use deliverable_code field that comes from backend
-        const deliverableId = task.deliverable_code || task.deliverable_id || task.id.split('-')[0] || task.id;
-        
-        // Emit gantt:changed event for scenario-store to sync with backend
-        const changePayload = {
-          deliverableId: deliverableId,
-          durationDays: durationDays,
-          start: start.toISOString().split('T')[0],
-          end: end.toISOString().split('T')[0],
-          resources: task.resources || []
-        };
-        
-        console.log('Emitting gantt:changed event:', changePayload);
-        document.dispatchEvent(new CustomEvent('gantt:changed', { detail: changePayload }));
-        
-        // Show save button
-        const saveBtn = document.getElementById('btn-save-timeline');
-        if (saveBtn) saveBtn.style.display = '';
-      },
-      on_progress_change: function(task, progress) {
-        console.log('Task progress changed:', task.name, progress);
-      },
-      on_view_change: function(mode) {
-        console.log('View mode changed to:', mode);
-      }
+      
+      // Event handlers spread from eventHandlers object
+      ...eventHandlers
     });
+    
+    console.log('[GANTT DEBUG] ✅ Gantt chart initialized successfully');
+    console.log('[GANTT DEBUG] ganttChart object:', ganttChart);
+    
+    // Debug: Check if event handlers were attached
+    if (ganttChart) {
+      console.log('[GANTT DEBUG] Checking attached handlers...');
+      console.log('[GANTT DEBUG] ganttChart.options:', ganttChart.options);
+      console.log('[GANTT DEBUG] ganttChart.options.readonly:', ganttChart.options?.readonly);
+      console.log('[GANTT DEBUG] ganttChart.options.readonly_dates:', ganttChart.options?.readonly_dates);
+      
+      // Fallback: Manually add event listeners to bars in case native events don't work
+      setTimeout(() => {
+        const bars = container.querySelectorAll('.bar-wrapper');
+        console.log('[GANTT DEBUG] Found', bars.length, 'bar elements to attach listeners');
+        
+        bars.forEach((bar, index) => {
+          // Store original position for comparison
+          const rect = bar.getBoundingClientRect();
+          let originalX = rect.left;
+          let isDragging = false;
+          let dragStartX = 0;
+          let dragStartTime = null;
+          
+          // Mouse events for dragging detection
+          bar.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            dragStartX = e.clientX;
+            dragStartTime = Date.now();
+            console.log('[GANTT FALLBACK] Bar mousedown detected at X:', dragStartX);
+          });
+          
+          bar.addEventListener('mouseup', (e) => {
+            if (isDragging && Date.now() - dragStartTime > 100) {
+              const dragEndX = e.clientX;
+              const dragDistance = Math.abs(dragEndX - dragStartX);
+              
+              if (dragDistance > 5) { // Minimum drag threshold
+                console.log('[GANTT FALLBACK] ⚠️ Bar drag detected! Distance:', dragDistance);
+                
+                // Try to find the task ID from the bar element
+                const taskId = bar.getAttribute('data-id') || 
+                               bar.querySelector('.bar')?.getAttribute('data-id') ||
+                               tasks[index]?.id;
+                
+                if (taskId) {
+                  console.log('[GANTT FALLBACK] Task ID found:', taskId);
+                  
+                  // Find the task in our array
+                  const task = tasks.find(t => t.id === taskId);
+                  if (task) {
+                    console.log('[GANTT FALLBACK] 🔧 Manually triggering sync for task:', task.name);
+                    
+                    // Get the updated dates from the Gantt internal state if possible
+                    let updatedTask = task;
+                    if (ganttChart.tasks && Array.isArray(ganttChart.tasks)) {
+                      updatedTask = ganttChart.tasks.find(t => t.id === taskId) || task;
+                    }
+                    
+                    // Manually emit the gantt:changed event
+                    const changePayload = {
+                      deliverableId: updatedTask.deliverable_code || updatedTask.deliverable_id || taskId,
+                      durationDays: calculateDuration(updatedTask.start, updatedTask.end),
+                      start: updatedTask.start,
+                      end: updatedTask.end,
+                      resources: updatedTask.resources || []
+                    };
+                    
+                    console.log('[GANTT FALLBACK] 🔔 Manually emitting gantt:changed event:', changePayload);
+                    document.dispatchEvent(new CustomEvent('gantt:changed', { detail: changePayload }));
+                    
+                    // Also call GanttBridge directly
+                    if (window.GanttBridge && window.GanttBridge.emitChange) {
+                      window.GanttBridge.emitChange(changePayload);
+                    }
+                  }
+                }
+              }
+            }
+            isDragging = false;
+          });
+        });
+      }, 500); // Wait for Gantt to fully render
+      
+      // Also set up a MutationObserver to detect DOM changes that indicate dragging
+      const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          if (mutation.type === 'attributes' && mutation.target.classList.contains('bar')) {
+            console.log('[GANTT DOM] Bar element changed:', mutation);
+            console.log('[GANTT DOM] Changed attribute:', mutation.attributeName);
+            console.log('[GANTT DOM] Old value:', mutation.oldValue);
+          }
+        });
+      });
+      
+      // Observe the Gantt container for changes
+      observer.observe(container, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeOldValue: true,
+        attributeFilter: ['transform', 'x', 'width', 'data-start', 'data-end']
+      });
+      console.log('[GANTT DEBUG] MutationObserver attached to detect bar movements');
+    }
     
     // Apply custom classes for department colors and critical path
     setTimeout(() => {

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Gantt Sync Test</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: #1e293b;
+      color: #e2e8f0;
+    }
+    #gantt {
+      overflow: auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    #logs {
+      margin-top: 20px;
+      padding: 10px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .log-entry {
+      margin: 5px 0;
+      padding: 5px;
+      border-left: 3px solid #3b82f6;
+    }
+    .log-entry.warning {
+      border-left-color: #f59e0b;
+    }
+    .log-entry.error {
+      border-left-color: #ef4444;
+    }
+    .log-entry.success {
+      border-left-color: #10b981;
+    }
+  </style>
+</head>
+<body>
+  <h1>Gantt Chart Synchronization Test</h1>
+  
+  <div id="status" style="margin: 10px 0; padding: 10px; background: #1e40af; border-radius: 4px;">
+    Initializing test...
+  </div>
+  
+  <div id="gantt"></div>
+  
+  <div id="logs">
+    <h3>Debug Logs:</h3>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
+  <script src="/static/js/gantt-bridge.js"></script>
+  <script src="/static/js/scenario-store.js"></script>
+  
+  <script>
+    // Logging utility
+    function log(message, type = 'info') {
+      const logsDiv = document.getElementById('logs');
+      const entry = document.createElement('div');
+      entry.className = 'log-entry ' + type;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logsDiv.appendChild(entry);
+      console.log(message);
+    }
+    
+    // Test tasks
+    const tasks = [
+      {
+        id: 'DEL-001',
+        name: 'Project Kickoff',
+        start: '2024-11-05',
+        end: '2024-11-07',
+        progress: 20,
+        deliverable_code: 'DEL-001',
+        deliverable_id: 'kickoff',
+        hours: 16,
+        resources: ['PM', 'Team Lead']
+      },
+      {
+        id: 'DEL-002',
+        name: 'Strategy Approval',
+        start: '2024-11-08',
+        end: '2024-11-12',
+        progress: 0,
+        deliverable_code: 'DEL-002',
+        deliverable_id: 'strategy',
+        hours: 32,
+        resources: ['Strategy', 'PM']
+      },
+      {
+        id: 'DEL-003',
+        name: 'Creative Development',
+        start: '2024-11-13',
+        end: '2024-11-20',
+        progress: 0,
+        deliverable_code: 'DEL-003',
+        deliverable_id: 'creative',
+        hours: 64,
+        resources: ['Creative', 'Design']
+      }
+    ];
+    
+    // Listen for gantt:changed events
+    document.addEventListener('gantt:changed', (event) => {
+      log('✅ gantt:changed event received!', 'success');
+      log('Payload: ' + JSON.stringify(event.detail, null, 2), 'info');
+      
+      // Show sync status
+      document.getElementById('status').textContent = 'Syncing to backend...';
+      document.getElementById('status').style.background = '#f59e0b';
+      
+      // Simulate backend sync
+      setTimeout(() => {
+        document.getElementById('status').textContent = '✅ Changes synced successfully!';
+        document.getElementById('status').style.background = '#10b981';
+      }, 1000);
+    });
+    
+    // Initialize Gantt
+    log('Starting Gantt initialization...');
+    
+    try {
+      const gantt = new Gantt("#gantt", tasks, {
+        // CRITICAL: These must be false for events to work
+        readonly: false,
+        readonly_dates: false,
+        readonly_progress: false,
+        
+        view_mode: 'Day',
+        date_format: 'YYYY-MM-DD',
+        
+        on_click: function(task) {
+          log(`Task clicked: ${task.name}`, 'info');
+        },
+        
+        on_date_change: function(task, start, end) {
+          log('⚡ on_date_change FIRED!', 'success');
+          log(`Task: ${task.name}`, 'info');
+          log(`Old dates: ${task.start} to ${task.end}`, 'info');
+          log(`New dates: ${start.toISOString().split('T')[0]} to ${end.toISOString().split('T')[0]}`, 'info');
+          
+          // Calculate duration
+          const durationMs = end - start;
+          const durationDays = Math.ceil(durationMs / (1000 * 60 * 60 * 24));
+          
+          // Extract deliverable ID
+          const deliverableId = task.deliverable_code || task.deliverable_id || task.id;
+          
+          // Emit gantt:changed event
+          const changePayload = {
+            deliverableId: deliverableId,
+            durationDays: durationDays,
+            start: start.toISOString().split('T')[0],
+            end: end.toISOString().split('T')[0],
+            resources: task.resources || []
+          };
+          
+          log('📤 Emitting gantt:changed event with payload:', 'warning');
+          log(JSON.stringify(changePayload, null, 2), 'info');
+          
+          document.dispatchEvent(new CustomEvent('gantt:changed', { detail: changePayload }));
+          
+          // Also try GanttBridge
+          if (window.GanttBridge && window.GanttBridge.emitChange) {
+            log('📤 Also calling GanttBridge.emitChange', 'warning');
+            window.GanttBridge.emitChange(changePayload);
+          }
+        },
+        
+        on_progress_change: function(task, progress) {
+          log(`Progress changed for ${task.name}: ${progress}%`, 'info');
+        },
+        
+        on_view_change: function(mode) {
+          log(`View changed to: ${mode}`, 'info');
+        }
+      });
+      
+      log('✅ Gantt initialized successfully!', 'success');
+      log('Options: readonly=' + gantt.options.readonly + ', readonly_dates=' + gantt.options.readonly_dates, 'info');
+      
+      document.getElementById('status').textContent = '✅ Gantt ready! Try dragging the task bars to test synchronization.';
+      document.getElementById('status').style.background = '#10b981';
+      
+      // Add manual drag detection as backup
+      setTimeout(() => {
+        const bars = document.querySelectorAll('.bar-wrapper');
+        log(`Found ${bars.length} task bars for fallback detection`, 'info');
+        
+        bars.forEach((bar, index) => {
+          let isDragging = false;
+          let startX = 0;
+          
+          bar.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX;
+            log(`🖱️ Mouse down on bar ${index}`, 'info');
+          });
+          
+          bar.addEventListener('mouseup', (e) => {
+            if (isDragging && Math.abs(e.clientX - startX) > 5) {
+              log(`🖱️ Drag detected on bar ${index} (fallback)`, 'warning');
+            }
+            isDragging = false;
+          });
+        });
+      }, 500);
+      
+    } catch (error) {
+      log('❌ Error initializing Gantt: ' + error.message, 'error');
+      document.getElementById('status').textContent = '❌ Error initializing Gantt';
+      document.getElementById('status').style.background = '#ef4444';
+    }
+  </script>
+</body>
+</html>
