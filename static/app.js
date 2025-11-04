@@ -920,6 +920,26 @@ async function initializeGanttChart(tasks = []) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
+        
+        // Calculate duration in days
+        const durationMs = end - start;
+        const durationDays = Math.ceil(durationMs / (1000 * 60 * 60 * 24));
+        
+        // Extract deliverable ID from task ID (assuming format like "DEL_xxx" or similar)
+        const deliverableId = task.deliverable_id || task.id.split('_')[0] || task.id;
+        
+        // Emit gantt:changed event for scenario-store to sync with backend
+        const changePayload = {
+          deliverableId: deliverableId,
+          durationDays: durationDays,
+          start: start.toISOString().split('T')[0],
+          end: end.toISOString().split('T')[0],
+          resources: task.resources || []
+        };
+        
+        console.log('Emitting gantt:changed event:', changePayload);
+        document.dispatchEvent(new CustomEvent('gantt:changed', { detail: changePayload }));
+        
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
         if (saveBtn) saveBtn.style.display = '';
