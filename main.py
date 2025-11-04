@@ -6256,6 +6256,103 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
             status_code=500
         )
 
+@app.post("/api/timeline/sync")
+async def api_sync_timeline_to_scenarios(payload: dict):
+    """
+    Sync Gantt timeline changes to _CURRENT_SCENARIOS for XML export.
+    This is the critical bridge that ensures Gantt changes appear in XML exports.
+    """
+    try:
+        scenario_letter = payload.get("scenario", "A")
+        timeline_data = payload.get("timeline", {})
+        deliverable_updates = payload.get("deliverable_updates", [])
+        session_id = payload.get("session_id")
+        
+        print(f"[Timeline Sync] Syncing timeline for scenario {scenario_letter}")
+        print(f"[Timeline Sync] Deliverable updates: {len(deliverable_updates)}")
+        
+        # Get the current scenario from _CURRENT_SCENARIOS
+        if scenario_letter not in _CURRENT_SCENARIOS:
+            print(f"[Timeline Sync] Scenario {scenario_letter} not found in _CURRENT_SCENARIOS")
+            return JSONResponse({"success": False, "error": f"Scenario {scenario_letter} not found"}, status_code=404)
+        
+        scenario = _CURRENT_SCENARIOS[scenario_letter]
+        items = scenario.get("items", [])
+        
+        # Update each deliverable with timeline changes from Gantt
+        for update in deliverable_updates:
+            deliverable_id = update.get("deliverable_id")
+            duration_days = update.get("duration_days")
+            start_date = update.get("start_date")
+            end_date = update.get("end_date")
+            hours_per_day = update.get("hours_per_day", 8)
+            resources = update.get("resources", [])
+            
+            # Find all items for this deliverable
+            for item in items:
+                if item.get("deliverable_code") == deliverable_id or item.get("Deliverable_Code") == deliverable_id:
+                    # Update timeline fields
+                    if duration_days is not None:
+                        item["Duration_Days"] = duration_days
+                        # Recalculate hours based on duration and resources
+                        resource_count = max(1, len(resources) if resources else 1)
+                        new_hours = duration_days * hours_per_day * resource_count
+                        item["Planned_Hours"] = round(new_hours, 2)
+                    
+                    if start_date:
+                        item["Start_Date"] = start_date
+                        # Calculate Start_Offset_Days if project_start is available
+                        if scenario.get("project_start"):
+                            project_start_dt = datetime.datetime.fromisoformat(scenario["project_start"])
+                            start_dt = datetime.datetime.fromisoformat(start_date)
+                            item["Start_Offset_Days"] = (start_dt - project_start_dt).days
+                    
+                    if end_date:
+                        item["End_Date"] = end_date
+                    
+                    if resources:
+                        item["Resources"] = resources
+                    
+                    # Update price based on new hours
+                    rate = item.get("Rate_USD", 195)
+                    item["Price_USD"] = round(item["Planned_Hours"] * rate, 2)
+        
+        # Store timeline metadata
+        scenario["timeline_synced_at"] = datetime.datetime.now().isoformat()
+        scenario["timeline_data"] = timeline_data
+        
+        # Recompute totals
+        scenario = _recompute_totals(scenario)
+        
+        # Save back to _CURRENT_SCENARIOS (this is what XML export uses!)
+        _CURRENT_SCENARIOS[scenario_letter] = scenario
+        
+        # Also update SCENARIO_STORE if session_id provided
+        if session_id and session_id in SCENARIO_STORE:
+            SCENARIO_STORE[session_id] = scenario
+            print(f"[Timeline Sync] Also updated SCENARIO_STORE for session {session_id}")
+        
+        print(f"[Timeline Sync] Successfully synced timeline for scenario {scenario_letter}")
+        print(f"[Timeline Sync] Total items updated: {len(items)}")
+        print(f"[Timeline Sync] New totals - Hours: {scenario['totals']['hours']}, Price: {scenario['totals']['price']}")
+        
+        return {
+            "success": True,
+            "scenario": scenario_letter,
+            "items_updated": len(deliverable_updates),
+            "totals": scenario.get("totals", {}),
+            "message": "Timeline synced successfully to _CURRENT_SCENARIOS for XML export"
+        }
+        
+    except Exception as e:
+        print(f"[Timeline Sync] Error syncing timeline: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
 # ========== Industry Template API Endpoints ==========
 @app.get("/api/industry/templates")
 def get_industry_templates():
