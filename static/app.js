@@ -886,12 +886,15 @@ async function initializeGanttChart(tasks = []) {
   }
   
   try {
-    // Initialize Frappe Gantt
-    ganttChart = new Gantt(container, tasks, {
+    // Initialize Frappe Gantt with drag-enabled configuration
+    const ganttOptions = {
       view_mode: document.getElementById('gantt-view-mode')?.value || 'Day',
       date_format: 'YYYY-MM-DD',
       popup_trigger: 'click',
       language: 'en',
+      readonly: false,           // Enable editing
+      readonly_dates: false,     // Enable date dragging/resizing
+      readonly_progress: false,  // Enable progress bar adjustment
       custom_popup_html: function(task) {
         const start = new Date(task._start);
         const end = new Date(task._end);
@@ -964,7 +967,13 @@ async function initializeGanttChart(tasks = []) {
       on_view_change: function(mode) {
         console.log('View mode changed to:', mode);
       }
-    });
+    };
+    
+    // Debug: Log options to verify callback exists
+    console.log('[Gantt Init] Creating Gantt with options. on_date_change exists?', typeof ganttOptions.on_date_change === 'function');
+    
+    // Create Gantt instance
+    ganttChart = new Gantt(container, tasks, ganttOptions);
     
     // Apply custom classes for department colors and critical path
     setTimeout(() => {
