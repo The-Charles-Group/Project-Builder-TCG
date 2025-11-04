@@ -1,7 +1,21 @@
 from fastapi import Header, HTTPException
 import os
+import secrets
 
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+# Generate a secure default token if ADMIN_TOKEN is not set in environment
+# This token will be consistent for the session but secure by default
+DEFAULT_SECURE_TOKEN = "dev_token_" + secrets.token_urlsafe(24)  # Prefix for easy identification
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", DEFAULT_SECURE_TOKEN)
+
+# Always print token on startup for development (remove in production)
+print("=" * 60)
+print("[LEARNING BRAIN] Admin Authentication Configured")
+if os.getenv("ADMIN_TOKEN") is None:
+    print(f"[LEARNING BRAIN] Using DEFAULT admin token: {ADMIN_TOKEN}")
+    print("[LEARNING BRAIN] Set ADMIN_TOKEN environment variable for production")
+else:
+    print("[LEARNING BRAIN] Using custom ADMIN_TOKEN from environment")
+print("=" * 60)
 
 def require_admin(authorization: str | None = Header(None)):
     if not ADMIN_TOKEN:

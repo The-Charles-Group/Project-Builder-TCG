@@ -9398,17 +9398,147 @@ document.addEventListener('DOMContentLoaded', () => {
 
 window.addEventListener("load", boot);
 
-// LEARN button functionality (Learning Brain integration)
+// Admin Authentication System for Learning Brain
+const AdminAuth = {
+  getToken() {
+    return localStorage.getItem('apb.adminToken');
+  },
+  
+  setToken(token) {
+    localStorage.setItem('apb.adminToken', token);
+    this.updateAdminIndicator();
+  },
+  
+  clearToken() {
+    localStorage.removeItem('apb.adminToken');
+    this.updateAdminIndicator();
+  },
+  
+  isAuthenticated() {
+    return !!this.getToken();
+  },
+  
+  async promptForToken(message = "Enter admin token to access learning features:") {
+    const token = prompt(message);
+    if (!token) return false;
+    
+    // Test the token with a simple status call
+    try {
+      const res = await fetch('/api/brain/status', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (res.ok) {
+        this.setToken(token);
+        alert("✅ Admin authentication successful!");
+        return true;
+      } else if (res.status === 401 || res.status === 403) {
+        alert("❌ Invalid admin token. Please try again.");
+        return false;
+      }
+    } catch (e) {
+      alert("❌ Authentication failed: " + e.message);
+      return false;
+    }
+  },
+  
+  updateAdminIndicator() {
+    // Remove existing indicator if any
+    const existingIndicator = document.getElementById('adminModeIndicator');
+    if (existingIndicator) {
+      existingIndicator.remove();
+    }
+    
+    // Add indicator if authenticated
+    if (this.isAuthenticated()) {
+      const indicator = document.createElement('div');
+      indicator.id = 'adminModeIndicator';
+      indicator.style.cssText = `
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: bold;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        cursor: pointer;
+        transition: transform 0.2s;
+      `;
+      indicator.innerHTML = `
+        <span>🔐 Admin Mode</span>
+        <span style="font-size: 10px; opacity: 0.9;">(click to logout)</span>
+      `;
+      indicator.onmouseover = () => indicator.style.transform = 'scale(1.05)';
+      indicator.onmouseout = () => indicator.style.transform = 'scale(1)';
+      indicator.onclick = () => {
+        if (confirm("Logout from admin mode?")) {
+          this.clearToken();
+          alert("Logged out from admin mode");
+        }
+      };
+      document.body.appendChild(indicator);
+    }
+  },
+  
+  async makeAuthenticatedRequest(url, options = {}) {
+    const token = this.getToken();
+    if (!token) {
+      throw new Error("Not authenticated");
+    }
+    
+    options.headers = options.headers || {};
+    options.headers['Authorization'] = `Bearer ${token}`;
+    
+    const response = await fetch(url, options);
+    
+    // If unauthorized, clear token and prompt again
+    if (response.status === 401 || response.status === 403) {
+      this.clearToken();
+      throw new Error("Authentication expired or invalid");
+    }
+    
+    return response;
+  }
+};
+
+// Initialize admin indicator on page load
+document.addEventListener('DOMContentLoaded', () => {
+  AdminAuth.updateAdminIndicator();
+});
+
+// LEARN button functionality (Learning Brain integration with authentication)
 (function attachLearn(){
   const btn = document.getElementById('learnBtn');
   if (!btn) return;
   btn.addEventListener('click', async () => {
+    // Check authentication first
+    if (!AdminAuth.isAuthenticated()) {
+      const authenticated = await AdminAuth.promptForToken(
+        "🔐 Admin authentication required\n\n" +
+        "Enter the admin token to access learning features.\n" +
+        "(Check server logs for the default token if not configured)"
+      );
+      if (!authenticated) {
+        return;
+      }
+    }
+    
     const rfpText = (window.APB?.step2?.rfpText) || "";
     const selected = Array.from(window.APB?.step2?.selectedCodes || []);
     const components = (window.APB?.selectionStore?.componentsByDeliv)
       ? Object.fromEntries(window.APB.selectionStore.componentsByDeliv) : {};
+    
     try {
-      const res = await fetch("/api/brain/learn", {
+      const res = await AdminAuth.makeAuthenticatedRequest("/api/brain/learn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -9419,10 +9549,20 @@ window.addEventListener("load", boot);
           notes: "learn-from-ui"
         })
       });
-      const data = await res.json();
-      alert("Learning event: " + (data?.message || res.status));
+      
+      if (res.ok) {
+        const data = await res.json();
+        alert("✅ Learning successful!\n\n" + (data?.message || "Data recorded for future improvements"));
+      } else {
+        const error = await res.json();
+        alert("❌ Learning failed: " + (error?.detail || res.statusText));
+      }
     } catch (e) {
-      alert("Learn call failed: " + e);
+      if (e.message.includes("Authentication")) {
+        alert("❌ " + e.message + "\n\nPlease click the Learn button again to re-authenticate.");
+      } else {
+        alert("❌ Learn call failed: " + e.message);
+      }
     }
   });
 })();
