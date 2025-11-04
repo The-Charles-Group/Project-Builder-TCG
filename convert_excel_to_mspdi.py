@@ -514,7 +514,22 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = str(deliverable_num)
             ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = "1"
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
-            ET.SubElement(deliv_task, "{%s}Start" % ns).text = current_date.isoformat()
+            
+            # FIX: Check if first row of deliverable has Start_Date (from Gantt merge)
+            deliverable_start_date = current_date
+            if not group.empty and "Start_Date" in group.columns:
+                first_row_start = group.iloc[0].get("Start_Date")
+                if pd.notna(first_row_start):
+                    try:
+                        start_val = str(first_row_start)
+                        if 'T' in start_val:
+                            deliverable_start_date = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
+                        else:
+                            deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                    except Exception as e:
+                        logging.warning(f"Could not parse deliverable Start_Date '{first_row_start}': {e}")
+            
+            ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
             ET.SubElement(deliv_task, "{%s}EffortDriven" % ns).text = "0"
@@ -539,8 +554,8 @@ def convert_excel_to_mspdi(
                 ET.SubElement(ext_attrs, "{%s}Value" % ns).text = deliv_code
             
             # Process component/task rows under this deliverable
-            deliverable_start = current_date
-            deliverable_finish = current_date
+            deliverable_start = deliverable_start_date  # Use merged start date from Gantt
+            deliverable_finish = deliverable_start_date
             component_num = 0
             prev_task_uid = None  # Track previous task for dependencies
             
@@ -570,9 +585,44 @@ def convert_excel_to_mspdi(
                     hours = float(planned_hours)
                     duration_days = max(1, int(np.ceil(hours / hours_per_day)))
                     
-                    # Calculate dates
-                    task_start = current_date
-                    task_end = add_business_days(task_start, duration_days)
+                    # FIX: Use merged timeline dates (Start_Date/End_Date) from Gantt if available
+                    # Only fall back to calculated dates if missing
+                    task_start = None
+                    task_end = None
+                    
+                    # Check for Start_Date field (from Gantt merge)
+                    if "Start_Date" in row.index and pd.notna(row.get("Start_Date")):
+                        try:
+                            start_val = str(row.get("Start_Date"))
+                            # Handle ISO format: 2025-11-16 or 2025-11-16T01:00:00
+                            if 'T' in start_val:
+                                task_start = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
+                            else:
+                                # Date only - add default 9 AM time
+                                task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                            logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
+                        except Exception as e:
+                            logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
+                    
+                    # Check for End_Date field (from Gantt merge)
+                    if "End_Date" in row.index and pd.notna(row.get("End_Date")):
+                        try:
+                            end_val = str(row.get("End_Date"))
+                            # Handle ISO format: 2025-11-27 or 2025-11-27T17:00:00
+                            if 'T' in end_val:
+                                task_end = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
+                            else:
+                                # Date only - add default 5 PM time
+                                task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
+                            logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
+                        except Exception as e:
+                            logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
+                    
+                    # Fall back to calculated dates if Start_Date/End_Date missing
+                    if task_start is None:
+                        task_start = current_date
+                    if task_end is None:
+                        task_end = add_business_days(task_start, duration_days)
                     
                     # Add task elements with enhanced WBS
                     ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
