@@ -2761,15 +2761,16 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     print(f"[WBS Builder] Has timeline_tasks: {'timeline_tasks' in scenario}")
     print(f"[WBS Builder] Has timeline: {'timeline' in scenario}")
 
-    # MERGE TIMELINE DATA: Copy Start_Date from timeline tasks into deliverables
-    # Support both formats: timeline.tasks (AI-generated) and timeline_tasks (manual Gantt saves)
+    # MERGE TIMELINE DATA: Copy Start_Date/End_Date from timeline tasks into deliverables
+    # Support both formats: timeline_tasks (manual Gantt saves) and timeline.tasks (AI-generated)
+    # IMPORTANT: Check timeline_tasks FIRST since it has priority over AI-generated timeline
     timeline_tasks = []
-    if "timeline" in scenario and scenario["timeline"]:
-        timeline_tasks = scenario["timeline"].get("tasks", [])
-        print(f"[WBS Builder] Using timeline.tasks format (AI-generated)")
-    elif "timeline_tasks" in scenario:
+    if "timeline_tasks" in scenario and scenario["timeline_tasks"]:
         timeline_tasks = scenario["timeline_tasks"]
         print(f"[WBS Builder] Using timeline_tasks format (manual Gantt saves)")
+    elif "timeline" in scenario and scenario["timeline"]:
+        timeline_tasks = scenario["timeline"].get("tasks", [])
+        print(f"[WBS Builder] Using timeline.tasks format (AI-generated)")
     else:
         print(f"[WBS Builder] ⚠️ NO TIMELINE DATA FOUND - skipping merge")
     
