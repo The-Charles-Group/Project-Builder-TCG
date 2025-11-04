@@ -4620,6 +4620,7 @@ async function buildFromCurrentSelection() {
     project_start: window.getProjectStartFromUI?.() || null,
     client_budget_usd: window.getClientBudgetFromUI?.() || null,
     project_name: document.getElementById('projectName')?.value || null,
+    session_id: window.SessionManager ? window.SessionManager.getCurrentSessionId() : null,
     scenario_a: window.getScenarioSpecAFromUI?.() || { mode: 'template', scenario_key: 'MED_LOW' },
     retainers: retainersPayload
   };
@@ -8239,7 +8240,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const payload = { 
       ...window.__lastBuildPayload, 
       selected_deliverable_codes: selectedCodes,
-      project_name: document.getElementById('projectName')?.value || window.__lastBuildPayload.project_name || null
+      project_name: document.getElementById('projectName')?.value || window.__lastBuildPayload.project_name || null,
+      session_id: window.SessionManager ? window.SessionManager.getCurrentSessionId() : null
     };
     const r = await fetch('/api/build', {
       method: 'POST',
@@ -9076,7 +9078,8 @@ async function s2ApplyAndBuild() {
     slack_after_client: slackC,
     slack_global_pct: slackPct,
     project_start: projectStart,
-    project_name: document.getElementById('projectName')?.value || null
+    project_name: document.getElementById('projectName')?.value || null,
+    session_id: window.SessionManager ? window.SessionManager.getCurrentSessionId() : null
   };
 
   const res = await fetch('/api/build', {

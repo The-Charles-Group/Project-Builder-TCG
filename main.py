@@ -3169,6 +3169,7 @@ class BuildPayload(BaseModel):
     project_start: Optional[str] = None     # ISO8601 format (e.g., "2025-10-06T09:00:00" or "YYYY-MM-DD")
     client_budget_usd: Optional[float] = None  # Client budget for budget analysis
     project_name: Optional[str] = None      # Project name from frontend input for exports
+    session_id: Optional[str] = None        # For saving to SCENARIO_STORE (enables Gantt sync)
     # NEW: monthly retainers selected on the second screen
     retainers: Optional[List[RetainerSelection]] = []
     # NEW: component-level selection per deliverable (supports multiple formats including "__ALL__" sentinel)
@@ -5611,6 +5612,14 @@ def api_build(payload: BuildPayload):
             "coverage_pct": round(coverage_pct, 1),
             "scale_factor_if_fit": round(scale_factor, 3)
         }
+    
+    # Save to SCENARIO_STORE if session_id provided (enables Gantt sync)
+    if payload.session_id:
+        scenario_data = scenarios["A"].copy()
+        scenario_data['session_id'] = payload.session_id
+        scenario_data['last_saved'] = datetime.datetime.now().isoformat()
+        SCENARIO_STORE[payload.session_id] = scenario_data
+        print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} (enables Gantt updates)")
     
     # Return scenarios (A only)
     return {"scenarios": scenarios}
