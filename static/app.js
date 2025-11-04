@@ -230,6 +230,9 @@ document.addEventListener('DOMContentLoaded', function() {
   if (selector) {
     selector.addEventListener('change', handleIndustrySelection);
   }
+  
+  // Initialize PDF download button event listeners
+  initializePDFDownloadButton();
 });
 
 async function handleIndustrySelection() {
@@ -990,6 +993,9 @@ async function initializeGanttChart(tasks = []) {
           }
         }
       });
+      
+      // Show PDF download button after Gantt is successfully rendered
+      showPDFDownloadButton();
     }, 100);
     
   } catch (error) {
@@ -1021,6 +1027,358 @@ function calculateDuration(start, end) {
   const startDate = new Date(start);
   const endDate = new Date(end);
   return Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+}
+
+// ================================================================================
+// Gantt Chart PDF Export Functions
+// ================================================================================
+
+// Show PDF button after Gantt chart is successfully rendered
+function showPDFDownloadButton() {
+  const pdfButton = document.getElementById('gantt-pdf-button');
+  if (pdfButton) {
+    pdfButton.style.display = 'block';
+  }
+}
+
+// Initialize PDF download button event listeners
+function initializePDFDownloadButton() {
+  const downloadBtn = document.getElementById('pdf-download-btn');
+  const dropdown = document.getElementById('pdf-dropdown');
+  const pdfOptions = document.querySelectorAll('.pdf-option');
+  
+  if (!downloadBtn || !dropdown) return;
+  
+  // Toggle dropdown on button click
+  downloadBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+  });
+  
+  // Close dropdown when clicking outside
+  document.addEventListener('click', function() {
+    dropdown.style.display = 'none';
+  });
+  
+  // Prevent dropdown from closing when clicking inside it
+  dropdown.addEventListener('click', function(e) {
+    e.stopPropagation();
+  });
+  
+  // Handle PDF option selection
+  pdfOptions.forEach(option => {
+    option.addEventListener('click', function() {
+      const view = this.getAttribute('data-view');
+      dropdown.style.display = 'none';
+      
+      // Generate PDF based on selected view
+      if (view === 'daily') {
+        generateDailyPDF();
+      } else if (view === 'weekly') {
+        generateWeeklyPDF();
+      } else if (view === 'monthly') {
+        generateMonthlyPDF();
+      }
+    });
+    
+    // Add hover effect
+    option.addEventListener('mouseenter', function() {
+      this.style.background = 'rgba(139, 92, 246, 0.2)';
+    });
+    option.addEventListener('mouseleave', function() {
+      this.style.background = 'transparent';
+    });
+  });
+}
+
+// Helper function to get project info
+function getProjectInfo() {
+  const projectNameInput = document.getElementById('projectName');
+  const projectName = projectNameInput ? projectNameInput.value || 'Untitled Project' : 'Untitled Project';
+  
+  // Get date range from tasks
+  if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
+    return {
+      name: projectName,
+      startDate: new Date().toISOString().split('T')[0],
+      endDate: new Date().toISOString().split('T')[0]
+    };
+  }
+  
+  const tasks = window.currentTimelineTasks;
+  const dates = tasks.map(t => new Date(t.start)).concat(tasks.map(t => new Date(t.end)));
+  const minDate = new Date(Math.min(...dates));
+  const maxDate = new Date(Math.max(...dates));
+  
+  return {
+    name: projectName,
+    startDate: minDate.toISOString().split('T')[0],
+    endDate: maxDate.toISOString().split('T')[0]
+  };
+}
+
+// Helper function to format date for display
+function formatDate(dateStr) {
+  const date = new Date(dateStr);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
+
+// Helper function to generate date columns for timeline
+function generateDateColumns(startDate, endDate, groupBy) {
+  const columns = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  
+  if (groupBy === 'day') {
+    let current = new Date(start);
+    while (current <= end) {
+      columns.push({
+        date: new Date(current),
+        label: `${current.getMonth() + 1}/${current.getDate()}`
+      });
+      current.setDate(current.getDate() + 1);
+    }
+  } else if (groupBy === 'week') {
+    let current = new Date(start);
+    let weekNum = 1;
+    while (current <= end) {
+      columns.push({
+        date: new Date(current),
+        label: `W${weekNum}`
+      });
+      current.setDate(current.getDate() + 7);
+      weekNum++;
+    }
+  } else if (groupBy === 'month') {
+    let current = new Date(start.getFullYear(), start.getMonth(), 1);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    while (current <= end) {
+      columns.push({
+        date: new Date(current),
+        label: `${months[current.getMonth()]} ${current.getFullYear()}`
+      });
+      current.setMonth(current.getMonth() + 1);
+    }
+  }
+  
+  return columns;
+}
+
+// Generate Daily PDF
+function generateDailyPDF() {
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    alert('PDF library not loaded. Please refresh the page and try again.');
+    return;
+  }
+  
+  if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
+    alert('No timeline data available. Please generate a timeline first.');
+    return;
+  }
+  
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF('l', 'mm', 'a4'); // Landscape orientation
+  const projectInfo = getProjectInfo();
+  
+  // Title
+  doc.setFontSize(16);
+  doc.text(projectInfo.name, 15, 15);
+  
+  // Date range
+  doc.setFontSize(10);
+  doc.text(`Timeline: ${formatDate(projectInfo.startDate)} - ${formatDate(projectInfo.endDate)}`, 15, 22);
+  doc.text('View: Daily', 15, 28);
+  
+  // Generate date columns
+  const dateColumns = generateDateColumns(projectInfo.startDate, projectInfo.endDate, 'day');
+  
+  // Prepare table data
+  const tableData = window.currentTimelineTasks.map(task => {
+    const row = [task.name];
+    const taskStart = new Date(task.start);
+    const taskEnd = new Date(task.end);
+    
+    // Add timeline bars for each date column
+    dateColumns.forEach(col => {
+      const colDate = col.date;
+      if (colDate >= taskStart && colDate <= taskEnd) {
+        row.push('■'); // Task bar indicator
+      } else {
+        row.push('');
+      }
+    });
+    
+    return row;
+  });
+  
+  // Table headers
+  const headers = [['Deliverable', ...dateColumns.map(c => c.label)]];
+  
+  // Generate table
+  doc.autoTable({
+    head: headers,
+    body: tableData,
+    startY: 35,
+    theme: 'grid',
+    styles: { fontSize: 7, cellPadding: 1.5 },
+    headStyles: { fillColor: [102, 126, 234], fontSize: 7 },
+    columnStyles: {
+      0: { cellWidth: 50, fontStyle: 'bold' }
+    },
+    margin: { left: 15, right: 15 }
+  });
+  
+  // Save PDF
+  doc.save(`${projectInfo.name}_Daily_Timeline.pdf`);
+}
+
+// Generate Weekly PDF
+function generateWeeklyPDF() {
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    alert('PDF library not loaded. Please refresh the page and try again.');
+    return;
+  }
+  
+  if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
+    alert('No timeline data available. Please generate a timeline first.');
+    return;
+  }
+  
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF('l', 'mm', 'a4');
+  const projectInfo = getProjectInfo();
+  
+  // Title
+  doc.setFontSize(16);
+  doc.text(projectInfo.name, 15, 15);
+  
+  // Date range
+  doc.setFontSize(10);
+  doc.text(`Timeline: ${formatDate(projectInfo.startDate)} - ${formatDate(projectInfo.endDate)}`, 15, 22);
+  doc.text('View: Weekly', 15, 28);
+  
+  // Generate week columns
+  const weekColumns = generateDateColumns(projectInfo.startDate, projectInfo.endDate, 'week');
+  
+  // Prepare table data
+  const tableData = window.currentTimelineTasks.map(task => {
+    const row = [task.name, formatDate(task.start), formatDate(task.end)];
+    const taskStart = new Date(task.start);
+    const taskEnd = new Date(task.end);
+    
+    // Add timeline bars for each week
+    weekColumns.forEach(col => {
+      const weekStart = new Date(col.date);
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      
+      // Check if task overlaps with this week
+      if (taskStart <= weekEnd && taskEnd >= weekStart) {
+        row.push('■■'); // Task bar indicator
+      } else {
+        row.push('');
+      }
+    });
+    
+    return row;
+  });
+  
+  // Table headers
+  const headers = [['Deliverable', 'Start', 'End', ...weekColumns.map(c => c.label)]];
+  
+  // Generate table
+  doc.autoTable({
+    head: headers,
+    body: tableData,
+    startY: 35,
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [102, 126, 234], fontSize: 8 },
+    columnStyles: {
+      0: { cellWidth: 45, fontStyle: 'bold' },
+      1: { cellWidth: 25 },
+      2: { cellWidth: 25 }
+    },
+    margin: { left: 15, right: 15 }
+  });
+  
+  // Save PDF
+  doc.save(`${projectInfo.name}_Weekly_Timeline.pdf`);
+}
+
+// Generate Monthly PDF
+function generateMonthlyPDF() {
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    alert('PDF library not loaded. Please refresh the page and try again.');
+    return;
+  }
+  
+  if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
+    alert('No timeline data available. Please generate a timeline first.');
+    return;
+  }
+  
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF('l', 'mm', 'a4');
+  const projectInfo = getProjectInfo();
+  
+  // Title
+  doc.setFontSize(16);
+  doc.text(projectInfo.name, 15, 15);
+  
+  // Date range
+  doc.setFontSize(10);
+  doc.text(`Timeline: ${formatDate(projectInfo.startDate)} - ${formatDate(projectInfo.endDate)}`, 15, 22);
+  doc.text('View: Monthly', 15, 28);
+  
+  // Generate month columns
+  const monthColumns = generateDateColumns(projectInfo.startDate, projectInfo.endDate, 'month');
+  
+  // Prepare table data
+  const tableData = window.currentTimelineTasks.map(task => {
+    const row = [task.name, formatDate(task.start), formatDate(task.end), `${task.hours || 0}h`];
+    const taskStart = new Date(task.start);
+    const taskEnd = new Date(task.end);
+    
+    // Add timeline bars for each month
+    monthColumns.forEach(col => {
+      const monthStart = new Date(col.date);
+      const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
+      
+      // Check if task overlaps with this month
+      if (taskStart <= monthEnd && taskEnd >= monthStart) {
+        row.push('■■■'); // Task bar indicator
+      } else {
+        row.push('');
+      }
+    });
+    
+    return row;
+  });
+  
+  // Table headers
+  const headers = [['Deliverable', 'Start', 'End', 'Hours', ...monthColumns.map(c => c.label)]];
+  
+  // Generate table
+  doc.autoTable({
+    head: headers,
+    body: tableData,
+    startY: 35,
+    theme: 'grid',
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [102, 126, 234], fontSize: 8 },
+    columnStyles: {
+      0: { cellWidth: 50, fontStyle: 'bold' },
+      1: { cellWidth: 25 },
+      2: { cellWidth: 25 },
+      3: { cellWidth: 18 }
+    },
+    margin: { left: 15, right: 15 }
+  });
+  
+  // Save PDF
+  doc.save(`${projectInfo.name}_Monthly_Timeline.pdf`);
 }
 
 // ================================================================================

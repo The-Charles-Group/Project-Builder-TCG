@@ -615,6 +615,24 @@
           
           <!-- Gantt Chart SVG will be rendered here -->
           <svg id="gantt"></svg>
+          
+          <!-- PDF Download Button (floating, hidden by default) -->
+          <div id="gantt-pdf-button" style="position:absolute; bottom:20px; right:20px; z-index:1000; display:none;">
+            <button id="pdf-download-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 20px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; gap: 8px;">
+              📥 Download PDF
+            </button>
+            <div id="pdf-dropdown" style="position:absolute; bottom:50px; right:0; background: #1a1a1a; border: 1px solid #4a5568; border-radius: 8px; padding: 8px; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); display:none;">
+              <button class="pdf-option" data-view="daily" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; margin-bottom: 4px; font-size: 0.9em;">
+                📅 Daily View
+              </button>
+              <button class="pdf-option" data-view="weekly" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; margin-bottom: 4px; font-size: 0.9em;">
+                📊 Weekly View
+              </button>
+              <button class="pdf-option" data-view="monthly" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; font-size: 0.9em;">
+                📈 Monthly View
+              </button>
+            </div>
+          </div>
         </div>
         
         <!-- AI Reasoning Panel (initially hidden) -->
@@ -3301,5 +3319,9 @@
       }, 500);
     });
   </script>
+  
+  <!-- jsPDF Libraries for Gantt Chart PDF Export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
 </body>
 </html>
