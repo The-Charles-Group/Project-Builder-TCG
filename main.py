@@ -1,5 +1,6 @@
 import os, re, io, math, json, datetime, urllib.parse, tempfile, base64
 import uuid
+import importlib
 import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
@@ -7558,6 +7559,10 @@ def _export_single_scenario_xml(
         
         # Convert to MSPDI XML
         project_start_iso = scenario.get("project_start")
+        
+        # Force reload of convert_excel_to_mspdi module to pick up any code changes
+        import convert_excel_to_mspdi as mspdi_module
+        importlib.reload(mspdi_module)
         
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
