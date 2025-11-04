@@ -532,6 +532,8 @@ def convert_excel_to_mspdi(
             
             # FIX: Check if first row of deliverable has Start_Date (from Gantt merge)
             deliverable_start_date = current_date
+            deliverable_end_date = None  # Will be set from Gantt or calculated
+            
             if not group.empty and "Start_Date" in group.columns:
                 first_row_start = group.iloc[0].get("Start_Date")
                 if pd.notna(first_row_start):
@@ -541,8 +543,23 @@ def convert_excel_to_mspdi(
                             deliverable_start_date = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
                         else:
                             deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                        logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
                     except Exception as e:
                         logging.warning(f"Could not parse deliverable Start_Date '{first_row_start}': {e}")
+            
+            # FIX: Check if first row of deliverable has End_Date (from Gantt merge)
+            if not group.empty and "End_Date" in group.columns:
+                first_row_end = group.iloc[0].get("End_Date")
+                if pd.notna(first_row_end):
+                    try:
+                        end_val = str(first_row_end)
+                        if 'T' in end_val:
+                            deliverable_end_date = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
+                        else:
+                            deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
+                        logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
+                    except Exception as e:
+                        logging.warning(f"Could not parse deliverable End_Date '{first_row_end}': {e}")
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
@@ -570,7 +587,8 @@ def convert_excel_to_mspdi(
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
-            deliverable_finish = deliverable_start_date
+            # Use merged end date from Gantt if available, otherwise will be calculated from child tasks
+            deliverable_finish = deliverable_end_date if deliverable_end_date else deliverable_start_date
             component_num = 0
             prev_task_uid = None  # Track previous task for dependencies
             
@@ -737,9 +755,11 @@ def convert_excel_to_mspdi(
                             ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
                             ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
                     
-                    # Track deliverable finish date
-                    if task_end > deliverable_finish:
-                        deliverable_finish = task_end
+                    # Track deliverable finish date (only if not already set from Gantt)
+                    # If user set End_Date in Gantt, respect that value
+                    if deliverable_end_date is None:
+                        if task_end > deliverable_finish:
+                            deliverable_finish = task_end
                     
                     # Update current date for next task
                     current_date = task_end
