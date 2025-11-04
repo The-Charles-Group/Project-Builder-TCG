@@ -589,6 +589,24 @@
             📊 AI Reasoning
           </button>
           <button id="btn-save-timeline" class="btn-sm" style="display:none;">Save Changes</button>
+          
+          <!-- PDF Download Button -->
+          <div id="gantt-pdf-button" style="position:relative; display:none;">
+            <button id="pdf-download-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; display: flex; align-items: center; gap: 6px;">
+              📥 PDF
+            </button>
+            <div id="pdf-dropdown" style="position:absolute; bottom:100%; right:0; margin-bottom:4px; background: #1a1a1a; border: 1px solid #4a5568; border-radius: 8px; padding: 8px; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); display:none; z-index:1000;">
+              <button class="pdf-option" data-view="daily" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; margin-bottom: 4px; font-size: 0.9em;">
+                📅 Daily View
+              </button>
+              <button class="pdf-option" data-view="weekly" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; margin-bottom: 4px; font-size: 0.9em;">
+                📊 Weekly View
+              </button>
+              <button class="pdf-option" data-view="monthly" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; font-size: 0.9em;">
+                📈 Monthly View
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       
@@ -677,24 +695,6 @@
             <ul id="ai-risks" style="list-style:none; padding:0; margin:0;">
               <li style="font-size:0.85em; color:var(--muted); padding:6px 0;">Evaluating risks...</li>
             </ul>
-          </div>
-          
-          <!-- PDF Download Button (inside AI panel at bottom) -->
-          <div id="gantt-pdf-button" style="position:relative; margin-top:20px; display:none;">
-            <button id="pdf-download-btn" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 20px; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; gap: 8px; width: 100%; justify-content: center;">
-              📥 Download PDF
-            </button>
-            <div id="pdf-dropdown" style="position:absolute; top:-128px; right:0; background: #1a1a1a; border: 1px solid #4a5568; border-radius: 8px; padding: 8px; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); display:none;">
-              <button class="pdf-option" data-view="daily" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; margin-bottom: 4px; font-size: 0.9em;">
-                📅 Daily View
-              </button>
-              <button class="pdf-option" data-view="weekly" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; margin-bottom: 4px; font-size: 0.9em;">
-                📊 Weekly View
-              </button>
-              <button class="pdf-option" data-view="monthly" style="width:100%; text-align:left; padding: 10px 12px; background: transparent; color: white; border: none; cursor: pointer; border-radius: 4px; font-size: 0.9em;">
-                📈 Monthly View
-              </button>
-            </div>
           </div>
         </div>
       </div>
