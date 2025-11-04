@@ -3009,6 +3009,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Planned_Hours": (monthly_hours * months) if months else parent_hours_display,
                 "Start_Offset_Days": dstart,
                 "Duration_Days": (total_deliv_duration * months) if months else total_deliv_duration,
+                "Start_Date": d.get("Start_Date", ""),
+                "End_Date": d.get("End_Date", ""),
                 "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": deliv_notes,
                 "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
                 "Price_USD": round(deliv_price, 2),
