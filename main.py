@@ -789,6 +789,7 @@ WF_COLUMNS = [
     "Service Department",            # <-- exact header, its own column
     "Role", "Seniority",
     "Planned_Hours", "Start_Offset_Days", "Duration_Days",
+    "Start_Date", "End_Date",
     "Dependencies", "Assignee_External_ID", "Notes",
     "Rate_USD", "Price_USD"
 ]
