@@ -2915,6 +2915,20 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             # deliv_label already set above with database fallback - don't override it
             deliv_notes = f'{d.get("complexity","")}/{d.get("tier","")}' + (f' | Retainer x{months} months' if months else '')
             total_deliv_duration = sum(int(t["duration_days"]) for t in schedule)  # one-cycle length
+            
+            # FIX B: Respect Step 4 Gantt overrides (Start_Offset_Days or Start_Date)
+            dstart = day_cursor  # default sequential start
+            try:
+                if str(d.get("Start_Offset_Days", "")).strip() != "":
+                    dstart = int(float(d["Start_Offset_Days"]))
+                elif d.get("Start_Date") and scenario.get("project_start"):
+                    import datetime
+                    ps = datetime.date.fromisoformat(str(scenario["project_start"])[:10])
+                    sd = datetime.date.fromisoformat(str(d["Start_Date"])[:10])
+                    dstart = (sd - ps).days
+            except Exception:
+                pass  # fall back to sequential start on any parse issue
+            
             rows.append({
                 "Row_ID": "",
                 "Deliverable_Code": dcode,
@@ -2925,7 +2939,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Task_Name": deliv_label,
                 "Component": "", "Task": "", "Role": "", "Seniority": "",
                 "Planned_Hours": (monthly_hours * months) if months else parent_hours_display,
-                "Start_Offset_Days": day_cursor,
+                "Start_Offset_Days": dstart,
                 "Duration_Days": (total_deliv_duration * months) if months else total_deliv_duration,
                 "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": deliv_notes,
                 "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
@@ -2980,7 +2994,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Project_Name": project_name, "WBS_ID": wbs_comp, "Parent_WBS_ID": wbs_deliv,
                     "Task_Name": comp, "Component": comp, "Task": "", "Role": "", "Seniority": "",
                     "Planned_Hours": comp_hours_total_display,
-                    "Start_Offset_Days": day_cursor + comp_offset,
+                    "Start_Offset_Days": dstart + comp_offset,
                     "Duration_Days": (comp_duration * months) if months else comp_duration,
                     "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs),
                     "Assignee_External_ID": "", "Notes": "",
@@ -3009,7 +3023,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         task_ordinal = (month_idx-1)*total_tasks_per_month + k
                         wbs_task = f"{wbs_comp}.{task_ordinal}"
 
-                        base_offset = day_cursor + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
+                        base_offset = dstart + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
 
                         rows.append({
                             "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
@@ -3095,7 +3109,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
                 prev_comp_wbs = wbs_comp
 
-            day_cursor += total_deliv_duration
+            # Advance cursor based on actual start used (preserves ordering for next deliverable)
+            day_cursor = max(day_cursor, dstart) + total_deliv_duration
             prev_deliv_wbs = wbs_deliv
 
     df = pd.DataFrame(rows)
@@ -7502,7 +7517,8 @@ def api_export_xml_scenario_a(add_anchors: bool = False, session_id: Optional[st
     return FileResponse(
         final_xml,
         filename=os.path.basename(final_xml),
-        media_type="application/xml"
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{os.path.basename(final_xml)}"'}
     )
 
 @app.get("/api/export/xml/b")
@@ -7526,7 +7542,8 @@ def api_export_xml_scenario_b(add_anchors: bool = False, session_id: Optional[st
     return FileResponse(
         final_xml,
         filename=os.path.basename(final_xml),
-        media_type="application/xml"
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{os.path.basename(final_xml)}"'}
     )
 
 @app.get("/api/export/xml/c")
@@ -7550,7 +7567,8 @@ def api_export_xml_scenario_c(add_anchors: bool = False, session_id: Optional[st
     return FileResponse(
         final_xml,
         filename=os.path.basename(final_xml),
-        media_type="application/xml"
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{os.path.basename(final_xml)}"'}
     )
 
 @app.get("/api/export/xml/all")
