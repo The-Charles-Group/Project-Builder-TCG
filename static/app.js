@@ -903,14 +903,7 @@ async function initializeGanttChart(tasks = []) {
             <p style="margin:4px 0;"><strong>Department:</strong> ${task.department || 'N/A'}</p>
             <p style="margin:4px 0;"><strong>Start:</strong> ${task.start}</p>
             <p style="margin:4px 0;"><strong>End:</strong> ${task.end}</p>
-            <p style="margin:4px 0;">
-              <strong>Duration:</strong> ${duration} days
-              <button onclick="enableDurationEdit('${task.id}')" 
-                      style="margin-left: 8px; padding: 2px 6px; background: var(--accent); 
-                             border: none; border-radius: 3px; color: white; cursor: pointer; font-size: 0.85em;">
-                Edit
-              </button>
-            </p>
+            <p style="margin:4px 0;"><strong>Duration:</strong> ${duration} days</p>
             <p style="margin:4px 0;"><strong>Hours:</strong> ${task.hours || 0}</p>
             ${task.critical_path ? '<p style="margin:4px 0;color:#fbbf24;"><strong>⚡ Critical Path</strong></p>' : ''}
           </div>
@@ -1363,10 +1356,8 @@ function updatePricingTable() {
     // Get tasks list
     const tasks = extractDeliverableTasks(item);
     
-    // Update grand total - ensure totalPrice is valid
-    if (!isNaN(totalPrice) && totalPrice > 0) {
-      grandTotal += totalPrice;
-    }
+    // Update grand total
+    grandTotal += totalPrice;
     
     // Determine row background (alternating + highlight for recurring)
     const isRecurring = cadenceType !== 'ONE_TIME';
@@ -2127,19 +2118,8 @@ async function updatePricing() {
   }
 }
 
-// Track manual edits for visual indicators
-let manuallyEditedFields = new Set();
-
 // Re-build scenario with current pricing settings
-async function rebuildScenario(resetManualEdits = false) {
-  if (resetManualEdits) {
-    // Clear all manual edits and reset to original values
-    pricingData.customHours.clear();
-    pricingData.customRates.clear();
-    manuallyEditedFields.clear();
-    console.log('[REBUILD] Cleared all manual pricing overrides');
-  }
-  
+async function rebuildScenario() {
   // Try to load from memory or localStorage
   let scenariosToUse = window.SCENARIOS;
   
@@ -3976,120 +3956,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   
-  // Inline editing functions for timeline durations
-  window.enableDurationEdit = function(taskId) {
-    const taskData = currentTimelineTasks.find(t => t.id === taskId);
-    if (!taskData) return;
-    
-    // Find the duration display element
-    const popup = document.querySelector('.gantt-popup');
-    if (!popup) return;
-    
-    const durationElement = Array.from(popup.querySelectorAll('p')).find(p => p.textContent.includes('Duration:'));
-    if (!durationElement) return;
-    
-    const currentDuration = taskData.duration || 1;
-    
-    // Replace with input
-    durationElement.innerHTML = `
-      <strong>Duration:</strong> 
-      <input type="number" id="duration-edit-${taskId}" 
-             value="${currentDuration}" 
-             min="1" max="365" 
-             style="width: 60px; padding: 2px 4px; background: rgba(139,92,246,0.1); 
-                    border: 1px solid rgba(139,92,246,0.3); color: white; border-radius: 4px;"
-             onkeydown="if(event.key==='Enter') saveDurationEdit('${taskId}')"
-             onblur="saveDurationEdit('${taskId}')" /> days
-      <button onclick="saveDurationEdit('${taskId}')" 
-              style="margin-left: 4px; padding: 2px 6px; background: var(--accent); 
-                     border: none; border-radius: 3px; color: white; cursor: pointer;">✓</button>
-    `;
-    
-    // Focus input
-    const input = document.getElementById(`duration-edit-${taskId}`);
-    if (input) {
-      input.focus();
-      input.select();
-    }
-  };
-
-  window.saveDurationEdit = async function(taskId) {
-    const input = document.getElementById(`duration-edit-${taskId}`);
-    if (!input) return;
-    
-    const newDuration = parseInt(input.value);
-    if (isNaN(newDuration) || newDuration < 1) {
-      alert('Duration must be at least 1 day');
-      return;
-    }
-    
-    // Update task data
-    const taskIndex = currentTimelineTasks.findIndex(t => t.id === taskId);
-    if (taskIndex === -1) return;
-    
-    const task = currentTimelineTasks[taskIndex];
-    const oldDuration = task.duration || 1;
-    const durationChange = newDuration - oldDuration;
-    
-    // Update duration
-    task.duration = newDuration;
-    
-    // Recalculate end date
-    const startDate = new Date(task.start);
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + newDuration - 1);
-    task.end = endDate.toISOString().split('T')[0];
-    
-    // Update dependent tasks (move subsequent tasks if needed)
-    if (task.dependencies && task.dependencies.length > 0) {
-      updateDependentTasks(task, durationChange);
-    }
-    
-    // Refresh the Gantt chart
-    if (ganttChart) {
-      ganttChart.refresh(currentTimelineTasks);
-    }
-    
-    // Update server
-    try {
-      await fetch('/api/update_timeline', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          task_id: taskId,
-          duration: newDuration,
-          tasks: currentTimelineTasks
-        })
-      });
-      console.log(`[TIMELINE] Duration updated for task ${taskId}: ${oldDuration} -> ${newDuration} days`);
-    } catch (err) {
-      console.error('[TIMELINE] Failed to save duration change:', err);
-    }
-    
-    // Close popup to refresh
-    const popup = document.querySelector('.gantt-popup');
-    if (popup) popup.style.display = 'none';
-  };
-
-  function updateDependentTasks(changedTask, durationChange) {
-    // Find tasks that depend on this task
-    currentTimelineTasks.forEach(task => {
-      if (task.dependencies && task.dependencies.includes(changedTask.id)) {
-        // Move this task by the duration change
-        const startDate = new Date(task.start);
-        startDate.setDate(startDate.getDate() + durationChange);
-        task.start = startDate.toISOString().split('T')[0];
-        
-        const endDate = new Date(task.end);
-        endDate.setDate(endDate.getDate() + durationChange);
-        task.end = endDate.toISOString().split('T')[0];
-        
-        // Recursively update tasks that depend on this one
-        updateDependentTasks(task, durationChange);
-      }
-    });
-  }
-
   // Save timeline changes
   const btnSave = document.getElementById('btn-save-timeline');
   if (btnSave) {

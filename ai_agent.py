@@ -649,8 +649,8 @@ Return a JSON object with the parsed command."""
                     {"role": "user", "content": user_prompt}
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=2000
-                # temperature=1.0 is default for GPT-4, no need to specify
+                max_tokens=2000,
+                temperature=0.3
             )
             
             parsed = json.loads(response.choices[0].message.content)
