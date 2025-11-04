@@ -2754,6 +2754,37 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     items = scenario.get("items", [])
     order_map = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
 
+    # MERGE TIMELINE DATA: Copy Start_Date from timeline tasks into deliverables
+    if "timeline" in scenario and scenario["timeline"]:
+        timeline_tasks = scenario["timeline"].get("tasks", [])
+        print(f"[WBS Builder] Found {len(timeline_tasks)} timeline tasks to merge")
+        
+        for item in items:
+            deliv_name = str(item.get("deliverable", "")).strip()
+            deliv_code = str(item.get("deliverable_code", item.get("code", ""))).strip()
+            
+            # Try to find matching timeline task by name or code
+            for task in timeline_tasks:
+                task_name = str(task.get("name", "")).strip()
+                task_id = str(task.get("id", "")).strip()
+                task_deliv_code = str(task.get("deliverable_code", "")).strip()
+                
+                # Match by deliverable name or code
+                if (deliv_name and task_name == deliv_name) or \
+                   (deliv_code and task_deliv_code == deliv_code) or \
+                   (deliv_code and task_id.endswith(deliv_code)):
+                    # Copy timeline dates into deliverable (check both casing variants)
+                    start_date = task.get("Start_Date") or task.get("start_date") or task.get("start")
+                    start_offset = task.get("Start_Offset_Days") if task.get("Start_Offset_Days") is not None else task.get("start_offset_days")
+                    
+                    if start_date:
+                        item["Start_Date"] = start_date
+                        print(f"[WBS Builder] Merged Start_Date={start_date} into {deliv_name}")
+                    if start_offset is not None:
+                        item["Start_Offset_Days"] = start_offset
+                        print(f"[WBS Builder] Merged Start_Offset_Days={start_offset} into {deliv_name}")
+                    break
+
     # Enrich items with Service Department for grouping
     DEPT_ORDER = ['Strategy', 'Creative', 'Content', 'Production', 'Technology', 'PM', 'Other']
     for item in items:
