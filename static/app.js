@@ -925,8 +925,8 @@ async function initializeGanttChart(tasks = []) {
         const durationMs = end - start;
         const durationDays = Math.ceil(durationMs / (1000 * 60 * 60 * 24));
         
-        // Extract deliverable ID from task ID (assuming format like "DEL_xxx" or similar)
-        const deliverableId = task.deliverable_id || task.id.split('_')[0] || task.id;
+        // Extract deliverable ID - use deliverable_code field that comes from backend
+        const deliverableId = task.deliverable_code || task.deliverable_id || task.id.split('-')[0] || task.id;
         
         // Emit gantt:changed event for scenario-store to sync with backend
         const changePayload = {
