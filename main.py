@@ -2764,11 +2764,13 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     
     if timeline_tasks:
         print(f"[WBS Builder] Found {len(timeline_tasks)} timeline tasks to merge")
+        print(f"[WBS Builder DEBUG] First 3 timeline tasks: {timeline_tasks[:3]}")
         
         for item in items:
             deliv_name = str(item.get("deliverable", "")).strip()
             deliv_code = str(item.get("deliverable_code", item.get("code", ""))).strip()
             
+            matched = False
             # Try to find matching timeline task by name or code
             for task in timeline_tasks:
                 task_name = str(task.get("name", "")).strip()
@@ -2779,17 +2781,21 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 if (deliv_name and task_name == deliv_name) or \
                    (deliv_code and task_deliv_code == deliv_code) or \
                    (deliv_code and task_id.endswith(deliv_code)):
+                    matched = True
                     # Copy timeline dates into deliverable (check both casing variants)
                     start_date = task.get("Start_Date") or task.get("start_date") or task.get("start")
                     start_offset = task.get("Start_Offset_Days") if task.get("Start_Offset_Days") is not None else task.get("start_offset_days")
                     
                     if start_date:
                         item["Start_Date"] = start_date
-                        print(f"[WBS Builder] Merged Start_Date={start_date} into {deliv_name}")
+                        print(f"[WBS Builder] ✓ Merged Start_Date={start_date} into {deliv_name}")
                     if start_offset is not None:
                         item["Start_Offset_Days"] = start_offset
-                        print(f"[WBS Builder] Merged Start_Offset_Days={start_offset} into {deliv_name}")
+                        print(f"[WBS Builder] ✓ Merged Start_Offset_Days={start_offset} into {deliv_name}")
                     break
+            
+            if not matched and deliv_name:
+                print(f"[WBS Builder] ✗ No timeline match for deliverable: '{deliv_name}' (code: '{deliv_code}')")
 
     # Enrich items with Service Department for grouping
     DEPT_ORDER = ['Strategy', 'Creative', 'Content', 'Production', 'Technology', 'PM', 'Other']
