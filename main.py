@@ -2755,8 +2755,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     order_map = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
 
     # MERGE TIMELINE DATA: Copy Start_Date from timeline tasks into deliverables
+    # Support both formats: timeline.tasks (AI-generated) and timeline_tasks (manual Gantt saves)
+    timeline_tasks = []
     if "timeline" in scenario and scenario["timeline"]:
         timeline_tasks = scenario["timeline"].get("tasks", [])
+    elif "timeline_tasks" in scenario:
+        timeline_tasks = scenario["timeline_tasks"]
+    
+    if timeline_tasks:
         print(f"[WBS Builder] Found {len(timeline_tasks)} timeline tasks to merge")
         
         for item in items:
