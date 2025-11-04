@@ -161,65 +161,7 @@
         d.months = months;
         for (const c of d.components || []) if (!c._customCadence) c.months = months;
       }
-      this.recompute(); 
-      this.emit();
-      
-      // Sync timeline changes to backend for XML export
-      this.syncTimelineToBackend([{
-        deliverable_id: deliverableId,
-        duration_days: durationDays,
-        start_date: payload.start,
-        end_date: payload.end,
-        resources: resources,
-        hours_per_day: hrsPerDay
-      }]);
-    },
-    async syncTimelineToBackend(deliverableUpdates) {
-      // Sync Gantt timeline changes to backend _CURRENT_SCENARIOS
-      // This ensures XML exports use the updated timeline data
-      try {
-        const currentScenario = window.currentScenarioLetter || 'A';
-        const sessionId = window.sessionId || 'default';
-        
-        console.log('[ScenarioStore] Syncing timeline to backend:', {
-          scenario: currentScenario,
-          updates: deliverableUpdates.length
-        });
-        
-        const response = await fetch('/api/timeline/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            scenario: currentScenario,
-            session_id: sessionId,
-            deliverable_updates: deliverableUpdates,
-            timeline: {
-              deliverables: this.state.deliverables,
-              totals: this.state.totals,
-              updated_at: new Date().toISOString()
-            }
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Timeline sync failed: ${response.status}`);
-        }
-        
-        const result = await response.json();
-        console.log('[ScenarioStore] Timeline synced successfully:', result);
-        
-        // Show success notification if available
-        if (window.showNotification) {
-          window.showNotification('Timeline synced to server', 'success');
-        }
-      } catch (error) {
-        console.error('[ScenarioStore] Timeline sync failed:', error);
-        // Still update local state even if backend sync fails
-        // Show error notification if available
-        if (window.showNotification) {
-          window.showNotification('Failed to sync timeline changes to server', 'error');
-        }
-      }
+      this.recompute(); this.emit();
     },
     applyResourceLeveling(levelingData) {
       if (!levelingData) return;
