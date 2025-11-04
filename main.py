@@ -9745,9 +9745,32 @@ async def save_timeline(request: dict):
         reasoning = request.get("reasoning", {})
         metadata = request.get("metadata", {})
         scenario_letter = request.get("scenario", "A")
+        session_id = request.get("session_id")  # Get session_id for SCENARIO_STORE lookup
         
-        # Get the current scenario
-        scen = _CURRENT_SCENARIOS.get(scenario_letter)
+        # Get the current scenario - prioritize SCENARIO_STORE if session_id is available
+        scen = None
+        session_bundle = None
+        
+        if session_id and session_id in SCENARIO_STORE:
+            # SCENARIO_STORE stores a bundle: { "A": {...}, "B": {...}, ... }
+            session_bundle = SCENARIO_STORE[session_id]
+            
+            # Check if bundle has scenario letter key or if it's a direct scenario
+            if isinstance(session_bundle, dict) and "items" in session_bundle:
+                # Direct scenario format (legacy)
+                scen = session_bundle
+                print(f"[TIMELINE SAVE] Using direct scenario from SCENARIO_STORE[{session_id}]")
+            elif isinstance(session_bundle, dict) and scenario_letter in session_bundle:
+                # Bundle format: get specific scenario
+                scen = session_bundle[scenario_letter]
+                print(f"[TIMELINE SAVE] Using SCENARIO_STORE[{session_id}][{scenario_letter}]")
+            else:
+                # Bundle exists but scenario doesn't - create it
+                scen = None
+        else:
+            # No session_id or not in SCENARIO_STORE
+            scen = _CURRENT_SCENARIOS.get(scenario_letter)
+        
         if not scen:
             # Initialize scenario if it doesn't exist
             scen = {
@@ -9756,7 +9779,19 @@ async def save_timeline(request: dict):
                 "timeline": {},
                 "metadata": {}
             }
-            _CURRENT_SCENARIOS[scenario_letter] = scen
+            
+            if session_id:
+                # Add to session bundle
+                if session_bundle is None:
+                    session_bundle = {}
+                    SCENARIO_STORE[session_id] = session_bundle
+                session_bundle[scenario_letter] = scen
+            else:
+                _CURRENT_SCENARIOS[scenario_letter] = scen
+        
+        # Ensure timeline dict exists (defensive fix for KeyError)
+        if "timeline" not in scen:
+            scen["timeline"] = {}
         
         # Update timeline data in the scenario
         scen["timeline_tasks"] = tasks
@@ -9818,11 +9853,22 @@ async def save_timeline(request: dict):
                     break
         
         # Store the complete scenario with timeline data
-        _CURRENT_SCENARIOS[scenario_letter] = scen
-        
-        # Also save to ScenarioStore if it exists
-        if hasattr(app.state, "scenario_store"):
-            app.state.scenario_store[scenario_letter] = scen
+        if session_id and session_bundle is not None:
+            # Update the specific scenario in the bundle
+            if isinstance(session_bundle, dict) and "items" in session_bundle:
+                # Direct scenario format - overwrite entire session
+                SCENARIO_STORE[session_id] = scen
+                print(f"[TIMELINE SAVE] Saved direct scenario to SCENARIO_STORE[{session_id}]")
+            else:
+                # Bundle format - update specific scenario letter
+                session_bundle[scenario_letter] = scen
+                SCENARIO_STORE[session_id] = session_bundle
+                print(f"[TIMELINE SAVE] Saved to SCENARIO_STORE[{session_id}][{scenario_letter}]")
+        else:
+            _CURRENT_SCENARIOS[scenario_letter] = scen
+            # Also save to ScenarioStore if it exists
+            if hasattr(app.state, "scenario_store"):
+                app.state.scenario_store[scenario_letter] = scen
         
         print(f"[TIMELINE SAVE] Saved {len(tasks)} tasks for scenario {scenario_letter}")
         print(f"[TIMELINE SAVE] Duration: {total_duration} days, Resources: {len(resource_allocation)}")

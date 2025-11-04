@@ -4010,18 +4010,26 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       
       try {
+        // Get session_id for SCENARIO_STORE integration
+        const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+        
         const response = await fetch('/api/timeline/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             tasks: currentTimelineTasks,
             reasoning: timelineReasoning,
+            session_id: sessionId,  // Include session_id so backend saves to SCENARIO_STORE
             metadata: {
               saved_at: new Date().toISOString(),
               project_name: document.getElementById('projectName')?.value || 'Project'
             }
           })
         });
+        
+        if (sessionId) {
+          console.log('[Timeline Save] Including session_id:', sessionId);
+        }
         
         if (response.ok) {
           alert('✅ Timeline changes saved successfully');
