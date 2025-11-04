@@ -3323,8 +3323,25 @@ def _current_scenarios():
     """Access current scenarios for reordering operations."""
     return _CURRENT_SCENARIOS
 
-# Alias for XML export endpoints
-_get_scenarios = _current_scenarios
+def _get_scenarios(session_id: Optional[str] = None) -> dict:
+    """
+    Get scenarios for export.
+    If session_id is provided, checks SCENARIO_STORE first (contains Gantt updates).
+    Falls back to _CURRENT_SCENARIOS if session_id not found or not provided.
+    
+    This ensures XML exports reflect Step 4 Gantt edits when session_id is passed.
+    """
+    if session_id and session_id in SCENARIO_STORE:
+        # Return session-based scenario with Gantt updates
+        scenario = SCENARIO_STORE[session_id]
+        # Wrap in letter format if needed for compatibility
+        if "items" in scenario:
+            # This is a single scenario, return it as "A"
+            return {"A": scenario}
+        return scenario
+    
+    # Fall back to _CURRENT_SCENARIOS (pricing-only data)
+    return _CURRENT_SCENARIOS
 
 # ---------- Helper function to create retainer summary sheet ----------
 def create_retainer_summary(scenario: dict) -> pd.DataFrame:
@@ -7456,9 +7473,13 @@ def _export_single_scenario_xml(
                 pass
 
 @app.get("/api/export/xml/a")
-def api_export_xml_scenario_a(add_anchors: bool = False):
-    """Export Scenario A only as XML"""
-    scenarios = _get_scenarios()
+def api_export_xml_scenario_a(add_anchors: bool = False, session_id: Optional[str] = None):
+    """
+    Export Scenario A only as XML.
+    If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
+    Otherwise uses _CURRENT_SCENARIOS (pricing-only data).
+    """
+    scenarios = _get_scenarios(session_id)
     if "A" not in scenarios:
         raise HTTPException(400, "Scenario A not found. Please build scenarios first.")
     
@@ -7476,9 +7497,13 @@ def api_export_xml_scenario_a(add_anchors: bool = False):
     )
 
 @app.get("/api/export/xml/b")
-def api_export_xml_scenario_b(add_anchors: bool = False):
-    """Export Scenario B only as XML"""
-    scenarios = _get_scenarios()
+def api_export_xml_scenario_b(add_anchors: bool = False, session_id: Optional[str] = None):
+    """
+    Export Scenario B only as XML.
+    If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
+    Otherwise uses _CURRENT_SCENARIOS (pricing-only data).
+    """
+    scenarios = _get_scenarios(session_id)
     if "B" not in scenarios:
         raise HTTPException(400, "Scenario B not found. Please build scenarios first.")
     
@@ -7496,9 +7521,13 @@ def api_export_xml_scenario_b(add_anchors: bool = False):
     )
 
 @app.get("/api/export/xml/c")
-def api_export_xml_scenario_c(add_anchors: bool = False):
-    """Export Scenario C only as XML"""
-    scenarios = _get_scenarios()
+def api_export_xml_scenario_c(add_anchors: bool = False, session_id: Optional[str] = None):
+    """
+    Export Scenario C only as XML.
+    If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
+    Otherwise uses _CURRENT_SCENARIOS (pricing-only data).
+    """
+    scenarios = _get_scenarios(session_id)
     if "C" not in scenarios:
         raise HTTPException(400, "Scenario C not found. Please build scenarios first.")
     
@@ -7516,9 +7545,13 @@ def api_export_xml_scenario_c(add_anchors: bool = False):
     )
 
 @app.get("/api/export/xml/all")
-def api_export_xml_all_scenarios():
-    """Export all three scenarios (A, B, C) as a ZIP archive"""
-    scenarios = _get_scenarios()
+def api_export_xml_all_scenarios(session_id: Optional[str] = None):
+    """
+    Export all three scenarios (A, B, C) as a ZIP archive.
+    If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
+    Otherwise uses _CURRENT_SCENARIOS (pricing-only data).
+    """
+    scenarios = _get_scenarios(session_id)
     
     # Check if all scenarios exist
     missing = []

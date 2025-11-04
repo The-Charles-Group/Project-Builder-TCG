@@ -7,8 +7,16 @@
   const DEFAULTS = { hoursPerDay: 6, currency: "USD", blendedRate: 195 };
 
   const ScenarioStore = {
+    // Use SessionManager's canonical session_id (matches backend SCENARIO_STORE keys)
+    get sessionId() {
+      return window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+    },
     state: {
       id: "working",
+      // session_id getter for backend sync
+      get session_id() {
+        return window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+      },
       name: "Working Scenario",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

@@ -912,14 +912,48 @@ async function initializeGanttChart(tasks = []) {
       on_click: function(task) {
         console.log('Task clicked:', task);
       },
-      on_date_change: function(task, start, end) {
+      on_date_change: async function(task, start, end) {
         console.log('Task date changed:', task.name, start, end);
-        // Update the task in our state
+        
+        // Update the task in our local state
         const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
         if (taskIndex >= 0) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
+        
+        // Sync to backend SCENARIO_STORE (GPT-5's plan: call /api/timeline/update_task)
+        try {
+          const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+          // Get fresh session_id directly from SessionManager (no caching)
+          const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+          
+          if (session_id && task.id) {
+            const response = await fetch('/api/timeline/update_task', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                session_id: session_id,
+                wbs_id: task.id,
+                start_date: start.toISOString().split('T')[0],
+                end_date: end.toISOString().split('T')[0],
+                duration_days: duration_days,
+                hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
+              })
+            });
+            
+            if (response.ok) {
+              const result = await response.json();
+              console.log('[Gantt] Task updated in backend SCENARIO_STORE:', result);
+              // TODO: Refresh pricing table with result.totals if needed
+            } else {
+              console.warn('[Gantt] Failed to sync task to backend:', await response.text());
+            }
+          }
+        } catch (error) {
+          console.error('[Gantt] Error syncing task to backend:', error);
+        }
+        
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
         if (saveBtn) saveBtn.style.display = '';
@@ -9054,11 +9088,20 @@ async function exportXMLScenario(letter) {
   // Check if anchors should be included
   const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
   
-  // Build endpoint with query parameter - using GET to match backend endpoint
-  const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+  // Get fresh session_id directly from SessionManager (no caching)
+  // This ensures we use the canonical ID that matches backend SCENARIO_STORE keys
+  const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+  
+  // Build endpoint with query parameters
+  // If session_id exists, backend will use SCENARIO_STORE (with Gantt changes)
+  // Otherwise, backend falls back to _CURRENT_SCENARIOS (pricing-only data)
+  let endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+  if (sessionId) {
+    endpoint += `&session_id=${encodeURIComponent(sessionId)}`;
+    console.log('[Export] Including session_id for Gantt-synced export:', sessionId);
+  }
   
   try {
-    // Backend uses stored _CURRENT_SCENARIOS data and validates there
     const response = await fetch(endpoint, {
       method: 'GET'
     });
