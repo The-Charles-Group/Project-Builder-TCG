@@ -1035,9 +1035,15 @@ function calculateDuration(start, end) {
 
 // Show PDF button after Gantt chart is successfully rendered
 function showPDFDownloadButton() {
+  console.log('[PDF] showPDFDownloadButton() called');
   const pdfButton = document.getElementById('gantt-pdf-button');
+  console.log('[PDF] Button element found:', !!pdfButton);
+  
   if (pdfButton) {
     pdfButton.style.display = 'block';
+    console.log('[PDF] ✅ PDF download button now visible (fixed position, z-index: 10000)');
+  } else {
+    console.error('[PDF] ❌ PDF button element not found in DOM');
   }
 }
 
