@@ -2754,13 +2754,24 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     items = scenario.get("items", [])
     order_map = {str(tg): i for i, tg in enumerate(DB.timeline_params["Task_Group"].astype(str).tolist())}
 
+    # DEBUG: Log what we received
+    print(f"[WBS Builder] build_wbs_with_pricing called for project: {project_name}")
+    print(f"[WBS Builder] Scenario keys: {list(scenario.keys())}")
+    print(f"[WBS Builder] Has items: {len(items)} deliverables")
+    print(f"[WBS Builder] Has timeline_tasks: {'timeline_tasks' in scenario}")
+    print(f"[WBS Builder] Has timeline: {'timeline' in scenario}")
+
     # MERGE TIMELINE DATA: Copy Start_Date from timeline tasks into deliverables
     # Support both formats: timeline.tasks (AI-generated) and timeline_tasks (manual Gantt saves)
     timeline_tasks = []
     if "timeline" in scenario and scenario["timeline"]:
         timeline_tasks = scenario["timeline"].get("tasks", [])
+        print(f"[WBS Builder] Using timeline.tasks format (AI-generated)")
     elif "timeline_tasks" in scenario:
         timeline_tasks = scenario["timeline_tasks"]
+        print(f"[WBS Builder] Using timeline_tasks format (manual Gantt saves)")
+    else:
+        print(f"[WBS Builder] ⚠️ NO TIMELINE DATA FOUND - skipping merge")
     
     if timeline_tasks:
         print(f"[WBS Builder] Found {len(timeline_tasks)} timeline tasks to merge")
@@ -3390,16 +3401,30 @@ def _get_scenarios(session_id: Optional[str] = None) -> dict:
     
     This ensures XML exports reflect Step 4 Gantt edits when session_id is passed.
     """
+    print(f"[GET_SCENARIOS] Called with session_id={session_id}")
+    
     if session_id and session_id in SCENARIO_STORE:
         # Return session-based scenario with Gantt updates
         scenario = SCENARIO_STORE[session_id]
+        print(f"[GET_SCENARIOS] Found scenario in SCENARIO_STORE")
+        print(f"[GET_SCENARIOS] Scenario keys: {list(scenario.keys())}")
+        print(f"[GET_SCENARIOS] Has timeline_tasks: {'timeline_tasks' in scenario}")
+        print(f"[GET_SCENARIOS] Has timeline: {'timeline' in scenario}")
+        
+        if "timeline_tasks" in scenario:
+            print(f"[GET_SCENARIOS] timeline_tasks count: {len(scenario['timeline_tasks'])}")
+            print(f"[GET_SCENARIOS] First timeline task: {scenario['timeline_tasks'][0] if scenario['timeline_tasks'] else 'EMPTY'}")
+        
         # Wrap in letter format if needed for compatibility
         if "items" in scenario:
             # This is a single scenario, return it as "A"
+            print(f"[GET_SCENARIOS] Wrapping single scenario as {'A': ...}")
             return {"A": scenario}
+        print(f"[GET_SCENARIOS] Returning scenario as-is (already has letter keys)")
         return scenario
     
     # Fall back to _CURRENT_SCENARIOS (pricing-only data)
+    print(f"[GET_SCENARIOS] Using _CURRENT_SCENARIOS (no session_id or not found)")
     return _CURRENT_SCENARIOS
 
 # ---------- Helper function to create retainer summary sheet ----------
@@ -7480,16 +7505,29 @@ def _export_single_scenario_xml(
     if not DB.loaded:
         DB.load()
     
+    print(f"[EXPORT_XML] Starting export for {scenario_label}")
+    print(f"[EXPORT_XML] Scenario keys: {list(scenario.keys())}")
+    print(f"[EXPORT_XML] Has timeline_tasks: {'timeline_tasks' in scenario}")
+    print(f"[EXPORT_XML] Has timeline: {'timeline' in scenario}")
+    
+    if "timeline_tasks" in scenario:
+        print(f"[EXPORT_XML] timeline_tasks count: {len(scenario['timeline_tasks'])}")
+    
     # Guard: ensure scenario has items
     _assert_has_items(scenario, f"{scenario_label} XML export")
     
     # Inflate components if missing
     scenario = _inflate_components_if_missing(scenario)
     
+    print(f"[EXPORT_XML] After inflate, has timeline_tasks: {'timeline_tasks' in scenario}")
+    
     # Determine project name
     project = (project_name 
                or _upload_title_default() 
                or f"Proposal {datetime.date.today().isoformat()}").strip()
+    
+    print(f"[EXPORT_XML] About to call build_wbs_dataframe_from_scenario()")
+    print(f"[EXPORT_XML] Passing scenario with keys: {list(scenario.keys())}")
     
     # Build WBS DataFrame
     df = build_wbs_dataframe_from_scenario(scenario, project)
