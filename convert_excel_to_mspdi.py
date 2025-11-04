@@ -182,6 +182,21 @@ def convert_excel_to_mspdi(
         logging.info(f"Reading Excel file: {input_xlsx}, sheet: {sheet_name}")
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
         logging.info(f"Successfully loaded {len(df)} rows from Excel")
+        
+        # FIX: Normalize column headers (replace spaces with underscores)
+        # This is necessary because the Excel writer converts "Start_Date" to "Start Date"
+        # but the GANTT merge logic checks for "Start_Date"
+        original_columns = list(df.columns)
+        df.columns = [str(c).replace(" ", "_") for c in df.columns]
+        logging.info(f"[HEADER NORMALIZATION] Original columns (first 5): {original_columns[:5]}")
+        logging.info(f"[HEADER NORMALIZATION] Normalized columns (first 5): {list(df.columns[:5])}")
+        
+        # Log if Start_Date/End_Date are present after normalization
+        if "Start_Date" in df.columns:
+            logging.info(f"[HEADER NORMALIZATION] ✓ Start_Date column found after normalization")
+        if "End_Date" in df.columns:
+            logging.info(f"[HEADER NORMALIZATION] ✓ End_Date column found after normalization")
+        
     except Exception as e:
         logging.error(f"Error reading Excel file: {e}")
         return {"error": str(e), "task_count": 0}
