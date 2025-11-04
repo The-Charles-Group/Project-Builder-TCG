@@ -7567,7 +7567,8 @@ def _export_single_scenario_xml(
         import convert_excel_to_mspdi as mspdi_module
         importlib.reload(mspdi_module)
         
-        stats = convert_excel_to_mspdi(
+        # CRITICAL: Use the reloaded module's function, not the old imported one
+        stats = mspdi_module.convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
             sheet_name=scenario_label,
