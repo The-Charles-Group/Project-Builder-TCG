@@ -2046,11 +2046,20 @@
       const scen = window.getScenario(letter);
       if (!scen) { alert(`Build Scenario ${letter} first.`); return; }
 
+      // Get session_id to access Gantt-edited timeline data from SCENARIO_STORE
+      const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+      
       // Check if anchors should be included
       const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
       
-      // Build endpoint with query parameter
-      const endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+      // Build endpoint with query parameters
+      // If session_id exists, backend will use SCENARIO_STORE (with Gantt changes)
+      // Otherwise, backend falls back to _CURRENT_SCENARIOS (pricing-only data)
+      let endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
+      if (sessionId) {
+        endpoint += `&session_id=${encodeURIComponent(sessionId)}`;
+        console.log('[Export] Including session_id for Gantt-synced export:', sessionId);
+      }
       
       try {
         const response = await fetch(endpoint);
