@@ -217,7 +217,7 @@ Return a JSON object with:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            temperature=0.3,
+            # temperature=1.0 is default for GPT-5, do not specify
             response_format={"type": "json_object"}
         )
         
@@ -593,7 +593,7 @@ class PricingOptimizer:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                temperature=0.3,
+                # temperature=1.0 is default for GPT-5, do not specify
                 response_format={"type": "json_object"}
             )
             

@@ -1741,8 +1741,8 @@ Return as JSON with keys:
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.7,  # Add temperature for better results
-            max_tokens=1000  # Use max_tokens for OpenAI models
+            # temperature=1.0 is default for GPT-5, do not specify
+            max_completion_tokens=1000  # Use max_completion_tokens for GPT-5
         )
 
         # Safely parse JSON response with validation
@@ -1932,7 +1932,7 @@ Return a JSON object with this structure:
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.7,  # Add temperature for better results
+            # temperature=1.0 is default for GPT-5, do not specify
             max_completion_tokens=2000  # Use max_completion_tokens for GPT-5 models
         )
 
