@@ -562,6 +562,36 @@ def convert_excel_to_mspdi(
                         logging.warning(f"Could not parse deliverable End_Date '{first_row_end}': {e}")
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
+            
+            # Add constraint type based on Gantt-sourced dates
+            has_gantt_start = False
+            has_gantt_end = False
+            
+            # Check if Start_Date was successfully parsed from Gantt
+            if not group.empty and "Start_Date" in group.columns:
+                first_row_start = group.iloc[0].get("Start_Date")
+                if pd.notna(first_row_start):
+                    has_gantt_start = True
+            
+            # Check if End_Date was successfully parsed from Gantt
+            if not group.empty and "End_Date" in group.columns:
+                first_row_end = group.iloc[0].get("End_Date")
+                if pd.notna(first_row_end):
+                    has_gantt_end = True
+            
+            # Apply constraint type
+            if has_gantt_start and has_gantt_end:
+                # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            elif has_gantt_start:
+                # Only start date from Gantt: Must Start On
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            # If neither, don't add constraint (ASAP scheduling by default)
+            
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
             ET.SubElement(deliv_task, "{%s}EffortDriven" % ns).text = "0"
@@ -702,17 +732,26 @@ def convert_excel_to_mspdi(
                     ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
                     ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
                     
-                    # Add constraint if needed
-                    constraint_type = ConstraintType.AS_SOON_AS_POSSIBLE
-                    if "Constraint" in row.index:
-                        constraint_val = row.get("Constraint", "")
-                        if constraint_val == "Must Start On":
-                            constraint_type = ConstraintType.MUST_START_ON
-                        elif constraint_val == "Must Finish On":
-                            constraint_type = ConstraintType.MUST_FINISH_ON
+                    # Add constraint type based on Gantt-sourced dates
+                    has_gantt_start = "Start_Date" in row.index and pd.notna(row.get("Start_Date"))
+                    has_gantt_end = "End_Date" in row.index and pd.notna(row.get("End_Date"))
                     
-                    ET.SubElement(task, "{%s}ConstraintType" % ns).text = str(constraint_type.value)
-                    ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                    # Apply constraint type based on Gantt-sourced dates
+                    if has_gantt_start and has_gantt_end:
+                        # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
+                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
+                        ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                        logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                    elif has_gantt_start:
+                        # Only start date from Gantt: Must Start On
+                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
+                        ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                        logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                    else:
+                        # No Gantt dates: ASAP scheduling (default)
+                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"
+                        ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                        logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                     
                     # Add cost if available
                     price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
