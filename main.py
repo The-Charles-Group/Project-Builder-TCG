@@ -3418,7 +3418,7 @@ def _get_scenarios(session_id: Optional[str] = None) -> dict:
         # Wrap in letter format if needed for compatibility
         if "items" in scenario:
             # This is a single scenario, return it as "A"
-            print(f"[GET_SCENARIOS] Wrapping single scenario as {'A': ...}")
+            print(f"[GET_SCENARIOS] Wrapping single scenario as 'A'")
             return {"A": scenario}
         print(f"[GET_SCENARIOS] Returning scenario as-is (already has letter keys)")
         return scenario
