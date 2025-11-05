@@ -8902,16 +8902,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (window.updateStep2Summary) updateStep2Summary();
     if (window.populateComponentsDeliverableDropdown) populateComponentsDeliverableDropdown();
   });
-  el.btnClear.addEventListener('click', () => { 
-    state.selected.clear(); 
-    renderList(el.search.value);
-    // Sync selection immediately
-    window.selectedCodes = Array.from(state.selected);
-    if (window.appState) window.appState.selectedCodes = window.selectedCodes;
-    // Update new UI panels
-    if (window.updateStep2Summary) updateStep2Summary();
-    if (window.populateComponentsDeliverableDropdown) populateComponentsDeliverableDropdown();
-  });
+  // Clear button handler removed - using centralized handler in initStep2UI()
 
   // 6) Public init for Step 2; call this right after Step 2 renders scenarios
   window.initStep2DeliverablePicker = async function initStep2DeliverablePicker(scenarios) {
@@ -9468,31 +9459,7 @@ S2.els.btnSelectAll?.addEventListener('click', () => {
     window.updateStep2Summary();
   }
 });
-S2.els.btnClear?.addEventListener('click', () => {
-  S2.selectedCodes.clear();
-  S2.selectedMeta.clear();
-  s2RenderRight(S2.els.search?.value || '');
-  s2RenderLeft();
-  
-  // Sync with new Step 2 UI state
-  if (window.step2PickerState) {
-    window.step2PickerState.selected.clear();
-  }
-  
-  // Update new Step 2 UI
-  if (window.step2State) {
-    window.step2State.currentDeliverable = null;
-  }
-  if (window.renderComponentsPanel) {
-    window.renderComponentsPanel(null);
-  }
-  if (window.populateComponentsDeliverableDropdown) {
-    window.populateComponentsDeliverableDropdown();
-  }
-  if (window.updateStep2Summary) {
-    window.updateStep2Summary();
-  }
-});
+// Clear button handler removed - using centralized handler in initStep2UI()
 
 // ---- Left panel ("Your Selection") with Components… buttons ----
 function s2RenderLeft() {
