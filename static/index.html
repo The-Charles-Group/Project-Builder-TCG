@@ -1793,6 +1793,44 @@
     
     // Make it globally accessible
     window.rebuildScenario = rebuildScenario;
+    
+    // Manual rebuild function for the Update Scenario button
+    async function manualRebuildScenario() {
+      console.log('[MANUAL REBUILD] User clicked Update Scenario button');
+      
+      const btn = document.getElementById('btnRebuildScenario');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Updating...';
+      }
+      
+      try {
+        // Call the rebuild function
+        await rebuildScenario();
+        
+        // Show success feedback
+        if (btn) {
+          btn.innerHTML = '✓ Updated!';
+          setTimeout(() => {
+            btn.disabled = false;
+            btn.innerHTML = '🔄 Update Scenario';
+          }, 2000);
+        }
+        
+        console.log('[MANUAL REBUILD] Scenario updated successfully');
+      } catch (error) {
+        console.error('[MANUAL REBUILD] Error:', error);
+        alert(`Failed to update scenario: ${error.message}`);
+        
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '🔄 Update Scenario';
+        }
+      }
+    }
+    
+    // Make it globally accessible
+    window.manualRebuildScenario = manualRebuildScenario;
 
     // Proceed to Pricing - sync selection state first
     function proceedToPricing() {
@@ -1948,12 +1986,20 @@
       // Calculate and display grand total - ALWAYS use original prices if available
       const annualRetainerCostOriginal = retainerMonthlyCostOriginal * 12;
       const grandTotal = oneTimeCostOriginal + annualRetainerCostOriginal;
-      const grandTotalEl = document.getElementById('grand-total-amount');
+      
+      // Update the Grand Total display (FIX: use correct element ID)
+      const grandTotalEl = document.getElementById('grand-total-cost');
       if (grandTotalEl) {
         grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
       }
       
-      // Update grand total display with duration
+      // Update the breakdown text below Grand Total
+      const breakdownEl = document.getElementById('grand-total-breakdown');
+      if (breakdownEl) {
+        breakdownEl.textContent = `One-time + 12 months retainer`;
+      }
+      
+      // Legacy grand total display (fallback for older UI)
       const grandTotalDisplay = document.getElementById('grand-total-display');
       if (grandTotalDisplay) {
         grandTotalDisplay.innerHTML = `
@@ -1965,6 +2011,8 @@
           </div>
         `;
       }
+      
+      console.log('[GRAND TOTAL] Updated:', { oneTimeCost: oneTimeCostOriginal, annualRetainer: annualRetainerCostOriginal, grandTotal });
       
       console.log('[PRICING] Display updated successfully');
     }
