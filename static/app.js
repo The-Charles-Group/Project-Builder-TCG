@@ -9281,10 +9281,12 @@ async function s2LoadDeliverables() {
     };
   }
   
-  // Wire Clear button
+  // Wire Clear button - clears ALL 3 panels at once
   const btnClear = APB.step2.els.btnClear;
   if (btnClear) {
     btnClear.onclick = () => {
+      console.log('[CLEAR ALL] Clearing all 3 panels...');
+      
       // Clear all selections from selectionStore
       selectionStore.deliverables.clear();
       selectionStore.componentsByDeliv.clear();
@@ -9303,7 +9305,19 @@ async function s2LoadDeliverables() {
       if (window.appState) window.appState.selectedCodes = [];
       if (window.step2PickerState) window.step2PickerState.selected.clear();
       
-      // Re-render all panels
+      // PANEL 1: Clear Deliverables panel checkboxes
+      const delivCheckboxes = document.querySelectorAll('#s2-deliv-list input[type="checkbox"]');
+      delivCheckboxes.forEach(cb => cb.checked = false);
+      
+      // PANEL 2: Clear Components panel checkboxes
+      const compCheckboxes = document.querySelectorAll('#s2-comp-list input[type="checkbox"]');
+      compCheckboxes.forEach(cb => cb.checked = false);
+      
+      // PANEL 3: Clear L3 panel checkboxes
+      const l3Checkboxes = document.querySelectorAll('#s2-l3-list input[type="checkbox"]');
+      l3Checkboxes.forEach(cb => cb.checked = false);
+      
+      // Re-render all panels to show empty states
       renderDeliverablesPanel();
       
       // Clear components panel with empty state
@@ -9314,15 +9328,19 @@ async function s2LoadDeliverables() {
       }
       
       // Clear L3 panel with empty state
-      const l3ListEl = document.getElementById('s2-l3-list');
-      if (l3ListEl) {
-        l3ListEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its L2 tasks</p>';
+      if (window.renderL3Panel) {
+        renderL3Panel();
+      } else {
+        const l3ListEl = document.getElementById('s2-l3-list');
+        if (l3ListEl) {
+          l3ListEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its L2 tasks</p>';
+        }
       }
       
       // Update summary counts to 0
       updateSummaryCounts();
       
-      console.log('[CLEAR] All selections cleared');
+      console.log('[CLEAR ALL] All 3 panels cleared successfully');
     };
   }
 }
@@ -9655,8 +9673,8 @@ S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
 // ========== XML Export Functions ==========
 async function exportXMLScenario(letter) {
-  // Check if anchors should be included
-  const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
+  // Always include Start/End anchors (checkbox removed - now always enabled)
+  const addAnchors = true;
   
   // Get fresh session_id directly from SessionManager (no caching)
   // This ensures we use the canonical ID that matches backend SCENARIO_STORE keys

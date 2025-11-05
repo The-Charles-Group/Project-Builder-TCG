@@ -263,13 +263,6 @@
           </button>
         </div>
         
-        <!-- XML Export Options -->
-        <div style="margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid rgba(255,255,255,0.08);">
-          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.85em;">
-            <input type="checkbox" id="toggle-anchors" style="cursor: pointer;">
-            <span title="Include START/END milestone anchors for each deliverable in XML exports">Include Start/End anchors in XML</span>
-          </label>
-        </div>
       </div>
 
       <div class="actions" style="margin-top: 20px;">
@@ -2059,8 +2052,8 @@
       // Get session_id to access Gantt-edited timeline data from SCENARIO_STORE
       const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
       
-      // Check if anchors should be included
-      const addAnchors = document.getElementById('toggle-anchors')?.checked || false;
+      // Always include Start/End anchors (checkbox removed - now always enabled)
+      const addAnchors = true;
       
       // Build endpoint with query parameters
       // If session_id exists, backend will use SCENARIO_STORE (with Gantt changes)
