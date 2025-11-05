@@ -3724,6 +3724,13 @@ async function generateAITimeline(retryAttempt = 0) {
       const metadataDiv = document.getElementById('timeline-metadata');
       if (metadataDiv) metadataDiv.style.display = '';
       
+      // Show PDF Download and Save Changes buttons after successful timeline generation
+      const pdfButton = document.getElementById('gantt-pdf-button');
+      if (pdfButton) pdfButton.style.display = '';
+      
+      const saveButton = document.getElementById('btn-save-timeline');
+      if (saveButton) saveButton.style.display = '';
+      
       // Hide loading
       loading.style.display = 'none';
       btn.disabled = false;
@@ -4377,6 +4384,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Get session_id for SCENARIO_STORE integration
         const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
         
+        // Step 1: Save timeline edits (dates, durations, etc.)
         const response = await fetch('/api/timeline/save', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -4396,7 +4404,81 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         if (response.ok) {
-          alert('✅ Timeline changes saved successfully');
+          // Step 2: Save timeline order (drag-and-drop reordering)
+          // Determine which scenario we're saving (A, B, or C)
+          const scenarioLetter = window.APP_STATE?.activeScenario || 'A';
+          
+          // Get the current scenario data
+          const scenario = (window.appState?.scenarios || window.SCENARIOS)?.[scenarioLetter];
+          
+          if (scenario) {
+            // Extract deliverable codes in current order from tasks
+            const deliverableCodes = currentTimelineTasks
+              .map(task => task.deliverable_code || (task.id ? task.id.split('-')[0] : null))
+              .filter((code, index, self) => code && self.indexOf(code) === index); // Remove nulls and duplicates
+            
+            if (deliverableCodes.length > 0) {
+              // Build included_map from scenario items
+              const includedMap = {};
+              if (scenario.items) {
+                scenario.items.forEach(item => {
+                  const code = item.deliverable_code;
+                  includedMap[code] = item.included_task_groups || [];
+                });
+              }
+              
+              // Build payload for reorder_timeline endpoint
+              const reorderPayload = {
+                scenario_letter: scenarioLetter,
+                deliverable_codes: deliverableCodes,
+                included_map: includedMap,
+                project_start: scenario.project_start,
+                complexity: scenario.items?.[0]?.complexity || 'Advanced',
+                tier: scenario.items?.[0]?.tier || 'T2_MediumVolume',
+                use_slack: scenario.use_slack !== false, // Default to true
+                slack_after_internal: scenario.slack_after_internal || 1,
+                slack_after_client: scenario.slack_after_client || 2,
+                slack_global_pct: scenario.slack_global_pct || 0.0
+              };
+              
+              console.log('[Timeline Save] Saving timeline order:', deliverableCodes);
+              
+              // Call reorder_timeline to persist the order
+              const reorderResponse = await fetch('/api/reorder_timeline', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(reorderPayload)
+              });
+              
+              if (reorderResponse.ok) {
+                const reorderResult = await reorderResponse.json();
+                
+                // Update local scenario with reordered items
+                if (reorderResult.items && window.appState?.scenarios) {
+                  window.appState.scenarios[scenarioLetter] = {
+                    ...window.appState.scenarios[scenarioLetter],
+                    items: reorderResult.items,
+                    user_order: deliverableCodes,
+                    manual_order_locked: true
+                  };
+                }
+                if (reorderResult.items && window.SCENARIOS) {
+                  window.SCENARIOS[scenarioLetter] = {
+                    ...window.SCENARIOS[scenarioLetter],
+                    items: reorderResult.items,
+                    user_order: deliverableCodes,
+                    manual_order_locked: true
+                  };
+                }
+                
+                console.log('[Timeline Save] ✅ Timeline order saved successfully');
+              } else {
+                console.warn('[Timeline Save] Failed to save timeline order:', await reorderResponse.text());
+              }
+            }
+          }
+          
+          alert('✅ Timeline changes and order saved successfully');
           btnSave.style.display = 'none';
           
           // Mark timeline as synced
@@ -8960,66 +9042,6 @@ function enableTimelineDnD(letter) {
       return (offset < 0 && offset > closest.offset) ? { offset, element: child } : closest;
     }, { offset: Number.NEGATIVE_INFINITY }).element;
   }
-
-  // Save + recompute schedule
-  document.getElementById('timeline-controls')?.querySelector('#tl-save')?.remove();
-  const btn = document.createElement('button');
-  btn.id = 'tl-save'; btn.textContent = 'Save Order';
-  btn.onclick = async () => {
-    const scenario = getScenario(letter);
-    if (!scenario) return;
-
-    // Get ordered deliverable codes from UI
-    const rows = [...body.querySelectorAll('.tl-row')];
-    const codes = rows.map(tr => tr.dataset.dcode);
-    
-    // Build included_map from current scenario items
-    const includedMap = Object.fromEntries(
-      scenario.items.map(item => [item.deliverable_code, item.included_task_groups ?? []])
-    );
-
-    // Get knobs from current scenario (these are the authoritative values)
-    const knobs = {
-      project_start: scenario.project_start,
-      complexity: scenario.items[0]?.complexity,  // Use first item's complexity as default
-      tier: scenario.items[0]?.tier,  // Use first item's tier as default
-      use_slack: scenario.use_slack,
-      slack_after_internal: scenario.slack_after_internal,
-      slack_after_client: scenario.slack_after_client,
-      slack_global_pct: scenario.slack_global_pct
-    };
-
-    const payload = {
-      scenario_letter: letter,
-      deliverable_codes: codes,
-      included_map: includedMap,
-      project_start: knobs.project_start,
-      complexity: knobs.complexity,
-      tier: knobs.tier,
-      use_slack: knobs.use_slack,
-      slack_after_internal: knobs.slack_after_internal,
-      slack_after_client: knobs.slack_after_client,
-      slack_global_pct: knobs.slack_global_pct
-    };
-
-    const res = await fetch('/api/reorder_timeline', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    }).then(r => r.json());
-
-    // Replace local items with server-persisted order + dates
-    if (res.items && window.appState.scenarios[letter]) {
-      window.appState.scenarios[letter] = {
-        ...window.appState.scenarios[letter],
-        items: res.items,
-        user_order: codes,
-        manual_order_locked: true
-      };
-    }
-    renderTimeline(letter);
-  };
-  document.getElementById('timeline-controls')?.appendChild(btn);
 }
 
 function renderTimelineStatus(letter) {

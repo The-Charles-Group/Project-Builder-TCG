@@ -457,24 +457,6 @@ main:not(:has(.card:not([style*="display: none"]))):before {
   border-bottom: none;
 }
 
-/* Save button styling */
-#tl-save {
-  margin-left: 16px;
-  background: var(--accent);
-  color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-#tl-save:hover {
-  background: #a0621a;
-  transform: translateY(-1px);
-}
-
 /* Responsive timeline layout */
 @media (max-width: 1200px) {
   .timeline-layout {
