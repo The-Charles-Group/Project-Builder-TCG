@@ -541,6 +541,8 @@ def convert_excel_to_mspdi(
                         start_val = str(first_row_start)
                         if 'T' in start_val:
                             deliverable_start_date = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
+                            # Remove timezone info to make it timezone-naive for consistent comparisons
+                            deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
                         else:
                             deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
                         logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
@@ -555,6 +557,8 @@ def convert_excel_to_mspdi(
                         end_val = str(first_row_end)
                         if 'T' in end_val:
                             deliverable_end_date = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
+                            # Remove timezone info to make it timezone-naive for consistent comparisons
+                            deliverable_end_date = deliverable_end_date.replace(tzinfo=None)
                         else:
                             deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
                         logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
@@ -756,6 +760,8 @@ def convert_excel_to_mspdi(
                                 # Handle ISO format: 2025-11-16 or 2025-11-16T01:00:00
                                 if 'T' in start_val:
                                     task_start = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
+                                    # Remove timezone info to make it timezone-naive for consistent comparisons
+                                    task_start = task_start.replace(tzinfo=None)
                                 else:
                                     # Date only - add default 9 AM time
                                     task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
@@ -770,6 +776,8 @@ def convert_excel_to_mspdi(
                                 # Handle ISO format: 2025-11-27 or 2025-11-27T17:00:00
                                 if 'T' in end_val:
                                     task_end = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
+                                    # Remove timezone info to make it timezone-naive for consistent comparisons
+                                    task_end = task_end.replace(tzinfo=None)
                                 else:
                                     # Date only - add default 5 PM time
                                     task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
