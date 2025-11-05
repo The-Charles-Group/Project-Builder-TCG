@@ -1175,18 +1175,26 @@ function generateDateColumns(startDate, endDate, groupBy) {
 
 // Generate Daily PDF
 function generateDailyPDF() {
-  // ISSUE FIX 3: Add debugging to show what currentTimelineTasks contains
+  // ISSUE FIX 3: Comprehensive data check with fallback to local currentTimelineTasks
   console.log('[PDF] generateDailyPDF called');
   console.log('[PDF] window.currentTimelineTasks:', window.currentTimelineTasks);
-  console.log('[PDF] window.currentTimelineTasks length:', window.currentTimelineTasks ? window.currentTimelineTasks.length : 'undefined');
+  console.log('[PDF] local currentTimelineTasks:', typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : 'undefined');
   
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert('PDF library not loaded. Please refresh the page and try again.');
     return;
   }
   
-  if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
-    console.error('[PDF] No timeline data available. Tasks:', window.currentTimelineTasks);
+  // ISSUE FIX 3: Check both window.currentTimelineTasks and local currentTimelineTasks variable
+  const tasks = window.currentTimelineTasks || (typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : null) || [];
+  
+  console.log('[PDF] Resolved tasks array:', tasks);
+  console.log('[PDF] Tasks length:', tasks.length);
+  
+  if (!tasks || tasks.length === 0) {
+    console.error('[PDF] No timeline data available after checking all sources');
+    console.error('[PDF] - window.currentTimelineTasks:', window.currentTimelineTasks);
+    console.error('[PDF] - local currentTimelineTasks:', typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : 'undefined');
     alert('No timeline data available. Please generate a timeline first.');
     return;
   }
@@ -1207,8 +1215,8 @@ function generateDailyPDF() {
   // Generate date columns
   const dateColumns = generateDateColumns(projectInfo.startDate, projectInfo.endDate, 'day');
   
-  // Prepare table data
-  const tableData = window.currentTimelineTasks.map(task => {
+  // Prepare table data - use resolved tasks array
+  const tableData = tasks.map(task => {
     const row = [task.name];
     const taskStart = new Date(task.start);
     const taskEnd = new Date(task.end);
@@ -1249,18 +1257,26 @@ function generateDailyPDF() {
 
 // Generate Weekly PDF
 function generateWeeklyPDF() {
-  // ISSUE FIX 3: Add debugging to show what currentTimelineTasks contains
+  // ISSUE FIX 3: Comprehensive data check with fallback to local currentTimelineTasks
   console.log('[PDF] generateWeeklyPDF called');
   console.log('[PDF] window.currentTimelineTasks:', window.currentTimelineTasks);
-  console.log('[PDF] window.currentTimelineTasks length:', window.currentTimelineTasks ? window.currentTimelineTasks.length : 'undefined');
+  console.log('[PDF] local currentTimelineTasks:', typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : 'undefined');
   
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert('PDF library not loaded. Please refresh the page and try again.');
     return;
   }
   
-  if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
-    console.error('[PDF] No timeline data available. Tasks:', window.currentTimelineTasks);
+  // ISSUE FIX 3: Check both window.currentTimelineTasks and local currentTimelineTasks variable
+  const tasks = window.currentTimelineTasks || (typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : null) || [];
+  
+  console.log('[PDF] Resolved tasks array:', tasks);
+  console.log('[PDF] Tasks length:', tasks.length);
+  
+  if (!tasks || tasks.length === 0) {
+    console.error('[PDF] No timeline data available after checking all sources');
+    console.error('[PDF] - window.currentTimelineTasks:', window.currentTimelineTasks);
+    console.error('[PDF] - local currentTimelineTasks:', typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : 'undefined');
     alert('No timeline data available. Please generate a timeline first.');
     return;
   }
@@ -1281,8 +1297,8 @@ function generateWeeklyPDF() {
   // Generate week columns
   const weekColumns = generateDateColumns(projectInfo.startDate, projectInfo.endDate, 'week');
   
-  // Prepare table data
-  const tableData = window.currentTimelineTasks.map(task => {
+  // Prepare table data - use resolved tasks array
+  const tableData = tasks.map(task => {
     const row = [task.name, formatDate(task.start), formatDate(task.end)];
     const taskStart = new Date(task.start);
     const taskEnd = new Date(task.end);
@@ -1329,18 +1345,26 @@ function generateWeeklyPDF() {
 
 // Generate Monthly PDF
 function generateMonthlyPDF() {
-  // ISSUE FIX 3: Add debugging to show what currentTimelineTasks contains
+  // ISSUE FIX 3: Comprehensive data check with fallback to local currentTimelineTasks
   console.log('[PDF] generateMonthlyPDF called');
   console.log('[PDF] window.currentTimelineTasks:', window.currentTimelineTasks);
-  console.log('[PDF] window.currentTimelineTasks length:', window.currentTimelineTasks ? window.currentTimelineTasks.length : 'undefined');
+  console.log('[PDF] local currentTimelineTasks:', typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : 'undefined');
   
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert('PDF library not loaded. Please refresh the page and try again.');
     return;
   }
   
-  if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
-    console.error('[PDF] No timeline data available. Tasks:', window.currentTimelineTasks);
+  // ISSUE FIX 3: Check both window.currentTimelineTasks and local currentTimelineTasks variable
+  const tasks = window.currentTimelineTasks || (typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : null) || [];
+  
+  console.log('[PDF] Resolved tasks array:', tasks);
+  console.log('[PDF] Tasks length:', tasks.length);
+  
+  if (!tasks || tasks.length === 0) {
+    console.error('[PDF] No timeline data available after checking all sources');
+    console.error('[PDF] - window.currentTimelineTasks:', window.currentTimelineTasks);
+    console.error('[PDF] - local currentTimelineTasks:', typeof currentTimelineTasks !== 'undefined' ? currentTimelineTasks : 'undefined');
     alert('No timeline data available. Please generate a timeline first.');
     return;
   }
@@ -1361,8 +1385,8 @@ function generateMonthlyPDF() {
   // Generate month columns
   const monthColumns = generateDateColumns(projectInfo.startDate, projectInfo.endDate, 'month');
   
-  // Prepare table data
-  const tableData = window.currentTimelineTasks.map(task => {
+  // Prepare table data - use resolved tasks array
+  const tableData = tasks.map(task => {
     const row = [task.name, formatDate(task.start), formatDate(task.end), `${task.hours || 0}h`];
     const taskStart = new Date(task.start);
     const taskEnd = new Date(task.end);
@@ -4514,7 +4538,8 @@ document.addEventListener('DOMContentLoaded', () => {
           }
           
           alert('✅ Timeline changes and order saved successfully');
-          btnSave.style.display = 'none';
+          // ISSUE FIX 2: Keep Save Changes button visible after saving
+          // btnSave.style.display = 'none';  // REMOVED - button should stay visible
           
           // Mark timeline as synced
           localStorage.setItem('timeline_synced', 'true');
@@ -4533,7 +4558,8 @@ document.addEventListener('DOMContentLoaded', () => {
         alert('Timeline saved locally');
       }
       
-      btnSave.style.display = 'none';
+      // ISSUE FIX 2: Keep Save Changes button visible after saving
+      // btnSave.style.display = 'none';  // REMOVED - button should stay visible
     });
   }
 });
