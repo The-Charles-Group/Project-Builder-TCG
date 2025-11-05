@@ -534,6 +534,10 @@ function toggleRetainerType(code, isRetainer) {
   }
   
   console.log(`[RETAINER] ${code} set to ${isRetainer ? 'RETAINER' : 'PROJECT'}`);
+  
+  // FIX: Update pricing displays immediately after toggle
+  updatePricingTable();
+  updatePricingSummary();
 }
 
 function updateRetainerMonths(code, months) {
@@ -5204,13 +5208,16 @@ async function buildFromCurrentSelection() {
     window.renderScenario('scenarioA', scenarios.A);
   }
 
-  // Show Step 4 (Timeline) and Step 5 (Export)
+  // FIX: Show Step 4 and Step 5 WITHOUT scrolling to them
+  // This allows the user to review pricing in Step 3 first
+  // They can scroll down to Step 4 when ready to generate timeline
   const step4 = document.querySelector("#step4");
   const step5 = document.querySelector("#step5");
   if (step5) step5.style.display = 'block';
-  if (step4 && window.showStep4) {
-    window.showStep4('A');  // Show timeline for Scenario A
-  }
+  if (step4) step4.style.display = 'block';
+  
+  // NOTE: We do NOT call step4.scrollIntoView() or window.showStep4()
+  // The page stays focused on Step 3 so user reviews pricing first
 }
 
 // Alias for backward compatibility
