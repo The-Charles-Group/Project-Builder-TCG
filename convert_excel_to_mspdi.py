@@ -294,14 +294,14 @@ def convert_excel_to_mspdi(
         
         # Custom Field 1: Risk Score (Number)
         ext_attr1 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
-        ET.SubElement(ext_attr1, "{%s}FieldID" % ns).text = "188743731"  # Task Number1
+        ET.SubElement(ext_attr1, "{%s}FieldID" % ns).text = "188743713"  # Task Number1
         ET.SubElement(ext_attr1, "{%s}FieldName" % ns).text = "Number1"
         ET.SubElement(ext_attr1, "{%s}Alias" % ns).text = "Risk Score"
         ET.SubElement(ext_attr1, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400033"
         
         # Custom Field 2: Confidence Level (Number)
         ext_attr2 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
-        ET.SubElement(ext_attr2, "{%s}FieldID" % ns).text = "188743732"  # Task Number2
+        ET.SubElement(ext_attr2, "{%s}FieldID" % ns).text = "188743714"  # Task Number2
         ET.SubElement(ext_attr2, "{%s}FieldName" % ns).text = "Number2"
         ET.SubElement(ext_attr2, "{%s}Alias" % ns).text = "Confidence Level"
         ET.SubElement(ext_attr2, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400034"
@@ -326,6 +326,13 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr5, "{%s}FieldName" % ns).text = "Text3"  
         ET.SubElement(ext_attr5, "{%s}Alias" % ns).text = "Component Name"
         ET.SubElement(ext_attr5, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400037"
+        
+        # Custom Field 6: Revenue (Number)
+        ext_attr6 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr6, "{%s}FieldID" % ns).text = "188743715"  # Task Number3
+        ET.SubElement(ext_attr6, "{%s}FieldName" % ns).text = "Number3"
+        ET.SubElement(ext_attr6, "{%s}Alias" % ns).text = "Revenue"
+        ET.SubElement(ext_attr6, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400038"
     
     # Add Calendar definition
     calendars = ET.SubElement(root, "{%s}Calendars" % ns)
@@ -481,11 +488,16 @@ def convert_excel_to_mspdi(
     # Process WBS tasks with enhanced structure
     task_uid = 1
     task_map = {}
+    wbs_to_uid = {}  # WBS to UID mapping for dependency resolution
     deliverable_tasks = {}  # Track deliverable summary tasks for dependencies
     component_tasks = {}    # Track component tasks for dependencies
     current_date = project_start
     deliverable_ends = {}
     all_task_uids = []  # Track all task UIDs for phase gates
+    
+    # Initialize cost accumulators for aggregation
+    deliverable_costs = {}  # {deliv_uid: total_cost}
+    component_costs = {}    # {comp_uid: total_cost}
     
     # Calculate total project timeline for phase gates
     total_rows = len(df)
@@ -517,14 +529,26 @@ def convert_excel_to_mspdi(
             all_task_uids.append(deliv_uid)
             deliverable_tasks[str(deliverable_name)] = deliv_uid
             
-            # Get deliverable code if available
+            # Initialize cost accumulator for this deliverable
+            deliverable_costs[deliv_uid] = 0.0
+            
+            # Get deliverable code and service department if available
             deliv_code = ""
             if "Deliverable_Code" in group.columns:
                 deliv_code = str(group["Deliverable_Code"].iloc[0]) if not group["Deliverable_Code"].empty else ""
             
+            # Get Service_Department for deliverable (from first row)
+            service_dept = ""
+            if "Service_Department" in group.columns and not group.empty:
+                service_dept = str(group["Service_Department"].iloc[0]) if pd.notna(group["Service_Department"].iloc[0]) else ""
+            
             ET.SubElement(deliv_task, "{%s}UID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}ID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}Name" % ns).text = str(deliverable_name)
+            
+            # Add Category element for Service_Department
+            category_value = service_dept if service_dept else "Unassigned"
+            ET.SubElement(deliv_task, "{%s}Category" % ns).text = category_value
             ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}WBS" % ns).text = str(deliverable_num)
@@ -674,15 +698,27 @@ def convert_excel_to_mspdi(
                 task_uid += 1
                 all_task_uids.append(comp_uid)
                 
+                # Initialize cost accumulator for this component
+                component_costs[comp_uid] = 0.0
+                
                 # Store component task for dependencies
                 component_tasks[f"{deliverable_name}:{component_name}"] = comp_uid
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Creating component summary task: '{component_name}' (UID={comp_uid})")
                 
+                # Get Service_Department for component (from first row of component group)
+                comp_service_dept = ""
+                if "Service_Department" in component_group.columns and not component_group.empty:
+                    comp_service_dept = str(component_group["Service_Department"].iloc[0]) if pd.notna(component_group["Service_Department"].iloc[0]) else ""
+                
                 # Component task properties
                 ET.SubElement(comp_task, "{%s}UID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}ID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}Name" % ns).text = str(component_name) if component_name else "Uncategorized"
+                
+                # Add Category element for Service_Department
+                comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
+                ET.SubElement(comp_task, "{%s}Category" % ns).text = comp_category_value
                 ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                 ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}"
@@ -739,6 +775,11 @@ def convert_excel_to_mspdi(
                                     row.get("Task_Label") or 
                                     f"{component_name} - Task {task_num_in_component}")
                         department = row.get("Department", "")
+                        
+                        # Get Service_Department for this task
+                        task_service_dept = row.get("Service_Department", "")
+                        if pd.isna(task_service_dept):
+                            task_service_dept = ""
                         
                         logging.info(f"[3-LEVEL HIERARCHY] Creating L3 task: '{task_name}' (UID={uid}, Component={component_name})")
                         
@@ -798,6 +839,14 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
+                        
+                        # Add Category element for Service_Department
+                        task_category_value = task_service_dept if task_service_dept else "Unassigned"
+                        ET.SubElement(task, "{%s}Category" % ns).text = task_category_value
+                        
+                        # Store WBS to UID mapping for dependency resolution
+                        task_wbs = f"{deliverable_num}.{component_num}.{task_num_in_component}"
+                        wbs_to_uid[task_wbs] = uid
                         ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
                         ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
                         ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}.{task_num_in_component}"
@@ -873,27 +922,40 @@ def convert_excel_to_mspdi(
                             ET.SubElement(task, "{%s}Manual" % ns).text = "0"
                             logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                         
-                        # Add cost if available
+                        # Add cost if available and accumulate into component and deliverable totals
                         price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
                         if price_usd is not None and pd.notna(price_usd):
                             try:
                                 price_value = float(price_usd)
-                                ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
-                                ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
-                                ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
-                            except (ValueError, TypeError):
-                                pass
+                                if price_value > 0:  # Only add positive costs
+                                    ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
+                                    ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
+                                    ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
+                                    
+                                    # Accumulate cost into component and deliverable totals
+                                    component_costs[comp_uid] += price_value
+                                    deliverable_costs[deliv_uid] += price_value
+                                    
+                                    # Add Revenue extended attribute (same as cost for flat billing)
+                                    if add_custom_fields:
+                                        ext_attr_revenue = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                                        ET.SubElement(ext_attr_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
+                                        ET.SubElement(ext_attr_revenue, "{%s}Value" % ns).text = str(price_value)
+                                else:
+                                    logging.warning(f"Skipping zero or negative price for task '{task_name}': {price_value}")
+                            except (ValueError, TypeError) as e:
+                                logging.warning(f"Could not parse Price_USD for task '{task_name}': {e}")
                         
                         # Add extended attributes (custom fields) for each task
                         if add_custom_fields:
                             # Risk Score (random for demo)
                             ext_attr_risk = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_risk, "{%s}FieldID" % ns).text = "188743731"  # Number1
+                            ET.SubElement(ext_attr_risk, "{%s}FieldID" % ns).text = "188743713"  # Number1
                             ET.SubElement(ext_attr_risk, "{%s}Value" % ns).text = str(random.randint(1, 10))
                             
                             # Confidence Level (random 70-100)
                             ext_attr_conf = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743732"  # Number2
+                            ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743714"  # Number2
                             ET.SubElement(ext_attr_conf, "{%s}Value" % ns).text = str(random.randint(70, 100))
                             
                             # Department
@@ -943,6 +1005,25 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{int(duration_hours * 60)}M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
+                # Add aggregated cost/revenue to component summary task
+                comp_total_cost = component_costs.get(comp_uid, 0.0)
+                if comp_total_cost > 0:
+                    ET.SubElement(comp_task, "{%s}Cost" % ns).text = str(comp_total_cost)
+                    ET.SubElement(comp_task, "{%s}FixedCost" % ns).text = str(comp_total_cost)
+                    ET.SubElement(comp_task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
+                    
+                    # Add Revenue extended attribute (same as cost for flat billing)
+                    if add_custom_fields:
+                        ext_attr_comp_revenue = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_comp_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
+                        ET.SubElement(ext_attr_comp_revenue, "{%s}Value" % ns).text = str(comp_total_cost)
+                    
+                    logging.info(f"[COST AGGREGATION] Component '{component_name}' total cost: ${comp_total_cost:.2f}")
+                
+                # Store component WBS to UID mapping
+                comp_wbs = f"{deliverable_num}.{component_num}"
+                wbs_to_uid[comp_wbs] = comp_uid
+                
                 # Update current_date to end of this component for next component to start
                 current_date = component_finish
                 
@@ -953,6 +1034,25 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{int(duration_hours * 60)}M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
+            
+            # Add aggregated cost/revenue to deliverable summary task
+            deliv_total_cost = deliverable_costs.get(deliv_uid, 0.0)
+            if deliv_total_cost > 0:
+                ET.SubElement(deliv_task, "{%s}Cost" % ns).text = str(deliv_total_cost)
+                ET.SubElement(deliv_task, "{%s}FixedCost" % ns).text = str(deliv_total_cost)
+                ET.SubElement(deliv_task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
+                
+                # Add Revenue extended attribute (same as cost for flat billing)
+                if add_custom_fields:
+                    ext_attr_deliv_revenue = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_deliv_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
+                    ET.SubElement(ext_attr_deliv_revenue, "{%s}Value" % ns).text = str(deliv_total_cost)
+                
+                logging.info(f"[COST AGGREGATION] Deliverable '{deliverable_name}' total cost: ${deliv_total_cost:.2f}")
+            
+            # Store deliverable WBS to UID mapping
+            deliv_wbs = str(deliverable_num)
+            wbs_to_uid[deliv_wbs] = deliv_uid
             
             # Add deliverable completion milestone
             if add_deliverable_milestones:
@@ -1071,32 +1171,115 @@ def convert_excel_to_mspdi(
     
     # Add PredecessorLink elements for dependencies
     if add_dependencies:
+        logging.info("[DEPENDENCIES] Processing Dependencies column from DataFrame")
+        
+        # Check if Dependencies column exists
+        if "Dependencies" in df.columns:
+            # Parse dependencies from DataFrame and create PredecessorLink elements
+            dependencies_count = 0
+            skipped_count = 0
+            
+            for uid, task_data in task_map.items():
+                task = task_data["task"]
+                
+                # Find the corresponding row in DataFrame for this task
+                # Match by deliverable, component, and task name
+                task_deliverable = task_data["deliverable"]
+                task_component = task_data["component"]
+                
+                # Get task name from the XML element
+                task_name_elem = task.find("{%s}Name" % ns)
+                if task_name_elem is not None:
+                    task_name = task_name_elem.text
+                else:
+                    continue
+                
+                # Find matching row in DataFrame
+                matching_rows = df[
+                    (df["Deliverable"] == task_deliverable) & 
+                    (df["Component"] == task_component)
+                ]
+                
+                # Further filter by task name if available
+                if "Task_Name" in df.columns:
+                    matching_rows = matching_rows[matching_rows["Task_Name"] == task_name]
+                elif "L3_Task" in df.columns:
+                    matching_rows = matching_rows[matching_rows["L3_Task"] == task_name]
+                
+                if not matching_rows.empty:
+                    row = matching_rows.iloc[0]
+                    dependencies_value = row.get("Dependencies", "")
+                    
+                    # Parse dependencies if value is not empty
+                    if dependencies_value and pd.notna(dependencies_value) and str(dependencies_value).strip():
+                        dependencies_str = str(dependencies_value).strip()
+                        
+                        # Split by comma or semicolon to get list of WBS IDs
+                        dep_wbs_list = []
+                        for sep in [',', ';']:
+                            if sep in dependencies_str:
+                                dep_wbs_list = [d.strip() for d in dependencies_str.split(sep)]
+                                break
+                        
+                        # If no separator found, treat as single dependency
+                        if not dep_wbs_list:
+                            dep_wbs_list = [dependencies_str]
+                        
+                        # Process each dependency
+                        for dep_wbs in dep_wbs_list:
+                            if not dep_wbs:
+                                continue
+                            
+                            # Resolve WBS to UID
+                            predecessor_uid = wbs_to_uid.get(dep_wbs)
+                            
+                            if predecessor_uid is None:
+                                logging.warning(f"[DEPENDENCIES] Invalid WBS reference '{dep_wbs}' in dependencies for task '{task_name}' - skipping")
+                                skipped_count += 1
+                                continue
+                            
+                            # Skip self-referencing dependencies
+                            if predecessor_uid == uid:
+                                logging.warning(f"[DEPENDENCIES] Self-referencing dependency for task '{task_name}' (UID={uid}) - skipping")
+                                skipped_count += 1
+                                continue
+                            
+                            # Create PredecessorLink element
+                            pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
+                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
+                            ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
+                            ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
+                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
+                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
+                            
+                            dependencies_count += 1
+                            logging.info(f"[DEPENDENCIES] Added dependency: Task '{task_name}' (UID={uid}) depends on WBS '{dep_wbs}' (UID={predecessor_uid})")
+            
+            logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies, skipped {skipped_count} invalid references")
+        else:
+            logging.warning("[DEPENDENCIES] Dependencies column not found in DataFrame - skipping dependency parsing")
+        
+        # Also add cross-deliverable dependencies based on department logic as fallback
         logging.info("[3-LEVEL HIERARCHY] Adding component-level dependencies (tasks within components run in parallel)")
         
-        # NOTE: Sequential chaining of all tasks removed - causes unrealistic timeline
-        # Tasks within a component should run in parallel
-        # Only add cross-department dependencies if needed
+        # Define department dependencies
+        dept_dependencies = {
+            "Creative": ["Strategy"],
+            "Paid Media": ["Creative", "Strategy"],
+            "Technology": ["Strategy"],
+            "Content": ["Strategy", "Creative"],
+            "Quality Assurance": ["Technology", "Content"]
+        }
         
-        # Identify logical dependencies
         for uid, task_data in task_map.items():
             task = task_data["task"]
-            
-            # REMOVED: Sequential chaining (prev_task logic)
-            # This was causing all tasks to chain sequentially, resulting in unrealistic timeline
-            # Tasks within a component should run in parallel
-            
-            # Add cross-deliverable dependencies based on department logic
             department = task_data["department"]
             deliverable = task_data["deliverable"]
             
-            # Define department dependencies
-            dept_dependencies = {
-                "Creative": ["Strategy"],
-                "Paid Media": ["Creative", "Strategy"],
-                "Technology": ["Strategy"],
-                "Content": ["Strategy", "Creative"],
-                "Quality Assurance": ["Technology", "Content"]
-            }
+            # Only add department-based dependencies if no explicit dependencies from DataFrame
+            existing_pred_links = task.findall("{%s}PredecessorLink" % ns)
+            if existing_pred_links:
+                continue  # Skip if dependencies already added from DataFrame
             
             if department in dept_dependencies:
                 # Look for tasks in dependent departments from earlier deliverables
