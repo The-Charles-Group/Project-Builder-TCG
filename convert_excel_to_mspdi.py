@@ -76,7 +76,11 @@ def create_governance_milestone_task(
     ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
     ET.SubElement(task, "{%s}WBS" % ns).text = wbs_level
     ET.SubElement(task, "{%s}OutlineNumber" % ns).text = wbs_level
-    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = str(wbs_level.count('.') + 1)
+    # FIX: Enforce Workfront 3-level hierarchy - map WBS depth to max 3 levels
+    # 0 dots (e.g., "1") → OutlineLevel 1, 1 dot (e.g., "1.1") → OutlineLevel 2, 2+ dots → OutlineLevel 3
+    dot_count = wbs_level.count('.')
+    outline_level = min(dot_count + 1, 3)  # Cap at level 3 for Workfront compatibility
+    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = str(outline_level)
     
     # Mark as milestone if no hours
     if hours == 0:
@@ -495,7 +499,13 @@ def convert_excel_to_mspdi(
     # Process WBS tasks with enhanced structure
     task_uid = 1
     task_map = {}
-    wbs_to_uid = {}  # WBS to UID mapping for dependency resolution
+    
+    # FIX: Dual mapping system for WBS codes
+    # 1. original_wbs_to_uid: Maps DataFrame WBS_ID → UID (for dependency lookup)
+    # 2. sequential_wbs_to_uid: Maps sequential WBS → UID (for XML structure)
+    original_wbs_to_uid = {}  # Original WBS_ID from DataFrame → UID mapping
+    sequential_wbs_to_uid = {}  # Sequential WBS code → UID mapping
+    
     deliverable_tasks = {}  # Track deliverable summary tasks for dependencies
     component_tasks = {}    # Track component tasks for dependencies
     current_date = project_start
@@ -515,6 +525,11 @@ def convert_excel_to_mspdi(
             int(total_rows * 0.50),  # 50% milestone
             int(total_rows * 0.75),  # 75% milestone
         ]
+    
+    # FIX: Sequential WBS counters - INDEPENDENT of DataFrame WBS_ID
+    deliverable_counter = 1  # Sequential counter for deliverables: 1, 2, 3...
+    component_counter_per_deliv = {}  # {deliverable_name: counter} for components per deliverable
+    task_counter_per_comp = {}  # {(deliverable, component): counter} for tasks per component
     
     # Group by deliverable to create hierarchy
     deliverable_num = 0
@@ -549,29 +564,28 @@ def convert_excel_to_mspdi(
             if "Service_Department" in group.columns and not group.empty:
                 service_dept = str(group["Service_Department"].iloc[0]) if pd.notna(group["Service_Department"].iloc[0]) else ""
             
-            # FIX: Use WBS_ID from DataFrame instead of calculated deliverable_num
-            deliv_wbs_id = None
+            # FIX: Preserve original WBS_ID from DataFrame for dependency lookup
+            original_deliv_wbs_id = None
             if "WBS_ID" in group.columns and not group.empty:
-                deliv_wbs_id_val = group.iloc[0].get("WBS_ID")
-                if pd.notna(deliv_wbs_id_val):
-                    deliv_wbs_id = str(deliv_wbs_id_val)
-                    logging.info(f"[WBS FIX] Using WBS_ID from DataFrame for deliverable '{deliverable_name}': {deliv_wbs_id}")
+                original_wbs_val = group.iloc[0].get("WBS_ID")
+                if pd.notna(original_wbs_val):
+                    original_deliv_wbs_id = str(original_wbs_val)
+                    logging.info(f"[WBS SEQUENTIAL] Storing original WBS_ID for deliverable '{deliverable_name}': {original_deliv_wbs_id}")
             
-            # Fallback to calculated WBS if WBS_ID not available
-            if not deliv_wbs_id:
-                deliv_wbs_id = str(deliverable_num)
-                logging.warning(f"[WBS FIX] WBS_ID not found for deliverable '{deliverable_name}', using calculated: {deliv_wbs_id}")
+            # FIX: Generate SEQUENTIAL WBS code (INDEPENDENT of DataFrame WBS_ID)
+            # This ensures NO duplicates and perfect Workfront compatibility
+            deliv_wbs = str(deliverable_counter)
+            deliv_outline_level = "1"  # All deliverables are level 1
             
-            # Calculate OutlineLevel from WBS_ID (count dots + 1)
-            deliv_outline_level = str(deliv_wbs_id.count('.') + 1)
+            logging.info(f"[WBS SEQUENTIAL] Deliverable '{deliverable_name}': Sequential WBS={deliv_wbs} (Original WBS_ID={original_deliv_wbs_id})")
             
             ET.SubElement(deliv_task, "{%s}UID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}ID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}Name" % ns).text = str(deliverable_name)
             ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
-            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs_id
-            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = deliv_wbs_id
+            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs
+            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = deliv_wbs
             ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = deliv_outline_level
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
             
@@ -715,6 +729,10 @@ def convert_excel_to_mspdi(
             
             component_num = 0
             
+            # FIX: Initialize component counter for this deliverable
+            if str(deliverable_name) not in component_counter_per_deliv:
+                component_counter_per_deliv[str(deliverable_name)] = 1
+            
             # Loop through each component (Level 2)
             for component_name, component_group in component_grouped:
                 component_num += 1
@@ -738,21 +756,20 @@ def convert_excel_to_mspdi(
                 if "Service_Department" in component_group.columns and not component_group.empty:
                     comp_service_dept = str(component_group["Service_Department"].iloc[0]) if pd.notna(component_group["Service_Department"].iloc[0]) else ""
                 
-                # FIX: Use WBS_ID from DataFrame instead of calculated deliverable_num.component_num
-                comp_wbs_id = None
+                # FIX: Preserve original WBS_ID from DataFrame for dependency lookup
+                original_comp_wbs_id = None
                 if "WBS_ID" in component_group.columns and not component_group.empty:
-                    comp_wbs_id_val = component_group.iloc[0].get("WBS_ID")
-                    if pd.notna(comp_wbs_id_val):
-                        comp_wbs_id = str(comp_wbs_id_val)
-                        logging.info(f"[WBS FIX] Using WBS_ID from DataFrame for component '{component_name}': {comp_wbs_id}")
+                    original_wbs_val = component_group.iloc[0].get("WBS_ID")
+                    if pd.notna(original_wbs_val):
+                        original_comp_wbs_id = str(original_wbs_val)
+                        logging.info(f"[WBS SEQUENTIAL] Storing original WBS_ID for component '{component_name}': {original_comp_wbs_id}")
                 
-                # Fallback to calculated WBS if WBS_ID not available
-                if not comp_wbs_id:
-                    comp_wbs_id = f"{deliverable_num}.{component_num}"
-                    logging.warning(f"[WBS FIX] WBS_ID not found for component '{component_name}', using calculated: {comp_wbs_id}")
+                # FIX: Generate SEQUENTIAL WBS code (INDEPENDENT of DataFrame WBS_ID)
+                # Format: {deliverable_wbs}.{component_counter}
+                comp_wbs = f"{deliv_wbs}.{component_counter_per_deliv[str(deliverable_name)]}"
+                comp_outline_level = "2"  # All components are level 2
                 
-                # Calculate OutlineLevel from WBS_ID (count dots + 1)
-                comp_outline_level = str(comp_wbs_id.count('.') + 1)
+                logging.info(f"[WBS SEQUENTIAL] Component '{component_name}': Sequential WBS={comp_wbs} (Original WBS_ID={original_comp_wbs_id})")
                 
                 # Component task properties
                 ET.SubElement(comp_task, "{%s}UID" % ns).text = str(comp_uid)
@@ -760,8 +777,8 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}Name" % ns).text = str(component_name) if component_name else "Uncategorized"
                 ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                 ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
-                ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs_id
-                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs_id
+                ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs
+                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs
                 ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
@@ -804,6 +821,11 @@ def convert_excel_to_mspdi(
                 component_start = current_date
                 component_finish = current_date
                 task_num_in_component = 0
+                
+                # FIX: Initialize task counter for this component
+                comp_key = (str(deliverable_name), str(component_name))
+                if comp_key not in task_counter_per_comp:
+                    task_counter_per_comp[comp_key] = 1
                 
                 # Loop through tasks within this component (Level 3)
                 for idx, row in component_group.iterrows():
@@ -880,31 +902,35 @@ def convert_excel_to_mspdi(
                         if task_end is None:
                             task_end = add_business_days(task_start, duration_days)
                         
-                        # FIX: Use WBS_ID from DataFrame instead of calculated WBS
-                        task_wbs_id = None
+                        # FIX: Preserve original WBS_ID from DataFrame for dependency lookup
+                        original_task_wbs_id = None
                         if "WBS_ID" in row.index and pd.notna(row.get("WBS_ID")):
-                            task_wbs_id = str(row.get("WBS_ID"))
-                            logging.info(f"[WBS FIX] Using WBS_ID from DataFrame for task '{task_name}': {task_wbs_id}")
+                            original_task_wbs_id = str(row.get("WBS_ID"))
+                            logging.info(f"[WBS SEQUENTIAL] Storing original WBS_ID for task '{task_name}': {original_task_wbs_id}")
                         
-                        # Fallback to calculated WBS if WBS_ID not available
-                        if not task_wbs_id:
-                            task_wbs_id = f"{deliverable_num}.{component_num}.{task_num_in_component}"
-                            logging.warning(f"[WBS FIX] WBS_ID not found for task '{task_name}', using calculated: {task_wbs_id}")
+                        # FIX: Generate SEQUENTIAL WBS code (INDEPENDENT of DataFrame WBS_ID)
+                        # Format: {component_wbs}.{task_counter}
+                        task_wbs = f"{comp_wbs}.{task_counter_per_comp[comp_key]}"
+                        task_outline_level = "3"  # All leaf tasks are level 3
                         
-                        # Calculate OutlineLevel from WBS_ID (count dots + 1)
-                        task_outline_level = str(task_wbs_id.count('.') + 1)
+                        logging.info(f"[WBS SEQUENTIAL] Task '{task_name}': Sequential WBS={task_wbs} (Original WBS_ID={original_task_wbs_id})")
                         
-                        # Add task elements with WBS from DataFrame
+                        # Add task elements with sequential WBS
                         ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
                         
-                        # Store WBS to UID mapping for dependency resolution
-                        wbs_to_uid[task_wbs_id] = uid
+                        # FIX: Store DUAL WBS to UID mappings
+                        # 1. Original WBS_ID → UID (for dependency lookup from DataFrame)
+                        # 2. Sequential WBS → UID (for XML structure)
+                        if original_task_wbs_id:
+                            original_wbs_to_uid[original_task_wbs_id] = uid
+                        sequential_wbs_to_uid[task_wbs] = uid
+                        
                         ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
                         ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-                        ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs_id
-                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs_id
+                        ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs
+                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs
                         ET.SubElement(task, "{%s}OutlineLevel" % ns).text = task_outline_level
                         ET.SubElement(task, "{%s}Priority" % ns).text = "500"
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
@@ -1056,6 +1082,9 @@ def convert_excel_to_mspdi(
                             "component_uid": comp_uid  # Track parent component
                         }
                         
+                        # FIX: Increment task counter for next task in this component
+                        task_counter_per_comp[comp_key] += 1
+                        
                     except Exception as e:
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
@@ -1080,11 +1109,18 @@ def convert_excel_to_mspdi(
                     
                     logging.info(f"[COST AGGREGATION] Component '{component_name}' total cost: ${comp_total_cost:.2f}")
                 
-                # Store component WBS to UID mapping (use the WBS_ID from DataFrame)
-                wbs_to_uid[comp_wbs_id] = comp_uid
+                # FIX: Store DUAL WBS to UID mappings for components
+                # 1. Original WBS_ID → UID (for dependency lookup from DataFrame)
+                # 2. Sequential WBS → UID (for XML structure)
+                if original_comp_wbs_id:
+                    original_wbs_to_uid[original_comp_wbs_id] = comp_uid
+                sequential_wbs_to_uid[comp_wbs] = comp_uid
                 
                 # Update current_date to end of this component for next component to start
                 current_date = component_finish
+                
+                # FIX: Increment component counter for next component in this deliverable
+                component_counter_per_deliv[str(deliverable_name)] += 1
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
@@ -1109,8 +1145,12 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[COST AGGREGATION] Deliverable '{deliverable_name}' total cost: ${deliv_total_cost:.2f}")
             
-            # Store deliverable WBS to UID mapping (use the WBS_ID from DataFrame)
-            wbs_to_uid[deliv_wbs_id] = deliv_uid
+            # FIX: Store DUAL WBS to UID mappings for deliverables
+            # 1. Original WBS_ID → UID (for dependency lookup from DataFrame)
+            # 2. Sequential WBS → UID (for XML structure)
+            if original_deliv_wbs_id:
+                original_wbs_to_uid[original_deliv_wbs_id] = deliv_uid
+            sequential_wbs_to_uid[deliv_wbs] = deliv_uid
             
             # Add deliverable completion milestone
             if add_deliverable_milestones:
@@ -1147,6 +1187,9 @@ def convert_excel_to_mspdi(
                     ext_attr_mt = ET.SubElement(milestone, "{%s}ExtendedAttribute" % ns)
                     ET.SubElement(ext_attr_mt, "{%s}FieldID" % ns).text = "188743731"  # Text1
                     ET.SubElement(ext_attr_mt, "{%s}Value" % ns).text = "Deliverable Milestone"
+            
+            # FIX: Increment deliverable counter for next deliverable
+            deliverable_counter += 1
     
     # Add phase gate milestones
     if add_phase_gates and all_task_uids:
@@ -1353,8 +1396,9 @@ def convert_excel_to_mspdi(
                         if not dep_wbs:
                             continue
                         
-                        # Resolve WBS to UID
-                        predecessor_uid = wbs_to_uid.get(dep_wbs)
+                        # FIX: Resolve WBS to UID using ORIGINAL WBS_ID mapping
+                        # Dependencies column contains original WBS_IDs from DataFrame, not sequential WBS codes
+                        predecessor_uid = original_wbs_to_uid.get(dep_wbs)
                         
                         if predecessor_uid is None:
                             logging.warning(f"[DEPENDENCIES] Invalid WBS reference '{dep_wbs}' for task {lookup_key} - skipping")
