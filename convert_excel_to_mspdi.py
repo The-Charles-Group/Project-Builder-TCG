@@ -937,10 +937,12 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{int(hours * 60)}M"
                         ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
-                        ET.SubElement(task, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
-                        ET.SubElement(task, "{%s}RegularWork" % ns).text = f"PT{int(hours * 60)}M"
+                        # FIX: Set Work to PT0M on leaf tasks to prevent double-counting in Workfront
+                        # Work will be calculated automatically from Assignment elements per MSPDI standard
+                        ET.SubElement(task, "{%s}Work" % ns).text = "PT0M"
+                        ET.SubElement(task, "{%s}RegularWork" % ns).text = "PT0M"
                         ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{int(hours * 60)}M"
-                        ET.SubElement(task, "{%s}RemainingWork" % ns).text = f"PT{int(hours * 60)}M"
+                        ET.SubElement(task, "{%s}RemainingWork" % ns).text = "PT0M"
                         ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
