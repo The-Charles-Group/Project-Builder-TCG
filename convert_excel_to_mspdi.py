@@ -618,216 +618,324 @@ def convert_excel_to_mspdi(
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
             # Use merged end date from Gantt if available, otherwise will be calculated from child tasks
             deliverable_finish = deliverable_end_date if deliverable_end_date else deliverable_start_date
-            component_num = 0
-            prev_task_uid = None  # Track previous task for dependencies
             
-            for idx, row in group.iterrows():
-                try:
-                    component_num += 1
-                    task = ET.SubElement(tasks, "{%s}Task" % ns)
-                    uid = task_uid
-                    task_uid += 1
-                    all_task_uids.append(uid)
+            # Group tasks by Component within this deliverable to create 3-level hierarchy
+            logging.info(f"[3-LEVEL HIERARCHY] Processing deliverable '{deliverable_name}' with component grouping")
+            try:
+                if "Component" in group.columns:
+                    # FIX: Convert Component column to object type and fill NaN with "Uncategorized"
+                    # This prevents issues with categorical types that don't allow null values
+                    group_copy = group.copy()
                     
-                    # Get task details
-                    task_name = row.get("Task_Name", row.get("Component", f"Task {uid}"))
-                    component_name = row.get("Component", "")
-                    department = row.get("Department", "")
+                    # Convert categorical to object if needed
+                    if pd.api.types.is_categorical_dtype(group_copy["Component"]):
+                        logging.info(f"[3-LEVEL HIERARCHY] Converting Component from categorical to object type")
+                        group_copy["Component"] = group_copy["Component"].astype(object)
                     
-                    # Store component task for dependencies
-                    if component_name:
-                        component_tasks[f"{deliverable_name}:{component_name}"] = uid
+                    # FIX: Fill blank/NaN component values with "Uncategorized" BEFORE groupby
+                    # Check for NaN, None, and empty strings
+                    blank_mask = group_copy["Component"].isna() | (group_copy["Component"] == "") | group_copy["Component"].isnull()
+                    blank_count = blank_mask.sum()
+                    if blank_count > 0:
+                        logging.info(f"[3-LEVEL HIERARCHY] Found {blank_count} tasks with blank Component, setting to 'Uncategorized'")
+                        group_copy.loc[blank_mask, "Component"] = "Uncategorized"
                     
-                    # Safely get hours
-                    planned_hours = row.get("Planned_Hours")
-                    if pd.isna(planned_hours) or planned_hours is None:
-                        planned_hours = row.get("Hours", 8)
-                    if pd.isna(planned_hours) or planned_hours is None:
-                        planned_hours = 8
-                    hours = float(planned_hours)
-                    duration_days = max(1, int(np.ceil(hours / hours_per_day)))
+                    # Now groupby will work correctly without dropna issues
+                    component_grouped = group_copy.groupby("Component", sort=False, dropna=False)
+                    logging.info(f"[3-LEVEL HIERARCHY] Found {len(component_grouped)} components in deliverable '{deliverable_name}'")
                     
-                    # FIX: Use merged timeline dates (Start_Date/End_Date) from Gantt if available
-                    # Only fall back to calculated dates if missing
-                    task_start = None
-                    task_end = None
+                    # Convert to list of tuples for iteration
+                    component_grouped = list(component_grouped)
+                else:
+                    logging.warning(f"[3-LEVEL HIERARCHY] No Component column found, creating single 'Uncategorized' group")
+                    component_grouped = [("Uncategorized", group)]
+            except Exception as e:
+                logging.warning(f"[3-LEVEL HIERARCHY] Error grouping by Component: {e}, falling back to single group")
+                import traceback
+                traceback.print_exc()
+                component_grouped = [("Uncategorized", group)]
+            
+            component_num = 0
+            
+            # Loop through each component (Level 2)
+            for component_name, component_group in component_grouped:
+                component_num += 1
+                
+                # Create component summary task (Level 2)
+                comp_task = ET.SubElement(tasks, "{%s}Task" % ns)
+                comp_uid = task_uid
+                task_uid += 1
+                all_task_uids.append(comp_uid)
+                
+                # Store component task for dependencies
+                component_tasks[f"{deliverable_name}:{component_name}"] = comp_uid
+                
+                logging.info(f"[3-LEVEL HIERARCHY] Creating component summary task: '{component_name}' (UID={comp_uid})")
+                
+                # Component task properties
+                ET.SubElement(comp_task, "{%s}UID" % ns).text = str(comp_uid)
+                ET.SubElement(comp_task, "{%s}ID" % ns).text = str(comp_uid)
+                ET.SubElement(comp_task, "{%s}Name" % ns).text = str(component_name) if component_name else "Uncategorized"
+                ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
+                ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}"
+                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{component_num}"
+                ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = "2"  # Component level
+                ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
+                ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
+                ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"
+                ET.SubElement(comp_task, "{%s}Work" % ns).text = "PT0M"
+                ET.SubElement(comp_task, "{%s}EffortDriven" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}Recurring" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}OverAllocated" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}Estimated" % ns).text = "1"
+                ET.SubElement(comp_task, "{%s}Milestone" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}Summary" % ns).text = "1"  # This is a summary task
+                ET.SubElement(comp_task, "{%s}Critical" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}IsSubproject" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}IsSubprojectReadOnly" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}IsMarked" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}IgnoreWarnings" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}ExternalTask" % ns).text = "0"
+                ET.SubElement(comp_task, "{%s}Active" % ns).text = "1"
+                
+                # Add custom fields for component
+                if add_custom_fields:
+                    # Component Name
+                    ext_attr_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
+                    ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
                     
-                    # Check for Start_Date field (from Gantt merge)
-                    if "Start_Date" in row.index and pd.notna(row.get("Start_Date")):
-                        try:
-                            start_val = str(row.get("Start_Date"))
-                            # Handle ISO format: 2025-11-16 or 2025-11-16T01:00:00
-                            if 'T' in start_val:
-                                task_start = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
-                            else:
-                                # Date only - add default 9 AM time
-                                task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
-                            logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
-                        except Exception as e:
-                            logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
-                    
-                    # Check for End_Date field (from Gantt merge)
-                    if "End_Date" in row.index and pd.notna(row.get("End_Date")):
-                        try:
-                            end_val = str(row.get("End_Date"))
-                            # Handle ISO format: 2025-11-27 or 2025-11-27T17:00:00
-                            if 'T' in end_val:
-                                task_end = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
-                            else:
-                                # Date only - add default 5 PM time
-                                task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
-                            logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
-                        except Exception as e:
-                            logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
-                    
-                    # Fall back to calculated dates if Start_Date/End_Date missing
-                    if task_start is None:
-                        task_start = current_date
-                    if task_end is None:
-                        task_end = add_business_days(task_start, duration_days)
-                    
-                    # Add task elements with enhanced WBS
-                    ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
-                    ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
-                    ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
-                    ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
-                    ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-                    ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}"
-                    ET.SubElement(task, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{component_num}"
-                    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = "2"
-                    ET.SubElement(task, "{%s}Priority" % ns).text = "500"
-                    ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
-                    ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
-                    ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{int(hours * 60)}M"
-                    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
-                    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
-                    ET.SubElement(task, "{%s}RegularWork" % ns).text = f"PT{int(hours * 60)}M"
-                    ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{int(hours * 60)}M"
-                    ET.SubElement(task, "{%s}RemainingWork" % ns).text = f"PT{int(hours * 60)}M"
-                    ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
-                    ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
-                    ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
-                    ET.SubElement(task, "{%s}EffortDriven" % ns).text = "1"
-                    ET.SubElement(task, "{%s}Recurring" % ns).text = "0"
-                    ET.SubElement(task, "{%s}OverAllocated" % ns).text = "0"
-                    ET.SubElement(task, "{%s}Estimated" % ns).text = "1"
-                    ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
-                    ET.SubElement(task, "{%s}Summary" % ns).text = "0"
-                    ET.SubElement(task, "{%s}Critical" % ns).text = "0"
-                    ET.SubElement(task, "{%s}IsSubproject" % ns).text = "0"
-                    ET.SubElement(task, "{%s}IsSubprojectReadOnly" % ns).text = "0"
-                    ET.SubElement(task, "{%s}IsMarked" % ns).text = "0"
-                    ET.SubElement(task, "{%s}IgnoreWarnings" % ns).text = "0"
-                    ET.SubElement(task, "{%s}HideBar" % ns).text = "0"
-                    ET.SubElement(task, "{%s}Rollup" % ns).text = "0"
-                    ET.SubElement(task, "{%s}BCWS" % ns).text = "0"
-                    ET.SubElement(task, "{%s}BCWP" % ns).text = "0"
-                    ET.SubElement(task, "{%s}PhysicalPercentComplete" % ns).text = "0"
-                    ET.SubElement(task, "{%s}EarnedValueMethod" % ns).text = "0"
-                    ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0H0M0S"
-                    ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0H0M0S"
-                    ET.SubElement(task, "{%s}Active" % ns).text = "1"
-                    ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
-                    ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
-                    
-                    # Add constraint type based on Gantt-sourced dates
-                    has_gantt_start = "Start_Date" in row.index and pd.notna(row.get("Start_Date"))
-                    has_gantt_end = "End_Date" in row.index and pd.notna(row.get("End_Date"))
-                    
-                    # Apply constraint type and manual scheduling fields based on Gantt-sourced dates
-                    if has_gantt_start and has_gantt_end:
-                        # Both dates from Gantt: Lock BOTH start and finish dates
-                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
-                        ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
-                        ET.SubElement(task, "{%s}Manual" % ns).text = "1"
-                        # CRITICAL: Add ManualStart, ManualFinish, ManualDuration to lock dates in Workfront
-                        ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
-                        ET.SubElement(task, "{%s}ManualFinish" % ns).text = task_end.isoformat()
-                        # Calculate duration from start to finish dates
-                        duration_minutes = int((task_end - task_start).total_seconds() / 60)
-                        ET.SubElement(task, "{%s}ManualDuration" % ns).text = f"PT{duration_minutes}M"
-                        logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
-                        logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start/finish/duration")
-                    elif has_gantt_start:
-                        # Only start date from Gantt: Lock start date only
-                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
-                        ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
-                        ET.SubElement(task, "{%s}Manual" % ns).text = "1"
-                        # CRITICAL: Add ManualStart to lock start date in Workfront
-                        ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
-                        # ManualFinish and ManualDuration not set - will use standard fields
-                        logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
-                        logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start")
-                    else:
-                        # No Gantt dates: ASAP scheduling (auto-scheduled)
-                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"
-                        ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
-                        ET.SubElement(task, "{%s}Manual" % ns).text = "0"
-                        logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
-                    
-                    # Add cost if available
-                    price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
-                    if price_usd is not None and pd.notna(price_usd):
-                        try:
-                            price_value = float(price_usd)
-                            ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
-                            ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
-                            ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    # Add extended attributes (custom fields) for each task
-                    if add_custom_fields:
-                        # Risk Score (random for demo)
-                        ext_attr_risk = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                        ET.SubElement(ext_attr_risk, "{%s}FieldID" % ns).text = "188743731"  # Number1
-                        ET.SubElement(ext_attr_risk, "{%s}Value" % ns).text = str(random.randint(1, 10))
+                    # Deliverable Code
+                    if deliv_code:
+                        ext_attr_dc = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
+                        ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
+                
+                # Track component start/finish dates
+                component_start = current_date
+                component_finish = current_date
+                task_num_in_component = 0
+                
+                # Loop through tasks within this component (Level 3)
+                for idx, row in component_group.iterrows():
+                    try:
+                        task_num_in_component += 1
+                        task = ET.SubElement(tasks, "{%s}Task" % ns)
+                        uid = task_uid
+                        task_uid += 1
+                        all_task_uids.append(uid)
                         
-                        # Confidence Level (random 70-100)
-                        ext_attr_conf = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                        ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743732"  # Number2
-                        ET.SubElement(ext_attr_conf, "{%s}Value" % ns).text = str(random.randint(70, 100))
+                        # Get task details - FIX: Use proper L3 task name, NOT Component as fallback
+                        task_name = (row.get("Task_Name") or 
+                                    row.get("L3_Task") or 
+                                    row.get("Task_Label") or 
+                                    f"{component_name} - Task {task_num_in_component}")
+                        department = row.get("Department", "")
                         
-                        # Department
-                        if department:
-                            ext_attr_dept = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                            ET.SubElement(ext_attr_dept, "{%s}Value" % ns).text = str(department)
+                        logging.info(f"[3-LEVEL HIERARCHY] Creating L3 task: '{task_name}' (UID={uid}, Component={component_name})")
                         
-                        # Deliverable Code
-                        if deliv_code:
-                            ext_attr_dc = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
-                            ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
+                        # Safely get hours
+                        planned_hours = row.get("Planned_Hours")
+                        if pd.isna(planned_hours) or planned_hours is None:
+                            planned_hours = row.get("Hours", 8)
+                        if pd.isna(planned_hours) or planned_hours is None:
+                            planned_hours = 8
+                        hours = float(planned_hours)
+                        duration_days = max(1, int(np.ceil(hours / hours_per_day)))
                         
-                        # Component Name
-                        if component_name:
+                        # FIX: Use merged timeline dates (Start_Date/End_Date) from Gantt if available
+                        # Only fall back to calculated dates if missing
+                        task_start = None
+                        task_end = None
+                        
+                        # Check for Start_Date field (from Gantt merge)
+                        if "Start_Date" in row.index and pd.notna(row.get("Start_Date")):
+                            try:
+                                start_val = str(row.get("Start_Date"))
+                                # Handle ISO format: 2025-11-16 or 2025-11-16T01:00:00
+                                if 'T' in start_val:
+                                    task_start = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
+                                else:
+                                    # Date only - add default 9 AM time
+                                    task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                                logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
+                            except Exception as e:
+                                logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
+                        
+                        # Check for End_Date field (from Gantt merge)
+                        if "End_Date" in row.index and pd.notna(row.get("End_Date")):
+                            try:
+                                end_val = str(row.get("End_Date"))
+                                # Handle ISO format: 2025-11-27 or 2025-11-27T17:00:00
+                                if 'T' in end_val:
+                                    task_end = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
+                                else:
+                                    # Date only - add default 5 PM time
+                                    task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
+                                logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
+                            except Exception as e:
+                                logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
+                        
+                        # Fall back to calculated dates if Start_Date/End_Date missing
+                        if task_start is None:
+                            task_start = current_date
+                        if task_end is None:
+                            task_end = add_business_days(task_start, duration_days)
+                        
+                        # Add task elements with 3-level WBS
+                        ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
+                        ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
+                        ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
+                        ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
+                        ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
+                        ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}.{task_num_in_component}"
+                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{component_num}.{task_num_in_component}"
+                        ET.SubElement(task, "{%s}OutlineLevel" % ns).text = "3"  # Task level (Level 3)
+                        ET.SubElement(task, "{%s}Priority" % ns).text = "500"
+                        ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
+                        ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
+                        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{int(hours * 60)}M"
+                        ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
+                        ET.SubElement(task, "{%s}Work" % ns).text = f"PT{int(hours * 60)}M"
+                        ET.SubElement(task, "{%s}RegularWork" % ns).text = f"PT{int(hours * 60)}M"
+                        ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{int(hours * 60)}M"
+                        ET.SubElement(task, "{%s}RemainingWork" % ns).text = f"PT{int(hours * 60)}M"
+                        ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
+                        ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
+                        ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
+                        ET.SubElement(task, "{%s}EffortDriven" % ns).text = "1"
+                        ET.SubElement(task, "{%s}Recurring" % ns).text = "0"
+                        ET.SubElement(task, "{%s}OverAllocated" % ns).text = "0"
+                        ET.SubElement(task, "{%s}Estimated" % ns).text = "1"
+                        ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
+                        ET.SubElement(task, "{%s}Summary" % ns).text = "0"
+                        ET.SubElement(task, "{%s}Critical" % ns).text = "0"
+                        ET.SubElement(task, "{%s}IsSubproject" % ns).text = "0"
+                        ET.SubElement(task, "{%s}IsSubprojectReadOnly" % ns).text = "0"
+                        ET.SubElement(task, "{%s}IsMarked" % ns).text = "0"
+                        ET.SubElement(task, "{%s}IgnoreWarnings" % ns).text = "0"
+                        ET.SubElement(task, "{%s}HideBar" % ns).text = "0"
+                        ET.SubElement(task, "{%s}Rollup" % ns).text = "0"
+                        ET.SubElement(task, "{%s}BCWS" % ns).text = "0"
+                        ET.SubElement(task, "{%s}BCWP" % ns).text = "0"
+                        ET.SubElement(task, "{%s}PhysicalPercentComplete" % ns).text = "0"
+                        ET.SubElement(task, "{%s}EarnedValueMethod" % ns).text = "0"
+                        ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0H0M0S"
+                        ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0H0M0S"
+                        ET.SubElement(task, "{%s}Active" % ns).text = "1"
+                        ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
+                        ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
+                        
+                        # Add constraint type based on Gantt-sourced dates
+                        has_gantt_start = "Start_Date" in row.index and pd.notna(row.get("Start_Date"))
+                        has_gantt_end = "End_Date" in row.index and pd.notna(row.get("End_Date"))
+                        
+                        # Apply constraint type and manual scheduling fields based on Gantt-sourced dates
+                        if has_gantt_start and has_gantt_end:
+                            # Both dates from Gantt: Lock BOTH start and finish dates
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "1"
+                            # CRITICAL: Add ManualStart, ManualFinish, ManualDuration to lock dates in Workfront
+                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}ManualFinish" % ns).text = task_end.isoformat()
+                            # Calculate duration from start to finish dates
+                            duration_minutes = int((task_end - task_start).total_seconds() / 60)
+                            ET.SubElement(task, "{%s}ManualDuration" % ns).text = f"PT{duration_minutes}M"
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                            logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start/finish/duration")
+                        elif has_gantt_start:
+                            # Only start date from Gantt: Lock start date only
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "1"
+                            # CRITICAL: Add ManualStart to lock start date in Workfront
+                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
+                            # ManualFinish and ManualDuration not set - will use standard fields
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                            logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start")
+                        else:
+                            # No Gantt dates: ASAP scheduling (auto-scheduled)
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "0"
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
+                        
+                        # Add cost if available
+                        price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
+                        if price_usd is not None and pd.notna(price_usd):
+                            try:
+                                price_value = float(price_usd)
+                                ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
+                                ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
+                                ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
+                            except (ValueError, TypeError):
+                                pass
+                        
+                        # Add extended attributes (custom fields) for each task
+                        if add_custom_fields:
+                            # Risk Score (random for demo)
+                            ext_attr_risk = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_risk, "{%s}FieldID" % ns).text = "188743731"  # Number1
+                            ET.SubElement(ext_attr_risk, "{%s}Value" % ns).text = str(random.randint(1, 10))
+                            
+                            # Confidence Level (random 70-100)
+                            ext_attr_conf = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743732"  # Number2
+                            ET.SubElement(ext_attr_conf, "{%s}Value" % ns).text = str(random.randint(70, 100))
+                            
+                            # Department
+                            if department:
+                                ext_attr_dept = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                                ET.SubElement(ext_attr_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                                ET.SubElement(ext_attr_dept, "{%s}Value" % ns).text = str(department)
+                            
+                            # Deliverable Code
+                            if deliv_code:
+                                ext_attr_dc = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                                ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
+                                ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
+                            
+                            # Component Name
                             ext_attr_comp = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
                             ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
                             ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
-                    
-                    # Track deliverable finish date (only if not already set from Gantt)
-                    # If user set End_Date in Gantt, respect that value
-                    if deliverable_end_date is None:
-                        if task_end > deliverable_finish:
-                            deliverable_finish = task_end
-                    
-                    # Update current date for next task
-                    current_date = task_end
-                    
-                    task_map[uid] = {
-                        "task": task,
-                        "deliverable": str(deliverable_name),
-                        "component": str(component_name),
-                        "department": str(department),
-                        "prev_task": prev_task_uid
-                    }
-                    
-                    prev_task_uid = uid  # Update for next iteration
-                    
-                except Exception as e:
-                    logging.error(f"Error processing task at index {idx}: {e}")
-                    task_uid -= 1  # Decrement to maintain correct count
+                        
+                        # Track component finish date
+                        if task_num_in_component == 1:
+                            component_start = task_start
+                        if task_end > component_finish:
+                            component_finish = task_end
+                        
+                        # Track deliverable finish date (only if not already set from Gantt)
+                        # If user set End_Date in Gantt, respect that value
+                        if deliverable_end_date is None:
+                            if task_end > deliverable_finish:
+                                deliverable_finish = task_end
+                        
+                        # Store task metadata (NO prev_task tracking - tasks within component run in parallel)
+                        task_map[uid] = {
+                            "task": task,
+                            "deliverable": str(deliverable_name),
+                            "component": str(component_name),
+                            "department": str(department),
+                            "component_uid": comp_uid  # Track parent component
+                        }
+                        
+                    except Exception as e:
+                        logging.error(f"Error processing task at index {idx}: {e}")
+                        task_uid -= 1  # Decrement to maintain correct count
+                
+                # Update component summary with calculated duration
+                duration_hours = calculate_business_hours(component_start, component_finish)
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{int(duration_hours * 60)}M"
+                ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
+                
+                # Update current_date to end of this component for next component to start
+                current_date = component_finish
+                
+                logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
             # Update deliverable summary with calculated duration
             duration_hours = calculate_business_hours(deliverable_start, deliverable_finish)
@@ -842,13 +950,16 @@ def convert_excel_to_mspdi(
                 task_uid += 1
                 all_task_uids.append(milestone_uid)
                 
+                # Use component_num to set proper WBS numbering after all components
+                milestone_wbs_num = component_num + 1
+                
                 ET.SubElement(milestone, "{%s}UID" % ns).text = str(milestone_uid)
                 ET.SubElement(milestone, "{%s}ID" % ns).text = str(milestone_uid)
                 ET.SubElement(milestone, "{%s}Name" % ns).text = f"{deliverable_name} - COMPLETE"
                 ET.SubElement(milestone, "{%s}Type" % ns).text = "1"
                 ET.SubElement(milestone, "{%s}Milestone" % ns).text = "1"
-                ET.SubElement(milestone, "{%s}WBS" % ns).text = f"{deliverable_num}.99"
-                ET.SubElement(milestone, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.99"
+                ET.SubElement(milestone, "{%s}WBS" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
+                ET.SubElement(milestone, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
                 ET.SubElement(milestone, "{%s}OutlineLevel" % ns).text = "2"
                 ET.SubElement(milestone, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(milestone, "{%s}Start" % ns).text = deliverable_finish.isoformat()
@@ -949,21 +1060,19 @@ def convert_excel_to_mspdi(
     
     # Add PredecessorLink elements for dependencies
     if add_dependencies:
-        logging.info("Adding task dependencies and predecessor links")
+        logging.info("[3-LEVEL HIERARCHY] Adding component-level dependencies (tasks within components run in parallel)")
+        
+        # NOTE: Sequential chaining of all tasks removed - causes unrealistic timeline
+        # Tasks within a component should run in parallel
+        # Only add cross-department dependencies if needed
         
         # Identify logical dependencies
         for uid, task_data in task_map.items():
             task = task_data["task"]
             
-            # Add predecessor link for sequential tasks within same deliverable
-            if task_data["prev_task"]:
-                pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
-                ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(task_data["prev_task"])
-                ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.FINISH_TO_START.value)
-                ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                ET.SubElement(pred_link, "{%s}CrossProjectName" % ns).text = ""
-                ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"  # No lag
-                ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
+            # REMOVED: Sequential chaining (prev_task logic)
+            # This was causing all tasks to chain sequentially, resulting in unrealistic timeline
+            # Tasks within a component should run in parallel
             
             # Add cross-deliverable dependencies based on department logic
             department = task_data["department"]
