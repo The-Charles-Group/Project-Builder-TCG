@@ -1413,7 +1413,30 @@ def convert_excel_to_mspdi(
                             skipped_count += 1
                             continue
                         
-                        # Create PredecessorLink element
+                        # WORKFRONT FIX: Check if predecessor is a summary task
+                        # Dependencies can only link to LEAF tasks, not summary tasks (deliverables/components)
+                        predecessor_task_elem = None
+                        for potential_pred_task in tasks.findall("{%s}Task" % ns):
+                            pred_uid_elem = potential_pred_task.find("{%s}UID" % ns)
+                            if pred_uid_elem is not None and int(pred_uid_elem.text) == predecessor_uid:
+                                predecessor_task_elem = potential_pred_task
+                                break
+                        
+                        if predecessor_task_elem is not None:
+                            # Check if this is a summary task
+                            summary_elem = predecessor_task_elem.find("{%s}Summary" % ns)
+                            is_summary = summary_elem is not None and summary_elem.text == "1"
+                            
+                            if is_summary:
+                                # Get predecessor name for better logging
+                                pred_name_elem = predecessor_task_elem.find("{%s}Name" % ns)
+                                pred_name = pred_name_elem.text if pred_name_elem is not None else "Unknown"
+                                
+                                logging.warning(f"[DEPENDENCIES] Skipping dependency to summary task: Task {lookup_key} (UID={task_uid}) -> Summary '{pred_name}' (UID={predecessor_uid}, WBS={dep_wbs})")
+                                skipped_count += 1
+                                continue
+                        
+                        # Create PredecessorLink element (only for leaf tasks)
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
                         ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
