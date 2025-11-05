@@ -9294,14 +9294,44 @@ async function s2LoadDeliverables() {
   const btnClear = APB.step2.els.btnClear;
   if (btnClear) {
     btnClear.onclick = () => {
-      APB.step2.selectedCodes.clear();
+      // Clear all selections from selectionStore
+      selectionStore.deliverables.clear();
+      selectionStore.componentsByDeliv.clear();
+      selectionStore.l3ByComponent.clear();
+      
+      // Clear deprecated properties for compatibility
       APB.step2.selectedComponentsByCode = {};
       APB.step2.selectedL3ByKey = {};
+      
+      // Clear active state
       APB.step2.activeDeliverableCode = null;
       APB.step2.activeComponentName = null;
+      
+      // Sync with global state
+      window.selectedCodes = [];
+      if (window.appState) window.appState.selectedCodes = [];
+      if (window.step2PickerState) window.step2PickerState.selected.clear();
+      
+      // Re-render all panels
       renderDeliverablesPanel();
-      renderComponentsEmptyState();
+      
+      // Clear components panel with empty state
+      if (window.renderComponentsPanel) {
+        renderComponentsPanel();
+      } else {
+        renderComponentsEmptyState();
+      }
+      
+      // Clear L3 panel with empty state
+      const l3ListEl = document.getElementById('s2-l3-list');
+      if (l3ListEl) {
+        l3ListEl.innerHTML = '<p style="color: var(--muted); text-align: center; padding-top: 40px; font-size: 0.9em;">Select a component to view its L2 tasks</p>';
+      }
+      
+      // Update summary counts to 0
       updateSummaryCounts();
+      
+      console.log('[CLEAR] All selections cleared');
     };
   }
 }
