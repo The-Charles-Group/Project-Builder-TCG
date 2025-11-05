@@ -3162,6 +3162,101 @@ async function exportPricingDetails() {
   }
 }
 
+// Generic export function for Step 5 exports
+async function exportScenario(fileFormat, buttonId) {
+  console.log(`[EXPORT] Starting ${fileFormat} export...`);
+  
+  // Get button reference for UI feedback
+  const btn = document.getElementById(buttonId);
+  const originalText = btn?.textContent || `Export ${fileFormat.toUpperCase()}`;
+  
+  // Get the scenario (try memory first, then localStorage)
+  let scenario = window.SCENARIOS?.A;
+  
+  if (!scenario) {
+    console.log('[EXPORT] Trying to load scenario from localStorage...');
+    try {
+      const saved = localStorage.getItem('latest_scenarios');
+      if (saved) {
+        const scenarios = JSON.parse(saved);
+        scenario = scenarios.A;
+        window.SCENARIOS = scenarios;  // Restore to memory
+      }
+    } catch (err) {
+      console.error('[EXPORT] Failed to load from localStorage:', err);
+    }
+  }
+  
+  if (!scenario) {
+    alert('❌ No scenario available to export.\n\nPlease build a scenario first in Step 3.');
+    return;
+  }
+  
+  // Show loading state
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Exporting...';
+  }
+  
+  try {
+    const projectName = document.getElementById('projectName')?.value || 'Project';
+    
+    console.log('[EXPORT] Calling /api/export with format:', fileFormat);
+    
+    const response = await fetch('/api/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scenario: scenario,
+        file_format: fileFormat
+      })
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[EXPORT] Server error:', errorText);
+      throw new Error(`Export failed (${response.status}): ${errorText}`);
+    }
+    
+    // Download the file
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ext = fileFormat === 'xlsx' ? 'xlsx' : 'csv';
+    const filename = `${projectName}_export_${new Date().toISOString().split('T')[0]}.${ext}`;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    
+    // Show success message
+    console.log('[EXPORT] Successfully exported:', filename);
+    alert(`✅ Export successful!\n\nFile: ${filename}\n\nCheck your downloads folder.`);
+    
+  } catch (error) {
+    console.error('[EXPORT] Error:', error);
+    alert(`❌ Export failed.\n\nError: ${error.message}\n\nPlease try again or check the console for details.`);
+  } finally {
+    // Reset button state
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+}
+
+// Export as Excel (.xlsx)
+async function exportExcel() {
+  await exportScenario('xlsx', 'btn-export-excel');
+}
+
+// Export as CSV (.csv)
+async function exportCSV() {
+  await exportScenario('csv', 'btn-export-csv');
+}
+
 // AI Optimize All Pricing Function - ENHANCED VERSION
 async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
@@ -4853,8 +4948,12 @@ async function boot() {
   const useBundles = document.querySelector("#useBundles");
   if (useBundles) useBundles.onchange = onScenarioTypeChanged;
   
-  const btnExportA = document.querySelector("#btnExportA");
-  if (btnExportA) btnExportA.onclick = () => onExport('A');
+  // Wire up Step 5 export buttons
+  const btnExportExcel = document.querySelector("#btn-export-excel");
+  if (btnExportExcel) btnExportExcel.onclick = exportExcel;
+  
+  const btnExportCSV = document.querySelector("#btn-export-csv");
+  if (btnExportCSV) btnExportCSV.onclick = exportCSV;
 
   // UI wiring (new Step 2)
   const proceedBtn = document.querySelector("#btnProceedToStep3");
