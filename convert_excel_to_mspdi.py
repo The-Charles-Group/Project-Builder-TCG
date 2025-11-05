@@ -549,14 +549,30 @@ def convert_excel_to_mspdi(
             if "Service_Department" in group.columns and not group.empty:
                 service_dept = str(group["Service_Department"].iloc[0]) if pd.notna(group["Service_Department"].iloc[0]) else ""
             
+            # FIX: Use WBS_ID from DataFrame instead of calculated deliverable_num
+            deliv_wbs_id = None
+            if "WBS_ID" in group.columns and not group.empty:
+                deliv_wbs_id_val = group.iloc[0].get("WBS_ID")
+                if pd.notna(deliv_wbs_id_val):
+                    deliv_wbs_id = str(deliv_wbs_id_val)
+                    logging.info(f"[WBS FIX] Using WBS_ID from DataFrame for deliverable '{deliverable_name}': {deliv_wbs_id}")
+            
+            # Fallback to calculated WBS if WBS_ID not available
+            if not deliv_wbs_id:
+                deliv_wbs_id = str(deliverable_num)
+                logging.warning(f"[WBS FIX] WBS_ID not found for deliverable '{deliverable_name}', using calculated: {deliv_wbs_id}")
+            
+            # Calculate OutlineLevel from WBS_ID (count dots + 1)
+            deliv_outline_level = str(deliv_wbs_id.count('.') + 1)
+            
             ET.SubElement(deliv_task, "{%s}UID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}ID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}Name" % ns).text = str(deliverable_name)
             ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
-            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = str(deliverable_num)
-            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = str(deliverable_num)
-            ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = "1"
+            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs_id
+            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = deliv_wbs_id
+            ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = deliv_outline_level
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
             
             # FIX: Check if first row of deliverable has Start_Date (from Gantt merge)
@@ -722,15 +738,31 @@ def convert_excel_to_mspdi(
                 if "Service_Department" in component_group.columns and not component_group.empty:
                     comp_service_dept = str(component_group["Service_Department"].iloc[0]) if pd.notna(component_group["Service_Department"].iloc[0]) else ""
                 
+                # FIX: Use WBS_ID from DataFrame instead of calculated deliverable_num.component_num
+                comp_wbs_id = None
+                if "WBS_ID" in component_group.columns and not component_group.empty:
+                    comp_wbs_id_val = component_group.iloc[0].get("WBS_ID")
+                    if pd.notna(comp_wbs_id_val):
+                        comp_wbs_id = str(comp_wbs_id_val)
+                        logging.info(f"[WBS FIX] Using WBS_ID from DataFrame for component '{component_name}': {comp_wbs_id}")
+                
+                # Fallback to calculated WBS if WBS_ID not available
+                if not comp_wbs_id:
+                    comp_wbs_id = f"{deliverable_num}.{component_num}"
+                    logging.warning(f"[WBS FIX] WBS_ID not found for component '{component_name}', using calculated: {comp_wbs_id}")
+                
+                # Calculate OutlineLevel from WBS_ID (count dots + 1)
+                comp_outline_level = str(comp_wbs_id.count('.') + 1)
+                
                 # Component task properties
                 ET.SubElement(comp_task, "{%s}UID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}ID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}Name" % ns).text = str(component_name) if component_name else "Uncategorized"
                 ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                 ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
-                ET.SubElement(comp_task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}"
-                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{component_num}"
-                ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = "2"  # Component level
+                ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs_id
+                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs_id
+                ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
                 ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"
@@ -848,19 +880,32 @@ def convert_excel_to_mspdi(
                         if task_end is None:
                             task_end = add_business_days(task_start, duration_days)
                         
-                        # Add task elements with 3-level WBS
+                        # FIX: Use WBS_ID from DataFrame instead of calculated WBS
+                        task_wbs_id = None
+                        if "WBS_ID" in row.index and pd.notna(row.get("WBS_ID")):
+                            task_wbs_id = str(row.get("WBS_ID"))
+                            logging.info(f"[WBS FIX] Using WBS_ID from DataFrame for task '{task_name}': {task_wbs_id}")
+                        
+                        # Fallback to calculated WBS if WBS_ID not available
+                        if not task_wbs_id:
+                            task_wbs_id = f"{deliverable_num}.{component_num}.{task_num_in_component}"
+                            logging.warning(f"[WBS FIX] WBS_ID not found for task '{task_name}', using calculated: {task_wbs_id}")
+                        
+                        # Calculate OutlineLevel from WBS_ID (count dots + 1)
+                        task_outline_level = str(task_wbs_id.count('.') + 1)
+                        
+                        # Add task elements with WBS from DataFrame
                         ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
                         
                         # Store WBS to UID mapping for dependency resolution
-                        task_wbs = f"{deliverable_num}.{component_num}.{task_num_in_component}"
-                        wbs_to_uid[task_wbs] = uid
+                        wbs_to_uid[task_wbs_id] = uid
                         ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
                         ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-                        ET.SubElement(task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}.{task_num_in_component}"
-                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{component_num}.{task_num_in_component}"
-                        ET.SubElement(task, "{%s}OutlineLevel" % ns).text = "3"  # Task level (Level 3)
+                        ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs_id
+                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs_id
+                        ET.SubElement(task, "{%s}OutlineLevel" % ns).text = task_outline_level
                         ET.SubElement(task, "{%s}Priority" % ns).text = "500"
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
                         ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
@@ -1035,9 +1080,8 @@ def convert_excel_to_mspdi(
                     
                     logging.info(f"[COST AGGREGATION] Component '{component_name}' total cost: ${comp_total_cost:.2f}")
                 
-                # Store component WBS to UID mapping
-                comp_wbs = f"{deliverable_num}.{component_num}"
-                wbs_to_uid[comp_wbs] = comp_uid
+                # Store component WBS to UID mapping (use the WBS_ID from DataFrame)
+                wbs_to_uid[comp_wbs_id] = comp_uid
                 
                 # Update current_date to end of this component for next component to start
                 current_date = component_finish
@@ -1065,9 +1109,8 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[COST AGGREGATION] Deliverable '{deliverable_name}' total cost: ${deliv_total_cost:.2f}")
             
-            # Store deliverable WBS to UID mapping
-            deliv_wbs = str(deliverable_num)
-            wbs_to_uid[deliv_wbs] = deliv_uid
+            # Store deliverable WBS to UID mapping (use the WBS_ID from DataFrame)
+            wbs_to_uid[deliv_wbs_id] = deliv_uid
             
             # Add deliverable completion milestone
             if add_deliverable_milestones:
