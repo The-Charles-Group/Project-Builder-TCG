@@ -1219,9 +1219,10 @@ def convert_excel_to_mspdi(
                     ET.SubElement(phase_milestone, "{%s}Name" % ns).text = phase_names[i]
                     ET.SubElement(phase_milestone, "{%s}Type" % ns).text = "1"
                     ET.SubElement(phase_milestone, "{%s}Milestone" % ns).text = "1"
-                    ET.SubElement(phase_milestone, "{%s}WBS" % ns).text = f"999.{i+1}"
-                    ET.SubElement(phase_milestone, "{%s}OutlineNumber" % ns).text = f"999.{i+1}"
+                    ET.SubElement(phase_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
+                    ET.SubElement(phase_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
                     ET.SubElement(phase_milestone, "{%s}OutlineLevel" % ns).text = "1"
+                    deliverable_counter += 1  # Increment for next milestone
                     ET.SubElement(phase_milestone, "{%s}Priority" % ns).text = "1000"  # High priority
                     ET.SubElement(phase_milestone, "{%s}Start" % ns).text = phase_date
                     ET.SubElement(phase_milestone, "{%s}Finish" % ns).text = phase_date
@@ -1250,9 +1251,10 @@ def convert_excel_to_mspdi(
         ET.SubElement(approval_milestone, "{%s}Name" % ns).text = "CLIENT APPROVAL - FINAL"
         ET.SubElement(approval_milestone, "{%s}Type" % ns).text = "1"
         ET.SubElement(approval_milestone, "{%s}Milestone" % ns).text = "1"
-        ET.SubElement(approval_milestone, "{%s}WBS" % ns).text = "999.99"
-        ET.SubElement(approval_milestone, "{%s}OutlineNumber" % ns).text = "999.99"
+        ET.SubElement(approval_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
+        ET.SubElement(approval_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
         ET.SubElement(approval_milestone, "{%s}OutlineLevel" % ns).text = "1"
+        deliverable_counter += 1  # Increment for consistency
         ET.SubElement(approval_milestone, "{%s}Priority" % ns).text = "1000"
         ET.SubElement(approval_milestone, "{%s}Start" % ns).text = current_date.isoformat()
         ET.SubElement(approval_milestone, "{%s}Finish" % ns).text = current_date.isoformat()
