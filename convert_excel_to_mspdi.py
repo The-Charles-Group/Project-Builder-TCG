@@ -333,6 +333,13 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr6, "{%s}FieldName" % ns).text = "Number3"
         ET.SubElement(ext_attr6, "{%s}Alias" % ns).text = "Revenue"
         ET.SubElement(ext_attr6, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400038"
+        
+        # Custom Field 7: Service Category (Text) - WORKFRONT REQUIREMENT
+        ext_attr7 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr7, "{%s}FieldID" % ns).text = "188743734"  # Task Text4
+        ET.SubElement(ext_attr7, "{%s}FieldName" % ns).text = "Text4"
+        ET.SubElement(ext_attr7, "{%s}Alias" % ns).text = "Service Category"
+        ET.SubElement(ext_attr7, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400039"
     
     # Add Calendar definition
     calendars = ET.SubElement(root, "{%s}Calendars" % ns)
@@ -545,10 +552,6 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}UID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}ID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}Name" % ns).text = str(deliverable_name)
-            
-            # Add Category element for Service_Department
-            category_value = service_dept if service_dept else "Unassigned"
-            ET.SubElement(deliv_task, "{%s}Category" % ns).text = category_value
             ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}WBS" % ns).text = str(deliverable_num)
@@ -639,10 +642,18 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}Active" % ns).text = "1"
             
             # Add custom fields for deliverable
-            if add_custom_fields and deliv_code:
-                ext_attrs = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
-                ET.SubElement(ext_attrs, "{%s}FieldID" % ns).text = "188743732"
-                ET.SubElement(ext_attrs, "{%s}Value" % ns).text = deliv_code
+            if add_custom_fields:
+                # Deliverable Code
+                if deliv_code:
+                    ext_attrs_dc = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attrs_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
+                    ET.SubElement(ext_attrs_dc, "{%s}Value" % ns).text = deliv_code
+                
+                # Service Category (replaces Category tag for Workfront)
+                category_value = service_dept if service_dept else "Unassigned"
+                ext_attrs_sc = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                ET.SubElement(ext_attrs_sc, "{%s}FieldID" % ns).text = "188743734"  # Text4
+                ET.SubElement(ext_attrs_sc, "{%s}Value" % ns).text = category_value
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
@@ -715,10 +726,6 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}UID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}ID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}Name" % ns).text = str(component_name) if component_name else "Uncategorized"
-                
-                # Add Category element for Service_Department
-                comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
-                ET.SubElement(comp_task, "{%s}Category" % ns).text = comp_category_value
                 ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                 ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}WBS" % ns).text = f"{deliverable_num}.{component_num}"
@@ -754,6 +761,12 @@ def convert_excel_to_mspdi(
                         ext_attr_dc = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
                         ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
                         ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
+                    
+                    # Service Category (replaces Category tag for Workfront)
+                    comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
+                    ext_attr_sc_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_sc_comp, "{%s}FieldID" % ns).text = "188743734"  # Text4
+                    ET.SubElement(ext_attr_sc_comp, "{%s}Value" % ns).text = comp_category_value
                 
                 # Track component start/finish dates
                 component_start = current_date
@@ -839,10 +852,6 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}UID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}ID" % ns).text = str(uid)
                         ET.SubElement(task, "{%s}Name" % ns).text = str(task_name)
-                        
-                        # Add Category element for Service_Department
-                        task_category_value = task_service_dept if task_service_dept else "Unassigned"
-                        ET.SubElement(task, "{%s}Category" % ns).text = task_category_value
                         
                         # Store WBS to UID mapping for dependency resolution
                         task_wbs = f"{deliverable_num}.{component_num}.{task_num_in_component}"
@@ -974,6 +983,12 @@ def convert_excel_to_mspdi(
                             ext_attr_comp = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
                             ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
                             ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
+                            
+                            # Service Category (replaces Category tag for Workfront)
+                            task_category_value = task_service_dept if task_service_dept else "Unassigned"
+                            ext_attr_sc_task = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_sc_task, "{%s}FieldID" % ns).text = "188743734"  # Text4
+                            ET.SubElement(ext_attr_sc_task, "{%s}Value" % ns).text = task_category_value
                         
                         # Track component finish date
                         if task_num_in_component == 1:
@@ -1170,92 +1185,157 @@ def convert_excel_to_mspdi(
             ET.SubElement(ext_attr_ca, "{%s}Value" % ns).text = "Client Approval"
     
     # Add PredecessorLink elements for dependencies
+    # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
     if add_dependencies:
-        logging.info("[DEPENDENCIES] Processing Dependencies column from DataFrame")
+        logging.info("[DEPENDENCIES] Processing Dependencies column for ALL task types (deliverables, components, leaf tasks)")
         
         # Check if Dependencies column exists
         if "Dependencies" in df.columns:
-            # Parse dependencies from DataFrame and create PredecessorLink elements
             dependencies_count = 0
             skipped_count = 0
             
+            # Build unified task lookup structure that includes ALL task types
+            # This maps (deliverable, component, task_name) tuples to (task_element, uid)
+            all_tasks_lookup = {}
+            
+            # Add deliverable tasks to lookup
+            for deliv_name, deliv_uid in deliverable_tasks.items():
+                # Find the deliverable task element by UID
+                deliv_task_elem = None
+                for task_elem in tasks.findall("{%s}Task" % ns):
+                    uid_elem = task_elem.find("{%s}UID" % ns)
+                    if uid_elem is not None and int(uid_elem.text) == deliv_uid:
+                        deliv_task_elem = task_elem
+                        break
+                
+                if deliv_task_elem is not None:
+                    # Key: (deliverable, None, None) for deliverable-level tasks
+                    all_tasks_lookup[(str(deliv_name), None, None)] = (deliv_task_elem, deliv_uid)
+                    logging.info(f"[DEPENDENCIES] Added deliverable to lookup: '{deliv_name}' (UID={deliv_uid})")
+            
+            # Add component tasks to lookup
+            for comp_key, comp_uid in component_tasks.items():
+                # comp_key format: "deliverable_name:component_name"
+                if ':' in comp_key:
+                    deliv_name, comp_name = comp_key.split(':', 1)
+                    
+                    # Find the component task element by UID
+                    comp_task_elem = None
+                    for task_elem in tasks.findall("{%s}Task" % ns):
+                        uid_elem = task_elem.find("{%s}UID" % ns)
+                        if uid_elem is not None and int(uid_elem.text) == comp_uid:
+                            comp_task_elem = task_elem
+                            break
+                    
+                    if comp_task_elem is not None:
+                        # Key: (deliverable, component, None) for component-level tasks
+                        all_tasks_lookup[(deliv_name, comp_name, None)] = (comp_task_elem, comp_uid)
+                        logging.info(f"[DEPENDENCIES] Added component to lookup: '{deliv_name}:{comp_name}' (UID={comp_uid})")
+            
+            # Add leaf tasks to lookup
             for uid, task_data in task_map.items():
-                task = task_data["task"]
+                task_elem = task_data["task"]
+                task_deliv = task_data["deliverable"]
+                task_comp = task_data["component"]
                 
-                # Find the corresponding row in DataFrame for this task
-                # Match by deliverable, component, and task name
-                task_deliverable = task_data["deliverable"]
-                task_component = task_data["component"]
-                
-                # Get task name from the XML element
-                task_name_elem = task.find("{%s}Name" % ns)
+                # Get task name from XML element
+                task_name_elem = task_elem.find("{%s}Name" % ns)
                 if task_name_elem is not None:
                     task_name = task_name_elem.text
+                    # Key: (deliverable, component, task_name) for leaf tasks
+                    all_tasks_lookup[(task_deliv, task_comp, task_name)] = (task_elem, uid)
+                    logging.info(f"[DEPENDENCIES] Added leaf task to lookup: '{task_deliv}:{task_comp}:{task_name}' (UID={uid})")
+            
+            logging.info(f"[DEPENDENCIES] Built unified lookup with {len(all_tasks_lookup)} tasks total")
+            
+            # Process Dependencies column for ALL rows in DataFrame
+            for idx, row in df.iterrows():
+                # Get task identifiers from DataFrame row
+                row_deliverable = row.get("Deliverable", "")
+                row_component = row.get("Component", "")
+                row_task = row.get("Task", "")
+                row_task_name = row.get("Task_Name", "")
+                
+                # Build lookup key based on hierarchy level
+                # Use Component and Task columns to distinguish between levels:
+                # - Deliverable: Component is empty
+                # - Component: Component is not empty, Task is empty
+                # - Leaf task: Both Component and Task are not empty
+                lookup_key = None
+                task_elem = None
+                task_uid = None
+                
+                # Determine hierarchy level
+                has_component = row_component and pd.notna(row_component) and str(row_component).strip() and str(row_component).strip() != ""
+                has_task = row_task and pd.notna(row_task) and str(row_task).strip() and str(row_task).strip() != ""
+                has_deliverable = row_deliverable and pd.notna(row_deliverable) and str(row_deliverable).strip() and str(row_deliverable).strip() != ""
+                
+                if has_task and has_component and has_deliverable:
+                    # Leaf task level (both Component and Task are populated)
+                    lookup_key = (str(row_deliverable), str(row_component), str(row_task_name))
+                elif has_component and has_deliverable and not has_task:
+                    # Component level (Component is populated, Task is not)
+                    lookup_key = (str(row_deliverable), str(row_component), None)
+                elif has_deliverable and not has_component:
+                    # Deliverable level (Component is not populated)
+                    lookup_key = (str(row_deliverable), None, None)
+                
+                # Look up task element and UID
+                if lookup_key and lookup_key in all_tasks_lookup:
+                    task_elem, task_uid = all_tasks_lookup[lookup_key]
                 else:
+                    # No matching task found, skip this row
                     continue
                 
-                # Find matching row in DataFrame
-                matching_rows = df[
-                    (df["Deliverable"] == task_deliverable) & 
-                    (df["Component"] == task_component)
-                ]
+                # Get Dependencies value from this row
+                dependencies_value = row.get("Dependencies", "")
                 
-                # Further filter by task name if available
-                if "Task_Name" in df.columns:
-                    matching_rows = matching_rows[matching_rows["Task_Name"] == task_name]
-                elif "L3_Task" in df.columns:
-                    matching_rows = matching_rows[matching_rows["L3_Task"] == task_name]
-                
-                if not matching_rows.empty:
-                    row = matching_rows.iloc[0]
-                    dependencies_value = row.get("Dependencies", "")
+                # Parse dependencies if value is not empty
+                if dependencies_value and pd.notna(dependencies_value) and str(dependencies_value).strip():
+                    dependencies_str = str(dependencies_value).strip()
                     
-                    # Parse dependencies if value is not empty
-                    if dependencies_value and pd.notna(dependencies_value) and str(dependencies_value).strip():
-                        dependencies_str = str(dependencies_value).strip()
+                    # Split by comma or semicolon to get list of WBS IDs
+                    dep_wbs_list = []
+                    for sep in [',', ';']:
+                        if sep in dependencies_str:
+                            dep_wbs_list = [d.strip() for d in dependencies_str.split(sep)]
+                            break
+                    
+                    # If no separator found, treat as single dependency
+                    if not dep_wbs_list:
+                        dep_wbs_list = [dependencies_str]
+                    
+                    # Process each dependency
+                    for dep_wbs in dep_wbs_list:
+                        if not dep_wbs:
+                            continue
                         
-                        # Split by comma or semicolon to get list of WBS IDs
-                        dep_wbs_list = []
-                        for sep in [',', ';']:
-                            if sep in dependencies_str:
-                                dep_wbs_list = [d.strip() for d in dependencies_str.split(sep)]
-                                break
+                        # Resolve WBS to UID
+                        predecessor_uid = wbs_to_uid.get(dep_wbs)
                         
-                        # If no separator found, treat as single dependency
-                        if not dep_wbs_list:
-                            dep_wbs_list = [dependencies_str]
+                        if predecessor_uid is None:
+                            logging.warning(f"[DEPENDENCIES] Invalid WBS reference '{dep_wbs}' for task {lookup_key} - skipping")
+                            skipped_count += 1
+                            continue
                         
-                        # Process each dependency
-                        for dep_wbs in dep_wbs_list:
-                            if not dep_wbs:
-                                continue
-                            
-                            # Resolve WBS to UID
-                            predecessor_uid = wbs_to_uid.get(dep_wbs)
-                            
-                            if predecessor_uid is None:
-                                logging.warning(f"[DEPENDENCIES] Invalid WBS reference '{dep_wbs}' in dependencies for task '{task_name}' - skipping")
-                                skipped_count += 1
-                                continue
-                            
-                            # Skip self-referencing dependencies
-                            if predecessor_uid == uid:
-                                logging.warning(f"[DEPENDENCIES] Self-referencing dependency for task '{task_name}' (UID={uid}) - skipping")
-                                skipped_count += 1
-                                continue
-                            
-                            # Create PredecessorLink element
-                            pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
-                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                            ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
-                            ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
-                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
-                            
-                            dependencies_count += 1
-                            logging.info(f"[DEPENDENCIES] Added dependency: Task '{task_name}' (UID={uid}) depends on WBS '{dep_wbs}' (UID={predecessor_uid})")
+                        # Skip self-referencing dependencies
+                        if predecessor_uid == task_uid:
+                            logging.warning(f"[DEPENDENCIES] Self-referencing dependency for task {lookup_key} (UID={task_uid}) - skipping")
+                            skipped_count += 1
+                            continue
+                        
+                        # Create PredecessorLink element
+                        pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
+                        ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
+                        ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
+                        ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
+                        ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
+                        
+                        dependencies_count += 1
+                        logging.info(f"[DEPENDENCIES] Added dependency: {lookup_key} (UID={task_uid}) depends on WBS '{dep_wbs}' (UID={predecessor_uid})")
             
-            logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies, skipped {skipped_count} invalid references")
+            logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies across ALL task types, skipped {skipped_count} invalid references")
         else:
             logging.warning("[DEPENDENCIES] Dependencies column not found in DataFrame - skipping dependency parsing")
         
