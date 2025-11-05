@@ -804,7 +804,9 @@ let addedCodes = [];
 
 // Gantt Chart Instance and Timeline State
 let ganttChart = null;
-let currentTimelineTasks = [];
+// ISSUE FIX 3: Make currentTimelineTasks accessible globally for PDF export
+window.currentTimelineTasks = [];
+let currentTimelineTasks = window.currentTimelineTasks;
 let timelineReasoning = null;
 
 // Pricing and Retainer State
@@ -1173,12 +1175,18 @@ function generateDateColumns(startDate, endDate, groupBy) {
 
 // Generate Daily PDF
 function generateDailyPDF() {
+  // ISSUE FIX 3: Add debugging to show what currentTimelineTasks contains
+  console.log('[PDF] generateDailyPDF called');
+  console.log('[PDF] window.currentTimelineTasks:', window.currentTimelineTasks);
+  console.log('[PDF] window.currentTimelineTasks length:', window.currentTimelineTasks ? window.currentTimelineTasks.length : 'undefined');
+  
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert('PDF library not loaded. Please refresh the page and try again.');
     return;
   }
   
   if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
+    console.error('[PDF] No timeline data available. Tasks:', window.currentTimelineTasks);
     alert('No timeline data available. Please generate a timeline first.');
     return;
   }
@@ -1241,12 +1249,18 @@ function generateDailyPDF() {
 
 // Generate Weekly PDF
 function generateWeeklyPDF() {
+  // ISSUE FIX 3: Add debugging to show what currentTimelineTasks contains
+  console.log('[PDF] generateWeeklyPDF called');
+  console.log('[PDF] window.currentTimelineTasks:', window.currentTimelineTasks);
+  console.log('[PDF] window.currentTimelineTasks length:', window.currentTimelineTasks ? window.currentTimelineTasks.length : 'undefined');
+  
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert('PDF library not loaded. Please refresh the page and try again.');
     return;
   }
   
   if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
+    console.error('[PDF] No timeline data available. Tasks:', window.currentTimelineTasks);
     alert('No timeline data available. Please generate a timeline first.');
     return;
   }
@@ -1315,12 +1329,18 @@ function generateWeeklyPDF() {
 
 // Generate Monthly PDF
 function generateMonthlyPDF() {
+  // ISSUE FIX 3: Add debugging to show what currentTimelineTasks contains
+  console.log('[PDF] generateMonthlyPDF called');
+  console.log('[PDF] window.currentTimelineTasks:', window.currentTimelineTasks);
+  console.log('[PDF] window.currentTimelineTasks length:', window.currentTimelineTasks ? window.currentTimelineTasks.length : 'undefined');
+  
   if (!window.jspdf || !window.jspdf.jsPDF) {
     alert('PDF library not loaded. Please refresh the page and try again.');
     return;
   }
   
   if (!window.currentTimelineTasks || window.currentTimelineTasks.length === 0) {
+    console.error('[PDF] No timeline data available. Tasks:', window.currentTimelineTasks);
     alert('No timeline data available. Please generate a timeline first.');
     return;
   }
@@ -3697,7 +3717,9 @@ async function generateAITimeline(retryAttempt = 0) {
   
   // Helper function to handle timeline completion
   const handleTimelineCompletion = (result) => {
-    currentTimelineTasks = result.tasks || [];
+    // ISSUE FIX 3: Update window.currentTimelineTasks so PDF export can access it
+    window.currentTimelineTasks = result.tasks || [];
+    currentTimelineTasks = window.currentTimelineTasks;
     timelineReasoning = result.reasoning || {};
     
     // Update reasoning panel
@@ -3724,12 +3746,25 @@ async function generateAITimeline(retryAttempt = 0) {
       const metadataDiv = document.getElementById('timeline-metadata');
       if (metadataDiv) metadataDiv.style.display = '';
       
-      // Show PDF Download and Save Changes buttons after successful timeline generation
+      // ISSUE FIX 2: Show PDF Download and Save Changes buttons after successful timeline generation
+      // These should stay visible permanently once timeline is generated
       const pdfButton = document.getElementById('gantt-pdf-button');
-      if (pdfButton) pdfButton.style.display = '';
+      if (pdfButton) {
+        pdfButton.style.display = '';
+        console.log('[Timeline] PDF download button shown');
+      }
       
       const saveButton = document.getElementById('btn-save-timeline');
-      if (saveButton) saveButton.style.display = '';
+      if (saveButton) {
+        saveButton.style.display = '';
+        console.log('[Timeline] Save Changes button shown and will stay visible');
+      }
+      
+      // ISSUE FIX 2: Defensive - ensure button stays visible even after other operations
+      // Set a flag to prevent it from being hidden
+      if (saveButton) {
+        saveButton.setAttribute('data-timeline-generated', 'true');
+      }
       
       // Hide loading
       loading.style.display = 'none';
