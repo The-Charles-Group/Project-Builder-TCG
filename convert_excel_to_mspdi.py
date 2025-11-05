@@ -212,6 +212,8 @@ def convert_excel_to_mspdi(
     # Determine project start date
     if fixed_start_iso:
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
+        # Remove timezone info to ensure all datetimes are timezone-naive for consistent comparisons
+        project_start = project_start.replace(tzinfo=None)
     elif start_date_mode == "next_monday":
         today = datetime.now()
         days_ahead = 0 - today.weekday()  # Monday is 0
