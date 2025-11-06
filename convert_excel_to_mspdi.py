@@ -114,6 +114,9 @@ def convert_excel_to_mspdi(
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
         # Remove timezone info to ensure all datetimes are timezone-naive for consistent comparisons
         project_start = project_start.replace(tzinfo=None)
+        # CRITICAL: Normalize time to business hours (09:00) regardless of input time
+        project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
+        logging.info(f"[TIME NORMALIZATION] Normalized project_start to 09:00:00: {project_start.isoformat()}")
     elif start_date_mode == "next_monday":
         today = datetime.now()
         days_ahead = 0 - today.weekday()  # Monday is 0
@@ -496,7 +499,9 @@ def convert_excel_to_mspdi(
                             # Remove timezone info to make it timezone-naive for consistent comparisons
                             deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
                         else:
-                            deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                            deliverable_start_date = datetime.fromisoformat(start_val)
+                        # CRITICAL: Always normalize time to 09:00 regardless of input
+                        deliverable_start_date = deliverable_start_date.replace(hour=9, minute=0, second=0, microsecond=0)
                         logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
                     except Exception as e:
                         logging.warning(f"Could not parse deliverable Start_Date '{first_row_start}': {e}")
@@ -512,7 +517,9 @@ def convert_excel_to_mspdi(
                             # Remove timezone info to make it timezone-naive for consistent comparisons
                             deliverable_end_date = deliverable_end_date.replace(tzinfo=None)
                         else:
-                            deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
+                            deliverable_end_date = datetime.fromisoformat(end_val)
+                        # CRITICAL: Always normalize time to 09:00 regardless of input
+                        deliverable_end_date = deliverable_end_date.replace(hour=9, minute=0, second=0, microsecond=0)
                         logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
                     except Exception as e:
                         logging.warning(f"Could not parse deliverable End_Date '{first_row_end}': {e}")
@@ -772,8 +779,9 @@ def convert_excel_to_mspdi(
                                     # Remove timezone info to make it timezone-naive for consistent comparisons
                                     task_start = task_start.replace(tzinfo=None)
                                 else:
-                                    # Date only - add default 9 AM time
-                                    task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                                    task_start = datetime.fromisoformat(start_val)
+                                # CRITICAL: Always normalize time to 09:00 regardless of input
+                                task_start = task_start.replace(hour=9, minute=0, second=0, microsecond=0)
                                 logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
@@ -788,8 +796,9 @@ def convert_excel_to_mspdi(
                                     # Remove timezone info to make it timezone-naive for consistent comparisons
                                     task_end = task_end.replace(tzinfo=None)
                                 else:
-                                    # Date only - add default 5 PM time
-                                    task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
+                                    task_end = datetime.fromisoformat(end_val)
+                                # CRITICAL: Always normalize time to 09:00 regardless of input
+                                task_end = task_end.replace(hour=9, minute=0, second=0, microsecond=0)
                                 logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
