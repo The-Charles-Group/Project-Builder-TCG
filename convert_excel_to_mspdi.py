@@ -992,7 +992,7 @@ def convert_excel_to_mspdi(
                 # Summary tasks are organizational containers - actual work is tracked in leaf tasks
                 # CRITICAL: For PT0M duration, Start must equal Finish to satisfy Workfront validation
                 ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
-                ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_start.isoformat()
+                ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
@@ -1028,7 +1028,7 @@ def convert_excel_to_mspdi(
             # Summary tasks are organizational containers - actual work is tracked in leaf tasks
             # CRITICAL: For PT0M duration, Start must equal Finish to satisfy Workfront validation
             ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
-            ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_start.isoformat()
+            ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
             # Add aggregated cost/revenue to deliverable summary task
@@ -1052,6 +1052,10 @@ def convert_excel_to_mspdi(
             if original_deliv_wbs_id:
                 original_wbs_to_uid[original_deliv_wbs_id] = deliv_uid
             sequential_wbs_to_uid[deliv_wbs] = deliv_uid
+            
+            # FIX: Advance current_date to deliverable finish for proper deliverable sequencing
+            # This ensures each deliverable starts after the previous one finishes
+            current_date = deliverable_finish
             
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
