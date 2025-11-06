@@ -1098,8 +1098,10 @@ def convert_excel_to_mspdi(
                         task_uid -= 1  # Decrement to maintain correct count
                 
                 # Update component summary with calculated duration
-                duration_hours = calculate_business_hours(component_start, component_finish)
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{int(duration_hours * 60)}M"
+                # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+                # This prevents Duration=PT0M when component_start == component_finish
+                component_duration_minutes = int((component_finish - component_start).total_seconds() / 60)
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{component_duration_minutes}M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task
@@ -1133,8 +1135,10 @@ def convert_excel_to_mspdi(
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
             # Update deliverable summary with calculated duration
-            duration_hours = calculate_business_hours(deliverable_start, deliverable_finish)
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{int(duration_hours * 60)}M"
+            # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+            # This prevents Duration=PT0M when dates match or business hours = 0
+            deliverable_duration_minutes = int((deliverable_finish - deliverable_start).total_seconds() / 60)
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{deliverable_duration_minutes}M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
