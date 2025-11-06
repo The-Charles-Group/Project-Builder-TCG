@@ -726,18 +726,24 @@ def convert_excel_to_mspdi(
                 if pd.notna(first_row_end):
                     has_gantt_end = True
             
-            # Apply constraint type
-            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
+            # Apply constraint type and manual scheduling tags
+            # WORKFRONT FIX: Add Manual* fields to summary tasks for proper date locking
             if has_gantt_start and has_gantt_end:
                 # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
                 ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
                 ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+                # Add Manual fields for Workfront compatibility
+                ET.SubElement(deliv_task, "{%s}ManualStart" % ns).text = deliverable_start_date.isoformat()
+                if deliverable_end_date:
+                    ET.SubElement(deliv_task, "{%s}ManualFinish" % ns).text = deliverable_end_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2) with Manual* fields")
             elif has_gantt_start:
                 # Only start date from Gantt: Must Start On
                 ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
                 ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+                # Add Manual fields for Workfront compatibility
+                ET.SubElement(deliv_task, "{%s}ManualStart" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2) with ManualStart")
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
@@ -1206,6 +1212,14 @@ def convert_excel_to_mspdi(
                 # CRITICAL: For PT0M duration, Start must equal Finish to satisfy Workfront validation
                 ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
+                
+                # WORKFRONT FIX: Add Manual* fields to component summary tasks for proper date locking
+                # Note: component_start is set from first child task (line 1185), not from Gantt
+                comp_start_elem = comp_task.find("{%s}Start" % ns)
+                if comp_start_elem is not None and comp_start_elem.text:
+                    ET.SubElement(comp_task, "{%s}ManualStart" % ns).text = comp_start_elem.text
+                    ET.SubElement(comp_task, "{%s}ManualFinish" % ns).text = component_finish.isoformat()
+                    logging.info(f"[WORKFRONT] Added Manual* fields to component '{component_name}'")
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
