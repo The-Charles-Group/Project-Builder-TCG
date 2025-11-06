@@ -371,7 +371,11 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Start" % ns).text = project_start.isoformat()
-    # Finish date will be added after all deliverables are processed
+    # Add Finish element immediately (will be updated after deliverables are processed)
+    # This ensures proper XML element ordering per MS Project schema
+    project_task_finish = ET.SubElement(project_task, "{%s}Finish" % ns)
+    project_task_finish.text = project_start.isoformat()  # Initial value, will be updated
+    logging.info(f"[PROJECT] Initialized project Finish date to: {project_start.isoformat()}")
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
@@ -1065,11 +1069,22 @@ def convert_excel_to_mspdi(
             
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
+            
+            # Log each deliverable finish update
+            logging.info(f"[PROJECT] Updated project finish date after '{deliverable_name}': {project_finish_date.isoformat()}")
     
-    # Update project summary task (UID=0) with Finish date
+    # Update project summary task (UID=0) Finish date
+    # Find the existing Finish element and update its value (don't create a new one)
     # This is required by Workfront for valid XML import
-    ET.SubElement(project_task, "{%s}Finish" % ns).text = project_finish_date.isoformat()
-    logging.info(f"[PROJECT] Set project finish date: {project_finish_date.isoformat()}")
+    finish_elem = project_task.find("{%s}Finish" % ns)
+    if finish_elem is not None:
+        finish_elem.text = project_finish_date.isoformat()
+        logging.info(f"[PROJECT] ✅ Updated project Finish date to: {project_finish_date.isoformat()}")
+    else:
+        logging.error(f"[PROJECT] ❌ ERROR: Finish element not found in project task!")
+        # Fallback: create it if missing (shouldn't happen)
+        ET.SubElement(project_task, "{%s}Finish" % ns).text = project_finish_date.isoformat()
+        logging.info(f"[PROJECT] Created missing Finish element with date: {project_finish_date.isoformat()}")
     
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
