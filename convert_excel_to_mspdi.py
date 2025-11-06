@@ -152,7 +152,6 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
-    add_deliverable_milestones: bool = True,
     add_phase_gates: bool = True,
     add_dependencies: bool = True,
     add_custom_fields: bool = True
@@ -172,7 +171,6 @@ def convert_excel_to_mspdi(
         pricing_mode: Pricing mode for the project
         rate_band: Rate band for pricing
         blended_rate: Blended rate if using flat pricing
-        add_deliverable_milestones: Add milestone tasks for deliverables
         add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
         add_dependencies: Add task dependencies
         add_custom_fields: Add ExtendedAttribute elements for Workfront
@@ -1171,42 +1169,6 @@ def convert_excel_to_mspdi(
                 original_wbs_to_uid[original_deliv_wbs_id] = deliv_uid
             sequential_wbs_to_uid[deliv_wbs] = deliv_uid
             
-            # Add deliverable completion milestone
-            if add_deliverable_milestones:
-                milestone = ET.SubElement(tasks, "{%s}Task" % ns)
-                milestone_uid = task_uid
-                task_uid += 1
-                all_task_uids.append(milestone_uid)
-                
-                # Use component_num to set proper WBS numbering after all components
-                milestone_wbs_num = component_num + 1
-                
-                ET.SubElement(milestone, "{%s}UID" % ns).text = str(milestone_uid)
-                ET.SubElement(milestone, "{%s}ID" % ns).text = str(milestone_uid)
-                ET.SubElement(milestone, "{%s}Name" % ns).text = f"{deliverable_name} - COMPLETE"
-                ET.SubElement(milestone, "{%s}Type" % ns).text = "1"
-                ET.SubElement(milestone, "{%s}Milestone" % ns).text = "1"
-                ET.SubElement(milestone, "{%s}WBS" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
-                ET.SubElement(milestone, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
-                ET.SubElement(milestone, "{%s}OutlineLevel" % ns).text = "2"
-                ET.SubElement(milestone, "{%s}Priority" % ns).text = "500"
-                ET.SubElement(milestone, "{%s}Start" % ns).text = deliverable_finish.isoformat()
-                ET.SubElement(milestone, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
-                ET.SubElement(milestone, "{%s}Duration" % ns).text = "PT0M"
-                ET.SubElement(milestone, "{%s}DurationFormat" % ns).text = "7"
-                ET.SubElement(milestone, "{%s}Work" % ns).text = "PT0M"
-                ET.SubElement(milestone, "{%s}Summary" % ns).text = "0"
-                ET.SubElement(milestone, "{%s}Critical" % ns).text = "1"
-                ET.SubElement(milestone, "{%s}IsMarked" % ns).text = "1"
-                ET.SubElement(milestone, "{%s}ConstraintType" % ns).text = str(ConstraintType.MUST_FINISH_ON.value)
-                ET.SubElement(milestone, "{%s}ConstraintDate" % ns).text = deliverable_finish.isoformat()
-                
-                # Add custom field for milestone type
-                if add_custom_fields:
-                    ext_attr_mt = ET.SubElement(milestone, "{%s}ExtendedAttribute" % ns)
-                    ET.SubElement(ext_attr_mt, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                    ET.SubElement(ext_attr_mt, "{%s}Value" % ns).text = "Deliverable Milestone"
-            
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
     
@@ -1258,38 +1220,6 @@ def convert_excel_to_mspdi(
                         ext_attr_pg = ET.SubElement(phase_milestone, "{%s}ExtendedAttribute" % ns)
                         ET.SubElement(ext_attr_pg, "{%s}FieldID" % ns).text = "188743731"  # Text1
                         ET.SubElement(ext_attr_pg, "{%s}Value" % ns).text = "Phase Gate"
-    
-    # Add client approval milestone at the end
-    if add_deliverable_milestones:
-        approval_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
-        approval_uid = task_uid
-        task_uid += 1
-        
-        ET.SubElement(approval_milestone, "{%s}UID" % ns).text = str(approval_uid)
-        ET.SubElement(approval_milestone, "{%s}ID" % ns).text = str(approval_uid)
-        ET.SubElement(approval_milestone, "{%s}Name" % ns).text = "CLIENT APPROVAL - FINAL"
-        ET.SubElement(approval_milestone, "{%s}Type" % ns).text = "1"
-        ET.SubElement(approval_milestone, "{%s}Milestone" % ns).text = "1"
-        ET.SubElement(approval_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
-        ET.SubElement(approval_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
-        ET.SubElement(approval_milestone, "{%s}OutlineLevel" % ns).text = "1"
-        deliverable_counter += 1  # Increment for consistency
-        ET.SubElement(approval_milestone, "{%s}Priority" % ns).text = "1000"
-        ET.SubElement(approval_milestone, "{%s}Start" % ns).text = current_date.isoformat()
-        ET.SubElement(approval_milestone, "{%s}Finish" % ns).text = current_date.isoformat()
-        ET.SubElement(approval_milestone, "{%s}Duration" % ns).text = "PT0M"
-        ET.SubElement(approval_milestone, "{%s}DurationFormat" % ns).text = "7"
-        ET.SubElement(approval_milestone, "{%s}Work" % ns).text = "PT0M"
-        ET.SubElement(approval_milestone, "{%s}Summary" % ns).text = "0"
-        ET.SubElement(approval_milestone, "{%s}Critical" % ns).text = "1"
-        ET.SubElement(approval_milestone, "{%s}IsMarked" % ns).text = "1"
-        ET.SubElement(approval_milestone, "{%s}Notes" % ns).text = "Final client approval and sign-off"
-        
-        # Add custom field for milestone type
-        if add_custom_fields:
-            ext_attr_ca = ET.SubElement(approval_milestone, "{%s}ExtendedAttribute" % ns)
-            ET.SubElement(ext_attr_ca, "{%s}FieldID" % ns).text = "188743731"  # Text1
-            ET.SubElement(ext_attr_ca, "{%s}Value" % ns).text = "Client Approval"
     
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
@@ -1706,7 +1636,6 @@ if __name__ == "__main__":
             input_xlsx=test_xlsx,
             output_xml=test_xml,
             project_name="Enhanced Test Project",
-            add_deliverable_milestones=True,
             add_phase_gates=True,
             add_dependencies=True,
             add_custom_fields=True

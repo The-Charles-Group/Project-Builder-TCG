@@ -7511,8 +7511,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
 def _export_single_scenario_xml(
     scenario: Dict[str, Any],
     scenario_label: str,
-    project_name: Optional[str] = None,
-    add_deliverable_milestones: bool = False
+    project_name: Optional[str] = None
 ) -> str:
     """
     Helper function to export a single scenario to XML.
@@ -7579,8 +7578,7 @@ def _export_single_scenario_xml(
             project_name=project,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
-            blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=add_deliverable_milestones
+            blended_rate=scenario.get("blended_rate")
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -7599,7 +7597,7 @@ def _export_single_scenario_xml(
                 pass
 
 @app.get("/api/export/xml/a")
-def api_export_xml_scenario_a(add_anchors: bool = False, session_id: Optional[str] = None):
+def api_export_xml_scenario_a(session_id: Optional[str] = None):
     """
     Export Scenario A only as XML.
     If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
@@ -7612,8 +7610,7 @@ def api_export_xml_scenario_a(add_anchors: bool = False, session_id: Optional[st
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["A"],
         scenario_label="Scenario A",
-        project_name=scenarios["A"].get("project_name"),
-        add_deliverable_milestones=add_anchors
+        project_name=scenarios["A"].get("project_name")
     )
     
     return FileResponse(
@@ -7624,7 +7621,7 @@ def api_export_xml_scenario_a(add_anchors: bool = False, session_id: Optional[st
     )
 
 @app.get("/api/export/xml/b")
-def api_export_xml_scenario_b(add_anchors: bool = False, session_id: Optional[str] = None):
+def api_export_xml_scenario_b(session_id: Optional[str] = None):
     """
     Export Scenario B only as XML.
     If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
@@ -7637,8 +7634,7 @@ def api_export_xml_scenario_b(add_anchors: bool = False, session_id: Optional[st
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["B"],
         scenario_label="Scenario B",
-        project_name=scenarios["B"].get("project_name"),
-        add_deliverable_milestones=add_anchors
+        project_name=scenarios["B"].get("project_name")
     )
     
     return FileResponse(
@@ -7649,7 +7645,7 @@ def api_export_xml_scenario_b(add_anchors: bool = False, session_id: Optional[st
     )
 
 @app.get("/api/export/xml/c")
-def api_export_xml_scenario_c(add_anchors: bool = False, session_id: Optional[str] = None):
+def api_export_xml_scenario_c(session_id: Optional[str] = None):
     """
     Export Scenario C only as XML.
     If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
@@ -7662,8 +7658,7 @@ def api_export_xml_scenario_c(add_anchors: bool = False, session_id: Optional[st
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["C"],
         scenario_label="Scenario C",
-        project_name=scenarios["C"].get("project_name"),
-        add_deliverable_milestones=add_anchors
+        project_name=scenarios["C"].get("project_name")
     )
     
     return FileResponse(
@@ -8767,8 +8762,7 @@ def convert_excel_to_mspdi(
     project_name: Optional[str] = None,      # <— explicit project name override
     pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
     rate_band: str = "Standard_US",          # <— NEW: rate band
-    blended_rate: Optional[float] = None,    # <— NEW: blended rate
-    add_deliverable_milestones: bool = False # <— NEW: toggle for START/END anchors
+    blended_rate: Optional[float] = None     # <— NEW: blended rate
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -9116,10 +9110,6 @@ def convert_excel_to_mspdi(
                 r["UID"] = i
             
             return enriched
-        
-        # Apply enrichment (optional)
-        if add_deliverable_milestones:
-            rows = enrich_wbs_for_workfront(rows)
         
         # Rebuild indices after enrichment
         by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
@@ -10220,7 +10210,6 @@ class XMLExportPayload(BaseModel):
     hours_per_day: float = 8.0
     sheet_name: str = "Scenario"
     add_dependencies: bool = True
-    add_milestones: bool = True
     add_custom_fields: bool = True
 
 @app.post("/api/xml")
@@ -10384,8 +10373,7 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             project_name=project_name,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
-            blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=payload.add_milestones
+            blended_rate=scenario.get("blended_rate")
         )
         
         # Post-process XML if parallelization is enabled
