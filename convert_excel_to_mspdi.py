@@ -1108,8 +1108,9 @@ def convert_excel_to_mspdi(
                 
                 # Update component summary with PT0M duration (Workfront standard for summary tasks)
                 # Summary tasks are organizational containers - actual work is tracked in leaf tasks
+                # CRITICAL: For PT0M duration, Start must equal Finish to satisfy Workfront validation
                 ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
-                ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
+                ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_start.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
@@ -1143,8 +1144,9 @@ def convert_excel_to_mspdi(
             
             # Update deliverable summary with PT0M duration (Workfront standard for summary tasks)
             # Summary tasks are organizational containers - actual work is tracked in leaf tasks
+            # CRITICAL: For PT0M duration, Start must equal Finish to satisfy Workfront validation
             ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
-            ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
+            ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_start.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
             # Add aggregated cost/revenue to deliverable summary task
