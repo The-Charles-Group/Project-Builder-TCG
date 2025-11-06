@@ -40,106 +40,6 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
-def create_governance_milestone_task(
-    task_uid: int,
-    ns: str,
-    name: str,
-    milestone_date: datetime,
-    governance_type: str,
-    wbs_level: str = "1",
-    hours: float = 0,
-    predecessor_uid: Optional[int] = None
-) -> Tuple[ET.Element, Dict[str, Any]]:
-    """
-    Create a governance milestone task in MSPDI format
-    
-    Args:
-        task_uid: Unique ID for the task
-        ns: XML namespace
-        name: Task name
-        milestone_date: Date for the milestone
-        governance_type: Type of governance milestone (steering_review, executive_briefing, etc.)
-        wbs_level: WBS level for the task
-        hours: Hours for the task (0 for pure milestone)
-        predecessor_uid: UID of predecessor task if any
-        
-    Returns:
-        Tuple of (XML Element, task metadata dict)
-    """
-    task = ET.Element("{%s}Task" % ns)
-    
-    # Basic task properties
-    ET.SubElement(task, "{%s}UID" % ns).text = str(task_uid)
-    ET.SubElement(task, "{%s}ID" % ns).text = str(task_uid)
-    ET.SubElement(task, "{%s}Name" % ns).text = name
-    ET.SubElement(task, "{%s}Type" % ns).text = "2"  # Fixed duration
-    ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-    ET.SubElement(task, "{%s}WBS" % ns).text = wbs_level
-    ET.SubElement(task, "{%s}OutlineNumber" % ns).text = wbs_level
-    # FIX: Enforce Workfront 3-level hierarchy - map WBS depth to max 3 levels
-    # 0 dots (e.g., "1") → OutlineLevel 1, 1 dot (e.g., "1.1") → OutlineLevel 2, 2+ dots → OutlineLevel 3
-    dot_count = wbs_level.count('.')
-    outline_level = min(dot_count + 1, 3)  # Cap at level 3 for Workfront compatibility
-    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = str(outline_level)
-    
-    # Mark as milestone if no hours
-    if hours == 0:
-        ET.SubElement(task, "{%s}Milestone" % ns).text = "1"
-        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0H0M0S"
-    else:
-        ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
-        duration_days = max(1, int(hours / 8))
-        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
-    
-    # Set dates
-    ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
-    if hours > 0:
-        end_date = milestone_date + timedelta(days=max(1, int(hours / 8)))
-        ET.SubElement(task, "{%s}Finish" % ns).text = end_date.isoformat()
-    else:
-        ET.SubElement(task, "{%s}Finish" % ns).text = milestone_date.isoformat()
-    
-    # Priority based on governance type
-    priority_map = {
-        "steering_review": "600",
-        "executive_briefing": "700",
-        "risk_review": "650",
-        "quality_gate": "550",
-        "change_control": "500",
-        "compliance": "600",
-        "uat": "550",
-        "performance_test": "500"
-    }
-    ET.SubElement(task, "{%s}Priority" % ns).text = priority_map.get(governance_type, "500")
-    
-    # Work and duration format
-    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "39"  # Hours
-    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{hours}H0M0S"
-    ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
-    ET.SubElement(task, "{%s}Summary" % ns).text = "0"
-    ET.SubElement(task, "{%s}Critical" % ns).text = "0"
-    
-    # Add custom field for governance type
-    ext_attrs = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-    ET.SubElement(ext_attrs, "{%s}FieldID" % ns).text = "188743731"  # Text1
-    ET.SubElement(ext_attrs, "{%s}Value" % ns).text = f"GOVERNANCE_{governance_type.upper()}"
-    
-    # Add notes to identify as governance milestone
-    ET.SubElement(task, "{%s}Notes" % ns).text = f"Governance Milestone: {governance_type}"
-    
-    # Metadata for tracking
-    metadata = {
-        "uid": task_uid,
-        "name": name,
-        "type": governance_type,
-        "date": milestone_date.isoformat(),
-        "is_governance": True,
-        "hours": hours
-    }
-    
-    return task, metadata
-
-
 def convert_excel_to_mspdi(
     input_xlsx: str,
     output_xml: str,
@@ -152,7 +52,6 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
-    add_phase_gates: bool = True,
     add_dependencies: bool = True,
     add_custom_fields: bool = True
 ) -> Dict[str, Any]:
@@ -171,7 +70,6 @@ def convert_excel_to_mspdi(
         pricing_mode: Pricing mode for the project
         rate_band: Rate band for pricing
         blended_rate: Blended rate if using flat pricing
-        add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
         add_dependencies: Add task dependencies
         add_custom_fields: Add ExtendedAttribute elements for Workfront
         
@@ -508,23 +406,12 @@ def convert_excel_to_mspdi(
     component_tasks = {}    # Track component tasks for dependencies
     current_date = project_start
     deliverable_ends = {}
-    all_task_uids = []  # Track all task UIDs for phase gates
     
     # Initialize cost and duration accumulators for aggregation
     deliverable_costs = {}  # {deliv_uid: total_cost}
     component_costs = {}    # {comp_uid: total_cost}
     deliverable_task_hours = {}  # {deliv_uid: sum_of_child_hours}
     component_task_hours = {}    # {comp_uid: sum_of_child_hours}
-    
-    # Calculate total project timeline for phase gates
-    total_rows = len(df)
-    phase_gate_positions = []
-    if add_phase_gates:
-        phase_gate_positions = [
-            int(total_rows * 0.25),  # 25% milestone
-            int(total_rows * 0.50),  # 50% milestone
-            int(total_rows * 0.75),  # 75% milestone
-        ]
     
     # FIX: Sequential WBS counters - INDEPENDENT of DataFrame WBS_ID
     deliverable_counter = 1  # Sequential counter for deliverables: 1, 2, 3...
@@ -548,7 +435,6 @@ def convert_excel_to_mspdi(
             deliv_task = ET.SubElement(tasks, "{%s}Task" % ns)
             deliv_uid = task_uid
             task_uid += 1
-            all_task_uids.append(deliv_uid)
             deliverable_tasks[str(deliverable_name)] = deliv_uid
             
             # Initialize cost accumulator for this deliverable
@@ -744,7 +630,6 @@ def convert_excel_to_mspdi(
                 comp_task = ET.SubElement(tasks, "{%s}Task" % ns)
                 comp_uid = task_uid
                 task_uid += 1
-                all_task_uids.append(comp_uid)
                 
                 # Initialize cost accumulator for this component
                 component_costs[comp_uid] = 0.0
@@ -838,7 +723,6 @@ def convert_excel_to_mspdi(
                         task = ET.SubElement(tasks, "{%s}Task" % ns)
                         uid = task_uid
                         task_uid += 1
-                        all_task_uids.append(uid)
                         
                         # Get task details - FIX: Use proper L3 task name, NOT Component as fallback
                         task_name = (row.get("Task_Name") or 
@@ -1172,55 +1056,6 @@ def convert_excel_to_mspdi(
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
     
-    # Add phase gate milestones
-    if add_phase_gates and all_task_uids:
-        phase_names = ["Phase 1 Complete (25%)", "Phase 2 Complete (50%)", "Phase 3 Complete (75%)"]
-        for i, position in enumerate(phase_gate_positions):
-            if position < len(all_task_uids):
-                # Get the task at this position
-                ref_task_uid = all_task_uids[position]
-                if ref_task_uid in task_map:
-                    ref_task_data = task_map[ref_task_uid]
-                    ref_task = ref_task_data["task"]
-                    
-                    # Find the finish date from the reference task
-                    finish_elem = ref_task.find("{%s}Finish" % ns)
-                    if finish_elem is not None:
-                        phase_date = finish_elem.text
-                    else:
-                        phase_date = (project_start + timedelta(days=30 * (i+1))).isoformat()
-                    
-                    # Create phase gate milestone
-                    phase_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
-                    phase_uid = task_uid
-                    task_uid += 1
-                    
-                    ET.SubElement(phase_milestone, "{%s}UID" % ns).text = str(phase_uid)
-                    ET.SubElement(phase_milestone, "{%s}ID" % ns).text = str(phase_uid)
-                    ET.SubElement(phase_milestone, "{%s}Name" % ns).text = phase_names[i]
-                    ET.SubElement(phase_milestone, "{%s}Type" % ns).text = "1"
-                    ET.SubElement(phase_milestone, "{%s}Milestone" % ns).text = "1"
-                    ET.SubElement(phase_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
-                    ET.SubElement(phase_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
-                    ET.SubElement(phase_milestone, "{%s}OutlineLevel" % ns).text = "1"
-                    deliverable_counter += 1  # Increment for next milestone
-                    ET.SubElement(phase_milestone, "{%s}Priority" % ns).text = "1000"  # High priority
-                    ET.SubElement(phase_milestone, "{%s}Start" % ns).text = phase_date
-                    ET.SubElement(phase_milestone, "{%s}Finish" % ns).text = phase_date
-                    ET.SubElement(phase_milestone, "{%s}Duration" % ns).text = "PT0M"
-                    ET.SubElement(phase_milestone, "{%s}DurationFormat" % ns).text = "7"
-                    ET.SubElement(phase_milestone, "{%s}Work" % ns).text = "PT0M"
-                    ET.SubElement(phase_milestone, "{%s}Summary" % ns).text = "0"
-                    ET.SubElement(phase_milestone, "{%s}Critical" % ns).text = "1"
-                    ET.SubElement(phase_milestone, "{%s}IsMarked" % ns).text = "1"
-                    ET.SubElement(phase_milestone, "{%s}Notes" % ns).text = f"Phase gate at {(i+1)*25}% project completion"
-                    
-                    # Add custom field for milestone type
-                    if add_custom_fields:
-                        ext_attr_pg = ET.SubElement(phase_milestone, "{%s}ExtendedAttribute" % ns)
-                        ET.SubElement(ext_attr_pg, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                        ET.SubElement(ext_attr_pg, "{%s}Value" % ns).text = "Phase Gate"
-    
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
     if add_dependencies:
@@ -1539,8 +1374,7 @@ def convert_excel_to_mspdi(
         "has_wbs": True,
         "has_dependencies": add_dependencies,
         "has_custom_fields": add_custom_fields,
-        "has_calendars": True,
-        "has_phase_gates": add_phase_gates
+        "has_calendars": True
     }
     
     logging.info(f"[Enhanced MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources, {stats['milestone_count']} milestones")
@@ -1636,7 +1470,6 @@ if __name__ == "__main__":
             input_xlsx=test_xlsx,
             output_xml=test_xml,
             project_name="Enhanced Test Project",
-            add_phase_gates=True,
             add_dependencies=True,
             add_custom_fields=True
         )
