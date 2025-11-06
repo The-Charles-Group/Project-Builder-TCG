@@ -687,9 +687,10 @@ def convert_excel_to_mspdi(
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
-            # FIX: ALWAYS calculate deliverable_finish from child components, ignore End_Date from first row
-            # End_Date in first row is for individual TASKS, not deliverable summaries
-            deliverable_finish = deliverable_start_date  # Will be updated to max(component finishes)
+            # FIX: Initialize deliverable_finish from Gantt End_Date if available, otherwise use start
+            # This ensures deliverables with no child tasks (all filtered out) still have proper duration
+            # Child tasks will update this to max(task finishes) if they exist
+            deliverable_finish = deliverable_end_date if deliverable_end_date else deliverable_start_date
             
             # Group tasks by Component within this deliverable to create 3-level hierarchy
             logging.info(f"[3-LEVEL HIERARCHY] Processing deliverable '{deliverable_name}' with component grouping")
