@@ -371,6 +371,7 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Start" % ns).text = project_start.isoformat()
+    # Finish date will be added after all deliverables are processed
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
@@ -406,6 +407,7 @@ def convert_excel_to_mspdi(
     component_tasks = {}    # Track component tasks for dependencies
     current_date = project_start
     deliverable_ends = {}
+    project_finish_date = project_start  # Track the maximum deliverable finish date for project summary task
     
     # Initialize cost and duration accumulators for aggregation
     deliverable_costs = {}  # {deliv_uid: total_cost}
@@ -1057,8 +1059,17 @@ def convert_excel_to_mspdi(
             # This ensures each deliverable starts after the previous one finishes
             current_date = deliverable_finish
             
+            # Update project finish date to track the latest deliverable finish
+            # Since deliverables are sequential, this will naturally track the last one
+            project_finish_date = deliverable_finish
+            
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
+    
+    # Update project summary task (UID=0) with Finish date
+    # This is required by Workfront for valid XML import
+    ET.SubElement(project_task, "{%s}Finish" % ns).text = project_finish_date.isoformat()
+    logging.info(f"[PROJECT] Set project finish date: {project_finish_date.isoformat()}")
     
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
