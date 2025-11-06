@@ -40,6 +40,189 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
+def classify_component_phase(component_name: str, task_labels: List[str] = None) -> str:
+    """
+    Classify a component into its natural workflow phase based on PM best practices.
+    
+    This function implements project management intelligence by recognizing common
+    component types and categorizing them into sequential workflow phases that a
+    seasoned PM would use.
+    
+    Args:
+        component_name: Name of the component (e.g., "Research", "Logo Design")
+        task_labels: Optional list of task names within the component for additional context
+        
+    Returns:
+        One of: "Discovery", "Strategy", "Creative", "Review", "Production", "Delivery"
+    """
+    
+    # Normalize for matching
+    name_lower = str(component_name).lower()
+    
+    # Phase detection keywords (order matters - more specific first)
+    
+    # Discovery Phase - Research, Analysis, Audit
+    discovery_keywords = [
+        'research', 'audit', 'analysis', 'analyze', 'discovery', 'investigation',
+        'competitive', 'landscape', 'stakeholder interview', 'user research',
+        'market research', 'data collection', 'assessment'
+    ]
+    
+    # Strategy Phase - Planning, Positioning, Messaging
+    strategy_keywords = [
+        'strategy', 'strategic', 'planning', 'plan', 'positioning', 'messaging',
+        'framework', 'architecture', 'roadmap', 'approach', 'recommendation',
+        'brief', 'briefing', 'guidelines', 'standards', 'criteria'
+    ]
+    
+    # Review Phase - Reviews, Revisions, Approval
+    review_keywords = [
+        'review', 'revision', 'revise', 'approval', 'feedback', 'critique',
+        'refinement', 'iteration', 'qa', 'quality check', 'validation'
+    ]
+    
+    # Production Phase - Final production, file prep, assembly
+    production_keywords = [
+        'production', 'file prep', 'final file', 'assembly', 'packaging',
+        'finalization', 'final packaging', 'mechanicals', 'print ready'
+    ]
+    
+    # Delivery Phase - Handoff, launch, training
+    delivery_keywords = [
+        'delivery', 'handoff', 'hand-off', 'launch', 'deployment', 'training',
+        'implementation', 'rollout', 'go-live', 'activation'
+    ]
+    
+    # Creative Phase - Design, copywriting, concepting (default for ambiguous)
+    creative_keywords = [
+        'design', 'creative', 'concept', 'ideation', 'copywriting', 'writing',
+        'logo', 'brand', 'visual', 'graphic', 'layout', 'mockup', 'prototype',
+        'illustration', 'photography', 'video', 'animation', 'typography',
+        'color', 'palette', 'style', 'identity'
+    ]
+    
+    # Check each phase in priority order
+    # Review and Production are checked first because they're more specific
+    if any(keyword in name_lower for keyword in review_keywords):
+        return "Review"
+    
+    if any(keyword in name_lower for keyword in production_keywords):
+        return "Production"
+    
+    if any(keyword in name_lower for keyword in delivery_keywords):
+        return "Delivery"
+    
+    if any(keyword in name_lower for keyword in discovery_keywords):
+        return "Discovery"
+    
+    if any(keyword in name_lower for keyword in strategy_keywords):
+        return "Strategy"
+    
+    if any(keyword in name_lower for keyword in creative_keywords):
+        return "Creative"
+    
+    # Default to Creative for ambiguous cases
+    # (most agency components are creative work)
+    return "Creative"
+
+
+def generate_smart_component_dependencies(
+    components_in_deliverable: List[Dict[str, Any]], 
+    ns: str,
+    max_parallel_per_phase: int = 3,
+    stagger_lag_days: int = 2
+) -> None:
+    """
+    Generate intelligent component dependencies based on PM best practices.
+    
+    This implements realistic project scheduling by:
+    1. Enforcing sequential workflow between phases (Discovery → Strategy → Creative → Review → Production → Delivery)
+    2. Allowing controlled parallelism within phases (max 3 concurrent components)
+    3. Staggering parallel starts with SS+lag to prevent unrealistic "everything starts at once" timelines
+    
+    Args:
+        components_in_deliverable: List of component data dicts with keys: comp_task (ET.Element), phase (str), comp_uid (int)
+        ns: XML namespace string
+        max_parallel_per_phase: Maximum components that can run in parallel within a phase (default 3)
+        stagger_lag_days: Days to lag each parallel component start (default 2)
+    """
+    
+    if not components_in_deliverable:
+        return
+    
+    # Phase execution order (DAG - no cycles possible)
+    phase_order = ["Discovery", "Strategy", "Creative", "Review", "Production", "Delivery"]
+    phase_priority = {phase: idx for idx, phase in enumerate(phase_order)}
+    
+    # Group components by phase
+    components_by_phase = {}
+    for comp_data in components_in_deliverable:
+        phase = comp_data["phase"]
+        if phase not in components_by_phase:
+            components_by_phase[phase] = []
+        components_by_phase[phase].append(comp_data)
+    
+    # Sort phases by priority
+    sorted_phases = sorted(components_by_phase.keys(), key=lambda p: phase_priority.get(p, 999))
+    
+    # 1. Add PHASE-TO-PHASE dependencies (sequential workflow)
+    # Each phase must complete before next phase starts
+    for i in range(len(sorted_phases) - 1):
+        current_phase = sorted_phases[i]
+        next_phase = sorted_phases[i + 1]
+        
+        # Get last component from current phase
+        last_comp_in_current = components_by_phase[current_phase][-1]
+        
+        # Get first component from next phase
+        first_comp_in_next = components_by_phase[next_phase][0]
+        
+        # Add FS dependency: next phase starts after current phase finishes
+        pred_link = ET.SubElement(first_comp_in_next["comp_task"], f"{{{ns}}}PredecessorLink")
+        ET.SubElement(pred_link, f"{{{ns}}}PredecessorUID").text = str(last_comp_in_current["comp_uid"])
+        ET.SubElement(pred_link, f"{{{ns}}}Type").text = str(DependencyType.FINISH_TO_START.value)
+        ET.SubElement(pred_link, f"{{{ns}}}CrossProject").text = "0"
+        ET.SubElement(pred_link, f"{{{ns}}}LinkLag").text = "0"
+        ET.SubElement(pred_link, f"{{{ns}}}LagFormat").text = "7"  # Days
+        
+        logging.info(f"[SMART SCHEDULING] Phase dependency: {current_phase} → {next_phase} (FS)")
+    
+    # 2. Add WITHIN-PHASE parallelism with staggering
+    for phase, components in components_by_phase.items():
+        if len(components) <= 1:
+            continue  # Single component, no dependencies needed
+        
+        # Components 1-3: Allow parallel with SS+lag staggering
+        # Components 4+: Use FS from first component (wait for capacity)
+        for idx, comp_data in enumerate(components):
+            if idx == 0:
+                continue  # First component in phase has no within-phase dependency
+            
+            if idx < max_parallel_per_phase:
+                # Parallel execution with staggered start (SS+lag)
+                lag_days = idx * stagger_lag_days
+                lag_minutes = lag_days * 480  # 8 hours/day * 60 min
+                
+                pred_link = ET.SubElement(comp_data["comp_task"], f"{{{ns}}}PredecessorLink")
+                ET.SubElement(pred_link, f"{{{ns}}}PredecessorUID").text = str(components[0]["comp_uid"])
+                ET.SubElement(pred_link, f"{{{ns}}}Type").text = str(DependencyType.START_TO_START.value)
+                ET.SubElement(pred_link, f"{{{ns}}}CrossProject").text = "0"
+                ET.SubElement(pred_link, f"{{{ns}}}LinkLag").text = str(lag_minutes)
+                ET.SubElement(pred_link, f"{{{ns}}}LagFormat").text = "12"  # Minutes
+                
+                logging.info(f"[SMART SCHEDULING] Within-phase stagger: {comp_data['comp_name']} starts +{lag_days}d after first (SS+{lag_days}d)")
+            else:
+                # Too many parallel - wait for first to finish (FS)
+                pred_link = ET.SubElement(comp_data["comp_task"], f"{{{ns}}}PredecessorLink")
+                ET.SubElement(pred_link, f"{{{ns}}}PredecessorUID").text = str(components[0]["comp_uid"])
+                ET.SubElement(pred_link, f"{{{ns}}}Type").text = str(DependencyType.FINISH_TO_START.value)
+                ET.SubElement(pred_link, f"{{{ns}}}CrossProject").text = "0"
+                ET.SubElement(pred_link, f"{{{ns}}}LinkLag").text = "0"
+                ET.SubElement(pred_link, f"{{{ns}}}LagFormat").text = "7"  # Days
+                
+                logging.info(f"[SMART SCHEDULING] Capacity limit: {comp_data['comp_name']} waits for first to finish (FS)")
+
+
 def convert_excel_to_mspdi(
     input_xlsx: str,
     output_xml: str,
@@ -53,7 +236,8 @@ def convert_excel_to_mspdi(
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
     add_dependencies: bool = True,
-    add_custom_fields: bool = True
+    add_custom_fields: bool = True,
+    enable_smart_scheduling: bool = True
 ) -> Dict[str, Any]:
     """
     Convert an Excel WBS file to enhanced Microsoft Project XML (MSPDI) format.
@@ -635,6 +819,9 @@ def convert_excel_to_mspdi(
             if str(deliverable_name) not in component_counter_per_deliv:
                 component_counter_per_deliv[str(deliverable_name)] = 1
             
+            # SMART SCHEDULING: Collect component metadata for intelligent dependency generation
+            components_for_smart_scheduling = []
+            
             # Loop through each component (Level 2)
             for component_name, component_group in component_grouped:
                 component_num += 1
@@ -723,6 +910,17 @@ def convert_excel_to_mspdi(
                 component_start = current_date
                 component_finish = current_date
                 task_num_in_component = 0
+                
+                # SMART SCHEDULING: Classify component phase and store metadata
+                component_phase = classify_component_phase(component_name)
+                components_for_smart_scheduling.append({
+                    "comp_task": comp_task,
+                    "comp_uid": comp_uid,
+                    "comp_name": str(component_name),
+                    "phase": component_phase,
+                    "deliv_name": str(deliverable_name)
+                })
+                logging.info(f"[SMART SCHEDULING] Component '{component_name}' classified as '{component_phase}' phase")
                 
                 # FIX: Initialize task counter for this component
                 comp_key = (str(deliverable_name), str(component_name))
@@ -1038,6 +1236,26 @@ def convert_excel_to_mspdi(
                 component_counter_per_deliv[str(deliverable_name)] += 1
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
+            
+            # SMART SCHEDULING: Apply intelligent component dependencies after all components are created
+            if enable_smart_scheduling and len(components_for_smart_scheduling) > 1:
+                logging.info(f"[SMART SCHEDULING] Applying intelligent dependencies to {len(components_for_smart_scheduling)} components in '{deliverable_name}'")
+                try:
+                    generate_smart_component_dependencies(
+                        components_in_deliverable=components_for_smart_scheduling,
+                        ns=ns,
+                        max_parallel_per_phase=3,
+                        stagger_lag_days=2
+                    )
+                    logging.info(f"[SMART SCHEDULING] Successfully applied smart scheduling to deliverable '{deliverable_name}'")
+                except Exception as e:
+                    logging.warning(f"[SMART SCHEDULING] Error applying smart scheduling to '{deliverable_name}': {e}")
+                    import traceback
+                    traceback.print_exc()
+            elif enable_smart_scheduling and len(components_for_smart_scheduling) == 1:
+                logging.info(f"[SMART SCHEDULING] Only 1 component in '{deliverable_name}', skipping smart scheduling")
+            elif not enable_smart_scheduling:
+                logging.info(f"[SMART SCHEDULING] Feature disabled, skipping smart scheduling for '{deliverable_name}'")
             
             # Update deliverable summary with PT0M duration (Workfront standard for summary tasks)
             # Summary tasks are organizational containers - actual work is tracked in leaf tasks
