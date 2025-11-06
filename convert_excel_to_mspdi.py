@@ -512,9 +512,11 @@ def convert_excel_to_mspdi(
     deliverable_ends = {}
     all_task_uids = []  # Track all task UIDs for phase gates
     
-    # Initialize cost accumulators for aggregation
+    # Initialize cost and duration accumulators for aggregation
     deliverable_costs = {}  # {deliv_uid: total_cost}
     component_costs = {}    # {comp_uid: total_cost}
+    deliverable_task_hours = {}  # {deliv_uid: sum_of_child_hours}
+    component_task_hours = {}    # {comp_uid: sum_of_child_hours}
     
     # Calculate total project timeline for phase gates
     total_rows = len(df)
@@ -553,6 +555,7 @@ def convert_excel_to_mspdi(
             
             # Initialize cost accumulator for this deliverable
             deliverable_costs[deliv_uid] = 0.0
+            deliverable_task_hours[deliv_uid] = 0.0
             
             # Get deliverable code and service department if available
             deliv_code = ""
@@ -747,6 +750,7 @@ def convert_excel_to_mspdi(
                 
                 # Initialize cost accumulator for this component
                 component_costs[comp_uid] = 0.0
+                component_task_hours[comp_uid] = 0.0
                 
                 # Store component task for dependencies
                 component_tasks[f"{deliverable_name}:{component_name}"] = comp_uid
@@ -860,6 +864,10 @@ def convert_excel_to_mspdi(
                             planned_hours = 8
                         hours = float(planned_hours)
                         duration_days = max(1, int(np.ceil(hours / hours_per_day)))
+                        
+                        # Accumulate task hours into component and deliverable totals
+                        component_task_hours[comp_uid] += hours
+                        deliverable_task_hours[deliv_uid] += hours
                         
                         # FIX: Use merged timeline dates (Start_Date/End_Date) from Gantt if available
                         # Only fall back to calculated dates if missing
@@ -1098,9 +1106,9 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
-                # Update component summary with calculated duration from business hours
-                # Summary tasks should use business hours, not calendar time
-                component_duration_hours = calculate_business_hours(component_start, component_finish)
+                # Update component summary with sum of child task hours
+                # Summary tasks should aggregate child effort hours, not use calendar time spans
+                component_duration_hours = component_task_hours.get(comp_uid, 0.0)
                 ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{int(component_duration_hours * 60)}M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
@@ -1134,9 +1142,9 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
-            # Update deliverable summary with calculated duration from business hours
-            # Summary tasks should use business hours, not calendar time
-            deliverable_duration_hours = calculate_business_hours(deliverable_start, deliverable_finish)
+            # Update deliverable summary with sum of child task hours
+            # Summary tasks should aggregate child effort hours, not use calendar time spans
+            deliverable_duration_hours = deliverable_task_hours.get(deliv_uid, 0.0)
             ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{int(deliverable_duration_hours * 60)}M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
