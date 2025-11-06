@@ -1106,10 +1106,9 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
-                # Update component summary with sum of child task hours
-                # Summary tasks should aggregate child effort hours, not use calendar time spans
-                component_duration_hours = component_task_hours.get(comp_uid, 0.0)
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{int(component_duration_hours * 60)}M"
+                # Update component summary with PT0M duration (Workfront standard for summary tasks)
+                # Summary tasks are organizational containers - actual work is tracked in leaf tasks
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task
@@ -1142,10 +1141,9 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
-            # Update deliverable summary with sum of child task hours
-            # Summary tasks should aggregate child effort hours, not use calendar time spans
-            deliverable_duration_hours = deliverable_task_hours.get(deliv_uid, 0.0)
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{int(deliverable_duration_hours * 60)}M"
+            # Update deliverable summary with PT0M duration (Workfront standard for summary tasks)
+            # Summary tasks are organizational containers - actual work is tracked in leaf tasks
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
