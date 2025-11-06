@@ -1480,7 +1480,7 @@ def convert_excel_to_mspdi(
                         # Create PredecessorLink element (only for leaf tasks)
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "1"  # FINISH_TO_START
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
@@ -1491,44 +1491,6 @@ def convert_excel_to_mspdi(
             logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies across ALL task types, skipped {skipped_count} invalid references")
         else:
             logging.warning("[DEPENDENCIES] Dependencies column not found in DataFrame - skipping dependency parsing")
-        
-        # Also add cross-deliverable dependencies based on department logic as fallback
-        logging.info("[3-LEVEL HIERARCHY] Adding component-level dependencies (tasks within components run in parallel)")
-        
-        # Define department dependencies
-        dept_dependencies = {
-            "Creative": ["Strategy"],
-            "Paid Media": ["Creative", "Strategy"],
-            "Technology": ["Strategy"],
-            "Content": ["Strategy", "Creative"],
-            "Quality Assurance": ["Technology", "Content"]
-        }
-        
-        for uid, task_data in task_map.items():
-            task = task_data["task"]
-            department = task_data["department"]
-            deliverable = task_data["deliverable"]
-            
-            # Only add department-based dependencies if no explicit dependencies from DataFrame
-            existing_pred_links = task.findall("{%s}PredecessorLink" % ns)
-            if existing_pred_links:
-                continue  # Skip if dependencies already added from DataFrame
-            
-            if department in dept_dependencies:
-                # Look for tasks in dependent departments from earlier deliverables
-                for other_uid, other_data in task_map.items():
-                    if other_uid >= uid:  # Only look at earlier tasks
-                        break
-                    if other_data["department"] in dept_dependencies[department]:
-                        if other_data["deliverable"] == deliverable:  # Same deliverable
-                            # Add dependency with Start-to-Start relationship
-                            pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
-                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
-                            ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.START_TO_START.value)
-                            ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "4800"  # 1 day lag (in minutes)
-                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
-                            break
     
     # Create Assignments container with enhanced resource assignments
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
