@@ -40,6 +40,71 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
+# GPT-5 PRO FIX 1 & 5: Dependency Rules Table for "Seasoned PM Brain"
+# Maps component/task type relationships to (dependency_type, lag_days)
+# MSPDI Type codes: 0=FF, 1=FS, 2=SF, 3=SS
+DEPENDENCY_RULES = {
+    # Research can start 2 days after Discovery begins (SS+2d)
+    ("Discovery", "Research"): (3, 2),  # SS + 2 days
+    ("Discovery", "Strategy"): (3, 2),   # SS + 2 days
+    
+    # Copy finishes before Design starts (FS+0d)
+    ("Copy", "Design"): (1, 0),          # FS + 0 days
+    ("Copywriting", "Design"): (1, 0),   # FS + 0 days
+    
+    # Design finishes before QA starts (FS+0d)
+    ("Design", "QA"): (1, 0),            # FS + 0 days
+    ("Design", "Quality Assurance"): (1, 0),  # FS + 0 days
+    
+    # Dev can start 1 day after QA begins when Dev is ~20% in (SS+1d)
+    ("Development", "QA"): (3, 1),       # SS + 1 day
+    ("Dev", "Quality Assurance"): (3, 1), # SS + 1 day
+    
+    # Strategy must finish before Creative starts (FS+0d)
+    ("Strategy", "Creative"): (1, 0),    # FS + 0 days
+    ("Strategy", "Design"): (1, 0),      # FS + 0 days
+    
+    # Creative finishes before Production starts (FS+0d)
+    ("Creative", "Production"): (1, 0),  # FS + 0 days
+    
+    # Default fallback patterns
+    ("Analysis", "Design"): (1, 0),      # FS + 0 days
+    ("Planning", "Execution"): (1, 0),   # FS + 0 days
+}
+
+
+def link_for(pred_task_name: str, succ_task_name: str, pred_component: Optional[str] = None, succ_component: Optional[str] = None) -> Tuple[int, int]:
+    """
+    GPT-5 PRO FIX 1: Determine dependency type and lag based on task relationships.
+    
+    Uses "seasoned PM" rules to determine realistic overlaps and dependencies.
+    
+    Args:
+        pred_task_name: Name of predecessor task
+        succ_task_name: Name of successor task
+        pred_component: Component name of predecessor (optional)
+        succ_component: Component name of successor (optional)
+        
+    Returns:
+        Tuple of (type_code, lag_days) where:
+        - type_code: 0=FF, 1=FS, 2=SF, 3=SS
+        - lag_days: Number of days lag (positive for delay, negative for lead)
+    """
+    # Try component-level match first
+    if pred_component and succ_component:
+        rule_key = (pred_component, succ_component)
+        if rule_key in DEPENDENCY_RULES:
+            return DEPENDENCY_RULES[rule_key]
+    
+    # Try task-name-level match (e.g., "Research" in task name)
+    for (pred_pattern, succ_pattern), (dep_type, lag) in DEPENDENCY_RULES.items():
+        if pred_pattern.lower() in pred_task_name.lower() and succ_pattern.lower() in succ_task_name.lower():
+            return (dep_type, lag)
+    
+    # Default to Finish-to-Start with no lag
+    return (1, 0)  # FS + 0 days
+
+
 def convert_excel_to_mspdi(
     input_xlsx: str,
     output_xml: str,
@@ -834,7 +899,8 @@ def convert_excel_to_mspdi(
                             original_wbs_to_uid[original_task_wbs_id] = uid
                         sequential_wbs_to_uid[task_wbs] = uid
                         
-                        ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
+                        # GPT-5 PRO FIX 3: Set non-summary leaf tasks to Type="1" (Fixed Duration)
+                        ET.SubElement(task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                         ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
                         ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs
                         ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs
@@ -859,7 +925,8 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
-                        ET.SubElement(task, "{%s}EffortDriven" % ns).text = "1"
+                        # GPT-5 PRO FIX 3: Set IsEffortDriven="0" for Fixed Duration tasks
+                        ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
                         ET.SubElement(task, "{%s}Recurring" % ns).text = "0"
                         ET.SubElement(task, "{%s}OverAllocated" % ns).text = "0"
                         ET.SubElement(task, "{%s}Estimated" % ns).text = "1"
@@ -1259,16 +1326,42 @@ def convert_excel_to_mspdi(
                                 skipped_count += 1
                                 continue
                         
-                        # Create PredecessorLink element (only for leaf tasks)
+                        # GPT-5 PRO FIX 1 & 2: Get task names and components for link_for() function
+                        # Get successor task name and component
+                        succ_task_name = row_task_name if row_task_name else str(row_deliverable)
+                        succ_component = str(row_component) if has_component else None
+                        
+                        # Get predecessor task name and component by looking up in task_map or DataFrame
+                        pred_task_name = "Unknown"
+                        pred_component = None
+                        
+                        if predecessor_task_elem is not None:
+                            pred_name_elem = predecessor_task_elem.find("{%s}Name" % ns)
+                            if pred_name_elem is not None:
+                                pred_task_name = pred_name_elem.text
+                        
+                        # Try to find predecessor component from task_map
+                        if predecessor_uid in task_map:
+                            pred_component = task_map[predecessor_uid].get("component")
+                        
+                        # Determine dependency type and lag using "seasoned PM" rules
+                        link_type, lag_days = link_for(pred_task_name, succ_task_name, pred_component, succ_component)
+                        lag_minutes = int(lag_days * 480)  # Convert days to minutes (480 min/day)
+                        
+                        # Create PredecessorLink element with proper type and lag
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = str(link_type)  # 0=FF, 1=FS, 2=SF, 3=SS
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                        ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
-                        ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
+                        ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_minutes)  # Lag in minutes
+                        ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days format
                         
                         dependencies_count += 1
-                        logging.info(f"[DEPENDENCIES] Added dependency: {lookup_key} (UID={task_uid}) depends on WBS '{dep_wbs}' (UID={predecessor_uid})")
+                        
+                        # Log dependency type for debugging
+                        type_names = {0: "FF", 1: "FS", 2: "SF", 3: "SS"}
+                        type_name = type_names.get(link_type, f"Type{link_type}")
+                        logging.info(f"[DEPENDENCIES] Added {type_name}+{lag_days}d dependency: '{succ_task_name}' (UID={task_uid}) depends on '{pred_task_name}' (UID={predecessor_uid})")
             
             logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies across ALL task types, skipped {skipped_count} invalid references")
         else:
@@ -1320,16 +1413,48 @@ def convert_excel_to_mspdi(
     for uid, task_data in task_map.items():
         task = task_data["task"]
         
-        # Get task hours
+        # GPT-5 PRO FIX 2: Get task hours with backfill from duration
         work_elem = task.find("{%s}Work" % ns)
         if work_elem is not None and work_elem.text:
             work_minutes = int(work_elem.text.replace("PT", "").replace("M", ""))
             work_hours = work_minutes / 60
         else:
+            work_hours = 0.0
+        
+        # GPT-5 PRO FIX 2: Backfill zero hours from duration (assume 1 FTE across duration)
+        if work_hours <= 0.0001:
+            duration_elem = task.find("{%s}Duration" % ns)
+            if duration_elem is not None and duration_elem.text:
+                duration_minutes = int(duration_elem.text.replace("PT", "").replace("M", ""))
+                work_hours = duration_minutes / 60  # Assume 1.0 FTE across the duration
+                logging.info(f"[ASSIGNMENT BACKFILL] Task UID={uid}: Backfilled {work_hours:.2f} hours from duration")
+        
+        # If still zero, use default
+        if work_hours <= 0.0001:
             work_hours = 8.0
         
         # Assign department resource
         department = task_data["department"]
+        
+        # GPT-5 PRO FIX 2: Ensure all tasks have at least one assignment (default to "Unassigned")
+        if not department or department not in department_resources:
+            department = "Unassigned"
+            # Create "Unassigned" resource if it doesn't exist
+            if department not in department_resources:
+                resources = root.find("{%s}Resources" % ns)
+                if resources is not None:
+                    unassigned_res = ET.SubElement(resources, "{%s}Resource" % ns)
+                    unassigned_uid = len(department_resources) + 1
+                    ET.SubElement(unassigned_res, "{%s}UID" % ns).text = str(unassigned_uid)
+                    ET.SubElement(unassigned_res, "{%s}ID" % ns).text = str(unassigned_uid)
+                    ET.SubElement(unassigned_res, "{%s}Name" % ns).text = "Unassigned"
+                    ET.SubElement(unassigned_res, "{%s}Type" % ns).text = "1"
+                    ET.SubElement(unassigned_res, "{%s}MaxUnits" % ns).text = "100"
+                    ET.SubElement(unassigned_res, "{%s}StandardRate" % ns).text = f"{blended_rate or 195:.2f}"
+                    ET.SubElement(unassigned_res, "{%s}CalendarUID" % ns).text = "1"
+                    department_resources["Unassigned"] = unassigned_uid
+                    logging.info(f"[ASSIGNMENT BACKFILL] Created 'Unassigned' resource (UID={unassigned_uid})")
+        
         if department in department_resources:
             assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
             ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
