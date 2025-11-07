@@ -1,0 +1,87 @@
+Exact instructions to give Replit (copy/paste)
+
+Below is precise, minimal surface‑area guidance tied to the current code paths.
+
+1) Enable SS / FF / FS with lag (days)
+
+Where: in the post‑processing that adds <PredecessorLink> (the block that currently sets Type="1" and LinkLag="0").
+
+Do this:
+
+Extend normalized_edges (or the structure that feeds it) to carry dep_type and lag_days for each edge (default to ("FS", 0) to preserve behavior).
+
+Map dep_type → MSPDI Type: FS=1, SS=2, FF=3, SF=4. Keep LagFormat=7 (days).
+
+Set LinkLag = str(lag_days * 480) if LinkLag expects minutes; or keep days if you already pass days. (Your current writer uses LagFormat=7; you can leave lag as days if that’s how you interpret it.)
+
+Heuristic to start:
+
+Strategy/Design components: use SS + 1–2d lag from their parent kickoff (lets ideation/research run in parallel).
+
+Client reviews/approvals: keep FS (hard gates).
+
+QA/Polish on long items: SS + 2d relative to the long build task (so QA starts mid‑stream).
+
+Code sketch (replace hard‑coded FS block):
+
+# existing:
+SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
+SubElement(pred_link, "Type").text = "1"
+SubElement(pred_link, "CrossProject").text = "0"
+SubElement(pred_link, "LinkLag").text = "0"
+SubElement(pred_link, "LagFormat").text = "7"
+
+# replace with:
+type_map = {"FS": "1", "SS": "2", "FF": "3", "SF": "4"}
+t = edge.get("dep_type", "FS")
+lag_days = int(edge.get("lag_days", 0))
+
+SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
+SubElement(pred_link, "Type").text = type_map.get(t, "1")
+SubElement(pred_link, "CrossProject").text = "0"
+SubElement(pred_link, "LinkLag").text = str(lag_days)     # days, since LagFormat=7
+SubElement(pred_link, "LagFormat").text = "7"             # days
+
+
+(You already create links in this function; the only change is to stop forcing FS/0‑lag.)
+
+2) Fix duration inflation at day boundaries
+
+Where: in the schedule roll‑up before writing XML (the block that sets DurationHours = business_minutes_between(Start, Finish)/60 and then snaps to 480‑minute blocks).
+
+Do this:
+
+Align Start/Finish to working blocks before measuring business minutes. If a Start equals the end of a work block (e.g., 18:00), advance to the next block’s start; if a Finish equals the start of a block (09:00), don’t count the prior block.
+
+Cap single‑day windows: if Start and Finish land on consecutive days at the same clock boundary (e.g., 18:00 → 18:00), treat that as 480 minutes unless the task’s planned work exceeds 8h.
+
+Snap after capping: keep your “snap to 480” rule, but compute on the corrected value.
+
+Why: you can see a one‑day window (18:00 → 18:00 next business day) becoming PT960M in the output for UID 26. The fix prevents that.
+
+3) Make Units reflect overlap, not inflate hours
+
+Where: assignment writer (it computes units = work_min / dur_min on the snapped duration).
+
+Do this:
+
+After fixing (2), keep:
+
+clamp units between 0.1 and 1.0 for single‑resource roles (only allow >1.0 if you explicitly split across multiple people).
+
+when you introduce SS overlaps, don’t multiply Work—leave Work as the estimate and let overlapping durations lower Units.
+
+Ensure Units remains a decimal fraction, not 100. Your latest file uses 1.0000 which is correct; keep it. Earlier export had 100 (percent), which is wrong in MSPDI.
+
+4) Keep ExtendedAttributes; they aren’t the blocker
+
+No change needed here; they’re standard MSPDI and you’re using the correct pattern (FieldIDs like 188743732 for Deliverable Code). Focus your import debugging on dependency typing and duration math.
+
+5) Sanity constraints the PM brain would expect
+
+Short tasks (≤ 4h Work): set Duration = 1 * 480 and Units = Work/480.
+
+1–2 day tasks (≤ 16h Work): Duration = ceil(Work/8h)*480.
+
+Long tasks (> 24h Work): allow SS followers to start at 25–40% progress of the predecessor (lag_days = ceil(0.3 * pred_duration_days)). This mimics “start Day 3 of a 10‑day task,” per your boss.
+(These are heuristics; you can refine by department—Strategy vs Creative vs Dev.)
