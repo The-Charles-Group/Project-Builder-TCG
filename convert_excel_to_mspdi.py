@@ -844,14 +844,19 @@ def convert_excel_to_mspdi(
                         
                         logging.info(f"[3-LEVEL HIERARCHY] Creating L3 task: '{task_name}' (UID={uid}, Component={component_name})")
                         
-                        # Safely get hours
+                        # Safely get hours (for Work calculation, NOT for Duration)
                         planned_hours = row.get("Planned_Hours")
                         if pd.isna(planned_hours) or planned_hours is None:
                             planned_hours = row.get("Hours", 8)
                         if pd.isna(planned_hours) or planned_hours is None:
                             planned_hours = 8
                         hours = float(planned_hours)
-                        duration_days = max(1, int(np.ceil(hours / hours_per_day)))
+                        
+                        # GPT-5 PRO FIX 1 & 2: DO NOT inflate duration from hours
+                        # Duration should be calculated from business-time span between Start/Finish dates ONLY
+                        # Use a standard 1-day duration as fallback when no End_Date is provided
+                        # This allows Units to show over-allocation (e.g., 16 hours in 1 day = 200% units)
+                        duration_days = 1  # Standard 1-day window, NOT based on hours
                         
                         # Accumulate task hours into component and deliverable totals
                         component_task_hours[comp_uid] += hours
@@ -1521,6 +1526,11 @@ def convert_excel_to_mspdi(
                 units = 0.0 if dur_minutes == 0 else (work_hours * 60) / dur_minutes
             else:
                 units = 1.0  # Default to 100%
+            
+            # GPT-5 PRO FIX 3: Clamp to reasonable range
+            # 0.05 (5% min) to 2.0 (200% max over-allocation)
+            # This prevents unrealistic units values while showing over-allocation
+            units = max(0.05, min(units, 2.0))
             
             ET.SubElement(assign, "{%s}Units" % ns).text = f"{units:.4f}"
             ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
