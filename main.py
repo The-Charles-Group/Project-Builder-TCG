@@ -3039,30 +3039,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     continue
 
                 comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp)
+                comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
 
                 comp_hours_month_display = int(base_comp_hours_display.get(comp, 0))
                 comp_hours_total_display = comp_hours_month_display * months if months else comp_hours_month_display
-                
-                # CHANGE 4: Compute capacity-based durations using per-month target hours FIRST
-                # Per-month target hours for each task group
-                tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
-                tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
-                
-                import math
-                capacity_durations = {}
-                for tg in tg_in_comp:
-                    target_hours = float(tg_target_month.get(tg, 0))
-                    if target_hours > 0:
-                        hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
-                        num_roles = len(hrs_role_df) if not hrs_role_df.empty else 1
-                        expected_concurrency = min(num_roles, 2)
-                        capacity_hours_per_day = 7.0 * expected_concurrency
-                        capacity_durations[tg] = max(1, math.ceil(target_hours / capacity_hours_per_day))
-                    else:
-                        capacity_durations[tg] = int(duration_by_tg.get(tg, 1))
-                
-                # CHANGE 4: Component duration = envelope (max path) using capacity-based durations
-                comp_duration = max((offset_by_tg[tg] - comp_offset + capacity_durations.get(tg, 1)) for tg in tg_in_comp) if tg_in_comp else 1
 
                 # Compute component-level price in Per_Resource mode (band-aware), monthly then scale
                 if pricing_mode == "Flat_Blended":
@@ -3093,21 +3073,19 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 })
 
                 # --- Tasks under the component ---
-                # (capacity_durations and tg_target_month already computed above before component row)
+                # Per-month target hours for each task group, then repeat Month 01..N
+                tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
+                tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
+
                 # Build month-by-month repetition
                 total_tasks_per_month = len(tg_in_comp)
                 prev_month_last_wbs = ""  # chain months sequentially per component
-                
-                # CHANGE 5: Track tasks by PM classification for SS+lag injection
-                tasks_by_pm_class = {}  # {class: [(wbs, duration), ...]}
 
                 for month_idx in range(1, (months if months else 1) + 1):
                     # enumerates tasks within this month
                     prev_task_last_wbs = ""
                     for k, tg in enumerate(tg_in_comp, start=1):
-                        # CHANGE 4: Use pre-computed capacity-based duration (per-month target)
-                        dur = capacity_durations.get(tg, 1)
-                        
+                        dur = int(duration_by_tg.get(tg, 1))
                         label_core = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
                         label = (f"Month {month_idx:02d} – {label_core}") if months else label_core
 
@@ -3116,63 +3094,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         wbs_task = f"{wbs_comp}.{task_ordinal}"
 
                         base_offset = dstart + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
-                        
-                        # CHANGE 5: Classify task by PM group and inject SS+lag dependencies
-                        def classify_pm_group(task_label, task_group):
-                            """Classify task into PM groups for overlap rules"""
-                            label_lower = str(task_label).lower() + str(task_group).lower()
-                            if any(x in label_lower for x in ['research', 'discovery', 'audit', 'analysis']):
-                                return 'research'
-                            elif any(x in label_lower for x in ['strategy', 'brief', 'planning']):
-                                return 'strategy'
-                            elif any(x in label_lower for x in ['creative', 'design', 'concept']):
-                                return 'design'
-                            elif any(x in label_lower for x in ['production', 'build', 'development']):
-                                return 'build'
-                            elif any(x in label_lower for x in ['qa', 'review', 'testing', 'approval']):
-                                return 'qa'
-                            elif any(x in label_lower for x in ['launch', 'handoff', 'deploy']):
-                                return 'launch'
-                            return None
-                        
-                        pm_class = classify_pm_group(label, tg)
-                        
-                        # Build base dependency (existing FS chain)
-                        base_dep = wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)
-                        
-                        # Add SS+lag dependencies per PM overlap rules
-                        extra_deps = []
-                        if pm_class and pm_class in ['strategy', 'design', 'build', 'qa']:
-                            # Discovery/Research → Strategy : SS+2d
-                            if pm_class == 'strategy' and 'research' in tasks_by_pm_class:
-                                for pred_wbs, pred_dur in tasks_by_pm_class['research']:
-                                    extra_deps.append(f"{pred_wbs} SS+2d")
-                            
-                            # Strategy → Creative/Design : SS + min(max(1, round(0.3*Strategy_dur)), 5)
-                            elif pm_class == 'design' and 'strategy' in tasks_by_pm_class:
-                                for pred_wbs, pred_dur in tasks_by_pm_class['strategy']:
-                                    lag = min(max(1, round(0.3 * pred_dur)), 5)
-                                    extra_deps.append(f"{pred_wbs} SS+{lag}d")
-                            
-                            # Creative/Design → Production/Build : SS + min(max(2, round(0.5*Design_dur)), 10)
-                            elif pm_class == 'build' and 'design' in tasks_by_pm_class:
-                                for pred_wbs, pred_dur in tasks_by_pm_class['design']:
-                                    lag = min(max(2, round(0.5 * pred_dur)), 10)
-                                    extra_deps.append(f"{pred_wbs} SS+{lag}d")
-                            
-                            # Production/Build → QA/Review/Testing : SS + min(max(1, round(0.2*Prod_dur)), 5)
-                            elif pm_class == 'qa' and 'build' in tasks_by_pm_class:
-                                for pred_wbs, pred_dur in tasks_by_pm_class['build']:
-                                    lag = min(max(1, round(0.2 * pred_dur)), 5)
-                                    extra_deps.append(f"{pred_wbs} SS+{lag}d")
-                        
-                        # Combine dependencies: base + extra SS+lag
-                        all_deps = [base_dep] + extra_deps if extra_deps else [base_dep]
-                        dependencies_str = ",".join(all_deps)
-                        
-                        # Track this task for future SS+lag references
-                        if pm_class:
-                            tasks_by_pm_class.setdefault(pm_class, []).append((wbs_task, dur))
 
                         rows.append({
                             "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
@@ -3183,7 +3104,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             "Planned_Hours": "",   # stays on role rows
                             "Start_Offset_Days": base_offset,
                             "Duration_Days": dur,
-                            "Dependencies": dependencies_str,
+                            "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
                             "Assignee_External_ID": "", "Notes": ""
                         })
 
@@ -3389,14 +3310,14 @@ class ExportXMLPayload(BaseModel):
     start_date_mode: str = "next_monday"
     fixed_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
     hours_per_day: float = 8.0
-    merge_identical_children: bool = True  # CHANGE 7: Default to True
+    merge_identical_children: bool = False
 
 class ExportWorkbookXMLPayload(BaseModel):
     scenario_a: Optional[Dict[str, Any]] = None
     scenario_b: Optional[Dict[str, Any]] = None  
     project_name: Optional[str] = None
     project_start_iso: Optional[str] = None  # ISO8601 project start (e.g., "2025-10-06T09:00:00")
-    merge_identical_children: bool = True  # CHANGE 7: Default to True
+    merge_identical_children: bool = False
 
 class ExportWorkbookXMLABCPayload(BaseModel):
     scenario_a: Optional[Dict[str, Any]] = None
@@ -7313,7 +7234,6 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
         # Use fixed_start_iso from payload, or fall back to project_start from scenario
         project_start_iso = fixed_start_iso or scenario.get("project_start")
         
-        # CHANGE 7: Flip merge_identical_children to True
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
@@ -7321,18 +7241,17 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             start_date_mode=start_date_mode,
             fixed_start_iso=project_start_iso,
             hours_per_day=hours_per_day,
-            merge_identical_children=True,
+            merge_identical_children=False,
             project_name=project_name,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate")
         )
         
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process XML to parallelize identical task names (optional) - DISABLED
+        # Post-process XML to parallelize identical task names (optional)
         final_xml = output_xml
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml = post_process_xml(output_xml)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml = post_process_xml(output_xml)
 
         return FileResponse(
             final_xml,
@@ -7390,25 +7309,23 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
         # Use project_start_iso from payload or scenario_a
         project_start_iso = payload.project_start_iso or scenario_a.get("project_start")
         
-        # CHANGE 7: Flip merge_identical_children to True
         stats_a = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx_a,
             output_xml=output_xml_a,
             sheet_name="Scenario A",
             fixed_start_iso=project_start_iso,
-            merge_identical_children=True,
+            merge_identical_children=False,
             project_name=project,
             pricing_mode=scenario_a.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_a.get("rate_band", "Standard_US"),
             blended_rate=scenario_a.get("blended_rate")
         )
         
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process Scenario A XML - DISABLED
+        # Post-process Scenario A XML
         final_xml_a = output_xml_a
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml_a = post_process_xml(output_xml_a)
-        #     temp_files.append(final_xml_a)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml_a = post_process_xml(output_xml_a)
+            temp_files.append(final_xml_a)
         
         # Create XML for Scenario B
         temp_xlsx_b = f"{base}_B_temp.xlsx"
@@ -7422,25 +7339,23 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
         # Use project_start_iso from payload or scenario_b
         project_start_iso_b = payload.project_start_iso or scenario_b.get("project_start")
         
-        # CHANGE 7: Flip merge_identical_children to True
         stats_b = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx_b,
             output_xml=output_xml_b,
             sheet_name="Scenario B",
             fixed_start_iso=project_start_iso_b,
-            merge_identical_children=True,
+            merge_identical_children=False,
             project_name=project,
             pricing_mode=scenario_b.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_b.get("rate_band", "Standard_US"),
             blended_rate=scenario_b.get("blended_rate")
         )
         
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process Scenario B XML - DISABLED
+        # Post-process Scenario B XML
         final_xml_b = output_xml_b
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml_b = post_process_xml(output_xml_b)
-        #     temp_files.append(final_xml_b)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml_b = post_process_xml(output_xml_b)
+            temp_files.append(final_xml_b)
         
         # Create zip file with both XMLs
         import zipfile
@@ -7508,22 +7423,20 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         with pd.ExcelWriter(tmp_xlsx_a, engine="openpyxl") as xw:
             dfA.to_excel(xw, sheet_name="Scenario A", index=False)
             _apply_number_formats(xw.sheets["Scenario A"], dfA)
-        # CHANGE 7: Flip merge_identical_children to True
         stats_a = convert_excel_to_mspdi(
             input_xlsx=tmp_xlsx_a, output_xml=out_xml_a, sheet_name="Scenario A",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
-            hours_per_day=p.hours_per_day, merge_identical_children=True,
+            hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project,
             pricing_mode=scenA.get("pricing_mode", "Flat_Blended"),
             rate_band=scenA.get("rate_band", "Standard_US"),
             blended_rate=scenA.get("blended_rate")
         )
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process Scenario A XML - DISABLED
+        # Post-process Scenario A XML
         final_xml_a = out_xml_a
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml_a = post_process_xml(out_xml_a)
-        #     temp_files.append(final_xml_a)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml_a = post_process_xml(out_xml_a)
+            temp_files.append(final_xml_a)
         xml_files.append(("Scenario_A.xml", final_xml_a, stats_a))
 
         # B
@@ -7533,22 +7446,20 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         with pd.ExcelWriter(tmp_xlsx_b, engine="openpyxl") as xw:
             dfB.to_excel(xw, sheet_name="Scenario B", index=False)
             _apply_number_formats(xw.sheets["Scenario B"], dfB)
-        # CHANGE 7: Flip merge_identical_children to True
         stats_b = convert_excel_to_mspdi(
             input_xlsx=tmp_xlsx_b, output_xml=out_xml_b, sheet_name="Scenario B",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
-            hours_per_day=p.hours_per_day, merge_identical_children=True,
+            hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project,
             pricing_mode=scenB.get("pricing_mode", "Flat_Blended"),
             rate_band=scenB.get("rate_band", "Standard_US"),
             blended_rate=scenB.get("blended_rate")
         )
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process Scenario B XML - DISABLED
+        # Post-process Scenario B XML
         final_xml_b = out_xml_b
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml_b = post_process_xml(out_xml_b)
-        #     temp_files.append(final_xml_b)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml_b = post_process_xml(out_xml_b)
+            temp_files.append(final_xml_b)
         xml_files.append(("Scenario_B.xml", final_xml_b, stats_b))
 
         # C
@@ -7558,22 +7469,20 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         with pd.ExcelWriter(tmp_xlsx_c, engine="openpyxl") as xw:
             dfC.to_excel(xw, sheet_name="Scenario C", index=False)
             _apply_number_formats(xw.sheets["Scenario C"], dfC)
-        # CHANGE 7: Flip merge_identical_children to True
         stats_c = convert_excel_to_mspdi(
             input_xlsx=tmp_xlsx_c, output_xml=out_xml_c, sheet_name="Scenario C",
             start_date_mode=p.start_date_mode, fixed_start_iso=p.fixed_start_iso,
-            hours_per_day=p.hours_per_day, merge_identical_children=True,
+            hours_per_day=p.hours_per_day, merge_identical_children=False,
             project_name=project,
             pricing_mode=scenC.get("pricing_mode", "Flat_Blended"),
             rate_band=scenC.get("rate_band", "Standard_US"),
             blended_rate=scenC.get("blended_rate")
         )
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process Scenario C XML - DISABLED
+        # Post-process Scenario C XML
         final_xml_c = out_xml_c
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml_c = post_process_xml(out_xml_c)
-        #     temp_files.append(final_xml_c)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml_c = post_process_xml(out_xml_c)
+            temp_files.append(final_xml_c)
         xml_files.append(("Scenario_C.xml", final_xml_c, stats_c))
 
         # Zip all 3
@@ -7602,7 +7511,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
 def _export_single_scenario_xml(
     scenario: Dict[str, Any],
     scenario_label: str,
-    project_name: Optional[str] = None
+    project_name: Optional[str] = None,
+    add_deliverable_milestones: bool = False
 ) -> str:
     """
     Helper function to export a single scenario to XML.
@@ -7658,7 +7568,6 @@ def _export_single_scenario_xml(
         importlib.reload(mspdi_module)
         
         # CRITICAL: Use the reloaded module's function, not the old imported one
-        # CHANGE 7: Flip merge_identical_children to True
         stats = mspdi_module.convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
@@ -7666,18 +7575,18 @@ def _export_single_scenario_xml(
             start_date_mode="next_monday",
             fixed_start_iso=project_start_iso,
             hours_per_day=8.0,
-            merge_identical_children=True,
+            merge_identical_children=False,
             project_name=project,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
-            blended_rate=scenario.get("blended_rate")
+            blended_rate=scenario.get("blended_rate"),
+            add_deliverable_milestones=add_deliverable_milestones
         )
         
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process XML to parallelize identical task names (optional) - DISABLED
+        # Post-process XML to parallelize identical task names (optional)
         final_xml = output_xml
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml = post_process_xml(output_xml)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml = post_process_xml(output_xml)
         
         return final_xml
     
@@ -7690,7 +7599,7 @@ def _export_single_scenario_xml(
                 pass
 
 @app.get("/api/export/xml/a")
-def api_export_xml_scenario_a(session_id: Optional[str] = None):
+def api_export_xml_scenario_a(add_anchors: bool = False, session_id: Optional[str] = None):
     """
     Export Scenario A only as XML.
     If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
@@ -7703,7 +7612,8 @@ def api_export_xml_scenario_a(session_id: Optional[str] = None):
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["A"],
         scenario_label="Scenario A",
-        project_name=scenarios["A"].get("project_name")
+        project_name=scenarios["A"].get("project_name"),
+        add_deliverable_milestones=add_anchors
     )
     
     return FileResponse(
@@ -7714,7 +7624,7 @@ def api_export_xml_scenario_a(session_id: Optional[str] = None):
     )
 
 @app.get("/api/export/xml/b")
-def api_export_xml_scenario_b(session_id: Optional[str] = None):
+def api_export_xml_scenario_b(add_anchors: bool = False, session_id: Optional[str] = None):
     """
     Export Scenario B only as XML.
     If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
@@ -7727,7 +7637,8 @@ def api_export_xml_scenario_b(session_id: Optional[str] = None):
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["B"],
         scenario_label="Scenario B",
-        project_name=scenarios["B"].get("project_name")
+        project_name=scenarios["B"].get("project_name"),
+        add_deliverable_milestones=add_anchors
     )
     
     return FileResponse(
@@ -7738,7 +7649,7 @@ def api_export_xml_scenario_b(session_id: Optional[str] = None):
     )
 
 @app.get("/api/export/xml/c")
-def api_export_xml_scenario_c(session_id: Optional[str] = None):
+def api_export_xml_scenario_c(add_anchors: bool = False, session_id: Optional[str] = None):
     """
     Export Scenario C only as XML.
     If session_id is provided, uses SCENARIO_STORE (includes Gantt edits).
@@ -7751,7 +7662,8 @@ def api_export_xml_scenario_c(session_id: Optional[str] = None):
     final_xml = _export_single_scenario_xml(
         scenario=scenarios["C"],
         scenario_label="Scenario C",
-        project_name=scenarios["C"].get("project_name")
+        project_name=scenarios["C"].get("project_name"),
+        add_deliverable_milestones=add_anchors
     )
     
     return FileResponse(
@@ -8851,11 +8763,12 @@ def convert_excel_to_mspdi(
     allow_unassigned: bool = True,
     include_audits: bool = True,
     audits_dir: Optional[str] = None,
-    merge_identical_children: bool = True,   # CHANGE 7: Default to True for multi-resource merge
+    merge_identical_children: bool = False,  # <— toggle for multi-resource merge
     project_name: Optional[str] = None,      # <— explicit project name override
     pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
     rate_band: str = "Standard_US",          # <— NEW: rate band
-    blended_rate: Optional[float] = None     # <— NEW: blended rate
+    blended_rate: Optional[float] = None,    # <— NEW: blended rate
+    add_deliverable_milestones: bool = False # <— NEW: toggle for START/END anchors
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -9204,6 +9117,10 @@ def convert_excel_to_mspdi(
             
             return enriched
         
+        # Apply enrichment (optional)
+        if add_deliverable_milestones:
+            rows = enrich_wbs_for_workfront(rows)
+        
         # Rebuild indices after enrichment
         by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
         children_by_parent = {}
@@ -9214,22 +9131,6 @@ def convert_excel_to_mspdi(
         summary_set = set(children_by_parent.keys())
         
         # Normalize dependencies & drop unsafe hierarchy edges
-        # CHANGE 3: Add dependency parser for "{WBS} [FS|SS|FF|SF][+/-Nd]" format
-        import re
-        def parse_dependency(dep_str):
-            """Parse dependency string like '1.2 SS+3d' or '1.3' (default FS+0)"""
-            dep_str = dep_str.strip()
-            # Match pattern: WBS [FS|SS|FF|SF][+/-][N]d
-            match = re.match(r'^([^\s]+)\s*(FS|SS|FF|SF)?\s*([+-]?\d+)?\s*d?$', dep_str, re.IGNORECASE)
-            if match:
-                wbs = match.group(1)
-                dep_type = (match.group(2) or 'FS').upper()
-                lag_days = int(match.group(3)) if match.group(3) else 0
-                return wbs, dep_type, lag_days
-            else:
-                # Default: plain WBS -> FS+0
-                return dep_str, 'FS', 0
-        
         init_edges = []
         for r in rows:
             deps = r.get("Dependencies", "").strip()
@@ -9237,12 +9138,10 @@ def convert_excel_to_mspdi(
                 for dep in deps.split(","):
                     dep = dep.strip()
                     if dep:
-                        pred_wbs, dep_type, lag_days = parse_dependency(dep)
-                        init_edges.append((pred_wbs, r["WBS"], dep_type, lag_days))
+                        init_edges.append((dep, r["WBS"]))
 
-        # CHANGE 2: normalized_edges now holds 4-tuples (pred, succ, dep_type, lag_days)
         normalized_edges = []
-        for pred_wbs, succ_wbs, dep_type, lag_days in init_edges:
+        for pred_wbs, succ_wbs in init_edges:
             # Rewrite removed children to their parents
             actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
             actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
@@ -9262,7 +9161,7 @@ def convert_excel_to_mspdi(
                 actual_succ = first_leaf(actual_succ)
                 
             if actual_pred != actual_succ:
-                normalized_edges.append((actual_pred, actual_succ, dep_type, lag_days))
+                normalized_edges.append((actual_pred, actual_succ))
 
         # Calculate project start date
         if fixed_start_iso:
@@ -9631,11 +9530,8 @@ def convert_excel_to_mspdi(
         # Add PredecessorLinks for dependencies
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         
-        # CHANGE 1: Add MSPDI_DEP mapping for typed dependencies
-        MSPDI_DEP = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
-        
         # Add PredecessorLink elements to tasks that have dependencies
-        for pred_wbs, succ_wbs, dep_type, lag_days in normalized_edges:
+        for pred_wbs, succ_wbs in normalized_edges:
             pred_uid = wbs_to_uid.get(pred_wbs)
             succ_uid = wbs_to_uid.get(succ_wbs)
             if pred_uid and succ_uid:
@@ -9645,13 +9541,11 @@ def convert_excel_to_mspdi(
                     if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
                         pred_link = SubElement(task_elem, "PredecessorLink")
                         SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
-                        SubElement(pred_link, "Type").text = str(MSPDI_DEP.get(dep_type, 1))  # default FS
+                        SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
                         SubElement(pred_link, "CrossProject").text = "0"
-                        
-                        # Lag in tenths of minutes, keep LagFormat=7 (Days)
-                        lag_tenths = int(float(lag_days) * 8 * 60 * 10)
-                        SubElement(pred_link, "LinkLag").text = str(lag_tenths)
-                        SubElement(pred_link, "LagFormat").text = "7"
+                        # Optional but harmless:
+                        SubElement(pred_link, "LinkLag").text = "0"
+                        SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
                         break
 
         # Compute project summary start/finish from children (no more hardcoded dates)
@@ -10326,6 +10220,7 @@ class XMLExportPayload(BaseModel):
     hours_per_day: float = 8.0
     sheet_name: str = "Scenario"
     add_dependencies: bool = True
+    add_milestones: bool = True
     add_custom_fields: bool = True
 
 @app.post("/api/xml")
@@ -10478,7 +10373,6 @@ def api_xml_export_flexible(payload: XMLExportPayload):
         # Convert to MSPDI XML with all features
         project_start_iso = payload.fixed_start_iso or scenario.get("project_start")
         
-        # CHANGE 7: Flip merge_identical_children to True
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
@@ -10486,18 +10380,18 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             start_date_mode=payload.start_date_mode,
             fixed_start_iso=project_start_iso,
             hours_per_day=payload.hours_per_day,
-            merge_identical_children=True,
+            merge_identical_children=False,
             project_name=project_name,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
-            blended_rate=scenario.get("blended_rate")
+            blended_rate=scenario.get("blended_rate"),
+            add_deliverable_milestones=payload.add_milestones
         )
         
-        # FIX 2: Disable post_process_xml to prevent Units inflation
-        # Post-process XML if parallelization is enabled - DISABLED
+        # Post-process XML if parallelization is enabled
         final_xml = output_xml
-        # if PARALLELIZE_IDENTICAL_NAMES:
-        #     final_xml = post_process_xml(output_xml)
+        if PARALLELIZE_IDENTICAL_NAMES:
+            final_xml = post_process_xml(output_xml)
         
         return FileResponse(
             final_xml,

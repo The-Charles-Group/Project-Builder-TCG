@@ -9673,6 +9673,9 @@ S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
 // ========== XML Export Functions ==========
 async function exportXMLScenario(letter) {
+  // Always include Start/End anchors (checkbox removed - now always enabled)
+  const addAnchors = true;
+  
   // Get fresh session_id directly from SessionManager (no caching)
   // This ensures we use the canonical ID that matches backend SCENARIO_STORE keys
   const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
@@ -9680,9 +9683,9 @@ async function exportXMLScenario(letter) {
   // Build endpoint with query parameters
   // If session_id exists, backend will use SCENARIO_STORE (with Gantt changes)
   // Otherwise, backend falls back to _CURRENT_SCENARIOS (pricing-only data)
-  let endpoint = `/api/export/xml/${letter.toLowerCase()}`;
+  let endpoint = `/api/export/xml/${letter.toLowerCase()}?add_anchors=${addAnchors}`;
   if (sessionId) {
-    endpoint += `?session_id=${encodeURIComponent(sessionId)}`;
+    endpoint += `&session_id=${encodeURIComponent(sessionId)}`;
     console.log('[Export] Including session_id for Gantt-synced export:', sessionId);
   }
   

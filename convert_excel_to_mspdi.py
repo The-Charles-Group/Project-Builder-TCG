@@ -40,282 +40,104 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
-# GPT-5 PRO FIX 1 & 5: Comprehensive Dependency Rules Table for "Seasoned PM Brain"
-# Maps component/task type relationships to (dependency_type, lag_days)
-# MSPDI Type codes: 0=FF, 1=FS, 2=SF, 3=SS
-# Negative lag = lead time, Positive lag = delay
-DEPENDENCY_RULES = {
-    # === Discovery & Research Phase ===
-    ("Discovery", "Research"): (3, 2),       # SS + 2d: Research can start 2 days after Discovery begins
-    ("Discovery", "Strategy"): (3, 2),       # SS + 2d: Strategy overlaps with Discovery
-    ("Discovery", "Analysis"): (3, 1),       # SS + 1d: Analysis can start shortly after Discovery
-    ("Research", "Strategy"): (1, 0),        # FS + 0d: Strategy waits for Research to finish
-    ("Research", "Analysis"): (3, 1),        # SS + 1d: Analysis can overlap with Research
-    ("Analysis", "Strategy"): (1, 0),        # FS + 0d: Strategy waits for Analysis
-    
-    # === Strategy Phase ===
-    ("Strategy", "Creative"): (1, 0),        # FS + 0d: Creative waits for Strategy
-    ("Strategy", "Design"): (1, 0),          # FS + 0d: Design waits for Strategy
-    ("Strategy", "Copywriting"): (1, 0),     # FS + 0d: Copy waits for Strategy
-    ("Strategy", "Planning"): (1, 0),        # FS + 0d: Planning waits for Strategy
-    ("Strategy", "Development"): (1, 2),     # FS + 2d: Dev starts 2 days after Strategy finishes
-    ("Strategy", "Media"): (1, 1),           # FS + 1d: Media planning starts after Strategy
-    
-    # === Creative & Design Phase ===
-    ("Copywriting", "Design"): (1, 0),       # FS + 0d: Design waits for final copy
-    ("Copy", "Design"): (1, 0),              # FS + 0d: Design waits for copy
-    ("Creative", "Design"): (3, 1),          # SS + 1d: Design can start shortly after Creative begins
-    ("Design", "Development"): (1, 0),       # FS + 0d: Dev waits for Design
-    ("Design", "Production"): (1, 0),        # FS + 0d: Production waits for Design
-    ("Creative", "Production"): (1, 0),      # FS + 0d: Production waits for Creative
-    ("Design", "QA"): (1, 0),                # FS + 0d: QA waits for Design
-    ("Design", "Review"): (1, 0),            # FS + 0d: Review waits for Design
-    
-    # === Development Phase ===
-    ("Development", "Testing"): (3, 3),      # SS + 3d: Testing can start when Dev is ~30% in
-    ("Development", "QA"): (3, 3),           # SS + 3d: QA can start when Dev is ~30% in
-    ("Dev", "Quality Assurance"): (3, 3),    # SS + 3d: QA overlaps with Development
-    ("Dev", "Testing"): (3, 3),              # SS + 3d: Testing overlaps with Development
-    ("Development", "Review"): (3, 5),       # SS + 5d: Review can start when Dev is ~50% in
-    ("Development", "Launch"): (1, 2),       # FS + 2d: Launch waits 2 days after Dev finishes
-    
-    # === QA & Testing Phase ===
-    ("QA", "Launch"): (1, 1),                # FS + 1d: Launch waits 1 day after QA finishes
-    ("Testing", "Launch"): (1, 1),           # FS + 1d: Launch waits 1 day after Testing
-    ("Quality Assurance", "Launch"): (1, 1), # FS + 1d: Launch waits after QA
-    ("QA", "Production"): (1, 0),            # FS + 0d: Production waits for QA
-    ("Testing", "Production"): (1, 0),       # FS + 0d: Production waits for Testing
-    ("QA", "Deployment"): (1, 0),            # FS + 0d: Deployment waits for QA
-    ("Testing", "Deployment"): (1, 0),       # FS + 0d: Deployment waits for Testing
-    
-    # === Review & Approval Phase ===
-    ("Review", "Approval"): (1, 0),          # FS + 0d: Approval waits for Review
-    ("Review", "Launch"): (1, 1),            # FS + 1d: Launch waits after Review
-    ("Approval", "Launch"): (1, 0),          # FS + 0d: Launch waits for Approval
-    ("Approval", "Production"): (1, 0),      # FS + 0d: Production waits for Approval
-    ("Review", "Production"): (1, 1),        # FS + 1d: Production waits after Review
-    
-    # === Media & Content Phase ===
-    ("Media", "QA"): (1, 0),                 # FS + 0d: QA waits for Media
-    ("Content", "Review"): (1, 0),           # FS + 0d: Review waits for Content
-    ("Content", "QA"): (1, 0),               # FS + 0d: QA waits for Content
-    ("Media", "Launch"): (1, 1),             # FS + 1d: Launch waits after Media
-    ("Content", "Production"): (1, 0),       # FS + 0d: Production waits for Content
-    
-    # === Production & Launch Phase ===
-    ("Production", "Launch"): (1, 0),        # FS + 0d: Launch waits for Production
-    ("Production", "Deployment"): (1, 0),    # FS + 0d: Deployment waits for Production
-    ("Deployment", "Launch"): (1, 0),        # FS + 0d: Launch waits for Deployment
-    
-    # === Planning & Execution ===
-    ("Planning", "Execution"): (1, 0),       # FS + 0d: Execution waits for Planning
-    ("Planning", "Development"): (1, 1),     # FS + 1d: Development starts after Planning
-    ("Planning", "Design"): (1, 0),          # FS + 0d: Design waits for Planning
-    
-    # === Common Cross-Phase Dependencies ===
-    ("Strategy", "QA"): (1, 5),              # FS + 5d: QA starts well after Strategy
-    ("Strategy", "Launch"): (1, 10),         # FS + 10d: Launch is far downstream from Strategy
-    ("Discovery", "Launch"): (1, 15),        # FS + 15d: Launch is end of project from Discovery
-    ("Research", "Launch"): (1, 12),         # FS + 12d: Launch is far downstream from Research
-}
-
-
-def link_for(pred_task_name: str, succ_task_name: str, pred_component: Optional[str] = None, succ_component: Optional[str] = None) -> Tuple[int, int]:
+def create_governance_milestone_task(
+    task_uid: int,
+    ns: str,
+    name: str,
+    milestone_date: datetime,
+    governance_type: str,
+    wbs_level: str = "1",
+    hours: float = 0,
+    predecessor_uid: Optional[int] = None
+) -> Tuple[ET.Element, Dict[str, Any]]:
     """
-    GPT-5 PRO FIX 1: Determine dependency type and lag based on task relationships.
-    
-    Uses "seasoned PM" rules to determine realistic overlaps and dependencies.
+    Create a governance milestone task in MSPDI format
     
     Args:
-        pred_task_name: Name of predecessor task
-        succ_task_name: Name of successor task
-        pred_component: Component name of predecessor (optional)
-        succ_component: Component name of successor (optional)
+        task_uid: Unique ID for the task
+        ns: XML namespace
+        name: Task name
+        milestone_date: Date for the milestone
+        governance_type: Type of governance milestone (steering_review, executive_briefing, etc.)
+        wbs_level: WBS level for the task
+        hours: Hours for the task (0 for pure milestone)
+        predecessor_uid: UID of predecessor task if any
         
     Returns:
-        Tuple of (type_code, lag_days) where:
-        - type_code: 0=FF, 1=FS, 2=SF, 3=SS
-        - lag_days: Number of days lag (positive for delay, negative for lead)
+        Tuple of (XML Element, task metadata dict)
     """
-    # Try component-level match first
-    if pred_component and succ_component:
-        rule_key = (pred_component, succ_component)
-        if rule_key in DEPENDENCY_RULES:
-            return DEPENDENCY_RULES[rule_key]
+    task = ET.Element("{%s}Task" % ns)
     
-    # Try task-name-level match (e.g., "Research" in task name)
-    for (pred_pattern, succ_pattern), (dep_type, lag) in DEPENDENCY_RULES.items():
-        if pred_pattern.lower() in pred_task_name.lower() and succ_pattern.lower() in succ_task_name.lower():
-            return (dep_type, lag)
+    # Basic task properties
+    ET.SubElement(task, "{%s}UID" % ns).text = str(task_uid)
+    ET.SubElement(task, "{%s}ID" % ns).text = str(task_uid)
+    ET.SubElement(task, "{%s}Name" % ns).text = name
+    ET.SubElement(task, "{%s}Type" % ns).text = "2"  # Fixed duration
+    ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
+    ET.SubElement(task, "{%s}WBS" % ns).text = wbs_level
+    ET.SubElement(task, "{%s}OutlineNumber" % ns).text = wbs_level
+    # FIX: Enforce Workfront 3-level hierarchy - map WBS depth to max 3 levels
+    # 0 dots (e.g., "1") → OutlineLevel 1, 1 dot (e.g., "1.1") → OutlineLevel 2, 2+ dots → OutlineLevel 3
+    dot_count = wbs_level.count('.')
+    outline_level = min(dot_count + 1, 3)  # Cap at level 3 for Workfront compatibility
+    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = str(outline_level)
     
-    # Default to Finish-to-Start with no lag
-    return (1, 0)  # FS + 0 days
-
-
-def parse_dependency_spec(dep_str):
-    """
-    Parse dependency specification like 'SS+2d', 'FS+0', 'FF-1d', 'SF+8h'
+    # Mark as milestone if no hours
+    if hours == 0:
+        ET.SubElement(task, "{%s}Milestone" % ns).text = "1"
+        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0H0M0S"
+    else:
+        ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
+        duration_days = max(1, int(hours / 8))
+        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
     
-    Returns:
-        tuple: (mspdi_type_code, lag_days)
-        
-    Examples:
-        'SS+2d' -> ('2', 2)  # Start-to-Start with 2-day lag
-        'FS+0' -> ('1', 0)   # Finish-to-Start with no lag
-        'FF-1d' -> ('3', -1) # Finish-to-Finish with 1-day lead
-        'SF+8h' -> ('4', 1)  # Start-to-Finish with 1-day lag (8h rounds to 1d)
-    """
-    # CRITICAL ERROR #1 FIX: CORRECT MSPDI type codes per standard
-    # FS=1, SS=2, FF=3, SF=4 (NOT the old incorrect values!)
-    TYPE_MAP = {"FS": "1", "SS": "2", "FF": "3", "SF": "4"}
-    LAG_UNITS = {"H": 60, "D": 480, "M": 1}  # hours, days, minutes (uppercase for matching)
+    # Set dates
+    ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
+    if hours > 0:
+        end_date = milestone_date + timedelta(days=max(1, int(hours / 8)))
+        ET.SubElement(task, "{%s}Finish" % ns).text = end_date.isoformat()
+    else:
+        ET.SubElement(task, "{%s}Finish" % ns).text = milestone_date.isoformat()
     
-    # Default to FS+0 if parsing fails
-    dep_str = str(dep_str).strip().upper()
-    if not dep_str:
-        return ("1", 0)
+    # Priority based on governance type
+    priority_map = {
+        "steering_review": "600",
+        "executive_briefing": "700",
+        "risk_review": "650",
+        "quality_gate": "550",
+        "change_control": "500",
+        "compliance": "600",
+        "uat": "550",
+        "performance_test": "500"
+    }
+    ET.SubElement(task, "{%s}Priority" % ns).text = priority_map.get(governance_type, "500")
     
-    # Extract type (FS, SS, FF, SF)
-    dep_type = "FS"  # default
-    for t in TYPE_MAP.keys():
-        if dep_str.startswith(t):
-            dep_type = t
-            dep_str = dep_str[len(t):]
-            break
+    # Work and duration format
+    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "39"  # Hours
+    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{hours}H0M0S"
+    ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
+    ET.SubElement(task, "{%s}Summary" % ns).text = "0"
+    ET.SubElement(task, "{%s}Critical" % ns).text = "0"
     
-    # Extract lag (e.g., '+2d', '-1d', '+8h')
-    lag_minutes = 0
-    if dep_str:
-        # Parse sign
-        sign = 1
-        if dep_str[0] == '+':
-            dep_str = dep_str[1:]
-        elif dep_str[0] == '-':
-            sign = -1
-            dep_str = dep_str[1:]
-        
-        # Parse value and unit
-        if dep_str:
-            # Extract numeric part
-            num_str = ""
-            unit = "D"  # default to days
-            for char in dep_str:
-                if char.isdigit() or char == '.':
-                    num_str += char
-                elif char in LAG_UNITS:
-                    unit = char
-                    break
-            
-            if num_str:
-                lag_value = float(num_str)
-                lag_minutes = int(sign * lag_value * LAG_UNITS[unit])
+    # Add custom field for governance type
+    ext_attrs = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+    ET.SubElement(ext_attrs, "{%s}FieldID" % ns).text = "188743731"  # Text1
+    ET.SubElement(ext_attrs, "{%s}Value" % ns).text = f"GOVERNANCE_{governance_type.upper()}"
     
-    # CRITICAL ERROR #2 FIX: Convert to days (not minutes) for LagFormat=7
-    # LinkLag should be in DAYS when LagFormat=7, not minutes!
-    lag_days = lag_minutes // 480  # Convert to whole days (480 min/day)
-    return (TYPE_MAP[dep_type], lag_days)
-
-
-# Test cases for parse_dependency_spec function
-# These demonstrate the expected behavior:
-# parse_dependency_spec("SS+2d") should return ("3", 960)  # Start-to-Start with 2-day lag
-# parse_dependency_spec("FS+0") should return ("1", 0)     # Finish-to-Start with no lag
-# parse_dependency_spec("FF-1d") should return ("0", -480) # Finish-to-Finish with 1-day lead
-# parse_dependency_spec("SF+8h") should return ("2", 480)  # Start-to-Finish with 8-hour lag
-
-
-# CRITICAL ERROR #3 FIX: Move calendar helper functions BEFORE they are used (line 979)
-# Business calendar configuration
-# Two working blocks per day: 9am-12pm (morning) and 1pm-6pm (afternoon)
-BUS_BLOCKS = [(datetime.min.time().replace(hour=9, minute=0), datetime.min.time().replace(hour=12, minute=0)),
-              (datetime.min.time().replace(hour=13, minute=0), datetime.min.time().replace(hour=18, minute=0))]
-
-
-def is_business_day(date) -> bool:
-    """Check if a date is a business day (Monday-Friday)"""
-    if isinstance(date, datetime):
-        date = date.date()
-    return date.weekday() < 5  # Monday=0, Friday=4
-
-
-def add_business_minutes(dt, minutes):
-    """
-    Add working minutes to a datetime, skipping non-business time.
-    Uses BUS_BLOCKS: [(time(9,0), time(12,0)), (time(13,0), time(18,0))]
+    # Add notes to identify as governance milestone
+    ET.SubElement(task, "{%s}Notes" % ns).text = f"Governance Milestone: {governance_type}"
     
-    Args:
-        dt: Starting datetime
-        minutes: Number of working minutes to add
-        
-    Returns:
-        Ending datetime after adding working minutes
-    """
-    from datetime import datetime as _dt, timedelta as _td, time
+    # Metadata for tracking
+    metadata = {
+        "uid": task_uid,
+        "name": name,
+        "type": governance_type,
+        "date": milestone_date.isoformat(),
+        "is_governance": True,
+        "hours": hours
+    }
     
-    def _in_block(t):
-        """Check if time is within any business block"""
-        return any(a <= t < b for a, b in BUS_BLOCKS)
-    
-    rem = int(minutes)
-    cur = dt
-    
-    while rem > 0:
-        # Advance to next working minute if needed
-        if not is_business_day(cur.date()) or not _in_block(cur.time()):
-            # Jump to next valid block start
-            moved = False
-            for a, b in BUS_BLOCKS:
-                if cur.time() < a and is_business_day(cur.date()):
-                    cur = _dt.combine(cur.date(), a)
-                    moved = True
-                    break
-            if not moved:
-                # Move to next business day
-                d = cur.date() + timedelta(days=1)
-                while not is_business_day(d):
-                    d += timedelta(days=1)
-                cur = _dt.combine(d, BUS_BLOCKS[0][0])
-            continue
-        
-        # Within a working block: consume up to end of block or rem
-        for a, b in BUS_BLOCKS:
-            if a <= cur.time() < b:
-                can = int((_dt.combine(cur.date(), b) - cur).total_seconds() // 60)
-                step = min(rem, can)
-                cur += _td(minutes=step)
-                rem -= step
-                break
-    
-    return cur
-
-
-def add_business_days(start_date: datetime, days: int) -> datetime:
-    """Add business days to a date, skipping weekends"""
-    current = start_date
-    days_added = 0
-    
-    while days_added < days:
-        current += timedelta(days=1)
-        if current.weekday() < 5:  # Monday = 0, Friday = 4
-            days_added += 1
-    
-    return current
-
-
-def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
-    """Calculate business hours between two dates"""
-    if end_date <= start_date:
-        return 0.0
-    
-    current = start_date
-    total_hours = 0.0
-    
-    while current < end_date:
-        if current.weekday() < 5:  # Business day
-            total_hours += 8.0  # 8 hours per business day
-        current += timedelta(days=1)
-    
-    return total_hours
+    return task, metadata
 
 
 def convert_excel_to_mspdi(
@@ -330,6 +152,8 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
+    add_deliverable_milestones: bool = True,
+    add_phase_gates: bool = True,
     add_dependencies: bool = True,
     add_custom_fields: bool = True
 ) -> Dict[str, Any]:
@@ -348,6 +172,8 @@ def convert_excel_to_mspdi(
         pricing_mode: Pricing mode for the project
         rate_band: Rate band for pricing
         blended_rate: Blended rate if using flat pricing
+        add_deliverable_milestones: Add milestone tasks for deliverables
+        add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
         add_dependencies: Add task dependencies
         add_custom_fields: Add ExtendedAttribute elements for Workfront
         
@@ -392,9 +218,6 @@ def convert_excel_to_mspdi(
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
         # Remove timezone info to ensure all datetimes are timezone-naive for consistent comparisons
         project_start = project_start.replace(tzinfo=None)
-        # CRITICAL: Normalize time to business hours (09:00) regardless of input time
-        project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
-        logging.info(f"[TIME NORMALIZATION] Normalized project_start to 09:00:00: {project_start.isoformat()}")
     elif start_date_mode == "next_monday":
         today = datetime.now()
         days_ahead = 0 - today.weekday()  # Monday is 0
@@ -560,9 +383,6 @@ def convert_excel_to_mspdi(
     department_resources = {}
     resource_id = 1
     
-    # FIX ISSUE 1: Track max_resource_uid globally to prevent duplicate UIDs
-    max_resource_uid = 0
-    
     # Extract unique departments and roles
     departments = set()
     if "Department" in df.columns:
@@ -578,8 +398,8 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
         ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 1.0 = 100% capacity (MSPDI ratio format)
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"  # 1.0 = 100% peak capacity
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1000"  # 10 resources at 100% each
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1000"
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
         ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
         ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -588,15 +408,14 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate or 150:.2f}"
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate or 150:.2f}/h"
         ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
         ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
         
         department_resources[str(dept)] = resource_id
-        max_resource_uid = resource_id  # FIX ISSUE 1: Track highest UID
         resource_id += 1
     
     # Add individual role resources
@@ -611,8 +430,8 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 1.0 = 100% capacity (MSPDI ratio format)
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"  # 1.0 = 100% peak capacity
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # 100% allocation
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
             ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
             ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
             ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -624,21 +443,20 @@ def convert_excel_to_mspdi(
             
             # Add rate if available
             if blended_rate:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate:.2f}"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
             elif "Rate_USD" in df.columns:
                 role_rate = df[df["Role"] == role]["Rate_USD"].dropna().iloc[0] if not df[df["Role"] == role]["Rate_USD"].dropna().empty else 150
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{role_rate:.2f}"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
             else:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = "150.00"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
             
             ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
             ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
             
             resource_map[str(role)] = resource_id
-            max_resource_uid = resource_id  # FIX ISSUE 1: Track highest UID
             resource_id += 1
     
     # Create Tasks container
@@ -657,11 +475,6 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Start" % ns).text = project_start.isoformat()
-    # Add Finish element immediately (will be updated after deliverables are processed)
-    # This ensures proper XML element ordering per MS Project schema
-    project_task_finish = ET.SubElement(project_task, "{%s}Finish" % ns)
-    project_task_finish.text = project_start.isoformat()  # Initial value, will be updated
-    logging.info(f"[PROJECT] Initialized project Finish date to: {project_start.isoformat()}")
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
@@ -697,13 +510,21 @@ def convert_excel_to_mspdi(
     component_tasks = {}    # Track component tasks for dependencies
     current_date = project_start
     deliverable_ends = {}
-    project_finish_date = project_start  # Track the maximum deliverable finish date for project summary task
+    all_task_uids = []  # Track all task UIDs for phase gates
     
-    # Initialize cost and duration accumulators for aggregation
+    # Initialize cost accumulators for aggregation
     deliverable_costs = {}  # {deliv_uid: total_cost}
     component_costs = {}    # {comp_uid: total_cost}
-    deliverable_task_hours = {}  # {deliv_uid: sum_of_child_hours}
-    component_task_hours = {}    # {comp_uid: sum_of_child_hours}
+    
+    # Calculate total project timeline for phase gates
+    total_rows = len(df)
+    phase_gate_positions = []
+    if add_phase_gates:
+        phase_gate_positions = [
+            int(total_rows * 0.25),  # 25% milestone
+            int(total_rows * 0.50),  # 50% milestone
+            int(total_rows * 0.75),  # 75% milestone
+        ]
     
     # FIX: Sequential WBS counters - INDEPENDENT of DataFrame WBS_ID
     deliverable_counter = 1  # Sequential counter for deliverables: 1, 2, 3...
@@ -727,11 +548,11 @@ def convert_excel_to_mspdi(
             deliv_task = ET.SubElement(tasks, "{%s}Task" % ns)
             deliv_uid = task_uid
             task_uid += 1
+            all_task_uids.append(deliv_uid)
             deliverable_tasks[str(deliverable_name)] = deliv_uid
             
             # Initialize cost accumulator for this deliverable
             deliverable_costs[deliv_uid] = 0.0
-            deliverable_task_hours[deliv_uid] = 0.0
             
             # Get deliverable code and service department if available
             deliv_code = ""
@@ -782,9 +603,7 @@ def convert_excel_to_mspdi(
                             # Remove timezone info to make it timezone-naive for consistent comparisons
                             deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
                         else:
-                            deliverable_start_date = datetime.fromisoformat(start_val)
-                        # CRITICAL: Always normalize time to 09:00 regardless of input
-                        deliverable_start_date = deliverable_start_date.replace(hour=9, minute=0, second=0, microsecond=0)
+                            deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
                         logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
                     except Exception as e:
                         logging.warning(f"Could not parse deliverable Start_Date '{first_row_start}': {e}")
@@ -800,19 +619,41 @@ def convert_excel_to_mspdi(
                             # Remove timezone info to make it timezone-naive for consistent comparisons
                             deliverable_end_date = deliverable_end_date.replace(tzinfo=None)
                         else:
-                            deliverable_end_date = datetime.fromisoformat(end_val)
-                        # CRITICAL: Always normalize time to 09:00 regardless of input
-                        deliverable_end_date = deliverable_end_date.replace(hour=9, minute=0, second=0, microsecond=0)
+                            deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
                         logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
                     except Exception as e:
                         logging.warning(f"Could not parse deliverable End_Date '{first_row_end}': {e}")
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             
-            # FIX ISSUE 3: DO NOT add constraints to summary tasks (violates MSPDI rules)
-            # Summary tasks auto-calculate dates from children - constraints cause Workfront import errors
-            # Note: Deliverable tasks are summary tasks (Summary=1 is set on line 677)
-            # Constraints will be applied only to leaf tasks (non-summary tasks) below
+            # Add constraint type based on Gantt-sourced dates
+            has_gantt_start = False
+            has_gantt_end = False
+            
+            # Check if Start_Date was successfully parsed from Gantt
+            if not group.empty and "Start_Date" in group.columns:
+                first_row_start = group.iloc[0].get("Start_Date")
+                if pd.notna(first_row_start):
+                    has_gantt_start = True
+            
+            # Check if End_Date was successfully parsed from Gantt
+            if not group.empty and "End_Date" in group.columns:
+                first_row_end = group.iloc[0].get("End_Date")
+                if pd.notna(first_row_end):
+                    has_gantt_end = True
+            
+            # Apply constraint type
+            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
+            if has_gantt_start and has_gantt_end:
+                # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            elif has_gantt_start:
+                # Only start date from Gantt: Must Start On
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
@@ -902,10 +743,10 @@ def convert_excel_to_mspdi(
                 comp_task = ET.SubElement(tasks, "{%s}Task" % ns)
                 comp_uid = task_uid
                 task_uid += 1
+                all_task_uids.append(comp_uid)
                 
                 # Initialize cost accumulator for this component
                 component_costs[comp_uid] = 0.0
-                component_task_hours[comp_uid] = 0.0
                 
                 # Store component task for dependencies
                 component_tasks[f"{deliverable_name}:{component_name}"] = comp_uid
@@ -995,6 +836,7 @@ def convert_excel_to_mspdi(
                         task = ET.SubElement(tasks, "{%s}Task" % ns)
                         uid = task_uid
                         task_uid += 1
+                        all_task_uids.append(uid)
                         
                         # Get task details - FIX: Use proper L3 task name, NOT Component as fallback
                         task_name = (row.get("Task_Name") or 
@@ -1010,23 +852,14 @@ def convert_excel_to_mspdi(
                         
                         logging.info(f"[3-LEVEL HIERARCHY] Creating L3 task: '{task_name}' (UID={uid}, Component={component_name})")
                         
-                        # Safely get hours (for Work calculation, NOT for Duration)
+                        # Safely get hours
                         planned_hours = row.get("Planned_Hours")
                         if pd.isna(planned_hours) or planned_hours is None:
                             planned_hours = row.get("Hours", 8)
                         if pd.isna(planned_hours) or planned_hours is None:
                             planned_hours = 8
                         hours = float(planned_hours)
-                        
-                        # GPT-5 PRO FIX 1 & 2: DO NOT inflate duration from hours
-                        # Duration should be calculated from business-time span between Start/Finish dates ONLY
-                        # Use a standard 1-day duration as fallback when no End_Date is provided
-                        # This allows Units to show over-allocation (e.g., 16 hours in 1 day = 200% units)
-                        duration_days = 1  # Standard 1-day window, NOT based on hours
-                        
-                        # Accumulate task hours into component and deliverable totals
-                        component_task_hours[comp_uid] += hours
-                        deliverable_task_hours[deliv_uid] += hours
+                        duration_days = max(1, int(np.ceil(hours / hours_per_day)))
                         
                         # FIX: Use merged timeline dates (Start_Date/End_Date) from Gantt if available
                         # Only fall back to calculated dates if missing
@@ -1043,9 +876,8 @@ def convert_excel_to_mspdi(
                                     # Remove timezone info to make it timezone-naive for consistent comparisons
                                     task_start = task_start.replace(tzinfo=None)
                                 else:
-                                    task_start = datetime.fromisoformat(start_val)
-                                # CRITICAL: Always normalize time to 09:00 regardless of input
-                                task_start = task_start.replace(hour=9, minute=0, second=0, microsecond=0)
+                                    # Date only - add default 9 AM time
+                                    task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
                                 logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
@@ -1060,9 +892,8 @@ def convert_excel_to_mspdi(
                                     # Remove timezone info to make it timezone-naive for consistent comparisons
                                     task_end = task_end.replace(tzinfo=None)
                                 else:
-                                    task_end = datetime.fromisoformat(end_val)
-                                # CRITICAL: Always normalize time to 09:00 regardless of input
-                                task_end = task_end.replace(hour=9, minute=0, second=0, microsecond=0)
+                                    # Date only - add default 5 PM time
+                                    task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
                                 logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
@@ -1070,28 +901,8 @@ def convert_excel_to_mspdi(
                         # Fall back to calculated dates if Start_Date/End_Date missing
                         if task_start is None:
                             task_start = current_date
-                            
-                            # USER INSTRUCTION: Align Start to working blocks
-                            # "If a Start equals the end of a work block (e.g., 18:00), advance to the next block's start"
-                            # Ensure task starts at valid business time (09:00), not after hours
-                            from datetime import time as dt_time
-                            if task_start.time() >= dt_time(18, 0) or task_start.time() < dt_time(9, 0):
-                                # Start is outside working hours, move to next business day at 09:00
-                                next_day = task_start.date() + timedelta(days=1)
-                                while not is_business_day(next_day):
-                                    next_day += timedelta(days=1)
-                                task_start = datetime.combine(next_day, dt_time(9, 0))
-                                logging.info(f"[START ALIGNMENT] Moved task start from after-hours to next business day: {task_start.isoformat()}")
-                            elif task_start.time() < dt_time(13, 0) and task_start.time() >= dt_time(12, 0):
-                                # Start is during lunch break (12:00-13:00), move to 13:00
-                                task_start = task_start.replace(hour=13, minute=0, second=0, microsecond=0)
-                                logging.info(f"[START ALIGNMENT] Moved task start from lunch to 13:00: {task_start.isoformat()}")
-                            
                         if task_end is None:
-                            # Calculate end by adding working minutes (480 per business day)
-                            # This keeps tasks within same day instead of rolling to next morning
-                            duration_minutes_to_add = duration_days * 480  # 480 minutes = 8-hour business day
-                            task_end = add_business_minutes(task_start, duration_minutes_to_add)
+                            task_end = add_business_days(task_start, duration_days)
                         
                         # FIX: Preserve original WBS_ID from DataFrame for dependency lookup
                         original_task_wbs_id = None
@@ -1118,8 +929,7 @@ def convert_excel_to_mspdi(
                             original_wbs_to_uid[original_task_wbs_id] = uid
                         sequential_wbs_to_uid[task_wbs] = uid
                         
-                        # GPT-5 PRO FIX 3: Set non-summary leaf tasks to Type="1" (Fixed Duration)
-                        ET.SubElement(task, "{%s}Type" % ns).text = "1"  # Fixed Duration
+                        ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
                         ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
                         ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs
                         ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs
@@ -1128,33 +938,11 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
                         ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
                         
-                        # FIX ISSUE 2: Calculate Duration in WORKING minutes (480 per day), not calendar minutes
-                        # MSPDI requires MinutesPerDay=480 for 8-hour workdays (not 1440 calendar minutes)
-                        # Calculate business days between start and end, then multiply by 480
-                        business_days = 0
-                        current_check_date = task_start.date()
-                        end_check_date = task_end.date()
-                        while current_check_date <= end_check_date:
-                            # Count only weekdays (Monday=0 to Friday=4)
-                            if current_check_date.weekday() < 5:
-                                business_days += 1
-                            current_check_date += timedelta(days=1)
-                        
-                        # FIX 3: Duration calculation - preserve sub-day tasks instead of rounding up
-                        # Calculate duration in working minutes = business_days × 480 (MinutesPerDay)
-                        duration_minutes = business_days * 480
-                        
-                        # Only round to full days (480 min) if duration is already >= 1 day
-                        # This preserves sub-day tasks (2h, 4h) instead of inflating them to 8h
-                        if duration_minutes >= 480:
-                            duration_minutes = ((duration_minutes + 479) // 480) * 480
-                        elif duration_minutes < 60:
-                            # Ensure minimum of 1 hour (60 minutes) for very short tasks
-                            duration_minutes = 60
-                        # else: leave sub-day tasks (60-479 minutes) as-is
-                        
+                        # FIX: Calculate Duration from actual time span (Finish - Start), not from hours
+                        # This prevents invalid XML where Duration=PT0M but Start≠Finish (Workfront rejects this)
+                        # Duration = calendar time span, Work = effort hours (different concepts)
+                        duration_minutes = int((task_end - task_start).total_seconds() / 60)
                         ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
-                        logging.info(f"[DURATION FIX] Task '{task_name}': {business_days} business days = PT{duration_minutes}M (working minutes)")
                         ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
                         # FIX: Set Work to PT0M on leaf tasks to prevent double-counting in Workfront
                         # Work will be calculated automatically from Assignment elements per MSPDI standard
@@ -1166,8 +954,7 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
-                        # GPT-5 PRO FIX 3: Set IsEffortDriven="0" for Fixed Duration tasks
-                        ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
+                        ET.SubElement(task, "{%s}EffortDriven" % ns).text = "1"
                         ET.SubElement(task, "{%s}Recurring" % ns).text = "0"
                         ET.SubElement(task, "{%s}OverAllocated" % ns).text = "0"
                         ET.SubElement(task, "{%s}Estimated" % ns).text = "1"
@@ -1311,10 +1098,11 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
-                # Update component summary with PT0M duration (Workfront standard for summary tasks)
-                # Summary tasks are organizational containers - actual work is tracked in leaf tasks
-                # CRITICAL: For PT0M duration, Start must equal Finish to satisfy Workfront validation
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
+                # Update component summary with calculated duration
+                # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+                # This prevents Duration=PT0M when component_start == component_finish
+                component_duration_minutes = int((component_finish - component_start).total_seconds() / 60)
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{component_duration_minutes}M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task
@@ -1347,10 +1135,11 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
-            # Update deliverable summary with PT0M duration (Workfront standard for summary tasks)
-            # Summary tasks are organizational containers - actual work is tracked in leaf tasks
-            # CRITICAL: For PT0M duration, Start must equal Finish to satisfy Workfront validation
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
+            # Update deliverable summary with calculated duration
+            # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+            # This prevents Duration=PT0M when dates match or business hours = 0
+            deliverable_duration_minutes = int((deliverable_finish - deliverable_start).total_seconds() / 60)
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{deliverable_duration_minutes}M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
@@ -1376,32 +1165,125 @@ def convert_excel_to_mspdi(
                 original_wbs_to_uid[original_deliv_wbs_id] = deliv_uid
             sequential_wbs_to_uid[deliv_wbs] = deliv_uid
             
-            # FIX: Advance current_date to deliverable finish for proper deliverable sequencing
-            # This ensures each deliverable starts after the previous one finishes
-            current_date = deliverable_finish
-            
-            # Update project finish date to track the latest deliverable finish
-            # Since deliverables are sequential, this will naturally track the last one
-            project_finish_date = deliverable_finish
+            # Add deliverable completion milestone
+            if add_deliverable_milestones:
+                milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+                milestone_uid = task_uid
+                task_uid += 1
+                all_task_uids.append(milestone_uid)
+                
+                # Use component_num to set proper WBS numbering after all components
+                milestone_wbs_num = component_num + 1
+                
+                ET.SubElement(milestone, "{%s}UID" % ns).text = str(milestone_uid)
+                ET.SubElement(milestone, "{%s}ID" % ns).text = str(milestone_uid)
+                ET.SubElement(milestone, "{%s}Name" % ns).text = f"{deliverable_name} - COMPLETE"
+                ET.SubElement(milestone, "{%s}Type" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}Milestone" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}WBS" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
+                ET.SubElement(milestone, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
+                ET.SubElement(milestone, "{%s}OutlineLevel" % ns).text = "2"
+                ET.SubElement(milestone, "{%s}Priority" % ns).text = "500"
+                ET.SubElement(milestone, "{%s}Start" % ns).text = deliverable_finish.isoformat()
+                ET.SubElement(milestone, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
+                ET.SubElement(milestone, "{%s}Duration" % ns).text = "PT0M"
+                ET.SubElement(milestone, "{%s}DurationFormat" % ns).text = "7"
+                ET.SubElement(milestone, "{%s}Work" % ns).text = "PT0M"
+                ET.SubElement(milestone, "{%s}Summary" % ns).text = "0"
+                ET.SubElement(milestone, "{%s}Critical" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}IsMarked" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}ConstraintType" % ns).text = str(ConstraintType.MUST_FINISH_ON.value)
+                ET.SubElement(milestone, "{%s}ConstraintDate" % ns).text = deliverable_finish.isoformat()
+                
+                # Add custom field for milestone type
+                if add_custom_fields:
+                    ext_attr_mt = ET.SubElement(milestone, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_mt, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                    ET.SubElement(ext_attr_mt, "{%s}Value" % ns).text = "Deliverable Milestone"
             
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
-            
-            # Log each deliverable finish update
-            logging.info(f"[PROJECT] Updated project finish date after '{deliverable_name}': {project_finish_date.isoformat()}")
     
-    # Update project summary task (UID=0) Finish date
-    # Find the existing Finish element and update its value (don't create a new one)
-    # This is required by Workfront for valid XML import
-    finish_elem = project_task.find("{%s}Finish" % ns)
-    if finish_elem is not None:
-        finish_elem.text = project_finish_date.isoformat()
-        logging.info(f"[PROJECT] ✅ Updated project Finish date to: {project_finish_date.isoformat()}")
-    else:
-        logging.error(f"[PROJECT] ❌ ERROR: Finish element not found in project task!")
-        # Fallback: create it if missing (shouldn't happen)
-        ET.SubElement(project_task, "{%s}Finish" % ns).text = project_finish_date.isoformat()
-        logging.info(f"[PROJECT] Created missing Finish element with date: {project_finish_date.isoformat()}")
+    # Add phase gate milestones
+    if add_phase_gates and all_task_uids:
+        phase_names = ["Phase 1 Complete (25%)", "Phase 2 Complete (50%)", "Phase 3 Complete (75%)"]
+        for i, position in enumerate(phase_gate_positions):
+            if position < len(all_task_uids):
+                # Get the task at this position
+                ref_task_uid = all_task_uids[position]
+                if ref_task_uid in task_map:
+                    ref_task_data = task_map[ref_task_uid]
+                    ref_task = ref_task_data["task"]
+                    
+                    # Find the finish date from the reference task
+                    finish_elem = ref_task.find("{%s}Finish" % ns)
+                    if finish_elem is not None:
+                        phase_date = finish_elem.text
+                    else:
+                        phase_date = (project_start + timedelta(days=30 * (i+1))).isoformat()
+                    
+                    # Create phase gate milestone
+                    phase_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+                    phase_uid = task_uid
+                    task_uid += 1
+                    
+                    ET.SubElement(phase_milestone, "{%s}UID" % ns).text = str(phase_uid)
+                    ET.SubElement(phase_milestone, "{%s}ID" % ns).text = str(phase_uid)
+                    ET.SubElement(phase_milestone, "{%s}Name" % ns).text = phase_names[i]
+                    ET.SubElement(phase_milestone, "{%s}Type" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}Milestone" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
+                    ET.SubElement(phase_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
+                    ET.SubElement(phase_milestone, "{%s}OutlineLevel" % ns).text = "1"
+                    deliverable_counter += 1  # Increment for next milestone
+                    ET.SubElement(phase_milestone, "{%s}Priority" % ns).text = "1000"  # High priority
+                    ET.SubElement(phase_milestone, "{%s}Start" % ns).text = phase_date
+                    ET.SubElement(phase_milestone, "{%s}Finish" % ns).text = phase_date
+                    ET.SubElement(phase_milestone, "{%s}Duration" % ns).text = "PT0M"
+                    ET.SubElement(phase_milestone, "{%s}DurationFormat" % ns).text = "7"
+                    ET.SubElement(phase_milestone, "{%s}Work" % ns).text = "PT0M"
+                    ET.SubElement(phase_milestone, "{%s}Summary" % ns).text = "0"
+                    ET.SubElement(phase_milestone, "{%s}Critical" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}IsMarked" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}Notes" % ns).text = f"Phase gate at {(i+1)*25}% project completion"
+                    
+                    # Add custom field for milestone type
+                    if add_custom_fields:
+                        ext_attr_pg = ET.SubElement(phase_milestone, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_pg, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                        ET.SubElement(ext_attr_pg, "{%s}Value" % ns).text = "Phase Gate"
+    
+    # Add client approval milestone at the end
+    if add_deliverable_milestones:
+        approval_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+        approval_uid = task_uid
+        task_uid += 1
+        
+        ET.SubElement(approval_milestone, "{%s}UID" % ns).text = str(approval_uid)
+        ET.SubElement(approval_milestone, "{%s}ID" % ns).text = str(approval_uid)
+        ET.SubElement(approval_milestone, "{%s}Name" % ns).text = "CLIENT APPROVAL - FINAL"
+        ET.SubElement(approval_milestone, "{%s}Type" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}Milestone" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
+        ET.SubElement(approval_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
+        ET.SubElement(approval_milestone, "{%s}OutlineLevel" % ns).text = "1"
+        deliverable_counter += 1  # Increment for consistency
+        ET.SubElement(approval_milestone, "{%s}Priority" % ns).text = "1000"
+        ET.SubElement(approval_milestone, "{%s}Start" % ns).text = current_date.isoformat()
+        ET.SubElement(approval_milestone, "{%s}Finish" % ns).text = current_date.isoformat()
+        ET.SubElement(approval_milestone, "{%s}Duration" % ns).text = "PT0M"
+        ET.SubElement(approval_milestone, "{%s}DurationFormat" % ns).text = "7"
+        ET.SubElement(approval_milestone, "{%s}Work" % ns).text = "PT0M"
+        ET.SubElement(approval_milestone, "{%s}Summary" % ns).text = "0"
+        ET.SubElement(approval_milestone, "{%s}Critical" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}IsMarked" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}Notes" % ns).text = "Final client approval and sign-off"
+        
+        # Add custom field for milestone type
+        if add_custom_fields:
+            ext_attr_ca = ET.SubElement(approval_milestone, "{%s}ExtendedAttribute" % ns)
+            ET.SubElement(ext_attr_ca, "{%s}FieldID" % ns).text = "188743731"  # Text1
+            ET.SubElement(ext_attr_ca, "{%s}Value" % ns).text = "Client Approval"
     
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
@@ -1567,43 +1449,16 @@ def convert_excel_to_mspdi(
                                 skipped_count += 1
                                 continue
                         
-                        # GPT-5 PRO FIX 1 & 2: Get task names and components for link_for() function
-                        # Get successor task name and component
-                        succ_task_name = row_task_name if row_task_name else str(row_deliverable)
-                        succ_component = str(row_component) if has_component else None
-                        
-                        # Get predecessor task name and component by looking up in task_map or DataFrame
-                        pred_task_name = "Unknown"
-                        pred_component = None
-                        
-                        if predecessor_task_elem is not None:
-                            pred_name_elem = predecessor_task_elem.find("{%s}Name" % ns)
-                            if pred_name_elem is not None:
-                                pred_task_name = pred_name_elem.text
-                        
-                        # Try to find predecessor component from task_map
-                        if predecessor_uid in task_map:
-                            pred_component = task_map[predecessor_uid].get("component")
-                        
-                        # Determine dependency type and lag using "seasoned PM" rules
-                        link_type, lag_days = link_for(pred_task_name, succ_task_name, pred_component, succ_component)
-                        # CRITICAL ERROR #2 FIX: Use lag_days directly, don't multiply by 480
-                        # When LagFormat=7 (Days), LinkLag should be in DAYS, not minutes!
-                        
-                        # Create PredecessorLink element with proper type and lag
+                        # Create PredecessorLink element (only for leaf tasks)
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = str(link_type)  # 1=FS, 2=SS, 3=FF, 4=SF
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                        ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_days)  # Lag in DAYS (not minutes!)
-                        ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days format
+                        ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
+                        ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
                         
                         dependencies_count += 1
-                        
-                        # Log dependency type for debugging
-                        type_names = {0: "FF", 1: "FS", 2: "SF", 3: "SS"}
-                        type_name = type_names.get(link_type, f"Type{link_type}")
-                        logging.info(f"[DEPENDENCIES] Added {type_name}+{lag_days}d dependency: '{succ_task_name}' (UID={task_uid}) depends on '{pred_task_name}' (UID={predecessor_uid})")
+                        logging.info(f"[DEPENDENCIES] Added dependency: {lookup_key} (UID={task_uid}) depends on WBS '{dep_wbs}' (UID={predecessor_uid})")
             
             logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies across ALL task types, skipped {skipped_count} invalid references")
         else:
@@ -1638,17 +1493,13 @@ def convert_excel_to_mspdi(
                         break
                     if other_data["department"] in dept_dependencies[department]:
                         if other_data["deliverable"] == deliverable:  # Same deliverable
-                            # Parse dependency spec (e.g., 'SS+1d', 'FS+0', 'FF-1d')
-                            # For now, use default SS+1d since we don't have spec from DataFrame yet
-                            dep_spec = "SS+1d"  # TODO: Get from DataFrame Dependencies column
-                            dep_type_code, lag_days = parse_dependency_spec(dep_spec)
-                            
+                            # Add dependency with Start-to-Start relationship
                             pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
                             ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
-                            ET.SubElement(pred_link, "{%s}Type" % ns).text = dep_type_code
+                            ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.START_TO_START.value)
                             ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_days)  # FIXED: Use lag_days directly
-                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days format
+                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "4800"  # 1 day lag (in minutes)
+                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
                             break
     
     # Create Assignments container with enhanced resource assignments
@@ -1659,68 +1510,22 @@ def convert_excel_to_mspdi(
     for uid, task_data in task_map.items():
         task = task_data["task"]
         
-        # GPT-5 PRO FIX 2: Get task hours with backfill from duration
+        # Get task hours
         work_elem = task.find("{%s}Work" % ns)
         if work_elem is not None and work_elem.text:
             work_minutes = int(work_elem.text.replace("PT", "").replace("M", ""))
             work_hours = work_minutes / 60
         else:
-            work_hours = 0.0
-        
-        # GPT-5 PRO FIX 2: Backfill zero hours from duration (assume 1 FTE across duration)
-        if work_hours <= 0.0001:
-            duration_elem = task.find("{%s}Duration" % ns)
-            if duration_elem is not None and duration_elem.text:
-                duration_minutes = int(duration_elem.text.replace("PT", "").replace("M", ""))
-                work_hours = duration_minutes / 60  # Assume 1.0 FTE across the duration
-                logging.info(f"[ASSIGNMENT BACKFILL] Task UID={uid}: Backfilled {work_hours:.2f} hours from duration")
-        
-        # If still zero, use default
-        if work_hours <= 0.0001:
             work_hours = 8.0
         
         # Assign department resource
         department = task_data["department"]
-        
-        # GPT-5 PRO FIX 2: Ensure all tasks have at least one assignment (default to "Unassigned")
-        if not department or department not in department_resources:
-            department = "Unassigned"
-            # Create "Unassigned" resource if it doesn't exist
-            if department not in department_resources:
-                resources = root.find("{%s}Resources" % ns)
-                if resources is not None:
-                    # FIX ISSUE 1: Use max_resource_uid + 1 to prevent duplicate UIDs
-                    unassigned_uid = max_resource_uid + 1
-                    unassigned_res = ET.SubElement(resources, "{%s}Resource" % ns)
-                    ET.SubElement(unassigned_res, "{%s}UID" % ns).text = str(unassigned_uid)
-                    ET.SubElement(unassigned_res, "{%s}ID" % ns).text = str(unassigned_uid)
-                    ET.SubElement(unassigned_res, "{%s}Name" % ns).text = "Unassigned"
-                    ET.SubElement(unassigned_res, "{%s}Type" % ns).text = "1"
-                    ET.SubElement(unassigned_res, "{%s}MaxUnits" % ns).text = "1"  # 1.0 = 100% capacity (MSPDI ratio format)
-                    ET.SubElement(unassigned_res, "{%s}StandardRate" % ns).text = f"{blended_rate or 195:.2f}"
-                    ET.SubElement(unassigned_res, "{%s}CalendarUID" % ns).text = "1"
-                    department_resources["Unassigned"] = unassigned_uid
-                    max_resource_uid = unassigned_uid  # FIX ISSUE 1: Update max_resource_uid
-                    logging.info(f"[ASSIGNMENT BACKFILL] Created 'Unassigned' resource (UID={unassigned_uid})")
-        
         if department in department_resources:
             assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
             ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
             ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
             ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
-            
-            # EXPERT SPECIFICATION: Calculate Units as work/duration ratio with proper clamping
-            # units = 0 if dur_min == 0 else min(1.0, round(work_min / dur_min, 4))
-            # MSPDI expects 1.0 = 100%, values >1.0 indicate over-allocation
-            duration_elem = task.find("{%s}Duration" % ns)
-            if duration_elem is not None and duration_elem.text:
-                dur_minutes = int(duration_elem.text.replace("PT", "").replace("M", ""))
-                work_minutes = work_hours * 60
-                units = 0 if dur_minutes == 0 else min(1.0, round(work_minutes / dur_minutes, 4))
-            else:
-                units = 1.0  # Default to 100%
-            
-            ET.SubElement(assign, "{%s}Units" % ns).text = f"{units:.4f}"
+            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
             ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
             ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{int(work_hours * 60)}M"
             ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{int(work_hours * 60)}M"
@@ -1751,275 +1556,6 @@ def convert_excel_to_mspdi(
             ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
             
             assignment_uid += 1
-    
-    # WORKFRONT FIX: Roll up assignment work hours back to tasks
-    # Workfront requires task Work = sum of assignment Work, or it rejects the file
-    logging.info("[WORKFRONT FIX] Rolling up assignment work hours to tasks...")
-    
-    # Step 1: Sum assignment work by TaskUID
-    task_work_rollup = {}  # {task_uid: total_work_minutes}
-    for assignment_elem in assignments.findall("{%s}Assignment" % ns):
-        task_uid_elem = assignment_elem.find("{%s}TaskUID" % ns)
-        work_elem = assignment_elem.find("{%s}Work" % ns)
-        
-        if task_uid_elem is not None and work_elem is not None:
-            task_uid = int(task_uid_elem.text)
-            work_text = work_elem.text or "PT0M"
-            work_minutes = int(work_text.replace("PT", "").replace("M", ""))
-            
-            if task_uid not in task_work_rollup:
-                task_work_rollup[task_uid] = 0
-            task_work_rollup[task_uid] += work_minutes
-    
-    # Step 2: Update task Work/RegularWork/RemainingWork elements
-    tasks_updated = 0
-    for uid, task_data in task_map.items():
-        task = task_data["task"]
-        total_work_minutes = task_work_rollup.get(uid, 0)
-        
-        # Update Work element
-        work_elem = task.find("{%s}Work" % ns)
-        if work_elem is not None:
-            old_work = work_elem.text
-            work_elem.text = f"PT{total_work_minutes}M"
-            if total_work_minutes > 0:
-                tasks_updated += 1
-                logging.info(f"[WORKFRONT FIX] Task UID={uid}: Updated Work from {old_work} to PT{total_work_minutes}M")
-        
-        # Update RegularWork element
-        regular_work_elem = task.find("{%s}RegularWork" % ns)
-        if regular_work_elem is not None:
-            regular_work_elem.text = f"PT{total_work_minutes}M"
-        
-        # Update RemainingWork element
-        remaining_work_elem = task.find("{%s}RemainingWork" % ns)
-        if remaining_work_elem is not None:
-            remaining_work_elem.text = f"PT{total_work_minutes}M"
-    
-    logging.info(f"[WORKFRONT FIX] Successfully updated {tasks_updated} tasks with rolled-up work hours")
-    
-    # Validation: Check for zero-work tasks
-    zero_work_count = 0
-    for uid, task_data in task_map.items():
-        task = task_data["task"]
-        work_elem = task.find("{%s}Work" % ns)
-        if work_elem is not None and work_elem.text == "PT0M":
-            # Check if it's a summary task (summary tasks can have zero direct work)
-            summary_elem = task.find("{%s}Summary" % ns)
-            is_summary = summary_elem is not None and summary_elem.text == "1"
-            if not is_summary:
-                zero_work_count += 1
-                task_name = task.find("{%s}Name" % ns).text if task.find("{%s}Name" % ns) is not None else "Unknown"
-                logging.warning(f"[WORKFRONT VALIDATION] Task UID={uid} '{task_name}' has zero work (not a summary task)")
-    
-    if zero_work_count > 0:
-        logging.warning(f"[WORKFRONT VALIDATION] Found {zero_work_count} non-summary tasks with zero work - may cause import issues")
-    else:
-        logging.info("[WORKFRONT VALIDATION] ✅ All non-summary tasks have work hours assigned")
-    
-    # =====================================================================
-    # WORKFRONT-SAFE POST-PROCESSING
-    # =====================================================================
-    # 1. Ensure every task has Start and Finish (populate defaults first)
-    # 2. Roll up Start/Finish for ALL summary tasks based on children
-    # 3. Force summary tasks to have Work=PT0M
-    # =====================================================================
-    
-    tasks_elem = root.find("{%s}Tasks" % ns)
-    if tasks_elem is not None:
-        all_tasks = list(tasks_elem.findall("{%s}Task" % ns))
-        
-        # STEP 1: Ensure every task has both Start and Finish elements FIRST
-        # This must happen before roll-up so summaries can aggregate child dates
-        logging.info("[WORKFRONT POST-PROCESS] Ensuring all tasks have Start/Finish dates...")
-        missing_dates_count = 0
-        for t in all_tasks:
-            start_elem = t.find("{%s}Start" % ns)
-            finish_elem = t.find("{%s}Finish" % ns)
-            
-            if start_elem is None:
-                start_elem = ET.SubElement(t, "{%s}Start" % ns)
-                start_elem.text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
-                missing_dates_count += 1
-            
-            if finish_elem is None:
-                # Calculate Finish from Start + Duration
-                duration_elem = t.find("{%s}Duration" % ns)
-                dur_text = duration_elem.text if duration_elem is not None else "PT0M"
-                
-                if dur_text == "PT0M":
-                    # Milestone or zero-duration task: Finish = Start
-                    finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
-                    finish_elem.text = start_elem.text
-                else:
-                    # Non-zero duration: calculate Finish from Start + Duration
-                    try:
-                        # Parse duration (format: PT###M for minutes)
-                        dur_minutes = int(dur_text.replace("PT", "").replace("M", ""))
-                        start_dt = datetime.strptime(start_elem.text, "%Y-%m-%dT%H:%M:%S")
-                        
-                        # Calculate finish using business days (8-hour days, 480 min/day)
-                        business_days = dur_minutes / 480
-                        finish_dt = start_dt + timedelta(days=business_days)
-                        
-                        finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
-                        finish_elem.text = finish_dt.strftime("%Y-%m-%dT%H:%M:%S")
-                    except Exception:
-                        # Fallback: use Start if parsing fails
-                        finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
-                        finish_elem.text = start_elem.text
-                
-                missing_dates_count += 1
-        
-        if missing_dates_count > 0:
-            logging.warning(f"[WORKFRONT POST-PROCESS] Added missing Start/Finish to {missing_dates_count} task elements")
-        else:
-            logging.info("[WORKFRONT POST-PROCESS] ✅ All tasks have Start/Finish dates")
-        
-        # STEP 2: Roll up Start/Finish for ALL summary tasks from their children
-        logging.info("[WORKFRONT POST-PROCESS] Rolling up summary task Start/Finish dates...")
-        
-        # Build OutlineLevel map to find parent-child relationships
-        task_hierarchy = {}  # {task_element: {"wbs": str, "level": int, "parent_wbs": str}}
-        for t in all_tasks:
-            wbs = (t.findtext("{%s}WBS" % ns) or "").strip()
-            outline_level_text = t.findtext("{%s}OutlineLevel" % ns)
-            outline_level = int(outline_level_text) if outline_level_text else 0
-            
-            # Determine parent WBS (e.g., "1.2.3" -> parent is "1.2")
-            parent_wbs = ""
-            if "." in wbs:
-                parent_wbs = wbs.rsplit(".", 1)[0]  # Remove last segment
-            elif wbs != "0":
-                parent_wbs = "0"  # Top-level items have project root as parent
-            
-            task_hierarchy[t] = {
-                "wbs": wbs,
-                "level": outline_level,
-                "parent_wbs": parent_wbs
-            }
-        
-        # Roll up dates for each summary task from ALL descendants
-        summary_count = 0
-        for t in all_tasks:
-            summary_elem = t.find("{%s}Summary" % ns)
-            is_summary = summary_elem is not None and summary_elem.text == "1"
-            
-            if is_summary:
-                wbs = task_hierarchy[t]["wbs"]
-                
-                # Find ALL descendants (not just direct children)
-                # A task is a descendant if its WBS starts with this WBS
-                descendant_starts = []
-                descendant_finishes = []
-                
-                for c in all_tasks:
-                    cwbs = task_hierarchy[c]["wbs"]
-                    c_is_summary = c.find("{%s}Summary" % ns) is not None and c.findtext("{%s}Summary" % ns) == "1"
-                    
-                    # Special case: root summary (WBS "0") includes all top-level tasks
-                    if wbs == "0":
-                        # Include tasks with WBS "1", "2", "3", etc (no dots, not "0")
-                        if cwbs and cwbs != "0" and "." not in cwbs:
-                            cs = c.findtext("{%s}Start" % ns)
-                            cf = c.findtext("{%s}Finish" % ns)
-                            if cs and cf:
-                                descendant_starts.append(cs)
-                                descendant_finishes.append(cf)
-                    else:
-                        # Normal case: child WBS starts with parent WBS + "."
-                        if cwbs and cwbs != wbs and cwbs.startswith(wbs + "."):
-                            cs = c.findtext("{%s}Start" % ns)
-                            cf = c.findtext("{%s}Finish" % ns)
-                            if cs and cf:
-                                descendant_starts.append(cs)
-                                descendant_finishes.append(cf)
-                
-                # Roll up Start/Finish from descendants
-                if descendant_starts and descendant_finishes:
-                    rolled_start = min(descendant_starts)
-                    rolled_finish = max(descendant_finishes)
-                    
-                    start_elem = t.find("{%s}Start" % ns)
-                    if start_elem is None:
-                        start_elem = ET.SubElement(t, "{%s}Start" % ns)
-                    start_elem.text = rolled_start
-                    
-                    finish_elem = t.find("{%s}Finish" % ns)
-                    if finish_elem is None:
-                        finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
-                    finish_elem.text = rolled_finish
-                    
-                    # Calculate Duration from Start/Finish (in working minutes)
-                    # CRITICAL: Use total_seconds() not days to capture sub-24-hour spans
-                    try:
-                        start_dt = datetime.strptime(rolled_start, "%Y-%m-%dT%H:%M:%S")
-                        finish_dt = datetime.strptime(rolled_finish, "%Y-%m-%dT%H:%M:%S")
-                        
-                        # Calculate total minutes from total seconds (handles partial days correctly)
-                        delta = finish_dt - start_dt
-                        total_minutes = int(round(delta.total_seconds() / 60))
-                        
-                        # Ensure non-negative duration
-                        total_minutes = max(0, total_minutes)
-                        
-                        duration_elem = t.find("{%s}Duration" % ns)
-                        if duration_elem is None:
-                            duration_elem = ET.SubElement(t, "{%s}Duration" % ns)
-                        duration_elem.text = f"PT{total_minutes}M"
-                    except Exception:
-                        # If date parsing fails, set to PT0M
-                        duration_elem = t.find("{%s}Duration" % ns)
-                        if duration_elem is None:
-                            duration_elem = ET.SubElement(t, "{%s}Duration" % ns)
-                        duration_elem.text = "PT0M"
-                    
-                    summary_count += 1
-                
-                # Force summary tasks to have Work=PT0M (but Duration is calculated above)
-                work_elem = t.find("{%s}Work" % ns)
-                if work_elem is None:
-                    work_elem = ET.SubElement(t, "{%s}Work" % ns)
-                work_elem.text = "PT0M"
-        
-        logging.info(f"[WORKFRONT POST-PROCESS] Rolled up {summary_count} summary tasks")
-    
-    # =====================================================================
-    # FINAL WORKFRONT VALIDATION
-    # =====================================================================
-    # Validate MSPDI structure before writing to catch Workfront issues
-    # =====================================================================
-    
-    if tasks_elem is not None:
-        validation_problems = []
-        all_tasks = list(tasks_elem.findall("{%s}Task" % ns))
-        
-        for t in all_tasks:
-            uid = t.findtext("{%s}UID" % ns)
-            name = t.findtext("{%s}Name" % ns) or ""
-            summary_elem = t.find("{%s}Summary" % ns)
-            is_summary = summary_elem is not None and summary_elem.text == "1"
-            start = t.findtext("{%s}Start" % ns)
-            finish = t.findtext("{%s}Finish" % ns)
-            work = t.findtext("{%s}Work" % ns) or "PT0M"
-            
-            # Check 1: Every task must have Start and Finish
-            if not start or not finish:
-                validation_problems.append(f"Task UID {uid} '{name}' missing Start/Finish")
-            
-            # Check 2: Summary tasks should have Work=PT0M
-            if is_summary and work != "PT0M":
-                validation_problems.append(f"Summary UID {uid} '{name}' has nonzero Work: {work}")
-        
-        if validation_problems:
-            logging.error(f"[MSPDI VALIDATION] Found {len(validation_problems)} issues:")
-            for problem in validation_problems[:10]:  # Show first 10
-                logging.error(f"  - {problem}")
-            if len(validation_problems) > 10:
-                logging.error(f"  ... and {len(validation_problems) - 10} more")
-            raise ValueError(f"MSPDI validation failed with {len(validation_problems)} issues. Check logs for details.")
-        else:
-            logging.info("[MSPDI VALIDATION] ✅ All validation checks passed - file is Workfront-safe!")
     
     # Write the XML file
     tree = ET.ElementTree(root)
@@ -2067,7 +1603,8 @@ def convert_excel_to_mspdi(
         "has_wbs": True,
         "has_dependencies": add_dependencies,
         "has_custom_fields": add_custom_fields,
-        "has_calendars": True
+        "has_calendars": True,
+        "has_phase_gates": add_phase_gates
     }
     
     logging.info(f"[Enhanced MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources, {stats['milestone_count']} milestones")
@@ -2124,6 +1661,35 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     return root
 
 
+def add_business_days(start_date: datetime, days: int) -> datetime:
+    """Add business days to a date, skipping weekends"""
+    current = start_date
+    days_added = 0
+    
+    while days_added < days:
+        current += timedelta(days=1)
+        if current.weekday() < 5:  # Monday = 0, Friday = 4
+            days_added += 1
+    
+    return current
+
+
+def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
+    """Calculate business hours between two dates"""
+    if end_date <= start_date:
+        return 0.0
+    
+    current = start_date
+    total_hours = 0.0
+    
+    while current < end_date:
+        if current.weekday() < 5:  # Business day
+            total_hours += 8.0  # 8 hours per business day
+        current += timedelta(days=1)
+    
+    return total_hours
+
+
 if __name__ == "__main__":
     # Test the enhanced converter
     test_xlsx = "test.xlsx"
@@ -2134,6 +1700,8 @@ if __name__ == "__main__":
             input_xlsx=test_xlsx,
             output_xml=test_xml,
             project_name="Enhanced Test Project",
+            add_deliverable_milestones=True,
+            add_phase_gates=True,
             add_dependencies=True,
             add_custom_fields=True
         )
