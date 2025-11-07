@@ -1539,6 +1539,71 @@ def convert_excel_to_mspdi(
             
             assignment_uid += 1
     
+    # WORKFRONT FIX: Roll up assignment work hours back to tasks
+    # Workfront requires task Work = sum of assignment Work, or it rejects the file
+    logging.info("[WORKFRONT FIX] Rolling up assignment work hours to tasks...")
+    
+    # Step 1: Sum assignment work by TaskUID
+    task_work_rollup = {}  # {task_uid: total_work_minutes}
+    for assignment_elem in assignments.findall("{%s}Assignment" % ns):
+        task_uid_elem = assignment_elem.find("{%s}TaskUID" % ns)
+        work_elem = assignment_elem.find("{%s}Work" % ns)
+        
+        if task_uid_elem is not None and work_elem is not None:
+            task_uid = int(task_uid_elem.text)
+            work_text = work_elem.text or "PT0M"
+            work_minutes = int(work_text.replace("PT", "").replace("M", ""))
+            
+            if task_uid not in task_work_rollup:
+                task_work_rollup[task_uid] = 0
+            task_work_rollup[task_uid] += work_minutes
+    
+    # Step 2: Update task Work/RegularWork/RemainingWork elements
+    tasks_updated = 0
+    for uid, task_data in task_map.items():
+        task = task_data["task"]
+        total_work_minutes = task_work_rollup.get(uid, 0)
+        
+        # Update Work element
+        work_elem = task.find("{%s}Work" % ns)
+        if work_elem is not None:
+            old_work = work_elem.text
+            work_elem.text = f"PT{total_work_minutes}M"
+            if total_work_minutes > 0:
+                tasks_updated += 1
+                logging.info(f"[WORKFRONT FIX] Task UID={uid}: Updated Work from {old_work} to PT{total_work_minutes}M")
+        
+        # Update RegularWork element
+        regular_work_elem = task.find("{%s}RegularWork" % ns)
+        if regular_work_elem is not None:
+            regular_work_elem.text = f"PT{total_work_minutes}M"
+        
+        # Update RemainingWork element
+        remaining_work_elem = task.find("{%s}RemainingWork" % ns)
+        if remaining_work_elem is not None:
+            remaining_work_elem.text = f"PT{total_work_minutes}M"
+    
+    logging.info(f"[WORKFRONT FIX] Successfully updated {tasks_updated} tasks with rolled-up work hours")
+    
+    # Validation: Check for zero-work tasks
+    zero_work_count = 0
+    for uid, task_data in task_map.items():
+        task = task_data["task"]
+        work_elem = task.find("{%s}Work" % ns)
+        if work_elem is not None and work_elem.text == "PT0M":
+            # Check if it's a summary task (summary tasks can have zero direct work)
+            summary_elem = task.find("{%s}Summary" % ns)
+            is_summary = summary_elem is not None and summary_elem.text == "1"
+            if not is_summary:
+                zero_work_count += 1
+                task_name = task.find("{%s}Name" % ns).text if task.find("{%s}Name" % ns) is not None else "Unknown"
+                logging.warning(f"[WORKFRONT VALIDATION] Task UID={uid} '{task_name}' has zero work (not a summary task)")
+    
+    if zero_work_count > 0:
+        logging.warning(f"[WORKFRONT VALIDATION] Found {zero_work_count} non-summary tasks with zero work - may cause import issues")
+    else:
+        logging.info("[WORKFRONT VALIDATION] ✅ All non-summary tasks have work hours assigned")
+    
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
