@@ -813,6 +813,11 @@ window.currentTimelineTasks = [];
 let currentTimelineTasks = window.currentTimelineTasks;
 let timelineReasoning = null;
 
+// Gantt drag buffer: stores pending updates during drag operations
+// Prevents freeze by batching server calls until mouseup
+let ganttDragBuffer = new Map(); // task.id -> {wbs_id, start_date, end_date, duration_days}
+let ganttIsDragging = false;
+
 // Pricing and Retainer State
 let pricingData = {
   deliverables: new Map(),
@@ -924,47 +929,27 @@ async function initializeGanttChart(tasks = []) {
       on_click: function(task) {
         console.log('Task clicked:', task);
       },
-      on_date_change: async function(task, start, end) {
-        console.log('Task date changed:', task.name, start, end);
+      on_date_change: function(task, start, end) {
+        console.log('[Gantt] Task date changed (buffering):', task.name, start, end);
         
-        // Update the task in our local state
+        // Mark that we're dragging
+        ganttIsDragging = true;
+        
+        // Update the task in our local state (UI only, no server call during drag)
         const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
         if (taskIndex >= 0) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
         
-        // Sync to backend SCENARIO_STORE (GPT-5's plan: call /api/timeline/update_task)
-        try {
-          const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-          // Get fresh session_id directly from SessionManager (no caching)
-          const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
-          
-          if (session_id && task.id) {
-            const response = await fetch('/api/timeline/update_task', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                session_id: session_id,
-                wbs_id: task.id,
-                start_date: start.toISOString().split('T')[0],
-                end_date: end.toISOString().split('T')[0],
-                duration_days: duration_days,
-                hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
-              })
-            });
-            
-            if (response.ok) {
-              const result = await response.json();
-              console.log('[Gantt] Task updated in backend SCENARIO_STORE:', result);
-              // TODO: Refresh pricing table with result.totals if needed
-            } else {
-              console.warn('[Gantt] Failed to sync task to backend:', await response.text());
-            }
-          }
-        } catch (error) {
-          console.error('[Gantt] Error syncing task to backend:', error);
-        }
+        // Buffer the update for batch commit on mouseup (prevents freeze during drag)
+        const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+        ganttDragBuffer.set(task.id, {
+          wbs_id: task.id,
+          start_date: start.toISOString().split('T')[0],
+          end_date: end.toISOString().split('T')[0],
+          duration_days: duration_days
+        });
         
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
@@ -983,6 +968,64 @@ async function initializeGanttChart(tasks = []) {
     
     // Create Gantt instance
     ganttChart = new Gantt(container, tasks, ganttOptions);
+    
+    // Remove any existing pointerup listeners to avoid duplicates on re-render
+    if (window.ganttPointerUpHandler) {
+      document.removeEventListener('pointerup', window.ganttPointerUpHandler);
+    }
+    
+    // Add pointerup listener to commit buffered drag updates (prevents freeze during drag)
+    // Use pointerup (not mouseup) to support mouse, touch, and pen input
+    // Attach to document (not container) to catch release even if pointer moves outside
+    window.ganttPointerUpHandler = async function() {
+      if (!ganttIsDragging || ganttDragBuffer.size === 0) {
+        ganttIsDragging = false;
+        return;
+      }
+      
+      console.log('[Gantt] Drag ended, committing', ganttDragBuffer.size, 'buffered updates');
+      
+      try {
+        // Get session ID
+        const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+        if (!session_id) {
+          console.warn('[Gantt] No session ID, skipping batch update');
+          ganttDragBuffer.clear();
+          ganttIsDragging = false;
+          return;
+        }
+        
+        // Collect all buffered updates
+        const updates = Array.from(ganttDragBuffer.values());
+        
+        // Send batch update to server
+        const response = await fetch('/api/timeline/update_tasks_batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: session_id,
+            updates: updates,
+            hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
+          })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          console.log('[Gantt] Batch update successful:', result.updated_count, 'tasks updated');
+          // TODO: Refresh pricing table with result.totals if needed
+        } else {
+          console.warn('[Gantt] Batch update failed:', await response.text());
+        }
+      } catch (error) {
+        console.error('[Gantt] Error in batch update:', error);
+      } finally {
+        // Clear buffer and reset dragging flag
+        ganttDragBuffer.clear();
+        ganttIsDragging = false;
+      }
+    };
+    
+    document.addEventListener('pointerup', window.ganttPointerUpHandler);
     
     // Apply custom classes for department colors and critical path
     setTimeout(() => {
