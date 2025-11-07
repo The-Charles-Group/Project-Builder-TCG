@@ -1,0 +1,104 @@
+Fix it: exact changes to tell Replit to make
+
+Below are “search → replace” level edits that will correct durations and make hours look right in Workfront.
+
+1) Stop inflating “DurationHours” with PlannedHours; honor business time when computing Finish
+
+File: your main export module (where the code block “# Calculate task schedules” lives). I’m referencing the snippet around duration_hours = max(...) and end_date = start_date + datetime.timedelta(hours=duration_hours).
+
+Replace this:
+
+duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+end_date = start_date + datetime.timedelta(hours=duration_hours)
+
+
+With this:
+
+# Duration is the *time window*, not the planned effort
+duration_hours = max(1.0, r["Duration"] * hours_per_day)  # keep at least 1h windows if needed
+
+def add_business_minutes(dt, minutes):
+    # uses the same BUS_BLOCKS and is_business_day that you already define
+    rem = int(minutes)
+    cur = dt
+    from datetime import datetime as _dt, timedelta as _td
+    def _in_block(t): 
+        return any(a <= t < b for a,b in BUS_BLOCKS)
+    while rem > 0:
+        # advance to next working minute if needed
+        if not is_business_day(cur.date()) or not _in_block(cur.time()):
+            # jump to next valid block start (today if later, else next business day)
+            moved = False
+            for a,b in BUS_BLOCKS:
+                if cur.time() < a and is_business_day(cur.date()):
+                    cur = _dt.combine(cur.date(), a); moved = True; break
+            if not moved:
+                d = cur.date() + datetime.timedelta(days=1)
+                while not is_business_day(d):
+                    d += datetime.timedelta(days=1)
+                cur = _dt.combine(d, BUS_BLOCKS[0][0])
+            continue
+        # within a working block: consume up to end of block or rem
+        for a,b in BUS_BLOCKS:
+            if a <= cur.time() < b:
+                can = int((_dt.combine(cur.date(), b) - cur).total_seconds() // 60)
+                step = min(rem, can)
+                cur += _td(minutes=step)
+                rem -= step
+                break
+    return cur
+
+end_date = add_business_minutes(start_date, int(duration_hours * 60))
+
+2) Recompute each task’s Duration from the Start/Finish span only (don’t “max” it)
+
+File: same module, in the block labeled “# 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)”.
+
+Replace this:
+
+sched["DurationHours"] = max(sched.get("DurationHours", 0), span_min / 60.0)
+
+
+With this:
+
+# Duration is exactly the business-time span between Start and Finish
+sched["DurationHours"] = max(0.0, span_min / 60.0)
+
+
+After 1) and 2): a one‑day task will have Duration=PT480M (8h window). If a task needs 16h of effort, that stays in Work and will be reflected as Units=2.0 (200% load) for the assigned resource instead of silently doubling the duration.
+
+3) Keep assignments mathematically consistent and explicit
+
+In the Assignments writer (you already compute Units = work_min / dur_min in the XML writer) make sure the number is emitted with fixed precision and clamped to a reasonable band. You already do the computation here:
+
+Change to:
+
+units = 0 if dur_min == 0 else work_min / dur_min
+units = max(0.05, min(units, 2.0))
+SubElement(assignment, "Units").text = f"{units:.4f}"
+
+
+(This prevents float quirks like “1.33333333333”.)
+
+4) Keep task Duration snapped to Workfront’s 8‑hour day blocks (you already do this)
+
+You’ve got this block in the Task writer; leave it as‑is (it’s good):
+
+dur_minutes = ((dur_minutes + 479) // 480) * 480
+
+5) Do not let PlannedHours inflate Duration upstream
+
+Anywhere PlannedHours was being used to increase the time window, remove that coupling. Planned hours should change Work, not Duration. The offending line is the max(..., r["PlannedHours"]) we removed in step 1.
+
+What will look correct after this
+
+A 1‑day task with 16 planned hours for one person will export as:
+
+Duration=PT480M (8h window)
+
+Work=PT960M (16h effort)
+
+Assignment Units=2.0000 (200% load)
+This matches how a seasoned PM would express “we’re packing extra effort into the same window” rather than silently stretching the schedule.
+
+Your earlier issues with Units=100 are resolved in this file (I see Units=1.0000 now), but Units are still 1.0 because Duration was inflated to match Work (960/960). Fixes above will produce the expected >1.0 Units where appropriate.
