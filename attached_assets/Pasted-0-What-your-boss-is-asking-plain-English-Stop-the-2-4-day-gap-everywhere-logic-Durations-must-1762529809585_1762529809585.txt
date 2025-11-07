@@ -1,0 +1,232 @@
+0) What your boss is asking (plain English)
+
+Stop the “2–4 day gap everywhere” logic. Durations must be estimated from scope (hours & complexity) and overlaps must be SS + lag like a real PM would do—not “everything starts together and lasts 2–4 days.”
+
+Components shouldn’t all sit on Day 0 in parallel or all be fully serial; they should overlap with typed dependencies (FS, SS, FF, SF) and lags that make sense for the work.
+
+Assignments must carry real work hours, not show 0 Hours in Workfront.
+
+The current XML writer emits FS with 0 lag for all links (see the writer where we hard‑code Type=1 and LinkLag=0), which matches the complaint.
+Also, components/tasks are built with simple sequential deps and fixed small default durations by task group (often 1 day), which produces the “everything in 2–4 days” smell.
+
+CHANGE‑SET A — Let dependencies carry Type and Lag
+
+Goal: Allow FS/SS/FF/SF with ±Nd and write these correctly into MSPDI for Workfront.
+
+Parse typed deps when building edges
+In the MSPDI converter, we currently build normalized_edges as simple (pred, succ) pairs; change this to carry 4‑tuples (pred, succ, dep_type, lag_days) and parse the Dependencies column if a row contains tokens like:
+
+1.2                 -> default FS+0
+1.2 FS+0d           -> explicit FS
+1.3 SS+3d           -> start-to-start with 3-day lag
+1.4 FF-1d           -> finish-to-finish with -1 day
+
+
+You’ll see where we append normalized_edges now as a 2‑tuple; update it to hold type/lag and preserve them during WBS rewrites (summary→leaf).
+
+Write Type + Lag in the XML
+Replace the hard‑coded block:
+
+SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
+SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
+SubElement(pred_link, "CrossProject").text = "0"
+SubElement(pred_link, "LinkLag").text = "0"
+SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
+
+
+with logic that maps the parsed type:
+
+MSPDI_DEP = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
+SubElement(pred_link, "Type").text = str(MSPDI_DEP[dep_type])    # dep_type in {"FS","SS","FF","SF"}
+# Lag in tenths of minutes; keep LagFormat=7 (Days)
+lag_tenths = int(lag_days * 8 * 60 * 10)  # 1 day = 8h = 480 min = 4800 tenths
+SubElement(pred_link, "LinkLag").text = str(lag_tenths)
+SubElement(pred_link, "LagFormat").text = "7"
+
+
+This change goes exactly where we currently set Type=1 & LinkLag=0 in the converter’s predecessor writer.
+
+Why: Workfront consumes MSPDI correctly when we set the Type and LinkLag; right now everything is FS+0, which eliminates overlap.
+
+CHANGE‑SET B — Produce realistic durations from hours + team capacity
+
+Goal: Stop using tiny fixed durations; convert hours → duration with reasonable parallelism.
+
+Where we build WBS rows and set Duration_Days from the task‑group table (often 1), update to:
+
+For leaf tasks (the rows that end up as actual tasks, not summaries), compute:
+
+hours = sum(role_hours_for_task)
+capacity_hours_per_day = 6.0 to 7.0 (focus factor on an 8h day) * expected_concurrency
+expected_concurrency = min(#roles_on_task, 2)   # cap to avoid fantasy parallelism
+duration_days = ceil(hours / capacity_hours_per_day)
+
+
+For component rows (summary), set Duration_Days to the envelope of its children (max path), not a sum of 1‑day placeholders.
+
+You’ll find where component & task durations are currently set with int(duration_by_tg.get(tg, 1)) and comp_duration = sum(...). Replace this “fixed by tg” with the capacity‑based calculation above.
+
+(Keep the existing “snap to 480‑minute day blocks” for Workfront compatibility; the writer already does this for task Duration.)
+
+CHANGE‑SET C — Inject PM‑style overlaps (SS + lag) instead of static gaps
+
+Goal: Add rule‑based overlaps that a senior PM would apply.
+
+In the WBS builder (same area where rows and Dependencies are assembled for components and their tasks), keep your existing FS chains but add these extra SS links with lags (examples you can start with):
+
+Discovery/Research  → Strategy             : SS + 2d
+Strategy            → Creative/Design      : SS + min( max(1, round(0.3 * Strategy_dur)), 5 )
+Creative/Design     → Production/Build     : SS + min( max(2, round(0.5 * Design_dur)), 10 )
+Production/Build    → QA/Review/Testing    : SS + min( max(1, round(0.2 * Prod_dur)), 5 )
+QA/Review/Testing   → Launch/Handoff       : FS + 0d   (leave as a gate)
+
+
+Where to hook it:
+
+At the point you’re building each component’s per‑month tasks and already calculate wbs_task + base offsets, add a small helper that classifies task names into coarse groups (research/strategy/design/build/qa/launch) and emits extra Dependencies entries with type+lag tokens (e.g., "1.2 SS+3d"). That will flow through the parser you added in Change‑set A.
+See the current component/task assembly and default sequential dependency authoring here to anchor the change.
+
+Notes
+
+These are additional edges (not replacements). The scheduler will respect the tightest constraint.
+
+This immediately avoids “stack 10 components on day 1”; some start later via SS+lag from their upstreams.
+
+CHANGE‑SET D — Ensure Assignments show non‑zero Work in Workfront
+
+Goal: Fix the “Assignments = 0 Hours” column in your Workfront view.
+
+Two things:
+
+Emit Work on each <Assignment>
+In the writer we already compute work_hours, work_min, and units, but older code only wrote Units. Make sure we also write Work:
+
+SubElement(assignment, "Units").text = str(units)
+SubElement(assignment, "Work").text = f"PT{int(work_min)}M"  # <-- add this
+
+
+(We have a patch block that includes this—ensure it’s in your live file.)
+
+Emit Cost from stored rate
+Use the uid_to_rate you collect from scenario pricing (already in scope) and write:
+
+cost = work_hours * rate
+SubElement(assignment, "Cost").text = f"{cost:.2f}"
+
+
+(That logic is already present in the newer block—keep it.)
+
+Resources should have a StandardRate
+The resource writer already sets StandardRate per role; keep that (Workfront will use it).
+
+Merge role rows → single task with multiple assignees
+When calling the exporter, turn on merging so role rows become Assignments on the parent leaf task. Switch the export endpoints to:
+
+merge_identical_children=True, allow_unassigned=True
+
+
+Right now the endpoints call the converter with merge_identical_children=False; flip that to get real multi‑resource tasks and non‑zero assignment work. (Update all export entry points.)
+
+What to change (copy/paste for the dev)
+
+1) In the MSPDI writer (the block that adds <PredecessorLink>)
+Replace the hard‑coded FS + 0 lag section with:
+
+# mapping once near the top of the function
+MSPDI_DEP = {"FF": 0, "FS": 1, "SF": 2, "SS": 3}
+
+# ...
+for pred_wbs, succ_wbs, dep_type, lag_days in normalized_edges:
+    pred_uid = wbs_to_uid.get(pred_wbs)
+    succ_uid = wbs_to_uid.get(succ_wbs)
+    if not (pred_uid and succ_uid):
+        continue
+
+    for task_elem in tasks_elem.findall("Task"):
+        uid_elem = task_elem.find("UID")
+        if uid_elem is None or uid_elem.text != str(succ_uid):
+            continue
+
+        pred_link = SubElement(task_elem, "PredecessorLink")
+        SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
+        SubElement(pred_link, "Type").text = str(MSPDI_DEP.get(dep_type, 1))  # default FS
+        SubElement(pred_link, "CrossProject").text = "0"
+
+        # Lag in tenths of minutes, keep LagFormat=7 (Days)
+        lag_tenths = int(float(lag_days) * 8 * 60 * 10)
+        SubElement(pred_link, "LinkLag").text = str(lag_tenths)
+        SubElement(pred_link, "LagFormat").text = "7"
+        break
+
+
+(You’re replacing the current Type="1" + LinkLag="0" block shown here.）
+
+2) Where we currently append edges
+Change normalized_edges.append((pred, succ)) to append four-tuple (pred, succ, dep_type, lag_days) and propagate type/lag through any WBS rewrites. (This is in the section that builds normalized_edges now as 2‑tuples.)
+
+3) Add a tiny dependency parser
+When reading each row’s Dependencies string, split on commas/semicolons and accept tokens like "{WBS} [FS|SS|FF|SF][+/-Nd]". Default to FS+0 if not provided. Store these into init_edges as (pred_wbs, this_wbs, type, lag).
+
+4) Replace the fixed duration snippets
+In the WBS builder (component & task row assembly), replace places where we set Duration_Days from a small fixed TG value with:
+
+hours = sum(role_hours_for_task)  # you already have role rows here
+parallelism = min(len(roles_on_task), 2) or 1
+cap = 7.0 * parallelism
+duration_days = max(1, math.ceil(hours / cap))
+
+
+…and for components, compute duration from the envelope (critical path of its child tasks), not the sum of tiny TG placeholders. The current fixed duration calls live where you set dur = int(duration_by_tg.get(tg, 1)) and comp_duration = sum(...)—replace those.
+
+5) Inject PM overlap rules
+Right after you enumerate per‑month tasks within each component, add a helper that classifies tasks by name (research/strategy/design/build/qa/launch) and emits extra SS links per the rules above by adding tokens to each task’s Dependencies string (e.g., "1.2 SS+3d"). That will flow through your new parser and down to MSPDI. Hook this in the same place you currently assign the default sequential dependency strings for component and task rows.
+
+6) Make sure Assignments emit real Work
+In the assignment writer, keep:
+
+SubElement(assignment, "Units").text = str(units)
+SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+SubElement(assignment, "Cost").text = f"{cost:.2f}"
+
+
+We already compute work_min and cost in the newer block; don’t regress.
+
+7) Flip the export flags so role rows merge
+Change your export endpoints to call the converter with:
+
+merge_identical_children=True, allow_unassigned=True
+
+
+These endpoints still have merge_identical_children=False—switch them so Workfront sees one task with multiple Assignments instead of many micro‑tasks.
+
+Quick review of your latest XML
+
+Resources: Standard calendar and StandardRate per role look good (Workfront‑friendly).
+
+Tasks & Durations: The writer already snaps durations to whole days (480 min), which Workfront prefers. Keep that.
+
+Dependencies: As of now they’re emitted as FS+0 because of the hard‑code (Type=1, LinkLag=0). This is precisely what your boss flagged—fix with Change‑set A.
+
+Assignments: If your current branch doesn’t include the Work element, Workfront will display 0 Hours in the Assignments column. Ensure the Work line is present (Change‑set D).
+
+Sanity checks after you patch
+
+Import into Workfront and spot‑check a few tasks:
+
+A couple of “Strategy → Design” tasks should show SS with a lag (3–5d).
+
+A “QA → Launch” should remain FS with 0d.
+
+Assignments should display non‑zero Hours.
+
+Open the XML and verify a sample predecessor link looks like:
+
+<PredecessorLink>
+  <PredecessorUID>…</PredecessorUID>
+  <Type>3</Type>            <!-- SS -->
+  <LinkLag>14400</LinkLag>  <!-- e.g., 3 days * 4800 -->
+  <LagFormat>7</LagFormat>  <!-- days -->
+</PredecessorLink>
+
+
+Confirm daily granularity remains 480 minutes (we already set MinutesPerDay/Week and DurationFormat=7).
