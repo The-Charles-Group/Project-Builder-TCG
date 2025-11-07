@@ -152,6 +152,74 @@ def link_for(pred_task_name: str, succ_task_name: str, pred_component: Optional[
     return (1, 0)  # FS + 0 days
 
 
+def parse_dependency_spec(dep_str):
+    """
+    Parse dependency specification like 'SS+2d', 'FS+0', 'FF-1d', 'SF+8h'
+    
+    Returns:
+        tuple: (mspdi_type_code, lag_minutes)
+        
+    Examples:
+        'SS+2d' -> ('3', 960)  # Start-to-Start with 2-day lag
+        'FS+0' -> ('1', 0)     # Finish-to-Start with no lag
+        'FF-1d' -> ('0', -480) # Finish-to-Finish with 1-day lead
+        'SF+8h' -> ('2', 480)  # Start-to-Finish with 8-hour lag
+    """
+    # MSPDI type codes: FS=1, SS=3, FF=0, SF=2
+    TYPE_MAP = {"FS": "1", "SS": "3", "FF": "0", "SF": "2"}
+    LAG_UNITS = {"H": 60, "D": 480, "M": 1}  # hours, days, minutes (uppercase for matching)
+    
+    # Default to FS+0 if parsing fails
+    dep_str = str(dep_str).strip().upper()
+    if not dep_str:
+        return ("1", 0)
+    
+    # Extract type (FS, SS, FF, SF)
+    dep_type = "FS"  # default
+    for t in TYPE_MAP.keys():
+        if dep_str.startswith(t):
+            dep_type = t
+            dep_str = dep_str[len(t):]
+            break
+    
+    # Extract lag (e.g., '+2d', '-1d', '+8h')
+    lag_minutes = 0
+    if dep_str:
+        # Parse sign
+        sign = 1
+        if dep_str[0] == '+':
+            dep_str = dep_str[1:]
+        elif dep_str[0] == '-':
+            sign = -1
+            dep_str = dep_str[1:]
+        
+        # Parse value and unit
+        if dep_str:
+            # Extract numeric part
+            num_str = ""
+            unit = "D"  # default to days
+            for char in dep_str:
+                if char.isdigit() or char == '.':
+                    num_str += char
+                elif char in LAG_UNITS:
+                    unit = char
+                    break
+            
+            if num_str:
+                lag_value = float(num_str)
+                lag_minutes = int(sign * lag_value * LAG_UNITS[unit])
+    
+    return (TYPE_MAP[dep_type], lag_minutes)
+
+
+# Test cases for parse_dependency_spec function
+# These demonstrate the expected behavior:
+# parse_dependency_spec("SS+2d") should return ("3", 960)  # Start-to-Start with 2-day lag
+# parse_dependency_spec("FS+0") should return ("1", 0)     # Finish-to-Start with no lag
+# parse_dependency_spec("FF-1d") should return ("0", -480) # Finish-to-Finish with 1-day lead
+# parse_dependency_spec("SF+8h") should return ("2", 480)  # Start-to-Finish with 8-hour lag
+
+
 def convert_excel_to_mspdi(
     input_xlsx: str,
     output_xml: str,
@@ -905,7 +973,10 @@ def convert_excel_to_mspdi(
                         if task_start is None:
                             task_start = current_date
                         if task_end is None:
-                            task_end = add_business_days(task_start, duration_days)
+                            # Calculate end by adding working minutes (480 per business day)
+                            # This keeps tasks within same day instead of rolling to next morning
+                            duration_minutes_to_add = duration_days * 480  # 480 minutes = 8-hour business day
+                            task_end = add_business_minutes(task_start, duration_minutes_to_add)
                         
                         # FIX: Preserve original WBS_ID from DataFrame for dependency lookup
                         original_task_wbs_id = None
@@ -1451,14 +1522,17 @@ def convert_excel_to_mspdi(
                         break
                     if other_data["department"] in dept_dependencies[department]:
                         if other_data["deliverable"] == deliverable:  # Same deliverable
-                            # Add dependency with Start-to-Start relationship
+                            # Parse dependency spec (e.g., 'SS+1d', 'FS+0', 'FF-1d')
+                            # For now, use default SS+1d since we don't have spec from DataFrame yet
+                            dep_spec = "SS+1d"  # TODO: Get from DataFrame Dependencies column
+                            dep_type_code, lag_minutes = parse_dependency_spec(dep_spec)
+                            
                             pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
                             ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
-                            ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.START_TO_START.value)
+                            ET.SubElement(pred_link, "{%s}Type" % ns).text = dep_type_code
                             ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                            # FIX ISSUE 4: Use 480 working minutes (1 day × 480), not 4800 calendar minutes
-                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "480"  # 1 day lag in working minutes
-                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
+                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_minutes)
+                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days format
                             break
     
     # Create Assignments container with enhanced resource assignments
@@ -1730,6 +1804,70 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(root, "{%s}Assignments" % ns)
     
     return root
+
+
+# Business calendar configuration
+# Two working blocks per day: 9am-12pm (morning) and 1pm-6pm (afternoon)
+BUS_BLOCKS = [(datetime.min.time().replace(hour=9, minute=0), datetime.min.time().replace(hour=12, minute=0)),
+              (datetime.min.time().replace(hour=13, minute=0), datetime.min.time().replace(hour=18, minute=0))]
+
+
+def is_business_day(date) -> bool:
+    """Check if a date is a business day (Monday-Friday)"""
+    if isinstance(date, datetime):
+        date = date.date()
+    return date.weekday() < 5  # Monday=0, Friday=4
+
+
+def add_business_minutes(dt, minutes):
+    """
+    Add working minutes to a datetime, skipping non-business time.
+    Uses BUS_BLOCKS: [(time(9,0), time(12,0)), (time(13,0), time(18,0))]
+    
+    Args:
+        dt: Starting datetime
+        minutes: Number of working minutes to add
+        
+    Returns:
+        Ending datetime after adding working minutes
+    """
+    from datetime import datetime as _dt, timedelta as _td, time
+    
+    def _in_block(t):
+        """Check if time is within any business block"""
+        return any(a <= t < b for a, b in BUS_BLOCKS)
+    
+    rem = int(minutes)
+    cur = dt
+    
+    while rem > 0:
+        # Advance to next working minute if needed
+        if not is_business_day(cur.date()) or not _in_block(cur.time()):
+            # Jump to next valid block start
+            moved = False
+            for a, b in BUS_BLOCKS:
+                if cur.time() < a and is_business_day(cur.date()):
+                    cur = _dt.combine(cur.date(), a)
+                    moved = True
+                    break
+            if not moved:
+                # Move to next business day
+                d = cur.date() + timedelta(days=1)
+                while not is_business_day(d):
+                    d += timedelta(days=1)
+                cur = _dt.combine(d, BUS_BLOCKS[0][0])
+            continue
+        
+        # Within a working block: consume up to end of block or rem
+        for a, b in BUS_BLOCKS:
+            if a <= cur.time() < b:
+                can = int((_dt.combine(cur.date(), b) - cur).total_seconds() // 60)
+                step = min(rem, can)
+                cur += _td(minutes=step)
+                rem -= step
+                break
+    
+    return cur
 
 
 def add_business_days(start_date: datetime, days: int) -> datetime:
