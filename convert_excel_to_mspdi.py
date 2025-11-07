@@ -40,36 +40,83 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
-# GPT-5 PRO FIX 1 & 5: Dependency Rules Table for "Seasoned PM Brain"
+# GPT-5 PRO FIX 1 & 5: Comprehensive Dependency Rules Table for "Seasoned PM Brain"
 # Maps component/task type relationships to (dependency_type, lag_days)
 # MSPDI Type codes: 0=FF, 1=FS, 2=SF, 3=SS
+# Negative lag = lead time, Positive lag = delay
 DEPENDENCY_RULES = {
-    # Research can start 2 days after Discovery begins (SS+2d)
-    ("Discovery", "Research"): (3, 2),  # SS + 2 days
-    ("Discovery", "Strategy"): (3, 2),   # SS + 2 days
+    # === Discovery & Research Phase ===
+    ("Discovery", "Research"): (3, 2),       # SS + 2d: Research can start 2 days after Discovery begins
+    ("Discovery", "Strategy"): (3, 2),       # SS + 2d: Strategy overlaps with Discovery
+    ("Discovery", "Analysis"): (3, 1),       # SS + 1d: Analysis can start shortly after Discovery
+    ("Research", "Strategy"): (1, 0),        # FS + 0d: Strategy waits for Research to finish
+    ("Research", "Analysis"): (3, 1),        # SS + 1d: Analysis can overlap with Research
+    ("Analysis", "Strategy"): (1, 0),        # FS + 0d: Strategy waits for Analysis
     
-    # Copy finishes before Design starts (FS+0d)
-    ("Copy", "Design"): (1, 0),          # FS + 0 days
-    ("Copywriting", "Design"): (1, 0),   # FS + 0 days
+    # === Strategy Phase ===
+    ("Strategy", "Creative"): (1, 0),        # FS + 0d: Creative waits for Strategy
+    ("Strategy", "Design"): (1, 0),          # FS + 0d: Design waits for Strategy
+    ("Strategy", "Copywriting"): (1, 0),     # FS + 0d: Copy waits for Strategy
+    ("Strategy", "Planning"): (1, 0),        # FS + 0d: Planning waits for Strategy
+    ("Strategy", "Development"): (1, 2),     # FS + 2d: Dev starts 2 days after Strategy finishes
+    ("Strategy", "Media"): (1, 1),           # FS + 1d: Media planning starts after Strategy
     
-    # Design finishes before QA starts (FS+0d)
-    ("Design", "QA"): (1, 0),            # FS + 0 days
-    ("Design", "Quality Assurance"): (1, 0),  # FS + 0 days
+    # === Creative & Design Phase ===
+    ("Copywriting", "Design"): (1, 0),       # FS + 0d: Design waits for final copy
+    ("Copy", "Design"): (1, 0),              # FS + 0d: Design waits for copy
+    ("Creative", "Design"): (3, 1),          # SS + 1d: Design can start shortly after Creative begins
+    ("Design", "Development"): (1, 0),       # FS + 0d: Dev waits for Design
+    ("Design", "Production"): (1, 0),        # FS + 0d: Production waits for Design
+    ("Creative", "Production"): (1, 0),      # FS + 0d: Production waits for Creative
+    ("Design", "QA"): (1, 0),                # FS + 0d: QA waits for Design
+    ("Design", "Review"): (1, 0),            # FS + 0d: Review waits for Design
     
-    # Dev can start 1 day after QA begins when Dev is ~20% in (SS+1d)
-    ("Development", "QA"): (3, 1),       # SS + 1 day
-    ("Dev", "Quality Assurance"): (3, 1), # SS + 1 day
+    # === Development Phase ===
+    ("Development", "Testing"): (3, 3),      # SS + 3d: Testing can start when Dev is ~30% in
+    ("Development", "QA"): (3, 3),           # SS + 3d: QA can start when Dev is ~30% in
+    ("Dev", "Quality Assurance"): (3, 3),    # SS + 3d: QA overlaps with Development
+    ("Dev", "Testing"): (3, 3),              # SS + 3d: Testing overlaps with Development
+    ("Development", "Review"): (3, 5),       # SS + 5d: Review can start when Dev is ~50% in
+    ("Development", "Launch"): (1, 2),       # FS + 2d: Launch waits 2 days after Dev finishes
     
-    # Strategy must finish before Creative starts (FS+0d)
-    ("Strategy", "Creative"): (1, 0),    # FS + 0 days
-    ("Strategy", "Design"): (1, 0),      # FS + 0 days
+    # === QA & Testing Phase ===
+    ("QA", "Launch"): (1, 1),                # FS + 1d: Launch waits 1 day after QA finishes
+    ("Testing", "Launch"): (1, 1),           # FS + 1d: Launch waits 1 day after Testing
+    ("Quality Assurance", "Launch"): (1, 1), # FS + 1d: Launch waits after QA
+    ("QA", "Production"): (1, 0),            # FS + 0d: Production waits for QA
+    ("Testing", "Production"): (1, 0),       # FS + 0d: Production waits for Testing
+    ("QA", "Deployment"): (1, 0),            # FS + 0d: Deployment waits for QA
+    ("Testing", "Deployment"): (1, 0),       # FS + 0d: Deployment waits for Testing
     
-    # Creative finishes before Production starts (FS+0d)
-    ("Creative", "Production"): (1, 0),  # FS + 0 days
+    # === Review & Approval Phase ===
+    ("Review", "Approval"): (1, 0),          # FS + 0d: Approval waits for Review
+    ("Review", "Launch"): (1, 1),            # FS + 1d: Launch waits after Review
+    ("Approval", "Launch"): (1, 0),          # FS + 0d: Launch waits for Approval
+    ("Approval", "Production"): (1, 0),      # FS + 0d: Production waits for Approval
+    ("Review", "Production"): (1, 1),        # FS + 1d: Production waits after Review
     
-    # Default fallback patterns
-    ("Analysis", "Design"): (1, 0),      # FS + 0 days
-    ("Planning", "Execution"): (1, 0),   # FS + 0 days
+    # === Media & Content Phase ===
+    ("Media", "QA"): (1, 0),                 # FS + 0d: QA waits for Media
+    ("Content", "Review"): (1, 0),           # FS + 0d: Review waits for Content
+    ("Content", "QA"): (1, 0),               # FS + 0d: QA waits for Content
+    ("Media", "Launch"): (1, 1),             # FS + 1d: Launch waits after Media
+    ("Content", "Production"): (1, 0),       # FS + 0d: Production waits for Content
+    
+    # === Production & Launch Phase ===
+    ("Production", "Launch"): (1, 0),        # FS + 0d: Launch waits for Production
+    ("Production", "Deployment"): (1, 0),    # FS + 0d: Deployment waits for Production
+    ("Deployment", "Launch"): (1, 0),        # FS + 0d: Launch waits for Deployment
+    
+    # === Planning & Execution ===
+    ("Planning", "Execution"): (1, 0),       # FS + 0d: Execution waits for Planning
+    ("Planning", "Development"): (1, 1),     # FS + 1d: Development starts after Planning
+    ("Planning", "Design"): (1, 0),          # FS + 0d: Design waits for Planning
+    
+    # === Common Cross-Phase Dependencies ===
+    ("Strategy", "QA"): (1, 5),              # FS + 5d: QA starts well after Strategy
+    ("Strategy", "Launch"): (1, 10),         # FS + 10d: Launch is far downstream from Strategy
+    ("Discovery", "Launch"): (1, 15),        # FS + 15d: Launch is end of project from Discovery
+    ("Research", "Launch"): (1, 12),         # FS + 12d: Launch is far downstream from Research
 }
 
 
