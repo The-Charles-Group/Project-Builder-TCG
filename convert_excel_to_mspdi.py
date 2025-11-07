@@ -578,8 +578,8 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
         ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1000"  # 10 resources at 100% each
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1000"
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 1.0 = 100% capacity (MSPDI ratio format)
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"  # 1.0 = 100% peak capacity
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
         ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
         ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -611,8 +611,8 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # 100% allocation
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 1.0 = 100% capacity (MSPDI ratio format)
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"  # 1.0 = 100% peak capacity
             ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
             ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
             ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -1696,7 +1696,7 @@ def convert_excel_to_mspdi(
                     ET.SubElement(unassigned_res, "{%s}ID" % ns).text = str(unassigned_uid)
                     ET.SubElement(unassigned_res, "{%s}Name" % ns).text = "Unassigned"
                     ET.SubElement(unassigned_res, "{%s}Type" % ns).text = "1"
-                    ET.SubElement(unassigned_res, "{%s}MaxUnits" % ns).text = "100"
+                    ET.SubElement(unassigned_res, "{%s}MaxUnits" % ns).text = "1"  # 1.0 = 100% capacity (MSPDI ratio format)
                     ET.SubElement(unassigned_res, "{%s}StandardRate" % ns).text = f"{blended_rate or 195:.2f}"
                     ET.SubElement(unassigned_res, "{%s}CalendarUID" % ns).text = "1"
                     department_resources["Unassigned"] = unassigned_uid
@@ -1709,18 +1709,16 @@ def convert_excel_to_mspdi(
             ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
             ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
             
-            # FIX 1: Calculate Units as work/duration ratio (MSPDI expects 1.0 = 100%)
+            # EXPERT SPECIFICATION: Calculate Units as work/duration ratio with proper clamping
+            # units = 0 if dur_min == 0 else min(1.0, round(work_min / dur_min, 4))
+            # MSPDI expects 1.0 = 100%, values >1.0 indicate over-allocation
             duration_elem = task.find("{%s}Duration" % ns)
             if duration_elem is not None and duration_elem.text:
                 dur_minutes = int(duration_elem.text.replace("PT", "").replace("M", ""))
-                units = 0.0 if dur_minutes == 0 else (work_hours * 60) / dur_minutes
+                work_minutes = work_hours * 60
+                units = 0 if dur_minutes == 0 else min(1.0, round(work_minutes / dur_minutes, 4))
             else:
                 units = 1.0  # Default to 100%
-            
-            # USER INSTRUCTION: Clamp to 0.1-1.0 range for single-resource roles
-            # 0.1 (10% min) to 1.0 (100% max) per PM best practices
-            # This prevents unrealistic units values for single resources
-            units = max(0.1, min(units, 1.0))
             
             ET.SubElement(assign, "{%s}Units" % ns).text = f"{units:.4f}"
             ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
