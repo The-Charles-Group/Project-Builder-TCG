@@ -1,0 +1,112 @@
+Direct, copy‑paste instructions to give the Replit agent
+
+Goal: Make the MSPDI export Workfront‑safe without changing your scheduling logic.
+
+A) Roll up Start/Finish for every summary task (not just UID=1)
+
+In convert_excel_to_mspdi.py, right after you finish writing <Tasks> (you already do a post‑pass that finds UID==1 and rolls that up), generalize it to all summary tasks.
+
+Tell Replit to add this post‑pass:
+
+# After building the <Tasks> tree in convert_excel_to_mspdi(...)
+# Compute Start/Finish for every summary task from its children
+
+from datetime import datetime
+
+def _parse_dt(s):
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
+
+def _format_dt(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%S")
+
+if tasks_elem is not None:
+    # Build parent -> [child Task elements] map using WBS prefix
+    all_tasks = tasks_elem.findall("Task")
+    wbs_to_task = {}
+    for t in all_tasks:
+        wbs = (t.findtext("WBS") or "").strip()
+        if wbs:
+            wbs_to_task[wbs] = t
+
+    # For each summary, collect direct children by WBS prefix
+    for t in all_tasks:
+        if t.findtext("Summary") == "1":
+            wbs = (t.findtext("WBS") or "").strip()
+            # children are tasks whose ParentWBS == this WBS, or WBS startswith this + '.'
+            child_starts, child_finishes = [], []
+            for c in all_tasks:
+                cwbs = (c.findtext("WBS") or "").strip()
+                if cwbs and cwbs.startswith(wbs + ".") and c.findtext("Summary") in ("0", "1"):
+                    cs = c.findtext("Start")
+                    cf = c.findtext("Finish")
+                    if cs and cf:
+                        child_starts.append(cs)
+                        child_finishes.append(cf)
+
+            if child_starts and child_finishes:
+                start_elem = t.find("Start") or SubElement(t, "Start")
+                finish_elem = t.find("Finish") or SubElement(t, "Finish")
+                start_elem.text = min(child_starts)
+                finish_elem.text = max(child_finishes)
+
+            # Summary rows should not carry nonzero Work/Duration
+            work = t.find("Work") or SubElement(t, "Work")
+            work.text = "PT0M"
+
+
+This mirrors the existing project‑summary roll‑up you already have for UID=1, but applies it across the board. (Right now your roll‑up is gated on uid_elem.text == "1", which only touches the project summary. )
+
+B) Guarantee that every Task node has both <Start> and <Finish>
+
+Before writing the final XML string, add a quick sanity sweep:
+
+# Sanity: ensure every Task has Start and Finish
+for t in tasks_elem.findall("Task"):
+    if t.find("Start") is None:
+        SubElement(t, "Start").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+    if t.find("Finish") is None:
+        # default to Start for milestones, otherwise Start + snapped duration
+        start_s = t.findtext("Start")
+        dur_s = t.findtext("Duration") or "PT0M"
+        # if Duration is 0 (milestone), Finish = Start
+        SubElement(t, "Finish").text = start_s
+
+
+This makes the file resilient even if a summary slips through.
+
+C) Keep 8‑hour days and 1.0 = 100% resource units (already done)
+
+You’ve standardized the calendar at MinutesPerDay=480 and use day‑formatted durations; keep that.
+
+Ensure resources use MaxUnits=1.0 (not 100). (Your newer exports show the corrected approach in code where resources are emitted with rates; keep that pattern. )
+
+D) Make a “Workfront‑safe mode” toggle (for debugging)
+
+Add a boolean flag like workfront_safe=True. When set:
+
+Strip ExtendedAttributes on tasks/resources while testing imports (you can re‑enable once we’re confident). You can see where these attributes are currently emitted on tasks in the XML.
+
+Clamp Assignment Units to ≤1.0 for safety (Workfront is pickier than MS Project). Your assignment build already computes Units; just wrap it with units = min(1.0, max(0.05, units)) before writing.
+
+E) Add a tiny export‑time validator so we catch this before upload
+
+Right after writing the XML but before returning it:
+
+# Minimal MSPDI sanity checks
+problems = []
+for t in tasks_elem.findall("Task"):
+    uid = t.findtext("UID")
+    name = t.findtext("Name") or ""
+    is_summary = t.findtext("Summary") == "1"
+    start = t.findtext("Start")
+    finish = t.findtext("Finish")
+
+    if not start or not finish:
+        problems.append(f"Task UID {uid} '{name}' missing Start/Finish")
+
+    work = t.findtext("Work") or "PT0M"
+    if is_summary and work != "PT0M":
+        problems.append(f"Summary UID {uid} '{name}' has nonzero Work: {work}")
+
+if problems:
+    raise ValueError("MSPDI validation failed:\n" + "\n".join(problems))
