@@ -3042,6 +3042,27 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
                 comp_hours_month_display = int(base_comp_hours_display.get(comp, 0))
                 comp_hours_total_display = comp_hours_month_display * months if months else comp_hours_month_display
+                
+                # CHANGE 4: Compute capacity-based durations using per-month target hours FIRST
+                # Per-month target hours for each task group
+                tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
+                tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
+                
+                import math
+                capacity_durations = {}
+                for tg in tg_in_comp:
+                    target_hours = float(tg_target_month.get(tg, 0))
+                    if target_hours > 0:
+                        hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
+                        num_roles = len(hrs_role_df) if not hrs_role_df.empty else 1
+                        expected_concurrency = min(num_roles, 2)
+                        capacity_hours_per_day = 7.0 * expected_concurrency
+                        capacity_durations[tg] = max(1, math.ceil(target_hours / capacity_hours_per_day))
+                    else:
+                        capacity_durations[tg] = int(duration_by_tg.get(tg, 1))
+                
+                # CHANGE 4: Component duration = envelope (max path) using capacity-based durations
+                comp_duration = max((offset_by_tg[tg] - comp_offset + capacity_durations.get(tg, 1)) for tg in tg_in_comp) if tg_in_comp else 1
 
                 # Compute component-level price in Per_Resource mode (band-aware), monthly then scale
                 if pricing_mode == "Flat_Blended":
@@ -3072,27 +3093,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 })
 
                 # --- Tasks under the component ---
-                # Per-month target hours for each task group, then repeat Month 01..N
-                tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
-                tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
-                
-                # CHANGE 4: Compute capacity-based durations using per-month target hours
-                import math
-                capacity_durations = {}
-                for tg in tg_in_comp:
-                    target_hours = float(tg_target_month.get(tg, 0))
-                    if target_hours > 0:
-                        hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
-                        num_roles = len(hrs_role_df) if not hrs_role_df.empty else 1
-                        expected_concurrency = min(num_roles, 2)
-                        capacity_hours_per_day = 7.0 * expected_concurrency
-                        capacity_durations[tg] = max(1, math.ceil(target_hours / capacity_hours_per_day))
-                    else:
-                        capacity_durations[tg] = int(duration_by_tg.get(tg, 1))
-                
-                # CHANGE 4: Component duration = envelope (max path) using capacity-based durations
-                comp_duration = max((offset_by_tg[tg] - comp_offset + capacity_durations.get(tg, 1)) for tg in tg_in_comp) if tg_in_comp else 1
-
+                # (capacity_durations and tg_target_month already computed above before component row)
                 # Build month-by-month repetition
                 total_tasks_per_month = len(tg_in_comp)
                 prev_month_last_wbs = ""  # chain months sequentially per component
