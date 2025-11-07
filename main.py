@@ -7328,10 +7328,11 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             blended_rate=scenario.get("blended_rate")
         )
         
-        # Post-process XML to parallelize identical task names (optional)
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process XML to parallelize identical task names (optional) - DISABLED
         final_xml = output_xml
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml = post_process_xml(output_xml)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml = post_process_xml(output_xml)
 
         return FileResponse(
             final_xml,
@@ -7402,11 +7403,12 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             blended_rate=scenario_a.get("blended_rate")
         )
         
-        # Post-process Scenario A XML
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process Scenario A XML - DISABLED
         final_xml_a = output_xml_a
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml_a = post_process_xml(output_xml_a)
-            temp_files.append(final_xml_a)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml_a = post_process_xml(output_xml_a)
+        #     temp_files.append(final_xml_a)
         
         # Create XML for Scenario B
         temp_xlsx_b = f"{base}_B_temp.xlsx"
@@ -7433,11 +7435,12 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             blended_rate=scenario_b.get("blended_rate")
         )
         
-        # Post-process Scenario B XML
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process Scenario B XML - DISABLED
         final_xml_b = output_xml_b
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml_b = post_process_xml(output_xml_b)
-            temp_files.append(final_xml_b)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml_b = post_process_xml(output_xml_b)
+        #     temp_files.append(final_xml_b)
         
         # Create zip file with both XMLs
         import zipfile
@@ -7515,11 +7518,12 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             rate_band=scenA.get("rate_band", "Standard_US"),
             blended_rate=scenA.get("blended_rate")
         )
-        # Post-process Scenario A XML
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process Scenario A XML - DISABLED
         final_xml_a = out_xml_a
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml_a = post_process_xml(out_xml_a)
-            temp_files.append(final_xml_a)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml_a = post_process_xml(out_xml_a)
+        #     temp_files.append(final_xml_a)
         xml_files.append(("Scenario_A.xml", final_xml_a, stats_a))
 
         # B
@@ -7539,11 +7543,12 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             rate_band=scenB.get("rate_band", "Standard_US"),
             blended_rate=scenB.get("blended_rate")
         )
-        # Post-process Scenario B XML
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process Scenario B XML - DISABLED
         final_xml_b = out_xml_b
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml_b = post_process_xml(out_xml_b)
-            temp_files.append(final_xml_b)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml_b = post_process_xml(out_xml_b)
+        #     temp_files.append(final_xml_b)
         xml_files.append(("Scenario_B.xml", final_xml_b, stats_b))
 
         # C
@@ -7563,11 +7568,12 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             rate_band=scenC.get("rate_band", "Standard_US"),
             blended_rate=scenC.get("blended_rate")
         )
-        # Post-process Scenario C XML
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process Scenario C XML - DISABLED
         final_xml_c = out_xml_c
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml_c = post_process_xml(out_xml_c)
-            temp_files.append(final_xml_c)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml_c = post_process_xml(out_xml_c)
+        #     temp_files.append(final_xml_c)
         xml_files.append(("Scenario_C.xml", final_xml_c, stats_c))
 
         # Zip all 3
@@ -7667,10 +7673,11 @@ def _export_single_scenario_xml(
             blended_rate=scenario.get("blended_rate")
         )
         
-        # Post-process XML to parallelize identical task names (optional)
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process XML to parallelize identical task names (optional) - DISABLED
         final_xml = output_xml
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml = post_process_xml(output_xml)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml = post_process_xml(output_xml)
         
         return final_xml
     
@@ -10486,10 +10493,11 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             blended_rate=scenario.get("blended_rate")
         )
         
-        # Post-process XML if parallelization is enabled
+        # FIX 2: Disable post_process_xml to prevent Units inflation
+        # Post-process XML if parallelization is enabled - DISABLED
         final_xml = output_xml
-        if PARALLELIZE_IDENTICAL_NAMES:
-            final_xml = post_process_xml(output_xml)
+        # if PARALLELIZE_IDENTICAL_NAMES:
+        #     final_xml = post_process_xml(output_xml)
         
         return FileResponse(
             final_xml,

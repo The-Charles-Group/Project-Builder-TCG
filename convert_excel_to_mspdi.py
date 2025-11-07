@@ -949,8 +949,19 @@ def convert_excel_to_mspdi(
                                 business_days += 1
                             current_check_date += timedelta(days=1)
                         
-                        # Duration in working minutes = business_days × 480 (MinutesPerDay)
-                        duration_minutes = max(business_days * 480, 480)  # Minimum 1 day (480 minutes)
+                        # FIX 3: Duration calculation - preserve sub-day tasks instead of rounding up
+                        # Calculate duration in working minutes = business_days × 480 (MinutesPerDay)
+                        duration_minutes = business_days * 480
+                        
+                        # Only round to full days (480 min) if duration is already >= 1 day
+                        # This preserves sub-day tasks (2h, 4h) instead of inflating them to 8h
+                        if duration_minutes >= 480:
+                            duration_minutes = ((duration_minutes + 479) // 480) * 480
+                        elif duration_minutes < 60:
+                            # Ensure minimum of 1 hour (60 minutes) for very short tasks
+                            duration_minutes = 60
+                        # else: leave sub-day tasks (60-479 minutes) as-is
+                        
                         ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
                         logging.info(f"[DURATION FIX] Task '{task_name}': {business_days} business days = PT{duration_minutes}M (working minutes)")
                         ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
@@ -1502,7 +1513,16 @@ def convert_excel_to_mspdi(
             ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
             ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
             ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
-            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
+            
+            # FIX 1: Calculate Units as work/duration ratio (MSPDI expects 1.0 = 100%)
+            duration_elem = task.find("{%s}Duration" % ns)
+            if duration_elem is not None and duration_elem.text:
+                dur_minutes = int(duration_elem.text.replace("PT", "").replace("M", ""))
+                units = 0.0 if dur_minutes == 0 else (work_hours * 60) / dur_minutes
+            else:
+                units = 1.0  # Default to 100%
+            
+            ET.SubElement(assign, "{%s}Units" % ns).text = f"{units:.4f}"
             ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
             ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{int(work_hours * 60)}M"
             ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{int(work_hours * 60)}M"
