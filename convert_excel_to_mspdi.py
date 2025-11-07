@@ -394,6 +394,9 @@ def convert_excel_to_mspdi(
     department_resources = {}
     resource_id = 1
     
+    # FIX ISSUE 1: Track max_resource_uid globally to prevent duplicate UIDs
+    max_resource_uid = 0
+    
     # Extract unique departments and roles
     departments = set()
     if "Department" in df.columns:
@@ -427,6 +430,7 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
         
         department_resources[str(dept)] = resource_id
+        max_resource_uid = resource_id  # FIX ISSUE 1: Track highest UID
         resource_id += 1
     
     # Add individual role resources
@@ -468,6 +472,7 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
             
             resource_map[str(role)] = resource_id
+            max_resource_uid = resource_id  # FIX ISSUE 1: Track highest UID
             resource_id += 1
     
     # Create Tasks container
@@ -638,34 +643,10 @@ def convert_excel_to_mspdi(
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             
-            # Add constraint type based on Gantt-sourced dates
-            has_gantt_start = False
-            has_gantt_end = False
-            
-            # Check if Start_Date was successfully parsed from Gantt
-            if not group.empty and "Start_Date" in group.columns:
-                first_row_start = group.iloc[0].get("Start_Date")
-                if pd.notna(first_row_start):
-                    has_gantt_start = True
-            
-            # Check if End_Date was successfully parsed from Gantt
-            if not group.empty and "End_Date" in group.columns:
-                first_row_end = group.iloc[0].get("End_Date")
-                if pd.notna(first_row_end):
-                    has_gantt_end = True
-            
-            # Apply constraint type
-            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
-            if has_gantt_start and has_gantt_end:
-                # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
-                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
-            elif has_gantt_start:
-                # Only start date from Gantt: Must Start On
-                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            # FIX ISSUE 3: DO NOT add constraints to summary tasks (violates MSPDI rules)
+            # Summary tasks auto-calculate dates from children - constraints cause Workfront import errors
+            # Note: Deliverable tasks are summary tasks (Summary=1 is set on line 677)
+            # Constraints will be applied only to leaf tasks (non-summary tasks) below
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
@@ -956,11 +937,22 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
                         ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
                         
-                        # FIX: Calculate Duration from actual time span (Finish - Start), not from hours
-                        # This prevents invalid XML where Duration=PT0M but Start≠Finish (Workfront rejects this)
-                        # Duration = calendar time span, Work = effort hours (different concepts)
-                        duration_minutes = int((task_end - task_start).total_seconds() / 60)
+                        # FIX ISSUE 2: Calculate Duration in WORKING minutes (480 per day), not calendar minutes
+                        # MSPDI requires MinutesPerDay=480 for 8-hour workdays (not 1440 calendar minutes)
+                        # Calculate business days between start and end, then multiply by 480
+                        business_days = 0
+                        current_check_date = task_start.date()
+                        end_check_date = task_end.date()
+                        while current_check_date <= end_check_date:
+                            # Count only weekdays (Monday=0 to Friday=4)
+                            if current_check_date.weekday() < 5:
+                                business_days += 1
+                            current_check_date += timedelta(days=1)
+                        
+                        # Duration in working minutes = business_days × 480 (MinutesPerDay)
+                        duration_minutes = max(business_days * 480, 480)  # Minimum 1 day (480 minutes)
                         ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
+                        logging.info(f"[DURATION FIX] Task '{task_name}': {business_days} business days = PT{duration_minutes}M (working minutes)")
                         ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
                         # FIX: Set Work to PT0M on leaf tasks to prevent double-counting in Workfront
                         # Work will be calculated automatically from Assignment elements per MSPDI standard
@@ -1448,8 +1440,9 @@ def convert_excel_to_mspdi(
                             ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
                             ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.START_TO_START.value)
                             ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "4800"  # 1 day lag (in minutes)
-                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
+                            # FIX ISSUE 4: Use 480 working minutes (1 day × 480), not 4800 calendar minutes
+                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "480"  # 1 day lag in working minutes
+                            ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
                             break
     
     # Create Assignments container with enhanced resource assignments
@@ -1490,8 +1483,9 @@ def convert_excel_to_mspdi(
             if department not in department_resources:
                 resources = root.find("{%s}Resources" % ns)
                 if resources is not None:
+                    # FIX ISSUE 1: Use max_resource_uid + 1 to prevent duplicate UIDs
+                    unassigned_uid = max_resource_uid + 1
                     unassigned_res = ET.SubElement(resources, "{%s}Resource" % ns)
-                    unassigned_uid = len(department_resources) + 1
                     ET.SubElement(unassigned_res, "{%s}UID" % ns).text = str(unassigned_uid)
                     ET.SubElement(unassigned_res, "{%s}ID" % ns).text = str(unassigned_uid)
                     ET.SubElement(unassigned_res, "{%s}Name" % ns).text = "Unassigned"
@@ -1500,6 +1494,7 @@ def convert_excel_to_mspdi(
                     ET.SubElement(unassigned_res, "{%s}StandardRate" % ns).text = f"{blended_rate or 195:.2f}"
                     ET.SubElement(unassigned_res, "{%s}CalendarUID" % ns).text = "1"
                     department_resources["Unassigned"] = unassigned_uid
+                    max_resource_uid = unassigned_uid  # FIX ISSUE 1: Update max_resource_uid
                     logging.info(f"[ASSIGNMENT BACKFILL] Created 'Unassigned' resource (UID={unassigned_uid})")
         
         if department in department_resources:
