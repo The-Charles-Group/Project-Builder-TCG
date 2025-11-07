@@ -157,16 +157,17 @@ def parse_dependency_spec(dep_str):
     Parse dependency specification like 'SS+2d', 'FS+0', 'FF-1d', 'SF+8h'
     
     Returns:
-        tuple: (mspdi_type_code, lag_minutes)
+        tuple: (mspdi_type_code, lag_days)
         
     Examples:
-        'SS+2d' -> ('3', 960)  # Start-to-Start with 2-day lag
-        'FS+0' -> ('1', 0)     # Finish-to-Start with no lag
-        'FF-1d' -> ('0', -480) # Finish-to-Finish with 1-day lead
-        'SF+8h' -> ('2', 480)  # Start-to-Finish with 8-hour lag
+        'SS+2d' -> ('2', 2)  # Start-to-Start with 2-day lag
+        'FS+0' -> ('1', 0)   # Finish-to-Start with no lag
+        'FF-1d' -> ('3', -1) # Finish-to-Finish with 1-day lead
+        'SF+8h' -> ('4', 1)  # Start-to-Finish with 1-day lag (8h rounds to 1d)
     """
-    # MSPDI type codes: FS=1, SS=3, FF=0, SF=2
-    TYPE_MAP = {"FS": "1", "SS": "3", "FF": "0", "SF": "2"}
+    # CRITICAL ERROR #1 FIX: CORRECT MSPDI type codes per standard
+    # FS=1, SS=2, FF=3, SF=4 (NOT the old incorrect values!)
+    TYPE_MAP = {"FS": "1", "SS": "2", "FF": "3", "SF": "4"}
     LAG_UNITS = {"H": 60, "D": 480, "M": 1}  # hours, days, minutes (uppercase for matching)
     
     # Default to FS+0 if parsing fails
@@ -209,7 +210,10 @@ def parse_dependency_spec(dep_str):
                 lag_value = float(num_str)
                 lag_minutes = int(sign * lag_value * LAG_UNITS[unit])
     
-    return (TYPE_MAP[dep_type], lag_minutes)
+    # CRITICAL ERROR #2 FIX: Convert to days (not minutes) for LagFormat=7
+    # LinkLag should be in DAYS when LagFormat=7, not minutes!
+    lag_days = lag_minutes // 480  # Convert to whole days (480 min/day)
+    return (TYPE_MAP[dep_type], lag_days)
 
 
 # Test cases for parse_dependency_spec function
@@ -218,6 +222,100 @@ def parse_dependency_spec(dep_str):
 # parse_dependency_spec("FS+0") should return ("1", 0)     # Finish-to-Start with no lag
 # parse_dependency_spec("FF-1d") should return ("0", -480) # Finish-to-Finish with 1-day lead
 # parse_dependency_spec("SF+8h") should return ("2", 480)  # Start-to-Finish with 8-hour lag
+
+
+# CRITICAL ERROR #3 FIX: Move calendar helper functions BEFORE they are used (line 979)
+# Business calendar configuration
+# Two working blocks per day: 9am-12pm (morning) and 1pm-6pm (afternoon)
+BUS_BLOCKS = [(datetime.min.time().replace(hour=9, minute=0), datetime.min.time().replace(hour=12, minute=0)),
+              (datetime.min.time().replace(hour=13, minute=0), datetime.min.time().replace(hour=18, minute=0))]
+
+
+def is_business_day(date) -> bool:
+    """Check if a date is a business day (Monday-Friday)"""
+    if isinstance(date, datetime):
+        date = date.date()
+    return date.weekday() < 5  # Monday=0, Friday=4
+
+
+def add_business_minutes(dt, minutes):
+    """
+    Add working minutes to a datetime, skipping non-business time.
+    Uses BUS_BLOCKS: [(time(9,0), time(12,0)), (time(13,0), time(18,0))]
+    
+    Args:
+        dt: Starting datetime
+        minutes: Number of working minutes to add
+        
+    Returns:
+        Ending datetime after adding working minutes
+    """
+    from datetime import datetime as _dt, timedelta as _td, time
+    
+    def _in_block(t):
+        """Check if time is within any business block"""
+        return any(a <= t < b for a, b in BUS_BLOCKS)
+    
+    rem = int(minutes)
+    cur = dt
+    
+    while rem > 0:
+        # Advance to next working minute if needed
+        if not is_business_day(cur.date()) or not _in_block(cur.time()):
+            # Jump to next valid block start
+            moved = False
+            for a, b in BUS_BLOCKS:
+                if cur.time() < a and is_business_day(cur.date()):
+                    cur = _dt.combine(cur.date(), a)
+                    moved = True
+                    break
+            if not moved:
+                # Move to next business day
+                d = cur.date() + timedelta(days=1)
+                while not is_business_day(d):
+                    d += timedelta(days=1)
+                cur = _dt.combine(d, BUS_BLOCKS[0][0])
+            continue
+        
+        # Within a working block: consume up to end of block or rem
+        for a, b in BUS_BLOCKS:
+            if a <= cur.time() < b:
+                can = int((_dt.combine(cur.date(), b) - cur).total_seconds() // 60)
+                step = min(rem, can)
+                cur += _td(minutes=step)
+                rem -= step
+                break
+    
+    return cur
+
+
+def add_business_days(start_date: datetime, days: int) -> datetime:
+    """Add business days to a date, skipping weekends"""
+    current = start_date
+    days_added = 0
+    
+    while days_added < days:
+        current += timedelta(days=1)
+        if current.weekday() < 5:  # Monday = 0, Friday = 4
+            days_added += 1
+    
+    return current
+
+
+def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
+    """Calculate business hours between two dates"""
+    if end_date <= start_date:
+        return 0.0
+    
+    current = start_date
+    total_hours = 0.0
+    
+    while current < end_date:
+        if current.weekday() < 5:  # Business day
+            total_hours += 8.0  # 8 hours per business day
+        current += timedelta(days=1)
+    
+    return total_hours
 
 
 def convert_excel_to_mspdi(
@@ -972,6 +1070,23 @@ def convert_excel_to_mspdi(
                         # Fall back to calculated dates if Start_Date/End_Date missing
                         if task_start is None:
                             task_start = current_date
+                            
+                            # USER INSTRUCTION: Align Start to working blocks
+                            # "If a Start equals the end of a work block (e.g., 18:00), advance to the next block's start"
+                            # Ensure task starts at valid business time (09:00), not after hours
+                            from datetime import time as dt_time
+                            if task_start.time() >= dt_time(18, 0) or task_start.time() < dt_time(9, 0):
+                                # Start is outside working hours, move to next business day at 09:00
+                                next_day = task_start.date() + timedelta(days=1)
+                                while not is_business_day(next_day):
+                                    next_day += timedelta(days=1)
+                                task_start = datetime.combine(next_day, dt_time(9, 0))
+                                logging.info(f"[START ALIGNMENT] Moved task start from after-hours to next business day: {task_start.isoformat()}")
+                            elif task_start.time() < dt_time(13, 0) and task_start.time() >= dt_time(12, 0):
+                                # Start is during lunch break (12:00-13:00), move to 13:00
+                                task_start = task_start.replace(hour=13, minute=0, second=0, microsecond=0)
+                                logging.info(f"[START ALIGNMENT] Moved task start from lunch to 13:00: {task_start.isoformat()}")
+                            
                         if task_end is None:
                             # Calculate end by adding working minutes (480 per business day)
                             # This keeps tasks within same day instead of rolling to next morning
@@ -1472,14 +1587,15 @@ def convert_excel_to_mspdi(
                         
                         # Determine dependency type and lag using "seasoned PM" rules
                         link_type, lag_days = link_for(pred_task_name, succ_task_name, pred_component, succ_component)
-                        lag_minutes = int(lag_days * 480)  # Convert days to minutes (480 min/day)
+                        # CRITICAL ERROR #2 FIX: Use lag_days directly, don't multiply by 480
+                        # When LagFormat=7 (Days), LinkLag should be in DAYS, not minutes!
                         
                         # Create PredecessorLink element with proper type and lag
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = str(link_type)  # 0=FF, 1=FS, 2=SF, 3=SS
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = str(link_type)  # 1=FS, 2=SS, 3=FF, 4=SF
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                        ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_minutes)  # Lag in minutes
+                        ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_days)  # Lag in DAYS (not minutes!)
                         ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days format
                         
                         dependencies_count += 1
@@ -1525,13 +1641,13 @@ def convert_excel_to_mspdi(
                             # Parse dependency spec (e.g., 'SS+1d', 'FS+0', 'FF-1d')
                             # For now, use default SS+1d since we don't have spec from DataFrame yet
                             dep_spec = "SS+1d"  # TODO: Get from DataFrame Dependencies column
-                            dep_type_code, lag_minutes = parse_dependency_spec(dep_spec)
+                            dep_type_code, lag_days = parse_dependency_spec(dep_spec)
                             
                             pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
                             ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
                             ET.SubElement(pred_link, "{%s}Type" % ns).text = dep_type_code
                             ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_minutes)
+                            ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = str(lag_days)  # FIXED: Use lag_days directly
                             ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days format
                             break
     
@@ -1601,10 +1717,10 @@ def convert_excel_to_mspdi(
             else:
                 units = 1.0  # Default to 100%
             
-            # GPT-5 PRO FIX 3: Clamp to reasonable range
-            # 0.05 (5% min) to 2.0 (200% max over-allocation)
-            # This prevents unrealistic units values while showing over-allocation
-            units = max(0.05, min(units, 2.0))
+            # USER INSTRUCTION: Clamp to 0.1-1.0 range for single-resource roles
+            # 0.1 (10% min) to 1.0 (100% max) per PM best practices
+            # This prevents unrealistic units values for single resources
+            units = max(0.1, min(units, 1.0))
             
             ET.SubElement(assign, "{%s}Units" % ns).text = f"{units:.4f}"
             ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
@@ -1804,99 +1920,6 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(root, "{%s}Assignments" % ns)
     
     return root
-
-
-# Business calendar configuration
-# Two working blocks per day: 9am-12pm (morning) and 1pm-6pm (afternoon)
-BUS_BLOCKS = [(datetime.min.time().replace(hour=9, minute=0), datetime.min.time().replace(hour=12, minute=0)),
-              (datetime.min.time().replace(hour=13, minute=0), datetime.min.time().replace(hour=18, minute=0))]
-
-
-def is_business_day(date) -> bool:
-    """Check if a date is a business day (Monday-Friday)"""
-    if isinstance(date, datetime):
-        date = date.date()
-    return date.weekday() < 5  # Monday=0, Friday=4
-
-
-def add_business_minutes(dt, minutes):
-    """
-    Add working minutes to a datetime, skipping non-business time.
-    Uses BUS_BLOCKS: [(time(9,0), time(12,0)), (time(13,0), time(18,0))]
-    
-    Args:
-        dt: Starting datetime
-        minutes: Number of working minutes to add
-        
-    Returns:
-        Ending datetime after adding working minutes
-    """
-    from datetime import datetime as _dt, timedelta as _td, time
-    
-    def _in_block(t):
-        """Check if time is within any business block"""
-        return any(a <= t < b for a, b in BUS_BLOCKS)
-    
-    rem = int(minutes)
-    cur = dt
-    
-    while rem > 0:
-        # Advance to next working minute if needed
-        if not is_business_day(cur.date()) or not _in_block(cur.time()):
-            # Jump to next valid block start
-            moved = False
-            for a, b in BUS_BLOCKS:
-                if cur.time() < a and is_business_day(cur.date()):
-                    cur = _dt.combine(cur.date(), a)
-                    moved = True
-                    break
-            if not moved:
-                # Move to next business day
-                d = cur.date() + timedelta(days=1)
-                while not is_business_day(d):
-                    d += timedelta(days=1)
-                cur = _dt.combine(d, BUS_BLOCKS[0][0])
-            continue
-        
-        # Within a working block: consume up to end of block or rem
-        for a, b in BUS_BLOCKS:
-            if a <= cur.time() < b:
-                can = int((_dt.combine(cur.date(), b) - cur).total_seconds() // 60)
-                step = min(rem, can)
-                cur += _td(minutes=step)
-                rem -= step
-                break
-    
-    return cur
-
-
-def add_business_days(start_date: datetime, days: int) -> datetime:
-    """Add business days to a date, skipping weekends"""
-    current = start_date
-    days_added = 0
-    
-    while days_added < days:
-        current += timedelta(days=1)
-        if current.weekday() < 5:  # Monday = 0, Friday = 4
-            days_added += 1
-    
-    return current
-
-
-def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
-    """Calculate business hours between two dates"""
-    if end_date <= start_date:
-        return 0.0
-    
-    current = start_date
-    total_hours = 0.0
-    
-    while current < end_date:
-        if current.weekday() < 5:  # Business day
-            total_hours += 8.0  # 8 hours per business day
-        current += timedelta(days=1)
-    
-    return total_hours
 
 
 if __name__ == "__main__":
