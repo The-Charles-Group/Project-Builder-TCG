@@ -1817,6 +1817,210 @@ def convert_excel_to_mspdi(
     else:
         logging.info("[WORKFRONT VALIDATION] ✅ All non-summary tasks have work hours assigned")
     
+    # =====================================================================
+    # WORKFRONT-SAFE POST-PROCESSING
+    # =====================================================================
+    # 1. Ensure every task has Start and Finish (populate defaults first)
+    # 2. Roll up Start/Finish for ALL summary tasks based on children
+    # 3. Force summary tasks to have Work=PT0M
+    # =====================================================================
+    
+    tasks_elem = root.find("{%s}Tasks" % ns)
+    if tasks_elem is not None:
+        all_tasks = list(tasks_elem.findall("{%s}Task" % ns))
+        
+        # STEP 1: Ensure every task has both Start and Finish elements FIRST
+        # This must happen before roll-up so summaries can aggregate child dates
+        logging.info("[WORKFRONT POST-PROCESS] Ensuring all tasks have Start/Finish dates...")
+        missing_dates_count = 0
+        for t in all_tasks:
+            start_elem = t.find("{%s}Start" % ns)
+            finish_elem = t.find("{%s}Finish" % ns)
+            
+            if start_elem is None:
+                start_elem = ET.SubElement(t, "{%s}Start" % ns)
+                start_elem.text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+                missing_dates_count += 1
+            
+            if finish_elem is None:
+                # Calculate Finish from Start + Duration
+                duration_elem = t.find("{%s}Duration" % ns)
+                dur_text = duration_elem.text if duration_elem is not None else "PT0M"
+                
+                if dur_text == "PT0M":
+                    # Milestone or zero-duration task: Finish = Start
+                    finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
+                    finish_elem.text = start_elem.text
+                else:
+                    # Non-zero duration: calculate Finish from Start + Duration
+                    try:
+                        # Parse duration (format: PT###M for minutes)
+                        dur_minutes = int(dur_text.replace("PT", "").replace("M", ""))
+                        start_dt = datetime.strptime(start_elem.text, "%Y-%m-%dT%H:%M:%S")
+                        
+                        # Calculate finish using business days (8-hour days, 480 min/day)
+                        business_days = dur_minutes / 480
+                        finish_dt = start_dt + timedelta(days=business_days)
+                        
+                        finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
+                        finish_elem.text = finish_dt.strftime("%Y-%m-%dT%H:%M:%S")
+                    except Exception:
+                        # Fallback: use Start if parsing fails
+                        finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
+                        finish_elem.text = start_elem.text
+                
+                missing_dates_count += 1
+        
+        if missing_dates_count > 0:
+            logging.warning(f"[WORKFRONT POST-PROCESS] Added missing Start/Finish to {missing_dates_count} task elements")
+        else:
+            logging.info("[WORKFRONT POST-PROCESS] ✅ All tasks have Start/Finish dates")
+        
+        # STEP 2: Roll up Start/Finish for ALL summary tasks from their children
+        logging.info("[WORKFRONT POST-PROCESS] Rolling up summary task Start/Finish dates...")
+        
+        # Build OutlineLevel map to find parent-child relationships
+        task_hierarchy = {}  # {task_element: {"wbs": str, "level": int, "parent_wbs": str}}
+        for t in all_tasks:
+            wbs = (t.findtext("{%s}WBS" % ns) or "").strip()
+            outline_level_text = t.findtext("{%s}OutlineLevel" % ns)
+            outline_level = int(outline_level_text) if outline_level_text else 0
+            
+            # Determine parent WBS (e.g., "1.2.3" -> parent is "1.2")
+            parent_wbs = ""
+            if "." in wbs:
+                parent_wbs = wbs.rsplit(".", 1)[0]  # Remove last segment
+            elif wbs != "0":
+                parent_wbs = "0"  # Top-level items have project root as parent
+            
+            task_hierarchy[t] = {
+                "wbs": wbs,
+                "level": outline_level,
+                "parent_wbs": parent_wbs
+            }
+        
+        # Roll up dates for each summary task from ALL descendants
+        summary_count = 0
+        for t in all_tasks:
+            summary_elem = t.find("{%s}Summary" % ns)
+            is_summary = summary_elem is not None and summary_elem.text == "1"
+            
+            if is_summary:
+                wbs = task_hierarchy[t]["wbs"]
+                
+                # Find ALL descendants (not just direct children)
+                # A task is a descendant if its WBS starts with this WBS
+                descendant_starts = []
+                descendant_finishes = []
+                
+                for c in all_tasks:
+                    cwbs = task_hierarchy[c]["wbs"]
+                    c_is_summary = c.find("{%s}Summary" % ns) is not None and c.findtext("{%s}Summary" % ns) == "1"
+                    
+                    # Special case: root summary (WBS "0") includes all top-level tasks
+                    if wbs == "0":
+                        # Include tasks with WBS "1", "2", "3", etc (no dots, not "0")
+                        if cwbs and cwbs != "0" and "." not in cwbs:
+                            cs = c.findtext("{%s}Start" % ns)
+                            cf = c.findtext("{%s}Finish" % ns)
+                            if cs and cf:
+                                descendant_starts.append(cs)
+                                descendant_finishes.append(cf)
+                    else:
+                        # Normal case: child WBS starts with parent WBS + "."
+                        if cwbs and cwbs != wbs and cwbs.startswith(wbs + "."):
+                            cs = c.findtext("{%s}Start" % ns)
+                            cf = c.findtext("{%s}Finish" % ns)
+                            if cs and cf:
+                                descendant_starts.append(cs)
+                                descendant_finishes.append(cf)
+                
+                # Roll up Start/Finish from descendants
+                if descendant_starts and descendant_finishes:
+                    rolled_start = min(descendant_starts)
+                    rolled_finish = max(descendant_finishes)
+                    
+                    start_elem = t.find("{%s}Start" % ns)
+                    if start_elem is None:
+                        start_elem = ET.SubElement(t, "{%s}Start" % ns)
+                    start_elem.text = rolled_start
+                    
+                    finish_elem = t.find("{%s}Finish" % ns)
+                    if finish_elem is None:
+                        finish_elem = ET.SubElement(t, "{%s}Finish" % ns)
+                    finish_elem.text = rolled_finish
+                    
+                    # Calculate Duration from Start/Finish (in working minutes)
+                    # CRITICAL: Use total_seconds() not days to capture sub-24-hour spans
+                    try:
+                        start_dt = datetime.strptime(rolled_start, "%Y-%m-%dT%H:%M:%S")
+                        finish_dt = datetime.strptime(rolled_finish, "%Y-%m-%dT%H:%M:%S")
+                        
+                        # Calculate total minutes from total seconds (handles partial days correctly)
+                        delta = finish_dt - start_dt
+                        total_minutes = int(round(delta.total_seconds() / 60))
+                        
+                        # Ensure non-negative duration
+                        total_minutes = max(0, total_minutes)
+                        
+                        duration_elem = t.find("{%s}Duration" % ns)
+                        if duration_elem is None:
+                            duration_elem = ET.SubElement(t, "{%s}Duration" % ns)
+                        duration_elem.text = f"PT{total_minutes}M"
+                    except Exception:
+                        # If date parsing fails, set to PT0M
+                        duration_elem = t.find("{%s}Duration" % ns)
+                        if duration_elem is None:
+                            duration_elem = ET.SubElement(t, "{%s}Duration" % ns)
+                        duration_elem.text = "PT0M"
+                    
+                    summary_count += 1
+                
+                # Force summary tasks to have Work=PT0M (but Duration is calculated above)
+                work_elem = t.find("{%s}Work" % ns)
+                if work_elem is None:
+                    work_elem = ET.SubElement(t, "{%s}Work" % ns)
+                work_elem.text = "PT0M"
+        
+        logging.info(f"[WORKFRONT POST-PROCESS] Rolled up {summary_count} summary tasks")
+    
+    # =====================================================================
+    # FINAL WORKFRONT VALIDATION
+    # =====================================================================
+    # Validate MSPDI structure before writing to catch Workfront issues
+    # =====================================================================
+    
+    if tasks_elem is not None:
+        validation_problems = []
+        all_tasks = list(tasks_elem.findall("{%s}Task" % ns))
+        
+        for t in all_tasks:
+            uid = t.findtext("{%s}UID" % ns)
+            name = t.findtext("{%s}Name" % ns) or ""
+            summary_elem = t.find("{%s}Summary" % ns)
+            is_summary = summary_elem is not None and summary_elem.text == "1"
+            start = t.findtext("{%s}Start" % ns)
+            finish = t.findtext("{%s}Finish" % ns)
+            work = t.findtext("{%s}Work" % ns) or "PT0M"
+            
+            # Check 1: Every task must have Start and Finish
+            if not start or not finish:
+                validation_problems.append(f"Task UID {uid} '{name}' missing Start/Finish")
+            
+            # Check 2: Summary tasks should have Work=PT0M
+            if is_summary and work != "PT0M":
+                validation_problems.append(f"Summary UID {uid} '{name}' has nonzero Work: {work}")
+        
+        if validation_problems:
+            logging.error(f"[MSPDI VALIDATION] Found {len(validation_problems)} issues:")
+            for problem in validation_problems[:10]:  # Show first 10
+                logging.error(f"  - {problem}")
+            if len(validation_problems) > 10:
+                logging.error(f"  ... and {len(validation_problems) - 10} more")
+            raise ValueError(f"MSPDI validation failed with {len(validation_problems)} issues. Check logs for details.")
+        else:
+            logging.info("[MSPDI VALIDATION] ✅ All validation checks passed - file is Workfront-safe!")
+    
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
