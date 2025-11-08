@@ -713,8 +713,16 @@ def convert_excel_to_mspdi(
                     ET.SubElement(ext_attrs_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
                     ET.SubElement(ext_attrs_dc, "{%s}Value" % ns).text = deliv_code
                 
-                # Service Category (replaces Category tag for Workfront)
+                # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
+                # Text1 mirrors Service Category for default grid visibility in Workfront
                 category_value = service_dept if service_dept else "Unassigned"
+                
+                # Text1 = Department (mirrors Service Category)
+                ext_attrs_dept = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                ET.SubElement(ext_attrs_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                ET.SubElement(ext_attrs_dept, "{%s}Value" % ns).text = category_value
+                
+                # Text4 = Service Category (WORKFRONT REQUIREMENT)
                 ext_attrs_sc = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
                 ET.SubElement(ext_attrs_sc, "{%s}FieldID" % ns).text = "188743734"  # Text4
                 ET.SubElement(ext_attrs_sc, "{%s}Value" % ns).text = category_value
@@ -847,8 +855,16 @@ def convert_excel_to_mspdi(
                         ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
                         ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
                     
-                    # Service Category (replaces Category tag for Workfront)
+                    # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
+                    # Text1 mirrors Service Category for default grid visibility in Workfront
                     comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
+                    
+                    # Text1 = Department (mirrors Service Category)
+                    ext_attr_dept_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_dept_comp, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                    ET.SubElement(ext_attr_dept_comp, "{%s}Value" % ns).text = comp_category_value
+                    
+                    # Text4 = Service Category (WORKFRONT REQUIREMENT)
                     ext_attr_sc_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
                     ET.SubElement(ext_attr_sc_comp, "{%s}FieldID" % ns).text = "188743734"  # Text4
                     ET.SubElement(ext_attr_sc_comp, "{%s}Value" % ns).text = comp_category_value
@@ -1331,8 +1347,31 @@ def convert_excel_to_mspdi(
     if add_dependencies:
         logging.info("[DEPENDENCIES] Processing Dependencies column for ALL task types (deliverables, components, leaf tasks)")
         
-        # Check if Dependencies column exists
-        if "Dependencies" in df.columns:
+        # FIX C: Add debug logging for WBS mapping
+        logging.info(f"[DEPENDENCIES DEBUG] original_wbs_to_uid has {len(original_wbs_to_uid)} entries")
+        if original_wbs_to_uid:
+            logging.info(f"[DEPENDENCIES DEBUG] Sample WBS IDs in mapping (first 10): {list(original_wbs_to_uid.keys())[:10]}")
+        else:
+            logging.warning("[DEPENDENCIES DEBUG] WARNING: original_wbs_to_uid is EMPTY - no dependencies can be created!")
+        
+        # FIX: Support multiple column names for dependencies (Dependencies, Predecessor, Predecessors)
+        dep_col = None
+        for possible_col in ["Dependencies", "Predecessor", "Predecessors"]:
+            if possible_col in df.columns:
+                dep_col = possible_col
+                break
+        
+        # FIX C: Check what dependency values exist in DataFrame
+        if dep_col:
+            logging.info(f"[INFO] [DEPENDENCIES] Using column '{dep_col}' for dependency data")
+            non_empty_deps = df[df[dep_col].notna() & (df[dep_col] != "")]
+            logging.info(f"[DEPENDENCIES DEBUG] Found {len(non_empty_deps)} rows with non-empty {dep_col} values")
+            if len(non_empty_deps) > 0:
+                sample_deps = non_empty_deps[dep_col].head(5).tolist()
+                logging.info(f"[DEPENDENCIES DEBUG] Sample {dep_col} values: {sample_deps}")
+        
+        # Check if dependency column exists
+        if dep_col:
             dependencies_count = 0
             skipped_count = 0
             
@@ -1392,11 +1431,25 @@ def convert_excel_to_mspdi(
             
             # Process Dependencies column for ALL rows in DataFrame
             for idx, row in df.iterrows():
+                # FIX: Skip role rows (same logic as task creation)
+                # Role rows were skipped during task creation, so they won't be in task_map
+                role_value = row.get("Role", "")
+                if pd.notna(role_value) and str(role_value).strip():
+                    logging.info(f"[DEPENDENCIES] Skipping role row at index {idx}: Role={role_value}")
+                    continue  # Skip to next row
+                
                 # Get task identifiers from DataFrame row
                 row_deliverable = row.get("Deliverable", "")
                 row_component = row.get("Component", "")
                 row_task = row.get("Task", "")
                 row_task_name = row.get("Task_Name", "")
+                
+                # FIX: Use the SAME task name derivation logic as task creation (lines 898-902)
+                # This ensures lookup_key matches what was actually stored in all_tasks_lookup
+                if not row_task_name or pd.isna(row_task_name) or str(row_task_name).strip() == "":
+                    row_task_name = (row.get("L3_Task") or 
+                                    row.get("Task_Label") or 
+                                    "")
                 
                 # Build lookup key based on hierarchy level
                 # Use Component and Task columns to distinguish between levels:
@@ -1415,22 +1468,33 @@ def convert_excel_to_mspdi(
                 if has_task and has_component and has_deliverable:
                     # Leaf task level (both Component and Task are populated)
                     lookup_key = (str(row_deliverable), str(row_component), str(row_task_name))
+                    logging.info(f"[DEPENDENCIES] Looking up LEAF task: deliverable='{row_deliverable}', component='{row_component}', task_name='{row_task_name}'")
                 elif has_component and has_deliverable and not has_task:
                     # Component level (Component is populated, Task is not)
                     lookup_key = (str(row_deliverable), str(row_component), None)
+                    logging.info(f"[DEPENDENCIES] Looking up COMPONENT: deliverable='{row_deliverable}', component='{row_component}'")
                 elif has_deliverable and not has_component:
                     # Deliverable level (Component is not populated)
                     lookup_key = (str(row_deliverable), None, None)
+                    logging.info(f"[DEPENDENCIES] Looking up DELIVERABLE: deliverable='{row_deliverable}'")
                 
                 # Look up task element and UID
                 if lookup_key and lookup_key in all_tasks_lookup:
                     task_elem, task_uid = all_tasks_lookup[lookup_key]
+                    logging.info(f"[DEPENDENCIES] ✓ Found task in lookup: UID={task_uid}")
                 else:
                     # No matching task found, skip this row
+                    if lookup_key:
+                        logging.warning(f"[DEPENDENCIES] ✗ Task NOT found in lookup: {lookup_key}")
+                        logging.warning(f"[DEPENDENCIES DEBUG] Available lookup keys sample: {list(all_tasks_lookup.keys())[:5]}")
                     continue
                 
-                # Get Dependencies value from this row
-                dependencies_value = row.get("Dependencies", "")
+                # Get dependency value from this row using detected column name
+                dependencies_value = row.get(dep_col, "")
+                
+                # FIX: Add detailed logging for dependency value
+                if dependencies_value and pd.notna(dependencies_value) and str(dependencies_value).strip():
+                    logging.info(f"[DEPENDENCIES] Row {idx} has {dep_col}='{dependencies_value}' for task UID={task_uid}")
                 
                 # Parse dependencies if value is not empty
                 if dependencies_value and pd.notna(dependencies_value) and str(dependencies_value).strip():
@@ -1454,12 +1518,16 @@ def convert_excel_to_mspdi(
                         
                         # FIX: Resolve WBS to UID using ORIGINAL WBS_ID mapping
                         # Dependencies column contains original WBS_IDs from DataFrame, not sequential WBS codes
+                        logging.info(f"[DEPENDENCIES] Looking up predecessor WBS '{dep_wbs}' in original_wbs_to_uid mapping")
                         predecessor_uid = original_wbs_to_uid.get(dep_wbs)
                         
                         if predecessor_uid is None:
-                            logging.warning(f"[DEPENDENCIES] Invalid WBS reference '{dep_wbs}' for task {lookup_key} - skipping")
+                            logging.warning(f"[DEPENDENCIES] ✗ Invalid WBS reference '{dep_wbs}' for task {lookup_key} - NOT FOUND in mapping")
+                            logging.warning(f"[DEPENDENCIES DEBUG] Available WBS IDs in mapping: {list(original_wbs_to_uid.keys())[:20]}")
                             skipped_count += 1
                             continue
+                        
+                        logging.info(f"[DEPENDENCIES] ✓ Found predecessor UID={predecessor_uid} for WBS '{dep_wbs}'")
                         
                         # Skip self-referencing dependencies
                         if predecessor_uid == task_uid:
@@ -1467,30 +1535,12 @@ def convert_excel_to_mspdi(
                             skipped_count += 1
                             continue
                         
-                        # WORKFRONT FIX: Check if predecessor is a summary task
-                        # Dependencies can only link to LEAF tasks, not summary tasks (deliverables/components)
-                        predecessor_task_elem = None
-                        for potential_pred_task in tasks.findall("{%s}Task" % ns):
-                            pred_uid_elem = potential_pred_task.find("{%s}UID" % ns)
-                            if pred_uid_elem is not None and int(pred_uid_elem.text) == predecessor_uid:
-                                predecessor_task_elem = potential_pred_task
-                                break
-                        
-                        if predecessor_task_elem is not None:
-                            # Check if this is a summary task
-                            summary_elem = predecessor_task_elem.find("{%s}Summary" % ns)
-                            is_summary = summary_elem is not None and summary_elem.text == "1"
-                            
-                            if is_summary:
-                                # Get predecessor name for better logging
-                                pred_name_elem = predecessor_task_elem.find("{%s}Name" % ns)
-                                pred_name = pred_name_elem.text if pred_name_elem is not None else "Unknown"
-                                
-                                logging.warning(f"[DEPENDENCIES] Skipping dependency to summary task: Task {lookup_key} (UID={task_uid}) -> Summary '{pred_name}' (UID={predecessor_uid}, WBS={dep_wbs})")
-                                skipped_count += 1
-                                continue
+                        # FIX: REMOVED overly restrictive check that prevented dependencies TO summary tasks
+                        # MS Project and Workfront ALLOW dependencies to summary tasks - they link to the appropriate child
+                        # The only check we need is to prevent summary tasks FROM having dependencies (see below)
                         
                         # FIX C: Skip adding predecessor if THIS task is a summary task
+                        # Summary tasks should not have explicit dependencies - only leaf tasks should
                         is_summary_task = False
                         summary_check_elem = task_elem.find("{%s}Summary" % ns)
                         if summary_check_elem is not None and summary_check_elem.text == "1":
@@ -1499,25 +1549,41 @@ def convert_excel_to_mspdi(
                         if is_summary_task:
                             task_name_elem = task_elem.find("{%s}Name" % ns)
                             task_name_for_log = task_name_elem.text if task_name_elem is not None else "Unknown"
-                            logging.warning(f"[DEPENDENCIES] Skipping dependency for summary task '{task_name_for_log}' (UID={task_uid})")
+                            logging.warning(f"[DEPENDENCIES] Skipping dependency FROM summary task '{task_name_for_log}' (UID={task_uid}) - summary tasks cannot have explicit dependencies")
                             skipped_count += 1
                             continue
                         
+                        # Get task name for enhanced logging
+                        task_name_elem = task_elem.find("{%s}Name" % ns)
+                        task_name_for_log = task_name_elem.text if task_name_elem is not None else "Unknown"
+                        
                         # Create PredecessorLink element (only for leaf tasks)
+                        logging.info(f"[DEPENDENCIES] ✓ Creating PredecessorLink: Task '{task_name_for_log}' (UID={task_uid}) → Predecessor UID={predecessor_uid} (Type=0, FS)")
+                        
+                        # FIX: Create PredecessorLink as child of task_elem using SubElement
+                        # This ensures the link is properly attached to the task in the XML tree
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        # FIX C: Force Type=0 (Finish-to-Start) for all dependencies
                         ET.SubElement(pred_link, "{%s}Type" % ns).text = "0"  # Type=0 is FS (Finish-to-Start)
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
                         
                         dependencies_count += 1
-                        logging.info(f"[DEPENDENCIES] Added dependency: {lookup_key} (UID={task_uid}) depends on WBS '{dep_wbs}' (UID={predecessor_uid})")
+                        
+                        # Enhanced logging to confirm attachment
+                        logging.info(f"[DEPENDENCIES] ✓✓ SUCCESS! PredecessorLink attached to task '{task_name_for_log}' (UID={task_uid})")
+                        logging.info(f"[DEPENDENCIES]    - Predecessor WBS '{dep_wbs}' (UID={predecessor_uid})")
+                        logging.info(f"[DEPENDENCIES]    - Total dependencies created so far: {dependencies_count}")
+                        logging.info(f"[DEPENDENCIES]    - PredecessorLink element has {len(list(pred_link))} child elements")
+                        
+                        # Verify the link was actually attached to the task
+                        task_pred_links = task_elem.findall("{%s}PredecessorLink" % ns)
+                        logging.info(f"[DEPENDENCIES]    - Task now has {len(task_pred_links)} PredecessorLink element(s)")
             
             logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies across ALL task types, skipped {skipped_count} invalid references")
         else:
-            logging.warning("[DEPENDENCIES] Dependencies column not found in DataFrame - skipping dependency parsing")
+            logging.warning("[WARNING] [DEPENDENCIES] No dependency column found in DataFrame (tried: Dependencies, Predecessor, Predecessors) - skipping dependency parsing")
         
         # Also add cross-deliverable dependencies based on department logic as fallback
         logging.info("[3-LEVEL HIERARCHY] Adding component-level dependencies (tasks within components run in parallel)")
@@ -1792,9 +1858,12 @@ def convert_excel_to_mspdi(
                     else:
                         ET.SubElement(task_elem, "{%s}Cost" % ns).text = str(task_cost)
                     
+                    # FIX E: Ensure FixedCost is set to match Cost (create if missing)
                     fixed_cost_elem = task_elem.find("{%s}FixedCost" % ns)
                     if fixed_cost_elem is not None:
                         fixed_cost_elem.text = str(task_cost)
+                    else:
+                        ET.SubElement(task_elem, "{%s}FixedCost" % ns).text = str(task_cost)
                     
                     task_name_elem = task_elem.find("{%s}Name" % ns)
                     task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
@@ -1853,6 +1922,41 @@ def convert_excel_to_mspdi(
     ET.indent(tree, space="  ")
     tree.write(output_xml, encoding="utf-8", xml_declaration=True)
     
+    # FIX: Verify PredecessorLink elements were created
+    # Count all PredecessorLink elements in the XML
+    pred_links_in_xml = root.findall(".//{%s}PredecessorLink" % ns)
+    pred_link_count = len(pred_links_in_xml)
+    
+    logging.info(f"[VERIFICATION] ==================== FINAL XML VERIFICATION ====================")
+    logging.info(f"[VERIFICATION] XML contains {pred_link_count} PredecessorLink elements")
+    if pred_link_count > 0:
+        logging.info(f"[VERIFICATION] ✓ SUCCESS! PredecessorLink elements were created in XML")
+        # Sample a few for logging
+        for i, pred_link in enumerate(pred_links_in_xml[:5]):
+            pred_uid_elem = pred_link.find("{%s}PredecessorUID" % ns)
+            pred_type_elem = pred_link.find("{%s}Type" % ns)
+            # Find parent task
+            parent_task = None
+            for task in root.findall(".//{%s}Task" % ns):
+                if pred_link in list(task):
+                    parent_task = task
+                    break
+            parent_uid = "Unknown"
+            parent_name = "Unknown"
+            if parent_task is not None:
+                uid_elem = parent_task.find("{%s}UID" % ns)
+                name_elem = parent_task.find("{%s}Name" % ns)
+                if uid_elem is not None:
+                    parent_uid = uid_elem.text
+                if name_elem is not None:
+                    parent_name = name_elem.text
+            
+            if pred_uid_elem is not None:
+                logging.info(f"[VERIFICATION] Sample #{i+1}: Task '{parent_name}' (UID={parent_uid}) → Predecessor UID={pred_uid_elem.text}, Type={pred_type_elem.text if pred_type_elem is not None else 'N/A'}")
+    else:
+        logging.warning(f"[VERIFICATION] ✗ WARNING! No PredecessorLink elements found in XML despite dependency processing")
+    logging.info(f"[VERIFICATION] ==================================================================")
+    
     # Return enhanced statistics
     deliverable_count = 0
     if "Deliverable" in df.columns:
@@ -1895,10 +1999,11 @@ def convert_excel_to_mspdi(
         "has_dependencies": add_dependencies,
         "has_custom_fields": add_custom_fields,
         "has_calendars": True,
-        "has_phase_gates": add_phase_gates
+        "has_phase_gates": add_phase_gates,
+        "predecessor_links_count": pred_link_count
     }
     
-    logging.info(f"[Enhanced MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources, {stats['milestone_count']} milestones")
+    logging.info(f"[Enhanced MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources, {stats['milestone_count']} milestones, {stats['predecessor_links_count']} dependencies")
     
     return stats
 
