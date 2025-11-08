@@ -1,0 +1,252 @@
+2) Is the deliverable→component logic correct? How do start/end dates get chosen?
+What the code actually does today
+
+Deliverable start (dstart) is:
+
+Step‑4 override if present:
+
+Start_Offset_Days (absolute day offset), or
+
+Start_Date relative to scenario.project_start
+
+Else sequential position via day_cursor.
+
+Deliverable duration is computed from the schedule’s task groups:
+total_deliv_duration = sum(int(t["duration_days"]) for t in schedule)—one cycle for a project (multiplied by months for retainers).
+
+Component start = dstart + comp_offset where comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp);
+component duration = sum(duration_by_tg[tg] for L3s in the component). They’re chained by dependency (prev_comp_wbs).
+
+Task start = dstart + offset_by_tg[tg] (+ cycles if retainer);
+task duration = duration_by_tg[tg] (usually small, often 1 day in your export).
+
+Where do components/L3s come from?
+Step‑2 endpoints pull components per deliverable and dedupe L3 labels.
+
+What’s “off”
+
+Summary bars (deliverable/component) are being given explicit durations (sum of children) instead of letting the tool compute min(child.start) → max(child.finish). That’s fine if nothing overlaps, but once you allow overlaps, “sum of L3 durations” overstates the summary bar and fights the Gantt tool. (Project files usually let summary dates roll up from children.)
+
+Static offsets/durations driven by duration_by_tg + fixed “slack” settings (1–2 days, 5% globally) explaining your “2–4 day” pattern.
+
+Target behavior (recommended)
+
+Keep deliverable start logic as‑is (it respects Step‑4 edits—good).
+
+For deliverable/component summary rows:
+
+Stop setting hard durations; let roll‑ups compute start/finish from children.
+
+For L3 tasks:
+
+Replace static durations with hours‑driven durations (see §3), and use true FS/SS with leads/lags to control overlap “like a PM.”
+
+3) “PM brain” scheduling: don’t stack 10 components into 2–4 days all in parallel
+
+Your boss is right—static 2–4 day gaps are not defensible. Here’s the practical fix that uses the data you already have.
+
+What to change (and where)
+
+Base L3 durations on hours and capacity—not a fixed digit.
+For each L3 task:
+days = ceil( planned_hours / (hours_per_day * available_resources * focus_factor) )
+
+hours_per_day: 6–7 (realistic net productivity)
+
+focus_factor: 0.6–0.8 (meetings/context loss)
+
+available_resources: number of assigned people for that L3 (can be derived from your role rows or default 1 if unknown).
+
+This plugs into the same place that currently uses duration_by_tg when building WBS rows.
+
+Constrain component concurrency by team capacity.
+Add a “max parallel components” guard per deliverable based on team roles (e.g., max_parallel = max(1, floor(total_FTE/1.5))). Then list‑schedule components with resource leveling so only max_parallel run at once.
+
+Use realistic dependencies:
+
+Strategy/brief → SS + 50% lead into Art Direction and Research (they can start mid‑brief).
+
+Internal Review → FS after concepts; Client Review → FS after internal; Revisions → FS after client;
+
+QA/PM lags tied to real feedback cycles (use your existing slack_after_internal / slack_after_client knobs, but as minimums, not “always add 1–2 days”).
+
+Save the result back into the scenario so Step‑4 sees it: keep your current mechanism that stores timeline_* fields in SCENARIO_STORE when the timeline is generated/saved.
+
+Where to implement: You already call suggest_timeline_from_selection(...) and generate_timeline(...). Add the “hours → duration; resource‑leveled components; SS/FS with leads” logic inside that scheduler (so offset_by_tg/duration_by_tg are populated from the new PM logic), then the WBS builder will emit correct offsets/durations automatically.
+
+Minimal code moves (high‑value, low churn)
+
+In the scheduler that returns schedule/offset_by_tg/duration_by_tg:
+
+Replace fixed duration_by_tg[tg] = 1..4 with the hours‑based formula.
+
+Insert a simple list‑scheduling/resource‑leveling pass that:
+
+Keeps at most max_parallel_components active per deliverable.
+
+Applies SS/FS constraints with configured lags.
+
+Leave everything else (Gantt/exports) untouched; they pick up the better schedule.
+
+4) Duplicated tasks in the XML: why this happens & how to fix it
+What’s happening in your export
+
+Role rows are being emitted as child “Task” elements under each L3 task (same Task_Name label), plus you also emit the parent L3 “Task.” That produces several “Idea Write‑Ups” rows under the same component in the XML/Gantt. See how role rows are appended with WBS_ID = f"{wbs_task}.{r_index}", Parent_WBS_ID = wbs_task, and the same "Task_Name": label.
+
+Additionally, L3 labels can repeat because the list of tg_in_comp is taken as a list (not a set). If your DB has multiple rows per task label/role, the same label may be appended multiple times.
+
+Two clean fixes (both are safe)
+
+A) Deduplicate L3 task labels per component before emitting
+
+Change:
+
+tg_in_comp = [tg for tg in tg_order if tg in tg_hours_in_comp.keys()]
+
+
+To:
+
+tg_in_comp = sorted({tg for tg in tg_order if tg in tg_hours_in_comp})
+
+
+(Ensures each L3 appears once per component.)
+
+B) Do NOT emit role rows as Tasks—use MSPDI Assignments instead
+
+In your Excel→MSPDI writer, you currently loop every row into <Task>. We need to skip rows that have a Role and instead attach them as <Assignment> to the parent L3 task’s UID.
+
+The XML builder already has Resources and a place for Assignments—you’re collecting assignments_total in stats. Adjust the writer:
+
+Change in convert_excel_to_mspdi:
+
+Task loop: only create <Task> for rows where Role == "" (i.e., summary rows & L3 tasks). Build a map wbs_to_uid.
+
+Assignment loop: for each role row (Role != ""), find parent_wbs = Parent_WBS_ID (the L3 WBS), map to parent_uid = wbs_to_uid[parent_wbs]; find/create resource_uid by (Role, Seniority); create <Assignment> with:
+
+<TaskUID> = parent_uid
+
+<ResourceUID> = the resource
+
+<Work>/<Units> computed from Planned_Hours (e.g., Work = hours * 60 minutes; Units default 1.0 if you lack %alloc)
+
+Keep predecessors only on the L3 task rows; drop PredecessorLinks on role rows.
+
+You already have the data on each role row (Role, Seniority, Planned_Hours) and a Resources section with rates; the change is to stop creating duplicate <Task> nodes for role rows and attach them as assignments instead. (See how your generator creates Tasks and Resources; this patch modifies the Tasks & Assignments phases.)
+
+Result: Each L3 shows once in the Gantt tree; resource loads live under Assignments; no more “Idea Write‑Ups” x4.
+
+Bonus: a tiny correctness improvement for summary bars
+
+Even after the scheduler fix, you’ll get more accurate summaries if you stop hard‑coding durations for deliverable/component summary rows and let roll‑ups compute from children (Project and other Gantt libs prefer this). You already roll up the project summary from children in the XML writer; apply the same idea for deliverable summary if you choose to.
+
+Copy‑paste patches (small, high‑impact)
+1) Throttle sync to stop Gantt freezes (server)
+# near SCENARIO_SYNC_STATE
+WRITE_THROTTLE_MS = 150
+
+# inside /api/scenario/sync after server_state is loaded
+now_ms = int(time.time() * 1000)
+last_ms = int(server_state.get("last_write_ms", 0))
+if now_ms - last_ms < WRITE_THROTTLE_MS:
+    return {
+        "serverVersion": server_state["version"],
+        "hasChanges": False,
+        "hasConflicts": False,
+        "conflicts": [],
+        "timestamp": now_ms,
+        "throttled": True
+    }
+server_state["last_write_ms"] = now_ms
+
+
+(same module as /api/scenario/sync)
+
+2) Batch endpoint for mouseup commits (server)
+class UpdateTasksBatchPayload(BaseModel):
+    session_id: str
+    updates: List[UpdateTaskPayload]  # reuse your schema
+
+@app.post("/api/timeline/update_tasks_batch")
+async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
+    sid = payload.session_id
+    if sid not in SCENARIO_STORE:
+        raise HTTPException(404, f"Scenario not found for session {sid}")
+    scenario = SCENARIO_STORE[sid]
+    items = scenario.get("items", [])
+
+    touched_deliv_codes = set()
+    for u in payload.updates:
+        # find item by WBS_ID and update dates/duration only for that row
+        for it in items:
+            if it.get("WBS_ID") == u.wbs_id:
+                if u.duration_days is not None:
+                    it["Duration_Days"] = u.duration_days
+                if u.start_date:
+                    it["Start_Date"] = u.start_date
+                if u.end_date:
+                    it["End_Date"] = u.end_date
+                touched_deliv_codes.add(it.get("Deliverable_Code",""))
+                break
+
+    # recompute totals only for touched deliverables
+    _recompute_totals(scenario)
+    SCENARIO_STORE[sid] = scenario
+    return {"success": True, "touched": list(touched_deliv_codes), "totals": scenario.get("totals", {})}
+
+
+(same file as /api/timeline/update_task)
+
+3) Deduplicate L3 task labels (export WBS builder)
+
+Change where you build tg_in_comp:
+
+# before
+tg_in_comp = [tg for tg in tg_order if tg in tg_hours_in_comp.keys()]
+# after
+tg_in_comp = sorted({tg for tg in tg_order if tg in tg_hours_in_comp})
+
+
+(in the WBS row builder under components/tasks)
+
+4) Convert role rows to Assignments (XML writer)
+
+In convert_excel_to_mspdi:
+
+Tasks section:
+
+for task_id, r in enumerate(rows, 1):
+    if str(r.get("Role","")).strip():  # role row → skip Task; handle in Assignments
+        continue
+    # ... create <Task> only for rows where Role is empty
+    # build wbs_to_uid[r["WBS"]] = UID
+
+
+Assignments section (new / revised):
+
+assignments_elem = SubElement(project, "Assignments")
+for r in rows:
+    role = str(r.get("Role","")).strip()
+    if not role:
+        continue  # only role rows here
+
+    parent_wbs = str(r.get("Parent_WBS_ID") or "").strip()
+    task_uid = wbs_to_uid.get(parent_wbs)
+    if not task_uid:
+        continue  # safety
+
+    res_key = (role, str(r.get("Seniority","")).strip())
+    res_uid = resource_uid_map.get(res_key)  # build this from your Resources loop
+    if not res_uid:
+        continue
+
+    hours = float(r.get("Planned_Hours", 0) or 0)
+    assign = SubElement(assignments_elem, "Assignment")
+    SubElement(assign, "TaskUID").text = str(task_uid)
+    SubElement(assign, "ResourceUID").text = str(res_uid)
+    SubElement(assign, "Work").text = f"PT{int(hours*60)}M"
+    SubElement(assign, "Units").text = "1"
+
+
+(Do not emit PredecessorLinks for role rows; keep them only on the L3 Task.)
+
+This removes visual duplication and produces proper workload math in MSP.
