@@ -5791,19 +5791,6 @@ class UpdateTaskPayload(BaseModel):
     end_date: Optional[str] = None
     hours_per_day: float = 8.0
 
-class TaskUpdate(BaseModel):
-    """Single task update within a batch"""
-    wbs_id: str
-    duration_days: Optional[float] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-
-class UpdateTasksBatchPayload(BaseModel):
-    """Batch update multiple Gantt tasks at once (e.g., after drag-drop ends)"""
-    session_id: str
-    updates: List[TaskUpdate]
-    hours_per_day: float = 8.0
-
 # Removed duplicate endpoint - see the other /api/pricing/redistribute-hours endpoint below
 
 @app.post("/api/pricing/analyze-retainer")
@@ -6360,8 +6347,7 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
         if payload.end_date:
             target_item["End_Date"] = payload.end_date
         
-        # Recompute totals (already optimized O(n) single pass)
-        # Real performance gain comes from client-side batching (see /api/timeline/update_tasks_batch)
+        # Recompute totals
         scenario = _recompute_totals(scenario)
         SCENARIO_STORE[session_id] = scenario
         
@@ -6388,93 +6374,6 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
         
     except Exception as e:
         print(f"[SCENARIO_STORE] Error updating task: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            {"success": False, "error": str(e)},
-            status_code=500
-        )
-
-@app.post("/api/timeline/update_tasks_batch")
-async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
-    """
-    Batch update multiple Gantt tasks at once (eliminates Gantt freeze during drag).
-    Applies all updates in one operation, then recalculates totals once.
-    
-    This endpoint should be called when user completes a drag operation (mouseup),
-    not during the drag itself.
-    """
-    try:
-        session_id = payload.session_id
-        
-        # Get scenario from store
-        if session_id not in SCENARIO_STORE:
-            raise HTTPException(404, f"Scenario not found for session {session_id}")
-        
-        scenario = SCENARIO_STORE[session_id]
-        items = scenario.get("items", [])
-        
-        # Track updated items for response
-        updated_items = []
-        updated_count = 0
-        
-        # Apply all updates
-        for update in payload.updates:
-            # Find item by WBS_ID
-            target_item = None
-            for item in items:
-                if item.get("WBS_ID") == update.wbs_id:
-                    target_item = item
-                    break
-            
-            if not target_item:
-                print(f"[Batch Update] Warning: Task not found with WBS_ID {update.wbs_id}, skipping")
-                continue
-            
-            # Update duration/dates if provided
-            if update.duration_days is not None:
-                target_item["Duration_Days"] = update.duration_days
-                # Recalculate hours: Duration_Days * Hours_Per_Day
-                new_hours = update.duration_days * payload.hours_per_day
-                target_item["Planned_Hours"] = round(new_hours, 2)
-            
-            if update.start_date:
-                target_item["Start_Date"] = update.start_date
-            
-            if update.end_date:
-                target_item["End_Date"] = update.end_date
-            
-            updated_items.append(target_item)
-            updated_count += 1
-            
-            # Update timeline if it exists
-            if "timeline" in scenario:
-                timeline = scenario["timeline"]
-                if "tasks" in timeline:
-                    for task in timeline["tasks"]:
-                        if task.get("id") == update.wbs_id:
-                            if update.duration_days is not None:
-                                task["duration_days"] = update.duration_days
-                                task["hours"] = update.duration_days * payload.hours_per_day
-                            if update.start_date:
-                                task["start_date"] = update.start_date
-                            if update.end_date:
-                                task["end_date"] = update.end_date
-                            break
-        
-        # Recompute totals ONCE for all updates
-        scenario = _recompute_totals(scenario)
-        SCENARIO_STORE[session_id] = scenario
-        
-        return {
-            "success": True,
-            "updated_count": updated_count,
-            "updated_items": updated_items,
-            "totals": scenario["totals"]
-        }
-        
-    except Exception as e:
-        print(f"[SCENARIO_STORE] Error in batch update: {e}")
         import traceback
         traceback.print_exc()
         return JSONResponse(
@@ -10511,11 +10410,8 @@ def api_xml_export_flexible(payload: XMLExportPayload):
 
 # ---------- Scenario Real-time Sync Endpoint ----------
 
-# Write throttling constant to prevent server overload during rapid Gantt drag events
-WRITE_THROTTLE_MS = 150  # Block writes faster than this per session (milliseconds)
-
 # In-memory store for scenario sync state
-SCENARIO_SYNC_STATE = {}  # session_id -> {scenario, version, last_modified, checksum, last_write_ms}
+SCENARIO_SYNC_STATE = {}  # session_id -> {scenario, version, last_modified, checksum}
 
 class ScenarioSyncPayload(BaseModel):
     session_id: str
@@ -10543,30 +10439,11 @@ async def sync_scenario(payload: ScenarioSyncPayload):
             "version": 0,
             "last_modified": 0,
             "checksum": "",
-            "history": [],
-            "last_write_ms": 0  # Track last write timestamp for throttling
+            "history": []
         }
     
     server_state = SCENARIO_SYNC_STATE[session_id]
     server_version = server_state["version"]
-    
-    # Write throttling: reject writes coming too fast (prevents Gantt drag freeze)
-    now_ms = int(time.time() * 1000)
-    last_ms = int(server_state.get("last_write_ms", 0))
-    if payload.scenario and (now_ms - last_ms < WRITE_THROTTLE_MS):
-        # Too soon; tell client nothing changed (prevents freeze during drag)
-        return {
-            "serverVersion": server_state["version"],
-            "hasChanges": False,
-            "hasConflicts": False,
-            "conflicts": [],
-            "timestamp": now_ms,
-            "throttled": True  # Indicates this write was skipped due to throttling
-        }
-    
-    # Update last write timestamp if we're processing this write
-    if payload.scenario:
-        server_state["last_write_ms"] = now_ms
     
     # Check for conflicts
     has_conflicts = False
