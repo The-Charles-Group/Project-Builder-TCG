@@ -3034,7 +3034,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
             for j, comp in enumerate(comps, start=1):
                 tg_hours_in_comp = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)  # per 'month' basis
-                tg_in_comp = [tg for tg in tg_order if tg in tg_hours_in_comp.keys()]
+                tg_in_comp = sorted({tg for tg in tg_order if tg in tg_hours_in_comp})
                 if not tg_in_comp:
                     continue
 
@@ -5791,6 +5791,11 @@ class UpdateTaskPayload(BaseModel):
     end_date: Optional[str] = None
     hours_per_day: float = 8.0
 
+class UpdateTasksBatchPayload(BaseModel):
+    """Batch update multiple Gantt tasks for mouseup commits"""
+    session_id: str
+    updates: List[UpdateTaskPayload]
+
 # Removed duplicate endpoint - see the other /api/pricing/redistribute-hours endpoint below
 
 @app.post("/api/pricing/analyze-retainer")
@@ -6374,6 +6379,56 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
         
     except Exception as e:
         print(f"[SCENARIO_STORE] Error updating task: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+@app.post("/api/timeline/update_tasks_batch")
+async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
+    """
+    Batch update multiple Gantt tasks for efficient mouseup commits.
+    Updates multiple tasks in a single transaction and recomputes totals once.
+    """
+    try:
+        session_id = payload.session_id
+        
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        items = scenario.get("items", [])
+        
+        touched_deliv_codes = set()
+        
+        for update in payload.updates:
+            for item in items:
+                if item.get("WBS_ID") == update.wbs_id:
+                    if update.duration_days is not None:
+                        item["Duration_Days"] = update.duration_days
+                        new_hours = update.duration_days * update.hours_per_day
+                        item["Planned_Hours"] = round(new_hours, 2)
+                    if update.start_date:
+                        item["Start_Date"] = update.start_date
+                    if update.end_date:
+                        item["End_Date"] = update.end_date
+                    touched_deliv_codes.add(item.get("Deliverable_Code", ""))
+                    break
+        
+        scenario = _recompute_totals(scenario)
+        SCENARIO_STORE[session_id] = scenario
+        
+        return {
+            "success": True,
+            "touched": list(touched_deliv_codes),
+            "totals": scenario.get("totals", {}),
+            "updated_count": len(payload.updates)
+        }
+        
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error in batch update: {e}")
         import traceback
         traceback.print_exc()
         return JSONResponse(
@@ -10412,6 +10467,7 @@ def api_xml_export_flexible(payload: XMLExportPayload):
 
 # In-memory store for scenario sync state
 SCENARIO_SYNC_STATE = {}  # session_id -> {scenario, version, last_modified, checksum}
+WRITE_THROTTLE_MS = 150  # Throttle writes to prevent Gantt freezes
 
 class ScenarioSyncPayload(BaseModel):
     session_id: str
@@ -10443,6 +10499,21 @@ async def sync_scenario(payload: ScenarioSyncPayload):
         }
     
     server_state = SCENARIO_SYNC_STATE[session_id]
+    
+    # Throttle check to prevent excessive writes
+    now_ms = int(time.time() * 1000)
+    last_ms = int(server_state.get("last_write_ms", 0))
+    if now_ms - last_ms < WRITE_THROTTLE_MS:
+        return {
+            "serverVersion": server_state["version"],
+            "hasChanges": False,
+            "hasConflicts": False,
+            "conflicts": [],
+            "timestamp": now_ms,
+            "throttled": True
+        }
+    server_state["last_write_ms"] = now_ms
+    
     server_version = server_state["version"]
     
     # Check for conflicts

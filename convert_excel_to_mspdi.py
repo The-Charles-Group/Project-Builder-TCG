@@ -380,6 +380,7 @@ def convert_excel_to_mspdi(
     
     # Add resources from the DataFrame with enhanced properties
     resource_map = {}
+    resource_uid_map = {}  # FIX: New mapping for (role, seniority) -> resource_uid
     department_resources = {}
     resource_id = 1
     
@@ -418,15 +419,32 @@ def convert_excel_to_mspdi(
         department_resources[str(dept)] = resource_id
         resource_id += 1
     
-    # Add individual role resources
+    # FIX: Add individual role resources with (role, seniority) mapping
     if "Role" in df.columns:
-        role_series = df["Role"] if isinstance(df["Role"], pd.Series) else pd.Series(df["Role"])
-        unique_roles = role_series.dropna().unique()
-        for role in unique_roles:
+        # Extract unique (role, seniority) combinations from role rows
+        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
+        
+        # Build set of unique (role, seniority) tuples
+        unique_role_seniority = set()
+        for _, row in role_rows.iterrows():
+            role = str(row.get("Role", "")).strip()
+            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
+            if role:
+                unique_role_seniority.add((role, seniority))
+        
+        # Create resources for each unique (role, seniority) combination
+        for role, seniority in sorted(unique_role_seniority):
             res = ET.SubElement(resources, "{%s}Resource" % ns)
             ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
             ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
-            ET.SubElement(res, "{%s}Name" % ns).text = str(role)
+            
+            # Create resource name with seniority if available
+            if seniority:
+                resource_name = f"{role} ({seniority})"
+            else:
+                resource_name = str(role)
+            
+            ET.SubElement(res, "{%s}Name" % ns).text = resource_name
             ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
@@ -445,7 +463,12 @@ def convert_excel_to_mspdi(
             if blended_rate:
                 ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
             elif "Rate_USD" in df.columns:
-                role_rate = df[df["Role"] == role]["Rate_USD"].dropna().iloc[0] if not df[df["Role"] == role]["Rate_USD"].dropna().empty else 150
+                # Try to find rate for this specific role
+                role_rate_rows = role_rows[role_rows["Role"] == role]
+                if not role_rate_rows.empty and "Rate_USD" in role_rate_rows.columns:
+                    role_rate = role_rate_rows["Rate_USD"].dropna().iloc[0] if not role_rate_rows["Rate_USD"].dropna().empty else 150
+                else:
+                    role_rate = 150
                 ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
             else:
                 ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
@@ -456,8 +479,19 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
             
+            # FIX: Store in both resource_map (role only) and resource_uid_map (role, seniority)
             resource_map[str(role)] = resource_id
+            resource_uid_map[(role, seniority)] = resource_id
+            
+            logging.info(f"[RESOURCE CREATION] Created resource UID={resource_id} for Role='{role}', Seniority='{seniority}', Name='{resource_name}'")
+            
             resource_id += 1
+    
+    # FIX: Log resource mapping summary for debugging
+    logging.info(f"[RESOURCE VALIDATION] Created {len(resource_uid_map)} role-seniority resources")
+    logging.info(f"[RESOURCE VALIDATION] resource_uid_map keys (first 10): {list(resource_uid_map.keys())[:10]}")
+    if len(resource_uid_map) != len(unique_role_seniority):
+        logging.warning(f"[RESOURCE VALIDATION] WARNING: Mismatch! Expected {len(unique_role_seniority)} resources, created {len(resource_uid_map)}")
     
     # Create Tasks container
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
@@ -832,6 +866,13 @@ def convert_excel_to_mspdi(
                 # Loop through tasks within this component (Level 3)
                 for idx, row in component_group.iterrows():
                     try:
+                        # FIX: SKIP creating Task elements for role rows (rows where Role is populated)
+                        # These will be converted to Assignments later
+                        role_value = row.get("Role", "")
+                        if pd.notna(role_value) and str(role_value).strip():
+                            logging.info(f"[ROLE ROW] Skipping task creation for role row at index {idx}: Role={role_value}")
+                            continue  # Skip to next row without creating a Task
+                        
                         task_num_in_component += 1
                         task = ET.SubElement(tasks, "{%s}Task" % ns)
                         uid = task_uid
@@ -1556,6 +1597,153 @@ def convert_excel_to_mspdi(
             ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
             
             assignment_uid += 1
+    
+    # FIX: Process role rows and create Assignments instead of duplicate Tasks
+    logging.info("[ROLE ASSIGNMENTS] Processing role rows to create Assignments")
+    role_assignment_count = 0
+    skipped_role_rows = 0
+    
+    # Loop through ALL rows in DataFrame to find role rows
+    for idx, row in df.iterrows():
+        try:
+            # Check if this is a role row (Role column is populated)
+            role_value = row.get("Role", "")
+            if not pd.notna(role_value) or not str(role_value).strip():
+                continue  # Skip non-role rows
+            
+            role = str(role_value).strip()
+            
+            # Get Seniority (may be empty)
+            seniority_value = row.get("Seniority", "")
+            seniority = str(seniority_value).strip() if pd.notna(seniority_value) else ""
+            
+            # Get Parent_WBS_ID to find the parent task
+            parent_wbs = row.get("Parent_WBS_ID", "")
+            if not pd.notna(parent_wbs) or not str(parent_wbs).strip():
+                # Try alternative column names
+                parent_wbs = row.get("WBS_ID", "")
+                if not pd.notna(parent_wbs) or not str(parent_wbs).strip():
+                    logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: No Parent_WBS_ID found for Role={role}")
+                    skipped_role_rows += 1
+                    continue
+            
+            parent_wbs = str(parent_wbs).strip()
+            
+            # Look up parent task UID using ORIGINAL WBS_ID mapping
+            task_uid_for_assignment = original_wbs_to_uid.get(parent_wbs)
+            if task_uid_for_assignment is None:
+                logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Parent WBS '{parent_wbs}' not found for Role={role}")
+                skipped_role_rows += 1
+                continue
+            
+            # FIX: Look up resource UID using (role, seniority) mapping (NOT resource_map)
+            resource_uid = resource_uid_map.get((role, seniority))
+            if resource_uid is None:
+                # Try without seniority as fallback
+                resource_uid = resource_uid_map.get((role, ""))
+                if resource_uid is None:
+                    # Final fallback: try resource_map (role only, may not have correct seniority)
+                    resource_uid = resource_map.get(str(role))
+                    if resource_uid is None:
+                        logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Resource not found for Role='{role}', Seniority='{seniority}'")
+                        logging.warning(f"[ROLE ASSIGNMENTS] Available resources in resource_uid_map: {list(resource_uid_map.keys())[:20]}")
+                        skipped_role_rows += 1
+                        continue
+                    else:
+                        logging.warning(f"[ROLE ASSIGNMENTS] Using fallback resource_map lookup for Role='{role}' (UID={resource_uid}). Seniority '{seniority}' not matched.")
+                else:
+                    logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}' with empty seniority (UID={resource_uid})")
+            else:
+                logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}', Seniority='{seniority}' -> UID={resource_uid}")
+            
+            # Get hours (Planned_Hours or Hours column)
+            hours_value = row.get("Planned_Hours")
+            if not pd.notna(hours_value) or hours_value is None:
+                hours_value = row.get("Hours", 0)
+            
+            try:
+                hours = float(hours_value) if pd.notna(hours_value) else 0.0
+            except (ValueError, TypeError):
+                hours = 0.0
+            
+            if hours <= 0:
+                logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Hours={hours} (must be > 0)")
+                skipped_role_rows += 1
+                continue
+            
+            # Create Assignment element
+            assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
+            ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
+            ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(task_uid_for_assignment)
+            ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(resource_uid)
+            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
+            
+            # Work in minutes (PT format)
+            work_minutes = int(hours * 60)
+            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{work_minutes}M"
+            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{work_minutes}M"
+            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{work_minutes}M"
+            
+            # Get task start/finish dates from the parent task
+            parent_task_elem = None
+            for task_elem in tasks.findall("{%s}Task" % ns):
+                uid_elem = task_elem.find("{%s}UID" % ns)
+                if uid_elem is not None and int(uid_elem.text) == task_uid_for_assignment:
+                    parent_task_elem = task_elem
+                    break
+            
+            if parent_task_elem is not None:
+                start_elem = parent_task_elem.find("{%s}Start" % ns)
+                finish_elem = parent_task_elem.find("{%s}Finish" % ns)
+                if start_elem is not None:
+                    ET.SubElement(assign, "{%s}Start" % ns).text = start_elem.text
+                if finish_elem is not None:
+                    ET.SubElement(assign, "{%s}Finish" % ns).text = finish_elem.text
+            else:
+                # Fallback to project start if parent task not found
+                ET.SubElement(assign, "{%s}Start" % ns).text = project_start.isoformat()
+                ET.SubElement(assign, "{%s}Finish" % ns).text = project_start.isoformat()
+            
+            # Standard assignment fields
+            ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
+            ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
+            ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
+            ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
+            ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
+            ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Cost" % ns).text = str(hours * (blended_rate or 150))
+            ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
+            ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}SV" % ns).text = "0"
+            ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
+            ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
+            
+            assignment_uid += 1
+            role_assignment_count += 1
+            
+            logging.info(f"[ROLE ASSIGNMENTS] Created assignment #{role_assignment_count}: Role='{role}', Seniority='{seniority}' -> Task UID={task_uid_for_assignment}, Resource UID={resource_uid}, Hours={hours}")
+            
+        except Exception as e:
+            logging.error(f"[ROLE ASSIGNMENTS] Error processing role row at index {idx}: {e}")
+            skipped_role_rows += 1
+    
+    logging.info(f"[ROLE ASSIGNMENTS] ========== SUMMARY ==========")
+    logging.info(f"[ROLE ASSIGNMENTS] Total role rows processed: {role_assignment_count + skipped_role_rows}")
+    logging.info(f"[ROLE ASSIGNMENTS] Successful assignments: {role_assignment_count}")
+    logging.info(f"[ROLE ASSIGNMENTS] Skipped rows: {skipped_role_rows}")
+    logging.info(f"[ROLE ASSIGNMENTS] Success rate: {(role_assignment_count / (role_assignment_count + skipped_role_rows) * 100) if (role_assignment_count + skipped_role_rows) > 0 else 0:.1f}%")
+    logging.info(f"[ROLE ASSIGNMENTS] ===============================")
     
     # Write the XML file
     tree = ET.ElementTree(root)
