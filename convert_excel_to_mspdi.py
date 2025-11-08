@@ -1089,11 +1089,12 @@ def convert_excel_to_mspdi(
                             ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743714"  # Number2
                             ET.SubElement(ext_attr_conf, "{%s}Value" % ns).text = str(random.randint(70, 100))
                             
-                            # Department
-                            if department:
-                                ext_attr_dept = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                                ET.SubElement(ext_attr_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                                ET.SubElement(ext_attr_dept, "{%s}Value" % ns).text = str(department)
+                            # FIX D: Text1 (Department) = Service Category for default grid visibility
+                            # Service Category is the primary field; Department mirrors it
+                            task_category_value = task_service_dept if task_service_dept else "Unassigned"
+                            ext_attr_dept = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                            ET.SubElement(ext_attr_dept, "{%s}Value" % ns).text = task_category_value
                             
                             # Deliverable Code
                             if deliv_code:
@@ -1106,8 +1107,7 @@ def convert_excel_to_mspdi(
                             ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
                             ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
                             
-                            # Service Category (replaces Category tag for Workfront)
-                            task_category_value = task_service_dept if task_service_dept else "Unassigned"
+                            # Service Category (Text4 - WORKFRONT REQUIREMENT)
                             ext_attr_sc_task = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
                             ET.SubElement(ext_attr_sc_task, "{%s}FieldID" % ns).text = "188743734"  # Text4
                             ET.SubElement(ext_attr_sc_task, "{%s}Value" % ns).text = task_category_value
@@ -1490,10 +1490,24 @@ def convert_excel_to_mspdi(
                                 skipped_count += 1
                                 continue
                         
+                        # FIX C: Skip adding predecessor if THIS task is a summary task
+                        is_summary_task = False
+                        summary_check_elem = task_elem.find("{%s}Summary" % ns)
+                        if summary_check_elem is not None and summary_check_elem.text == "1":
+                            is_summary_task = True
+                        
+                        if is_summary_task:
+                            task_name_elem = task_elem.find("{%s}Name" % ns)
+                            task_name_for_log = task_name_elem.text if task_name_elem is not None else "Unknown"
+                            logging.warning(f"[DEPENDENCIES] Skipping dependency for summary task '{task_name_for_log}' (UID={task_uid})")
+                            skipped_count += 1
+                            continue
+                        
                         # Create PredecessorLink element (only for leaf tasks)
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
+                        # FIX C: Force Type=0 (Finish-to-Start) for all dependencies
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "0"  # Type=0 is FS (Finish-to-Start)
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
@@ -1543,11 +1557,39 @@ def convert_excel_to_mspdi(
                             ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
                             break
     
-    # Create Assignments container with enhanced resource assignments
-    assignments = ET.SubElement(root, "{%s}Assignments" % ns)
+    # FIX B: Build child-hours-by-role for each parent WBS (ALWAYS, not gated by merge)
+    # This allows assignments even when L3 PlannedHours=0
+    logging.info("[FIX B] Building child-hours-by-role aggregator for parent tasks")
+    child_hours_by_parent = {}
+    for idx, row in df.iterrows():
+        parent_wbs = row.get("Parent_WBS_ID", "")
+        if not pd.notna(parent_wbs) or not str(parent_wbs).strip():
+            continue
+        
+        parent_wbs = str(parent_wbs).strip()
+        planned_hours = row.get("Planned_Hours", 0)
+        role_value = row.get("Role", "")
+        
+        # Only aggregate if row has hours and a single role
+        if pd.notna(role_value) and str(role_value).strip() and pd.notna(planned_hours):
+            try:
+                hours = float(planned_hours)
+                if hours > 0:
+                    role = str(role_value).strip()
+                    child_hours_by_parent.setdefault(parent_wbs, {}).setdefault(role, 0.0)
+                    child_hours_by_parent[parent_wbs][role] += hours
+            except (ValueError, TypeError):
+                pass
+    
+    logging.info(f"[FIX B] Built child hours aggregator for {len(child_hours_by_parent)} parent tasks")
+    
+    # FIX A: Build assignment data list BEFORE creating XML elements
+    # This allows us to aggregate work by task and update Task.Work elements
+    logging.info("[FIX A] Building assignment data structure before creating XML")
+    assignment_data_list = []
     assignment_uid = 1
     
-    # Create resource assignments
+    # Create resource assignments data (not XML yet)
     for uid, task_data in task_map.items():
         task = task_data["task"]
         
@@ -1562,44 +1604,20 @@ def convert_excel_to_mspdi(
         # Assign department resource
         department = task_data["department"]
         if department in department_resources:
-            assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
-            ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
-            ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
-            ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
-            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
-            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
-            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{int(work_hours * 60)}M"
-            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{int(work_hours * 60)}M"
-            ET.SubElement(assign, "{%s}Start" % ns).text = task.find("{%s}Start" % ns).text
-            ET.SubElement(assign, "{%s}Finish" % ns).text = task.find("{%s}Finish" % ns).text
-            ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
-            ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
-            ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
-            ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
-            ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
-            ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
-            ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
-            ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
-            ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
-            ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
-            ET.SubElement(assign, "{%s}Cost" % ns).text = str(work_hours * (blended_rate or 150))
-            ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
-            ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
-            ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
-            ET.SubElement(assign, "{%s}SV" % ns).text = "0"
-            ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
-            ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
-            ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
-            ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
-            
+            # Store assignment data (not XML yet)
+            assignment_data_list.append({
+                "AssignmentUID": assignment_uid,
+                "TaskUID": uid,
+                "ResourceUID": department_resources[department],
+                "WorkHours": work_hours,
+                "Cost": work_hours * (blended_rate or 150),
+                "Start": task.find("{%s}Start" % ns).text,
+                "Finish": task.find("{%s}Finish" % ns).text
+            })
             assignment_uid += 1
     
-    # FIX: Process role rows and create Assignments instead of duplicate Tasks
-    logging.info("[ROLE ASSIGNMENTS] Processing role rows to create Assignments")
+    # FIX: Process role rows and create assignment data (not XML yet)
+    logging.info("[ROLE ASSIGNMENTS] Processing role rows to create assignment data")
     role_assignment_count = 0
     skipped_role_rows = 0
     
@@ -1632,9 +1650,13 @@ def convert_excel_to_mspdi(
             # Look up parent task UID using ORIGINAL WBS_ID mapping
             task_uid_for_assignment = original_wbs_to_uid.get(parent_wbs)
             if task_uid_for_assignment is None:
-                logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Parent WBS '{parent_wbs}' not found for Role={role}")
-                skipped_role_rows += 1
-                continue
+                # FIX B: Try child_hours_by_parent if task not found directly
+                if parent_wbs in child_hours_by_parent:
+                    logging.info(f"[FIX B] Using child hours aggregator for parent WBS '{parent_wbs}'")
+                else:
+                    logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Parent WBS '{parent_wbs}' not found for Role={role}")
+                    skipped_role_rows += 1
+                    continue
             
             # FIX: Look up resource UID using (role, seniority) mapping (NOT resource_map)
             resource_uid = resource_uid_map.get((role, seniority))
@@ -1666,23 +1688,17 @@ def convert_excel_to_mspdi(
             except (ValueError, TypeError):
                 hours = 0.0
             
+            # FIX B: If hours <= 0, try to get hours from child_hours_by_parent
+            if hours <= 0 and parent_wbs in child_hours_by_parent:
+                role_hours_map = child_hours_by_parent[parent_wbs]
+                if role in role_hours_map:
+                    hours = role_hours_map[role]
+                    logging.info(f"[FIX B] Using aggregated hours {hours} from children for Role={role}, Parent WBS={parent_wbs}")
+            
             if hours <= 0:
                 logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Hours={hours} (must be > 0)")
                 skipped_role_rows += 1
                 continue
-            
-            # Create Assignment element
-            assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
-            ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
-            ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(task_uid_for_assignment)
-            ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(resource_uid)
-            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
-            
-            # Work in minutes (PT format)
-            work_minutes = int(hours * 60)
-            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{work_minutes}M"
-            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{work_minutes}M"
-            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{work_minutes}M"
             
             # Get task start/finish dates from the parent task
             parent_task_elem = None
@@ -1695,44 +1711,27 @@ def convert_excel_to_mspdi(
             if parent_task_elem is not None:
                 start_elem = parent_task_elem.find("{%s}Start" % ns)
                 finish_elem = parent_task_elem.find("{%s}Finish" % ns)
-                if start_elem is not None:
-                    ET.SubElement(assign, "{%s}Start" % ns).text = start_elem.text
-                if finish_elem is not None:
-                    ET.SubElement(assign, "{%s}Finish" % ns).text = finish_elem.text
+                task_start_text = start_elem.text if start_elem is not None else project_start.isoformat()
+                task_finish_text = finish_elem.text if finish_elem is not None else project_start.isoformat()
             else:
-                # Fallback to project start if parent task not found
-                ET.SubElement(assign, "{%s}Start" % ns).text = project_start.isoformat()
-                ET.SubElement(assign, "{%s}Finish" % ns).text = project_start.isoformat()
+                task_start_text = project_start.isoformat()
+                task_finish_text = project_start.isoformat()
             
-            # Standard assignment fields
-            ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
-            ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
-            ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
-            ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
-            ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
-            ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
-            ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
-            ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
-            ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
-            ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
-            ET.SubElement(assign, "{%s}Cost" % ns).text = str(hours * (blended_rate or 150))
-            ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
-            ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
-            ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
-            ET.SubElement(assign, "{%s}SV" % ns).text = "0"
-            ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
-            ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
-            ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
-            ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
-            ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
+            # Store assignment data (not XML yet)
+            assignment_data_list.append({
+                "AssignmentUID": assignment_uid,
+                "TaskUID": task_uid_for_assignment,
+                "ResourceUID": resource_uid,
+                "WorkHours": hours,
+                "Cost": hours * (blended_rate or 150),
+                "Start": task_start_text,
+                "Finish": task_finish_text
+            })
             
             assignment_uid += 1
             role_assignment_count += 1
             
-            logging.info(f"[ROLE ASSIGNMENTS] Created assignment #{role_assignment_count}: Role='{role}', Seniority='{seniority}' -> Task UID={task_uid_for_assignment}, Resource UID={resource_uid}, Hours={hours}")
+            logging.info(f"[ROLE ASSIGNMENTS] Created assignment data #{role_assignment_count}: Role='{role}', Seniority='{seniority}' -> Task UID={task_uid_for_assignment}, Resource UID={resource_uid}, Hours={hours}")
             
         except Exception as e:
             logging.error(f"[ROLE ASSIGNMENTS] Error processing role row at index {idx}: {e}")
@@ -1744,6 +1743,110 @@ def convert_excel_to_mspdi(
     logging.info(f"[ROLE ASSIGNMENTS] Skipped rows: {skipped_role_rows}")
     logging.info(f"[ROLE ASSIGNMENTS] Success rate: {(role_assignment_count / (role_assignment_count + skipped_role_rows) * 100) if (role_assignment_count + skipped_role_rows) > 0 else 0:.1f}%")
     logging.info(f"[ROLE ASSIGNMENTS] ===============================")
+    
+    # FIX A: Aggregate work by task from assignments
+    logging.info("[FIX A] Aggregating work by task from assignments")
+    work_by_task = {}
+    cost_by_task = {}
+    for a in assignment_data_list:
+        task_uid = a["TaskUID"]
+        work_by_task[task_uid] = work_by_task.get(task_uid, 0.0) + float(a["WorkHours"])
+        cost_by_task[task_uid] = cost_by_task.get(task_uid, 0.0) + float(a["Cost"])
+    
+    logging.info(f"[FIX A] Aggregated work for {len(work_by_task)} tasks")
+    
+    # FIX A & E: Update Task.Work and Task.Cost elements from aggregated assignments
+    logging.info("[FIX A & E] Updating Task.Work and Task.Cost from aggregated assignments")
+    for task_uid, work_hours in work_by_task.items():
+        # Find task element by UID
+        for task_elem in tasks.findall("{%s}Task" % ns):
+            uid_elem = task_elem.find("{%s}UID" % ns)
+            if uid_elem is not None and int(uid_elem.text) == task_uid:
+                # Check if this is a summary task (skip work updates for summary tasks)
+                summary_elem = task_elem.find("{%s}Summary" % ns)
+                is_summary = summary_elem is not None and summary_elem.text == "1"
+                
+                if not is_summary:
+                    # Update Work, RemainingWork, RegularWork
+                    planned_minutes = int(round(60 * work_hours))
+                    
+                    work_elem = task_elem.find("{%s}Work" % ns)
+                    if work_elem is not None:
+                        work_elem.text = f"PT{planned_minutes}M"
+                    else:
+                        ET.SubElement(task_elem, "{%s}Work" % ns).text = f"PT{planned_minutes}M"
+                    
+                    remaining_work_elem = task_elem.find("{%s}RemainingWork" % ns)
+                    if remaining_work_elem is not None:
+                        remaining_work_elem.text = f"PT{planned_minutes}M"
+                    
+                    regular_work_elem = task_elem.find("{%s}RegularWork" % ns)
+                    if regular_work_elem is not None:
+                        regular_work_elem.text = f"PT{planned_minutes}M"
+                    
+                    # FIX E: Update Task.Cost from assignment costs
+                    task_cost = cost_by_task.get(task_uid, 0.0)
+                    cost_elem = task_elem.find("{%s}Cost" % ns)
+                    if cost_elem is not None:
+                        cost_elem.text = str(task_cost)
+                    else:
+                        ET.SubElement(task_elem, "{%s}Cost" % ns).text = str(task_cost)
+                    
+                    fixed_cost_elem = task_elem.find("{%s}FixedCost" % ns)
+                    if fixed_cost_elem is not None:
+                        fixed_cost_elem.text = str(task_cost)
+                    
+                    task_name_elem = task_elem.find("{%s}Name" % ns)
+                    task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
+                    logging.info(f"[FIX A & E] Updated task '{task_name}' (UID={task_uid}): Work={planned_minutes}M, Cost=${task_cost:.2f}")
+                break
+    
+    # Create Assignments container with enhanced resource assignments
+    logging.info("[FIX A] Creating Assignment XML elements from assignment data")
+    assignments = ET.SubElement(root, "{%s}Assignments" % ns)
+    
+    # Create assignment XML elements from assignment_data_list
+    for assignment_data in assignment_data_list:
+        assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
+        ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_data["AssignmentUID"])
+        ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(assignment_data["TaskUID"])
+        ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(assignment_data["ResourceUID"])
+        ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
+        
+        # Work in minutes (PT format)
+        work_minutes = int(assignment_data["WorkHours"] * 60)
+        ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{work_minutes}M"
+        ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{work_minutes}M"
+        ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{work_minutes}M"
+        ET.SubElement(assign, "{%s}Start" % ns).text = assignment_data["Start"]
+        ET.SubElement(assign, "{%s}Finish" % ns).text = assignment_data["Finish"]
+        
+        # Standard assignment fields
+        ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
+        ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
+        ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
+        ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
+        ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
+        ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
+        ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
+        ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
+        ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
+        ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
+        ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
+        ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
+        ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
+        ET.SubElement(assign, "{%s}Cost" % ns).text = str(assignment_data["Cost"])
+        ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
+        ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
+        ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
+        ET.SubElement(assign, "{%s}SV" % ns).text = "0"
+        ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
+        ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
+        ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
+        ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
+        ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
+    
+    logging.info(f"[FIX A] Created {len(assignment_data_list)} Assignment XML elements")
     
     # Write the XML file
     tree = ET.ElementTree(root)
