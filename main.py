@@ -1549,14 +1549,91 @@ class AgencyDB:
         return g
 
     # ---------- Timeline ----------
+    def hours_to_duration_days(self, hours: float, deliverable_code: str = "", task_group: str = "", 
+                               scenario_col: str = "") -> float:
+        """
+        Task 5: Hours-based duration calculation using capacity formula.
+        Formula: days = ceil(hours / (hours_per_day * available_resources * focus_factor))
+        
+        Parameters:
+        - hours: Total hours for the task
+        - deliverable_code: Used to identify resource roles if available
+        - task_group: Used to identify typical resources needed
+        - scenario_col: Scenario column for hours lookup
+        
+        Returns: Duration in business days
+        """
+        # PM-brain parameters based on agency reality
+        hours_per_day = 6.5  # Realistic productive hours (not 8)
+        focus_factor = 0.7   # Account for context switching, meetings, admin
+        
+        # Determine available resources - try to get from actual role assignments
+        available_resources = 1.0  # Default to 1 FTE
+        
+        if deliverable_code and task_group and scenario_col and self.all_rows is not None:
+            try:
+                # Check how many distinct roles are assigned to this task
+                sub = self.all_rows[
+                    (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+                    (self.all_rows["task_group"].astype(str) == str(task_group))
+                ]
+                if not sub.empty and isinstance(sub, pd.DataFrame):
+                    # Count distinct roles with non-zero hours
+                    sub_filtered = sub[sub[scenario_col] > 0] if scenario_col in sub.columns else sub
+                    unique_roles = sub_filtered["Resource_Title"].nunique()
+                    if unique_roles > 0:
+                        # Average 0.5 FTE per role (realistic for shared resources)
+                        available_resources = unique_roles * 0.5
+            except Exception:
+                pass  # Fall back to default
+        
+        # Calculate duration with minimum of 1 day
+        if hours <= 0:
+            return 1.0
+        
+        effective_daily_capacity = hours_per_day * available_resources * focus_factor
+        duration_days = math.ceil(hours / effective_daily_capacity)
+        
+        return max(1.0, float(duration_days))
+    
     def task_group_duration_days(self, task_group: str, complexity: str, tier: str, use_slack: bool,
-                                 slack_after_internal: int, slack_after_client: int, slack_global_pct: float) -> float:
-        # Base nominal
+                                 slack_after_internal: int, slack_after_client: int, slack_global_pct: float,
+                                 deliverable_code: str = "", scenario_col: str = "") -> float:
+        """
+        Enhanced with hours-based calculation (Task 5).
+        Falls back to static lookups if hours data unavailable.
+        """
+        # Try hours-based calculation first if we have the data
+        if deliverable_code and scenario_col and self.all_rows is not None:
+            try:
+                # Get actual hours for this task group from scenario
+                sub = self.all_rows[
+                    (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+                    (self.all_rows["task_group"].astype(str) == str(task_group))
+                ]
+                if not sub.empty and isinstance(sub, pd.DataFrame) and scenario_col in sub.columns:
+                    total_hours = float(sub[scenario_col].sum())
+                    if total_hours > 0:
+                        # Use hours-based calculation
+                        base_dur = self.hours_to_duration_days(
+                            total_hours, 
+                            deliverable_code, 
+                            task_group, 
+                            scenario_col
+                        )
+                        # Apply slack if needed
+                        if use_slack and slack_global_pct > 0:
+                            base_dur *= (1.0 + float(slack_global_pct))
+                        return max(1.0, round(base_dur, 2))
+            except Exception:
+                pass  # Fall through to static calculation
+        
+        # Fallback: Static lookup from Timeline_Params (original logic)
         if self.timeline_params is None or not isinstance(self.timeline_params, pd.DataFrame):
-            return 0.0
+            return 1.0
         tp = self.timeline_params[self.timeline_params["Task_Group"]==task_group]
         if tp.empty or not isinstance(tp, pd.DataFrame):
-            return 0.0
+            return 1.0
         base = float(tp["Nominal_Duration_Days"].iloc[0])
 
         # Scaling - with None checks for v3 database compatibility
@@ -1584,12 +1661,75 @@ class AgencyDB:
             dur *= (1.0 + float(slack_global_pct))
         return max(1.0, round(dur, 2))
 
+    def _build_task_dependencies(self, task_groups: List[str], slack_after_internal: int, 
+                                 slack_after_client: int) -> Dict[str, Dict[str, Any]]:
+        """
+        Task 7: Build SS/FS dependency relationships between task groups.
+        
+        Returns dict mapping task_group -> {"type": "SS"/"FS", "predecessor": str, "lag_days": int, "lag_pct": float}
+        """
+        dependencies = {}
+        
+        # Dependency rules based on PM best practices
+        DEPENDENCY_RULES = {
+            # Strategy/Brief overlaps with downstream work (SS = Start-to-Start)
+            "art_direction": {"type": "SS", "predecessor": "strategy", "lag_pct": 0.5, "reason": "Art direction can start with draft strategy"},
+            "research": {"type": "SS", "predecessor": "strategy", "lag_pct": 0.5, "reason": "Research can parallel strategy"},
+            "concepting": {"type": "SS", "predecessor": "strategy", "lag_pct": 0.6, "reason": "Concepts need strategic direction"},
+            
+            # Review chains use FS (Finish-to-Start)
+            "internal_review": {"type": "FS", "predecessor": "concepting", "lag_days": 0, "reason": "Review after concepts complete"},
+            "client_review": {"type": "FS", "predecessor": "internal_review", "lag_days": slack_after_internal, "reason": "Client review after internal"},
+            "revisions": {"type": "FS", "predecessor": "client_review", "lag_days": slack_after_client, "reason": "Revisions after client feedback"},
+            
+            # Production follows creative (with some overlap)
+            "production": {"type": "SS", "predecessor": "creative", "lag_pct": 0.4, "reason": "Production can start on approved pieces"},
+            "development": {"type": "SS", "predecessor": "design", "lag_pct": 0.7, "reason": "Development needs core designs"},
+        }
+        
+        # Map task groups to dependencies
+        for tg in task_groups:
+            tg_lower = tg.lower().replace("_", "").replace(" ", "")
+            
+            # Check each rule to see if it matches
+            for pattern, rule in DEPENDENCY_RULES.items():
+                pattern_clean = pattern.lower().replace("_", "").replace(" ", "")
+                if pattern_clean in tg_lower:
+                    # Check if predecessor exists in task_groups
+                    pred = rule["predecessor"]
+                    for potential_pred in task_groups:
+                        pred_clean = potential_pred.lower().replace("_", "").replace(" ", "")
+                        if pred in pred_clean or pred_clean in pred:
+                            dependencies[tg] = {
+                                "type": rule["type"],
+                                "predecessor": potential_pred,
+                                "lag_days": rule.get("lag_days", 0),
+                                "lag_pct": rule.get("lag_pct", 0.0),
+                                "reason": rule.get("reason", "")
+                            }
+                            break
+        
+        return dependencies
+    
     def build_schedule(self, deliverable_code: str, included_task_groups: List[str],
                        complexity: str, tier: str,
                        use_slack: bool, slack_after_internal: int, slack_after_client: int, slack_global_pct: float,
                        project_start: Optional[str]=None, scenario_letter: str="A") -> List[Dict[str, Any]]:
+        """
+        Enhanced with:
+        - Task 6: Resource leveling with capacity constraints
+        - Task 7: SS/FS dependencies with leads/lags
+        """
         if self.timeline_params is None or not isinstance(self.timeline_params, pd.DataFrame):
             return []
+        
+        # Get scenario column for hours lookup
+        scenario_col = ""
+        try:
+            scenario_col = self.scenario_hours_col(complexity, tier)
+        except:
+            pass
+        
         order_map = {tg:i for i, tg in enumerate(self.timeline_params["Task_Group"].astype(str).tolist())}
         tgs = self.sort_task_groups(included_task_groups, scenario_letter)
 
@@ -1608,32 +1748,138 @@ class AgencyDB:
         if start_date.month >= 10:  # If starting in Q4, include next year's holidays
             holidays.extend(_get_us_mx_holidays(year + 1))
 
-        # Use numpy to calculate business days (Mon-Fri only, excluding holidays)
+        # Task 7: Build dependencies between task groups
+        dependencies = self._build_task_dependencies(tgs, slack_after_internal, slack_after_client)
+        
+        # Task 6: Calculate total FTE available for resource leveling
+        total_fte = 3.0  # Default team capacity (can be parameterized later)
+        if self.all_rows is not None and deliverable_code and scenario_col:
+            try:
+                # Estimate FTE from unique roles assigned to this deliverable
+                sub = self.all_rows[
+                    (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+                    (self.all_rows["task_group"].astype(str).isin([str(x) for x in tgs]))
+                ]
+                if not sub.empty and isinstance(sub, pd.DataFrame):
+                    unique_roles = sub["Resource_Title"].nunique()
+                    total_fte = max(3.0, unique_roles * 0.5)  # 0.5 FTE per role, minimum 3
+            except:
+                pass
+        
+        # Max parallel tasks based on team capacity (Task 6)
+        max_parallel = max(1, int(total_fte / 1.5))
+        
+        # Track active tasks by date for resource leveling (Task 6)
+        active_tasks_by_date = {}  # date_str -> count of active tasks
+        
+        # Build schedule with dependencies and resource leveling
         cursor = np.datetime64(start_date)
         rows = []
+        task_end_dates = {}  # task_group -> end_date (for dependency calculation)
+        
         for tg in tgs:
-            dur = self.task_group_duration_days(tg, complexity, tier, use_slack,
-                                                slack_after_internal, slack_after_client, slack_global_pct)
-            # Ceiling the duration to ensure we have at least 1 business day
+            # Get duration using enhanced hours-based calculation
+            dur = self.task_group_duration_days(
+                tg, complexity, tier, use_slack,
+                slack_after_internal, slack_after_client, slack_global_pct,
+                deliverable_code, scenario_col
+            )
             business_days_needed = max(1, math.ceil(dur))
             
-            # Calculate start (ensure it's a business day)
-            start = np.busday_offset(cursor, 0, roll='forward', holidays=holidays)
-            # Calculate end using business day offset
+            # Task 7: Apply dependencies to determine start date
+            actual_start = cursor
+            if tg in dependencies:
+                dep = dependencies[tg]
+                pred_tg = dep["predecessor"]
+                
+                if pred_tg in task_end_dates:
+                    pred_end = task_end_dates[pred_tg]
+                    
+                    if dep["type"] == "FS":
+                        # Finish-to-Start: start after predecessor ends + lag
+                        lag_days = dep.get("lag_days", 0)
+                        actual_start = np.busday_offset(pred_end, lag_days, roll='forward', holidays=holidays)
+                    
+                    elif dep["type"] == "SS":
+                        # Start-to-Start: start when predecessor is X% complete
+                        lag_pct = dep.get("lag_pct", 0.0)
+                        if pred_tg in rows:
+                            pred_row = next((r for r in rows if r["task_group"] == pred_tg), None)
+                            if pred_row:
+                                pred_start = np.datetime64(pred_row["start_date"])
+                                pred_duration = pred_row["duration_days"]
+                                lag_days = int(pred_duration * lag_pct)
+                                actual_start = np.busday_offset(pred_start, lag_days, roll='forward', holidays=holidays)
+            
+            # Task 6: Resource leveling - check if we're over capacity
+            # If too many tasks running in parallel, push start forward
+            start_candidate = np.busday_offset(actual_start, 0, roll='forward', holidays=holidays)
+            while True:
+                # Check how many tasks are active on this date
+                date_str = str(start_candidate)
+                active_count = active_tasks_by_date.get(date_str, 0)
+                
+                if active_count < max_parallel:
+                    # We have capacity - use this start date
+                    actual_start = start_candidate
+                    break
+                else:
+                    # Over capacity - try next business day
+                    start_candidate = np.busday_offset(start_candidate, 1, roll='forward', holidays=holidays)
+            
+            # Calculate end date
+            start = np.busday_offset(actual_start, 0, roll='forward', holidays=holidays)
             end = np.busday_offset(start, business_days_needed, roll='forward', holidays=holidays)
+            
+            # Task 6: Track active tasks for resource leveling
+            current_date = start
+            while current_date < end:
+                date_str = str(current_date)
+                active_tasks_by_date[date_str] = active_tasks_by_date.get(date_str, 0) + 1
+                current_date = np.busday_offset(current_date, 1, roll='forward', holidays=holidays)
             
             # Convert numpy dates back to strings for JSON serialization
             start_str = str(start)
             end_str = str(end)
             
-            rows.append({
+            # Get resource assignments for this task
+            resources_assigned = []
+            if self.all_rows is not None and deliverable_code and scenario_col:
+                try:
+                    sub = self.all_rows[
+                        (self.all_rows["Deliverable_Code"].astype(str) == str(deliverable_code)) &
+                        (self.all_rows["task_group"].astype(str) == str(tg))
+                    ]
+                    if not sub.empty and isinstance(sub, pd.DataFrame):
+                        resources_assigned = sub["Resource_Title"].dropna().unique().tolist()
+                except:
+                    pass
+            
+            # Build schedule entry with enhanced info
+            schedule_entry = {
                 "task_group": tg,
                 "start_date": start_str,
                 "end_date": end_str,
-                "duration_days": business_days_needed
-            })
+                "duration_days": business_days_needed,
+                "resources_assigned": resources_assigned  # Task 6: Resource info
+            }
             
-            # Move cursor to end date for next task group
+            # Task 7: Add dependency info if present
+            if tg in dependencies:
+                dep = dependencies[tg]
+                schedule_entry.update({
+                    "dependency_type": dep["type"],
+                    "dependency_predecessor": dep["predecessor"],
+                    "dependency_lag_days": dep.get("lag_days", 0),
+                    "dependency_reason": dep.get("reason", "")
+                })
+            
+            rows.append(schedule_entry)
+            
+            # Store end date for dependency calculations
+            task_end_dates[tg] = end
+            
+            # Move cursor to end date for next task group (for sequential tasks)
             cursor = end
 
             # Slack after reviews (in business days)
@@ -3008,7 +3254,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Component": "", "Task": "", "Role": "", "Seniority": "",
                 "Planned_Hours": (monthly_hours * months) if months else parent_hours_display,
                 "Start_Offset_Days": dstart,
-                "Duration_Days": (total_deliv_duration * months) if months else total_deliv_duration,
+                "Duration_Days": "",  # Task 8: Leave empty for summary bar - computed from children
                 "Start_Date": d.get("Start_Date", ""),
                 "End_Date": d.get("End_Date", ""),
                 "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": deliv_notes,
@@ -3065,7 +3311,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Task_Name": comp, "Component": comp, "Task": "", "Role": "", "Seniority": "",
                     "Planned_Hours": comp_hours_total_display,
                     "Start_Offset_Days": dstart + comp_offset,
-                    "Duration_Days": (comp_duration * months) if months else comp_duration,
+                    "Duration_Days": "",  # Task 8: Leave empty for summary bar - computed from children
                     "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs),
                     "Assignee_External_ID": "", "Notes": "",
                     "Rate_USD": round(comp_rate if pricing_mode=="Flat_Blended" else _eff_rate(comp_price, comp_hours_total_display or 0), 2),
