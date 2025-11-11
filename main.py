@@ -7546,7 +7546,10 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             project_name=project_name,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
-            blended_rate=scenario.get("blended_rate")
+            blended_rate=scenario.get("blended_rate"),
+            add_deliverable_milestones=False,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -7619,7 +7622,10 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project,
             pricing_mode=scenario_a.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_a.get("rate_band", "Standard_US"),
-            blended_rate=scenario_a.get("blended_rate")
+            blended_rate=scenario_a.get("blended_rate"),
+            add_deliverable_milestones=False,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         
         # Post-process Scenario A XML
@@ -7649,7 +7655,10 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project,
             pricing_mode=scenario_b.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_b.get("rate_band", "Standard_US"),
-            blended_rate=scenario_b.get("blended_rate")
+            blended_rate=scenario_b.get("blended_rate"),
+            add_deliverable_milestones=False,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         
         # Post-process Scenario B XML
@@ -7731,7 +7740,10 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenA.get("pricing_mode", "Flat_Blended"),
             rate_band=scenA.get("rate_band", "Standard_US"),
-            blended_rate=scenA.get("blended_rate")
+            blended_rate=scenA.get("blended_rate"),
+            add_deliverable_milestones=False,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         # Post-process Scenario A XML
         final_xml_a = out_xml_a
@@ -7754,7 +7766,10 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenB.get("pricing_mode", "Flat_Blended"),
             rate_band=scenB.get("rate_band", "Standard_US"),
-            blended_rate=scenB.get("blended_rate")
+            blended_rate=scenB.get("blended_rate"),
+            add_deliverable_milestones=False,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         # Post-process Scenario B XML
         final_xml_b = out_xml_b
@@ -7777,7 +7792,10 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenC.get("pricing_mode", "Flat_Blended"),
             rate_band=scenC.get("rate_band", "Standard_US"),
-            blended_rate=scenC.get("blended_rate")
+            blended_rate=scenC.get("blended_rate"),
+            add_deliverable_milestones=False,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         # Post-process Scenario C XML
         final_xml_c = out_xml_c
@@ -7881,7 +7899,9 @@ def _export_single_scenario_xml(
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=add_deliverable_milestones
+            add_deliverable_milestones=add_deliverable_milestones,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -9069,7 +9089,9 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
     rate_band: str = "Standard_US",          # <— NEW: rate band
     blended_rate: Optional[float] = None,    # <— NEW: blended rate
-    add_deliverable_milestones: bool = False # <— NEW: toggle for START/END anchors
+    add_deliverable_milestones: bool = False, # <— NEW: toggle for START/END anchors
+    add_phase_gates: bool = False,           # <— NEW: toggle for phase gates
+    add_client_approval_milestone: bool = False # <— NEW: toggle for client approval milestone
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -10686,7 +10708,9 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=payload.add_milestones
+            add_deliverable_milestones=payload.add_milestones,
+            add_phase_gates=False,
+            add_client_approval_milestone=False
         )
         
         # Post-process XML if parallelization is enabled

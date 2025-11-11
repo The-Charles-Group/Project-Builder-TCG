@@ -152,8 +152,9 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
-    add_deliverable_milestones: bool = True,
-    add_phase_gates: bool = True,
+    add_deliverable_milestones: bool = False,
+    add_phase_gates: bool = False,
+    add_client_approval_milestone: bool = False,
     add_dependencies: bool = True,
     add_custom_fields: bool = True
 ) -> Dict[str, Any]:
@@ -172,8 +173,9 @@ def convert_excel_to_mspdi(
         pricing_mode: Pricing mode for the project
         rate_band: Rate band for pricing
         blended_rate: Blended rate if using flat pricing
-        add_deliverable_milestones: Add milestone tasks for deliverables
+        add_deliverable_milestones: Add START/END anchor milestones for deliverables
         add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
+        add_client_approval_milestone: Add CLIENT APPROVAL - FINAL milestone at end
         add_dependencies: Add task dependencies
         add_custom_fields: Add ExtendedAttribute elements for Workfront
         
@@ -1311,7 +1313,7 @@ def convert_excel_to_mspdi(
                         ET.SubElement(ext_attr_pg, "{%s}Value" % ns).text = "Phase Gate"
     
     # Add client approval milestone at the end
-    if add_deliverable_milestones:
+    if add_client_approval_milestone:
         approval_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
         approval_uid = task_uid
         task_uid += 1
