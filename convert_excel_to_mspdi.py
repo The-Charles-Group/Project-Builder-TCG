@@ -20,6 +20,20 @@ import random
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
+def normalize_resource_name(name: str) -> str:
+    """
+    Normalize resource name for deduplication.
+    Strips whitespace and converts to lowercase for comparison.
+    
+    Args:
+        name: Raw resource name (e.g., "  Senior Designer  ")
+    
+    Returns:
+        Normalized name (e.g., "senior designer")
+    """
+    return str(name).strip().lower()
+
+
 class DependencyType(Enum):
     """Types of task dependencies for MS Project"""
     FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
@@ -426,28 +440,36 @@ def convert_excel_to_mspdi(
         # Extract unique (role, seniority) combinations from role rows
         role_rows = df[df["Role"].notna() & (df["Role"] != "")]
         
-        # Build set of unique (role, seniority) tuples
-        unique_role_seniority = set()
+        # Build registry with normalized keys for deduplication
+        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
+        
         for _, row in role_rows.iterrows():
             role = str(row.get("Role", "")).strip()
             seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
             if role:
-                unique_role_seniority.add((role, seniority))
+                # Create display name (original case/formatting)
+                display_name = f"{role} ({seniority})" if seniority else role
+                
+                # Create normalized key for deduplication
+                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
+                
+                # Store in registry (will automatically dedupe by normalized key)
+                if normalized_key not in resource_registry:
+                    resource_registry[normalized_key] = {
+                        "display_name": display_name,
+                        "role": role,
+                        "seniority": seniority,
+                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
+                    }
         
-        # Create resources for each unique (role, seniority) combination
-        for role, seniority in sorted(unique_role_seniority):
+        # Create resources from registry (sorted for consistency)
+        for normalized_key in sorted(resource_registry.keys()):
+            res_data = resource_registry[normalized_key]
             res = ET.SubElement(resources, "{%s}Resource" % ns)
             ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
             ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
-            
-            # Create resource name with seniority if available
-            if seniority:
-                resource_name = f"{role} ({seniority})"
-            else:
-                resource_name = str(role)
-            
-            ET.SubElement(res, "{%s}Name" % ns).text = resource_name
-            ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
+            ET.SubElement(res, "{%s}Name" % ns).text = res_data["display_name"]
+            ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(res_data["role"]).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
             ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # 100% allocation
@@ -464,14 +486,8 @@ def convert_excel_to_mspdi(
             # Add rate if available
             if blended_rate:
                 ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
-            elif "Rate_USD" in df.columns:
-                # Try to find rate for this specific role
-                role_rate_rows = role_rows[role_rows["Role"] == role]
-                if not role_rate_rows.empty and "Rate_USD" in role_rate_rows.columns:
-                    role_rate = role_rate_rows["Rate_USD"].dropna().iloc[0] if not role_rate_rows["Rate_USD"].dropna().empty else 150
-                else:
-                    role_rate = 150
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
+            elif res_data["rate"] is not None:
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${res_data['rate']:.2f}/h"
             else:
                 ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
             
@@ -481,19 +497,36 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
             
-            # FIX: Store in both resource_map (role only) and resource_uid_map (role, seniority)
-            resource_map[str(role)] = resource_id
-            resource_uid_map[(role, seniority)] = resource_id
+            # Store in resource_uid_map using NORMALIZED key
+            resource_uid_map[normalized_key] = resource_id
+            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
             
-            logging.info(f"[RESOURCE CREATION] Created resource UID={resource_id} for Role='{role}', Seniority='{seniority}', Name='{resource_name}'")
+            logging.info(f"[RESOURCE CREATION] Created resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}', Name='{res_data['display_name']}' (normalized_key='{normalized_key}')")
             
             resource_id += 1
+    
+    # VALIDATION GUARD: Ensure no duplicate Resource UIDs
+    logging.info("[RESOURCE VALIDATION] Running post-creation validation...")
+    
+    # Collect all Resource UIDs from XML
+    resource_uids_in_xml = []
+    for res_elem in resources.findall("{%s}Resource" % ns):
+        uid_elem = res_elem.find("{%s}UID" % ns)
+        if uid_elem is not None:
+            resource_uids_in_xml.append(int(uid_elem.text))
+    
+    # Check for duplicates
+    assert len(resource_uids_in_xml) == len(set(resource_uids_in_xml)), \
+        f"CRITICAL: Duplicate ResourceUIDs found in XML! UIDs: {resource_uids_in_xml}"
+    
+    logging.info(f"[RESOURCE VALIDATION] ✓ All {len(resource_uids_in_xml)} Resource UIDs are unique")
+    
+    # Build valid resource UID set for assignment validation later
+    valid_resource_uids = set(resource_uids_in_xml)
     
     # FIX: Log resource mapping summary for debugging
     logging.info(f"[RESOURCE VALIDATION] Created {len(resource_uid_map)} role-seniority resources")
     logging.info(f"[RESOURCE VALIDATION] resource_uid_map keys (first 10): {list(resource_uid_map.keys())[:10]}")
-    if len(resource_uid_map) != len(unique_role_seniority):
-        logging.warning(f"[RESOURCE VALIDATION] WARNING: Mismatch! Expected {len(unique_role_seniority)} resources, created {len(resource_uid_map)}")
     
     # Create Tasks container
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
@@ -1726,25 +1759,30 @@ def convert_excel_to_mspdi(
                     skipped_role_rows += 1
                     continue
             
-            # FIX: Look up resource UID using (role, seniority) mapping (NOT resource_map)
-            resource_uid = resource_uid_map.get((role, seniority))
+            # FIX: Look up resource UID using normalized (role, seniority) mapping
+            # Normalize role/seniority for lookup
+            normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
+            resource_uid = resource_uid_map.get(normalized_key)
+            
             if resource_uid is None:
-                # Try without seniority as fallback
-                resource_uid = resource_uid_map.get((role, ""))
+                # Try without seniority as fallback (normalized key with empty seniority)
+                fallback_key = f"{normalize_resource_name(role)}|"
+                resource_uid = resource_uid_map.get(fallback_key)
                 if resource_uid is None:
                     # Final fallback: try resource_map (role only, may not have correct seniority)
                     resource_uid = resource_map.get(str(role))
                     if resource_uid is None:
                         logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Resource not found for Role='{role}', Seniority='{seniority}'")
+                        logging.warning(f"[ROLE ASSIGNMENTS] Normalized key attempted: '{normalized_key}'")
                         logging.warning(f"[ROLE ASSIGNMENTS] Available resources in resource_uid_map: {list(resource_uid_map.keys())[:20]}")
                         skipped_role_rows += 1
                         continue
                     else:
                         logging.warning(f"[ROLE ASSIGNMENTS] Using fallback resource_map lookup for Role='{role}' (UID={resource_uid}). Seniority '{seniority}' not matched.")
                 else:
-                    logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}' with empty seniority (UID={resource_uid})")
+                    logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}' with empty seniority (UID={resource_uid}, normalized_key='{fallback_key}')")
             else:
-                logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}', Seniority='{seniority}' -> UID={resource_uid}")
+                logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}', Seniority='{seniority}' -> UID={resource_uid} (normalized_key='{normalized_key}')")
             
             # Get hours (Planned_Hours or Hours column)
             hours_value = row.get("Planned_Hours")
@@ -1822,6 +1860,24 @@ def convert_excel_to_mspdi(
         cost_by_task[task_uid] = cost_by_task.get(task_uid, 0.0) + float(a["Cost"])
     
     logging.info(f"[FIX A] Aggregated work for {len(work_by_task)} tasks")
+    
+    # VALIDATION GUARD: Ensure all assignments reference valid Resource UIDs
+    logging.info("[ASSIGNMENT VALIDATION] Validating assignment ResourceUIDs...")
+    invalid_assignments = []
+    
+    for assign_data in assignment_data_list:
+        res_uid = assign_data.get("ResourceUID")
+        if res_uid not in valid_resource_uids:
+            invalid_assignments.append({
+                "task_uid": assign_data.get("TaskUID"),
+                "resource_uid": res_uid,
+                "assignment_uid": assign_data.get("AssignmentUID")
+            })
+    
+    assert len(invalid_assignments) == 0, \
+        f"CRITICAL: {len(invalid_assignments)} assignments reference invalid ResourceUIDs: {invalid_assignments}"
+    
+    logging.info(f"[ASSIGNMENT VALIDATION] ✓ All {len(assignment_data_list)} assignments reference valid Resource UIDs")
     
     # FIX A & E: Update Task.Work and Task.Cost elements from aggregated assignments
     logging.info("[FIX A & E] Updating Task.Work and Task.Cost from aggregated assignments")
