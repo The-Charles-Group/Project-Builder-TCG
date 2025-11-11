@@ -140,6 +140,113 @@ def create_governance_milestone_task(
     return task, metadata
 
 
+def lint_mspdi_in_place(xml_path: str) -> None:
+    """
+    Sanitize MSPDI XML file to ensure Workfront compatibility.
+    Parses XML with ElementTree and normalizes numeric fields safely.
+    
+    Fixes:
+    - Strips currency symbols and /h from StandardRate and OvertimeRate
+    - Normalizes MaxUnits/PeakUnits to "1" (100% allocation)
+    - Converts assignment Units to "1.0000" (decimal fraction)
+    
+    Args:
+        xml_path: Path to the MSPDI XML file to sanitize in-place
+    """
+    logging.info(f"[LINT] Sanitizing XML file: {xml_path}")
+    
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        ns = "http://schemas.microsoft.com/project"
+        
+        corrections = []
+        
+        # Fix 1: Sanitize resource rates
+        for resource in root.findall(".//{%s}Resource" % ns):
+            uid_elem = resource.find("{%s}UID" % ns)
+            uid = uid_elem.text if uid_elem is not None else "Unknown"
+            
+            # StandardRate
+            std_rate_elem = resource.find("{%s}StandardRate" % ns)
+            if std_rate_elem is not None and std_rate_elem.text:
+                original = std_rate_elem.text
+                # Strip all non-numeric characters except decimal point
+                cleaned = ''.join(c for c in original if c.isdigit() or c == '.')
+                if cleaned and cleaned != original:
+                    std_rate_elem.text = cleaned
+                    corrections.append(f"Resource UID={uid}: StandardRate '{original}' → '{cleaned}'")
+            
+            # OvertimeRate
+            ot_rate_elem = resource.find("{%s}OvertimeRate" % ns)
+            if ot_rate_elem is not None and ot_rate_elem.text:
+                original = ot_rate_elem.text
+                cleaned = ''.join(c for c in original if c.isdigit() or c == '.')
+                if cleaned and cleaned != original:
+                    ot_rate_elem.text = cleaned
+                    corrections.append(f"Resource UID={uid}: OvertimeRate '{original}' → '{cleaned}'")
+            
+            # MaxUnits
+            max_units_elem = resource.find("{%s}MaxUnits" % ns)
+            if max_units_elem is not None and max_units_elem.text:
+                try:
+                    value = float(max_units_elem.text)
+                    if value > 1.0:
+                        max_units_elem.text = "1"
+                        corrections.append(f"Resource UID={uid}: MaxUnits {value} → 1")
+                except ValueError:
+                    pass
+            
+            # PeakUnits
+            peak_units_elem = resource.find("{%s}PeakUnits" % ns)
+            if peak_units_elem is not None and peak_units_elem.text:
+                try:
+                    value = float(peak_units_elem.text)
+                    if value > 1.0:
+                        peak_units_elem.text = "1"
+                        corrections.append(f"Resource UID={uid}: PeakUnits {value} → 1")
+                except ValueError:
+                    pass
+        
+        # Fix 2: Sanitize assignment units
+        for assignment in root.findall(".//{%s}Assignment" % ns):
+            uid_elem = assignment.find("{%s}UID" % ns)
+            uid = uid_elem.text if uid_elem is not None else "Unknown"
+            
+            units_elem = assignment.find("{%s}Units" % ns)
+            if units_elem is not None and units_elem.text:
+                try:
+                    value = float(units_elem.text)
+                    # Convert percentage (100) to decimal (1.0000)
+                    if value > 1.0:
+                        units_elem.text = "1.0000"
+                        corrections.append(f"Assignment UID={uid}: Units {value} → 1.0000")
+                    elif value == 0:
+                        # Keep zero as is (no assignment)
+                        pass
+                    elif '.' not in units_elem.text:
+                        # Convert integer to decimal format
+                        units_elem.text = f"{value:.4f}"
+                        corrections.append(f"Assignment UID={uid}: Units {units_elem.text} → {value:.4f}")
+                except ValueError:
+                    pass
+        
+        # Save changes if any corrections were made
+        if corrections:
+            tree.write(xml_path, encoding='utf-8', xml_declaration=True)
+            logging.info(f"[LINT] Made {len(corrections)} corrections:")
+            for correction in corrections[:10]:  # Log first 10
+                logging.info(f"  - {correction}")
+            if len(corrections) > 10:
+                logging.info(f"  ... and {len(corrections) - 10} more corrections")
+        else:
+            logging.info("[LINT] ✓ No corrections needed - XML is already compliant")
+    
+    except Exception as e:
+        logging.error(f"[LINT] Failed to sanitize XML: {e}")
+        # Don't raise - allow export to proceed even if lint fails
+
+
 def convert_excel_to_mspdi(
     input_xlsx: str,
     output_xml: str,
@@ -401,8 +508,8 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
         ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1000"  # 10 resources at 100% each
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1000"
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 100% allocation
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
         ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
         ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -411,9 +518,9 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate or 150:.2f}/h"
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate or 150:.2f}"
         ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
         ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
@@ -450,8 +557,8 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # 100% allocation
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 100% allocation
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"
             ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
             ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
             ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -463,7 +570,7 @@ def convert_excel_to_mspdi(
             
             # Add rate if available
             if blended_rate:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate:.2f}"
             elif "Rate_USD" in df.columns:
                 # Try to find rate for this specific role
                 role_rate_rows = role_rows[role_rows["Role"] == role]
@@ -471,12 +578,12 @@ def convert_excel_to_mspdi(
                     role_rate = role_rate_rows["Rate_USD"].dropna().iloc[0] if not role_rate_rows["Rate_USD"].dropna().empty else 150
                 else:
                     role_rate = 150
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{role_rate:.2f}"
             else:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = "150.00"
             
             ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
             ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
@@ -1986,7 +2093,7 @@ def convert_excel_to_mspdi(
         ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_data["AssignmentUID"])
         ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(assignment_data["TaskUID"])
         ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(assignment_data["ResourceUID"])
-        ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
+        ET.SubElement(assign, "{%s}Units" % ns).text = "1.0000"  # 100% allocation (decimal fraction)
         
         # Work in minutes (PT format)
         work_minutes = int(assignment_data["WorkHours"] * 60)
