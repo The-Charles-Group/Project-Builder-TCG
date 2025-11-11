@@ -425,9 +425,9 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate or 150:.2f}/h"
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate or 150:.2f}"
         ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
         ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
@@ -485,14 +485,14 @@ def convert_excel_to_mspdi(
             
             # Add rate if available
             if blended_rate:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate:.2f}"
             elif res_data["rate"] is not None:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${res_data['rate']:.2f}/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['rate']:.2f}"
             else:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = "150.00"
             
             ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
             ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
