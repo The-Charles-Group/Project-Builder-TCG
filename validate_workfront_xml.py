@@ -422,6 +422,95 @@ class WorkfrontXMLValidator:
         if not required_errors:
             print(f"  All required fields present")
     
+    def check_workfront_compatibility(self):
+        """Check Workfront-specific requirements for units and dependency types"""
+        print("\n✓ Checking Workfront compatibility...")
+        
+        # Check Assignment Units (must be fractional ≤ 1.0, not percentage like 100)
+        invalid_assignment_units = []
+        for assignment in self._find_all('.//ms:Assignment' if self.ns['ms'] else './/Assignment'):
+            uid = self._findtext(assignment, 'ms:UID' if self.ns['ms'] else 'UID')
+            units = self._findtext(assignment, 'ms:Units' if self.ns['ms'] else 'Units')
+            
+            if units:
+                try:
+                    units_val = float(units)
+                    if units_val > 1.0:
+                        self.errors.append(
+                            f"Assignment UID={uid} has Units={units} (must be ≤ 1.0 for Workfront). "
+                            f"Use fractional format: 1.0 = 100%, not percentage format 100 = 100%"
+                        )
+                        invalid_assignment_units.append(uid)
+                except ValueError:
+                    self.errors.append(
+                        f"Assignment UID={uid} has invalid Units value: '{units}'"
+                    )
+        
+        # Check Resource MaxUnits and PeakUnits (must be fractional ≤ 1.0)
+        invalid_resource_units = []
+        for resource in self._find_all('.//ms:Resource' if self.ns['ms'] else './/Resource'):
+            uid = self._findtext(resource, 'ms:UID' if self.ns['ms'] else 'UID')
+            name = self._findtext(resource, 'ms:Name' if self.ns['ms'] else 'Name')
+            max_units = self._findtext(resource, 'ms:MaxUnits' if self.ns['ms'] else 'MaxUnits')
+            peak_units = self._findtext(resource, 'ms:PeakUnits' if self.ns['ms'] else 'PeakUnits')
+            
+            if max_units:
+                try:
+                    max_units_val = float(max_units)
+                    if max_units_val > 1.0:
+                        self.errors.append(
+                            f"Resource UID={uid} ('{name}') has MaxUnits={max_units} (must be ≤ 1.0 for Workfront). "
+                            f"Use fractional format: 1.0 = 100%"
+                        )
+                        invalid_resource_units.append(uid)
+                except ValueError:
+                    self.errors.append(
+                        f"Resource UID={uid} ('{name}') has invalid MaxUnits value: '{max_units}'"
+                    )
+            
+            if peak_units:
+                try:
+                    peak_units_val = float(peak_units)
+                    if peak_units_val > 1.0:
+                        self.errors.append(
+                            f"Resource UID={uid} ('{name}') has PeakUnits={peak_units} (must be ≤ 1.0 for Workfront). "
+                            f"Use fractional format: 1.0 = 100%"
+                        )
+                        if uid not in invalid_resource_units:
+                            invalid_resource_units.append(uid)
+                except ValueError:
+                    self.errors.append(
+                        f"Resource UID={uid} ('{name}') has invalid PeakUnits value: '{peak_units}'"
+                    )
+        
+        # Check PredecessorLink Type (must be 1=FS, 2=SS, or 3=FF - NOT 0)
+        invalid_predecessor_types = []
+        for pred_link in self._find_all('.//ms:PredecessorLink' if self.ns['ms'] else './/PredecessorLink'):
+            pred_uid = self._findtext(pred_link, 'ms:PredecessorUID' if self.ns['ms'] else 'PredecessorUID')
+            link_type = self._findtext(pred_link, 'ms:Type' if self.ns['ms'] else 'Type')
+            
+            if link_type:
+                if link_type.strip() not in {'1', '2', '3'}:
+                    self.errors.append(
+                        f"PredecessorLink to UID={pred_uid} has invalid Type={link_type}. "
+                        f"Workfront requires: 1=FS (Finish-to-Start), 2=SS (Start-to-Start), or 3=FF (Finish-to-Finish)"
+                    )
+                    invalid_predecessor_types.append(pred_uid)
+        
+        # Summary
+        if not invalid_assignment_units and not invalid_resource_units and not invalid_predecessor_types:
+            print(f"  Assignment Units: All values ≤ 1.0 (fractional format) ✓")
+            print(f"  Resource MaxUnits/PeakUnits: All values ≤ 1.0 (fractional format) ✓")
+            print(f"  PredecessorLink Types: All values valid (1, 2, or 3) ✓")
+            print(f"  Workfront compatibility checks passed")
+        else:
+            if invalid_assignment_units:
+                print(f"  ❌ Found {len(invalid_assignment_units)} assignment(s) with invalid Units")
+            if invalid_resource_units:
+                print(f"  ❌ Found {len(invalid_resource_units)} resource(s) with invalid MaxUnits/PeakUnits")
+            if invalid_predecessor_types:
+                print(f"  ❌ Found {len(invalid_predecessor_types)} dependency/ies with invalid Type")
+    
     def validate(self) -> bool:
         """Run all validation checks"""
         print(f"Validating: {self.xml_file}")
@@ -440,6 +529,7 @@ class WorkfrontXMLValidator:
         self.check_wbs_codes()
         self.check_data_types()
         self.check_required_fields()
+        self.check_workfront_compatibility()
         
         return self.print_results()
     
