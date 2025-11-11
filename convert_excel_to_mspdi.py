@@ -54,6 +54,39 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
+def add_extended_attribute(parent_element: ET.Element, ns: str, field_id: str, value: str, 
+                           element_type: int = 1, cf_type: str = "12", ext_attr_uid_counter: List[int] = None):
+    """
+    Add an ExtendedAttribute to a task/resource/assignment with proper MSPDI schema structure.
+    
+    Args:
+        parent_element: The parent XML element (Task, Resource, or Assignment)
+        ns: XML namespace
+        field_id: FieldID (e.g., "188743732" for Text2)
+        value: The value to set
+        element_type: 1=Task, 2=Resource, 3=Assignment
+        cf_type: Custom field type code (12=Text, 2=Number)
+        ext_attr_uid_counter: Mutable list to track UIDs (will be modified)
+    """
+    # Find or create ExtendedAttributes container
+    ext_attrs_container = parent_element.find("{%s}ExtendedAttributes" % ns)
+    if ext_attrs_container is None:
+        ext_attrs_container = ET.SubElement(parent_element, "{%s}ExtendedAttributes" % ns)
+    
+    # Create ExtendedAttribute with proper structure
+    ext_attr = ET.SubElement(ext_attrs_container, "{%s}ExtendedAttribute" % ns)
+    
+    # Add UID if counter provided
+    if ext_attr_uid_counter is not None:
+        ET.SubElement(ext_attr, "{%s}UID" % ns).text = str(ext_attr_uid_counter[0])
+        ext_attr_uid_counter[0] += 1
+    
+    ET.SubElement(ext_attr, "{%s}FieldID" % ns).text = field_id
+    ET.SubElement(ext_attr, "{%s}Value" % ns).text = str(value)
+    ET.SubElement(ext_attr, "{%s}ElementType" % ns).text = str(element_type)
+    ET.SubElement(ext_attr, "{%s}CfType" % ns).text = str(cf_type)
+
+
 def create_governance_milestone_task(
     task_uid: int,
     ns: str,
@@ -62,7 +95,8 @@ def create_governance_milestone_task(
     governance_type: str,
     wbs_level: str = "1",
     hours: float = 0,
-    predecessor_uid: Optional[int] = None
+    predecessor_uid: Optional[int] = None,
+    ext_attr_uid_counter: List[int] = None
 ) -> Tuple[ET.Element, Dict[str, Any]]:
     """
     Create a governance milestone task in MSPDI format
@@ -76,6 +110,7 @@ def create_governance_milestone_task(
         wbs_level: WBS level for the task
         hours: Hours for the task (0 for pure milestone)
         predecessor_uid: UID of predecessor task if any
+        ext_attr_uid_counter: Mutable list to track ExtendedAttribute UIDs
         
     Returns:
         Tuple of (XML Element, task metadata dict)
@@ -133,10 +168,9 @@ def create_governance_milestone_task(
     ET.SubElement(task, "{%s}Summary" % ns).text = "0"
     ET.SubElement(task, "{%s}Critical" % ns).text = "0"
     
-    # Add custom field for governance type
-    ext_attrs = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-    ET.SubElement(ext_attrs, "{%s}FieldID" % ns).text = "188743731"  # Text1
-    ET.SubElement(ext_attrs, "{%s}Value" % ns).text = f"GOVERNANCE_{governance_type.upper()}"
+    # Add custom field for governance type using proper MSPDI schema
+    add_extended_attribute(task, ns, "188743731", f"GOVERNANCE_{governance_type.upper()}", 
+                          element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
     
     # Add notes to identify as governance milestone
     ET.SubElement(task, "{%s}Notes" % ns).text = f"Governance Milestone: {governance_type}"
@@ -581,6 +615,9 @@ def convert_excel_to_mspdi(
     task_uid = 1
     task_map = {}
     
+    # Initialize ExtendedAttribute UID counter for proper MSPDI schema compliance
+    ext_attr_uid_counter = [1]  # Mutable list to track ExtendedAttribute UIDs across all tasks
+    
     # FIX: Dual mapping system for WBS codes
     # 1. original_wbs_to_uid: Maps DataFrame WBS_ID → UID (for dependency lookup)
     # 2. sequential_wbs_to_uid: Maps sequential WBS → UID (for XML structure)
@@ -752,27 +789,24 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}ExternalTask" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}Active" % ns).text = "1"
             
-            # Add custom fields for deliverable
+            # Add custom fields for deliverable using proper MSPDI schema
             if add_custom_fields:
                 # Deliverable Code
                 if deliv_code:
-                    ext_attrs_dc = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
-                    ET.SubElement(ext_attrs_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
-                    ET.SubElement(ext_attrs_dc, "{%s}Value" % ns).text = deliv_code
+                    add_extended_attribute(deliv_task, ns, "188743732", deliv_code, 
+                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                 
                 # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
                 # Text1 mirrors Service Category for default grid visibility in Workfront
                 category_value = service_dept if service_dept else "Unassigned"
                 
                 # Text1 = Department (mirrors Service Category)
-                ext_attrs_dept = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
-                ET.SubElement(ext_attrs_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                ET.SubElement(ext_attrs_dept, "{%s}Value" % ns).text = category_value
+                add_extended_attribute(deliv_task, ns, "188743731", category_value, 
+                                     element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                 
                 # Text4 = Service Category (WORKFRONT REQUIREMENT)
-                ext_attrs_sc = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
-                ET.SubElement(ext_attrs_sc, "{%s}FieldID" % ns).text = "188743734"  # Text4
-                ET.SubElement(ext_attrs_sc, "{%s}Value" % ns).text = category_value
+                add_extended_attribute(deliv_task, ns, "188743734", category_value, 
+                                     element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
@@ -889,32 +923,28 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}ExternalTask" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}Active" % ns).text = "1"
                 
-                # Add custom fields for component
+                # Add custom fields for component using proper MSPDI schema
                 if add_custom_fields:
                     # Component Name
-                    ext_attr_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
-                    ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
-                    ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
+                    add_extended_attribute(comp_task, ns, "188743733", str(component_name), 
+                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                     
                     # Deliverable Code
                     if deliv_code:
-                        ext_attr_dc = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
-                        ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
-                        ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
+                        add_extended_attribute(comp_task, ns, "188743732", deliv_code, 
+                                             element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                     
                     # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
                     # Text1 mirrors Service Category for default grid visibility in Workfront
                     comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
                     
                     # Text1 = Department (mirrors Service Category)
-                    ext_attr_dept_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
-                    ET.SubElement(ext_attr_dept_comp, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                    ET.SubElement(ext_attr_dept_comp, "{%s}Value" % ns).text = comp_category_value
+                    add_extended_attribute(comp_task, ns, "188743731", comp_category_value, 
+                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                     
                     # Text4 = Service Category (WORKFRONT REQUIREMENT)
-                    ext_attr_sc_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
-                    ET.SubElement(ext_attr_sc_comp, "{%s}FieldID" % ns).text = "188743734"  # Text4
-                    ET.SubElement(ext_attr_sc_comp, "{%s}Value" % ns).text = comp_category_value
+                    add_extended_attribute(comp_task, ns, "188743734", comp_category_value, 
+                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                 
                 # Track component start/finish dates
                 component_start = current_date
@@ -1130,50 +1160,43 @@ def convert_excel_to_mspdi(
                                     component_costs[comp_uid] += price_value
                                     deliverable_costs[deliv_uid] += price_value
                                     
-                                    # Add Revenue extended attribute (same as cost for flat billing)
+                                    # Add Revenue extended attribute (same as cost for flat billing) using proper MSPDI schema
                                     if add_custom_fields:
-                                        ext_attr_revenue = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                                        ET.SubElement(ext_attr_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
-                                        ET.SubElement(ext_attr_revenue, "{%s}Value" % ns).text = str(price_value)
+                                        add_extended_attribute(task, ns, "188743715", str(price_value), 
+                                                             element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
                                 else:
                                     logging.warning(f"Skipping zero or negative price for task '{task_name}': {price_value}")
                             except (ValueError, TypeError) as e:
                                 logging.warning(f"Could not parse Price_USD for task '{task_name}': {e}")
                         
-                        # Add extended attributes (custom fields) for each task
+                        # Add extended attributes (custom fields) for each task using proper MSPDI schema
                         if add_custom_fields:
-                            # Risk Score (random for demo)
-                            ext_attr_risk = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_risk, "{%s}FieldID" % ns).text = "188743713"  # Number1
-                            ET.SubElement(ext_attr_risk, "{%s}Value" % ns).text = str(random.randint(1, 10))
+                            # Risk Score (random for demo) - Number field, CfType = 2
+                            add_extended_attribute(task, ns, "188743713", str(random.randint(1, 10)), 
+                                                 element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
                             
-                            # Confidence Level (random 70-100)
-                            ext_attr_conf = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743714"  # Number2
-                            ET.SubElement(ext_attr_conf, "{%s}Value" % ns).text = str(random.randint(70, 100))
+                            # Confidence Level (random 70-100) - Number field, CfType = 2
+                            add_extended_attribute(task, ns, "188743714", str(random.randint(70, 100)), 
+                                                 element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
                             
                             # FIX D: Text1 (Department) = Service Category for default grid visibility
-                            # Service Category is the primary field; Department mirrors it
+                            # Service Category is the primary field; Department mirrors it - Text field, CfType = 12
                             task_category_value = task_service_dept if task_service_dept else "Unassigned"
-                            ext_attr_dept = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                            ET.SubElement(ext_attr_dept, "{%s}Value" % ns).text = task_category_value
+                            add_extended_attribute(task, ns, "188743731", task_category_value, 
+                                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                             
-                            # Deliverable Code
+                            # Deliverable Code - Text field, CfType = 12
                             if deliv_code:
-                                ext_attr_dc = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                                ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
-                                ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
+                                add_extended_attribute(task, ns, "188743732", deliv_code, 
+                                                     element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                             
-                            # Component Name
-                            ext_attr_comp = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
-                            ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
+                            # Component Name - Text field, CfType = 12
+                            add_extended_attribute(task, ns, "188743733", str(component_name), 
+                                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                             
-                            # Service Category (Text4 - WORKFRONT REQUIREMENT)
-                            ext_attr_sc_task = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
-                            ET.SubElement(ext_attr_sc_task, "{%s}FieldID" % ns).text = "188743734"  # Text4
-                            ET.SubElement(ext_attr_sc_task, "{%s}Value" % ns).text = task_category_value
+                            # Service Category (Text4 - WORKFRONT REQUIREMENT) - Text field, CfType = 12
+                            add_extended_attribute(task, ns, "188743734", task_category_value, 
+                                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
                         
                         # Track component finish date
                         if task_num_in_component == 1:
@@ -1216,11 +1239,10 @@ def convert_excel_to_mspdi(
                     ET.SubElement(comp_task, "{%s}FixedCost" % ns).text = str(comp_total_cost)
                     ET.SubElement(comp_task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
                     
-                    # Add Revenue extended attribute (same as cost for flat billing)
+                    # Add Revenue extended attribute (same as cost for flat billing) using proper MSPDI schema
                     if add_custom_fields:
-                        ext_attr_comp_revenue = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
-                        ET.SubElement(ext_attr_comp_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
-                        ET.SubElement(ext_attr_comp_revenue, "{%s}Value" % ns).text = str(comp_total_cost)
+                        add_extended_attribute(comp_task, ns, "188743715", str(comp_total_cost), 
+                                             element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
                     
                     logging.info(f"[COST AGGREGATION] Component '{component_name}' total cost: ${comp_total_cost:.2f}")
                 
@@ -1254,11 +1276,10 @@ def convert_excel_to_mspdi(
                 ET.SubElement(deliv_task, "{%s}FixedCost" % ns).text = str(deliv_total_cost)
                 ET.SubElement(deliv_task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
                 
-                # Add Revenue extended attribute (same as cost for flat billing)
+                # Add Revenue extended attribute (same as cost for flat billing) using proper MSPDI schema
                 if add_custom_fields:
-                    ext_attr_deliv_revenue = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
-                    ET.SubElement(ext_attr_deliv_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
-                    ET.SubElement(ext_attr_deliv_revenue, "{%s}Value" % ns).text = str(deliv_total_cost)
+                    add_extended_attribute(deliv_task, ns, "188743715", str(deliv_total_cost), 
+                                         element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
                 
                 logging.info(f"[COST AGGREGATION] Deliverable '{deliverable_name}' total cost: ${deliv_total_cost:.2f}")
             
@@ -1299,11 +1320,10 @@ def convert_excel_to_mspdi(
                 ET.SubElement(milestone, "{%s}ConstraintType" % ns).text = str(ConstraintType.MUST_FINISH_ON.value)
                 ET.SubElement(milestone, "{%s}ConstraintDate" % ns).text = deliverable_finish.isoformat()
                 
-                # Add custom field for milestone type
+                # Add custom field for milestone type using proper MSPDI schema
                 if add_custom_fields:
-                    ext_attr_mt = ET.SubElement(milestone, "{%s}ExtendedAttribute" % ns)
-                    ET.SubElement(ext_attr_mt, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                    ET.SubElement(ext_attr_mt, "{%s}Value" % ns).text = "Deliverable Milestone"
+                    add_extended_attribute(milestone, ns, "188743731", "Deliverable Milestone", 
+                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
             
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
@@ -1351,11 +1371,10 @@ def convert_excel_to_mspdi(
                     ET.SubElement(phase_milestone, "{%s}IsMarked" % ns).text = "1"
                     ET.SubElement(phase_milestone, "{%s}Notes" % ns).text = f"Phase gate at {(i+1)*25}% project completion"
                     
-                    # Add custom field for milestone type
+                    # Add custom field for milestone type using proper MSPDI schema
                     if add_custom_fields:
-                        ext_attr_pg = ET.SubElement(phase_milestone, "{%s}ExtendedAttribute" % ns)
-                        ET.SubElement(ext_attr_pg, "{%s}FieldID" % ns).text = "188743731"  # Text1
-                        ET.SubElement(ext_attr_pg, "{%s}Value" % ns).text = "Phase Gate"
+                        add_extended_attribute(phase_milestone, ns, "188743731", "Phase Gate", 
+                                             element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
     
     # Add client approval milestone at the end
     if add_client_approval_milestone:
@@ -1383,11 +1402,10 @@ def convert_excel_to_mspdi(
         ET.SubElement(approval_milestone, "{%s}IsMarked" % ns).text = "1"
         ET.SubElement(approval_milestone, "{%s}Notes" % ns).text = "Final client approval and sign-off"
         
-        # Add custom field for milestone type
+        # Add custom field for milestone type using proper MSPDI schema
         if add_custom_fields:
-            ext_attr_ca = ET.SubElement(approval_milestone, "{%s}ExtendedAttribute" % ns)
-            ET.SubElement(ext_attr_ca, "{%s}FieldID" % ns).text = "188743731"  # Text1
-            ET.SubElement(ext_attr_ca, "{%s}Value" % ns).text = "Client Approval"
+            add_extended_attribute(approval_milestone, ns, "188743731", "Client Approval", 
+                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
     
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
