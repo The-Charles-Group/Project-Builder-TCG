@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
 import numpy as np
-from convert_excel_to_mspdi import convert_excel_to_mspdi, lint_mspdi_in_place
+from convert_excel_to_mspdi import convert_excel_to_mspdi
 from contextlib import asynccontextmanager
 import httpx
 import hashlib
@@ -7552,9 +7552,6 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             add_client_approval_milestone=False
         )
         
-        # FIX 4: Sanitize XML for Workfront compatibility
-        lint_mspdi_in_place(output_xml)
-        
         # Post-process XML to parallelize identical task names (optional)
         final_xml = output_xml
         if PARALLELIZE_IDENTICAL_NAMES:
@@ -7631,9 +7628,6 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             add_client_approval_milestone=False
         )
         
-        # FIX 4: Sanitize XML for Workfront compatibility
-        lint_mspdi_in_place(output_xml_a)
-        
         # Post-process Scenario A XML
         final_xml_a = output_xml_a
         if PARALLELIZE_IDENTICAL_NAMES:
@@ -7666,9 +7660,6 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             add_phase_gates=False,
             add_client_approval_milestone=False
         )
-        
-        # FIX 4: Sanitize XML for Workfront compatibility
-        lint_mspdi_in_place(output_xml_b)
         
         # Post-process Scenario B XML
         final_xml_b = output_xml_b
@@ -7754,10 +7745,6 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             add_phase_gates=False,
             add_client_approval_milestone=False
         )
-        
-        # FIX 4: Sanitize XML for Workfront compatibility
-        lint_mspdi_in_place(out_xml_a)
-        
         # Post-process Scenario A XML
         final_xml_a = out_xml_a
         if PARALLELIZE_IDENTICAL_NAMES:
@@ -7784,10 +7771,6 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             add_phase_gates=False,
             add_client_approval_milestone=False
         )
-        
-        # FIX 4: Sanitize XML for Workfront compatibility
-        lint_mspdi_in_place(out_xml_b)
-        
         # Post-process Scenario B XML
         final_xml_b = out_xml_b
         if PARALLELIZE_IDENTICAL_NAMES:
@@ -7814,10 +7797,6 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             add_phase_gates=False,
             add_client_approval_milestone=False
         )
-        
-        # FIX 4: Sanitize XML for Workfront compatibility
-        lint_mspdi_in_place(out_xml_c)
-        
         # Post-process Scenario C XML
         final_xml_c = out_xml_c
         if PARALLELIZE_IDENTICAL_NAMES:
@@ -7924,9 +7903,6 @@ def _export_single_scenario_xml(
             add_phase_gates=False,
             add_client_approval_milestone=False
         )
-        
-        # FIX 4: Sanitize XML for Workfront compatibility
-        mspdi_module.lint_mspdi_in_place(output_xml)
         
         # Post-process XML to parallelize identical task names (optional)
         final_xml = output_xml
@@ -10736,9 +10712,6 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             add_phase_gates=False,
             add_client_approval_milestone=False
         )
-        
-        # FIX 4: Sanitize XML for Workfront compatibility
-        lint_mspdi_in_place(output_xml)
         
         # Post-process XML if parallelization is enabled
         final_xml = output_xml

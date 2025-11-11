@@ -20,41 +20,6 @@ import random
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
-def _snap_to_working_time(dt: datetime, start: bool = True) -> datetime:
-    """
-    Snap datetime to working hours for Workfront compatibility.
-    
-    Workfront expects all Start times at 09:00:00 and Finish times at 18:00:00
-    to align with the working calendar. This prevents T01:00:00 timestamps that
-    cause import failures.
-    
-    Args:
-        dt: DateTime object to snap
-        start: If True, snap to 09:00:00 (start time), else 18:00:00 (finish time)
-    
-    Returns:
-        DateTime with time component set to either 09:00:00 or 18:00:00
-    """
-    if dt is None:
-        return None
-    
-    # Snap to working hours: 09:00 for starts, 18:00 for finishes
-    return dt.replace(hour=(9 if start else 18), minute=0, second=0, microsecond=0)
-
-
-def _set_snapped_datetime(task_elem, tag, dt, ns, is_start=True, fallback_dt=None):
-    if dt is None:
-        dt = fallback_dt
-    
-    if dt is None:
-        return None
-    
-    snapped_dt = _snap_to_working_time(dt, start=is_start)
-    elem = ET.SubElement(task_elem, "{%s}%s" % (ns, tag))
-    elem.text = snapped_dt.isoformat()
-    return elem
-
-
 class DependencyType(Enum):
     """Types of task dependencies for MS Project"""
     FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
@@ -126,16 +91,13 @@ def create_governance_milestone_task(
         duration_days = max(1, int(hours / 8))
         ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
     
-    # Set dates - APPLY WORKFRONT SNAPPING
-    # For milestones (hours == 0), both Start and Finish snap to 09:00:00
-    # For non-milestones, Start snaps to 09:00:00, Finish snaps to 18:00:00
-    if hours == 0:
-        _set_snapped_datetime(task, 'Start', milestone_date, ns, is_start=True)
-        _set_snapped_datetime(task, 'Finish', milestone_date, ns, is_start=True)
-    else:
+    # Set dates
+    ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
+    if hours > 0:
         end_date = milestone_date + timedelta(days=max(1, int(hours / 8)))
-        _set_snapped_datetime(task, 'Start', milestone_date, ns, is_start=True)
-        _set_snapped_datetime(task, 'Finish', end_date, ns, is_start=False)
+        ET.SubElement(task, "{%s}Finish" % ns).text = end_date.isoformat()
+    else:
+        ET.SubElement(task, "{%s}Finish" % ns).text = milestone_date.isoformat()
     
     # Priority based on governance type
     priority_map = {
@@ -176,113 +138,6 @@ def create_governance_milestone_task(
     }
     
     return task, metadata
-
-
-def lint_mspdi_in_place(xml_path: str) -> None:
-    """
-    Sanitize MSPDI XML file to ensure Workfront compatibility.
-    Parses XML with ElementTree and normalizes numeric fields safely.
-    
-    Fixes:
-    - Strips currency symbols and /h from StandardRate and OvertimeRate
-    - Normalizes MaxUnits/PeakUnits to "1" (100% allocation)
-    - Converts assignment Units to "1.0000" (decimal fraction)
-    
-    Args:
-        xml_path: Path to the MSPDI XML file to sanitize in-place
-    """
-    logging.info(f"[LINT] Sanitizing XML file: {xml_path}")
-    
-    try:
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
-        ns = "http://schemas.microsoft.com/project"
-        
-        corrections = []
-        
-        # Fix 1: Sanitize resource rates
-        for resource in root.findall(".//{%s}Resource" % ns):
-            uid_elem = resource.find("{%s}UID" % ns)
-            uid = uid_elem.text if uid_elem is not None else "Unknown"
-            
-            # StandardRate
-            std_rate_elem = resource.find("{%s}StandardRate" % ns)
-            if std_rate_elem is not None and std_rate_elem.text:
-                original = std_rate_elem.text
-                # Strip all non-numeric characters except decimal point
-                cleaned = ''.join(c for c in original if c.isdigit() or c == '.')
-                if cleaned and cleaned != original:
-                    std_rate_elem.text = cleaned
-                    corrections.append(f"Resource UID={uid}: StandardRate '{original}' → '{cleaned}'")
-            
-            # OvertimeRate
-            ot_rate_elem = resource.find("{%s}OvertimeRate" % ns)
-            if ot_rate_elem is not None and ot_rate_elem.text:
-                original = ot_rate_elem.text
-                cleaned = ''.join(c for c in original if c.isdigit() or c == '.')
-                if cleaned and cleaned != original:
-                    ot_rate_elem.text = cleaned
-                    corrections.append(f"Resource UID={uid}: OvertimeRate '{original}' → '{cleaned}'")
-            
-            # MaxUnits
-            max_units_elem = resource.find("{%s}MaxUnits" % ns)
-            if max_units_elem is not None and max_units_elem.text:
-                try:
-                    value = float(max_units_elem.text)
-                    if value > 1.0:
-                        max_units_elem.text = "1"
-                        corrections.append(f"Resource UID={uid}: MaxUnits {value} → 1")
-                except ValueError:
-                    pass
-            
-            # PeakUnits
-            peak_units_elem = resource.find("{%s}PeakUnits" % ns)
-            if peak_units_elem is not None and peak_units_elem.text:
-                try:
-                    value = float(peak_units_elem.text)
-                    if value > 1.0:
-                        peak_units_elem.text = "1"
-                        corrections.append(f"Resource UID={uid}: PeakUnits {value} → 1")
-                except ValueError:
-                    pass
-        
-        # Fix 2: Sanitize assignment units
-        for assignment in root.findall(".//{%s}Assignment" % ns):
-            uid_elem = assignment.find("{%s}UID" % ns)
-            uid = uid_elem.text if uid_elem is not None else "Unknown"
-            
-            units_elem = assignment.find("{%s}Units" % ns)
-            if units_elem is not None and units_elem.text:
-                try:
-                    value = float(units_elem.text)
-                    # Convert percentage (100) to decimal (1.0000)
-                    if value > 1.0:
-                        units_elem.text = "1.0000"
-                        corrections.append(f"Assignment UID={uid}: Units {value} → 1.0000")
-                    elif value == 0:
-                        # Keep zero as is (no assignment)
-                        pass
-                    elif '.' not in units_elem.text:
-                        # Convert integer to decimal format
-                        units_elem.text = f"{value:.4f}"
-                        corrections.append(f"Assignment UID={uid}: Units {units_elem.text} → {value:.4f}")
-                except ValueError:
-                    pass
-        
-        # Save changes if any corrections were made
-        if corrections:
-            tree.write(xml_path, encoding='utf-8', xml_declaration=True)
-            logging.info(f"[LINT] Made {len(corrections)} corrections:")
-            for correction in corrections[:10]:  # Log first 10
-                logging.info(f"  - {correction}")
-            if len(corrections) > 10:
-                logging.info(f"  ... and {len(corrections) - 10} more corrections")
-        else:
-            logging.info("[LINT] ✓ No corrections needed - XML is already compliant")
-    
-    except Exception as e:
-        logging.error(f"[LINT] Failed to sanitize XML: {e}")
-        # Don't raise - allow export to proceed even if lint fails
 
 
 def convert_excel_to_mspdi(
@@ -393,8 +248,8 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CreationDate" % ns).text = datetime.now().isoformat()
     ET.SubElement(root, "{%s}LastSaved" % ns).text = datetime.now().isoformat()
     ET.SubElement(root, "{%s}ScheduleFromStart" % ns).text = "1"
-    _set_snapped_datetime(root, 'StartDate', project_start, ns, is_start=True)
-    _set_snapped_datetime(root, 'FinishDate', project_start + timedelta(days=365), ns, is_start=False)
+    ET.SubElement(root, "{%s}StartDate" % ns).text = project_start.isoformat()
+    ET.SubElement(root, "{%s}FinishDate" % ns).text = (project_start + timedelta(days=365)).isoformat()
     ET.SubElement(root, "{%s}FYStartDate" % ns).text = "1"  # January
     ET.SubElement(root, "{%s}CriticalSlackLimit" % ns).text = "0"
     ET.SubElement(root, "{%s}CurrencyDigits" % ns).text = "2"
@@ -546,19 +401,19 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
         ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 100% allocation
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1000"  # 10 resources at 100% each
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1000"
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-        _set_snapped_datetime(res, 'AvailableFrom', project_start, ns, is_start=True)
-        _set_snapped_datetime(res, 'AvailableTo', project_start + timedelta(days=365), ns, is_start=False)
-        _set_snapped_datetime(res, 'Start', project_start, ns, is_start=True)
-        _set_snapped_datetime(res, 'Finish', project_start + timedelta(days=365), ns, is_start=False)
+        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate or 150:.2f}"
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate or 150:.2f}/h"
         ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
         ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
@@ -595,20 +450,20 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 100% allocation
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # 100% allocation
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
             ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-            _set_snapped_datetime(res, 'AvailableFrom', project_start, ns, is_start=True)
-            _set_snapped_datetime(res, 'AvailableTo', project_start + timedelta(days=365), ns, is_start=False)
-            _set_snapped_datetime(res, 'Start', project_start, ns, is_start=True)
-            _set_snapped_datetime(res, 'Finish', project_start + timedelta(days=365), ns, is_start=False)
+            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
             ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
             ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
             ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"
             
             # Add rate if available
             if blended_rate:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate:.2f}"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
             elif "Rate_USD" in df.columns:
                 # Try to find rate for this specific role
                 role_rate_rows = role_rows[role_rows["Role"] == role]
@@ -616,12 +471,12 @@ def convert_excel_to_mspdi(
                     role_rate = role_rate_rows["Rate_USD"].dropna().iloc[0] if not role_rate_rows["Rate_USD"].dropna().empty else 150
                 else:
                     role_rate = 150
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{role_rate:.2f}"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
             else:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = "150.00"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
             
             ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
             ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
@@ -655,12 +510,12 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}OutlineNumber" % ns).text = "0"
     ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
-    _set_snapped_datetime(project_task, 'Start', project_start, ns, is_start=True)
+    ET.SubElement(project_task, "{%s}Start" % ns).text = project_start.isoformat()
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
-    _set_snapped_datetime(project_task, 'Stop', project_start, ns, is_start=True)
-    _set_snapped_datetime(project_task, 'Resume', project_start, ns, is_start=True)
+    ET.SubElement(project_task, "{%s}Stop" % ns).text = project_start.isoformat()
+    ET.SubElement(project_task, "{%s}Resume" % ns).text = project_start.isoformat()
     ET.SubElement(project_task, "{%s}ResumeValid" % ns).text = "0"
     ET.SubElement(project_task, "{%s}EffortDriven" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Recurring" % ns).text = "0"
@@ -676,10 +531,6 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}ExternalTask" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Active" % ns).text = "1"
     ET.SubElement(project_task, "{%s}Manual" % ns).text = "0"
-    
-    # Store reference to update duration later (will be updated after all tasks are processed)
-    # Placeholder finish date - will be updated with actual project end date
-    _set_snapped_datetime(project_task, 'Finish', project_start, ns, is_start=False)
     
     # Process WBS tasks with enhanced structure
     task_uid = 1
@@ -809,7 +660,7 @@ def convert_excel_to_mspdi(
                     except Exception as e:
                         logging.warning(f"Could not parse deliverable End_Date '{first_row_end}': {e}")
             
-            _set_snapped_datetime(deliv_task, 'Start', deliverable_start_date, ns, is_start=True)
+            ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             
             # Add constraint type based on Gantt-sourced dates
             has_gantt_start = False
@@ -832,12 +683,12 @@ def convert_excel_to_mspdi(
             if has_gantt_start and has_gantt_end:
                 # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
                 ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                _set_snapped_datetime(deliv_task, 'ConstraintDate', deliverable_start_date, ns, is_start=True)
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
                 logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
             elif has_gantt_start:
                 # Only start date from Gantt: Must Start On
                 ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                _set_snapped_datetime(deliv_task, 'ConstraintDate', deliverable_start_date, ns, is_start=True)
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
                 logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
@@ -976,7 +827,7 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs
                 ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
-                _set_snapped_datetime(comp_task, 'Start', current_date, ns, is_start=True)
+                ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
                 ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"
                 ET.SubElement(comp_task, "{%s}Work" % ns).text = "PT0M"
                 ET.SubElement(comp_task, "{%s}EffortDriven" % ns).text = "0"
@@ -1086,8 +937,6 @@ def convert_excel_to_mspdi(
                                 else:
                                     # Date only - add default 9 AM time
                                     task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
-                                # APPLY WORKFRONT SNAPPING: L3 task start time to 09:00:00
-                                task_start = _snap_to_working_time(task_start, start=True)
                                 logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
@@ -1104,8 +953,6 @@ def convert_excel_to_mspdi(
                                 else:
                                     # Date only - add default 5 PM time
                                     task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
-                                # APPLY WORKFRONT SNAPPING: L3 task finish time to 18:00:00
-                                task_end = _snap_to_working_time(task_end, start=False)
                                 logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
@@ -1147,8 +994,8 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs
                         ET.SubElement(task, "{%s}OutlineLevel" % ns).text = task_outline_level
                         ET.SubElement(task, "{%s}Priority" % ns).text = "500"
-                        _set_snapped_datetime(task, 'Start', task_start, ns, is_start=True, fallback_dt=project_start)
-                        _set_snapped_datetime(task, 'Finish', task_end, ns, is_start=False, fallback_dt=project_start)
+                        ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
+                        ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
                         
                         # FIX: Calculate Duration from actual time span (Finish - Start), not from hours
                         # This prevents invalid XML where Duration=PT0M but Start≠Finish (Workfront rejects this)
@@ -1163,8 +1010,8 @@ def convert_excel_to_mspdi(
                         # RemainingDuration must match Duration (same calendar time span)
                         ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{duration_minutes}M"
                         ET.SubElement(task, "{%s}RemainingWork" % ns).text = "PT0M"
-                        _set_snapped_datetime(task, 'Stop', task_end, ns, is_start=False)
-                        _set_snapped_datetime(task, 'Resume', task_end, ns, is_start=False)
+                        ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
+                        ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
                         ET.SubElement(task, "{%s}EffortDriven" % ns).text = "1"
                         ET.SubElement(task, "{%s}Recurring" % ns).text = "0"
@@ -1197,11 +1044,11 @@ def convert_excel_to_mspdi(
                         if has_gantt_start and has_gantt_end:
                             # Both dates from Gantt: Lock BOTH start and finish dates
                             ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
-                            _set_snapped_datetime(task, 'ConstraintDate', task_start, ns, is_start=True)
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
                             ET.SubElement(task, "{%s}Manual" % ns).text = "1"
                             # CRITICAL: Add ManualStart, ManualFinish, ManualDuration to lock dates in Workfront
-                            _set_snapped_datetime(task, 'ManualStart', task_start, ns, is_start=True)
-                            _set_snapped_datetime(task, 'ManualFinish', task_end, ns, is_start=False)
+                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}ManualFinish" % ns).text = task_end.isoformat()
                             # Calculate duration from start to finish dates
                             duration_minutes = int((task_end - task_start).total_seconds() / 60)
                             ET.SubElement(task, "{%s}ManualDuration" % ns).text = f"PT{duration_minutes}M"
@@ -1210,17 +1057,17 @@ def convert_excel_to_mspdi(
                         elif has_gantt_start:
                             # Only start date from Gantt: Lock start date only
                             ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
-                            _set_snapped_datetime(task, 'ConstraintDate', task_start, ns, is_start=True)
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
                             ET.SubElement(task, "{%s}Manual" % ns).text = "1"
                             # CRITICAL: Add ManualStart to lock start date in Workfront
-                            _set_snapped_datetime(task, 'ManualStart', task_start, ns, is_start=True)
+                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
                             # ManualFinish and ManualDuration not set - will use standard fields
                             logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
                             logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start")
                         else:
                             # No Gantt dates: ASAP scheduling (auto-scheduled)
                             ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"
-                            _set_snapped_datetime(task, 'ConstraintDate', task_start, ns, is_start=True)
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
                             ET.SubElement(task, "{%s}Manual" % ns).text = "0"
                             logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                         
@@ -1315,7 +1162,7 @@ def convert_excel_to_mspdi(
                 # This prevents Duration=PT0M when component_start == component_finish
                 component_duration_minutes = int((component_finish - component_start).total_seconds() / 60)
                 ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{component_duration_minutes}M"
-                _set_snapped_datetime(comp_task, 'Finish', component_finish, ns, is_start=False)
+                ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
@@ -1352,8 +1199,8 @@ def convert_excel_to_mspdi(
             # This prevents Duration=PT0M when dates match or business hours = 0
             deliverable_duration_minutes = int((deliverable_finish - deliverable_start).total_seconds() / 60)
             ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{deliverable_duration_minutes}M"
-            _set_snapped_datetime(deliv_task, 'Finish', deliverable_finish, ns, is_start=False)
-            deliverable_ends[deliverable_name] = _snap_to_working_time(deliverable_finish, start=False)
+            ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
+            deliverable_ends[deliverable_name] = deliverable_finish
             
             # Add aggregated cost/revenue to deliverable summary task
             deliv_total_cost = deliverable_costs.get(deliv_uid, 0.0)
@@ -1396,8 +1243,8 @@ def convert_excel_to_mspdi(
                 ET.SubElement(milestone, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
                 ET.SubElement(milestone, "{%s}OutlineLevel" % ns).text = "2"
                 ET.SubElement(milestone, "{%s}Priority" % ns).text = "500"
-                _set_snapped_datetime(milestone, 'Start', deliverable_finish, ns, is_start=True)
-                _set_snapped_datetime(milestone, 'Finish', deliverable_finish, ns, is_start=True)
+                ET.SubElement(milestone, "{%s}Start" % ns).text = deliverable_finish.isoformat()
+                ET.SubElement(milestone, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
                 ET.SubElement(milestone, "{%s}Duration" % ns).text = "PT0M"
                 ET.SubElement(milestone, "{%s}DurationFormat" % ns).text = "7"
                 ET.SubElement(milestone, "{%s}Work" % ns).text = "PT0M"
@@ -1405,7 +1252,7 @@ def convert_excel_to_mspdi(
                 ET.SubElement(milestone, "{%s}Critical" % ns).text = "1"
                 ET.SubElement(milestone, "{%s}IsMarked" % ns).text = "1"
                 ET.SubElement(milestone, "{%s}ConstraintType" % ns).text = str(ConstraintType.MUST_FINISH_ON.value)
-                _set_snapped_datetime(milestone, 'ConstraintDate', deliverable_finish, ns, is_start=False)
+                ET.SubElement(milestone, "{%s}ConstraintDate" % ns).text = deliverable_finish.isoformat()
                 
                 # Add custom field for milestone type
                 if add_custom_fields:
@@ -1415,105 +1262,6 @@ def convert_excel_to_mspdi(
             
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
-    
-    # FIX: Update project summary task (UID=0) with calculated duration
-    # Workfront rejects non-milestone tasks with zero duration, causing import failures
-    if current_date and current_date > project_start:
-        project_finish = current_date
-        project_duration_minutes = int((project_finish - project_start).total_seconds() / 60)
-        
-        # Find and update the project task (UID=0) elements
-        for task in tasks.findall("{%s}Task" % ns):
-            uid_elem = task.find("{%s}UID" % ns)
-            if uid_elem is not None and uid_elem.text == "0":
-                # Update Duration
-                duration_elem = task.find("{%s}Duration" % ns)
-                if duration_elem is not None:
-                    duration_elem.text = f"PT{project_duration_minutes}M"
-                
-                # Update Finish - APPLY WORKFRONT SNAPPING: Project summary finish to 18:00:00
-                finish_elem = task.find("{%s}Finish" % ns)
-                if finish_elem is not None:
-                    task.remove(finish_elem)
-                _set_snapped_datetime(task, 'Finish', project_finish, ns, is_start=False)
-                
-                # Update Work (total project hours)
-                work_elem = task.find("{%s}Work" % ns)
-                if work_elem is not None:
-                    # Calculate total work from all assignments
-                    total_work_minutes = 0
-                    assignments = root.find("{%s}Assignments" % ns)
-                    if assignments is not None:
-                        for assignment in assignments.findall("{%s}Assignment" % ns):
-                            work = assignment.find("{%s}Work" % ns)
-                            if work is not None and work.text:
-                                # Parse PT format (e.g., "PT480M" or "PT8H0M0S")
-                                work_text = work.text.replace('PT', '').replace('H0M0S', '').replace('M', '')
-                                try:
-                                    # If it contains 'H', parse hours
-                                    if 'H' in work.text:
-                                        # Extract hours and convert to minutes
-                                        hours_part = work.text.split('H')[0].replace('PT', '')
-                                        total_work_minutes += int(hours_part) * 60
-                                    else:
-                                        # Just minutes
-                                        total_work_minutes += int(work_text)
-                                except ValueError:
-                                    logging.warning(f"Could not parse work value: {work.text}")
-                                    pass
-                    
-                    if total_work_minutes > 0:
-                        work_elem.text = f"PT{total_work_minutes}M"
-                
-                logging.info(f"[WORKFRONT FIX] Updated project summary task (UID=0): Duration={project_duration_minutes}min ({project_duration_minutes/60:.1f}hrs), Finish={project_finish.isoformat()}")
-                break
-    else:
-        logging.warning("[WORKFRONT FIX] Could not update project summary task: current_date not set or not after project_start")
-    
-    # VALIDATION: Check for zero-duration non-milestone tasks (Workfront compatibility)
-    logging.info("[WORKFRONT VALIDATION] Checking for zero-duration non-milestone tasks...")
-    zero_duration_tasks = []
-
-    for task in tasks.findall("{%s}Task" % ns):
-        uid_elem = task.find("{%s}UID" % ns)
-        duration_elem = task.find("{%s}Duration" % ns)
-        milestone_elem = task.find("{%s}Milestone" % ns)
-        name_elem = task.find("{%s}Name" % ns)
-        
-        if uid_elem is not None and duration_elem is not None:
-            uid = uid_elem.text
-            duration = duration_elem.text
-            is_milestone = milestone_elem is not None and milestone_elem.text == "1"
-            task_name = name_elem.text if name_elem is not None else "Unnamed"
-            
-            # Check if task has zero duration but is not a milestone
-            if duration == "PT0M" and not is_milestone:
-                zero_duration_tasks.append((uid, task_name))
-                
-                # FIX: Give it a minimum 1-hour duration for Workfront compatibility
-                duration_elem.text = "PT60M"  # 1 hour minimum
-                
-                # Also update Work if it's zero
-                work_elem = task.find("{%s}Work" % ns)
-                if work_elem is not None and work_elem.text == "PT0M":
-                    work_elem.text = "PT60M"
-                
-                start_elem = task.find("{%s}Start" % ns)
-                finish_elem = task.find("{%s}Finish" % ns)
-                if start_elem is not None and finish_elem is not None:
-                    try:
-                        start_date = datetime.fromisoformat(start_elem.text)
-                        task.remove(finish_elem)
-                        _set_snapped_datetime(task, 'Finish', start_date, ns, is_start=False)
-                    except:
-                        pass
-                
-                logging.warning(f"[WORKFRONT VALIDATION] Fixed zero-duration task UID={uid}: '{task_name}' - set to 1 hour minimum")
-
-    if zero_duration_tasks:
-        logging.warning(f"[WORKFRONT VALIDATION] Fixed {len(zero_duration_tasks)} zero-duration non-milestone tasks for Workfront compatibility")
-    else:
-        logging.info("[WORKFRONT VALIDATION] ✓ No zero-duration non-milestone tasks found")
     
     # Add phase gate milestones
     if add_phase_gates and all_task_uids:
@@ -1548,9 +1296,8 @@ def convert_excel_to_mspdi(
                     ET.SubElement(phase_milestone, "{%s}OutlineLevel" % ns).text = "1"
                     deliverable_counter += 1  # Increment for next milestone
                     ET.SubElement(phase_milestone, "{%s}Priority" % ns).text = "1000"  # High priority
-                    phase_datetime = datetime.fromisoformat(phase_date) if isinstance(phase_date, str) else phase_date
-                    _set_snapped_datetime(phase_milestone, 'Start', phase_datetime, ns, is_start=True)
-                    _set_snapped_datetime(phase_milestone, 'Finish', phase_datetime, ns, is_start=True)
+                    ET.SubElement(phase_milestone, "{%s}Start" % ns).text = phase_date
+                    ET.SubElement(phase_milestone, "{%s}Finish" % ns).text = phase_date
                     ET.SubElement(phase_milestone, "{%s}Duration" % ns).text = "PT0M"
                     ET.SubElement(phase_milestone, "{%s}DurationFormat" % ns).text = "7"
                     ET.SubElement(phase_milestone, "{%s}Work" % ns).text = "PT0M"
@@ -1581,8 +1328,8 @@ def convert_excel_to_mspdi(
         ET.SubElement(approval_milestone, "{%s}OutlineLevel" % ns).text = "1"
         deliverable_counter += 1  # Increment for consistency
         ET.SubElement(approval_milestone, "{%s}Priority" % ns).text = "1000"
-        _set_snapped_datetime(approval_milestone, 'Start', current_date, ns, is_start=True)
-        _set_snapped_datetime(approval_milestone, 'Finish', current_date, ns, is_start=True)
+        ET.SubElement(approval_milestone, "{%s}Start" % ns).text = current_date.isoformat()
+        ET.SubElement(approval_milestone, "{%s}Finish" % ns).text = current_date.isoformat()
         ET.SubElement(approval_milestone, "{%s}Duration" % ns).text = "PT0M"
         ET.SubElement(approval_milestone, "{%s}DurationFormat" % ns).text = "7"
         ET.SubElement(approval_milestone, "{%s}Work" % ns).text = "PT0M"
@@ -1813,13 +1560,13 @@ def convert_excel_to_mspdi(
                         task_name_for_log = task_name_elem.text if task_name_elem is not None else "Unknown"
                         
                         # Create PredecessorLink element (only for leaf tasks)
-                        logging.info(f"[DEPENDENCIES] ✓ Creating PredecessorLink: Task '{task_name_for_log}' (UID={task_uid}) → Predecessor UID={predecessor_uid} (Type=1, FS)")
+                        logging.info(f"[DEPENDENCIES] ✓ Creating PredecessorLink: Task '{task_name_for_log}' (UID={task_uid}) → Predecessor UID={predecessor_uid} (Type=0, FS)")
                         
                         # FIX: Create PredecessorLink as child of task_elem using SubElement
                         # This ensures the link is properly attached to the task in the XML tree
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "1"  # Type=1 is FS (Finish-to-Start) - MSPDI standard
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "0"  # Type=0 is FS (Finish-to-Start)
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
@@ -1925,14 +1672,6 @@ def convert_excel_to_mspdi(
         # Assign department resource
         department = task_data["department"]
         if department in department_resources:
-            # APPLY WORKFRONT SNAPPING: Assignment Start/Finish from task
-            task_start_text = task.find("{%s}Start" % ns).text
-            task_finish_text = task.find("{%s}Finish" % ns).text
-            task_start_dt = datetime.fromisoformat(task_start_text) if task_start_text else project_start
-            task_finish_dt = datetime.fromisoformat(task_finish_text) if task_finish_text else project_start
-            snapped_dept_start = _snap_to_working_time(task_start_dt, start=True)
-            snapped_dept_finish = _snap_to_working_time(task_finish_dt, start=False)
-            
             # Store assignment data (not XML yet)
             assignment_data_list.append({
                 "AssignmentUID": assignment_uid,
@@ -1940,8 +1679,8 @@ def convert_excel_to_mspdi(
                 "ResourceUID": department_resources[department],
                 "WorkHours": work_hours,
                 "Cost": work_hours * (blended_rate or 150),
-                "Start": snapped_dept_start.isoformat(),
-                "Finish": snapped_dept_finish.isoformat()
+                "Start": task.find("{%s}Start" % ns).text,
+                "Finish": task.find("{%s}Finish" % ns).text
             })
             assignment_uid += 1
     
@@ -2046,13 +1785,6 @@ def convert_excel_to_mspdi(
                 task_start_text = project_start.isoformat()
                 task_finish_text = project_start.isoformat()
             
-            # APPLY WORKFRONT SNAPPING: Assignment Start/Finish times
-            # Parse timestamps and snap them before storing
-            task_start_dt = datetime.fromisoformat(task_start_text) if isinstance(task_start_text, str) else task_start_text
-            task_finish_dt = datetime.fromisoformat(task_finish_text) if isinstance(task_finish_text, str) else task_finish_text
-            snapped_assignment_start = _snap_to_working_time(task_start_dt, start=True)
-            snapped_assignment_finish = _snap_to_working_time(task_finish_dt, start=False)
-            
             # Store assignment data (not XML yet)
             assignment_data_list.append({
                 "AssignmentUID": assignment_uid,
@@ -2060,8 +1792,8 @@ def convert_excel_to_mspdi(
                 "ResourceUID": resource_uid,
                 "WorkHours": hours,
                 "Cost": hours * (blended_rate or 150),
-                "Start": snapped_assignment_start.isoformat(),
-                "Finish": snapped_assignment_finish.isoformat()
+                "Start": task_start_text,
+                "Finish": task_finish_text
             })
             
             assignment_uid += 1
@@ -2140,48 +1872,6 @@ def convert_excel_to_mspdi(
                     logging.info(f"[FIX A & E] Updated task '{task_name}' (UID={task_uid}): Work={planned_minutes}M, Cost=${task_cost:.2f}")
                 break
     
-    # WORKFRONT FIX: Set project summary task (UID=0) Work from aggregated task work
-    # This is the authoritative Work calculation for the project summary (overrides earlier PT0M default)
-    # NOTE: The earlier block at lines ~1398-1424 runs before assignments are populated and produces PT0M
-    logging.info("[WORKFRONT FIX] Calculating project summary task Work from aggregated assignments")
-    
-    if work_by_task:
-        # Sum all non-summary task work hours
-        total_work_hours = sum(work_by_task.values())
-        total_work_minutes = int(round(60 * total_work_hours))
-        
-        # Find and update project summary task (UID=0)
-        project_summary_found = False
-        for task_elem in tasks.findall("{%s}Task" % ns):
-            uid_elem = task_elem.find("{%s}UID" % ns)
-            if uid_elem is not None and uid_elem.text == "0":
-                project_summary_found = True
-                
-                # Update or create Work element
-                work_elem = task_elem.find("{%s}Work" % ns)
-                if work_elem is not None:
-                    work_elem.text = f"PT{total_work_minutes}M"
-                else:
-                    ET.SubElement(task_elem, "{%s}Work" % ns).text = f"PT{total_work_minutes}M"
-                
-                # Update RemainingWork if it exists (for consistency)
-                remaining_work_elem = task_elem.find("{%s}RemainingWork" % ns)
-                if remaining_work_elem is not None:
-                    remaining_work_elem.text = f"PT{total_work_minutes}M"
-                
-                # Update RegularWork if it exists (for consistency)
-                regular_work_elem = task_elem.find("{%s}RegularWork" % ns)
-                if regular_work_elem is not None:
-                    regular_work_elem.text = f"PT{total_work_minutes}M"
-                
-                logging.info(f"[WORKFRONT FIX] ✓ Set project summary task (UID=0) Work: {total_work_minutes}M ({total_work_hours:.1f} hours)")
-                break
-        
-        if not project_summary_found:
-            logging.warning("[WORKFRONT FIX] Project summary task (UID=0) not found - cannot set Work field")
-    else:
-        logging.warning("[WORKFRONT FIX] No aggregated task work found (work_by_task is empty) - skipping summary Work update")
-    
     # Create Assignments container with enhanced resource assignments
     logging.info("[FIX A] Creating Assignment XML elements from assignment data")
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
@@ -2192,7 +1882,7 @@ def convert_excel_to_mspdi(
         ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_data["AssignmentUID"])
         ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(assignment_data["TaskUID"])
         ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(assignment_data["ResourceUID"])
-        ET.SubElement(assign, "{%s}Units" % ns).text = "1.0000"  # 100% allocation (decimal fraction)
+        ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
         
         # Work in minutes (PT format)
         work_minutes = int(assignment_data["WorkHours"] * 60)
@@ -2233,25 +1923,6 @@ def convert_excel_to_mspdi(
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
     tree.write(output_xml, encoding="utf-8", xml_declaration=True)
-    
-    # AUTOMATED VALIDATION: Scan for any unsnapped T01:00:00 timestamps
-    with open(output_xml, 'r', encoding='utf-8') as f:
-        xml_content = f.read()
-        t01_count = xml_content.count('T01:00:00')
-        
-        if t01_count > 0:
-            logging.error(f"[TIMESTAMP VALIDATION] ❌ CRITICAL: Found {t01_count} instances of T01:00:00 in generated XML")
-            logging.error(f"[TIMESTAMP VALIDATION] This will cause Workfront import to fail. All timestamps must be snapped to working hours.")
-            # Find first few instances for debugging
-            lines = xml_content.split('\n')
-            found_count = 0
-            for i, line in enumerate(lines, 1):
-                if 'T01:00:00' in line and found_count < 5:
-                    logging.error(f"[TIMESTAMP VALIDATION] Line {i}: {line.strip()[:100]}")
-                    found_count += 1
-            raise ValueError(f"XML validation failed: {t01_count} unsnapped timestamps (T01:00:00) found. Workfront requires all timestamps to be aligned to working hours (09:00:00 or 18:00:00).")
-        else:
-            logging.info(f"[TIMESTAMP VALIDATION] ✓ SUCCESS: Zero T01:00:00 timestamps found - XML is Workfront-compatible")
     
     # FIX: Verify PredecessorLink elements were created
     # Count all PredecessorLink elements in the XML
