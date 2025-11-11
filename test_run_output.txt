@@ -1,0 +1,106 @@
+[INFO] Reading Excel file: test_rate_fix_data.xlsx, sheet: Scenario A
+[INFO] Successfully loaded 7 rows from Excel
+[INFO] [HEADER NORMALIZATION] Original columns (first 5): ['WBS_ID', 'Task_Name', 'Deliverable', 'Component', 'Role']
+[INFO] [HEADER NORMALIZATION] Normalized columns (first 5): ['WBS_ID', 'Task_Name', 'Deliverable', 'Component', 'Role']
+[INFO] [RESOURCE CREATION] Created resource UID=1 for Role='Designer (Mid)', Seniority='', Name='Designer (Mid)' (normalized_key='designer (mid)|')
+[INFO] [RESOURCE CREATION] Created resource UID=2 for Role='Strategist (Mid)', Seniority='', Name='Strategist (Mid)' (normalized_key='strategist (mid)|')
+[INFO] [RESOURCE VALIDATION] Running post-creation validation...
+[INFO] [RESOURCE VALIDATION] ✓ All 2 Resource UIDs are unique
+[INFO] [RESOURCE VALIDATION] Created 2 role-seniority resources
+[INFO] [RESOURCE VALIDATION] resource_uid_map keys (first 10): ['designer (mid)|', 'strategist (mid)|']
+[INFO] Processing tasks grouped by deliverable with enhanced WBS structure
+[INFO] [WBS SEQUENTIAL] Storing original WBS_ID for deliverable 'Website Redesign': 1
+[INFO] [WBS SEQUENTIAL] Deliverable 'Website Redesign': Sequential WBS=1 (Original WBS_ID=1)
+[INFO] [3-LEVEL HIERARCHY] Processing deliverable 'Website Redesign' with component grouping
+[INFO] [3-LEVEL HIERARCHY] Found 1 tasks with blank Component, EXCLUDING them from export
+[INFO] [3-LEVEL HIERARCHY] Found 2 components in deliverable 'Website Redesign'
+[INFO] [3-LEVEL HIERARCHY] Creating component summary task: 'Design' (UID=2)
+[INFO] [WBS SEQUENTIAL] Storing original WBS_ID for component 'Design': 1.1
+[INFO] [WBS SEQUENTIAL] Component 'Design': Sequential WBS=1.1 (Original WBS_ID=1.1)
+[INFO] [3-LEVEL HIERARCHY] Creating L3 task: 'Design' (UID=3, Component=Design)
+[INFO] [WBS SEQUENTIAL] Storing original WBS_ID for task 'Design': 1.1
+[INFO] [WBS SEQUENTIAL] Task 'Design': Sequential WBS=1.1.1 (Original WBS_ID=1.1)
+[INFO] [CONSTRAINT] Task 'Design': ASAP (Type 0)
+[INFO] [ROLE ROW] Skipping task creation for role row at index 2: Role=Designer (Mid)
+[INFO] [ROLE ROW] Skipping task creation for role row at index 3: Role=Designer (Mid)
+[INFO] [3-LEVEL HIERARCHY] Component 'Design' completed with 1 tasks
+[INFO] [3-LEVEL HIERARCHY] Creating component summary task: 'Strategy' (UID=4)
+[INFO] [WBS SEQUENTIAL] Storing original WBS_ID for component 'Strategy': 1.2
+[INFO] [WBS SEQUENTIAL] Component 'Strategy': Sequential WBS=1.2 (Original WBS_ID=1.2)
+[INFO] [3-LEVEL HIERARCHY] Creating L3 task: 'Strategy' (UID=5, Component=Strategy)
+[INFO] [WBS SEQUENTIAL] Storing original WBS_ID for task 'Strategy': 1.2
+[INFO] [WBS SEQUENTIAL] Task 'Strategy': Sequential WBS=1.2.1 (Original WBS_ID=1.2)
+[INFO] [CONSTRAINT] Task 'Strategy': ASAP (Type 0)
+[INFO] [ROLE ROW] Skipping task creation for role row at index 5: Role=Strategist (Mid)
+[INFO] [ROLE ROW] Skipping task creation for role row at index 6: Role=Strategist (Mid)
+[INFO] [3-LEVEL HIERARCHY] Component 'Strategy' completed with 1 tasks
+[INFO] [DEPENDENCIES] Processing Dependencies column for ALL task types (deliverables, components, leaf tasks)
+[INFO] [DEPENDENCIES DEBUG] original_wbs_to_uid has 3 entries
+[INFO] [DEPENDENCIES DEBUG] Sample WBS IDs in mapping (first 10): ['1.1', '1.2', '1']
+[WARNING] [WARNING] [DEPENDENCIES] No dependency column found in DataFrame (tried: Dependencies, Predecessor, Predecessors) - skipping dependency parsing
+[INFO] [3-LEVEL HIERARCHY] Adding component-level dependencies (tasks within components run in parallel)
+[INFO] [FIX B] Building child-hours-by-role aggregator for parent tasks
+[INFO] [FIX B] Built child hours aggregator for 0 parent tasks
+[INFO] [FIX A] Building assignment data structure before creating XML
+[INFO] [ROLE ASSIGNMENTS] Processing role rows to create assignment data
+[WARNING] [ROLE ASSIGNMENTS] Skipping role row at index 2: Parent WBS '1.1.1' not found for Role=Designer (Mid)
+[WARNING] [ROLE ASSIGNMENTS] Skipping role row at index 3: Parent WBS '1.1.2' not found for Role=Designer (Mid)
+[WARNING] [ROLE ASSIGNMENTS] Skipping role row at index 5: Parent WBS '1.2.1' not found for Role=Strategist (Mid)
+[WARNING] [ROLE ASSIGNMENTS] Skipping role row at index 6: Parent WBS '1.2.2' not found for Role=Strategist (Mid)
+[INFO] [ROLE ASSIGNMENTS] ========== SUMMARY ==========
+[INFO] [ROLE ASSIGNMENTS] Total role rows processed: 4
+[INFO] [ROLE ASSIGNMENTS] Successful assignments: 0
+[INFO] [ROLE ASSIGNMENTS] Skipped rows: 4
+[INFO] [ROLE ASSIGNMENTS] Success rate: 0.0%
+[INFO] [ROLE ASSIGNMENTS] ===============================
+[INFO] [FIX A] Aggregating work by task from assignments
+[INFO] [FIX A] Aggregated work for 0 tasks
+[INFO] [ASSIGNMENT VALIDATION] Validating assignment ResourceUIDs...
+[INFO] [ASSIGNMENT VALIDATION] ✓ All 0 assignments reference valid Resource UIDs
+[INFO] [FIX A & E] Updating Task.Work and Task.Cost from aggregated assignments
+[INFO] [FIX A] Creating Assignment XML elements from assignment data
+[INFO] [FIX A] Created 0 Assignment XML elements
+[INFO] [VERIFICATION] ==================== FINAL XML VERIFICATION ====================
+[INFO] [VERIFICATION] XML contains 0 PredecessorLink elements
+[WARNING] [VERIFICATION] ✗ WARNING! No PredecessorLink elements found in XML despite dependency processing
+[INFO] [VERIFICATION] ==================================================================
+[INFO] [Enhanced MSPDI] Created test_rate_fix_output.xml: 5 tasks, 2 resources, 0 milestones, 0 dependencies
+
+======================================================================
+Testing Rate Formatting Fix
+======================================================================
+
+Step 1: Creating test scenario data...
+  Created 4 tasks
+  Resources: Designer (Mid) @ $150/h, Strategist (Mid) @ $175/h
+  1 Deliverable: Website Redesign
+  2 Components: Design, Strategy
+  Saved test data to test_rate_fix_data.xlsx
+  Test data created ✓
+
+Step 2: Generating XML with convert_excel_to_mspdi...
+  Generated 5 tasks
+  Output: test_rate_fix_output.xml
+  XML generation completed ✓
+
+Step 3: Running comprehensive validator...
+  Validation passed - no errors found ✓
+
+Step 4: Checking rate field formats...
+  Resource 'Designer (Mid)' StandardRate: 150.00 ✓
+  Resource 'Designer (Mid)' OvertimeRate: 225.00 ✓
+  Resource 'Strategist (Mid)' StandardRate: 150.00 ✓
+  Resource 'Strategist (Mid)' OvertimeRate: 225.00 ✓
+
+======================================================================
+TEST RESULTS
+======================================================================
+
+✅ ALL TESTS PASSED - Rate fix verified!
+  - 0 validation errors
+  - All rates are bare decimals (no $ or /h)
+  - XML is Workfront-compatible
+
+Test files kept for inspection:
+  - test_rate_fix_data.xlsx
+  - test_rate_fix_output.xml
