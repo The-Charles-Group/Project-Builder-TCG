@@ -532,6 +532,10 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}Active" % ns).text = "1"
     ET.SubElement(project_task, "{%s}Manual" % ns).text = "0"
     
+    # Store reference to update duration later (will be updated after all tasks are processed)
+    # Placeholder finish date - will be updated with actual project end date
+    ET.SubElement(project_task, "{%s}Finish" % ns).text = project_start.isoformat()
+    
     # Process WBS tasks with enhanced structure
     task_uid = 1
     task_map = {}
@@ -1262,6 +1266,106 @@ def convert_excel_to_mspdi(
             
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
+    
+    # FIX: Update project summary task (UID=0) with calculated duration
+    # Workfront rejects non-milestone tasks with zero duration, causing import failures
+    if current_date and current_date > project_start:
+        project_finish = current_date
+        project_duration_minutes = int((project_finish - project_start).total_seconds() / 60)
+        
+        # Find and update the project task (UID=0) elements
+        for task in tasks.findall("{%s}Task" % ns):
+            uid_elem = task.find("{%s}UID" % ns)
+            if uid_elem is not None and uid_elem.text == "0":
+                # Update Duration
+                duration_elem = task.find("{%s}Duration" % ns)
+                if duration_elem is not None:
+                    duration_elem.text = f"PT{project_duration_minutes}M"
+                
+                # Update Finish
+                finish_elem = task.find("{%s}Finish" % ns)
+                if finish_elem is None:
+                    finish_elem = ET.SubElement(task, "{%s}Finish" % ns)
+                finish_elem.text = project_finish.isoformat()
+                
+                # Update Work (total project hours)
+                work_elem = task.find("{%s}Work" % ns)
+                if work_elem is not None:
+                    # Calculate total work from all assignments
+                    total_work_minutes = 0
+                    assignments = root.find("{%s}Assignments" % ns)
+                    if assignments is not None:
+                        for assignment in assignments.findall("{%s}Assignment" % ns):
+                            work = assignment.find("{%s}Work" % ns)
+                            if work is not None and work.text:
+                                # Parse PT format (e.g., "PT480M" or "PT8H0M0S")
+                                work_text = work.text.replace('PT', '').replace('H0M0S', '').replace('M', '')
+                                try:
+                                    # If it contains 'H', parse hours
+                                    if 'H' in work.text:
+                                        # Extract hours and convert to minutes
+                                        hours_part = work.text.split('H')[0].replace('PT', '')
+                                        total_work_minutes += int(hours_part) * 60
+                                    else:
+                                        # Just minutes
+                                        total_work_minutes += int(work_text)
+                                except ValueError:
+                                    logging.warning(f"Could not parse work value: {work.text}")
+                                    pass
+                    
+                    if total_work_minutes > 0:
+                        work_elem.text = f"PT{total_work_minutes}M"
+                
+                logging.info(f"[WORKFRONT FIX] Updated project summary task (UID=0): Duration={project_duration_minutes}min ({project_duration_minutes/60:.1f}hrs), Finish={project_finish.isoformat()}")
+                break
+    else:
+        logging.warning("[WORKFRONT FIX] Could not update project summary task: current_date not set or not after project_start")
+    
+    # VALIDATION: Check for zero-duration non-milestone tasks (Workfront compatibility)
+    logging.info("[WORKFRONT VALIDATION] Checking for zero-duration non-milestone tasks...")
+    zero_duration_tasks = []
+
+    for task in tasks.findall("{%s}Task" % ns):
+        uid_elem = task.find("{%s}UID" % ns)
+        duration_elem = task.find("{%s}Duration" % ns)
+        milestone_elem = task.find("{%s}Milestone" % ns)
+        name_elem = task.find("{%s}Name" % ns)
+        
+        if uid_elem is not None and duration_elem is not None:
+            uid = uid_elem.text
+            duration = duration_elem.text
+            is_milestone = milestone_elem is not None and milestone_elem.text == "1"
+            task_name = name_elem.text if name_elem is not None else "Unnamed"
+            
+            # Check if task has zero duration but is not a milestone
+            if duration == "PT0M" and not is_milestone:
+                zero_duration_tasks.append((uid, task_name))
+                
+                # FIX: Give it a minimum 1-hour duration for Workfront compatibility
+                duration_elem.text = "PT60M"  # 1 hour minimum
+                
+                # Also update Work if it's zero
+                work_elem = task.find("{%s}Work" % ns)
+                if work_elem is not None and work_elem.text == "PT0M":
+                    work_elem.text = "PT60M"
+                
+                # Update Finish to be 1 hour after Start
+                start_elem = task.find("{%s}Start" % ns)
+                finish_elem = task.find("{%s}Finish" % ns)
+                if start_elem is not None and finish_elem is not None:
+                    try:
+                        start_date = datetime.fromisoformat(start_elem.text)
+                        finish_date = start_date + timedelta(hours=1)
+                        finish_elem.text = finish_date.isoformat()
+                    except:
+                        pass
+                
+                logging.warning(f"[WORKFRONT VALIDATION] Fixed zero-duration task UID={uid}: '{task_name}' - set to 1 hour minimum")
+
+    if zero_duration_tasks:
+        logging.warning(f"[WORKFRONT VALIDATION] Fixed {len(zero_duration_tasks)} zero-duration non-milestone tasks for Workfront compatibility")
+    else:
+        logging.info("[WORKFRONT VALIDATION] ✓ No zero-duration non-milestone tasks found")
     
     # Add phase gate milestones
     if add_phase_gates and all_task_uids:
