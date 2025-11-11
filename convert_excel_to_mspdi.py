@@ -386,8 +386,8 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CreationDate" % ns).text = datetime.now().isoformat()
     ET.SubElement(root, "{%s}LastSaved" % ns).text = datetime.now().isoformat()
     ET.SubElement(root, "{%s}ScheduleFromStart" % ns).text = "1"
-    ET.SubElement(root, "{%s}StartDate" % ns).text = project_start.isoformat()
-    ET.SubElement(root, "{%s}FinishDate" % ns).text = (project_start + timedelta(days=365)).isoformat()
+    ET.SubElement(root, "{%s}StartDate" % ns).text = _snap_to_working_time(project_start, start=True).isoformat()
+    ET.SubElement(root, "{%s}FinishDate" % ns).text = _snap_to_working_time(project_start + timedelta(days=365), start=False).isoformat()
     ET.SubElement(root, "{%s}FYStartDate" % ns).text = "1"  # January
     ET.SubElement(root, "{%s}CriticalSlackLimit" % ns).text = "0"
     ET.SubElement(root, "{%s}CurrencyDigits" % ns).text = "2"
@@ -542,10 +542,10 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 100% allocation
         ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
-        ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
-        ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
-        ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = _snap_to_working_time(project_start, start=True).isoformat()
+        ET.SubElement(res, "{%s}AvailableTo" % ns).text = _snap_to_working_time(project_start + timedelta(days=365), start=False).isoformat()
+        ET.SubElement(res, "{%s}Start" % ns).text = _snap_to_working_time(project_start, start=True).isoformat()
+        ET.SubElement(res, "{%s}Finish" % ns).text = _snap_to_working_time(project_start + timedelta(days=365), start=False).isoformat()
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
@@ -591,10 +591,10 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1"  # 100% allocation
             ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1"
             ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
-            ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
-            ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
-            ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = _snap_to_working_time(project_start, start=True).isoformat()
+            ET.SubElement(res, "{%s}AvailableTo" % ns).text = _snap_to_working_time(project_start + timedelta(days=365), start=False).isoformat()
+            ET.SubElement(res, "{%s}Start" % ns).text = _snap_to_working_time(project_start, start=True).isoformat()
+            ET.SubElement(res, "{%s}Finish" % ns).text = _snap_to_working_time(project_start + timedelta(days=365), start=False).isoformat()
             ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
             ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
             ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"
