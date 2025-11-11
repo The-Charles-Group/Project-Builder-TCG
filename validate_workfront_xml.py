@@ -512,78 +512,83 @@ class WorkfrontXMLValidator:
                 print(f"  ❌ Found {len(invalid_predecessor_types)} dependency/ies with invalid Type")
     
     def check_extended_attributes(self):
-        """Check ExtendedAttributes usage and proper MSPDI schema structure"""
-        print("\n✓ Checking ExtendedAttributes usage and schema structure...")
+        """Check ExtendedAttributes for correct MSPDI schema (flat siblings, not wrapped)"""
+        print("\n✓ Checking ExtendedAttributes schema (GPT-5 Pro compliant)...")
         
         # Count ExtendedAttribute definitions in header
         ext_attr_defs = self._find_all('.//ms:ExtendedAttributes/ms:ExtendedAttribute' if self.ns['ms'] else './/ExtendedAttributes/ExtendedAttribute')
         num_definitions = len(ext_attr_defs)
         
-        # Check tasks for proper ExtendedAttributes structure
-        tasks_with_values = 0
-        total_values = 0
-        bare_ext_attrs = 0  # ExtendedAttribute elements NOT wrapped in ExtendedAttributes container
-        missing_metadata = []  # ExtendedAttribute elements missing required metadata
+        # Check tasks for proper flat ExtendedAttributes structure
+        tasks_with_flat_attrs = 0
+        total_flat_attrs = 0
+        tasks_with_wrapper = []  # Tasks with ExtendedAttributes wrapper (WRONG)
+        attrs_with_metadata = []  # ExtendedAttribute elements with UID/CfType/ElementType (WRONG at task level)
         
         for task in self._find_all('.//ms:Task' if self.ns['ms'] else './/Task'):
             task_uid = self._findtext(task, 'ms:UID' if self.ns['ms'] else 'UID')
             
-            # Check for bare ExtendedAttribute elements (WRONG - old schema)
-            bare_attrs = task.findall('ms:ExtendedAttribute' if self.ns['ms'] else 'ExtendedAttribute', self.ns if self.ns['ms'] else None)
-            if bare_attrs:
-                bare_ext_attrs += len(bare_attrs)
-                self.errors.append(
-                    f"Task UID={task_uid}: Found {len(bare_attrs)} bare <ExtendedAttribute> element(s) "
-                    f"not wrapped in <ExtendedAttributes> container. Workfront requires proper MSPDI schema: "
-                    f"<ExtendedAttributes><ExtendedAttribute>...</ExtendedAttribute></ExtendedAttributes>"
-                )
-            
-            # Check for properly wrapped ExtendedAttributes (CORRECT - new schema)
+            # Check for ExtendedAttributes wrapper container (WRONG - should be flat siblings)
             ext_attrs_container = task.find('ms:ExtendedAttributes' if self.ns['ms'] else 'ExtendedAttributes', self.ns if self.ns['ms'] else None)
             if ext_attrs_container is not None:
-                tasks_with_values += 1
-                ext_attrs = ext_attrs_container.findall('ms:ExtendedAttribute' if self.ns['ms'] else 'ExtendedAttribute', self.ns if self.ns['ms'] else None)
-                total_values += len(ext_attrs)
+                tasks_with_wrapper.append(task_uid)
+                self.errors.append(
+                    f"Task UID={task_uid}: Has <ExtendedAttributes> wrapper container. "
+                    f"Per GPT-5 Pro: Task-level ExtendedAttributes must be FLAT siblings (no wrapper). "
+                    f"Only project-level definitions use wrapper container."
+                )
+            
+            # Check for flat ExtendedAttribute siblings (CORRECT)
+            flat_attrs = task.findall('ms:ExtendedAttribute' if self.ns['ms'] else 'ExtendedAttribute', self.ns if self.ns['ms'] else None)
+            if flat_attrs:
+                tasks_with_flat_attrs += 1
+                total_flat_attrs += len(flat_attrs)
                 
-                # Validate each ExtendedAttribute has required metadata
-                for ext_attr in ext_attrs:
-                    uid = self._findtext(ext_attr, 'ms:UID' if self.ns['ms'] else 'UID')
+                # Validate each flat ExtendedAttribute has correct structure
+                for ext_attr in flat_attrs:
                     field_id = self._findtext(ext_attr, 'ms:FieldID' if self.ns['ms'] else 'FieldID')
-                    element_type = self._findtext(ext_attr, 'ms:ElementType' if self.ns['ms'] else 'ElementType')
-                    cf_type = self._findtext(ext_attr, 'ms:CfType' if self.ns['ms'] else 'CfType')
+                    value = self._findtext(ext_attr, 'ms:Value' if self.ns['ms'] else 'Value')
                     
-                    missing_fields = []
-                    if not uid:
-                        missing_fields.append('UID')
-                    if not element_type:
-                        missing_fields.append('ElementType')
-                    if not cf_type:
-                        missing_fields.append('CfType')
+                    # Must have FieldID and Value
+                    if not field_id:
+                        self.errors.append(f"Task UID={task_uid}: ExtendedAttribute missing FieldID")
+                    if value is None:
+                        self.errors.append(f"Task UID={task_uid}: ExtendedAttribute missing Value")
                     
-                    if missing_fields:
-                        missing_metadata.append({
+                    # Must NOT have UID, ElementType, or CfType at task level
+                    has_metadata = []
+                    if ext_attr.find('ms:UID' if self.ns['ms'] else 'UID', self.ns if self.ns['ms'] else None) is not None:
+                        has_metadata.append('UID')
+                    if ext_attr.find('ms:ElementType' if self.ns['ms'] else 'ElementType', self.ns if self.ns['ms'] else None) is not None:
+                        has_metadata.append('ElementType')
+                    if ext_attr.find('ms:CfType' if self.ns['ms'] else 'CfType', self.ns if self.ns['ms'] else None) is not None:
+                        has_metadata.append('CfType')
+                    
+                    if has_metadata:
+                        attrs_with_metadata.append({
                             'task_uid': task_uid,
                             'field_id': field_id,
-                            'missing': missing_fields
+                            'metadata': has_metadata
                         })
         
         # Report findings
-        if bare_ext_attrs > 0:
-            print(f"  ❌ Found {bare_ext_attrs} bare ExtendedAttribute element(s) without proper wrapper")
-            print(f"  ❌ Workfront will reject this file due to schema violations")
+        if tasks_with_wrapper:
+            print(f"  ❌ Found {len(tasks_with_wrapper)} task(s) with ExtendedAttributes wrapper container")
+            print(f"  ❌ Workfront requires FLAT siblings (no wrapper at task level)")
         
-        if missing_metadata:
-            for item in missing_metadata[:5]:  # Show first 5
+        if attrs_with_metadata:
+            for item in attrs_with_metadata[:5]:  # Show first 5
                 self.errors.append(
                     f"Task UID={item['task_uid']}, FieldID={item['field_id']}: "
-                    f"ExtendedAttribute missing required fields: {', '.join(item['missing'])}"
+                    f"ExtendedAttribute has task-level metadata: {', '.join(item['metadata'])}. "
+                    f"Per GPT-5 Pro: Task-level attrs should only have FieldID + Value."
                 )
-            if len(missing_metadata) > 5:
-                self.errors.append(f"... and {len(missing_metadata) - 5} more ExtendedAttribute(s) with missing metadata")
-            print(f"  ❌ Found {len(missing_metadata)} ExtendedAttribute(s) missing required metadata")
+            if len(attrs_with_metadata) > 5:
+                self.errors.append(f"... and {len(attrs_with_metadata) - 5} more ExtendedAttribute(s) with incorrect metadata")
+            print(f"  ❌ Found {len(attrs_with_metadata)} ExtendedAttribute(s) with task-level metadata (should be project-level only)")
         
         # Check for unused definitions
-        if num_definitions > 0 and total_values == 0 and bare_ext_attrs == 0:
+        if num_definitions > 0 and total_flat_attrs == 0:
             self.warnings.append(
                 f"Found {num_definitions} ExtendedAttribute definition(s) in header but 0 tasks use them. "
                 f"Workfront may reject this as corrupted/incomplete."
@@ -591,13 +596,16 @@ class WorkfrontXMLValidator:
             print(f"  ⚠️  {num_definitions} custom field(s) defined but never used")
         
         # Success message
-        if bare_ext_attrs == 0 and len(missing_metadata) == 0:
-            if num_definitions > 0:
-                print(f"  {num_definitions} custom field(s) defined")
-                print(f"  {total_values} ExtendedAttribute(s) in {tasks_with_values} task(s)")
-                print(f"  All ExtendedAttributes properly wrapped and structured ✓")
-            else:
+        if len(tasks_with_wrapper) == 0 and len(attrs_with_metadata) == 0:
+            if num_definitions > 0 and total_flat_attrs > 0:
+                print(f"  {num_definitions} custom field(s) defined in project header")
+                print(f"  {total_flat_attrs} flat ExtendedAttribute(s) in {tasks_with_flat_attrs} task(s)")
+                print(f"  All task-level ExtendedAttributes are flat siblings (FieldID + Value only) ✓")
+                print(f"  Schema is GPT-5 Pro compliant and Workfront-ready ✓")
+            elif num_definitions == 0:
                 print(f"  No ExtendedAttributes defined (clean export) ✓")
+            else:
+                print(f"  {num_definitions} custom field(s) defined but not used in tasks")
     
     def validate(self) -> bool:
         """Run all validation checks"""

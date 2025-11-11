@@ -54,37 +54,23 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
-def add_extended_attribute(parent_element: ET.Element, ns: str, field_id: str, value: str, 
-                           element_type: int = 1, cf_type: str = "12", ext_attr_uid_counter: List[int] = None):
+def add_task_extended_attribute(task_elem: ET.Element, ns: str, field_id: str, value: Any):
     """
-    Add an ExtendedAttribute to a task/resource/assignment with proper MSPDI schema structure.
+    Write a single task-level ExtendedAttribute compliant with MSPDI schema.
+    Creates flat ExtendedAttribute siblings under Task with ONLY FieldID + Value.
+    
+    Per GPT-5 Pro guidance: Task-level ExtendedAttributes must be flat (no wrapper container,
+    no UID/ElementType/CfType metadata). Rich metadata belongs only in project-level definitions.
     
     Args:
-        parent_element: The parent XML element (Task, Resource, or Assignment)
+        task_elem: The Task XML element
         ns: XML namespace
-        field_id: FieldID (e.g., "188743732" for Text2)
-        value: The value to set
-        element_type: 1=Task, 2=Resource, 3=Assignment
-        cf_type: Custom field type code (12=Text, 2=Number)
-        ext_attr_uid_counter: Mutable list to track UIDs (will be modified)
+        field_id: FieldID (e.g., "188743732" for Text2/Deliverable Code)
+        value: The value to set (converted to string, None becomes empty string)
     """
-    # Find or create ExtendedAttributes container
-    ext_attrs_container = parent_element.find("{%s}ExtendedAttributes" % ns)
-    if ext_attrs_container is None:
-        ext_attrs_container = ET.SubElement(parent_element, "{%s}ExtendedAttributes" % ns)
-    
-    # Create ExtendedAttribute with proper structure
-    ext_attr = ET.SubElement(ext_attrs_container, "{%s}ExtendedAttribute" % ns)
-    
-    # Add UID if counter provided
-    if ext_attr_uid_counter is not None:
-        ET.SubElement(ext_attr, "{%s}UID" % ns).text = str(ext_attr_uid_counter[0])
-        ext_attr_uid_counter[0] += 1
-    
-    ET.SubElement(ext_attr, "{%s}FieldID" % ns).text = field_id
-    ET.SubElement(ext_attr, "{%s}Value" % ns).text = str(value)
-    ET.SubElement(ext_attr, "{%s}ElementType" % ns).text = str(element_type)
-    ET.SubElement(ext_attr, "{%s}CfType" % ns).text = str(cf_type)
+    ea = ET.SubElement(task_elem, "{%s}ExtendedAttribute" % ns)
+    ET.SubElement(ea, "{%s}FieldID" % ns).text = str(field_id)
+    ET.SubElement(ea, "{%s}Value" % ns).text = "" if value is None else str(value)
 
 
 def create_governance_milestone_task(
@@ -168,9 +154,8 @@ def create_governance_milestone_task(
     ET.SubElement(task, "{%s}Summary" % ns).text = "0"
     ET.SubElement(task, "{%s}Critical" % ns).text = "0"
     
-    # Add custom field for governance type using proper MSPDI schema
-    add_extended_attribute(task, ns, "188743731", f"GOVERNANCE_{governance_type.upper()}", 
-                          element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+    # Add custom field for governance type (flat MSPDI schema)
+    add_task_extended_attribute(task, ns, "188743731", f"GOVERNANCE_{governance_type.upper()}")
     
     # Add notes to identify as governance milestone
     ET.SubElement(task, "{%s}Notes" % ns).text = f"Governance Milestone: {governance_type}"
@@ -789,24 +774,21 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}ExternalTask" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}Active" % ns).text = "1"
             
-            # Add custom fields for deliverable using proper MSPDI schema
+            # Add custom fields for deliverable (flat MSPDI schema)
             if add_custom_fields:
                 # Deliverable Code
                 if deliv_code:
-                    add_extended_attribute(deliv_task, ns, "188743732", deliv_code, 
-                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                    add_task_extended_attribute(deliv_task, ns, "188743732", deliv_code)
                 
                 # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
                 # Text1 mirrors Service Category for default grid visibility in Workfront
                 category_value = service_dept if service_dept else "Unassigned"
                 
                 # Text1 = Department (mirrors Service Category)
-                add_extended_attribute(deliv_task, ns, "188743731", category_value, 
-                                     element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                add_task_extended_attribute(deliv_task, ns, "188743731", category_value)
                 
                 # Text4 = Service Category (WORKFRONT REQUIREMENT)
-                add_extended_attribute(deliv_task, ns, "188743734", category_value, 
-                                     element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                add_task_extended_attribute(deliv_task, ns, "188743734", category_value)
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
@@ -923,28 +905,24 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}ExternalTask" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}Active" % ns).text = "1"
                 
-                # Add custom fields for component using proper MSPDI schema
+                # Add custom fields for component (flat MSPDI schema)
                 if add_custom_fields:
                     # Component Name
-                    add_extended_attribute(comp_task, ns, "188743733", str(component_name), 
-                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                    add_task_extended_attribute(comp_task, ns, "188743733", str(component_name))
                     
                     # Deliverable Code
                     if deliv_code:
-                        add_extended_attribute(comp_task, ns, "188743732", deliv_code, 
-                                             element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                        add_task_extended_attribute(comp_task, ns, "188743732", deliv_code)
                     
                     # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
                     # Text1 mirrors Service Category for default grid visibility in Workfront
                     comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
                     
                     # Text1 = Department (mirrors Service Category)
-                    add_extended_attribute(comp_task, ns, "188743731", comp_category_value, 
-                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                    add_task_extended_attribute(comp_task, ns, "188743731", comp_category_value)
                     
                     # Text4 = Service Category (WORKFRONT REQUIREMENT)
-                    add_extended_attribute(comp_task, ns, "188743734", comp_category_value, 
-                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                    add_task_extended_attribute(comp_task, ns, "188743734", comp_category_value)
                 
                 # Track component start/finish dates
                 component_start = current_date
@@ -1160,43 +1138,36 @@ def convert_excel_to_mspdi(
                                     component_costs[comp_uid] += price_value
                                     deliverable_costs[deliv_uid] += price_value
                                     
-                                    # Add Revenue extended attribute (same as cost for flat billing) using proper MSPDI schema
+                                    # Add Revenue extended attribute (same as cost for flat billing)
                                     if add_custom_fields:
-                                        add_extended_attribute(task, ns, "188743715", str(price_value), 
-                                                             element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
+                                        add_task_extended_attribute(task, ns, "188743715", str(price_value))
                                 else:
                                     logging.warning(f"Skipping zero or negative price for task '{task_name}': {price_value}")
                             except (ValueError, TypeError) as e:
                                 logging.warning(f"Could not parse Price_USD for task '{task_name}': {e}")
                         
-                        # Add extended attributes (custom fields) for each task using proper MSPDI schema
+                        # Add extended attributes (custom fields) for each task (flat MSPDI schema)
                         if add_custom_fields:
-                            # Risk Score (random for demo) - Number field, CfType = 2
-                            add_extended_attribute(task, ns, "188743713", str(random.randint(1, 10)), 
-                                                 element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
+                            # Risk Score (random for demo)
+                            add_task_extended_attribute(task, ns, "188743713", str(random.randint(1, 10)))
                             
-                            # Confidence Level (random 70-100) - Number field, CfType = 2
-                            add_extended_attribute(task, ns, "188743714", str(random.randint(70, 100)), 
-                                                 element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
+                            # Confidence Level (random 70-100)
+                            add_task_extended_attribute(task, ns, "188743714", str(random.randint(70, 100)))
                             
                             # FIX D: Text1 (Department) = Service Category for default grid visibility
-                            # Service Category is the primary field; Department mirrors it - Text field, CfType = 12
+                            # Service Category is the primary field; Department mirrors it
                             task_category_value = task_service_dept if task_service_dept else "Unassigned"
-                            add_extended_attribute(task, ns, "188743731", task_category_value, 
-                                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                            add_task_extended_attribute(task, ns, "188743731", task_category_value)
                             
-                            # Deliverable Code - Text field, CfType = 12
+                            # Deliverable Code
                             if deliv_code:
-                                add_extended_attribute(task, ns, "188743732", deliv_code, 
-                                                     element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                                add_task_extended_attribute(task, ns, "188743732", deliv_code)
                             
-                            # Component Name - Text field, CfType = 12
-                            add_extended_attribute(task, ns, "188743733", str(component_name), 
-                                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                            # Component Name
+                            add_task_extended_attribute(task, ns, "188743733", str(component_name))
                             
-                            # Service Category (Text4 - WORKFRONT REQUIREMENT) - Text field, CfType = 12
-                            add_extended_attribute(task, ns, "188743734", task_category_value, 
-                                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                            # Service Category (Text4 - WORKFRONT REQUIREMENT)
+                            add_task_extended_attribute(task, ns, "188743734", task_category_value)
                         
                         # Track component finish date
                         if task_num_in_component == 1:
@@ -1239,10 +1210,9 @@ def convert_excel_to_mspdi(
                     ET.SubElement(comp_task, "{%s}FixedCost" % ns).text = str(comp_total_cost)
                     ET.SubElement(comp_task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
                     
-                    # Add Revenue extended attribute (same as cost for flat billing) using proper MSPDI schema
+                    # Add Revenue extended attribute (same as cost for flat billing)
                     if add_custom_fields:
-                        add_extended_attribute(comp_task, ns, "188743715", str(comp_total_cost), 
-                                             element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
+                        add_task_extended_attribute(comp_task, ns, "188743715", str(comp_total_cost))
                     
                     logging.info(f"[COST AGGREGATION] Component '{component_name}' total cost: ${comp_total_cost:.2f}")
                 
@@ -1276,10 +1246,9 @@ def convert_excel_to_mspdi(
                 ET.SubElement(deliv_task, "{%s}FixedCost" % ns).text = str(deliv_total_cost)
                 ET.SubElement(deliv_task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
                 
-                # Add Revenue extended attribute (same as cost for flat billing) using proper MSPDI schema
+                # Add Revenue extended attribute (same as cost for flat billing)
                 if add_custom_fields:
-                    add_extended_attribute(deliv_task, ns, "188743715", str(deliv_total_cost), 
-                                         element_type=1, cf_type="2", ext_attr_uid_counter=ext_attr_uid_counter)
+                    add_task_extended_attribute(deliv_task, ns, "188743715", str(deliv_total_cost))
                 
                 logging.info(f"[COST AGGREGATION] Deliverable '{deliverable_name}' total cost: ${deliv_total_cost:.2f}")
             
@@ -1320,10 +1289,9 @@ def convert_excel_to_mspdi(
                 ET.SubElement(milestone, "{%s}ConstraintType" % ns).text = str(ConstraintType.MUST_FINISH_ON.value)
                 ET.SubElement(milestone, "{%s}ConstraintDate" % ns).text = deliverable_finish.isoformat()
                 
-                # Add custom field for milestone type using proper MSPDI schema
+                # Add custom field for milestone type (flat MSPDI schema)
                 if add_custom_fields:
-                    add_extended_attribute(milestone, ns, "188743731", "Deliverable Milestone", 
-                                         element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                    add_task_extended_attribute(milestone, ns, "188743731", "Deliverable Milestone")
             
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
@@ -1371,10 +1339,9 @@ def convert_excel_to_mspdi(
                     ET.SubElement(phase_milestone, "{%s}IsMarked" % ns).text = "1"
                     ET.SubElement(phase_milestone, "{%s}Notes" % ns).text = f"Phase gate at {(i+1)*25}% project completion"
                     
-                    # Add custom field for milestone type using proper MSPDI schema
+                    # Add custom field for milestone type (flat MSPDI schema)
                     if add_custom_fields:
-                        add_extended_attribute(phase_milestone, ns, "188743731", "Phase Gate", 
-                                             element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+                        add_task_extended_attribute(phase_milestone, ns, "188743731", "Phase Gate")
     
     # Add client approval milestone at the end
     if add_client_approval_milestone:
@@ -1402,10 +1369,9 @@ def convert_excel_to_mspdi(
         ET.SubElement(approval_milestone, "{%s}IsMarked" % ns).text = "1"
         ET.SubElement(approval_milestone, "{%s}Notes" % ns).text = "Final client approval and sign-off"
         
-        # Add custom field for milestone type using proper MSPDI schema
+        # Add custom field for milestone type (flat MSPDI schema)
         if add_custom_fields:
-            add_extended_attribute(approval_milestone, ns, "188743731", "Client Approval", 
-                                 element_type=1, cf_type="12", ext_attr_uid_counter=ext_attr_uid_counter)
+            add_task_extended_attribute(approval_milestone, ns, "188743731", "Client Approval")
     
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
@@ -2052,6 +2018,46 @@ def convert_excel_to_mspdi(
             type_fixed += 1
     logging.info(f"[WORKFRONT FIX] Fixed {type_fixed} PredecessorLink Type values")
     logging.info("[WORKFRONT FIX] ✓ All safety passes completed")
+    
+    # GPT-5 Pro Regression Guard: Validate task-level ExtendedAttributes schema
+    logging.info("[REGRESSION GUARD] Validating task-level ExtendedAttribute schema...")
+    schema_violations = []
+    tasks_elem = root.find("{%s}Tasks" % ns)
+    if tasks_elem is not None:
+        for task in tasks_elem.findall("{%s}Task" % ns):
+            task_uid = task.find("{%s}UID" % ns)
+            task_uid_text = task_uid.text if task_uid is not None else "Unknown"
+            
+            # Check for ExtendedAttributes wrapper (WRONG)
+            ext_attrs_wrapper = task.find("{%s}ExtendedAttributes" % ns)
+            if ext_attrs_wrapper is not None:
+                schema_violations.append(f"Task UID={task_uid_text}: Has ExtendedAttributes wrapper (should be flat siblings)")
+            
+            # Check each ExtendedAttribute for proper structure
+            for ea in task.findall("{%s}ExtendedAttribute" % ns):
+                # Must have FieldID and Value
+                if ea.find("{%s}FieldID" % ns) is None:
+                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute missing FieldID")
+                if ea.find("{%s}Value" % ns) is None:
+                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute missing Value")
+                
+                # Must NOT have UID, CfType, or ElementType at task level
+                if ea.find("{%s}UID" % ns) is not None:
+                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute has UID (task-level should NOT have UID)")
+                if ea.find("{%s}CfType" % ns) is not None:
+                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute has CfType (task-level should NOT have CfType)")
+                if ea.find("{%s}ElementType" % ns) is not None:
+                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute has ElementType (task-level should NOT have ElementType)")
+    
+    if schema_violations:
+        logging.error(f"[REGRESSION GUARD] ❌ SCHEMA VIOLATIONS DETECTED! {len(schema_violations)} violations:")
+        for violation in schema_violations[:10]:  # Show first 10
+            logging.error(f"  - {violation}")
+        if len(schema_violations) > 10:
+            logging.error(f"  ... and {len(schema_violations) - 10} more violations")
+        raise ValueError(f"Task-level ExtendedAttribute schema violations detected. Export aborted.")
+    else:
+        logging.info("[REGRESSION GUARD] ✓ All task-level ExtendedAttributes have correct flat schema (FieldID + Value only)")
     
     # Write the XML file
     tree = ET.ElementTree(root)
