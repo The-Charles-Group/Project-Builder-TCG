@@ -2083,6 +2083,48 @@ def convert_excel_to_mspdi(
                     logging.info(f"[FIX A & E] Updated task '{task_name}' (UID={task_uid}): Work={planned_minutes}M, Cost=${task_cost:.2f}")
                 break
     
+    # WORKFRONT FIX: Set project summary task (UID=0) Work from aggregated task work
+    # This is the authoritative Work calculation for the project summary (overrides earlier PT0M default)
+    # NOTE: The earlier block at lines ~1398-1424 runs before assignments are populated and produces PT0M
+    logging.info("[WORKFRONT FIX] Calculating project summary task Work from aggregated assignments")
+    
+    if work_by_task:
+        # Sum all non-summary task work hours
+        total_work_hours = sum(work_by_task.values())
+        total_work_minutes = int(round(60 * total_work_hours))
+        
+        # Find and update project summary task (UID=0)
+        project_summary_found = False
+        for task_elem in tasks.findall("{%s}Task" % ns):
+            uid_elem = task_elem.find("{%s}UID" % ns)
+            if uid_elem is not None and uid_elem.text == "0":
+                project_summary_found = True
+                
+                # Update or create Work element
+                work_elem = task_elem.find("{%s}Work" % ns)
+                if work_elem is not None:
+                    work_elem.text = f"PT{total_work_minutes}M"
+                else:
+                    ET.SubElement(task_elem, "{%s}Work" % ns).text = f"PT{total_work_minutes}M"
+                
+                # Update RemainingWork if it exists (for consistency)
+                remaining_work_elem = task_elem.find("{%s}RemainingWork" % ns)
+                if remaining_work_elem is not None:
+                    remaining_work_elem.text = f"PT{total_work_minutes}M"
+                
+                # Update RegularWork if it exists (for consistency)
+                regular_work_elem = task_elem.find("{%s}RegularWork" % ns)
+                if regular_work_elem is not None:
+                    regular_work_elem.text = f"PT{total_work_minutes}M"
+                
+                logging.info(f"[WORKFRONT FIX] ✓ Set project summary task (UID=0) Work: {total_work_minutes}M ({total_work_hours:.1f} hours)")
+                break
+        
+        if not project_summary_found:
+            logging.warning("[WORKFRONT FIX] Project summary task (UID=0) not found - cannot set Work field")
+    else:
+        logging.warning("[WORKFRONT FIX] No aggregated task work found (work_by_task is empty) - skipping summary Work update")
+    
     # Create Assignments container with enhanced resource assignments
     logging.info("[FIX A] Creating Assignment XML elements from assignment data")
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
