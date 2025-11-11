@@ -545,26 +545,29 @@ class WorkfrontXMLValidator:
                 ext_attrs = ext_attrs_container.findall('ms:ExtendedAttribute' if self.ns['ms'] else 'ExtendedAttribute', self.ns if self.ns['ms'] else None)
                 total_values += len(ext_attrs)
                 
-                # Validate each ExtendedAttribute has required metadata
+                # Validate ExtendedAttribute schema compliance - check for FORBIDDEN fields
+                # Per Microsoft MSPDI schema, task-level ExtendedAttribute should ONLY have FieldID + Value
                 for ext_attr in ext_attrs:
-                    uid = self._findtext(ext_attr, 'ms:UID' if self.ns['ms'] else 'UID')
                     field_id = self._findtext(ext_attr, 'ms:FieldID' if self.ns['ms'] else 'FieldID')
+                    
+                    # Check for forbidden fields that violate MSPDI schema
+                    uid = self._findtext(ext_attr, 'ms:UID' if self.ns['ms'] else 'UID')
                     element_type = self._findtext(ext_attr, 'ms:ElementType' if self.ns['ms'] else 'ElementType')
                     cf_type = self._findtext(ext_attr, 'ms:CfType' if self.ns['ms'] else 'CfType')
                     
-                    missing_fields = []
-                    if not uid:
-                        missing_fields.append('UID')
-                    if not element_type:
-                        missing_fields.append('ElementType')
-                    if not cf_type:
-                        missing_fields.append('CfType')
+                    forbidden_fields = []
+                    if uid:
+                        forbidden_fields.append('UID')
+                    if element_type:
+                        forbidden_fields.append('ElementType')
+                    if cf_type:
+                        forbidden_fields.append('CfType')
                     
-                    if missing_fields:
+                    if forbidden_fields:
                         missing_metadata.append({
                             'task_uid': task_uid,
                             'field_id': field_id,
-                            'missing': missing_fields
+                            'forbidden': forbidden_fields
                         })
         
         # Report findings
@@ -576,11 +579,13 @@ class WorkfrontXMLValidator:
             for item in missing_metadata[:5]:  # Show first 5
                 self.errors.append(
                     f"Task UID={item['task_uid']}, FieldID={item['field_id']}: "
-                    f"ExtendedAttribute missing required fields: {', '.join(item['missing'])}"
+                    f"ExtendedAttribute contains FORBIDDEN fields (MSPDI schema violation): {', '.join(item['forbidden'])}. "
+                    f"Task-level ExtendedAttribute should only contain FieldID and Value."
                 )
             if len(missing_metadata) > 5:
-                self.errors.append(f"... and {len(missing_metadata) - 5} more ExtendedAttribute(s) with missing metadata")
-            print(f"  ❌ Found {len(missing_metadata)} ExtendedAttribute(s) missing required metadata")
+                self.errors.append(f"... and {len(missing_metadata) - 5} more ExtendedAttribute(s) with forbidden fields")
+            print(f"  ❌ Found {len(missing_metadata)} ExtendedAttribute(s) with forbidden fields (UID/ElementType/CfType)")
+            print(f"  ❌ These violate Microsoft MSPDI schema - Workfront will reject the file")
         
         # Check for unused definitions
         if num_definitions > 0 and total_values == 0 and bare_ext_attrs == 0:
