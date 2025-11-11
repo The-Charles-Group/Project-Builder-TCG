@@ -20,6 +20,44 @@ class WorkfrontXMLValidator:
         self.ns = {'ms': 'http://schemas.microsoft.com/project'}
         self.errors = []
         self.warnings = []
+    
+    def check_xml_declaration(self) -> bool:
+        """Check XML declaration matches Microsoft Project/Workfront format"""
+        try:
+            with open(self.xml_file, 'r', encoding='utf-8') as f:
+                first_line = f.readline().strip()
+            
+            # Expected format: <?xml version="1.0" encoding="UTF-8"?>
+            expected = '<?xml version="1.0" encoding="UTF-8"?>'
+            
+            if first_line != expected:
+                # Check for common issues
+                if "version='1.0'" in first_line or "encoding='utf-8'" in first_line:
+                    self.errors.append(
+                        f"XML declaration uses single quotes instead of double quotes. "
+                        f"Expected: {expected}, Found: {first_line}"
+                    )
+                elif 'encoding="utf-8"' in first_line:
+                    self.errors.append(
+                        f"XML declaration uses lowercase 'utf-8'. "
+                        f"Workfront requires uppercase 'UTF-8'. Found: {first_line}"
+                    )
+                elif not first_line.startswith('<?xml'):
+                    self.warnings.append(
+                        f"XML declaration not found or malformed. Expected: {expected}"
+                    )
+                else:
+                    self.errors.append(
+                        f"XML declaration format incorrect. "
+                        f"Expected: {expected}, Found: {first_line}"
+                    )
+                return False
+            
+            print(f"  Declaration format correct: {expected}")
+            return True
+        except Exception as e:
+            self.errors.append(f"Error reading XML declaration: {e}")
+            return False
         
     def load_xml(self) -> bool:
         """Load and parse XML file"""
@@ -386,11 +424,15 @@ class WorkfrontXMLValidator:
     
     def validate(self) -> bool:
         """Run all validation checks"""
-        if not self.load_xml():
-            return False
-        
         print(f"Validating: {self.xml_file}")
         print("=" * 70)
+        
+        # Check XML declaration FIRST (before parsing)
+        print("\n✓ Checking XML declaration format...")
+        self.check_xml_declaration()
+        
+        if not self.load_xml():
+            return False
         
         self.check_duplicate_uids()
         self.check_reference_integrity()

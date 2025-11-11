@@ -226,7 +226,19 @@ def convert_excel_to_mspdi(
         root = create_empty_mspdi_xml(project_name or "Empty Project", fixed_start_iso)
         tree = ET.ElementTree(root)
         ET.indent(tree, space="  ")
-        tree.write(output_xml, encoding="utf-8", xml_declaration=True)
+        
+        # Write without declaration first
+        tree.write(output_xml, encoding="utf-8", xml_declaration=False)
+        
+        # Read the file and prepend the correct declaration
+        with open(output_xml, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Write back with Microsoft Project-compliant declaration
+        with open(output_xml, 'w', encoding='utf-8') as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+            f.write(content)
+        
         return {"task_count": 0, "warning": "Empty input data"}
     
     # Determine project start date
@@ -1978,7 +1990,18 @@ def convert_excel_to_mspdi(
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
-    tree.write(output_xml, encoding="utf-8", xml_declaration=True)
+    
+    # Write without declaration first
+    tree.write(output_xml, encoding="utf-8", xml_declaration=False)
+    
+    # Read the file and prepend the correct declaration
+    with open(output_xml, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # Write back with Microsoft Project-compliant declaration
+    with open(output_xml, 'w', encoding='utf-8') as f:
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write(content)
     
     # FIX: Verify PredecessorLink elements were created
     # Count all PredecessorLink elements in the XML
