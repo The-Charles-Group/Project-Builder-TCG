@@ -1,0 +1,75 @@
+Surgical, low‑risk fixes to apply now
+
+Below are precise changes you can hand to Replit (file/section names follow what you shared). They do not expand scope or add heavy logic—each is targeted to the failure points above.
+
+A) De‑duplicate tasks before UID assignment
+
+In the function that builds the WBS DataFrame (just before writing the Excel that feeds convert_excel_to_mspdi), add a single line to drop duplicates by WBS + Task name:
+
+# right after df = build_wbs_dataframe_from_scenario(...)
+df = df.drop_duplicates(subset=["WBS_ID", "Task_Name"], keep="first").reset_index(drop=True)
+
+
+(This is in the “safe build – comp broken.docx” flow around the _export_single_scenario_xml helper right after df = _ensure_v3_ae_columns(df).)
+
+This guarantees you never feed duplicate rows into UID assignment.
+
+B) Enforce unique UIDs and update all references
+
+Inside convert_excel_to_mspdi.convert_excel_to_mspdi (the writer):
+
+Keep a running used_uids set when creating <Task> nodes. If a row would reuse a UID, allocate a fresh UID and record a old_uid → new_uid mapping.
+
+After tasks are written, rewrite:
+
+every <Assignment>/<TaskUID> using the mapping, and
+
+every <PredecessorLink>/<PredecessorUID> using the mapping.
+
+Your current writer already builds wbs_to_uid and iterates tasks to add predecessors; extend that pattern with the remap. (You’re already iterating tasks to add <PredecessorLink>. Use that loop to assert uniqueness and remap where needed.)
+
+Tip: After writing the XML to a string—but before saving—run a quick integrity pass:
+
+assert all <Task><UID> values are unique,
+
+assert all <Assignment><TaskUID> and <PredecessorUID> exist.
+
+C) Set predecessor type to a valid value (FS = 1)
+
+Your current code snippet in the doc shows the correct value, but the 09:19 AM export still has 0. That means the old code path is still being used somewhere.
+
+In the predecessor writer, force:
+
+SubElement(pred_link, "Type").text = "1"   # 1 = Finish-to-Start
+
+
+(This line should replace any “0” you still have.)
+
+D) Snap all times to the working day
+
+Before converting datetime to strings, normalize all Start/Finish (for tasks and assignments) to 09:00 or 18:00 as appropriate. You are already converting datetimes to strings; add this tiny normalization just above it:
+
+def _snap_to_working_time(dt, start=True):
+    # put all *starts* at 09:00:00 and *finishes* at 18:00:00
+    return dt.replace(hour=(9 if start else 18), minute=0, second=0, microsecond=0)
+
+for uid, sched in uid_to_sched.items():
+    if isinstance(sched["Start"], datetime.datetime):
+        sched["Start"] = _snap_to_working_time(sched["Start"], start=True)
+    if isinstance(sched["Finish"], datetime.datetime):
+        sched["Finish"] = _snap_to_working_time(sched["Finish"], start=False)
+
+
+You’re already computing business‑minutes and snapping durations to 480 minutes; this simply aligns the timestamps to your calendar to avoid the 01:00:00 mismatch.
+
+E) Strip “COMPLETE / Phase X / FINAL approval” milestones
+
+If you don’t want these ever, remove them at the source. Right after the DataFrame is built (same spot as A), filter out those labels:
+
+_bad = [" complete", "phase ", "client approval - final"]
+df = df[~df["Task_Name"].str.lower().str.contains("|".join(_bad))]
+
+
+That will remove lines like “Phase 1 Complete (25%)”, “Phase 2 Complete (50%)”, and the “CLIENT APPROVAL – FINAL” type markers, which you said extend due dates with no benefit.
+
+(You can keep a switch add_deliverable_milestones=False in your call; but the 09:19 file still contains
