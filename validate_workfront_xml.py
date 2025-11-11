@@ -511,6 +511,39 @@ class WorkfrontXMLValidator:
             if invalid_predecessor_types:
                 print(f"  ❌ Found {len(invalid_predecessor_types)} dependency/ies with invalid Type")
     
+    def check_extended_attributes(self):
+        """Check for unused ExtendedAttributes that can cause Workfront import failures"""
+        print("\n✓ Checking ExtendedAttributes usage...")
+        
+        # Count ExtendedAttribute definitions in header
+        ext_attr_defs = self._find_all('.//ms:ExtendedAttributes/ms:ExtendedAttribute' if self.ns['ms'] else './/ExtendedAttributes/ExtendedAttribute')
+        num_definitions = len(ext_attr_defs)
+        
+        # Count tasks with ExtendedAttributeValue (actual usage)
+        tasks_with_values = 0
+        total_values = 0
+        for task in self._find_all('.//ms:Task' if self.ns['ms'] else './/Task'):
+            ext_values = task.findall('ms:ExtendedAttribute' if self.ns['ms'] else 'ExtendedAttribute', self.ns if self.ns['ms'] else None)
+            if ext_values:
+                tasks_with_values += 1
+                total_values += len(ext_values)
+        
+        if num_definitions > 0 and total_values == 0:
+            self.warnings.append(
+                f"⚠️  WORKFRONT IMPORT WARNING: Found {num_definitions} ExtendedAttribute definition(s) "
+                f"in the XML header, but 0 tasks actually use them. "
+                f"Workfront may reject this file as corrupted/incomplete. "
+                f"Fix: Either populate the custom fields in tasks, or remove the ExtendedAttributes block entirely. "
+                f"(Set add_custom_fields=False in convert_excel_to_mspdi to disable)"
+            )
+            print(f"  ⚠️  {num_definitions} custom field(s) defined but never used")
+            print(f"  ⚠️  This may cause Workfront to reject the import")
+        elif num_definitions > 0:
+            print(f"  {num_definitions} custom field(s) defined")
+            print(f"  {total_values} ExtendedAttributeValue(s) in {tasks_with_values} task(s) ✓")
+        else:
+            print(f"  No ExtendedAttributes defined (clean export) ✓")
+    
     def validate(self) -> bool:
         """Run all validation checks"""
         print(f"Validating: {self.xml_file}")
@@ -530,6 +563,7 @@ class WorkfrontXMLValidator:
         self.check_data_types()
         self.check_required_fields()
         self.check_workfront_compatibility()
+        self.check_extended_attributes()
         
         return self.print_results()
     

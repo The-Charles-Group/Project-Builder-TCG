@@ -191,7 +191,7 @@ def convert_excel_to_mspdi(
         add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
         add_client_approval_milestone: Add CLIENT APPROVAL - FINAL milestone at end
         add_dependencies: Add task dependencies
-        add_custom_fields: Add ExtendedAttribute elements for Workfront
+        add_custom_fields: Add ExtendedAttribute elements for Workfront with proper MSPDI schema structure
         
     Returns:
         Dictionary with conversion statistics
