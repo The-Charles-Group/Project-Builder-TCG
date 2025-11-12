@@ -514,11 +514,8 @@ def convert_excel_to_mspdi(
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
     
-    # WORKFRONT FIX: Add empty Baseline container (Workfront expects this even if empty)
-    ET.SubElement(root, "{%s}Baseline" % ns)
-    
-    # WORKFRONT FIX: Add empty OutlineCodes container (Workfront expects this even if empty)
-    ET.SubElement(root, "{%s}OutlineCodes" % ns)
+    # WORKFRONT FIX: DO NOT add empty Baseline or OutlineCodes - Workfront rejects self-closing complex types
+    # These elements require child nodes when present, so omit them entirely when no data exists
     
     # Create Resources container with enhanced resource definitions
     resources = ET.SubElement(root, "{%s}Resources" % ns)
