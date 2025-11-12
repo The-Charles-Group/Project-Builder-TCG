@@ -341,9 +341,9 @@ def convert_excel_to_mspdi(
         with open(output_xml, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Write back with Workfront-compliant declaration (double quotes, uppercase UTF-8)
+        # Write back with Workfront-compliant declaration (double quotes, uppercase UTF-8, standalone)
         with open(output_xml, 'w', encoding='utf-8') as f:
-            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+            f.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
             f.write(content)
         
         return {"task_count": 0, "warning": "Empty input data"}
@@ -426,6 +426,11 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}NewTasksAreManual" % ns).text = "0"
     ET.SubElement(root, "{%s}DefaultTaskEVMethod" % ns).text = "0"  # % Complete
     ET.SubElement(root, "{%s}ProjectExternallyEdited" % ns).text = "0"
+    
+    # WORKFRONT FIX: Add empty OutlineCodes and WBSMasks elements
+    # These are required by Workfront even if empty
+    ET.SubElement(root, "{%s}OutlineCodes" % ns)
+    ET.SubElement(root, "{%s}WBSMasks" % ns)
     
     # Add ExtendedAttributes definitions for custom fields
     if add_custom_fields:
@@ -2306,8 +2311,8 @@ def convert_excel_to_mspdi(
     
     # Write to file in BINARY mode with manual UTF-8 encoding (no BOM)
     with open(output_xml, 'wb') as f:
-        # Write declaration manually as UTF-8 bytes (no BOM)
-        f.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
+        # Write declaration manually as UTF-8 bytes (no BOM, with standalone)
+        f.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
         # Write content as UTF-8 bytes (no BOM)
         f.write(xml_content.encode('utf-8'))
     
