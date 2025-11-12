@@ -523,7 +523,9 @@ def convert_excel_to_mspdi(
     resource_map = {}
     resource_uid_map = {}  # FIX: New mapping for (role, seniority) -> resource_uid
     department_resources = {}
-    resource_id = 1
+    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
+    # Tasks start at UID=1, Resources must be in separate namespace
+    resource_id = 1000
     
     # Extract unique departments and roles
     departments = set()
@@ -776,8 +778,10 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}Name" % ns).text = deliverable_name
             ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
-            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs
-            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = deliv_wbs
+            # WORKFRONT FIX: Strip trailing periods from WBS to prevent "8." format
+            deliv_wbs_clean = str(deliv_wbs).rstrip('.')
+            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs_clean
+            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = deliv_wbs_clean
             ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = deliv_outline_level
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
             
@@ -955,8 +959,10 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}Name" % ns).text = component_name
                 ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                 ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
-                ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs
-                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs
+                # WORKFRONT FIX: Strip trailing periods from WBS to prevent "8.3." format
+                comp_wbs_clean = str(comp_wbs).rstrip('.')
+                ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs_clean
+                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs_clean
                 ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
@@ -1142,8 +1148,10 @@ def convert_excel_to_mspdi(
                         
                         ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
                         ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-                        ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs
-                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs
+                        # WORKFRONT FIX: Strip trailing periods from WBS to prevent "8.3.5." format
+                        task_wbs_clean = str(task_wbs).rstrip('.')
+                        ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs_clean
+                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs_clean
                         ET.SubElement(task, "{%s}OutlineLevel" % ns).text = task_outline_level
                         ET.SubElement(task, "{%s}Priority" % ns).text = "500"
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
