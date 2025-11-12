@@ -2231,9 +2231,9 @@ def convert_excel_to_mspdi(
             if uid_elem is not None and int(uid_elem.text) == task_uid:
                 # Check if this is a summary task (skip work updates for summary tasks)
                 summary_elem = task_elem.find("{%s}Summary" % ns)
-                is_summary = summary_elem is not None and summary_elem.text == "1"
+                task_is_summary = summary_elem is not None and summary_elem.text == "1"
                 
-                if not is_summary:
+                if not task_is_summary:
                     # Update Work, RemainingWork, RegularWork
                     planned_minutes = int(round(60 * work_hours))
                     
@@ -2580,9 +2580,9 @@ def convert_excel_to_mspdi(
     for task_elem in tasks.findall("{%s}Task" % ns):
         work_elem = task_elem.find("{%s}Work" % ns)
         summary_elem = task_elem.find("{%s}Summary" % ns)
-        is_summary = summary_elem is not None and summary_elem.text == "1"
+        task_is_summary = summary_elem is not None and summary_elem.text == "1"
         
-        if work_elem is not None and not is_summary:
+        if work_elem is not None and not task_is_summary:
             work_val = work_elem.text
             if work_val and work_val != "PT0M":
                 tasks_with_nonzero_work += 1
