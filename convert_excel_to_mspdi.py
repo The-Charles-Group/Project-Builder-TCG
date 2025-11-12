@@ -2368,6 +2368,41 @@ def convert_excel_to_mspdi(
     # structures built in Phase 1 (after resource data was built).
     logging.info("[PHASE 2] Writing Assignments XML from pre-built data...")
     
+    # ORPHANED ASSIGNMENT CLEANUP: Remove assignments referencing non-existent TaskUIDs
+    # This prevents Workfront from rejecting the file due to invalid cross-references
+    logging.info("[ORPHANED CLEANUP] Building valid_task_uids set from finalized tasks...")
+    valid_task_uids = set()
+    tasks_elem = root.find("{%s}Tasks" % ns)
+    if tasks_elem is not None:
+        for task in tasks_elem.findall("{%s}Task" % ns):
+            uid_elem = task.find("{%s}UID" % ns)
+            if uid_elem is not None and uid_elem.text:
+                valid_task_uids.add(int(uid_elem.text))
+    
+    logging.info(f"[ORPHANED CLEANUP] Found {len(valid_task_uids)} valid task UIDs in final XML")
+    
+    # Filter out orphaned assignments
+    original_assignment_count = len(assignment_data_list)
+    filtered_assignments = []
+    orphaned_count = 0
+    
+    for assignment_data in assignment_data_list:
+        task_uid = assignment_data["TaskUID"]
+        if task_uid in valid_task_uids:
+            filtered_assignments.append(assignment_data)
+        else:
+            orphaned_count += 1
+            logging.warning(f"[ORPHANED CLEANUP] Dropping orphaned assignment: TaskUID={task_uid} not in valid tasks")
+    
+    assignment_data_list = filtered_assignments
+    
+    if orphaned_count > 0:
+        logging.warning(f"[ORPHANED CLEANUP] ⚠ Dropped {orphaned_count} orphaned assignments (TaskUIDs not in final task set)")
+    else:
+        logging.info(f"[ORPHANED CLEANUP] ✓ No orphaned assignments found (all {original_assignment_count} assignments reference valid tasks)")
+    
+    logging.info(f"[ORPHANED CLEANUP] Final assignment count: {len(assignment_data_list)} (was {original_assignment_count})")
+    
     # FIX A: Check for duplicate Assignment UIDs in source data
     logging.info("[FIX A] Checking for duplicate Assignment UIDs in assignment_data_list...")
     uids_from_data = [a["AssignmentUID"] for a in assignment_data_list]
