@@ -5,6 +5,17 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 
 ## Recent Changes (Nov 12, 2025)
 
+### Workfront XML Export - GPT-5 Pro MSPDI Schema Compliance Fix
+- **Critical Bug Fix**: Added missing `<Assignments />` section to MSPDI XML structure
+- **Impact**: Resolves Workfront "unable to read file" import error caused by missing required MSPDI schema element
+- **Root Cause**: MSPDI schema requires exactly ONE of each section (`<Calendars>`, `<Resources>`, `<Tasks>`, `<Assignments>`) under `<Project>`. The generator was completely omitting the `<Assignments />` section, causing schema validation failure in Workfront.
+- **Fix Implementation**:
+  - Added empty `<Assignments />` element on line 1926-1930 immediately before XML serialization
+  - Wired `sanitize_task_name()` into component creation path (line 787) to strip "- COMPLETE" suffix from ALL task types
+  - Added wrapper task filtering for components (lines 790-792) to skip "Phase N", "Client Approval" tasks BEFORE creating XML elements, preventing ghost tasks
+- **Validation**: XML structure now includes single consolidated blocks: one `<Calendars>`, one `<Resources>`, one `<Tasks>`, one `<Assignments />` per MSPDI schema requirements
+- **Files**: `convert_excel_to_mspdi.py` lines 787-792 (component sanitization/filtering), lines 1926-1930 (Assignments section)
+
 ### Workfront XML Export - Orphaned Dependency Fix
 - **Critical Bug Fix**: Validated all predecessor UIDs against actual XML task tree before creating PredecessorLink elements
 - **Impact**: Eliminated orphaned dependencies that caused Workfront to reject entire XML file with "unable to read file" error
