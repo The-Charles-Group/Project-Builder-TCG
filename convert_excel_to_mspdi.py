@@ -222,9 +222,9 @@ def convert_excel_to_mspdi(
         with open(output_xml, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Write back with Microsoft Project-compliant declaration
+        # Write back with Workfront-compliant declaration (double quotes, uppercase UTF-8)
         with open(output_xml, 'w', encoding='utf-8') as f:
-            f.write("<?xml version='1.0' encoding='utf-8'?>\n")
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
             f.write(content)
         
         return {"task_count": 0, "warning": "Empty input data"}
@@ -415,8 +415,8 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
         ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
         ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
         ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -472,8 +472,8 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(res_data["role"]).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
             ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
             ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
             ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -1952,9 +1952,9 @@ def convert_excel_to_mspdi(
     with open(output_xml, 'r', encoding='utf-8') as f:
         content = f.read()
     
-    # Write back with Microsoft Project-compliant declaration
+    # Write back with Workfront-compliant declaration (double quotes, uppercase UTF-8)
     with open(output_xml, 'w', encoding='utf-8') as f:
-        f.write("<?xml version='1.0' encoding='utf-8'?>\n")
+        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
         f.write(content)
     
     # FIX: Verify PredecessorLink elements were created
