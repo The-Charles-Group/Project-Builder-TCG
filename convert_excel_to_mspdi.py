@@ -2025,8 +2025,8 @@ def convert_excel_to_mspdi(
     tasks_elem = root.find("{%s}Tasks" % ns)
     if tasks_elem is not None:
         for task in tasks_elem.findall("{%s}Task" % ns):
-            task_uid = task.find("{%s}UID" % ns)
-            task_uid_text = task_uid.text if task_uid is not None else "Unknown"
+            uid_elem = task.find("{%s}UID" % ns)
+            task_uid_text = uid_elem.text if uid_elem is not None else "Unknown"
             
             # Check for ExtendedAttributes wrapper (WRONG)
             ext_attrs_wrapper = task.find("{%s}ExtendedAttributes" % ns)
