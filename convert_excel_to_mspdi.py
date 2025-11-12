@@ -1238,6 +1238,17 @@ def convert_excel_to_mspdi(
     if add_dependencies:
         logging.info("[DEPENDENCIES] Processing Dependencies column for ALL task types (deliverables, components, leaf tasks)")
         
+        # CRITICAL FIX: Build set of valid task UIDs from actual XML tree
+        # This prevents orphaned dependencies to tasks that were filtered out
+        valid_task_uids = set()
+        for task_elem in tasks.findall("{%s}Task" % ns):
+            uid_elem = task_elem.find("{%s}UID" % ns)
+            if uid_elem is not None:
+                valid_task_uids.add(int(uid_elem.text))
+        
+        logging.info(f"[DEPENDENCIES] Built valid task UID set with {len(valid_task_uids)} tasks")
+        logging.info(f"[DEPENDENCIES] Sample valid UIDs: {sorted(list(valid_task_uids))[:10]}")
+        
         # FIX C: Add debug logging for WBS mapping
         logging.info(f"[DEPENDENCIES DEBUG] original_wbs_to_uid has {len(original_wbs_to_uid)} entries")
         if original_wbs_to_uid:
@@ -1418,7 +1429,15 @@ def convert_excel_to_mspdi(
                             skipped_count += 1
                             continue
                         
-                        logging.info(f"[DEPENDENCIES] ✓ Found predecessor UID={predecessor_uid} for WBS '{dep_wbs}'")
+                        # CRITICAL FIX: Validate that predecessor UID exists in actual XML task tree
+                        # This prevents orphaned dependencies to tasks that were filtered out (wrapper/duplicate/empty summaries)
+                        if predecessor_uid not in valid_task_uids:
+                            logging.warning(f"[DEPENDENCIES] ✗ ORPHANED DEPENDENCY: WBS '{dep_wbs}' maps to UID={predecessor_uid} but this task was FILTERED OUT")
+                            logging.warning(f"[DEPENDENCIES] Task {lookup_key} tried to link to non-existent predecessor - SKIPPING to prevent Workfront import failure")
+                            skipped_count += 1
+                            continue
+                        
+                        logging.info(f"[DEPENDENCIES] ✓ Found predecessor UID={predecessor_uid} for WBS '{dep_wbs}' (validated in XML tree)")
                         
                         # Skip self-referencing dependencies
                         if predecessor_uid == task_uid:
