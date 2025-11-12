@@ -2111,6 +2111,26 @@ def convert_excel_to_mspdi(
     else:
         logging.info("[HIERARCHY VALIDATION] ✓ All summary tasks have at least one child - hierarchy is valid")
     
+    # CRITICAL VALIDATION: Count Summary elements before export
+    logging.info("[SUMMARY VALIDATION] Counting Summary elements in XML tree...")
+    summary_count = 0
+    if tasks_elem is not None:
+        for task in tasks_elem.findall("{%s}Task" % ns):
+            summary_elem = task.find("{%s}Summary" % ns)
+            if summary_elem is not None:
+                summary_count += 1
+                if summary_elem.text == "1":
+                    uid_elem = task.find("{%s}UID" % ns)
+                    name_elem = task.find("{%s}Name" % ns)
+                    level_elem = task.find("{%s}OutlineLevel" % ns)
+                    logging.info(f"[SUMMARY CHECK] Found Summary=1: UID={uid_elem.text if uid_elem is not None else '?'}, Name='{name_elem.text if name_elem is not None else '?'}', Level={level_elem.text if level_elem is not None else '?'}")
+    
+    logging.info(f"[SUMMARY VALIDATION] Found {summary_count} tasks with Summary element")
+    if summary_count == 0:
+        logging.error("[SUMMARY VALIDATION] ❌ CRITICAL: NO Summary elements found in XML tree!")
+        logging.error("[SUMMARY VALIDATION] Workfront requires Summary=1 for all deliverables and components")
+        raise ValueError("Export aborted: No Summary elements found in XML tree. This will cause Workfront import to fail.")
+    
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
