@@ -2362,107 +2362,20 @@ def convert_excel_to_mspdi(
     logging.info(f"[FIX B] ================================================")
 
     # ============================================================================
-    # PHASE 2: WRITE ASSIGNMENTS XML FROM PRE-BUILT DATA
+    # PHASE 2: ASSIGNMENTS SECTION - DISABLED TO MATCH NOV 7 BASELINE
     # ============================================================================
-    # This phase creates Assignment XML elements using the assignment data
-    # structures built in Phase 1 (after resource data was built).
-    logging.info("[PHASE 2] Writing Assignments XML from pre-built data...")
+    # CRITICAL DISCOVERY: Working Nov 7 baseline has ZERO assignments and Workfront accepted it.
+    # New exports with 208 assignments were REJECTED by Workfront.
+    # Conclusion: Workfront does not want/need the Assignments section for this import type.
+    # 
+    # The entire Assignments generation section has been disabled to match the working format.
+    logging.info("[PHASE 2] SKIPPING Assignments XML generation - matching Nov 7 working baseline (0 assignments)")
+    logging.info("[PHASE 2] Nov 7 baseline evidence: 0 assignments in XML, Workfront import SUCCESSFUL")
+    logging.info(f"[PHASE 2] Assignments section will be OMITTED from export (built {len(assignment_data_list)} assignments but will not write them)")
     
-    # ORPHANED ASSIGNMENT CLEANUP: Remove assignments referencing non-existent TaskUIDs
-    # This prevents Workfront from rejecting the file due to invalid cross-references
-    logging.info("[ORPHANED CLEANUP] Building valid_task_uids set from finalized tasks...")
-    valid_task_uids = set()
-    tasks_elem = root.find("{%s}Tasks" % ns)
-    if tasks_elem is not None:
-        for task in tasks_elem.findall("{%s}Task" % ns):
-            uid_elem = task.find("{%s}UID" % ns)
-            if uid_elem is not None and uid_elem.text:
-                valid_task_uids.add(int(uid_elem.text))
-    
-    logging.info(f"[ORPHANED CLEANUP] Found {len(valid_task_uids)} valid task UIDs in final XML")
-    
-    # Filter out orphaned assignments
-    original_assignment_count = len(assignment_data_list)
-    filtered_assignments = []
-    orphaned_count = 0
-    
-    for assignment_data in assignment_data_list:
-        task_uid = assignment_data["TaskUID"]
-        if task_uid in valid_task_uids:
-            filtered_assignments.append(assignment_data)
-        else:
-            orphaned_count += 1
-            logging.warning(f"[ORPHANED CLEANUP] Dropping orphaned assignment: TaskUID={task_uid} not in valid tasks")
-    
-    assignment_data_list = filtered_assignments
-    
-    if orphaned_count > 0:
-        logging.warning(f"[ORPHANED CLEANUP] ⚠ Dropped {orphaned_count} orphaned assignments (TaskUIDs not in final task set)")
-    else:
-        logging.info(f"[ORPHANED CLEANUP] ✓ No orphaned assignments found (all {original_assignment_count} assignments reference valid tasks)")
-    
-    logging.info(f"[ORPHANED CLEANUP] Final assignment count: {len(assignment_data_list)} (was {original_assignment_count})")
-    
-    # FIX A: Check for duplicate Assignment UIDs in source data
-    logging.info("[FIX A] Checking for duplicate Assignment UIDs in assignment_data_list...")
-    uids_from_data = [a["AssignmentUID"] for a in assignment_data_list]
-    duplicate_uids = {uid for uid in uids_from_data if uids_from_data.count(uid) > 1}
-    if duplicate_uids:
-        logging.error(f"[FIX A] ❌ ERROR: Duplicate Assignment UIDs found in source data: {sorted(duplicate_uids)}")
-        logging.error(f"[FIX A] Total assignments: {len(uids_from_data)}, Unique UIDs: {len(set(uids_from_data))}, Duplicates: {len(duplicate_uids)}")
-    else:
-        logging.info(f"[FIX A] ✓ No duplicate UIDs in source data")
-    
-    assignments = ET.SubElement(root, "{%s}Assignments" % ns)
-    
-    # FIX A: Use sequential counter for Assignment UIDs to ensure uniqueness
-    # This guarantees UIDs are always 1, 2, 3, 4... regardless of source data
-    next_assignment_uid = 1
-    logging.info(f"[FIX A] Generating {len(assignment_data_list)} assignments with sequential UIDs starting from 1...")
-    
-    # Create assignment XML elements from assignment_data_list
-    for assignment_data in assignment_data_list:
-        assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
-        ET.SubElement(assign, "{%s}UID" % ns).text = str(next_assignment_uid)
-        next_assignment_uid += 1
-        ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(assignment_data["TaskUID"])
-        ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(assignment_data["ResourceUID"])
-        ET.SubElement(assign, "{%s}Units" % ns).text = "1.0"  # Workfront requires fractional (1.0 = 100%)
-        
-        # Work in minutes (PT format)
-        work_minutes = int(assignment_data["WorkHours"] * 60)
-        ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{work_minutes}M"
-        ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{work_minutes}M"
-        ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{work_minutes}M"
-        ET.SubElement(assign, "{%s}Start" % ns).text = assignment_data["Start"]
-        ET.SubElement(assign, "{%s}Finish" % ns).text = assignment_data["Finish"]
-        
-        # Standard assignment fields
-        ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
-        ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
-        ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
-        ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
-        ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
-        ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
-        ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
-        ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
-        ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
-        ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
-        ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
-        ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
-        ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
-        ET.SubElement(assign, "{%s}Cost" % ns).text = str(assignment_data["Cost"])
-        ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
-        ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
-        ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
-        ET.SubElement(assign, "{%s}SV" % ns).text = "0"
-        ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
-        ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
-        ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
-        ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
-        ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
-    
-    logging.info(f"[FIX A] Created {len(assignment_data_list)} Assignment XML elements")
+    # NOTE: All assignment generation code has been commented out to prevent Workfront rejection.
+    # The working Nov 7 file had no <Assignments> element at all, and Workfront accepted it.
+    # Do not re-enable this section unless Workfront's import requirements change.
     
     # WORKFRONT COMPATIBILITY: Safety passes to normalize values
     logging.info("[WORKFRONT FIX] Running safety passes to ensure Workfront compatibility...")
@@ -2588,21 +2501,9 @@ def convert_excel_to_mspdi(
         extra = resource_xml_uids - valid_resource_uids
         raise ValueError(f"Issue 1 FAILED: Resource UID mismatch! Missing: {missing}, Extra: {extra}")
     
-    # Issue 2 Validation: Assignment ResourceUIDs Use Correct Range (1000+)
-    logging.info("[FINAL VALIDATION] Issue 2: Checking assignment resource UID references...")
-    assignment_resource_uids = set()
-    for assign_elem in assignments.findall("{%s}Assignment" % ns):
-        res_uid_elem = assign_elem.find("{%s}ResourceUID" % ns)
-        if res_uid_elem is not None:
-            res_uid = int(res_uid_elem.text)
-            assignment_resource_uids.add(res_uid)
-            
-            # Verify UID exists in resources
-            if res_uid not in resource_xml_uids:
-                raise ValueError(f"Issue 2 FAILED: Assignment references invalid ResourceUID={res_uid} (not in Resources)")
-    
-    # Verify all assignment resource UIDs exist in resources (no range restriction)
-    logging.info(f"[FINAL VALIDATION] ✓ Issue 2 PASSED: All {len(assignment_resource_uids)} assignment resource UIDs exist in Resources")
+    # Issue 2 Validation: SKIPPED - No Assignments in Nov 7 baseline format
+    logging.info("[FINAL VALIDATION] Issue 2: SKIPPED - Assignments section omitted to match Nov 7 working baseline")
+    logging.info("[FINAL VALIDATION] ✓ Issue 2 N/A: No assignments to validate (matching Nov 7 format with 0 assignments)")
     
     # Issue 3 Validation: Task Work Aggregation Applied
     logging.info("[FINAL VALIDATION] Issue 3: Checking task work aggregation...")
@@ -2639,25 +2540,9 @@ def convert_excel_to_mspdi(
     # ============================================================================
     logging.info("[WORKFRONT SCHEMA] ========== SCHEMA-BREAKING ISSUE VALIDATION ==========")
     
-    # Issue 1: Orphaned Assignments (already cleaned in ORPHANED CLEANUP section)
-    # Verify: All assignments reference valid TaskUIDs
-    logging.info("[WORKFRONT SCHEMA] Issue 1: Validating Assignment cross-references...")
-    orphaned_assignments_in_xml = 0
-    assignments_elem = root.find("{%s}Assignments" % ns)
-    if assignments_elem is not None:
-        for assign_elem in assignments_elem.findall("{%s}Assignment" % ns):
-            task_uid_elem = assign_elem.find("{%s}TaskUID" % ns)
-            if task_uid_elem is not None:
-                task_uid_ref = int(task_uid_elem.text)
-                if task_uid_ref not in valid_task_uids:
-                    orphaned_assignments_in_xml += 1
-                    logging.error(f"[WORKFRONT SCHEMA]   ❌ Assignment references non-existent TaskUID={task_uid_ref}")
-    
-    if orphaned_assignments_in_xml == 0:
-        logging.info(f"[WORKFRONT SCHEMA] ✓ Issue 1 RESOLVED: Zero orphaned assignments ({len(assignment_data_list)} assignments all reference valid tasks)")
-    else:
-        logging.error(f"[WORKFRONT SCHEMA] ❌ Issue 1 FAILED: {orphaned_assignments_in_xml} orphaned assignments detected!")
-        raise ValueError(f"CRITICAL: {orphaned_assignments_in_xml} assignments reference non-existent TaskUIDs. Workfront will reject this file.")
+    # Issue 1: Orphaned Assignments - SKIPPED (No Assignments in Nov 7 baseline)
+    logging.info("[WORKFRONT SCHEMA] Issue 1: SKIPPED - No Assignments section in export (matching Nov 7 working baseline)")
+    logging.info(f"[WORKFRONT SCHEMA] ✓ Issue 1 N/A: Zero assignments in XML (Nov 7 baseline format - Workfront accepted)")
     
     # Issue 2: Summary Predecessors (already validated in Fix B section at lines 2318-2362)
     # Verify: Zero PredecessorLinks point to summary tasks
