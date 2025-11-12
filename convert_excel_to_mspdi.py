@@ -351,8 +351,8 @@ def convert_excel_to_mspdi(
     # Determine project start date
     if fixed_start_iso:
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
-        # Remove timezone info to ensure all datetimes are timezone-naive for consistent comparisons
-        project_start = project_start.replace(tzinfo=None)
+        # Remove timezone info and normalize to 09:00 business hours for calendar consistency
+        project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=None)
     elif start_date_mode == "next_monday":
         today = datetime.now()
         days_ahead = 0 - today.weekday()  # Monday is 0
@@ -1802,13 +1802,11 @@ def convert_excel_to_mspdi(
             # Look up parent task UID using ORIGINAL WBS_ID mapping
             task_uid_for_assignment = original_wbs_to_uid.get(parent_wbs)
             if task_uid_for_assignment is None:
-                # FIX B: Try child_hours_by_parent if task not found directly
-                if parent_wbs in child_hours_by_parent:
-                    logging.info(f"[FIX B] Using child hours aggregator for parent WBS '{parent_wbs}'")
-                else:
-                    logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Parent WBS '{parent_wbs}' not found for Role={role}")
-                    skipped_role_rows += 1
-                    continue
+                # CRITICAL FIX: Skip assignments with no valid task UID (prevents TaskUID=None errors)
+                logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Parent WBS '{parent_wbs}' not found in task mapping for Role={role}, Seniority={seniority}")
+                logging.warning(f"[ROLE ASSIGNMENTS] Available WBS IDs: {list(original_wbs_to_uid.keys())[:20]}")
+                skipped_role_rows += 1
+                continue
             
             # FIX: Look up resource UID using normalized (role, seniority) mapping
             # Normalize role/seniority for lookup
