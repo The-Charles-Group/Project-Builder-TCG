@@ -1476,8 +1476,139 @@ def convert_excel_to_mspdi(
     logging.info(f"[TASK UID TRACKING] ✓ Built authoritative task UID set: {len(valid_task_uids)} tasks")
     logging.info(f"[TASK UID TRACKING] Sample task UIDs: {sorted(list(valid_task_uids))[:10]}")
     
+    # ============================================================================
+    # FIX B: Build summary task lookup maps for predecessor validation
+    # This ensures no PredecessorUID points to a summary task (Summary=1)
+    # ============================================================================
+    logging.info("[FIX B] Building summary task lookup maps for predecessor validation...")
+    is_summary = {}
+    task_finish = {}
+    children_by_uid = {}
+    descendant_leaves_by_summary = {}
+    
+    # First pass: Build is_summary and task_finish mappings
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        uid_elem = task_elem.find("{%s}UID" % ns)
+        if uid_elem is None:
+            continue
+        
+        uid = int(uid_elem.text)
+        
+        # Check if this is a summary task
+        summary_elem = task_elem.find("{%s}Summary" % ns)
+        is_summary[uid] = (summary_elem is not None and summary_elem.text == "1")
+        
+        # Store finish date for leaf selection
+        finish_elem = task_elem.find("{%s}Finish" % ns)
+        task_finish[uid] = finish_elem.text if finish_elem is not None else ""
+    
+    # Second pass: Build parent-child relationships using OutlineNumber
+    task_by_outline = {}
+    outline_to_uid = {}
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        uid_elem = task_elem.find("{%s}UID" % ns)
+        outline_elem = task_elem.find("{%s}OutlineNumber" % ns)
+        if uid_elem is not None and outline_elem is not None:
+            uid = int(uid_elem.text)
+            outline = outline_elem.text
+            task_by_outline[outline] = uid
+            outline_to_uid[outline] = uid
+    
+    # Build children relationships by parsing OutlineNumber hierarchy
+    # For "1.3.2", parent is "1.3"
+    # For "1", parent is "0" (root/project level)
+    # Skip outline "0" itself to avoid self-referential loop
+    for outline, uid in outline_to_uid.items():
+        if outline == "0":
+            # This is the root/project task - skip to avoid self-reference
+            continue
+        
+        # Determine parent outline
+        if "." in outline:
+            # Has a parent - trim last segment
+            parent_outline = ".".join(outline.rsplit(".", 1)[:-1])
+        else:
+            # Top-level task - parent is UID 0 (project root)
+            parent_outline = "0"
+        
+        # Find parent UID
+        parent_uid = outline_to_uid.get(parent_outline, 0)
+        
+        # Add this task as a child of its parent
+        if parent_uid not in children_by_uid:
+            children_by_uid[parent_uid] = []
+        children_by_uid[parent_uid].append(uid)
+    
+    # Third pass: Build descendant_leaves_by_summary (recursive leaf collection)
+    def get_all_leaf_descendants(uid):
+        """Recursively get all leaf task UIDs under a given UID"""
+        if not is_summary.get(uid, False):
+            # This is a leaf task
+            return [uid]
+        
+        # This is a summary task - collect leaves from all children
+        leaves = []
+        for child_uid in children_by_uid.get(uid, []):
+            leaves.extend(get_all_leaf_descendants(child_uid))
+        return leaves
+    
+    for uid in is_summary:
+        if is_summary[uid]:
+            descendant_leaves_by_summary[uid] = get_all_leaf_descendants(uid)
+    
+    # Log summary of lookup maps
+    summary_count = sum(1 for v in is_summary.values() if v)
+    leaf_count = sum(1 for v in is_summary.values() if not v)
+    logging.info(f"[FIX B] ✓ Built lookup maps:")
+    logging.info(f"[FIX B]   - Total tasks: {len(is_summary)}")
+    logging.info(f"[FIX B]   - Summary tasks: {summary_count}")
+    logging.info(f"[FIX B]   - Leaf tasks: {leaf_count}")
+    logging.info(f"[FIX B]   - Summary tasks with leaf descendants: {len(descendant_leaves_by_summary)}")
+    if descendant_leaves_by_summary:
+        sample_summary = list(descendant_leaves_by_summary.keys())[0]
+        sample_leaves = descendant_leaves_by_summary[sample_summary]
+        logging.info(f"[FIX B]   - Example: Summary UID {sample_summary} has {len(sample_leaves)} leaf descendants")
+    
+    # ============================================================================
+    # FIX B: Shared helper function for predecessor rewriting
+    # This ensures all PredecessorLinks (DataFrame + department-based) are rewritten consistently
+    # ============================================================================
+    def rewrite_predecessor_uid_if_summary(pred_uid, task_name_for_context=""):
+        """
+        Rewrite predecessor UID if it points to a summary task.
+        Returns: (rewritten_uid, was_rewritten, was_dropped)
+        - If pred_uid is a leaf task: returns (pred_uid, False, False)
+        - If pred_uid is a summary with leaves: returns (leaf_uid, True, False)
+        - If pred_uid is a summary without leaves: returns (None, False, True)
+        """
+        nonlocal predecessors_rewritten, predecessors_dropped
+        
+        if not is_summary.get(pred_uid, False):
+            # This is a leaf task - use as-is
+            return (pred_uid, False, False)
+        
+        # This is a summary task - must rewrite or drop
+        leaves = descendant_leaves_by_summary.get(pred_uid, [])
+        
+        if leaves:
+            # Rewrite to latest-finishing leaf descendant
+            rewritten_uid = max(leaves, key=lambda u: task_finish.get(u, ""))
+            predecessors_rewritten += 1
+            logging.warning(f"[FIX B] Rewrote summary predecessor: UID {pred_uid} → UID {rewritten_uid} (latest-finishing leaf){' for ' + task_name_for_context if task_name_for_context else ''}")
+            return (rewritten_uid, True, False)
+        else:
+            # No leaves under this summary - drop
+            predecessors_dropped += 1
+            logging.warning(f"[FIX B] Dropped predecessor to summary task UID {pred_uid} (no leaf descendants){' for ' + task_name_for_context if task_name_for_context else ''}")
+            return (None, False, True)
+    
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
+    
+    # FIX B: Initialize counters for predecessor rewrites/drops
+    predecessors_rewritten = 0
+    predecessors_dropped = 0
+    
     if add_dependencies:
         logging.info("[DEPENDENCIES] Processing Dependencies column for ALL task types (deliverables, components, leaf tasks)")
         
@@ -1711,8 +1842,24 @@ def convert_excel_to_mspdi(
                         task_name_elem = task_elem.find("{%s}Name" % ns)
                         task_name_for_log = task_name_elem.text if task_name_elem is not None else "Unknown"
                         
+                        # ============================================================================
+                        # FIX B: Rewrite summary predecessors to leaf tasks using shared helper
+                        # Workfront requires all PredecessorUID to point to leaf tasks (Summary=0)
+                        # ============================================================================
+                        original_predecessor_uid = predecessor_uid
+                        predecessor_uid, was_rewritten, was_dropped = rewrite_predecessor_uid_if_summary(
+                            predecessor_uid, 
+                            task_name_for_context=f"Task '{task_name_for_log}' (UID={task_uid})"
+                        )
+                        
+                        if was_dropped:
+                            # Predecessor was dropped - skip this link
+                            skipped_count += 1
+                            continue
+                        
                         # Create PredecessorLink element (only for leaf tasks)
-                        logging.info(f"[DEPENDENCIES] ✓ Creating PredecessorLink: Task '{task_name_for_log}' (UID={task_uid}) → Predecessor UID={predecessor_uid} (Type=1, FS)")
+                        log_prefix = "[FIX B REWRITTEN]" if was_rewritten else "[DEPENDENCIES]"
+                        logging.info(f"{log_prefix} ✓ Creating PredecessorLink: Task '{task_name_for_log}' (UID={task_uid}) → Predecessor UID={predecessor_uid} (Type=1, FS)")
                         
                         # FIX: Create PredecessorLink as child of task_elem using SubElement
                         # This ensures the link is properly attached to the task in the XML tree
@@ -1768,9 +1915,19 @@ def convert_excel_to_mspdi(
                         break
                     if other_data["department"] in dept_dependencies[department]:
                         if other_data["deliverable"] == deliverable:  # Same deliverable
+                            # FIX B: Rewrite if other_uid is a summary task using shared helper
+                            dept_pred_uid, was_rewritten, was_dropped = rewrite_predecessor_uid_if_summary(
+                                other_uid,
+                                task_name_for_context=f"Dept-based dependency for UID {uid}"
+                            )
+                            
+                            if was_dropped:
+                                # Predecessor was dropped - skip this link
+                                continue
+                            
                             # Add dependency with Start-to-Start relationship
                             pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
-                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
+                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(dept_pred_uid)
                             ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.START_TO_START.value)
                             ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                             ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "4800"  # 1 day lag (in minutes)
@@ -2148,17 +2305,91 @@ def convert_excel_to_mspdi(
     logging.info(f"[FIX ISSUE 3] ================================================")
 
     # ============================================================================
+    # FIX B: Final Validation - Ensure NO PredecessorUID points to Summary tasks
+    # ============================================================================
+    logging.info("[FIX B] ========== PREDECESSOR VALIDATION ==========")
+    logging.info(f"[FIX B] Summary predecessors rewritten: {predecessors_rewritten}")
+    logging.info(f"[FIX B] Invalid predecessors dropped: {predecessors_dropped}")
+    logging.info(f"[LINK CLEANUP] Rewrote {predecessors_rewritten} summary predecessors; Dropped {predecessors_dropped} invalid predecessors")
+    
+    # Validate: Check all PredecessorUID elements to ensure none point to summary tasks
+    logging.info("[FIX B] Validating all PredecessorUID elements in XML...")
+    illegal_summary_preds = []
+    missing_preds = []
+    
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        task_uid_elem = task_elem.find("{%s}UID" % ns)
+        if task_uid_elem is None:
+            continue
+        task_uid = int(task_uid_elem.text)
+        
+        for pred_link in task_elem.findall("{%s}PredecessorLink" % ns):
+            pred_uid_elem = pred_link.find("{%s}PredecessorUID" % ns)
+            if pred_uid_elem is None:
+                continue
+            pred_uid = int(pred_uid_elem.text)
+            
+            # Check if predecessor UID exists in valid tasks
+            if pred_uid not in valid_task_uids:
+                missing_preds.append((task_uid, pred_uid))
+            # Check if predecessor points to a summary task
+            elif is_summary.get(pred_uid, False):
+                illegal_summary_preds.append((task_uid, pred_uid))
+    
+    # Log results
+    logging.info(f"[FIX B CHECK] Predecessors -> missing: {len(missing_preds)}, summary: {len(illegal_summary_preds)}")
+    
+    if illegal_summary_preds:
+        logging.error(f"[FIX B] ❌ CRITICAL: {len(illegal_summary_preds)} PredecessorUID elements still point to summary tasks!")
+        for task_uid, pred_uid in illegal_summary_preds[:10]:
+            logging.error(f"[FIX B]   - Task UID {task_uid} → Summary Task UID {pred_uid}")
+        raise ValueError(
+            f"CRITICAL: {len(illegal_summary_preds)} PredecessorUID elements point to summary tasks. "
+            f"Workfront will reject this file. First illegal: Task UID={illegal_summary_preds[0][0]} → Summary UID={illegal_summary_preds[0][1]}"
+        )
+    
+    if missing_preds:
+        logging.error(f"[FIX B] ❌ CRITICAL: {len(missing_preds)} PredecessorUID elements reference non-existent tasks!")
+        for task_uid, pred_uid in missing_preds[:10]:
+            logging.error(f"[FIX B]   - Task UID {task_uid} → Missing Task UID {pred_uid}")
+        raise ValueError(
+            f"CRITICAL: {len(missing_preds)} PredecessorUID elements reference tasks that don't exist. "
+            f"First missing: Task UID={missing_preds[0][0]} → Missing UID={missing_preds[0][1]}"
+        )
+    
+    logging.info(f"[FIX B] ✓✓ VALIDATION PASSED: All PredecessorUID elements point to valid LEAF tasks!")
+    logging.info(f"[FIX B] ✓✓ No summary predecessors remaining - Workfront will accept this file")
+    logging.info(f"[FIX B] ================================================")
+
+    # ============================================================================
     # PHASE 2: WRITE ASSIGNMENTS XML FROM PRE-BUILT DATA
     # ============================================================================
     # This phase creates Assignment XML elements using the assignment data
     # structures built in Phase 1 (after resource data was built).
     logging.info("[PHASE 2] Writing Assignments XML from pre-built data...")
+    
+    # FIX A: Check for duplicate Assignment UIDs in source data
+    logging.info("[FIX A] Checking for duplicate Assignment UIDs in assignment_data_list...")
+    uids_from_data = [a["AssignmentUID"] for a in assignment_data_list]
+    duplicate_uids = {uid for uid in uids_from_data if uids_from_data.count(uid) > 1}
+    if duplicate_uids:
+        logging.error(f"[FIX A] ❌ ERROR: Duplicate Assignment UIDs found in source data: {sorted(duplicate_uids)}")
+        logging.error(f"[FIX A] Total assignments: {len(uids_from_data)}, Unique UIDs: {len(set(uids_from_data))}, Duplicates: {len(duplicate_uids)}")
+    else:
+        logging.info(f"[FIX A] ✓ No duplicate UIDs in source data")
+    
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
+    
+    # FIX A: Use sequential counter for Assignment UIDs to ensure uniqueness
+    # This guarantees UIDs are always 1, 2, 3, 4... regardless of source data
+    next_assignment_uid = 1
+    logging.info(f"[FIX A] Generating {len(assignment_data_list)} assignments with sequential UIDs starting from 1...")
     
     # Create assignment XML elements from assignment_data_list
     for assignment_data in assignment_data_list:
         assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
-        ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_data["AssignmentUID"])
+        ET.SubElement(assign, "{%s}UID" % ns).text = str(next_assignment_uid)
+        next_assignment_uid += 1
         ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(assignment_data["TaskUID"])
         ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(assignment_data["ResourceUID"])
         ET.SubElement(assign, "{%s}Units" % ns).text = "1.0"  # Workfront requires fractional (1.0 = 100%)
