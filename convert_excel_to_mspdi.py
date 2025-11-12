@@ -389,8 +389,7 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CurrencySymbol" % ns).text = "$"
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
-    # WORKFRONT FIX: Reference Default Calendar UID 9999
-    ET.SubElement(root, "{%s}DefaultCalendarUID" % ns).text = "9999"
+    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
     ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
     ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
     ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
@@ -421,6 +420,7 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}BaselineForEarnedValue" % ns).text = "0"
     ET.SubElement(root, "{%s}AutoAddNewResourcesAndTasks" % ns).text = "1"
     ET.SubElement(root, "{%s}CurrentDate" % ns).text = datetime.now().isoformat()
+    ET.SubElement(root, "{%s}MicrosoftProjectServerURL" % ns).text = "1"
     ET.SubElement(root, "{%s}Autolink" % ns).text = "1"
     ET.SubElement(root, "{%s}NewTaskStartDate" % ns).text = "0"  # Project Start Date
     ET.SubElement(root, "{%s}NewTasksAreManual" % ns).text = "0"
@@ -474,9 +474,7 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr6, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400038"
     
     # Add Calendar definition
-    # WORKFRONT FIX: Use UID=9999 for Calendar to avoid collision with Task UIDs (0-N)
-    # Workfront requires globally unique UIDs across ALL element types (Calendar, Tasks, Resources, Assignments)
-    CALENDAR_UID = "9999"
+    CALENDAR_UID = "1"
     calendars = ET.SubElement(root, "{%s}Calendars" % ns)
     calendar = ET.SubElement(calendars, "{%s}Calendar" % ns)
     ET.SubElement(calendar, "{%s}UID" % ns).text = CALENDAR_UID
@@ -510,6 +508,66 @@ def convert_excel_to_mspdi(
     # These elements require child nodes when present, so omit them entirely when no data exists
     
 
+    # ============================================================================
+    # PHASE 2: WRITE RESOURCES XML FROM PRE-BUILT DATA
+    # ============================================================================
+    # This phase creates Resource XML elements in the correct MSPDI schema order
+    # (BEFORE Tasks) using the resource data structures built in Phase 1.
+    logging.info("[PHASE 2] Writing Resources XML from pre-built data...")
+    resources = ET.SubElement(root, "{%s}Resources" % ns)
+    
+    # Create Resource XML elements from resource_data_list
+    for res_data in resource_data_list:
+        res = ET.SubElement(resources, "{%s}Resource" % ns)
+        ET.SubElement(res, "{%s}UID" % ns).text = str(res_data["UID"])
+        ET.SubElement(res, "{%s}ID" % ns).text = str(res_data["ID"])
+        ET.SubElement(res, "{%s}Name" % ns).text = res_data["Name"]
+        ET.SubElement(res, "{%s}Initials" % ns).text = res_data["Initials"]
+        if res_data.get("Group"):
+            ET.SubElement(res, "{%s}Group" % ns).text = res_data["Group"]
+        ET.SubElement(res, "{%s}Type" % ns).text = res_data["Type"]
+        ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+        ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
+        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
+        ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
+        ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['Rate']:.2f}"
+        ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{res_data['Rate'] * 1.5:.2f}"
+        ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
+        ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
+        ET.SubElement(res, "{%s}CalendarUID" % ns).text = CALENDAR_UID
+    
+    logging.info(f"[PHASE 2] ✓ Created {len(resource_data_list)} Resource XML elements")
+    
+    # VALIDATION GUARD: Verify Resource XML elements match data structures
+    resource_uids_in_xml = []
+    for res_elem in resources.findall("{%s}Resource" % ns):
+        uid_elem = res_elem.find("{%s}UID" % ns)
+        if uid_elem is not None:
+            resource_uids_in_xml.append(int(uid_elem.text))
+    
+    # Verify count matches
+    assert len(resource_uids_in_xml) == len(resource_data_list), \
+        f"CRITICAL: Resource XML count mismatch! XML={len(resource_uids_in_xml)}, Data={len(resource_data_list)}"
+    
+    # Check for duplicates
+    assert len(resource_uids_in_xml) == len(set(resource_uids_in_xml)), \
+        f"CRITICAL: Duplicate ResourceUIDs found in XML! UIDs: {resource_uids_in_xml}"
+    
+    # Verify UIDs match valid_resource_uids from Phase 1
+    xml_uid_set = set(resource_uids_in_xml)
+    assert xml_uid_set == valid_resource_uids, \
+        f"CRITICAL: Resource UIDs in XML don't match Phase 1 data! XML UIDs: {xml_uid_set}, Expected: {valid_resource_uids}"
+    
+    logging.info(f"[PHASE 2] ✓ All {len(resource_uids_in_xml)} Resource UIDs validated (no duplicates, matches Phase 1 data)")
+    
     # Create Tasks container
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
     
@@ -2012,67 +2070,6 @@ def convert_excel_to_mspdi(
     logging.info(f"[FIX ISSUE 3] ================================================")
 
     # ============================================================================
-    # PHASE 2: WRITE RESOURCES XML FROM PRE-BUILT DATA
-    # ============================================================================
-    # This phase creates Resource XML elements in the correct MSPDI schema order
-    # (after Tasks) using the resource data structures built in Phase 1.
-    logging.info("[PHASE 2] Writing Resources XML from pre-built data...")
-    resources = ET.SubElement(root, "{%s}Resources" % ns)
-    
-    # Create Resource XML elements from resource_data_list
-    for res_data in resource_data_list:
-        res = ET.SubElement(resources, "{%s}Resource" % ns)
-        ET.SubElement(res, "{%s}UID" % ns).text = str(res_data["UID"])
-        ET.SubElement(res, "{%s}ID" % ns).text = str(res_data["ID"])
-        ET.SubElement(res, "{%s}Name" % ns).text = res_data["Name"]
-        ET.SubElement(res, "{%s}Initials" % ns).text = res_data["Initials"]
-        if res_data.get("Group"):
-            ET.SubElement(res, "{%s}Group" % ns).text = res_data["Group"]
-        ET.SubElement(res, "{%s}Type" % ns).text = res_data["Type"]
-        ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-        ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
-        ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
-        ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
-        ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
-        ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
-        ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
-        ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['Rate']:.2f}"
-        ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{res_data['Rate'] * 1.5:.2f}"
-        ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
-        ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
-        # WORKFRONT FIX: Reference Calendar UID 9999
-        ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
-    
-    logging.info(f"[PHASE 2] ✓ Created {len(resource_data_list)} Resource XML elements")
-    
-    # VALIDATION GUARD: Verify Resource XML elements match data structures
-    resource_uids_in_xml = []
-    for res_elem in resources.findall("{%s}Resource" % ns):
-        uid_elem = res_elem.find("{%s}UID" % ns)
-        if uid_elem is not None:
-            resource_uids_in_xml.append(int(uid_elem.text))
-    
-    # Verify count matches
-    assert len(resource_uids_in_xml) == len(resource_data_list), \
-        f"CRITICAL: Resource XML count mismatch! XML={len(resource_uids_in_xml)}, Data={len(resource_data_list)}"
-    
-    # Check for duplicates
-    assert len(resource_uids_in_xml) == len(set(resource_uids_in_xml)), \
-        f"CRITICAL: Duplicate ResourceUIDs found in XML! UIDs: {resource_uids_in_xml}"
-    
-    # Verify UIDs match valid_resource_uids from Phase 1
-    xml_uid_set = set(resource_uids_in_xml)
-    assert xml_uid_set == valid_resource_uids, \
-        f"CRITICAL: Resource UIDs in XML don't match Phase 1 data! XML UIDs: {xml_uid_set}, Expected: {valid_resource_uids}"
-    
-    logging.info(f"[PHASE 2] ✓ All {len(resource_uids_in_xml)} Resource UIDs validated (no duplicates, matches Phase 1 data)")
-    
-    # ============================================================================
     # PHASE 2: WRITE ASSIGNMENTS XML FROM PRE-BUILT DATA
     # ============================================================================
     # This phase creates Assignment XML elements using the assignment data
@@ -2415,8 +2412,7 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     else:
         ET.SubElement(root, "{%s}StartDate" % ns).text = datetime.now().isoformat()
     
-    # WORKFRONT FIX: Reference Default Calendar UID 9999
-    ET.SubElement(root, "{%s}DefaultCalendarUID" % ns).text = "9999"
+    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
     ET.SubElement(root, "{%s}DefaultTaskType" % ns).text = "0"
     ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"
     ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = "0"
