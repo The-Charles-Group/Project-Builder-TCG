@@ -527,9 +527,9 @@ def convert_excel_to_mspdi(
     department_resources = {}  # department -> resource_uid
     resource_data_list = []  # List of resource data dicts for XML creation later
     
-    # WORKFRONT: Start resource UIDs at 1 (working Nov 7 format)
-    # Sequential numbering starting from 1
-    resource_id = 1
+    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with Task UIDs (0-999)
+    # Global UID uniqueness requirement: Resources 1000+, Tasks 0-999, Assignments sequential
+    resource_id = 1000
     
     # Extract unique departments
     departments = set()
@@ -2596,8 +2596,39 @@ def convert_excel_to_mspdi(
     else:
         logging.warning(f"[FINAL VALIDATION] ⚠ Issue 3 WARNING: No tasks have non-zero Work values! work_by_task may not have been applied.")
     
+    # CRITICAL: Global UID Uniqueness Validation
+    # UIDs must be unique across ALL element types (Tasks, Resources, Assignments)
+    # Standard ranges: Tasks 0-999, Resources 1000+, Assignments sequential (separate namespace)
+    logging.info("[FINAL VALIDATION] Global UID Uniqueness: Checking for collisions between Tasks and Resources...")
+    
+    # Collect all Task UIDs
+    task_uids_set = set()
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        uid_elem = task_elem.find("{%s}UID" % ns)
+        if uid_elem is not None:
+            task_uids_set.add(int(uid_elem.text))
+    
+    # Check for collisions
+    uid_collisions = task_uids_set.intersection(resource_xml_uids)
+    
+    if uid_collisions:
+        logging.error(f"[FINAL VALIDATION] ❌ CRITICAL: UID COLLISION DETECTED!")
+        logging.error(f"[FINAL VALIDATION] {len(uid_collisions)} UIDs appear in both Tasks and Resources: {sorted(list(uid_collisions))[:10]}")
+        logging.error(f"[FINAL VALIDATION] Task UID range: {min(task_uids_set)}-{max(task_uids_set)}")
+        logging.error(f"[FINAL VALIDATION] Resource UID range: {min(resource_xml_uids)}-{max(resource_xml_uids)}")
+        raise ValueError(
+            f"CRITICAL: UID collision detected! {len(uid_collisions)} UIDs appear in both Tasks and Resources. "
+            f"Workfront requires globally unique UIDs. Colliding UIDs: {sorted(list(uid_collisions))[:20]}"
+        )
+    
+    logging.info(f"[FINAL VALIDATION] ✓ Global UID Uniqueness PASSED: No collisions detected")
+    logging.info(f"[FINAL VALIDATION]   - Task UIDs: {len(task_uids_set)} unique ({min(task_uids_set)}-{max(task_uids_set)})")
+    logging.info(f"[FINAL VALIDATION]   - Resource UIDs: {len(resource_xml_uids)} unique ({min(resource_xml_uids)}-{max(resource_xml_uids)})")
+    logging.info(f"[FINAL VALIDATION]   - Ranges are properly segregated (Tasks: 0-999, Resources: 1000+)")
+    
     logging.info("[FINAL VALIDATION] ========== ALL REGRESSIONS CHECKED ==========")
     logging.info("[FINAL VALIDATION] ✓ All three critical issues validated successfully")
+    logging.info("[FINAL VALIDATION] ✓ Global UID uniqueness confirmed")
     logging.info("[FINAL VALIDATION] ✓ XML is ready for export")
     
     # Write the XML file
