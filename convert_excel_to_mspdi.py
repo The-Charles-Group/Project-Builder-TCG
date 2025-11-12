@@ -1084,9 +1084,9 @@ def convert_excel_to_mspdi(
                             logging.info(f"[WRAPPER FILTER] Skipping banned wrapper task: '{task_name}'")
                             continue
                         
-                        # FIX 3: Hybrid task deduplication
-                        # CRITICAL: Do this BEFORE creating task element to prevent ghost tasks
-                        # Strategy: Use WBS_ID if available, else use deliverable+component if both present, else skip dedup
+                        # FIX 3: WBS-based deduplication ONLY (DISABLED name-based dedup causing 527 tasks to be dropped)
+                        # CRITICAL: Only deduplicate tasks with IDENTICAL WBS_ID (exact same row from Excel)
+                        # Nov 7 working baseline had 774 tasks - name-based dedup was incorrectly dropping to 247
                         
                         # Try to get WBS_ID or OutlineNumber as stable unique identifier
                         wbs_id = row.get("WBS_ID") or row.get("OutlineNumber")
@@ -1099,26 +1099,11 @@ def convert_excel_to_mspdi(
                                     logging.info(f"[DEDUP] Skipping duplicate WBS task: '{task_name}' (WBS={wbs_id})")
                                     continue
                                 seen_tasks.add(dedup_key)
-                            else:
-                                wbs_id = None
-                        else:
-                            wbs_id = None
                         
-                        # If no valid WBS, check if deliverable AND component are populated
-                        if wbs_id is None:
-                            has_deliv = pd.notna(deliv_code) and str(deliv_code).strip() and str(deliv_code).lower() != "nan"
-                            has_comp = pd.notna(component_name) and str(component_name).strip() and str(component_name).lower() != "nan"
-                            
-                            if has_deliv and has_comp:
-                                # Both fields present - use traditional dedup key
-                                dedup_key = (deliv_code, component_name, normalize_task_name_for_dedup(task_name))
-                                if dedup_key in seen_tasks:
-                                    logging.info(f"[DEDUP] Skipping duplicate task: '{task_name}' in component '{component_name}'")
-                                    continue
-                                seen_tasks.add(dedup_key)
-                            else:
-                                # Missing deliverable or component - skip dedup to avoid false positives
-                                logging.debug(f"[DEDUP] Skipping dedup check for task '{task_name}' (missing deliverable/component metadata)")
+                        # CRITICAL: Name-based deduplication DISABLED to match Nov 7 working baseline
+                        # Previous code was dropping tasks like "Review" across different deliverables
+                        # Result: 774 tasks → 247 tasks → Workfront rejection
+                        # Nov 7 had no name-based dedup and Workfront accepted it with 774 tasks
                         
                         # NOW create the task element (after all filtering checks passed)
                         task_num_in_component += 1
