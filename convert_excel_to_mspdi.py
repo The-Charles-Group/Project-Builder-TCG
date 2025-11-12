@@ -2364,18 +2364,18 @@ def convert_excel_to_mspdi(
     # ============================================================================
     # PHASE 2: ASSIGNMENTS SECTION - DISABLED TO MATCH NOV 7 BASELINE
     # ============================================================================
-    # CRITICAL DISCOVERY: Working Nov 7 baseline has ZERO assignments and Workfront accepted it.
-    # New exports with 208 assignments were REJECTED by Workfront.
-    # Conclusion: Workfront does not want/need the Assignments section for this import type.
+    # CRITICAL DISCOVERY: Working Nov 7 baseline has empty <Assignments /> element with ZERO children.
+    # Workfront REQUIRES the <Assignments /> container but does NOT want Assignment children.
+    # The empty element is created at line 2723 in create_empty_mspdi_xml().
     # 
-    # The entire Assignments generation section has been disabled to match the working format.
-    logging.info("[PHASE 2] SKIPPING Assignments XML generation - matching Nov 7 working baseline (0 assignments)")
-    logging.info("[PHASE 2] Nov 7 baseline evidence: 0 assignments in XML, Workfront import SUCCESSFUL")
-    logging.info(f"[PHASE 2] Assignments section will be OMITTED from export (built {len(assignment_data_list)} assignments but will not write them)")
+    # The assignment population loop has been disabled to match the working format.
+    logging.info("[PHASE 2] SKIPPING Assignment children generation - matching Nov 7 working baseline (empty <Assignments />)")
+    logging.info("[PHASE 2] Nov 7 baseline evidence: <Assignments /> element present but empty, Workfront import SUCCESSFUL")
+    logging.info(f"[PHASE 2] Will create empty <Assignments /> container without children (built {len(assignment_data_list)} assignments but will not write them)")
     
-    # NOTE: All assignment generation code has been commented out to prevent Workfront rejection.
-    # The working Nov 7 file had no <Assignments> element at all, and Workfront accepted it.
-    # Do not re-enable this section unless Workfront's import requirements change.
+    # NOTE: Assignment child generation is disabled. The empty <Assignments /> container is created elsewhere.
+    # Nov 7 working format: <Assignments /> self-closing tag with no children.
+    # Do not populate with Assignment children unless Workfront's import requirements change.
     
     # WORKFRONT COMPATIBILITY: Safety passes to normalize values
     logging.info("[WORKFRONT FIX] Running safety passes to ensure Workfront compatibility...")
@@ -2564,6 +2564,15 @@ def convert_excel_to_mspdi(
     logging.info("[FINAL VALIDATION] ✓ Schema-breaking issues resolved")
     logging.info("[FINAL VALIDATION] ✓ XML is ready for export")
     
+    # ============================================================================
+    # CRITICAL: Add empty <Assignments /> element to match Nov 7 working baseline
+    # ============================================================================
+    # Nov 7 working file has: <Assignments /> (self-closing empty tag)
+    # Workfront's MSPDI schema REQUIRES this element to be present, even if empty
+    logging.info("[ASSIGNMENTS] Creating empty <Assignments /> element (Nov 7 baseline format)")
+    ET.SubElement(root, "{%s}Assignments" % ns)
+    logging.info("[ASSIGNMENTS] ✓ Empty <Assignments /> container added (no Assignment children)")
+    
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
@@ -2715,8 +2724,9 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}Summary" % ns).text = "1"
     
-    # CRITICAL: Do NOT create Assignments element - Nov 7 working baseline has NO Assignments section
-    # ET.SubElement(root, "{%s}Assignments" % ns)  # DISABLED - Workfront rejects files with Assignments
+    # CRITICAL: Workfront REQUIRES empty <Assignments /> element (Nov 7 baseline evidence)
+    # Do NOT populate with Assignment children - just create the empty container
+    ET.SubElement(root, "{%s}Assignments" % ns)  # Creates self-closing <Assignments /> tag
     
     return root
 
