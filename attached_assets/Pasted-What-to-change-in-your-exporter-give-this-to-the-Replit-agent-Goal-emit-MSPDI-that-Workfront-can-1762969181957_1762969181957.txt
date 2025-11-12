@@ -1,0 +1,60 @@
+What to change in your exporter (give this to the Replit agent)
+
+Goal: emit MSPDI that Workfront can schedule without guessing.
+
+Compute scheduling fields from one source of truth.
+
+For each leaf task: decide the source of truth for effort. If it’s planned_hours, then:
+
+Task.Work = planned_hours (in minutes).
+
+Create at least one <Assignment> with Assignment.Work that sums to Task.Work (split across roles if needed).
+
+Choose Task.Duration = ceil(Task.Work / (resource_units * 8h/day)) * 480 minutes (use the 8‑hour calendar).
+
+Set Task.Start to the first valid working slot ≥ the latest predecessor finish.
+
+Set Task.Finish to the end of Start + Duration on the working calendar.
+
+For summary tasks: Duration=PT0M, Work=PT0M; let Start/Finish roll up from children.
+
+Make predecessors safe.
+
+Emit <PredecessorLink> only when the referenced PredecessorUID exists.
+
+Strip or fix any reference that points to a UID outside the file. (You have examples with 770‑772 that won’t exist in most runs. Remove them.)
+
+Always emit a non‑empty <Assignments> section when hours > 0.
+
+For each leaf task with hours, create <Assignment> rows like:
+
+<Assignment>
+  <UID>auto</UID>
+  <TaskUID>{task_uid}</TaskUID>
+  <ResourceUID>{resource_uid}</ResourceUID>
+  <Units>1</Units>
+  <Work>PT{minutes}M</Work>
+  <Start>{Task.Start}</Start>
+  <Finish>{Task.Finish}</Finish>
+</Assignment>
+
+
+Don’t leave <Assignments /> empty if tasks have Work or Cost.
+
+Normalize names you don’t want in Workfront.
+
+Remove “Phase 1/2”, “Client Approval”, and “– COMPLETE” suffixes before generating the WBS so it doesn’t affect grouping and outline numbers.
+
+Fix outline numbers.
+
+Ensure WBS/OutlineNumber are clean (1, 1.1, 1.1.1, …). No trailing dots like 2.4..
+
+Make calendar‑consistent timestamps.
+
+Use 09:00 for starts and end at 17:00/18:00 on working days. Avoid 01:00 starts unless your calendar includes 01:00.
+
+Map money & revenue to supported fields.
+
+Keep StandardRate/FixedCost numeric only (no $).
+
+If you’re storing Planned Revenue, continue using the custom Number field you already labeled Revenue (Number3). That’s fine; Workfront ignores unknown ExtendedAttributes but won’t error if they’re valid numbers.
