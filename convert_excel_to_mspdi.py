@@ -801,8 +801,8 @@ def convert_excel_to_mspdi(
             logging.info(f"[3-LEVEL HIERARCHY] Processing deliverable '{deliverable_name}' with component grouping")
             try:
                 if "Component" in group.columns:
-                    # FIX: Filter out tasks with blank Component values to avoid "Uncategorized" wrapper
-                    # This ensures clean Deliverable → Component → Task hierarchy
+                    # FIX: Fill blank Component values with "Uncategorized" to preserve all tasks
+                    # This ensures NO tasks are dropped - blank components become "Uncategorized"
                     group_copy = group.copy()
                     
                     # Convert categorical to object if needed
@@ -810,17 +810,15 @@ def convert_excel_to_mspdi(
                         logging.info(f"[3-LEVEL HIERARCHY] Converting Component from categorical to object type")
                         group_copy["Component"] = group_copy["Component"].astype(object)
                     
-                    # FIX: FILTER OUT tasks with blank Component values (don't include them in XML)
-                    # Check for NaN, None, and empty strings
+                    # Fill blank Component values with "Uncategorized"
                     blank_mask = group_copy["Component"].isna() | (group_copy["Component"] == "") | group_copy["Component"].isnull()
                     blank_count = blank_mask.sum()
                     if blank_count > 0:
-                        logging.info(f"[3-LEVEL HIERARCHY] Found {blank_count} tasks with blank Component, EXCLUDING them from export")
-                        # Filter OUT blank rows instead of filling them with "Uncategorized"
-                        group_copy = group_copy[~blank_mask]
+                        logging.info(f"[3-LEVEL HIERARCHY] Found {blank_count} tasks with blank Component, grouping as 'Uncategorized'")
+                        group_copy.loc[blank_mask, "Component"] = "Uncategorized"
                     
-                    # Now groupby will work correctly with only non-blank components
-                    component_grouped = group_copy.groupby("Component", sort=False, dropna=True)
+                    # Group by Component (now includes "Uncategorized" for blank values)
+                    component_grouped = group_copy.groupby("Component", sort=False, dropna=False)
                     logging.info(f"[3-LEVEL HIERARCHY] Found {len(component_grouped)} components in deliverable '{deliverable_name}'")
                     
                     # Convert to list of tuples for iteration
