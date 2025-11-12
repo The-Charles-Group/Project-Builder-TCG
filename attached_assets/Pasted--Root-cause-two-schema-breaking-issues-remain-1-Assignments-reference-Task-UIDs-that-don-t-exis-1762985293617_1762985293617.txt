@@ -1,0 +1,67 @@
+🧩 Root cause — two schema‑breaking issues remain
+1. Assignments reference Task UIDs that don’t exist
+
+The latest export still contains <Assignment> blocks with TaskUID values that aren’t present in <Tasks>.
+That happens when your exporter builds assignments before filtering or deduplication removes their parent tasks.
+Workfront validates those cross‑references and fails the import if any orphaned link exists.
+
+✅ Fix
+• After all task filtering and deduplication, rebuild a valid_task_uids = {t.uid for t in tasks} set.
+• Before writing <Assignments>, drop every assignment whose TaskUID not in valid_task_uids.
+• Log the cleanup count (e.g., [CLEANUP] Dropped X orphaned assignments).
+
+2. Predecessors still point to summary tasks
+
+Even in this 05 : 03 PM export, <PredecessorLink> entries target summary tasks (Summary = 1).
+Example:
+
+<PredecessorLink>
+  <PredecessorUID>285</PredecessorUID>
+  <Type>2</Type>
+</PredecessorLink>
+
+
+Task 285 is marked <Summary>1</Summary>, which violates MSPDI rules — Workfront cannot link to summary tasks.
+
+✅ Fix
+• Build lookup maps after task generation:
+
+is_summary = {t.uid: t.summary == 1 for t in tasks}
+descendant_leaves = {s.uid: [leaf.uid for leaf in s.children if leaf.summary == 0]
+                     for s in tasks if s.summary}
+
+
+• Before writing each <PredecessorLink>:
+
+if is_summary.get(pred_uid, False):
+    leaves = descendant_leaves.get(pred_uid, [])
+    if leaves:
+        pred_uid = max(leaves, key=lambda u: finish_time[u])  # latest‑finishing leaf
+    else:
+        continue  # drop invalid link
+if pred_uid not in valid_task_uids:
+    continue
+
+
+• Log how many links were rewritten or dropped.
+
+⚙️ Why Workfront rejects the file
+
+Workfront’s MSPDI parser fails when:
+
+any <Assignment> → <TaskUID> or <PredecessorUID> points to an undefined UID, or
+
+a <PredecessorUID> targets a summary task.
+
+Your 05 : 03 PM file still has both.
+
+✅ Final checklist before re‑export
+
+Run UID integrity check:
+- No duplicate Assignment.UID.
+- Every Assignment.TaskUID in <Task.UIDs>.
+- Every PredecessorUID in <Task.UIDs> and not summary.
+
+Log cleanup counts (orphaned assignments = 0, summary predecessors = 0).
+
+Re‑export and re‑import.
