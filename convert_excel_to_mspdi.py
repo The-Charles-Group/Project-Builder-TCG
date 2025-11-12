@@ -341,9 +341,9 @@ def convert_excel_to_mspdi(
         with open(output_xml, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # Write back with Workfront-compliant declaration (double quotes, uppercase UTF-8, standalone)
+        # Write back with Workfront-compliant declaration (single quotes, lowercase utf-8)
         with open(output_xml, 'w', encoding='utf-8') as f:
-            f.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
+            f.write("<?xml version='1.0' encoding='utf-8'?>\n")
             f.write(content)
         
         return {"task_count": 0, "warning": "Empty input data"}
@@ -427,11 +427,6 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}DefaultTaskEVMethod" % ns).text = "0"  # % Complete
     ET.SubElement(root, "{%s}ProjectExternallyEdited" % ns).text = "0"
     
-    # WORKFRONT FIX: Add empty OutlineCodes and WBSMasks elements
-    # These are required by Workfront even if empty
-    ET.SubElement(root, "{%s}OutlineCodes" % ns)
-    ET.SubElement(root, "{%s}WBSMasks" % ns)
-    
     # Add ExtendedAttributes definitions for custom fields
     if add_custom_fields:
         extended_attrs = ET.SubElement(root, "{%s}ExtendedAttributes" % ns)
@@ -477,6 +472,13 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr6, "{%s}FieldName" % ns).text = "Number3"
         ET.SubElement(ext_attr6, "{%s}Alias" % ns).text = "Revenue"
         ET.SubElement(ext_attr6, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400038"
+        
+        # Custom Field 7: Service Category (Text) - WORKFRONT REQUIRED
+        ext_attr7 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
+        ET.SubElement(ext_attr7, "{%s}FieldID" % ns).text = "188743734"  # Task Text4
+        ET.SubElement(ext_attr7, "{%s}FieldName" % ns).text = "Text4"
+        ET.SubElement(ext_attr7, "{%s}Alias" % ns).text = "Service Category"
+        ET.SubElement(ext_attr7, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400039"
     
     # Add Calendar definition
     CALENDAR_UID = "1"
@@ -525,9 +527,9 @@ def convert_excel_to_mspdi(
     department_resources = {}  # department -> resource_uid
     resource_data_list = []  # List of resource data dicts for XML creation later
     
-    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
-    # Tasks start at UID=1, Resources must be in separate namespace
-    resource_id = 1000
+    # WORKFRONT: Start resource UIDs at 1 (working Nov 7 format)
+    # Sequential numbering starting from 1
+    resource_id = 1
     
     # Extract unique departments
     departments = set()
@@ -657,8 +659,8 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}Group" % ns).text = res_data["Group"]
         ET.SubElement(res, "{%s}Type" % ns).text = res_data["Type"]
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # Workfront format: 100 = 100%
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"  # Workfront format: 100 = 100%
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
         ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
         ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -895,6 +897,9 @@ def convert_excel_to_mspdi(
                 # Text1 = Department
                 department_value = service_dept if service_dept else "Unassigned"
                 add_task_extended_attribute(deliv_task, ns, "188743731", department_value)
+                
+                # Text4 = Service Category (fallback to Department) - WORKFRONT REQUIRED
+                add_task_extended_attribute(deliv_task, ns, "188743734", department_value)
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
@@ -1036,6 +1041,9 @@ def convert_excel_to_mspdi(
                     # Text1 = Department
                     comp_department_value = comp_service_dept if comp_service_dept else "Unassigned"
                     add_task_extended_attribute(comp_task, ns, "188743731", comp_department_value)
+                    
+                    # Text4 = Service Category (fallback to Department) - WORKFRONT REQUIRED
+                    add_task_extended_attribute(comp_task, ns, "188743734", comp_department_value)
                 
                 # Track component start/finish dates
                 component_start = current_date
@@ -1262,34 +1270,34 @@ def convert_excel_to_mspdi(
                             ET.SubElement(task, "{%s}Manual" % ns).text = "0"
                             logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                         
-                        # FIX 5: Add revenue fields to leaf tasks
-                        # Get revenue from multiple possible sources
-                        revenue = None
-                        if "Revenue" in row.index and pd.notna(row.get("Revenue")):
-                            revenue = float(row.get("Revenue"))
-                        elif "Planned_Cost" in row.index and pd.notna(row.get("Planned_Cost")):
-                            revenue = float(row.get("Planned_Cost"))
+                        # FIX 5: Calculate cost value for this task
+                        # WORKFRONT CRITICAL: Cost and Revenue extended attribute MUST be identical
+                        # Use Planned_Cost or Price_USD from spreadsheet, or default to hours * 150
+                        cost_value = None
+                        if "Planned_Cost" in row.index and pd.notna(row.get("Planned_Cost")):
+                            cost_value = float(row.get("Planned_Cost"))
                         elif "Price_USD" in row.index and pd.notna(row.get("Price_USD")):
-                            revenue = float(row.get("Price_USD"))
+                            cost_value = float(row.get("Price_USD"))
                         else:
                             # Default: hours * 150
-                            revenue = hours * 150
+                            cost_value = hours * 150
                         
-                        # FIX: Always add revenue fields, even if revenue=0 (Workfront requirement)
-                        # Set Cost, FixedCost, FixedCostAccrual
-                        ET.SubElement(task, "{%s}Cost" % ns).text = f"{revenue:.2f}"
-                        ET.SubElement(task, "{%s}FixedCost" % ns).text = f"{revenue:.2f}"
+                        # FIX: Always add cost/revenue fields, even if cost_value=0 (Workfront requirement)
+                        # Set Cost, FixedCost, FixedCostAccrual using cost_value
+                        ET.SubElement(task, "{%s}Cost" % ns).text = f"{cost_value:.2f}"
+                        ET.SubElement(task, "{%s}FixedCost" % ns).text = f"{cost_value:.2f}"
                         ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
                         
                         # Accumulate cost into component and deliverable totals
-                        component_costs[comp_uid] += revenue
-                        deliverable_costs[deliv_uid] += revenue
+                        component_costs[comp_uid] += cost_value
+                        deliverable_costs[deliv_uid] += cost_value
                         
-                        # Add Revenue extended attribute (Number3 = FieldID 188743715)
+                        # WORKFRONT CRITICAL: Revenue extended attribute MUST equal Cost
+                        # Always use the SAME cost_value that was written to <Cost>
                         if add_custom_fields:
-                            add_task_extended_attribute(task, ns, "188743715", f"{revenue:.2f}")
+                            add_task_extended_attribute(task, ns, "188743715", f"{cost_value:.2f}")
                         
-                        logging.info(f"[REVENUE] Task '{task_name}': Revenue=${revenue:.2f}")
+                        logging.info(f"[COST/REVENUE] Task '{task_name}': Cost=Revenue=${cost_value:.2f}")
                         
                         # Add extended attributes (custom fields) for each task (flat MSPDI schema)
                         if add_custom_fields:
@@ -1309,6 +1317,10 @@ def convert_excel_to_mspdi(
                             
                             # Component Name
                             add_task_extended_attribute(task, ns, "188743733", str(component_name))
+                            
+                            # Text4 = Service Category (fallback to Department) - WORKFRONT REQUIRED
+                            service_category_value = row.get("Service_Category") if pd.notna(row.get("Service_Category")) else task_department_value
+                            add_task_extended_attribute(task, ns, "188743734", service_category_value)
                         
                         # Track component finish date
                         if task_num_in_component == 1:
@@ -2311,8 +2323,8 @@ def convert_excel_to_mspdi(
     
     # Write to file in BINARY mode with manual UTF-8 encoding (no BOM)
     with open(output_xml, 'wb') as f:
-        # Write declaration manually as UTF-8 bytes (no BOM, with standalone)
-        f.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n')
+        # Write declaration manually as UTF-8 bytes (no BOM) - WORKFRONT FORMAT
+        f.write(b"<?xml version='1.0' encoding='utf-8'?>\n")
         # Write content as UTF-8 bytes (no BOM)
         f.write(xml_content.encode('utf-8'))
     
