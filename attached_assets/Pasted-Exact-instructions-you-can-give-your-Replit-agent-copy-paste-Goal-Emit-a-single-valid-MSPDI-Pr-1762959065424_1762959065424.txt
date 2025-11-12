@@ -1,0 +1,110 @@
+Exact instructions you can give your Replit agent (copy/paste)
+
+Goal: Emit a single, valid MSPDI <Project> document with one <Calendars>, one <Resources>, one <Tasks>, and one <Assignments> section; dedupe resources and tasks; strip phase/client‑approval/“- COMPLETE” noise; keep hours, dependencies, predecessors, dates, and planned revenue correct.
+
+1) Build the document skeleton once
+
+Use this exact root:
+<Project xmlns="http://schemas.microsoft.com/project">
+
+Order of children must be:
+Header fields …, then <Calendars>, <Resources>, <Tasks>, <Assignments>.
+
+Always include <Assignments /> even if empty.
+
+Pseudocode
+
+root = Project()
+emit_header(root, meta)        # Name, StartDate, etc.
+emit_calendars(root, calendar) # exactly one
+emit_resources(root, resources) # exactly one
+emit_tasks(root, tasks)        # exactly one
+emit_assignments(root, [])     # emit empty element if none
+
+2) Resources: dedupe and renumber
+
+Aggregate every resource into one list before writing XML.
+
+Key resources by a stable key, e.g. (normalized_name, initials, role) to prevent duplicates.
+
+Ensure unique UID and ID: assign sequential integers starting at 1.
+
+Keep rate fields consistent (e.g., StandardRateFormat=2, OvertimeRateFormat=2).
+
+Remove any second/third <Resources> blocks; there must be only one. The current file has repeats (see evidence).
+
+Pseudocode
+
+unique = {}
+for r in input_resources:
+    k = (slug(r.name), r.initials)
+    if k not in unique:
+        unique[k] = r
+
+# renumber
+for i, r in enumerate(unique.values(), start=1):
+    r.uid = i
+    r.id  = i
+emit_resources(root, unique.values())
+
+3) Tasks: sanitize, dedupe, and keep dependencies intact
+
+Strip labels from names:
+
+Remove trailing " - COMPLETE" (case-insensitive).
+
+Remove task rows whose name matches ^Phase\s*\d+ or ^Client Approval$.
+
+Avoid summary/leaf duplicates:
+If a summary task and one of its direct children share the same sanitized name, drop the child (or rename one). Keep one task per logical step. Evidence of this pattern exists now (summary and leaf named “Graphic Mock‑Ups”).
+
+Preserve UIDs for tasks you keep. For tasks you drop, rewrite any <PredecessorLink> that points to the removed UID to the kept task (usually its parent summary).
+
+Recompute summary Start/Finish:
+For any summary task, set Start = min(Start of descendants) and Finish = max(Finish of descendants). Recalculate Duration in minutes (MinutesPerDay=480).
+
+Keep dates/times consistent: use your workday start (09:00:00) unless the user supplies a specific time.
+
+Regexes
+
+Remove complete flag: re.sub(r'\s*-\s*complete\s*$', '', name, flags=re.I)
+
+Filter phases/approval: skip if re.match(r'^(phase\s*\d+|client\s*approval)$', name, flags=re.I)
+
+4) Planned hours, dependencies, predecessors, dates, revenue
+
+Planned Hours → Duration
+Duration is in minutes (e.g., 3 days → PT1440M*3 = PT4320M). If you have hours, duration_minutes = planned_hours * 60. For summaries, compute from children as above.
+
+Dependencies/Predecessors
+Output per MSPDI:
+
+<PredecessorLink>
+  <PredecessorUID>###</PredecessorUID>
+  <Type>1</Type>        <!-- 1 = FS -->
+  <CrossProject>0</CrossProject>
+  <LinkLag>0</LinkLag>
+  <LagFormat>7</LagFormat>
+</PredecessorLink>
+
+
+Make sure every referenced PredecessorUID still exists after deduping.
+
+Start/Due dates
+
+If the user gave explicit dates, respect them.
+
+If only duration is provided, compute Finish = Start + duration (working minutes).
+
+Planned Revenue
+You’re already writing it into Number3 (FieldID 188743715) on tasks; keep doing that. I see it populated correctly for many tasks in the failing file (e.g., 975.00, 1560.00).
+
+5) Keep the header stable (match the earlier, importable files)
+
+Use a single <Calendars> block with standard weekdays and work times (09:00–12:00 & 13:00–18:00). Your file already has the right pattern—just don’t repeat it.
+
+Stick with the same basic header values the working XML used (e.g., MinutesPerDay=480, MinutesPerWeek=2400).
+
+6) Emit <Assignments />
+
+Even if you’re not creating resource assignments yet, output <Assignments /> immediately after </Tasks>. This is present in your working file and missing from the failing one.
