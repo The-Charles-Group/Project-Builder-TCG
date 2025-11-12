@@ -1348,6 +1348,13 @@ def convert_excel_to_mspdi(
                     logging.info(f"[DEPENDENCIES] Skipping role row at index {idx}: Role={role_value}")
                     continue  # Skip to next row
                 
+                # CRITICAL FIX: Skip rows that were filtered out (duplicates/wrappers) during task creation
+                # Check if this row's WBS_ID exists in original_wbs_to_uid (only exported tasks are in this map)
+                original_task_wbs_id = str(row.get("WBS_ID", "")).strip()
+                if original_task_wbs_id and original_task_wbs_id not in original_wbs_to_uid:
+                    logging.info(f"[DEPENDENCIES] Skipping filtered-out task at index {idx}: WBS_ID={original_task_wbs_id} (was not exported)")
+                    continue
+                
                 # Get task identifiers from DataFrame row
                 row_deliverable = row.get("Deliverable", "")
                 row_component = row.get("Component", "")
@@ -1397,6 +1404,11 @@ def convert_excel_to_mspdi(
                     if lookup_key:
                         logging.warning(f"[DEPENDENCIES] ✗ Task NOT found in lookup: {lookup_key}")
                         logging.warning(f"[DEPENDENCIES DEBUG] Available lookup keys sample: {list(all_tasks_lookup.keys())[:5]}")
+                    continue
+                
+                # SAFETY CHECK: Ensure task_uid is valid before processing dependencies
+                if task_uid is None:
+                    logging.warning(f"[DEPENDENCIES] Task UID is None for row {idx}, skipping dependencies")
                     continue
                 
                 # Get dependency value from this row using detected column name
