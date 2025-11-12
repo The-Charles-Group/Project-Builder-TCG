@@ -507,6 +507,131 @@ def convert_excel_to_mspdi(
     # WORKFRONT FIX: DO NOT add empty Baseline or OutlineCodes - Workfront rejects self-closing complex types
     # These elements require child nodes when present, so omit them entirely when no data exists
     
+    # ============================================================================
+    # PHASE 1: BUILD RESOURCE DATA STRUCTURES (NO XML YET)
+    # ============================================================================
+    # This phase builds all resource-related data structures BEFORE creating
+    # assignment data, which allows assignments to reference resource UIDs.
+    logging.info("[PHASE 1] Building resource data structures...")
+    
+    # Initialize resource data structures
+    resource_map = {}  # role -> resource_uid (backward compatibility)
+    resource_uid_map = {}  # normalized_key (role|seniority) -> resource_uid
+    department_resources = {}  # department -> resource_uid
+    resource_data_list = []  # List of resource data dicts for XML creation later
+    
+    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
+    # Tasks start at UID=1, Resources must be in separate namespace
+    resource_id = 1000
+    
+    # Extract unique departments
+    departments = set()
+    if "Department" in df.columns:
+        departments.update(df["Department"].dropna().unique())
+    
+    # Build department resource data
+    logging.info(f"[PHASE 1] Building data for {len(departments)} department resources...")
+    for dept in departments:
+        resource_data_list.append({
+            "UID": resource_id,
+            "ID": resource_id,
+            "Name": f"{dept} Team",
+            "Initials": "".join([w[0] for w in str(dept).split()[:2]]),
+            "Group": str(dept),
+            "Type": "1",  # Work resource
+            "Rate": blended_rate or 150
+        })
+        department_resources[str(dept)] = resource_id
+        
+        # FIX ISSUE 1: Add department resources to resource_uid_map for consistency
+        # Use normalized key: "dept:{dept_name}" to avoid collision with role keys
+        dept_normalized_key = f"dept:{normalize_resource_name(str(dept))}"
+        resource_uid_map[dept_normalized_key] = resource_id
+        logging.info(f"[PHASE 1 FIX] Added department '{dept}' to resource_uid_map with key '{dept_normalized_key}' -> UID={resource_id}")
+        
+        resource_id += 1
+    
+    # Build individual role resource data
+    if "Role" in df.columns:
+        # Extract unique (role, seniority) combinations from role rows
+        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
+        
+        # Build registry with normalized keys for deduplication
+        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
+        
+        for _, row in role_rows.iterrows():
+            role = str(row.get("Role", "")).strip()
+            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
+            if role:
+                # Create display name (original case/formatting)
+                display_name = f"{role} ({seniority})" if seniority else role
+                
+                # Create normalized key for deduplication
+                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
+                
+                # Store in registry (will automatically dedupe by normalized key)
+                if normalized_key not in resource_registry:
+                    resource_registry[normalized_key] = {
+                        "display_name": display_name,
+                        "role": role,
+                        "seniority": seniority,
+                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
+                    }
+        
+        # Create resource data from registry (sorted for consistency)
+        logging.info(f"[PHASE 1] Building data for {len(resource_registry)} role resources...")
+        for normalized_key in sorted(resource_registry.keys()):
+            res_data = resource_registry[normalized_key]
+            
+            # Determine rate
+            if blended_rate:
+                rate = blended_rate
+            elif res_data["rate"] is not None:
+                rate = res_data["rate"]
+            else:
+                rate = 150.0
+            
+            resource_data_list.append({
+                "UID": resource_id,
+                "ID": resource_id,
+                "Name": res_data["display_name"],
+                "Initials": "".join([w[0] for w in str(res_data["role"]).split()[:3]]),
+                "Group": "",
+                "Type": "1",  # Work resource
+                "Rate": rate
+            })
+            
+            # Store in resource_uid_map using NORMALIZED key
+            resource_uid_map[normalized_key] = resource_id
+            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
+            
+            logging.info(f"[PHASE 1] Registered resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}' (normalized_key='{normalized_key}')")
+            
+            resource_id += 1
+    
+    # Build valid resource UID set for validation
+    valid_resource_uids = set([r["UID"] for r in resource_data_list])
+    
+    logging.info(f"[PHASE 1] ✓ Built data for {len(resource_data_list)} total resources")
+    logging.info(f"[PHASE 1] ✓ Department resources: {len(department_resources)}")
+    logging.info(f"[PHASE 1] ✓ Role resources: {len(resource_uid_map)}")
+    logging.info(f"[PHASE 1] ✓ Valid resource UIDs: {len(valid_resource_uids)}")
+    
+    # FIX ISSUE 1: VALIDATION - Ensure resource_uid_map and resource_data_list are in sync
+    logging.info("[PHASE 1 VALIDATION] Verifying resource_uid_map and resource_data_list synchronization...")
+    resource_data_uids = set([r["UID"] for r in resource_data_list])
+    resource_map_uids = set(resource_uid_map.values())
+    
+    # Check: Every UID in resource_uid_map should exist in resource_data_list
+    missing_in_data_list = resource_map_uids - resource_data_uids
+    if missing_in_data_list:
+        raise ValueError(
+            f"CRITICAL: {len(missing_in_data_list)} resource UIDs in resource_uid_map are missing from resource_data_list: {missing_in_data_list}"
+        )
+    
+    logging.info(f"[PHASE 1 VALIDATION] ✓ All {len(resource_map_uids)} resource UIDs in resource_uid_map exist in resource_data_list")
+    logging.info(f"[PHASE 1 VALIDATION] ✓ resource_data_list has {len(resource_data_uids)} total resources")
+    logging.info(f"[PHASE 1 VALIDATION] ✓ Sync verification passed: resource_uid_map and resource_data_list are consistent")
 
     # ============================================================================
     # PHASE 2: WRITE RESOURCES XML FROM PRE-BUILT DATA
@@ -1628,132 +1753,6 @@ def convert_excel_to_mspdi(
                 pass
     
     logging.info(f"[FIX B] Built child hours aggregator for {len(child_hours_by_parent)} parent tasks")
-    
-    # ============================================================================
-    # PHASE 1: BUILD RESOURCE DATA STRUCTURES (NO XML YET)
-    # ============================================================================
-    # This phase builds all resource-related data structures BEFORE creating
-    # assignment data, which allows assignments to reference resource UIDs.
-    logging.info("[PHASE 1] Building resource data structures...")
-    
-    # Initialize resource data structures
-    resource_map = {}  # role -> resource_uid (backward compatibility)
-    resource_uid_map = {}  # normalized_key (role|seniority) -> resource_uid
-    department_resources = {}  # department -> resource_uid
-    resource_data_list = []  # List of resource data dicts for XML creation later
-    
-    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
-    # Tasks start at UID=1, Resources must be in separate namespace
-    resource_id = 1000
-    
-    # Extract unique departments
-    departments = set()
-    if "Department" in df.columns:
-        departments.update(df["Department"].dropna().unique())
-    
-    # Build department resource data
-    logging.info(f"[PHASE 1] Building data for {len(departments)} department resources...")
-    for dept in departments:
-        resource_data_list.append({
-            "UID": resource_id,
-            "ID": resource_id,
-            "Name": f"{dept} Team",
-            "Initials": "".join([w[0] for w in str(dept).split()[:2]]),
-            "Group": str(dept),
-            "Type": "1",  # Work resource
-            "Rate": blended_rate or 150
-        })
-        department_resources[str(dept)] = resource_id
-        
-        # FIX ISSUE 1: Add department resources to resource_uid_map for consistency
-        # Use normalized key: "dept:{dept_name}" to avoid collision with role keys
-        dept_normalized_key = f"dept:{normalize_resource_name(str(dept))}"
-        resource_uid_map[dept_normalized_key] = resource_id
-        logging.info(f"[PHASE 1 FIX] Added department '{dept}' to resource_uid_map with key '{dept_normalized_key}' -> UID={resource_id}")
-        
-        resource_id += 1
-    
-    # Build individual role resource data
-    if "Role" in df.columns:
-        # Extract unique (role, seniority) combinations from role rows
-        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
-        
-        # Build registry with normalized keys for deduplication
-        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
-        
-        for _, row in role_rows.iterrows():
-            role = str(row.get("Role", "")).strip()
-            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
-            if role:
-                # Create display name (original case/formatting)
-                display_name = f"{role} ({seniority})" if seniority else role
-                
-                # Create normalized key for deduplication
-                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
-                
-                # Store in registry (will automatically dedupe by normalized key)
-                if normalized_key not in resource_registry:
-                    resource_registry[normalized_key] = {
-                        "display_name": display_name,
-                        "role": role,
-                        "seniority": seniority,
-                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
-                    }
-        
-        # Create resource data from registry (sorted for consistency)
-        logging.info(f"[PHASE 1] Building data for {len(resource_registry)} role resources...")
-        for normalized_key in sorted(resource_registry.keys()):
-            res_data = resource_registry[normalized_key]
-            
-            # Determine rate
-            if blended_rate:
-                rate = blended_rate
-            elif res_data["rate"] is not None:
-                rate = res_data["rate"]
-            else:
-                rate = 150.0
-            
-            resource_data_list.append({
-                "UID": resource_id,
-                "ID": resource_id,
-                "Name": res_data["display_name"],
-                "Initials": "".join([w[0] for w in str(res_data["role"]).split()[:3]]),
-                "Group": "",
-                "Type": "1",  # Work resource
-                "Rate": rate
-            })
-            
-            # Store in resource_uid_map using NORMALIZED key
-            resource_uid_map[normalized_key] = resource_id
-            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
-            
-            logging.info(f"[PHASE 1] Registered resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}' (normalized_key='{normalized_key}')")
-            
-            resource_id += 1
-    
-    # Build valid resource UID set for validation
-    valid_resource_uids = set([r["UID"] for r in resource_data_list])
-    
-    logging.info(f"[PHASE 1] ✓ Built data for {len(resource_data_list)} total resources")
-    logging.info(f"[PHASE 1] ✓ Department resources: {len(department_resources)}")
-    logging.info(f"[PHASE 1] ✓ Role resources: {len(resource_uid_map)}")
-    logging.info(f"[PHASE 1] ✓ Valid resource UIDs: {len(valid_resource_uids)}")
-    
-    # FIX ISSUE 1: VALIDATION - Ensure resource_uid_map and resource_data_list are in sync
-    logging.info("[PHASE 1 VALIDATION] Verifying resource_uid_map and resource_data_list synchronization...")
-    resource_data_uids = set([r["UID"] for r in resource_data_list])
-    resource_map_uids = set(resource_uid_map.values())
-    
-    # Check: Every UID in resource_uid_map should exist in resource_data_list
-    missing_in_data_list = resource_map_uids - resource_data_uids
-    if missing_in_data_list:
-        raise ValueError(
-            f"CRITICAL: {len(missing_in_data_list)} resource UIDs in resource_uid_map are missing from resource_data_list: {missing_in_data_list}"
-        )
-    
-    logging.info(f"[PHASE 1 VALIDATION] ✓ All {len(resource_map_uids)} resource UIDs in resource_uid_map exist in resource_data_list")
-    logging.info(f"[PHASE 1 VALIDATION] ✓ resource_data_list has {len(resource_data_uids)} total resources")
-    logging.info(f"[PHASE 1 VALIDATION] ✓ Sync verification passed: resource_uid_map and resource_data_list are consistent")
     
     # ============================================================================
     # PHASE 1: BUILD ASSIGNMENT DATA STRUCTURES (NO XML YET)
