@@ -1084,13 +1084,41 @@ def convert_excel_to_mspdi(
                             logging.info(f"[WRAPPER FILTER] Skipping banned wrapper task: '{task_name}'")
                             continue
                         
-                        # FIX 3: Task deduplication - check if task already seen in this component
+                        # FIX 3: Hybrid task deduplication
                         # CRITICAL: Do this BEFORE creating task element to prevent ghost tasks
-                        dedup_key = (deliv_code, component_name, normalize_task_name_for_dedup(task_name))
-                        if dedup_key in seen_tasks:
-                            logging.info(f"[DEDUP] Skipping duplicate task: '{task_name}' in component '{component_name}'")
-                            continue
-                        seen_tasks.add(dedup_key)
+                        # Strategy: Use WBS_ID if available, else use deliverable+component if both present, else skip dedup
+                        
+                        # Try to get WBS_ID or OutlineNumber as stable unique identifier
+                        wbs_id = row.get("WBS_ID") or row.get("OutlineNumber")
+                        if pd.notna(wbs_id):
+                            wbs_id = str(wbs_id).strip()
+                            if wbs_id and wbs_id.lower() != "nan":
+                                # WBS identifier exists - use it for dedup (only identical WBS rows collapse)
+                                dedup_key = ("wbs", wbs_id)
+                                if dedup_key in seen_tasks:
+                                    logging.info(f"[DEDUP] Skipping duplicate WBS task: '{task_name}' (WBS={wbs_id})")
+                                    continue
+                                seen_tasks.add(dedup_key)
+                            else:
+                                wbs_id = None
+                        else:
+                            wbs_id = None
+                        
+                        # If no valid WBS, check if deliverable AND component are populated
+                        if wbs_id is None:
+                            has_deliv = pd.notna(deliv_code) and str(deliv_code).strip() and str(deliv_code).lower() != "nan"
+                            has_comp = pd.notna(component_name) and str(component_name).strip() and str(component_name).lower() != "nan"
+                            
+                            if has_deliv and has_comp:
+                                # Both fields present - use traditional dedup key
+                                dedup_key = (deliv_code, component_name, normalize_task_name_for_dedup(task_name))
+                                if dedup_key in seen_tasks:
+                                    logging.info(f"[DEDUP] Skipping duplicate task: '{task_name}' in component '{component_name}'")
+                                    continue
+                                seen_tasks.add(dedup_key)
+                            else:
+                                # Missing deliverable or component - skip dedup to avoid false positives
+                                logging.debug(f"[DEDUP] Skipping dedup check for task '{task_name}' (missing deliverable/component metadata)")
                         
                         # NOW create the task element (after all filtering checks passed)
                         task_num_in_component += 1
