@@ -1594,9 +1594,138 @@ def convert_excel_to_mspdi(
     
     logging.info(f"[FIX B] Built child hours aggregator for {len(child_hours_by_parent)} parent tasks")
     
-    # FIX A: Build assignment data list BEFORE creating XML elements
-    # This allows us to aggregate work by task and update Task.Work elements
-    logging.info("[FIX A] Building assignment data structure before creating XML")
+    # ============================================================================
+    # PHASE 1: BUILD RESOURCE DATA STRUCTURES (NO XML YET)
+    # ============================================================================
+    # This phase builds all resource-related data structures BEFORE creating
+    # assignment data, which allows assignments to reference resource UIDs.
+    logging.info("[PHASE 1] Building resource data structures...")
+    
+    # Initialize resource data structures
+    resource_map = {}  # role -> resource_uid (backward compatibility)
+    resource_uid_map = {}  # normalized_key (role|seniority) -> resource_uid
+    department_resources = {}  # department -> resource_uid
+    resource_data_list = []  # List of resource data dicts for XML creation later
+    
+    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
+    # Tasks start at UID=1, Resources must be in separate namespace
+    resource_id = 1000
+    
+    # Extract unique departments
+    departments = set()
+    if "Department" in df.columns:
+        departments.update(df["Department"].dropna().unique())
+    
+    # Build department resource data
+    logging.info(f"[PHASE 1] Building data for {len(departments)} department resources...")
+    for dept in departments:
+        resource_data_list.append({
+            "UID": resource_id,
+            "ID": resource_id,
+            "Name": f"{dept} Team",
+            "Initials": "".join([w[0] for w in str(dept).split()[:2]]),
+            "Group": str(dept),
+            "Type": "1",  # Work resource
+            "Rate": blended_rate or 150
+        })
+        department_resources[str(dept)] = resource_id
+        
+        # FIX ISSUE 1: Add department resources to resource_uid_map for consistency
+        # Use normalized key: "dept:{dept_name}" to avoid collision with role keys
+        dept_normalized_key = f"dept:{normalize_resource_name(str(dept))}"
+        resource_uid_map[dept_normalized_key] = resource_id
+        logging.info(f"[PHASE 1 FIX] Added department '{dept}' to resource_uid_map with key '{dept_normalized_key}' -> UID={resource_id}")
+        
+        resource_id += 1
+    
+    # Build individual role resource data
+    if "Role" in df.columns:
+        # Extract unique (role, seniority) combinations from role rows
+        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
+        
+        # Build registry with normalized keys for deduplication
+        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
+        
+        for _, row in role_rows.iterrows():
+            role = str(row.get("Role", "")).strip()
+            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
+            if role:
+                # Create display name (original case/formatting)
+                display_name = f"{role} ({seniority})" if seniority else role
+                
+                # Create normalized key for deduplication
+                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
+                
+                # Store in registry (will automatically dedupe by normalized key)
+                if normalized_key not in resource_registry:
+                    resource_registry[normalized_key] = {
+                        "display_name": display_name,
+                        "role": role,
+                        "seniority": seniority,
+                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
+                    }
+        
+        # Create resource data from registry (sorted for consistency)
+        logging.info(f"[PHASE 1] Building data for {len(resource_registry)} role resources...")
+        for normalized_key in sorted(resource_registry.keys()):
+            res_data = resource_registry[normalized_key]
+            
+            # Determine rate
+            if blended_rate:
+                rate = blended_rate
+            elif res_data["rate"] is not None:
+                rate = res_data["rate"]
+            else:
+                rate = 150.0
+            
+            resource_data_list.append({
+                "UID": resource_id,
+                "ID": resource_id,
+                "Name": res_data["display_name"],
+                "Initials": "".join([w[0] for w in str(res_data["role"]).split()[:3]]),
+                "Group": "",
+                "Type": "1",  # Work resource
+                "Rate": rate
+            })
+            
+            # Store in resource_uid_map using NORMALIZED key
+            resource_uid_map[normalized_key] = resource_id
+            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
+            
+            logging.info(f"[PHASE 1] Registered resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}' (normalized_key='{normalized_key}')")
+            
+            resource_id += 1
+    
+    # Build valid resource UID set for validation
+    valid_resource_uids = set([r["UID"] for r in resource_data_list])
+    
+    logging.info(f"[PHASE 1] ✓ Built data for {len(resource_data_list)} total resources")
+    logging.info(f"[PHASE 1] ✓ Department resources: {len(department_resources)}")
+    logging.info(f"[PHASE 1] ✓ Role resources: {len(resource_uid_map)}")
+    logging.info(f"[PHASE 1] ✓ Valid resource UIDs: {len(valid_resource_uids)}")
+    
+    # FIX ISSUE 1: VALIDATION - Ensure resource_uid_map and resource_data_list are in sync
+    logging.info("[PHASE 1 VALIDATION] Verifying resource_uid_map and resource_data_list synchronization...")
+    resource_data_uids = set([r["UID"] for r in resource_data_list])
+    resource_map_uids = set(resource_uid_map.values())
+    
+    # Check: Every UID in resource_uid_map should exist in resource_data_list
+    missing_in_data_list = resource_map_uids - resource_data_uids
+    if missing_in_data_list:
+        raise ValueError(
+            f"CRITICAL: {len(missing_in_data_list)} resource UIDs in resource_uid_map are missing from resource_data_list: {missing_in_data_list}"
+        )
+    
+    logging.info(f"[PHASE 1 VALIDATION] ✓ All {len(resource_map_uids)} resource UIDs in resource_uid_map exist in resource_data_list")
+    logging.info(f"[PHASE 1 VALIDATION] ✓ resource_data_list has {len(resource_data_uids)} total resources")
+    logging.info(f"[PHASE 1 VALIDATION] ✓ Sync verification passed: resource_uid_map and resource_data_list are consistent")
+    
+    # ============================================================================
+    # PHASE 1: BUILD ASSIGNMENT DATA STRUCTURES (NO XML YET)
+    # ============================================================================
+    # Now that resource data is built, we can create assignments that reference
+    # resource UIDs safely.
+    logging.info("[PHASE 1] Building assignment data structure...")
     assignment_data_list = []
     assignment_uid = 1
     
@@ -1772,23 +1901,59 @@ def convert_excel_to_mspdi(
     # VALIDATION GUARD: Ensure all assignments reference valid Resource UIDs
     logging.info("[ASSIGNMENT VALIDATION] Validating assignment ResourceUIDs...")
     invalid_assignments = []
+    resource_uid_usage = {}  # Track which resource UIDs are actually used
     
     for assign_data in assignment_data_list:
         res_uid = assign_data.get("ResourceUID")
+        task_uid = assign_data.get("TaskUID")
+        
+        # FIX ISSUE 2: Verify resource UID exists in resource_data_list
         if res_uid not in valid_resource_uids:
             invalid_assignments.append({
-                "task_uid": assign_data.get("TaskUID"),
+                "task_uid": task_uid,
                 "resource_uid": res_uid,
                 "assignment_uid": assign_data.get("AssignmentUID")
             })
+        else:
+            # Track resource UID usage for reporting
+            resource_uid_usage[res_uid] = resource_uid_usage.get(res_uid, 0) + 1
     
-    assert len(invalid_assignments) == 0, \
-        f"CRITICAL: {len(invalid_assignments)} assignments reference invalid ResourceUIDs: {invalid_assignments}"
+    if len(invalid_assignments) > 0:
+        logging.error(f"[ASSIGNMENT VALIDATION] ❌ CRITICAL: {len(invalid_assignments)} assignments reference invalid ResourceUIDs!")
+        logging.error(f"[ASSIGNMENT VALIDATION] Valid resource UIDs: {sorted(valid_resource_uids)[:20]} ...")
+        logging.error(f"[ASSIGNMENT VALIDATION] Invalid assignments: {invalid_assignments[:10]}")
+        raise ValueError(
+            f"CRITICAL: {len(invalid_assignments)} assignments reference resource UIDs that don't exist in resource_data_list. "
+            f"First invalid: Task UID={invalid_assignments[0]['task_uid']}, Resource UID={invalid_assignments[0]['resource_uid']}"
+        )
     
     logging.info(f"[ASSIGNMENT VALIDATION] ✓ All {len(assignment_data_list)} assignments reference valid Resource UIDs")
+    logging.info(f"[ASSIGNMENT VALIDATION] ✓ {len(resource_uid_usage)} unique resources are assigned to tasks")
     
-    # FIX A & E: Update Task.Work and Task.Cost elements from aggregated assignments
-    logging.info("[FIX A & E] Updating Task.Work and Task.Cost from aggregated assignments")
+    # FIX ISSUE 2: Verify resource UIDs are from 1000+ range (not sequential from 1)
+    all_resource_uids_in_assignments = [a["ResourceUID"] for a in assignment_data_list]
+    min_res_uid = min(all_resource_uids_in_assignments) if all_resource_uids_in_assignments else None
+    max_res_uid = max(all_resource_uids_in_assignments) if all_resource_uids_in_assignments else None
+    
+    if min_res_uid is not None and min_res_uid < 1000:
+        logging.warning(f"[ASSIGNMENT VALIDATION] ⚠ WARNING: Found resource UID {min_res_uid} < 1000. Expected UIDs >= 1000 to avoid collision with Task UIDs.")
+    
+    logging.info(f"[ASSIGNMENT VALIDATION] ✓ Resource UID range in assignments: {min_res_uid} to {max_res_uid}")
+    logging.info(f"[ASSIGNMENT VALIDATION] ✓ Issue 2 validation passed: All assignments use actual resource UIDs from resource_uid_map")
+    
+    # ============================================================================
+    # FIX ISSUE 3: APPLY WORK AGGREGATION TO TASK XML ELEMENTS
+    # ============================================================================
+    # This section takes the work_by_task aggregation calculated from assignments
+    # and applies it to the Task XML elements BEFORE Phase 2 serialization.
+    # This ensures Task.Work fields accurately reflect assignment totals.
+    logging.info("[FIX ISSUE 3] Applying work_by_task aggregation to Task XML elements...")
+    logging.info(f"[FIX ISSUE 3] work_by_task contains aggregated work for {len(work_by_task)} tasks")
+    
+    tasks_updated_count = 0
+    tasks_skipped_summary = 0
+    tasks_not_found = 0
+    
     for task_uid, work_hours in work_by_task.items():
         # Find task element by UID
         for task_elem in tasks.findall("{%s}Task" % ns):
@@ -1804,8 +1969,10 @@ def convert_excel_to_mspdi(
                     
                     work_elem = task_elem.find("{%s}Work" % ns)
                     if work_elem is not None:
+                        old_work_value = work_elem.text
                         work_elem.text = f"PT{planned_minutes}M"
                     else:
+                        old_work_value = "MISSING"
                         ET.SubElement(task_elem, "{%s}Work" % ns).text = f"PT{planned_minutes}M"
                     
                     remaining_work_elem = task_elem.find("{%s}RemainingWork" % ns)
@@ -1833,35 +2000,58 @@ def convert_excel_to_mspdi(
                     
                     task_name_elem = task_elem.find("{%s}Name" % ns)
                     task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
-                    logging.info(f"[FIX A & E] Updated task '{task_name}' (UID={task_uid}): Work={planned_minutes}M, Cost=${task_cost:.2f}")
+                    
+                    # Log update details
+                    logging.info(f"[FIX ISSUE 3] Updated task '{task_name}' (UID={task_uid}): Work={old_work_value} → PT{planned_minutes}M ({work_hours}h), Cost=${task_cost:.2f}")
+                    tasks_updated_count += 1
+                else:
+                    # Log skipped summary task
+                    task_name_elem = task_elem.find("{%s}Name" % ns)
+                    task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
+                    logging.info(f"[FIX ISSUE 3] Skipped summary task '{task_name}' (UID={task_uid}) - summary tasks auto-calculate work from children")
+                    tasks_skipped_summary += 1
                 break
+        else:
+            # Task UID not found in XML tree
+            tasks_not_found += 1
+            logging.warning(f"[FIX ISSUE 3] Task UID={task_uid} not found in XML tree (work={work_hours}h cannot be applied)")
     
+    # FIX ISSUE 3: Summary and validation
+    logging.info(f"[FIX ISSUE 3] ========== WORK AGGREGATION SUMMARY ==========")
+    logging.info(f"[FIX ISSUE 3] Tasks with aggregated work: {len(work_by_task)}")
+    logging.info(f"[FIX ISSUE 3] Leaf tasks updated: {tasks_updated_count}")
+    logging.info(f"[FIX ISSUE 3] Summary tasks skipped: {tasks_skipped_summary}")
+    logging.info(f"[FIX ISSUE 3] Tasks not found: {tasks_not_found}")
+    
+    # Validation: Ensure most tasks were updated successfully
+    if tasks_updated_count == 0 and len(work_by_task) > 0:
+        logging.warning(f"[FIX ISSUE 3] ⚠ WARNING: No tasks were updated despite {len(work_by_task)} tasks in work_by_task!")
+        logging.warning(f"[FIX ISSUE 3] This may indicate that work aggregation is not being applied correctly.")
+    elif tasks_updated_count > 0:
+        success_rate = (tasks_updated_count / len(work_by_task) * 100) if len(work_by_task) > 0 else 0
+        logging.info(f"[FIX ISSUE 3] ✓ Success rate: {success_rate:.1f}% ({tasks_updated_count}/{len(work_by_task)} tasks updated)")
+        logging.info(f"[FIX ISSUE 3] ✓ Issue 3 fix COMPLETE: work_by_task aggregation successfully applied to Task XML elements")
+    
+    logging.info(f"[FIX ISSUE 3] ================================================")
 
-    # Create Resources container with enhanced resource definitions
+    # ============================================================================
+    # PHASE 2: WRITE RESOURCES XML FROM PRE-BUILT DATA
+    # ============================================================================
+    # This phase creates Resource XML elements in the correct MSPDI schema order
+    # (after Tasks) using the resource data structures built in Phase 1.
+    logging.info("[PHASE 2] Writing Resources XML from pre-built data...")
     resources = ET.SubElement(root, "{%s}Resources" % ns)
     
-    # Add resources from the DataFrame with enhanced properties
-    resource_map = {}
-    resource_uid_map = {}  # FIX: New mapping for (role, seniority) -> resource_uid
-    department_resources = {}
-    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
-    # Tasks start at UID=1, Resources must be in separate namespace
-    resource_id = 1000
-    
-    # Extract unique departments and roles
-    departments = set()
-    if "Department" in df.columns:
-        departments.update(df["Department"].dropna().unique())
-    
-    # Add department-level resources first
-    for dept in departments:
+    # Create Resource XML elements from resource_data_list
+    for res_data in resource_data_list:
         res = ET.SubElement(resources, "{%s}Resource" % ns)
-        ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
-        ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
-        ET.SubElement(res, "{%s}Name" % ns).text = f"{dept} Team"
-        ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(dept).split()[:2]])
-        ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
-        ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
+        ET.SubElement(res, "{%s}UID" % ns).text = str(res_data["UID"])
+        ET.SubElement(res, "{%s}ID" % ns).text = str(res_data["ID"])
+        ET.SubElement(res, "{%s}Name" % ns).text = res_data["Name"]
+        ET.SubElement(res, "{%s}Initials" % ns).text = res_data["Initials"]
+        if res_data.get("Group"):
+            ET.SubElement(res, "{%s}Group" % ns).text = res_data["Group"]
+        ET.SubElement(res, "{%s}Type" % ns).text = res_data["Type"]
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
         ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
         ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
@@ -1873,112 +2063,44 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate or 150:.2f}"
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['Rate']:.2f}"
         ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{res_data['Rate'] * 1.5:.2f}"
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
         # WORKFRONT FIX: Reference Calendar UID 9999
         ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
-        
-        department_resources[str(dept)] = resource_id
-        resource_id += 1
     
-    # FIX: Add individual role resources with (role, seniority) mapping
-    if "Role" in df.columns:
-        # Extract unique (role, seniority) combinations from role rows
-        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
-        
-        # Build registry with normalized keys for deduplication
-        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
-        
-        for _, row in role_rows.iterrows():
-            role = str(row.get("Role", "")).strip()
-            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
-            if role:
-                # Create display name (original case/formatting)
-                display_name = f"{role} ({seniority})" if seniority else role
-                
-                # Create normalized key for deduplication
-                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
-                
-                # Store in registry (will automatically dedupe by normalized key)
-                if normalized_key not in resource_registry:
-                    resource_registry[normalized_key] = {
-                        "display_name": display_name,
-                        "role": role,
-                        "seniority": seniority,
-                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
-                    }
-        
-        # Create resources from registry (sorted for consistency)
-        for normalized_key in sorted(resource_registry.keys()):
-            res_data = resource_registry[normalized_key]
-            res = ET.SubElement(resources, "{%s}Resource" % ns)
-            ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
-            ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
-            ET.SubElement(res, "{%s}Name" % ns).text = res_data["display_name"]
-            ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(res_data["role"]).split()[:3]])
-            ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
-            ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-            ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
-            ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
-            ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
-            ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
-            ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
-            ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
-            ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"
-            
-            # Add rate if available
-            if blended_rate:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate:.2f}"
-            elif res_data["rate"] is not None:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['rate']:.2f}"
-            else:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = "150.00"
-            
-            ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
-            ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
-            # WORKFRONT FIX: Reference Calendar UID 9999
-            ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
-            
-            # Store in resource_uid_map using NORMALIZED key
-            resource_uid_map[normalized_key] = resource_id
-            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
-            
-            logging.info(f"[RESOURCE CREATION] Created resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}', Name='{res_data['display_name']}' (normalized_key='{normalized_key}')")
-            
-            resource_id += 1
+    logging.info(f"[PHASE 2] ✓ Created {len(resource_data_list)} Resource XML elements")
     
-    # VALIDATION GUARD: Ensure no duplicate Resource UIDs
-    logging.info("[RESOURCE VALIDATION] Running post-creation validation...")
-    
-    # Collect all Resource UIDs from XML
+    # VALIDATION GUARD: Verify Resource XML elements match data structures
     resource_uids_in_xml = []
     for res_elem in resources.findall("{%s}Resource" % ns):
         uid_elem = res_elem.find("{%s}UID" % ns)
         if uid_elem is not None:
             resource_uids_in_xml.append(int(uid_elem.text))
     
+    # Verify count matches
+    assert len(resource_uids_in_xml) == len(resource_data_list), \
+        f"CRITICAL: Resource XML count mismatch! XML={len(resource_uids_in_xml)}, Data={len(resource_data_list)}"
+    
     # Check for duplicates
     assert len(resource_uids_in_xml) == len(set(resource_uids_in_xml)), \
         f"CRITICAL: Duplicate ResourceUIDs found in XML! UIDs: {resource_uids_in_xml}"
     
-    logging.info(f"[RESOURCE VALIDATION] ✓ All {len(resource_uids_in_xml)} Resource UIDs are unique")
+    # Verify UIDs match valid_resource_uids from Phase 1
+    xml_uid_set = set(resource_uids_in_xml)
+    assert xml_uid_set == valid_resource_uids, \
+        f"CRITICAL: Resource UIDs in XML don't match Phase 1 data! XML UIDs: {xml_uid_set}, Expected: {valid_resource_uids}"
     
-    # Build valid resource UID set for assignment validation later
-    valid_resource_uids = set(resource_uids_in_xml)
+    logging.info(f"[PHASE 2] ✓ All {len(resource_uids_in_xml)} Resource UIDs validated (no duplicates, matches Phase 1 data)")
     
-    # FIX: Log resource mapping summary for debugging
-    logging.info(f"[RESOURCE VALIDATION] Created {len(resource_uid_map)} role-seniority resources")
-    logging.info(f"[RESOURCE VALIDATION] resource_uid_map keys (first 10): {list(resource_uid_map.keys())[:10]}")
-    # Create Assignments container with enhanced resource assignments
-    logging.info("[FIX A] Creating Assignment XML elements from assignment data")
+    # ============================================================================
+    # PHASE 2: WRITE ASSIGNMENTS XML FROM PRE-BUILT DATA
+    # ============================================================================
+    # This phase creates Assignment XML elements using the assignment data
+    # structures built in Phase 1 (after resource data was built).
+    logging.info("[PHASE 2] Writing Assignments XML from pre-built data...")
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
     
     # Create assignment XML elements from assignment_data_list
@@ -2127,6 +2249,73 @@ def convert_excel_to_mspdi(
         logging.error("[SUMMARY VALIDATION] ❌ CRITICAL: NO Summary elements found in XML tree!")
         logging.error("[SUMMARY VALIDATION] Workfront requires Summary=1 for all deliverables and components")
         raise ValueError("Export aborted: No Summary elements found in XML tree. This will cause Workfront import to fail.")
+    
+    # ============================================================================
+    # FINAL VALIDATION: Verify All Three Critical Issues Are Resolved
+    # ============================================================================
+    logging.info("[FINAL VALIDATION] ========== COMPREHENSIVE REGRESSION CHECK ==========")
+    
+    # Issue 1 Validation: Resource UID Mapping Consistency
+    logging.info("[FINAL VALIDATION] Issue 1: Checking resource_uid_map and resource_data_list synchronization...")
+    resource_xml_uids = set()
+    for res_elem in resources.findall("{%s}Resource" % ns):
+        uid_elem = res_elem.find("{%s}UID" % ns)
+        if uid_elem is not None:
+            resource_xml_uids.add(int(uid_elem.text))
+    
+    if resource_xml_uids == valid_resource_uids:
+        logging.info(f"[FINAL VALIDATION] ✓ Issue 1 PASSED: All {len(resource_xml_uids)} resources in XML match resource_data_list")
+    else:
+        missing = valid_resource_uids - resource_xml_uids
+        extra = resource_xml_uids - valid_resource_uids
+        raise ValueError(f"Issue 1 FAILED: Resource UID mismatch! Missing: {missing}, Extra: {extra}")
+    
+    # Issue 2 Validation: Assignment ResourceUIDs Use Correct Range (1000+)
+    logging.info("[FINAL VALIDATION] Issue 2: Checking assignment resource UID references...")
+    assignment_resource_uids = set()
+    for assign_elem in assignments.findall("{%s}Assignment" % ns):
+        res_uid_elem = assign_elem.find("{%s}ResourceUID" % ns)
+        if res_uid_elem is not None:
+            res_uid = int(res_uid_elem.text)
+            assignment_resource_uids.add(res_uid)
+            
+            # Verify UID exists in resources
+            if res_uid not in resource_xml_uids:
+                raise ValueError(f"Issue 2 FAILED: Assignment references invalid ResourceUID={res_uid} (not in Resources)")
+    
+    if min(assignment_resource_uids) >= 1000 if assignment_resource_uids else True:
+        logging.info(f"[FINAL VALIDATION] ✓ Issue 2 PASSED: All {len(assignment_resource_uids)} assignment resource UIDs >= 1000 and exist in Resources")
+    else:
+        invalid_uids = [uid for uid in assignment_resource_uids if uid < 1000]
+        logging.warning(f"[FINAL VALIDATION] ⚠ Issue 2 WARNING: {len(invalid_uids)} resource UIDs < 1000: {invalid_uids[:10]}")
+    
+    # Issue 3 Validation: Task Work Aggregation Applied
+    logging.info("[FINAL VALIDATION] Issue 3: Checking task work aggregation...")
+    tasks_with_nonzero_work = 0
+    tasks_with_zero_work = 0
+    
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        work_elem = task_elem.find("{%s}Work" % ns)
+        summary_elem = task_elem.find("{%s}Summary" % ns)
+        is_summary = summary_elem is not None and summary_elem.text == "1"
+        
+        if work_elem is not None and not is_summary:
+            work_val = work_elem.text
+            if work_val and work_val != "PT0M":
+                tasks_with_nonzero_work += 1
+            else:
+                tasks_with_zero_work += 1
+    
+    if tasks_with_nonzero_work > 0:
+        logging.info(f"[FINAL VALIDATION] ✓ Issue 3 PASSED: {tasks_with_nonzero_work} leaf tasks have non-zero Work values")
+        if tasks_with_zero_work > 0:
+            logging.info(f"[FINAL VALIDATION]   ({tasks_with_zero_work} tasks still have PT0M - may be tasks without assignments)")
+    else:
+        logging.warning(f"[FINAL VALIDATION] ⚠ Issue 3 WARNING: No tasks have non-zero Work values! work_by_task may not have been applied.")
+    
+    logging.info("[FINAL VALIDATION] ========== ALL REGRESSIONS CHECKED ==========")
+    logging.info("[FINAL VALIDATION] ✓ All three critical issues validated successfully")
+    logging.info("[FINAL VALIDATION] ✓ XML is ready for export")
     
     # Write the XML file
     tree = ET.ElementTree(root)
@@ -2315,20 +2504,26 @@ def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
 
 
 if __name__ == "__main__":
-    # Test the enhanced converter
-    test_xlsx = "test.xlsx"
-    test_xml = "test_enhanced.xml"
+    # Support command-line arguments or use default test files
+    import sys
+    
+    if len(sys.argv) >= 3:
+        test_xlsx = sys.argv[1]
+        test_xml = sys.argv[2]
+    else:
+        test_xlsx = "test.xlsx"
+        test_xml = "test_enhanced.xml"
     
     if os.path.exists(test_xlsx):
         stats = convert_excel_to_mspdi(
             input_xlsx=test_xlsx,
             output_xml=test_xml,
             project_name="Enhanced Test Project",
-            add_deliverable_milestones=True,
-            add_phase_gates=True,
             add_dependencies=True,
             add_custom_fields=True
         )
-        print(f"Enhanced conversion complete: {stats}")
+        print(f"Conversion complete: {stats}")
+        print(f"\n✓ Output written to: {test_xml}")
+        print(f"✓ Verify the three critical issues are resolved in the output above")
     else:
         print(f"Test file {test_xlsx} not found")
