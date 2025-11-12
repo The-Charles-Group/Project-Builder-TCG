@@ -2715,7 +2715,8 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}Summary" % ns).text = "1"
     
-    ET.SubElement(root, "{%s}Assignments" % ns)
+    # CRITICAL: Do NOT create Assignments element - Nov 7 working baseline has NO Assignments section
+    # ET.SubElement(root, "{%s}Assignments" % ns)  # DISABLED - Workfront rejects files with Assignments
     
     return root
 
