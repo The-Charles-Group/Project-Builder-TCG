@@ -149,7 +149,7 @@ def convert_excel_to_mspdi(
         
         # Write back with Microsoft Project-compliant declaration
         with open(output_xml, 'w', encoding='utf-8') as f:
-            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+            f.write("<?xml version='1.0' encoding='utf-8'?>\n")
             f.write(content)
         
         return {"task_count": 0, "warning": "Empty input data"}
@@ -340,8 +340,8 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
         ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional (1.0 = 100%)
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional (1.0 = 100%)
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
         ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
         ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -397,8 +397,8 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(res_data["role"]).split()[:3]])
             ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
             ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional (1.0 = 100%)
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional (1.0 = 100%)
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
             ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
             ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
             ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -1747,42 +1747,7 @@ def convert_excel_to_mspdi(
     # WORKFRONT COMPATIBILITY: Safety passes to normalize values
     logging.info("[WORKFRONT FIX] Running safety passes to ensure Workfront compatibility...")
     
-    # Safety Pass A: Normalize Assignment Units (100 → 1.0)
-    units_fixed = 0
-    for u in root.findall(".//{%s}Assignments/{%s}Assignment/{%s}Units" % (ns, ns, ns)):
-        try:
-            val = float(u.text or "1.0")
-            if val > 1.0:  # Convert percentage to fraction
-                u.text = "1.0"
-                units_fixed += 1
-        except:
-            u.text = "1.0"
-            units_fixed += 1
-    logging.info(f"[WORKFRONT FIX] Fixed {units_fixed} Assignment Units values")
-    
-    # Safety Pass B: Normalize Resource MaxUnits and PeakUnits (100/1000 → 1.0)
-    max_units_fixed = 0
-    peak_units_fixed = 0
-    for tag, counter in [(".//{%s}Resources/{%s}Resource/{%s}MaxUnits" % (ns, ns, ns), 'max'), 
-                         (".//{%s}Resources/{%s}Resource/{%s}PeakUnits" % (ns, ns, ns), 'peak')]:
-        for n in root.findall(tag):
-            try:
-                val = float(n.text or "1.0")
-                if val > 1.0:  # Convert percentage to fraction
-                    n.text = "1.0"
-                    if counter == 'max':
-                        max_units_fixed += 1
-                    else:
-                        peak_units_fixed += 1
-            except:
-                n.text = "1.0"
-                if counter == 'max':
-                    max_units_fixed += 1
-                else:
-                    peak_units_fixed += 1
-    logging.info(f"[WORKFRONT FIX] Fixed {max_units_fixed} MaxUnits and {peak_units_fixed} PeakUnits values")
-    
-    # Safety Pass C: Normalize PredecessorLink Type (0 or invalid → 1 for FS)
+    # Safety Pass A: Normalize PredecessorLink Type (0 or invalid → 1 for FS)
     type_fixed = 0
     for t in root.findall(".//{%s}PredecessorLink/{%s}Type" % (ns, ns)):
         current_val = (t.text or "").strip()
@@ -1790,7 +1755,7 @@ def convert_excel_to_mspdi(
             t.text = "1"
             type_fixed += 1
     logging.info(f"[WORKFRONT FIX] Fixed {type_fixed} PredecessorLink Type values")
-    logging.info("[WORKFRONT FIX] ✓ All safety passes completed")
+    logging.info("[WORKFRONT FIX] ✓ Safety pass completed")
     
     # GPT-5 Pro Regression Guard: Validate task-level ExtendedAttributes schema
     logging.info("[REGRESSION GUARD] Validating task-level ExtendedAttribute schema...")
@@ -1845,7 +1810,7 @@ def convert_excel_to_mspdi(
     
     # Write back with Microsoft Project-compliant declaration
     with open(output_xml, 'w', encoding='utf-8') as f:
-        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write("<?xml version='1.0' encoding='utf-8'?>\n")
         f.write(content)
     
     # FIX: Verify PredecessorLink elements were created
