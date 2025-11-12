@@ -2077,12 +2077,6 @@ def convert_excel_to_mspdi(
     else:
         logging.info("[REGRESSION GUARD] ✓ All task-level ExtendedAttributes have correct flat schema (FieldID + Value only)")
     
-    # GPT-5 Pro CRITICAL FIX: Always include <Assignments /> even when empty
-    # MSPDI schema requires this section for Workfront import compatibility
-    logging.info("[GPT-5 PRO FIX] Adding empty <Assignments /> section (required by MSPDI schema)")
-    assignments = ET.SubElement(root, "{%s}Assignments" % ns)
-    logging.info(f"[GPT-5 PRO FIX] ✓ Created <Assignments /> element with 0 assignments")
-    
     # CRITICAL VALIDATION: Check for empty summary tasks before export
     # Workfront rejects XML with summary tasks that have no children
     logging.info("[HIERARCHY VALIDATION] Validating task hierarchy...")
