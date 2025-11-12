@@ -1461,21 +1461,25 @@ def convert_excel_to_mspdi(
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
     
+    # ============================================================================
+    # CRITICAL: Build authoritative set of valid Task UIDs from final XML tree
+    # This set is the single source of truth for all downstream validation
+    # (assignments, dependencies, predecessor links)
+    # ============================================================================
+    logging.info("[TASK UID TRACKING] Building final task UID set from XML tree...")
+    valid_task_uids = set()
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        uid_elem = task_elem.find("{%s}UID" % ns)
+        if uid_elem is not None:
+            valid_task_uids.add(int(uid_elem.text))
+    
+    logging.info(f"[TASK UID TRACKING] ✓ Built authoritative task UID set: {len(valid_task_uids)} tasks")
+    logging.info(f"[TASK UID TRACKING] Sample task UIDs: {sorted(list(valid_task_uids))[:10]}")
+    
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
     if add_dependencies:
         logging.info("[DEPENDENCIES] Processing Dependencies column for ALL task types (deliverables, components, leaf tasks)")
-        
-        # CRITICAL FIX: Build set of valid task UIDs from actual XML tree
-        # This prevents orphaned dependencies to tasks that were filtered out
-        valid_task_uids = set()
-        for task_elem in tasks.findall("{%s}Task" % ns):
-            uid_elem = task_elem.find("{%s}UID" % ns)
-            if uid_elem is not None:
-                valid_task_uids.add(int(uid_elem.text))
-        
-        logging.info(f"[DEPENDENCIES] Built valid task UID set with {len(valid_task_uids)} tasks")
-        logging.info(f"[DEPENDENCIES] Sample valid UIDs: {sorted(list(valid_task_uids))[:10]}")
         
         # FIX C: Add debug logging for WBS mapping
         logging.info(f"[DEPENDENCIES DEBUG] original_wbs_to_uid has {len(original_wbs_to_uid)} entries")
@@ -1966,7 +1970,36 @@ def convert_excel_to_mspdi(
     logging.info(f"[ROLE ASSIGNMENTS] Success rate: {(role_assignment_count / (role_assignment_count + skipped_role_rows) * 100) if (role_assignment_count + skipped_role_rows) > 0 else 0:.1f}%")
     logging.info(f"[ROLE ASSIGNMENTS] ===============================")
     
-    # FIX A: Aggregate work by task from assignments
+    # ============================================================================
+    # CRITICAL: Filter out assignments for tasks that were removed during generation
+    # This MUST happen BEFORE aggregates are built to ensure they only contain valid data
+    # ============================================================================
+    logging.info("[ASSIGNMENT CLEANUP] Filtering assignments for removed tasks...")
+    original_assignment_count = len(assignment_data_list)
+    filtered_assignments = []
+    removed_task_uids = set()
+    
+    for assign_data in assignment_data_list:
+        task_uid = assign_data.get("TaskUID")
+        if task_uid in valid_task_uids:
+            filtered_assignments.append(assign_data)
+        else:
+            removed_task_uids.add(task_uid)
+    
+    # Replace assignment list with filtered version
+    assignment_data_list = filtered_assignments
+    
+    removed_count = original_assignment_count - len(assignment_data_list)
+    if removed_count > 0:
+        logging.warning(f"[ASSIGNMENT CLEANUP] Removed {removed_count} assignments for {len(removed_task_uids)} filtered tasks")
+        logging.info(f"[ASSIGNMENT CLEANUP] Removed task UIDs: {sorted(removed_task_uids)[:20]}")
+    else:
+        logging.info(f"[ASSIGNMENT CLEANUP] No orphaned assignments found - all tasks are valid")
+    
+    logging.info(f"[ASSIGNMENT CLEANUP] ✓ Final assignment count: {len(assignment_data_list)} (removed {removed_count} orphaned)")
+    logging.info(f"[ASSIGNMENT CLEANUP] ✓ All remaining assignments reference valid Task UIDs")
+    
+    # FIX A: Aggregate work by task from assignments (AFTER cleanup)
     logging.info("[FIX A] Aggregating work by task from assignments")
     work_by_task = {}
     cost_by_task = {}
@@ -2008,6 +2041,7 @@ def convert_excel_to_mspdi(
     
     logging.info(f"[ASSIGNMENT VALIDATION] ✓ All {len(assignment_data_list)} assignments reference valid Resource UIDs")
     logging.info(f"[ASSIGNMENT VALIDATION] ✓ {len(resource_uid_usage)} unique resources are assigned to tasks")
+    logging.info(f"[ASSIGNMENT VALIDATION] ✓ All assignments reference valid Task UIDs (cleanup performed earlier)")
     
     # FIX ISSUE 2: Verify resource UIDs are from 1000+ range (not sequential from 1)
     all_resource_uids_in_assignments = [a["ResourceUID"] for a in assignment_data_list]
