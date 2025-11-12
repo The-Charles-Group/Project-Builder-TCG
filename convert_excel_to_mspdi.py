@@ -527,9 +527,9 @@ def convert_excel_to_mspdi(
     department_resources = {}  # department -> resource_uid
     resource_data_list = []  # List of resource data dicts for XML creation later
     
-    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with Task UIDs (0-999)
-    # Global UID uniqueness requirement: Resources 1000+, Tasks 0-999, Assignments sequential
-    resource_id = 1000
+    # WORKFRONT: Start resource UIDs at 1 (working Nov 7 format)
+    # Nov 7 baseline proved Resource UIDs 1-20 work with Task UIDs 0-293
+    resource_id = 1
     
     # Extract unique departments
     departments = set()
@@ -2601,11 +2601,8 @@ def convert_excel_to_mspdi(
             if res_uid not in resource_xml_uids:
                 raise ValueError(f"Issue 2 FAILED: Assignment references invalid ResourceUID={res_uid} (not in Resources)")
     
-    if min(assignment_resource_uids) >= 1000 if assignment_resource_uids else True:
-        logging.info(f"[FINAL VALIDATION] ✓ Issue 2 PASSED: All {len(assignment_resource_uids)} assignment resource UIDs >= 1000 and exist in Resources")
-    else:
-        invalid_uids = [uid for uid in assignment_resource_uids if uid < 1000]
-        logging.warning(f"[FINAL VALIDATION] ⚠ Issue 2 WARNING: {len(invalid_uids)} resource UIDs < 1000: {invalid_uids[:10]}")
+    # Verify all assignment resource UIDs exist in resources (no range restriction)
+    logging.info(f"[FINAL VALIDATION] ✓ Issue 2 PASSED: All {len(assignment_resource_uids)} assignment resource UIDs exist in Resources")
     
     # Issue 3 Validation: Task Work Aggregation Applied
     logging.info("[FINAL VALIDATION] Issue 3: Checking task work aggregation...")
@@ -2631,35 +2628,11 @@ def convert_excel_to_mspdi(
     else:
         logging.warning(f"[FINAL VALIDATION] ⚠ Issue 3 WARNING: No tasks have non-zero Work values! work_by_task may not have been applied.")
     
-    # CRITICAL: Global UID Uniqueness Validation
-    # UIDs must be unique across ALL element types (Tasks, Resources, Assignments)
-    # Standard ranges: Tasks 0-999, Resources 1000+, Assignments sequential (separate namespace)
-    logging.info("[FINAL VALIDATION] Global UID Uniqueness: Checking for collisions between Tasks and Resources...")
-    
-    # Collect all Task UIDs
-    task_uids_set = set()
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        uid_elem = task_elem.find("{%s}UID" % ns)
-        if uid_elem is not None:
-            task_uids_set.add(int(uid_elem.text))
-    
-    # Check for collisions
-    uid_collisions = task_uids_set.intersection(resource_xml_uids)
-    
-    if uid_collisions:
-        logging.error(f"[FINAL VALIDATION] ❌ CRITICAL: UID COLLISION DETECTED!")
-        logging.error(f"[FINAL VALIDATION] {len(uid_collisions)} UIDs appear in both Tasks and Resources: {sorted(list(uid_collisions))[:10]}")
-        logging.error(f"[FINAL VALIDATION] Task UID range: {min(task_uids_set)}-{max(task_uids_set)}")
-        logging.error(f"[FINAL VALIDATION] Resource UID range: {min(resource_xml_uids)}-{max(resource_xml_uids)}")
-        raise ValueError(
-            f"CRITICAL: UID collision detected! {len(uid_collisions)} UIDs appear in both Tasks and Resources. "
-            f"Workfront requires globally unique UIDs. Colliding UIDs: {sorted(list(uid_collisions))[:20]}"
-        )
-    
-    logging.info(f"[FINAL VALIDATION] ✓ Global UID Uniqueness PASSED: No collisions detected")
-    logging.info(f"[FINAL VALIDATION]   - Task UIDs: {len(task_uids_set)} unique ({min(task_uids_set)}-{max(task_uids_set)})")
-    logging.info(f"[FINAL VALIDATION]   - Resource UIDs: {len(resource_xml_uids)} unique ({min(resource_xml_uids)}-{max(resource_xml_uids)})")
-    logging.info(f"[FINAL VALIDATION]   - Ranges are properly segregated (Tasks: 0-999, Resources: 1000+)")
+    # NOTE: Task/Resource UID Overlap is ALLOWED by Workfront
+    # The working Nov 7 file had overlapping UIDs (Task UIDs 0-293, Resource UIDs 1-20)
+    # and Workfront accepted it successfully. UID uniqueness is only required WITHIN each type.
+    logging.info("[FINAL VALIDATION] Skipping Global UID Uniqueness check - Workfront tolerates Task/Resource UID overlap")
+    logging.info(f"[FINAL VALIDATION] Nov 7 baseline: Task/Resource UIDs can overlap - Workfront accepts this")
     
     # ============================================================================
     # WORKFRONT SCHEMA COMPLIANCE: Final validation for schema-breaking issues
