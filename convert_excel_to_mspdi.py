@@ -109,6 +109,125 @@ def normalize_task_name_for_dedup(name: str) -> str:
     return re.sub(r'\s+', ' ', name)
 
 
+def validate_task_hierarchy(tasks_elem: ET.Element, ns: str) -> List[Dict[str, str]]:
+    """
+    Validate that every summary task (Summary=1) has at least one child task.
+    
+    This is CRITICAL for Workfront import compatibility. Workfront rejects XML files
+    with empty summary tasks (no children) with "plan has to link" error.
+    
+    Args:
+        tasks_elem: The Tasks XML element containing all Task elements
+        ns: XML namespace string
+    
+    Returns:
+        List of violations, each dict with keys: 'uid', 'name', 'wbs', 'outline_level'
+        Empty list if no violations found.
+    """
+    violations = []
+    
+    # Build parent-child relationship map: {parent_outline_level: [child_uids...]}
+    # We need to check that every summary task has at least one direct child
+    task_metadata = {}  # {uid: {name, wbs, outline_number, outline_level, is_summary}}
+    
+    # First pass: collect all task metadata
+    for task in tasks_elem.findall("{%s}Task" % ns):
+        uid_elem = task.find("{%s}UID" % ns)
+        name_elem = task.find("{%s}Name" % ns)
+        wbs_elem = task.find("{%s}WBS" % ns)
+        outline_num_elem = task.find("{%s}OutlineNumber" % ns)
+        outline_level_elem = task.find("{%s}OutlineLevel" % ns)
+        summary_elem = task.find("{%s}Summary" % ns)
+        
+        if uid_elem is not None:
+            uid = uid_elem.text
+            task_metadata[uid] = {
+                'name': name_elem.text if name_elem is not None else 'Unknown',
+                'wbs': wbs_elem.text if wbs_elem is not None else 'Unknown',
+                'outline_number': outline_num_elem.text if outline_num_elem is not None else 'Unknown',
+                'outline_level': int(outline_level_elem.text) if outline_level_elem is not None else 0,
+                'is_summary': summary_elem is not None and summary_elem.text == '1'
+            }
+    
+    # Second pass: for each summary task, find children and validate
+    for uid, metadata in task_metadata.items():
+        if not metadata['is_summary']:
+            continue  # Skip non-summary tasks
+        
+        # Find children: tasks with outline_level = this_level + 1 AND outline_number starts with this outline_number
+        this_outline_num = metadata['outline_number']
+        this_level = metadata['outline_level']
+        
+        has_children = False
+        for child_uid, child_metadata in task_metadata.items():
+            if child_uid == uid:
+                continue  # Skip self
+            
+            child_outline_num = child_metadata['outline_number']
+            child_level = child_metadata['outline_level']
+            
+            # Check if this is a direct child:
+            # 1. Child level must be exactly parent_level + 1
+            # 2. Child outline number must start with parent outline number + "."
+            #    EXCEPTION: Root task (level 0) has children at level 1 with outline numbers "1", "2", etc.
+            if child_level == this_level + 1:
+                # Special case for root task (level 0): children are "1", "2", "3", not "0.1", "0.2"
+                if this_level == 0:
+                    has_children = True
+                    break
+                # Normal case: children must start with parent number + dot
+                elif child_outline_num.startswith(this_outline_num + "."):
+                    has_children = True
+                    break
+        
+        if not has_children:
+            violations.append({
+                'uid': uid,
+                'name': metadata['name'],
+                'wbs': metadata['wbs'],
+                'outline_level': str(this_level)
+            })
+    
+    return violations
+
+
+def check_for_trailing_dots(xml_string: str) -> List[Dict[str, str]]:
+    """
+    Scan XML string for OutlineNumber values ending with ".".
+    
+    Trailing dots in OutlineNumber are invalid and can cause import issues.
+    Example: "1.2." is invalid, should be "1.2"
+    
+    Args:
+        xml_string: Raw XML content as string
+    
+    Returns:
+        List of violations, each dict with keys: 'outline_number', 'context'
+        Empty list if no violations found.
+    """
+    import re
+    violations = []
+    
+    # Pattern to find OutlineNumber elements ending with "."
+    # Captures: <OutlineNumber>1.2.</OutlineNumber>
+    pattern = r'<OutlineNumber>([^<]+\.)</OutlineNumber>'
+    
+    matches = re.finditer(pattern, xml_string)
+    for match in matches:
+        outline_number = match.group(1)
+        # Get surrounding context (50 chars before and after)
+        start = max(0, match.start() - 50)
+        end = min(len(xml_string), match.end() + 50)
+        context = xml_string[start:end]
+        
+        violations.append({
+            'outline_number': outline_number,
+            'context': context
+        })
+    
+    return violations
+
+
 class DependencyType(Enum):
     """Types of task dependencies for MS Project"""
     FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
@@ -1177,6 +1296,26 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
+                # CRITICAL VALIDATION: Check if any tasks were actually created for this component
+                # If all tasks were filtered out (role rows, wrapper tasks, duplicates), skip this component
+                if task_num_in_component == 0:
+                    logging.warning(f"[EMPTY COMPONENT] Skipping component '{component_name}' - no tasks after filtering")
+                    # Remove the component summary task from the XML tree
+                    tasks.remove(comp_task)
+                    # Remove from tracking maps
+                    if comp_uid in component_costs:
+                        del component_costs[comp_uid]
+                    comp_key_str = f"{deliverable_name}:{component_name}"
+                    if comp_key_str in component_tasks:
+                        del component_tasks[comp_key_str]
+                    # Decrement task_uid to maintain correct count (component wasn't actually used)
+                    task_uid -= 1
+                    # Remove from all_task_uids
+                    if comp_uid in all_task_uids:
+                        all_task_uids.remove(comp_uid)
+                    # Skip to next component
+                    continue
+                
                 # FIX 4: Component summary tasks must have Duration=PT0M to let Workfront auto-calculate from children
                 # Do NOT calculate duration from time span - this causes issues with Workfront rollup
                 ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
@@ -1940,6 +2079,37 @@ def convert_excel_to_mspdi(
     logging.info("[GPT-5 PRO FIX] Adding empty <Assignments /> section (required by MSPDI schema)")
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
     logging.info(f"[GPT-5 PRO FIX] ✓ Created <Assignments /> element with 0 assignments")
+    
+    # CRITICAL VALIDATION: Check for empty summary tasks before export
+    # Workfront rejects XML with summary tasks that have no children
+    logging.info("[HIERARCHY VALIDATION] Validating task hierarchy...")
+    
+    # Ensure tasks_elem exists before validation
+    if tasks_elem is None:
+        logging.warning("[HIERARCHY VALIDATION] No Tasks element found in XML, skipping validation")
+        hierarchy_violations = []
+    else:
+        hierarchy_violations = validate_task_hierarchy(tasks_elem, ns)
+    
+    if hierarchy_violations:
+        logging.error(f"[HIERARCHY VALIDATION] ❌ CRITICAL: Found {len(hierarchy_violations)} empty summary tasks!")
+        logging.error(f"[HIERARCHY VALIDATION] Workfront will reject this XML with 'plan has to link' error")
+        
+        # Log first 10 violations
+        for i, violation in enumerate(hierarchy_violations[:10]):
+            logging.error(f"  {i+1}. Empty summary task: UID={violation['uid']}, Name='{violation['name']}', WBS={violation['wbs']}, Level={violation['outline_level']}")
+        
+        if len(hierarchy_violations) > 10:
+            logging.error(f"  ... and {len(hierarchy_violations) - 10} more empty summary tasks")
+        
+        # Raise error to abort export
+        raise ValueError(
+            f"Export aborted: Found {len(hierarchy_violations)} empty summary tasks. "
+            f"Workfront requires all summary tasks (Summary=1) to have at least one child task. "
+            f"First violation: UID={hierarchy_violations[0]['uid']}, Name='{hierarchy_violations[0]['name']}'"
+        )
+    else:
+        logging.info("[HIERARCHY VALIDATION] ✓ All summary tasks have at least one child - hierarchy is valid")
     
     # Write the XML file
     tree = ET.ElementTree(root)
