@@ -472,13 +472,6 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr6, "{%s}FieldName" % ns).text = "Number3"
         ET.SubElement(ext_attr6, "{%s}Alias" % ns).text = "Revenue"
         ET.SubElement(ext_attr6, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400038"
-        
-        # Custom Field 7: Service Category (Text) - WORKFRONT REQUIREMENT
-        ext_attr7 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
-        ET.SubElement(ext_attr7, "{%s}FieldID" % ns).text = "188743734"  # Task Text4
-        ET.SubElement(ext_attr7, "{%s}FieldName" % ns).text = "Text4"
-        ET.SubElement(ext_attr7, "{%s}Alias" % ns).text = "Service Category"
-        ET.SubElement(ext_attr7, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400039"
     
     # Add Calendar definition
     # WORKFRONT FIX: Use UID=9999 for Calendar to avoid collision with Task UIDs (0-N)
@@ -711,15 +704,9 @@ def convert_excel_to_mspdi(
                 if deliv_code:
                     add_task_extended_attribute(deliv_task, ns, "188743732", deliv_code)
                 
-                # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
-                # Text1 mirrors Service Category for default grid visibility in Workfront
-                category_value = service_dept if service_dept else "Unassigned"
-                
-                # Text1 = Department (mirrors Service Category)
-                add_task_extended_attribute(deliv_task, ns, "188743731", category_value)
-                
-                # Text4 = Service Category (WORKFRONT REQUIREMENT)
-                add_task_extended_attribute(deliv_task, ns, "188743734", category_value)
+                # Text1 = Department
+                department_value = service_dept if service_dept else "Unassigned"
+                add_task_extended_attribute(deliv_task, ns, "188743731", department_value)
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
@@ -858,15 +845,9 @@ def convert_excel_to_mspdi(
                     if deliv_code:
                         add_task_extended_attribute(comp_task, ns, "188743732", deliv_code)
                     
-                    # FIX D: Text1 (Department) and Text4 (Service Category) must both be set
-                    # Text1 mirrors Service Category for default grid visibility in Workfront
-                    comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
-                    
-                    # Text1 = Department (mirrors Service Category)
-                    add_task_extended_attribute(comp_task, ns, "188743731", comp_category_value)
-                    
-                    # Text4 = Service Category (WORKFRONT REQUIREMENT)
-                    add_task_extended_attribute(comp_task, ns, "188743734", comp_category_value)
+                    # Text1 = Department
+                    comp_department_value = comp_service_dept if comp_service_dept else "Unassigned"
+                    add_task_extended_attribute(comp_task, ns, "188743731", comp_department_value)
                 
                 # Track component start/finish dates
                 component_start = current_date
@@ -1130,10 +1111,9 @@ def convert_excel_to_mspdi(
                             # Confidence Level (random 70-100)
                             add_task_extended_attribute(task, ns, "188743714", str(random.randint(70, 100)))
                             
-                            # FIX D: Text1 (Department) = Service Category for default grid visibility
-                            # Service Category is the primary field; Department mirrors it
-                            task_category_value = task_service_dept if task_service_dept else "Unassigned"
-                            add_task_extended_attribute(task, ns, "188743731", task_category_value)
+                            # Text1 = Department
+                            task_department_value = task_service_dept if task_service_dept else "Unassigned"
+                            add_task_extended_attribute(task, ns, "188743731", task_department_value)
                             
                             # Deliverable Code
                             if deliv_code:
@@ -1141,9 +1121,6 @@ def convert_excel_to_mspdi(
                             
                             # Component Name
                             add_task_extended_attribute(task, ns, "188743733", str(component_name))
-                            
-                            # Service Category (Text4 - WORKFRONT REQUIREMENT)
-                            add_task_extended_attribute(task, ns, "188743734", task_category_value)
                         
                         # Track component finish date
                         if task_num_in_component == 1:
