@@ -20,214 +20,6 @@ import random
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
-def normalize_resource_name(name: str) -> str:
-    """
-    Normalize resource name for deduplication.
-    Strips whitespace and converts to lowercase for comparison.
-    
-    Args:
-        name: Raw resource name (e.g., "  Senior Designer  ")
-    
-    Returns:
-        Normalized name (e.g., "senior designer")
-    """
-    return str(name).strip().lower()
-
-
-def sanitize_task_name(name: str) -> str:
-    """
-    Sanitize task name by removing banned suffixes and normalizing whitespace.
-    
-    Removes:
-    - " – COMPLETE" suffix (case-insensitive, handles various dash types)
-    - " - COMPLETE" suffix
-    - Extra whitespace
-    
-    Args:
-        name: Raw task name
-    
-    Returns:
-        Sanitized task name
-    """
-    import re
-    name = str(name).strip()
-    # Remove " – COMPLETE" or " - COMPLETE" suffix (case-insensitive)
-    name = re.sub(r'\s*[-–]\s*complete\s*$', '', name, flags=re.IGNORECASE)
-    # Normalize multiple spaces to single space
-    name = re.sub(r'\s+', ' ', name)
-    return name.strip()
-
-
-def should_drop_wrapper_task(name: str) -> bool:
-    """
-    Check if a task name matches banned wrapper patterns.
-    
-    Wrapper tasks to exclude:
-    - Anything starting with "Phase" followed by digits (Phase 1, Phase 2 Kickoff, etc.)
-    - Anything starting with "Client Approval" (Client Approval, Client Approval - Final, etc.)
-    - Anything starting with "Client Review" (Client Review, Client Review & Revisions, etc.)
-    - Anything starting with "Internal Review"
-    
-    Args:
-        name: Task name to check
-    
-    Returns:
-        True if task should be dropped, False otherwise
-    """
-    import re
-    name_normalized = name.strip().lower()
-    
-    # Pattern: Check if name STARTS WITH these banned prefixes (not exact match)
-    # This catches "Phase 1 Kickoff", "Client Approval - Final", etc.
-    banned_patterns = [
-        r'^phase\s*\d+',              # Phase 1, Phase 2, Phase 3 Kickoff, etc.
-        r'^client\s*approval',         # Client Approval, Client Approval - Final, etc.
-        r'^client\s*review',           # Client Review, Client Review & Revisions, etc.
-        r'^client\s*revisions?',       # Client Revision, Client Revisions, etc.
-        r'^internal\s*review',         # Internal Review, Internal Review - Draft, etc.
-    ]
-    
-    for pattern in banned_patterns:
-        if re.match(pattern, name_normalized, re.IGNORECASE):
-            return True
-    
-    return False
-
-
-def normalize_task_name_for_dedup(name: str) -> str:
-    """
-    Normalize task name for deduplication key.
-    
-    Args:
-        name: Task name
-    
-    Returns:
-        Normalized lowercase name with single spaces
-    """
-    import re
-    name = str(name).strip().lower()
-    return re.sub(r'\s+', ' ', name)
-
-
-def validate_task_hierarchy(tasks_elem: ET.Element, ns: str) -> List[Dict[str, str]]:
-    """
-    Validate that every summary task (Summary=1) has at least one child task.
-    
-    This is CRITICAL for Workfront import compatibility. Workfront rejects XML files
-    with empty summary tasks (no children) with "plan has to link" error.
-    
-    Args:
-        tasks_elem: The Tasks XML element containing all Task elements
-        ns: XML namespace string
-    
-    Returns:
-        List of violations, each dict with keys: 'uid', 'name', 'wbs', 'outline_level'
-        Empty list if no violations found.
-    """
-    violations = []
-    
-    # Build parent-child relationship map: {parent_outline_level: [child_uids...]}
-    # We need to check that every summary task has at least one direct child
-    task_metadata = {}  # {uid: {name, wbs, outline_number, outline_level, is_summary}}
-    
-    # First pass: collect all task metadata
-    for task in tasks_elem.findall("{%s}Task" % ns):
-        uid_elem = task.find("{%s}UID" % ns)
-        name_elem = task.find("{%s}Name" % ns)
-        wbs_elem = task.find("{%s}WBS" % ns)
-        outline_num_elem = task.find("{%s}OutlineNumber" % ns)
-        outline_level_elem = task.find("{%s}OutlineLevel" % ns)
-        summary_elem = task.find("{%s}Summary" % ns)
-        
-        if uid_elem is not None:
-            uid = uid_elem.text
-            task_metadata[uid] = {
-                'name': name_elem.text if name_elem is not None else 'Unknown',
-                'wbs': wbs_elem.text if wbs_elem is not None else 'Unknown',
-                'outline_number': outline_num_elem.text if outline_num_elem is not None else 'Unknown',
-                'outline_level': int(outline_level_elem.text) if outline_level_elem is not None else 0,
-                'is_summary': summary_elem is not None and summary_elem.text == '1'
-            }
-    
-    # Second pass: for each summary task, find children and validate
-    for uid, metadata in task_metadata.items():
-        if not metadata['is_summary']:
-            continue  # Skip non-summary tasks
-        
-        # Find children: tasks with outline_level = this_level + 1 AND outline_number starts with this outline_number
-        this_outline_num = metadata['outline_number']
-        this_level = metadata['outline_level']
-        
-        has_children = False
-        for child_uid, child_metadata in task_metadata.items():
-            if child_uid == uid:
-                continue  # Skip self
-            
-            child_outline_num = child_metadata['outline_number']
-            child_level = child_metadata['outline_level']
-            
-            # Check if this is a direct child:
-            # 1. Child level must be exactly parent_level + 1
-            # 2. Child outline number must start with parent outline number + "."
-            #    EXCEPTION: Root task (level 0) has children at level 1 with outline numbers "1", "2", etc.
-            if child_level == this_level + 1:
-                # Special case for root task (level 0): children are "1", "2", "3", not "0.1", "0.2"
-                if this_level == 0:
-                    has_children = True
-                    break
-                # Normal case: children must start with parent number + dot
-                elif child_outline_num.startswith(this_outline_num + "."):
-                    has_children = True
-                    break
-        
-        if not has_children:
-            violations.append({
-                'uid': uid,
-                'name': metadata['name'],
-                'wbs': metadata['wbs'],
-                'outline_level': str(this_level)
-            })
-    
-    return violations
-
-
-def check_for_trailing_dots(xml_string: str) -> List[Dict[str, str]]:
-    """
-    Scan XML string for OutlineNumber values ending with ".".
-    
-    Trailing dots in OutlineNumber are invalid and can cause import issues.
-    Example: "1.2." is invalid, should be "1.2"
-    
-    Args:
-        xml_string: Raw XML content as string
-    
-    Returns:
-        List of violations, each dict with keys: 'outline_number', 'context'
-        Empty list if no violations found.
-    """
-    import re
-    violations = []
-    
-    # Pattern to find OutlineNumber elements ending with "."
-    # Captures: <OutlineNumber>1.2.</OutlineNumber>
-    pattern = r'<OutlineNumber>([^<]+\.)</OutlineNumber>'
-    
-    matches = re.finditer(pattern, xml_string)
-    for match in matches:
-        outline_number = match.group(1)
-        # Get surrounding context (50 chars before and after)
-        start = max(0, match.start() - 50)
-        end = min(len(xml_string), match.end() + 50)
-        context = xml_string[start:end]
-        
-        violations.append({
-            'outline_number': outline_number,
-            'context': context
-        })
-    
-    return violations
-
-
 class DependencyType(Enum):
     """Types of task dependencies for MS Project"""
     FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
@@ -248,23 +40,104 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
-def add_task_extended_attribute(task_elem: ET.Element, ns: str, field_id: str, value: Any):
+def create_governance_milestone_task(
+    task_uid: int,
+    ns: str,
+    name: str,
+    milestone_date: datetime,
+    governance_type: str,
+    wbs_level: str = "1",
+    hours: float = 0,
+    predecessor_uid: Optional[int] = None
+) -> Tuple[ET.Element, Dict[str, Any]]:
     """
-    Write a single task-level ExtendedAttribute compliant with MSPDI schema.
-    Creates flat ExtendedAttribute siblings under Task with ONLY FieldID + Value.
-    
-    Per GPT-5 Pro guidance: Task-level ExtendedAttributes must be flat (no wrapper container,
-    no UID/ElementType/CfType metadata). Rich metadata belongs only in project-level definitions.
+    Create a governance milestone task in MSPDI format
     
     Args:
-        task_elem: The Task XML element
+        task_uid: Unique ID for the task
         ns: XML namespace
-        field_id: FieldID (e.g., "188743732" for Text2/Deliverable Code)
-        value: The value to set (converted to string, None becomes empty string)
+        name: Task name
+        milestone_date: Date for the milestone
+        governance_type: Type of governance milestone (steering_review, executive_briefing, etc.)
+        wbs_level: WBS level for the task
+        hours: Hours for the task (0 for pure milestone)
+        predecessor_uid: UID of predecessor task if any
+        
+    Returns:
+        Tuple of (XML Element, task metadata dict)
     """
-    ea = ET.SubElement(task_elem, "{%s}ExtendedAttribute" % ns)
-    ET.SubElement(ea, "{%s}FieldID" % ns).text = str(field_id)
-    ET.SubElement(ea, "{%s}Value" % ns).text = "" if value is None else str(value)
+    task = ET.Element("{%s}Task" % ns)
+    
+    # Basic task properties
+    ET.SubElement(task, "{%s}UID" % ns).text = str(task_uid)
+    ET.SubElement(task, "{%s}ID" % ns).text = str(task_uid)
+    ET.SubElement(task, "{%s}Name" % ns).text = name
+    ET.SubElement(task, "{%s}Type" % ns).text = "2"  # Fixed duration
+    ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
+    ET.SubElement(task, "{%s}WBS" % ns).text = wbs_level
+    ET.SubElement(task, "{%s}OutlineNumber" % ns).text = wbs_level
+    # FIX: Enforce Workfront 3-level hierarchy - map WBS depth to max 3 levels
+    # 0 dots (e.g., "1") → OutlineLevel 1, 1 dot (e.g., "1.1") → OutlineLevel 2, 2+ dots → OutlineLevel 3
+    dot_count = wbs_level.count('.')
+    outline_level = min(dot_count + 1, 3)  # Cap at level 3 for Workfront compatibility
+    ET.SubElement(task, "{%s}OutlineLevel" % ns).text = str(outline_level)
+    
+    # Mark as milestone if no hours
+    if hours == 0:
+        ET.SubElement(task, "{%s}Milestone" % ns).text = "1"
+        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0H0M0S"
+    else:
+        ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
+        duration_days = max(1, int(hours / 8))
+        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
+    
+    # Set dates
+    ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
+    if hours > 0:
+        end_date = milestone_date + timedelta(days=max(1, int(hours / 8)))
+        ET.SubElement(task, "{%s}Finish" % ns).text = end_date.isoformat()
+    else:
+        ET.SubElement(task, "{%s}Finish" % ns).text = milestone_date.isoformat()
+    
+    # Priority based on governance type
+    priority_map = {
+        "steering_review": "600",
+        "executive_briefing": "700",
+        "risk_review": "650",
+        "quality_gate": "550",
+        "change_control": "500",
+        "compliance": "600",
+        "uat": "550",
+        "performance_test": "500"
+    }
+    ET.SubElement(task, "{%s}Priority" % ns).text = priority_map.get(governance_type, "500")
+    
+    # Work and duration format
+    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "39"  # Hours
+    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{hours}H0M0S"
+    ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
+    ET.SubElement(task, "{%s}Summary" % ns).text = "0"
+    ET.SubElement(task, "{%s}Critical" % ns).text = "0"
+    
+    # Add custom field for governance type
+    ext_attrs = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+    ET.SubElement(ext_attrs, "{%s}FieldID" % ns).text = "188743731"  # Text1
+    ET.SubElement(ext_attrs, "{%s}Value" % ns).text = f"GOVERNANCE_{governance_type.upper()}"
+    
+    # Add notes to identify as governance milestone
+    ET.SubElement(task, "{%s}Notes" % ns).text = f"Governance Milestone: {governance_type}"
+    
+    # Metadata for tracking
+    metadata = {
+        "uid": task_uid,
+        "name": name,
+        "type": governance_type,
+        "date": milestone_date.isoformat(),
+        "is_governance": True,
+        "hours": hours
+    }
+    
+    return task, metadata
 
 
 def convert_excel_to_mspdi(
@@ -279,6 +152,8 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
+    add_deliverable_milestones: bool = True,
+    add_phase_gates: bool = True,
     add_dependencies: bool = True,
     add_custom_fields: bool = True
 ) -> Dict[str, Any]:
@@ -297,8 +172,10 @@ def convert_excel_to_mspdi(
         pricing_mode: Pricing mode for the project
         rate_band: Rate band for pricing
         blended_rate: Blended rate if using flat pricing
+        add_deliverable_milestones: Add milestone tasks for deliverables
+        add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
         add_dependencies: Add task dependencies
-        add_custom_fields: Add ExtendedAttribute elements for Workfront with proper MSPDI schema structure
+        add_custom_fields: Add ExtendedAttribute elements for Workfront
         
     Returns:
         Dictionary with conversion statistics
@@ -333,26 +210,14 @@ def convert_excel_to_mspdi(
         root = create_empty_mspdi_xml(project_name or "Empty Project", fixed_start_iso)
         tree = ET.ElementTree(root)
         ET.indent(tree, space="  ")
-        
-        # Write without declaration first
-        tree.write(output_xml, encoding="utf-8", xml_declaration=False)
-        
-        # Read the file and prepend the correct declaration
-        with open(output_xml, 'r', encoding='utf-8') as f:
-            content = f.read()
-        
-        # Write back with Workfront-compliant declaration (single quotes, lowercase utf-8)
-        with open(output_xml, 'w', encoding='utf-8') as f:
-            f.write("<?xml version='1.0' encoding='utf-8'?>\n")
-            f.write(content)
-        
+        tree.write(output_xml, encoding="utf-8", xml_declaration=True)
         return {"task_count": 0, "warning": "Empty input data"}
     
     # Determine project start date
     if fixed_start_iso:
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
-        # Remove timezone info and normalize to 09:00 business hours for calendar consistency
-        project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0, tzinfo=None)
+        # Remove timezone info to ensure all datetimes are timezone-naive for consistent comparisons
+        project_start = project_start.replace(tzinfo=None)
     elif start_date_mode == "next_monday":
         today = datetime.now()
         days_ahead = 0 - today.weekday()  # Monday is 0
@@ -473,7 +338,7 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr6, "{%s}Alias" % ns).text = "Revenue"
         ET.SubElement(ext_attr6, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400038"
         
-        # Custom Field 7: Service Category (Text) - WORKFRONT REQUIRED
+        # Custom Field 7: Service Category (Text) - WORKFRONT REQUIREMENT
         ext_attr7 = ET.SubElement(extended_attrs, "{%s}ExtendedAttribute" % ns)
         ET.SubElement(ext_attr7, "{%s}FieldID" % ns).text = "188743734"  # Task Text4
         ET.SubElement(ext_attr7, "{%s}FieldName" % ns).text = "Text4"
@@ -481,10 +346,9 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr7, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400039"
     
     # Add Calendar definition
-    CALENDAR_UID = "1"
     calendars = ET.SubElement(root, "{%s}Calendars" % ns)
     calendar = ET.SubElement(calendars, "{%s}Calendar" % ns)
-    ET.SubElement(calendar, "{%s}UID" % ns).text = CALENDAR_UID
+    ET.SubElement(calendar, "{%s}UID" % ns).text = "1"
     ET.SubElement(calendar, "{%s}Name" % ns).text = "Standard"
     ET.SubElement(calendar, "{%s}IsBaseCalendar" % ns).text = "1"
     ET.SubElement(calendar, "{%s}IsBaselineCalendar" % ns).text = "0"
@@ -511,156 +375,32 @@ def convert_excel_to_mspdi(
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
     
-    # WORKFRONT FIX: DO NOT add empty Baseline or OutlineCodes - Workfront rejects self-closing complex types
-    # These elements require child nodes when present, so omit them entirely when no data exists
+    # Create Resources container with enhanced resource definitions
+    resources = ET.SubElement(root, "{%s}Resources" % ns)
     
-    # ============================================================================
-    # PHASE 1: BUILD RESOURCE DATA STRUCTURES (NO XML YET)
-    # ============================================================================
-    # This phase builds all resource-related data structures BEFORE creating
-    # assignment data, which allows assignments to reference resource UIDs.
-    logging.info("[PHASE 1] Building resource data structures...")
-    
-    # Initialize resource data structures
-    resource_map = {}  # role -> resource_uid (backward compatibility)
-    resource_uid_map = {}  # normalized_key (role|seniority) -> resource_uid
-    department_resources = {}  # department -> resource_uid
-    resource_data_list = []  # List of resource data dicts for XML creation later
-    
-    # WORKFRONT: Start resource UIDs at 1 (working Nov 7 format)
-    # Nov 7 baseline proved Resource UIDs 1-20 work with Task UIDs 0-293
+    # Add resources from the DataFrame with enhanced properties
+    resource_map = {}
+    resource_uid_map = {}  # FIX: New mapping for (role, seniority) -> resource_uid
+    department_resources = {}
     resource_id = 1
     
-    # Extract unique departments
+    # Extract unique departments and roles
     departments = set()
     if "Department" in df.columns:
         departments.update(df["Department"].dropna().unique())
     
-    # Build department resource data
-    logging.info(f"[PHASE 1] Building data for {len(departments)} department resources...")
+    # Add department-level resources first
     for dept in departments:
-        resource_data_list.append({
-            "UID": resource_id,
-            "ID": resource_id,
-            "Name": f"{dept} Team",
-            "Initials": "".join([w[0] for w in str(dept).split()[:2]]),
-            "Group": str(dept),
-            "Type": "1",  # Work resource
-            "Rate": blended_rate or 150
-        })
-        department_resources[str(dept)] = resource_id
-        
-        # FIX ISSUE 1: Add department resources to resource_uid_map for consistency
-        # Use normalized key: "dept:{dept_name}" to avoid collision with role keys
-        dept_normalized_key = f"dept:{normalize_resource_name(str(dept))}"
-        resource_uid_map[dept_normalized_key] = resource_id
-        logging.info(f"[PHASE 1 FIX] Added department '{dept}' to resource_uid_map with key '{dept_normalized_key}' -> UID={resource_id}")
-        
-        resource_id += 1
-    
-    # Build individual role resource data
-    if "Role" in df.columns:
-        # Extract unique (role, seniority) combinations from role rows
-        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
-        
-        # Build registry with normalized keys for deduplication
-        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
-        
-        for _, row in role_rows.iterrows():
-            role = str(row.get("Role", "")).strip()
-            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
-            if role:
-                # Create display name (original case/formatting)
-                display_name = f"{role} ({seniority})" if seniority else role
-                
-                # Create normalized key for deduplication
-                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
-                
-                # Store in registry (will automatically dedupe by normalized key)
-                if normalized_key not in resource_registry:
-                    resource_registry[normalized_key] = {
-                        "display_name": display_name,
-                        "role": role,
-                        "seniority": seniority,
-                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
-                    }
-        
-        # Create resource data from registry (sorted for consistency)
-        logging.info(f"[PHASE 1] Building data for {len(resource_registry)} role resources...")
-        for normalized_key in sorted(resource_registry.keys()):
-            res_data = resource_registry[normalized_key]
-            
-            # Determine rate
-            if blended_rate:
-                rate = blended_rate
-            elif res_data["rate"] is not None:
-                rate = res_data["rate"]
-            else:
-                rate = 150.0
-            
-            resource_data_list.append({
-                "UID": resource_id,
-                "ID": resource_id,
-                "Name": res_data["display_name"],
-                "Initials": "".join([w[0] for w in str(res_data["role"]).split()[:3]]),
-                "Group": "",
-                "Type": "1",  # Work resource
-                "Rate": rate
-            })
-            
-            # Store in resource_uid_map using NORMALIZED key
-            resource_uid_map[normalized_key] = resource_id
-            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
-            
-            logging.info(f"[PHASE 1] Registered resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}' (normalized_key='{normalized_key}')")
-            
-            resource_id += 1
-    
-    # Build valid resource UID set for validation
-    valid_resource_uids = set([r["UID"] for r in resource_data_list])
-    
-    logging.info(f"[PHASE 1] ✓ Built data for {len(resource_data_list)} total resources")
-    logging.info(f"[PHASE 1] ✓ Department resources: {len(department_resources)}")
-    logging.info(f"[PHASE 1] ✓ Role resources: {len(resource_uid_map)}")
-    logging.info(f"[PHASE 1] ✓ Valid resource UIDs: {len(valid_resource_uids)}")
-    
-    # FIX ISSUE 1: VALIDATION - Ensure resource_uid_map and resource_data_list are in sync
-    logging.info("[PHASE 1 VALIDATION] Verifying resource_uid_map and resource_data_list synchronization...")
-    resource_data_uids = set([r["UID"] for r in resource_data_list])
-    resource_map_uids = set(resource_uid_map.values())
-    
-    # Check: Every UID in resource_uid_map should exist in resource_data_list
-    missing_in_data_list = resource_map_uids - resource_data_uids
-    if missing_in_data_list:
-        raise ValueError(
-            f"CRITICAL: {len(missing_in_data_list)} resource UIDs in resource_uid_map are missing from resource_data_list: {missing_in_data_list}"
-        )
-    
-    logging.info(f"[PHASE 1 VALIDATION] ✓ All {len(resource_map_uids)} resource UIDs in resource_uid_map exist in resource_data_list")
-    logging.info(f"[PHASE 1 VALIDATION] ✓ resource_data_list has {len(resource_data_uids)} total resources")
-    logging.info(f"[PHASE 1 VALIDATION] ✓ Sync verification passed: resource_uid_map and resource_data_list are consistent")
-
-    # ============================================================================
-    # PHASE 2: WRITE RESOURCES XML FROM PRE-BUILT DATA
-    # ============================================================================
-    # This phase creates Resource XML elements in the correct MSPDI schema order
-    # (BEFORE Tasks) using the resource data structures built in Phase 1.
-    logging.info("[PHASE 2] Writing Resources XML from pre-built data...")
-    resources = ET.SubElement(root, "{%s}Resources" % ns)
-    
-    # Create Resource XML elements from resource_data_list
-    for res_data in resource_data_list:
         res = ET.SubElement(resources, "{%s}Resource" % ns)
-        ET.SubElement(res, "{%s}UID" % ns).text = str(res_data["UID"])
-        ET.SubElement(res, "{%s}ID" % ns).text = str(res_data["ID"])
-        ET.SubElement(res, "{%s}Name" % ns).text = res_data["Name"]
-        ET.SubElement(res, "{%s}Initials" % ns).text = res_data["Initials"]
-        if res_data.get("Group"):
-            ET.SubElement(res, "{%s}Group" % ns).text = res_data["Group"]
-        ET.SubElement(res, "{%s}Type" % ns).text = res_data["Type"]
+        ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
+        ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
+        ET.SubElement(res, "{%s}Name" % ns).text = f"{dept} Team"
+        ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(dept).split()[:2]])
+        ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
+        ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
         ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # Workfront format: 100 = 100%
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"  # Workfront format: 100 = 100%
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1000"  # 10 resources at 100% each
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1000"
         ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
         ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
         ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
@@ -669,42 +409,94 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['Rate']:.2f}"
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate or 150:.2f}/h"
         ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{res_data['Rate'] * 1.5:.2f}"
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
-        ET.SubElement(res, "{%s}CalendarUID" % ns).text = CALENDAR_UID
+        ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
+        
+        department_resources[str(dept)] = resource_id
+        resource_id += 1
     
-    logging.info(f"[PHASE 2] ✓ Created {len(resource_data_list)} Resource XML elements")
+    # FIX: Add individual role resources with (role, seniority) mapping
+    if "Role" in df.columns:
+        # Extract unique (role, seniority) combinations from role rows
+        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
+        
+        # Build set of unique (role, seniority) tuples
+        unique_role_seniority = set()
+        for _, row in role_rows.iterrows():
+            role = str(row.get("Role", "")).strip()
+            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
+            if role:
+                unique_role_seniority.add((role, seniority))
+        
+        # Create resources for each unique (role, seniority) combination
+        for role, seniority in sorted(unique_role_seniority):
+            res = ET.SubElement(resources, "{%s}Resource" % ns)
+            ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
+            ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
+            
+            # Create resource name with seniority if available
+            if seniority:
+                resource_name = f"{role} ({seniority})"
+            else:
+                resource_name = str(role)
+            
+            ET.SubElement(res, "{%s}Name" % ns).text = resource_name
+            ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(role).split()[:3]])
+            ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
+            ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "100"  # 100% allocation
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "100"
+            ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
+            ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
+            ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"
+            
+            # Add rate if available
+            if blended_rate:
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
+            elif "Rate_USD" in df.columns:
+                # Try to find rate for this specific role
+                role_rate_rows = role_rows[role_rows["Role"] == role]
+                if not role_rate_rows.empty and "Rate_USD" in role_rate_rows.columns:
+                    role_rate = role_rate_rows["Rate_USD"].dropna().iloc[0] if not role_rate_rows["Rate_USD"].dropna().empty else 150
+                else:
+                    role_rate = 150
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
+            else:
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
+            
+            ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+            ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
+            ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
+            ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
+            
+            # FIX: Store in both resource_map (role only) and resource_uid_map (role, seniority)
+            resource_map[str(role)] = resource_id
+            resource_uid_map[(role, seniority)] = resource_id
+            
+            logging.info(f"[RESOURCE CREATION] Created resource UID={resource_id} for Role='{role}', Seniority='{seniority}', Name='{resource_name}'")
+            
+            resource_id += 1
     
-    # VALIDATION GUARD: Verify Resource XML elements match data structures
-    resource_uids_in_xml = []
-    for res_elem in resources.findall("{%s}Resource" % ns):
-        uid_elem = res_elem.find("{%s}UID" % ns)
-        if uid_elem is not None:
-            resource_uids_in_xml.append(int(uid_elem.text))
-    
-    # Verify count matches
-    assert len(resource_uids_in_xml) == len(resource_data_list), \
-        f"CRITICAL: Resource XML count mismatch! XML={len(resource_uids_in_xml)}, Data={len(resource_data_list)}"
-    
-    # Check for duplicates
-    assert len(resource_uids_in_xml) == len(set(resource_uids_in_xml)), \
-        f"CRITICAL: Duplicate ResourceUIDs found in XML! UIDs: {resource_uids_in_xml}"
-    
-    # Verify UIDs match valid_resource_uids from Phase 1
-    xml_uid_set = set(resource_uids_in_xml)
-    assert xml_uid_set == valid_resource_uids, \
-        f"CRITICAL: Resource UIDs in XML don't match Phase 1 data! XML UIDs: {xml_uid_set}, Expected: {valid_resource_uids}"
-    
-    logging.info(f"[PHASE 2] ✓ All {len(resource_uids_in_xml)} Resource UIDs validated (no duplicates, matches Phase 1 data)")
+    # FIX: Log resource mapping summary for debugging
+    logging.info(f"[RESOURCE VALIDATION] Created {len(resource_uid_map)} role-seniority resources")
+    logging.info(f"[RESOURCE VALIDATION] resource_uid_map keys (first 10): {list(resource_uid_map.keys())[:10]}")
+    if len(resource_uid_map) != len(unique_role_seniority):
+        logging.warning(f"[RESOURCE VALIDATION] WARNING: Mismatch! Expected {len(unique_role_seniority)} resources, created {len(resource_uid_map)}")
     
     # Create Tasks container
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
     
     # Add project summary task (Task 0)
-    # CRITICAL FIX: Root task MUST have OutlineLevel=0 (not 1) for Workfront compatibility
     project_task = ET.SubElement(tasks, "{%s}Task" % ns)
     ET.SubElement(project_task, "{%s}UID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}ID" % ns).text = "0"
@@ -742,9 +534,6 @@ def convert_excel_to_mspdi(
     task_uid = 1
     task_map = {}
     
-    # Initialize ExtendedAttribute UID counter for proper MSPDI schema compliance
-    ext_attr_uid_counter = [1]  # Mutable list to track ExtendedAttribute UIDs across all tasks
-    
     # FIX: Dual mapping system for WBS codes
     # 1. original_wbs_to_uid: Maps DataFrame WBS_ID → UID (for dependency lookup)
     # 2. sequential_wbs_to_uid: Maps sequential WBS → UID (for XML structure)
@@ -761,6 +550,15 @@ def convert_excel_to_mspdi(
     deliverable_costs = {}  # {deliv_uid: total_cost}
     component_costs = {}    # {comp_uid: total_cost}
     
+    # Calculate total project timeline for phase gates
+    total_rows = len(df)
+    phase_gate_positions = []
+    if add_phase_gates:
+        phase_gate_positions = [
+            int(total_rows * 0.25),  # 25% milestone
+            int(total_rows * 0.50),  # 50% milestone
+            int(total_rows * 0.75),  # 75% milestone
+        ]
     
     # FIX: Sequential WBS counters - INDEPENDENT of DataFrame WBS_ID
     deliverable_counter = 1  # Sequential counter for deliverables: 1, 2, 3...
@@ -815,18 +613,13 @@ def convert_excel_to_mspdi(
             
             logging.info(f"[WBS SEQUENTIAL] Deliverable '{deliverable_name}': Sequential WBS={deliv_wbs} (Original WBS_ID={original_deliv_wbs_id})")
             
-            # FIX 1: Sanitize deliverable name to remove "– COMPLETE" suffix
-            deliverable_name = sanitize_task_name(str(deliverable_name))
-            
             ET.SubElement(deliv_task, "{%s}UID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}ID" % ns).text = str(deliv_uid)
-            ET.SubElement(deliv_task, "{%s}Name" % ns).text = deliverable_name
+            ET.SubElement(deliv_task, "{%s}Name" % ns).text = str(deliverable_name)
             ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
-            # WORKFRONT FIX: Strip trailing periods from WBS to prevent "8." format
-            deliv_wbs_clean = str(deliv_wbs).rstrip('.')
-            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs_clean
-            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = deliv_wbs_clean
+            ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs
+            ET.SubElement(deliv_task, "{%s}OutlineNumber" % ns).text = deliv_wbs
             ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = deliv_outline_level
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
             
@@ -867,10 +660,34 @@ def convert_excel_to_mspdi(
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             
-            # FIX 4: Summary tasks (deliverables) must have ConstraintType=0 (ASAP) and no manual scheduling
-            # Remove ManualStart, ManualFinish, ManualDuration, ConstraintDate - these prevent Workfront from rolling up dates
-            ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
-            logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': ASAP (Type 0) - summary task")
+            # Add constraint type based on Gantt-sourced dates
+            has_gantt_start = False
+            has_gantt_end = False
+            
+            # Check if Start_Date was successfully parsed from Gantt
+            if not group.empty and "Start_Date" in group.columns:
+                first_row_start = group.iloc[0].get("Start_Date")
+                if pd.notna(first_row_start):
+                    has_gantt_start = True
+            
+            # Check if End_Date was successfully parsed from Gantt
+            if not group.empty and "End_Date" in group.columns:
+                first_row_end = group.iloc[0].get("End_Date")
+                if pd.notna(first_row_end):
+                    has_gantt_end = True
+            
+            # Apply constraint type
+            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
+            if has_gantt_start and has_gantt_end:
+                # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            elif has_gantt_start:
+                # Only start date from Gantt: Must Start On
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
@@ -888,18 +705,19 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}ExternalTask" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}Active" % ns).text = "1"
             
-            # Add custom fields for deliverable (flat MSPDI schema)
+            # Add custom fields for deliverable
             if add_custom_fields:
                 # Deliverable Code
                 if deliv_code:
-                    add_task_extended_attribute(deliv_task, ns, "188743732", deliv_code)
+                    ext_attrs_dc = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attrs_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
+                    ET.SubElement(ext_attrs_dc, "{%s}Value" % ns).text = deliv_code
                 
-                # Text1 = Department
-                department_value = service_dept if service_dept else "Unassigned"
-                add_task_extended_attribute(deliv_task, ns, "188743731", department_value)
-                
-                # Text4 = Service Category (fallback to Department) - WORKFRONT REQUIRED
-                add_task_extended_attribute(deliv_task, ns, "188743734", department_value)
+                # Service Category (replaces Category tag for Workfront)
+                category_value = service_dept if service_dept else "Unassigned"
+                ext_attrs_sc = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                ET.SubElement(ext_attrs_sc, "{%s}FieldID" % ns).text = "188743734"  # Text4
+                ET.SubElement(ext_attrs_sc, "{%s}Value" % ns).text = category_value
             
             # Process component/task rows under this deliverable
             deliverable_start = deliverable_start_date  # Use merged start date from Gantt
@@ -912,8 +730,8 @@ def convert_excel_to_mspdi(
             logging.info(f"[3-LEVEL HIERARCHY] Processing deliverable '{deliverable_name}' with component grouping")
             try:
                 if "Component" in group.columns:
-                    # FIX: Fill blank Component values with "Uncategorized" to preserve all tasks
-                    # This ensures NO tasks are dropped - blank components become "Uncategorized"
+                    # FIX: Filter out tasks with blank Component values to avoid "Uncategorized" wrapper
+                    # This ensures clean Deliverable → Component → Task hierarchy
                     group_copy = group.copy()
                     
                     # Convert categorical to object if needed
@@ -921,15 +739,17 @@ def convert_excel_to_mspdi(
                         logging.info(f"[3-LEVEL HIERARCHY] Converting Component from categorical to object type")
                         group_copy["Component"] = group_copy["Component"].astype(object)
                     
-                    # Fill blank Component values with "Uncategorized"
+                    # FIX: FILTER OUT tasks with blank Component values (don't include them in XML)
+                    # Check for NaN, None, and empty strings
                     blank_mask = group_copy["Component"].isna() | (group_copy["Component"] == "") | group_copy["Component"].isnull()
                     blank_count = blank_mask.sum()
                     if blank_count > 0:
-                        logging.info(f"[3-LEVEL HIERARCHY] Found {blank_count} tasks with blank Component, grouping as 'Uncategorized'")
-                        group_copy.loc[blank_mask, "Component"] = "Uncategorized"
+                        logging.info(f"[3-LEVEL HIERARCHY] Found {blank_count} tasks with blank Component, EXCLUDING them from export")
+                        # Filter OUT blank rows instead of filling them with "Uncategorized"
+                        group_copy = group_copy[~blank_mask]
                     
-                    # Group by Component (now includes "Uncategorized" for blank values)
-                    component_grouped = group_copy.groupby("Component", sort=False, dropna=False)
+                    # Now groupby will work correctly with only non-blank components
+                    component_grouped = group_copy.groupby("Component", sort=False, dropna=True)
                     logging.info(f"[3-LEVEL HIERARCHY] Found {len(component_grouped)} components in deliverable '{deliverable_name}'")
                     
                     # Convert to list of tuples for iteration
@@ -951,17 +771,9 @@ def convert_excel_to_mspdi(
             
             # Loop through each component (Level 2)
             for component_name, component_group in component_grouped:
-                # GPT-5 Pro FIX: Sanitize component name BEFORE any processing
-                component_name = sanitize_task_name(str(component_name)) if component_name else "Uncategorized"
-                
-                # GPT-5 Pro FIX: Filter wrapper components BEFORE creating task element
-                if component_name != "Uncategorized" and should_drop_wrapper_task(component_name):
-                    logging.info(f"[WRAPPER FILTER] Skipping banned wrapper component: '{component_name}'")
-                    continue  # Skip this entire component
-                
                 component_num += 1
                 
-                # NOW create component summary task (Level 2) - AFTER sanitization and filtering
+                # Create component summary task (Level 2)
                 comp_task = ET.SubElement(tasks, "{%s}Task" % ns)
                 comp_uid = task_uid
                 task_uid += 1
@@ -998,21 +810,14 @@ def convert_excel_to_mspdi(
                 # Component task properties
                 ET.SubElement(comp_task, "{%s}UID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}ID" % ns).text = str(comp_uid)
-                ET.SubElement(comp_task, "{%s}Name" % ns).text = component_name
+                ET.SubElement(comp_task, "{%s}Name" % ns).text = str(component_name) if component_name else "Uncategorized"
                 ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                 ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
-                # WORKFRONT FIX: Strip trailing periods from WBS to prevent "8.3." format
-                comp_wbs_clean = str(comp_wbs).rstrip('.')
-                ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs_clean
-                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs_clean
+                ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs
+                ET.SubElement(comp_task, "{%s}OutlineNumber" % ns).text = comp_wbs
                 ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
-                
-                # FIX 4: Component summary tasks must have ConstraintType=0 (ASAP) and no manual scheduling
-                ET.SubElement(comp_task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
-                logging.info(f"[CONSTRAINT] Component '{component_name}': ASAP (Type 0) - summary task")
-                
                 ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"
                 ET.SubElement(comp_task, "{%s}Work" % ns).text = "PT0M"
                 ET.SubElement(comp_task, "{%s}EffortDriven" % ns).text = "0"
@@ -1029,21 +834,24 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}ExternalTask" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}Active" % ns).text = "1"
                 
-                # Add custom fields for component (flat MSPDI schema)
+                # Add custom fields for component
                 if add_custom_fields:
                     # Component Name
-                    add_task_extended_attribute(comp_task, ns, "188743733", str(component_name))
+                    ext_attr_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
+                    ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
                     
                     # Deliverable Code
                     if deliv_code:
-                        add_task_extended_attribute(comp_task, ns, "188743732", deliv_code)
+                        ext_attr_dc = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
+                        ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
                     
-                    # Text1 = Department
-                    comp_department_value = comp_service_dept if comp_service_dept else "Unassigned"
-                    add_task_extended_attribute(comp_task, ns, "188743731", comp_department_value)
-                    
-                    # Text4 = Service Category (fallback to Department) - WORKFRONT REQUIRED
-                    add_task_extended_attribute(comp_task, ns, "188743734", comp_department_value)
+                    # Service Category (replaces Category tag for Workfront)
+                    comp_category_value = comp_service_dept if comp_service_dept else "Unassigned"
+                    ext_attr_sc_comp = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_sc_comp, "{%s}FieldID" % ns).text = "188743734"  # Text4
+                    ET.SubElement(ext_attr_sc_comp, "{%s}Value" % ns).text = comp_category_value
                 
                 # Track component start/finish dates
                 component_start = current_date
@@ -1055,9 +863,6 @@ def convert_excel_to_mspdi(
                 if comp_key not in task_counter_per_comp:
                     task_counter_per_comp[comp_key] = 1
                 
-                # FIX 3: Task deduplication - track seen tasks by (deliverable_code, component_name, normalized_task_name)
-                seen_tasks = set()
-                
                 # Loop through tasks within this component (Level 3)
                 for idx, row in component_group.iterrows():
                     try:
@@ -1068,50 +873,17 @@ def convert_excel_to_mspdi(
                             logging.info(f"[ROLE ROW] Skipping task creation for role row at index {idx}: Role={role_value}")
                             continue  # Skip to next row without creating a Task
                         
-                        # Get task details - FIX: Use proper L3 task name, NOT Component as fallback
-                        # CRITICAL: Do this BEFORE creating task element to prevent ghost tasks
-                        task_name = (row.get("Task_Name") or 
-                                    row.get("L3_Task") or 
-                                    row.get("Task_Label") or 
-                                    f"{component_name} - Task {task_num_in_component + 1}")
-                        
-                        # FIX 1: Sanitize task name to remove "– COMPLETE" suffix
-                        task_name = sanitize_task_name(str(task_name))
-                        
-                        # FIX 2: Filter wrapper tasks (Phase 1, Client Approval, etc.)
-                        # CRITICAL: Do this BEFORE creating task element
-                        if should_drop_wrapper_task(task_name):
-                            logging.info(f"[WRAPPER FILTER] Skipping banned wrapper task: '{task_name}'")
-                            continue
-                        
-                        # FIX 3: WBS-based deduplication ONLY (DISABLED name-based dedup causing 527 tasks to be dropped)
-                        # CRITICAL: Only deduplicate tasks with IDENTICAL WBS_ID (exact same row from Excel)
-                        # Nov 7 working baseline had 774 tasks - name-based dedup was incorrectly dropping to 247
-                        
-                        # Try to get WBS_ID or OutlineNumber as stable unique identifier
-                        wbs_id = row.get("WBS_ID") or row.get("OutlineNumber")
-                        if pd.notna(wbs_id):
-                            wbs_id = str(wbs_id).strip()
-                            if wbs_id and wbs_id.lower() != "nan":
-                                # WBS identifier exists - use it for dedup (only identical WBS rows collapse)
-                                dedup_key = ("wbs", wbs_id)
-                                if dedup_key in seen_tasks:
-                                    logging.info(f"[DEDUP] Skipping duplicate WBS task: '{task_name}' (WBS={wbs_id})")
-                                    continue
-                                seen_tasks.add(dedup_key)
-                        
-                        # CRITICAL: Name-based deduplication DISABLED to match Nov 7 working baseline
-                        # Previous code was dropping tasks like "Review" across different deliverables
-                        # Result: 774 tasks → 247 tasks → Workfront rejection
-                        # Nov 7 had no name-based dedup and Workfront accepted it with 774 tasks
-                        
-                        # NOW create the task element (after all filtering checks passed)
                         task_num_in_component += 1
                         task = ET.SubElement(tasks, "{%s}Task" % ns)
                         uid = task_uid
                         task_uid += 1
                         all_task_uids.append(uid)
                         
+                        # Get task details - FIX: Use proper L3 task name, NOT Component as fallback
+                        task_name = (row.get("Task_Name") or 
+                                    row.get("L3_Task") or 
+                                    row.get("Task_Label") or 
+                                    f"{component_name} - Task {task_num_in_component}")
                         department = row.get("Department", "")
                         
                         # Get Service_Department for this task
@@ -1200,10 +972,8 @@ def convert_excel_to_mspdi(
                         
                         ET.SubElement(task, "{%s}Type" % ns).text = "0"  # Fixed units
                         ET.SubElement(task, "{%s}IsNull" % ns).text = "0"
-                        # WORKFRONT FIX: Strip trailing periods from WBS to prevent "8.3.5." format
-                        task_wbs_clean = str(task_wbs).rstrip('.')
-                        ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs_clean
-                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs_clean
+                        ET.SubElement(task, "{%s}WBS" % ns).text = task_wbs
+                        ET.SubElement(task, "{%s}OutlineNumber" % ns).text = task_wbs
                         ET.SubElement(task, "{%s}OutlineLevel" % ns).text = task_outline_level
                         ET.SubElement(task, "{%s}Priority" % ns).text = "500"
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
@@ -1283,57 +1053,64 @@ def convert_excel_to_mspdi(
                             ET.SubElement(task, "{%s}Manual" % ns).text = "0"
                             logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                         
-                        # FIX 5: Calculate cost value for this task
-                        # WORKFRONT CRITICAL: Cost and Revenue extended attribute MUST be identical
-                        # Use Planned_Cost or Price_USD from spreadsheet, or default to hours * 150
-                        cost_value = None
-                        if "Planned_Cost" in row.index and pd.notna(row.get("Planned_Cost")):
-                            cost_value = float(row.get("Planned_Cost"))
-                        elif "Price_USD" in row.index and pd.notna(row.get("Price_USD")):
-                            cost_value = float(row.get("Price_USD"))
-                        else:
-                            # Default: hours * 150
-                            cost_value = hours * 150
+                        # Add cost if available and accumulate into component and deliverable totals
+                        price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
+                        if price_usd is not None and pd.notna(price_usd):
+                            try:
+                                price_value = float(price_usd)
+                                if price_value > 0:  # Only add positive costs
+                                    ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
+                                    ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
+                                    ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
+                                    
+                                    # Accumulate cost into component and deliverable totals
+                                    component_costs[comp_uid] += price_value
+                                    deliverable_costs[deliv_uid] += price_value
+                                    
+                                    # Add Revenue extended attribute (same as cost for flat billing)
+                                    if add_custom_fields:
+                                        ext_attr_revenue = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                                        ET.SubElement(ext_attr_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
+                                        ET.SubElement(ext_attr_revenue, "{%s}Value" % ns).text = str(price_value)
+                                else:
+                                    logging.warning(f"Skipping zero or negative price for task '{task_name}': {price_value}")
+                            except (ValueError, TypeError) as e:
+                                logging.warning(f"Could not parse Price_USD for task '{task_name}': {e}")
                         
-                        # FIX: Always add cost/revenue fields, even if cost_value=0 (Workfront requirement)
-                        # Set Cost, FixedCost, FixedCostAccrual using cost_value
-                        ET.SubElement(task, "{%s}Cost" % ns).text = f"{cost_value:.2f}"
-                        ET.SubElement(task, "{%s}FixedCost" % ns).text = f"{cost_value:.2f}"
-                        ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
-                        
-                        # Accumulate cost into component and deliverable totals
-                        component_costs[comp_uid] += cost_value
-                        deliverable_costs[deliv_uid] += cost_value
-                        
-                        # WORKFRONT CRITICAL: Revenue extended attribute MUST equal Cost
-                        # Always use the SAME cost_value that was written to <Cost>
-                        if add_custom_fields:
-                            add_task_extended_attribute(task, ns, "188743715", f"{cost_value:.2f}")
-                        
-                        logging.info(f"[COST/REVENUE] Task '{task_name}': Cost=Revenue=${cost_value:.2f}")
-                        
-                        # Add extended attributes (custom fields) for each task (flat MSPDI schema)
+                        # Add extended attributes (custom fields) for each task
                         if add_custom_fields:
                             # Risk Score (random for demo)
-                            add_task_extended_attribute(task, ns, "188743713", str(random.randint(1, 10)))
+                            ext_attr_risk = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_risk, "{%s}FieldID" % ns).text = "188743713"  # Number1
+                            ET.SubElement(ext_attr_risk, "{%s}Value" % ns).text = str(random.randint(1, 10))
                             
                             # Confidence Level (random 70-100)
-                            add_task_extended_attribute(task, ns, "188743714", str(random.randint(70, 100)))
+                            ext_attr_conf = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_conf, "{%s}FieldID" % ns).text = "188743714"  # Number2
+                            ET.SubElement(ext_attr_conf, "{%s}Value" % ns).text = str(random.randint(70, 100))
                             
-                            # Text1 = Department
-                            task_department_value = task_service_dept if task_service_dept else "Unassigned"
-                            add_task_extended_attribute(task, ns, "188743731", task_department_value)
+                            # Department
+                            if department:
+                                ext_attr_dept = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                                ET.SubElement(ext_attr_dept, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                                ET.SubElement(ext_attr_dept, "{%s}Value" % ns).text = str(department)
                             
                             # Deliverable Code
                             if deliv_code:
-                                add_task_extended_attribute(task, ns, "188743732", deliv_code)
+                                ext_attr_dc = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                                ET.SubElement(ext_attr_dc, "{%s}FieldID" % ns).text = "188743732"  # Text2
+                                ET.SubElement(ext_attr_dc, "{%s}Value" % ns).text = deliv_code
                             
                             # Component Name
-                            add_task_extended_attribute(task, ns, "188743733", str(component_name))
+                            ext_attr_comp = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_comp, "{%s}FieldID" % ns).text = "188743733"  # Text3
+                            ET.SubElement(ext_attr_comp, "{%s}Value" % ns).text = str(component_name)
                             
-                            # Text4 = Service Category (fallback to Department) - WORKFRONT REQUIRED
-                            service_category_value = row.get("Service_Category") if pd.notna(row.get("Service_Category")) else task_department_value
-                            add_task_extended_attribute(task, ns, "188743734", service_category_value)
+                            # Service Category (replaces Category tag for Workfront)
+                            task_category_value = task_service_dept if task_service_dept else "Unassigned"
+                            ext_attr_sc_task = ET.SubElement(task, "{%s}ExtendedAttribute" % ns)
+                            ET.SubElement(ext_attr_sc_task, "{%s}FieldID" % ns).text = "188743734"  # Text4
+                            ET.SubElement(ext_attr_sc_task, "{%s}Value" % ns).text = task_category_value
                         
                         # Track component finish date
                         if task_num_in_component == 1:
@@ -1362,31 +1139,12 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
-                # CRITICAL VALIDATION: Check if any tasks were actually created for this component
-                # If all tasks were filtered out (role rows, wrapper tasks, duplicates), skip this component
-                if task_num_in_component == 0:
-                    logging.warning(f"[EMPTY COMPONENT] Skipping component '{component_name}' - no tasks after filtering")
-                    # Remove the component summary task from the XML tree
-                    tasks.remove(comp_task)
-                    # Remove from tracking maps
-                    if comp_uid in component_costs:
-                        del component_costs[comp_uid]
-                    comp_key_str = f"{deliverable_name}:{component_name}"
-                    if comp_key_str in component_tasks:
-                        del component_tasks[comp_key_str]
-                    # Decrement task_uid to maintain correct count (component wasn't actually used)
-                    task_uid -= 1
-                    # Remove from all_task_uids
-                    if comp_uid in all_task_uids:
-                        all_task_uids.remove(comp_uid)
-                    # Skip to next component
-                    continue
-                
-                # FIX 4: Component summary tasks must have Duration=PT0M to let Workfront auto-calculate from children
-                # Do NOT calculate duration from time span - this causes issues with Workfront rollup
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
+                # Update component summary with calculated duration
+                # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+                # This prevents Duration=PT0M when component_start == component_finish
+                component_duration_minutes = int((component_finish - component_start).total_seconds() / 60)
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{component_duration_minutes}M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
-                logging.info(f"[SUMMARY] Component '{component_name}': Duration=PT0M (will auto-calculate from children)")
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
@@ -1397,7 +1155,9 @@ def convert_excel_to_mspdi(
                     
                     # Add Revenue extended attribute (same as cost for flat billing)
                     if add_custom_fields:
-                        add_task_extended_attribute(comp_task, ns, "188743715", str(comp_total_cost))
+                        ext_attr_comp_revenue = ET.SubElement(comp_task, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_comp_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
+                        ET.SubElement(ext_attr_comp_revenue, "{%s}Value" % ns).text = str(comp_total_cost)
                     
                     logging.info(f"[COST AGGREGATION] Component '{component_name}' total cost: ${comp_total_cost:.2f}")
                 
@@ -1416,12 +1176,13 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
-            # FIX 4: Deliverable summary tasks must have Duration=PT0M to let Workfront auto-calculate from children
-            # Do NOT calculate duration from time span - this causes issues with Workfront rollup
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
+            # Update deliverable summary with calculated duration
+            # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+            # This prevents Duration=PT0M when dates match or business hours = 0
+            deliverable_duration_minutes = int((deliverable_finish - deliverable_start).total_seconds() / 60)
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{deliverable_duration_minutes}M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
-            logging.info(f"[SUMMARY] Deliverable '{deliverable_name}': Duration=PT0M (will auto-calculate from children)")
             
             # Add aggregated cost/revenue to deliverable summary task
             deliv_total_cost = deliverable_costs.get(deliv_uid, 0.0)
@@ -1432,7 +1193,9 @@ def convert_excel_to_mspdi(
                 
                 # Add Revenue extended attribute (same as cost for flat billing)
                 if add_custom_fields:
-                    add_task_extended_attribute(deliv_task, ns, "188743715", str(deliv_total_cost))
+                    ext_attr_deliv_revenue = ET.SubElement(deliv_task, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_deliv_revenue, "{%s}FieldID" % ns).text = "188743715"  # Number3
+                    ET.SubElement(ext_attr_deliv_revenue, "{%s}Value" % ns).text = str(deliv_total_cost)
                 
                 logging.info(f"[COST AGGREGATION] Deliverable '{deliverable_name}' total cost: ${deliv_total_cost:.2f}")
             
@@ -1443,185 +1206,133 @@ def convert_excel_to_mspdi(
                 original_wbs_to_uid[original_deliv_wbs_id] = deliv_uid
             sequential_wbs_to_uid[deliv_wbs] = deliv_uid
             
+            # Add deliverable completion milestone
+            if add_deliverable_milestones:
+                milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+                milestone_uid = task_uid
+                task_uid += 1
+                all_task_uids.append(milestone_uid)
+                
+                # Use component_num to set proper WBS numbering after all components
+                milestone_wbs_num = component_num + 1
+                
+                ET.SubElement(milestone, "{%s}UID" % ns).text = str(milestone_uid)
+                ET.SubElement(milestone, "{%s}ID" % ns).text = str(milestone_uid)
+                ET.SubElement(milestone, "{%s}Name" % ns).text = f"{deliverable_name} - COMPLETE"
+                ET.SubElement(milestone, "{%s}Type" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}Milestone" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}WBS" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
+                ET.SubElement(milestone, "{%s}OutlineNumber" % ns).text = f"{deliverable_num}.{milestone_wbs_num}"
+                ET.SubElement(milestone, "{%s}OutlineLevel" % ns).text = "2"
+                ET.SubElement(milestone, "{%s}Priority" % ns).text = "500"
+                ET.SubElement(milestone, "{%s}Start" % ns).text = deliverable_finish.isoformat()
+                ET.SubElement(milestone, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
+                ET.SubElement(milestone, "{%s}Duration" % ns).text = "PT0M"
+                ET.SubElement(milestone, "{%s}DurationFormat" % ns).text = "7"
+                ET.SubElement(milestone, "{%s}Work" % ns).text = "PT0M"
+                ET.SubElement(milestone, "{%s}Summary" % ns).text = "0"
+                ET.SubElement(milestone, "{%s}Critical" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}IsMarked" % ns).text = "1"
+                ET.SubElement(milestone, "{%s}ConstraintType" % ns).text = str(ConstraintType.MUST_FINISH_ON.value)
+                ET.SubElement(milestone, "{%s}ConstraintDate" % ns).text = deliverable_finish.isoformat()
+                
+                # Add custom field for milestone type
+                if add_custom_fields:
+                    ext_attr_mt = ET.SubElement(milestone, "{%s}ExtendedAttribute" % ns)
+                    ET.SubElement(ext_attr_mt, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                    ET.SubElement(ext_attr_mt, "{%s}Value" % ns).text = "Deliverable Milestone"
+            
             # FIX: Increment deliverable counter for next deliverable
             deliverable_counter += 1
     
-    # ============================================================================
-    # CRITICAL: Build authoritative set of valid Task UIDs from final XML tree
-    # This set is the single source of truth for all downstream validation
-    # (assignments, dependencies, predecessor links)
-    # ============================================================================
-    logging.info("[TASK UID TRACKING] Building final task UID set from XML tree...")
-    valid_task_uids = set()
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        uid_elem = task_elem.find("{%s}UID" % ns)
-        if uid_elem is not None:
-            valid_task_uids.add(int(uid_elem.text))
+    # Add phase gate milestones
+    if add_phase_gates and all_task_uids:
+        phase_names = ["Phase 1 Complete (25%)", "Phase 2 Complete (50%)", "Phase 3 Complete (75%)"]
+        for i, position in enumerate(phase_gate_positions):
+            if position < len(all_task_uids):
+                # Get the task at this position
+                ref_task_uid = all_task_uids[position]
+                if ref_task_uid in task_map:
+                    ref_task_data = task_map[ref_task_uid]
+                    ref_task = ref_task_data["task"]
+                    
+                    # Find the finish date from the reference task
+                    finish_elem = ref_task.find("{%s}Finish" % ns)
+                    if finish_elem is not None:
+                        phase_date = finish_elem.text
+                    else:
+                        phase_date = (project_start + timedelta(days=30 * (i+1))).isoformat()
+                    
+                    # Create phase gate milestone
+                    phase_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+                    phase_uid = task_uid
+                    task_uid += 1
+                    
+                    ET.SubElement(phase_milestone, "{%s}UID" % ns).text = str(phase_uid)
+                    ET.SubElement(phase_milestone, "{%s}ID" % ns).text = str(phase_uid)
+                    ET.SubElement(phase_milestone, "{%s}Name" % ns).text = phase_names[i]
+                    ET.SubElement(phase_milestone, "{%s}Type" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}Milestone" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
+                    ET.SubElement(phase_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
+                    ET.SubElement(phase_milestone, "{%s}OutlineLevel" % ns).text = "1"
+                    deliverable_counter += 1  # Increment for next milestone
+                    ET.SubElement(phase_milestone, "{%s}Priority" % ns).text = "1000"  # High priority
+                    ET.SubElement(phase_milestone, "{%s}Start" % ns).text = phase_date
+                    ET.SubElement(phase_milestone, "{%s}Finish" % ns).text = phase_date
+                    ET.SubElement(phase_milestone, "{%s}Duration" % ns).text = "PT0M"
+                    ET.SubElement(phase_milestone, "{%s}DurationFormat" % ns).text = "7"
+                    ET.SubElement(phase_milestone, "{%s}Work" % ns).text = "PT0M"
+                    ET.SubElement(phase_milestone, "{%s}Summary" % ns).text = "0"
+                    ET.SubElement(phase_milestone, "{%s}Critical" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}IsMarked" % ns).text = "1"
+                    ET.SubElement(phase_milestone, "{%s}Notes" % ns).text = f"Phase gate at {(i+1)*25}% project completion"
+                    
+                    # Add custom field for milestone type
+                    if add_custom_fields:
+                        ext_attr_pg = ET.SubElement(phase_milestone, "{%s}ExtendedAttribute" % ns)
+                        ET.SubElement(ext_attr_pg, "{%s}FieldID" % ns).text = "188743731"  # Text1
+                        ET.SubElement(ext_attr_pg, "{%s}Value" % ns).text = "Phase Gate"
     
-    logging.info(f"[TASK UID TRACKING] ✓ Built authoritative task UID set: {len(valid_task_uids)} tasks")
-    logging.info(f"[TASK UID TRACKING] Sample task UIDs: {sorted(list(valid_task_uids))[:10]}")
-    
-    # ============================================================================
-    # FIX B: Build summary task lookup maps for predecessor validation
-    # This ensures no PredecessorUID points to a summary task (Summary=1)
-    # ============================================================================
-    logging.info("[FIX B] Building summary task lookup maps for predecessor validation...")
-    is_summary = {}
-    task_finish = {}
-    children_by_uid = {}
-    descendant_leaves_by_summary = {}
-    
-    # First pass: Build is_summary and task_finish mappings
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        uid_elem = task_elem.find("{%s}UID" % ns)
-        if uid_elem is None:
-            continue
+    # Add client approval milestone at the end
+    if add_deliverable_milestones:
+        approval_milestone = ET.SubElement(tasks, "{%s}Task" % ns)
+        approval_uid = task_uid
+        task_uid += 1
         
-        uid = int(uid_elem.text)
+        ET.SubElement(approval_milestone, "{%s}UID" % ns).text = str(approval_uid)
+        ET.SubElement(approval_milestone, "{%s}ID" % ns).text = str(approval_uid)
+        ET.SubElement(approval_milestone, "{%s}Name" % ns).text = "CLIENT APPROVAL - FINAL"
+        ET.SubElement(approval_milestone, "{%s}Type" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}Milestone" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}WBS" % ns).text = str(deliverable_counter)
+        ET.SubElement(approval_milestone, "{%s}OutlineNumber" % ns).text = str(deliverable_counter)
+        ET.SubElement(approval_milestone, "{%s}OutlineLevel" % ns).text = "1"
+        deliverable_counter += 1  # Increment for consistency
+        ET.SubElement(approval_milestone, "{%s}Priority" % ns).text = "1000"
+        ET.SubElement(approval_milestone, "{%s}Start" % ns).text = current_date.isoformat()
+        ET.SubElement(approval_milestone, "{%s}Finish" % ns).text = current_date.isoformat()
+        ET.SubElement(approval_milestone, "{%s}Duration" % ns).text = "PT0M"
+        ET.SubElement(approval_milestone, "{%s}DurationFormat" % ns).text = "7"
+        ET.SubElement(approval_milestone, "{%s}Work" % ns).text = "PT0M"
+        ET.SubElement(approval_milestone, "{%s}Summary" % ns).text = "0"
+        ET.SubElement(approval_milestone, "{%s}Critical" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}IsMarked" % ns).text = "1"
+        ET.SubElement(approval_milestone, "{%s}Notes" % ns).text = "Final client approval and sign-off"
         
-        # Check if this is a summary task
-        summary_elem = task_elem.find("{%s}Summary" % ns)
-        is_summary[uid] = (summary_elem is not None and summary_elem.text == "1")
-        
-        # Store finish date for leaf selection
-        finish_elem = task_elem.find("{%s}Finish" % ns)
-        task_finish[uid] = finish_elem.text if finish_elem is not None else ""
-    
-    # Second pass: Build parent-child relationships using OutlineNumber
-    task_by_outline = {}
-    outline_to_uid = {}
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        uid_elem = task_elem.find("{%s}UID" % ns)
-        outline_elem = task_elem.find("{%s}OutlineNumber" % ns)
-        if uid_elem is not None and outline_elem is not None:
-            uid = int(uid_elem.text)
-            outline = outline_elem.text
-            task_by_outline[outline] = uid
-            outline_to_uid[outline] = uid
-    
-    # Build children relationships by parsing OutlineNumber hierarchy
-    # For "1.3.2", parent is "1.3"
-    # For "1", parent is "0" (root/project level)
-    # Skip outline "0" itself to avoid self-referential loop
-    for outline, uid in outline_to_uid.items():
-        if outline == "0":
-            # This is the root/project task - skip to avoid self-reference
-            continue
-        
-        # Determine parent outline
-        if "." in outline:
-            # Has a parent - trim last segment
-            parent_outline = ".".join(outline.rsplit(".", 1)[:-1])
-        else:
-            # Top-level task - parent is UID 0 (project root)
-            parent_outline = "0"
-        
-        # Find parent UID
-        parent_uid = outline_to_uid.get(parent_outline, 0)
-        
-        # Add this task as a child of its parent
-        if parent_uid not in children_by_uid:
-            children_by_uid[parent_uid] = []
-        children_by_uid[parent_uid].append(uid)
-    
-    # Third pass: Build descendant_leaves_by_summary (recursive leaf collection)
-    def get_all_leaf_descendants(uid):
-        """Recursively get all leaf task UIDs under a given UID"""
-        if not is_summary.get(uid, False):
-            # This is a leaf task
-            return [uid]
-        
-        # This is a summary task - collect leaves from all children
-        leaves = []
-        for child_uid in children_by_uid.get(uid, []):
-            leaves.extend(get_all_leaf_descendants(child_uid))
-        return leaves
-    
-    for uid in is_summary:
-        if is_summary[uid]:
-            descendant_leaves_by_summary[uid] = get_all_leaf_descendants(uid)
-    
-    # Log summary of lookup maps
-    summary_count = sum(1 for v in is_summary.values() if v)
-    leaf_count = sum(1 for v in is_summary.values() if not v)
-    logging.info(f"[FIX B] ✓ Built lookup maps:")
-    logging.info(f"[FIX B]   - Total tasks: {len(is_summary)}")
-    logging.info(f"[FIX B]   - Summary tasks: {summary_count}")
-    logging.info(f"[FIX B]   - Leaf tasks: {leaf_count}")
-    logging.info(f"[FIX B]   - Summary tasks with leaf descendants: {len(descendant_leaves_by_summary)}")
-    if descendant_leaves_by_summary:
-        sample_summary = list(descendant_leaves_by_summary.keys())[0]
-        sample_leaves = descendant_leaves_by_summary[sample_summary]
-        logging.info(f"[FIX B]   - Example: Summary UID {sample_summary} has {len(sample_leaves)} leaf descendants")
-    
-    # ============================================================================
-    # FIX B: Shared helper function for predecessor rewriting
-    # This ensures all PredecessorLinks (DataFrame + department-based) are rewritten consistently
-    # ============================================================================
-    def rewrite_predecessor_uid_if_summary(pred_uid, task_name_for_context=""):
-        """
-        Rewrite predecessor UID if it points to a summary task.
-        Returns: (rewritten_uid, was_rewritten, was_dropped)
-        - If pred_uid is a leaf task: returns (pred_uid, False, False)
-        - If pred_uid is a summary with leaves: returns (leaf_uid, True, False)
-        - If pred_uid is a summary without leaves: returns (None, False, True)
-        """
-        nonlocal predecessors_rewritten, predecessors_dropped
-        
-        if not is_summary.get(pred_uid, False):
-            # This is a leaf task - use as-is
-            return (pred_uid, False, False)
-        
-        # This is a summary task - must rewrite or drop
-        leaves = descendant_leaves_by_summary.get(pred_uid, [])
-        
-        if leaves:
-            # Rewrite to latest-finishing leaf descendant
-            rewritten_uid = max(leaves, key=lambda u: task_finish.get(u, ""))
-            predecessors_rewritten += 1
-            logging.warning(f"[FIX B] Rewrote summary predecessor: UID {pred_uid} → UID {rewritten_uid} (latest-finishing leaf){' for ' + task_name_for_context if task_name_for_context else ''}")
-            return (rewritten_uid, True, False)
-        else:
-            # No leaves under this summary - drop
-            predecessors_dropped += 1
-            logging.warning(f"[FIX B] Dropped predecessor to summary task UID {pred_uid} (no leaf descendants){' for ' + task_name_for_context if task_name_for_context else ''}")
-            return (None, False, True)
+        # Add custom field for milestone type
+        if add_custom_fields:
+            ext_attr_ca = ET.SubElement(approval_milestone, "{%s}ExtendedAttribute" % ns)
+            ET.SubElement(ext_attr_ca, "{%s}FieldID" % ns).text = "188743731"  # Text1
+            ET.SubElement(ext_attr_ca, "{%s}Value" % ns).text = "Client Approval"
     
     # Add PredecessorLink elements for dependencies
     # FIX FOR ISSUE 1: Process dependencies for ALL task types (deliverables, components, AND leaf tasks)
-    
-    # FIX B: Initialize counters for predecessor rewrites/drops
-    predecessors_rewritten = 0
-    predecessors_dropped = 0
-    
     if add_dependencies:
         logging.info("[DEPENDENCIES] Processing Dependencies column for ALL task types (deliverables, components, leaf tasks)")
         
-        # FIX C: Add debug logging for WBS mapping
-        logging.info(f"[DEPENDENCIES DEBUG] original_wbs_to_uid has {len(original_wbs_to_uid)} entries")
-        if original_wbs_to_uid:
-            logging.info(f"[DEPENDENCIES DEBUG] Sample WBS IDs in mapping (first 10): {list(original_wbs_to_uid.keys())[:10]}")
-        else:
-            logging.warning("[DEPENDENCIES DEBUG] WARNING: original_wbs_to_uid is EMPTY - no dependencies can be created!")
-        
-        # FIX: Support multiple column names for dependencies (Dependencies, Predecessor, Predecessors)
-        dep_col = None
-        for possible_col in ["Dependencies", "Predecessor", "Predecessors"]:
-            if possible_col in df.columns:
-                dep_col = possible_col
-                break
-        
-        # FIX C: Check what dependency values exist in DataFrame
-        if dep_col:
-            logging.info(f"[INFO] [DEPENDENCIES] Using column '{dep_col}' for dependency data")
-            non_empty_deps = df[df[dep_col].notna() & (df[dep_col] != "")]
-            logging.info(f"[DEPENDENCIES DEBUG] Found {len(non_empty_deps)} rows with non-empty {dep_col} values")
-            if len(non_empty_deps) > 0:
-                sample_deps = non_empty_deps[dep_col].head(5).tolist()
-                logging.info(f"[DEPENDENCIES DEBUG] Sample {dep_col} values: {sample_deps}")
-        
-        # Check if dependency column exists
-        if dep_col:
+        # Check if Dependencies column exists
+        if "Dependencies" in df.columns:
             dependencies_count = 0
             skipped_count = 0
             
@@ -1681,32 +1392,11 @@ def convert_excel_to_mspdi(
             
             # Process Dependencies column for ALL rows in DataFrame
             for idx, row in df.iterrows():
-                # FIX: Skip role rows (same logic as task creation)
-                # Role rows were skipped during task creation, so they won't be in task_map
-                role_value = row.get("Role", "")
-                if pd.notna(role_value) and str(role_value).strip():
-                    logging.info(f"[DEPENDENCIES] Skipping role row at index {idx}: Role={role_value}")
-                    continue  # Skip to next row
-                
-                # CRITICAL FIX: Skip rows that were filtered out (duplicates/wrappers) during task creation
-                # Check if this row's WBS_ID exists in original_wbs_to_uid (only exported tasks are in this map)
-                original_task_wbs_id = str(row.get("WBS_ID", "")).strip()
-                if original_task_wbs_id and original_task_wbs_id not in original_wbs_to_uid:
-                    logging.info(f"[DEPENDENCIES] Skipping filtered-out task at index {idx}: WBS_ID={original_task_wbs_id} (was not exported)")
-                    continue
-                
                 # Get task identifiers from DataFrame row
                 row_deliverable = row.get("Deliverable", "")
                 row_component = row.get("Component", "")
                 row_task = row.get("Task", "")
                 row_task_name = row.get("Task_Name", "")
-                
-                # FIX: Use the SAME task name derivation logic as task creation (lines 898-902)
-                # This ensures lookup_key matches what was actually stored in all_tasks_lookup
-                if not row_task_name or pd.isna(row_task_name) or str(row_task_name).strip() == "":
-                    row_task_name = (row.get("L3_Task") or 
-                                    row.get("Task_Label") or 
-                                    "")
                 
                 # Build lookup key based on hierarchy level
                 # Use Component and Task columns to distinguish between levels:
@@ -1725,38 +1415,22 @@ def convert_excel_to_mspdi(
                 if has_task and has_component and has_deliverable:
                     # Leaf task level (both Component and Task are populated)
                     lookup_key = (str(row_deliverable), str(row_component), str(row_task_name))
-                    logging.info(f"[DEPENDENCIES] Looking up LEAF task: deliverable='{row_deliverable}', component='{row_component}', task_name='{row_task_name}'")
                 elif has_component and has_deliverable and not has_task:
                     # Component level (Component is populated, Task is not)
                     lookup_key = (str(row_deliverable), str(row_component), None)
-                    logging.info(f"[DEPENDENCIES] Looking up COMPONENT: deliverable='{row_deliverable}', component='{row_component}'")
                 elif has_deliverable and not has_component:
                     # Deliverable level (Component is not populated)
                     lookup_key = (str(row_deliverable), None, None)
-                    logging.info(f"[DEPENDENCIES] Looking up DELIVERABLE: deliverable='{row_deliverable}'")
                 
                 # Look up task element and UID
                 if lookup_key and lookup_key in all_tasks_lookup:
                     task_elem, task_uid = all_tasks_lookup[lookup_key]
-                    logging.info(f"[DEPENDENCIES] ✓ Found task in lookup: UID={task_uid}")
                 else:
                     # No matching task found, skip this row
-                    if lookup_key:
-                        logging.warning(f"[DEPENDENCIES] ✗ Task NOT found in lookup: {lookup_key}")
-                        logging.warning(f"[DEPENDENCIES DEBUG] Available lookup keys sample: {list(all_tasks_lookup.keys())[:5]}")
                     continue
                 
-                # SAFETY CHECK: Ensure task_uid is valid before processing dependencies
-                if task_uid is None:
-                    logging.warning(f"[DEPENDENCIES] Task UID is None for row {idx}, skipping dependencies")
-                    continue
-                
-                # Get dependency value from this row using detected column name
-                dependencies_value = row.get(dep_col, "")
-                
-                # FIX: Add detailed logging for dependency value
-                if dependencies_value and pd.notna(dependencies_value) and str(dependencies_value).strip():
-                    logging.info(f"[DEPENDENCIES] Row {idx} has {dep_col}='{dependencies_value}' for task UID={task_uid}")
+                # Get Dependencies value from this row
+                dependencies_value = row.get("Dependencies", "")
                 
                 # Parse dependencies if value is not empty
                 if dependencies_value and pd.notna(dependencies_value) and str(dependencies_value).strip():
@@ -1780,24 +1454,12 @@ def convert_excel_to_mspdi(
                         
                         # FIX: Resolve WBS to UID using ORIGINAL WBS_ID mapping
                         # Dependencies column contains original WBS_IDs from DataFrame, not sequential WBS codes
-                        logging.info(f"[DEPENDENCIES] Looking up predecessor WBS '{dep_wbs}' in original_wbs_to_uid mapping")
                         predecessor_uid = original_wbs_to_uid.get(dep_wbs)
                         
                         if predecessor_uid is None:
-                            logging.warning(f"[DEPENDENCIES] ✗ Invalid WBS reference '{dep_wbs}' for task {lookup_key} - NOT FOUND in mapping")
-                            logging.warning(f"[DEPENDENCIES DEBUG] Available WBS IDs in mapping: {list(original_wbs_to_uid.keys())[:20]}")
+                            logging.warning(f"[DEPENDENCIES] Invalid WBS reference '{dep_wbs}' for task {lookup_key} - skipping")
                             skipped_count += 1
                             continue
-                        
-                        # CRITICAL FIX: Validate that predecessor UID exists in actual XML task tree
-                        # This prevents orphaned dependencies to tasks that were filtered out (wrapper/duplicate/empty summaries)
-                        if predecessor_uid not in valid_task_uids:
-                            logging.warning(f"[DEPENDENCIES] ✗ ORPHANED DEPENDENCY: WBS '{dep_wbs}' maps to UID={predecessor_uid} but this task was FILTERED OUT")
-                            logging.warning(f"[DEPENDENCIES] Task {lookup_key} tried to link to non-existent predecessor - SKIPPING to prevent Workfront import failure")
-                            skipped_count += 1
-                            continue
-                        
-                        logging.info(f"[DEPENDENCIES] ✓ Found predecessor UID={predecessor_uid} for WBS '{dep_wbs}' (validated in XML tree)")
                         
                         # Skip self-referencing dependencies
                         if predecessor_uid == task_uid:
@@ -1805,71 +1467,43 @@ def convert_excel_to_mspdi(
                             skipped_count += 1
                             continue
                         
-                        # FIX: REMOVED overly restrictive check that prevented dependencies TO summary tasks
-                        # MS Project and Workfront ALLOW dependencies to summary tasks - they link to the appropriate child
-                        # The only check we need is to prevent summary tasks FROM having dependencies (see below)
+                        # WORKFRONT FIX: Check if predecessor is a summary task
+                        # Dependencies can only link to LEAF tasks, not summary tasks (deliverables/components)
+                        predecessor_task_elem = None
+                        for potential_pred_task in tasks.findall("{%s}Task" % ns):
+                            pred_uid_elem = potential_pred_task.find("{%s}UID" % ns)
+                            if pred_uid_elem is not None and int(pred_uid_elem.text) == predecessor_uid:
+                                predecessor_task_elem = potential_pred_task
+                                break
                         
-                        # FIX C: Skip adding predecessor if THIS task is a summary task
-                        # Summary tasks should not have explicit dependencies - only leaf tasks should
-                        is_summary_task = False
-                        summary_check_elem = task_elem.find("{%s}Summary" % ns)
-                        if summary_check_elem is not None and summary_check_elem.text == "1":
-                            is_summary_task = True
-                        
-                        if is_summary_task:
-                            task_name_elem = task_elem.find("{%s}Name" % ns)
-                            task_name_for_log = task_name_elem.text if task_name_elem is not None else "Unknown"
-                            logging.warning(f"[DEPENDENCIES] Skipping dependency FROM summary task '{task_name_for_log}' (UID={task_uid}) - summary tasks cannot have explicit dependencies")
-                            skipped_count += 1
-                            continue
-                        
-                        # Get task name for enhanced logging
-                        task_name_elem = task_elem.find("{%s}Name" % ns)
-                        task_name_for_log = task_name_elem.text if task_name_elem is not None else "Unknown"
-                        
-                        # ============================================================================
-                        # FIX B: Rewrite summary predecessors to leaf tasks using shared helper
-                        # Workfront requires all PredecessorUID to point to leaf tasks (Summary=0)
-                        # ============================================================================
-                        original_predecessor_uid = predecessor_uid
-                        predecessor_uid, was_rewritten, was_dropped = rewrite_predecessor_uid_if_summary(
-                            predecessor_uid, 
-                            task_name_for_context=f"Task '{task_name_for_log}' (UID={task_uid})"
-                        )
-                        
-                        if was_dropped:
-                            # Predecessor was dropped - skip this link
-                            skipped_count += 1
-                            continue
+                        if predecessor_task_elem is not None:
+                            # Check if this is a summary task
+                            summary_elem = predecessor_task_elem.find("{%s}Summary" % ns)
+                            is_summary = summary_elem is not None and summary_elem.text == "1"
+                            
+                            if is_summary:
+                                # Get predecessor name for better logging
+                                pred_name_elem = predecessor_task_elem.find("{%s}Name" % ns)
+                                pred_name = pred_name_elem.text if pred_name_elem is not None else "Unknown"
+                                
+                                logging.warning(f"[DEPENDENCIES] Skipping dependency to summary task: Task {lookup_key} (UID={task_uid}) -> Summary '{pred_name}' (UID={predecessor_uid}, WBS={dep_wbs})")
+                                skipped_count += 1
+                                continue
                         
                         # Create PredecessorLink element (only for leaf tasks)
-                        log_prefix = "[FIX B REWRITTEN]" if was_rewritten else "[DEPENDENCIES]"
-                        logging.info(f"{log_prefix} ✓ Creating PredecessorLink: Task '{task_name_for_log}' (UID={task_uid}) → Predecessor UID={predecessor_uid} (Type=1, FS)")
-                        
-                        # FIX: Create PredecessorLink as child of task_elem using SubElement
-                        # This ensures the link is properly attached to the task in the XML tree
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "1"  # Type=1 is FS (Finish-to-Start) in Workfront
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
                         
                         dependencies_count += 1
-                        
-                        # Enhanced logging to confirm attachment
-                        logging.info(f"[DEPENDENCIES] ✓✓ SUCCESS! PredecessorLink attached to task '{task_name_for_log}' (UID={task_uid})")
-                        logging.info(f"[DEPENDENCIES]    - Predecessor WBS '{dep_wbs}' (UID={predecessor_uid})")
-                        logging.info(f"[DEPENDENCIES]    - Total dependencies created so far: {dependencies_count}")
-                        logging.info(f"[DEPENDENCIES]    - PredecessorLink element has {len(list(pred_link))} child elements")
-                        
-                        # Verify the link was actually attached to the task
-                        task_pred_links = task_elem.findall("{%s}PredecessorLink" % ns)
-                        logging.info(f"[DEPENDENCIES]    - Task now has {len(task_pred_links)} PredecessorLink element(s)")
+                        logging.info(f"[DEPENDENCIES] Added dependency: {lookup_key} (UID={task_uid}) depends on WBS '{dep_wbs}' (UID={predecessor_uid})")
             
             logging.info(f"[DEPENDENCIES] Added {dependencies_count} dependencies across ALL task types, skipped {skipped_count} invalid references")
         else:
-            logging.warning("[WARNING] [DEPENDENCIES] No dependency column found in DataFrame (tried: Dependencies, Predecessor, Predecessors) - skipping dependency parsing")
+            logging.warning("[DEPENDENCIES] Dependencies column not found in DataFrame - skipping dependency parsing")
         
         # Also add cross-deliverable dependencies based on department logic as fallback
         logging.info("[3-LEVEL HIERARCHY] Adding component-level dependencies (tasks within components run in parallel)")
@@ -1900,61 +1534,20 @@ def convert_excel_to_mspdi(
                         break
                     if other_data["department"] in dept_dependencies[department]:
                         if other_data["deliverable"] == deliverable:  # Same deliverable
-                            # FIX B: Rewrite if other_uid is a summary task using shared helper
-                            dept_pred_uid, was_rewritten, was_dropped = rewrite_predecessor_uid_if_summary(
-                                other_uid,
-                                task_name_for_context=f"Dept-based dependency for UID {uid}"
-                            )
-                            
-                            if was_dropped:
-                                # Predecessor was dropped - skip this link
-                                continue
-                            
                             # Add dependency with Start-to-Start relationship
                             pred_link = ET.SubElement(task, "{%s}PredecessorLink" % ns)
-                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(dept_pred_uid)
+                            ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(other_uid)
                             ET.SubElement(pred_link, "{%s}Type" % ns).text = str(DependencyType.START_TO_START.value)
                             ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                             ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "4800"  # 1 day lag (in minutes)
                             ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
                             break
     
-    # FIX B: Build child-hours-by-role for each parent WBS (ALWAYS, not gated by merge)
-    # This allows assignments even when L3 PlannedHours=0
-    logging.info("[FIX B] Building child-hours-by-role aggregator for parent tasks")
-    child_hours_by_parent = {}
-    for idx, row in df.iterrows():
-        parent_wbs = row.get("Parent_WBS_ID", "")
-        if not pd.notna(parent_wbs) or not str(parent_wbs).strip():
-            continue
-        
-        parent_wbs = str(parent_wbs).strip()
-        planned_hours = row.get("Planned_Hours", 0)
-        role_value = row.get("Role", "")
-        
-        # Only aggregate if row has hours and a single role
-        if pd.notna(role_value) and str(role_value).strip() and pd.notna(planned_hours):
-            try:
-                hours = float(planned_hours)
-                if hours > 0:
-                    role = str(role_value).strip()
-                    child_hours_by_parent.setdefault(parent_wbs, {}).setdefault(role, 0.0)
-                    child_hours_by_parent[parent_wbs][role] += hours
-            except (ValueError, TypeError):
-                pass
-    
-    logging.info(f"[FIX B] Built child hours aggregator for {len(child_hours_by_parent)} parent tasks")
-    
-    # ============================================================================
-    # PHASE 1: BUILD ASSIGNMENT DATA STRUCTURES (NO XML YET)
-    # ============================================================================
-    # Now that resource data is built, we can create assignments that reference
-    # resource UIDs safely.
-    logging.info("[PHASE 1] Building assignment data structure...")
-    assignment_data_list = []
+    # Create Assignments container with enhanced resource assignments
+    assignments = ET.SubElement(root, "{%s}Assignments" % ns)
     assignment_uid = 1
     
-    # Create resource assignments data (not XML yet)
+    # Create resource assignments
     for uid, task_data in task_map.items():
         task = task_data["task"]
         
@@ -1969,20 +1562,44 @@ def convert_excel_to_mspdi(
         # Assign department resource
         department = task_data["department"]
         if department in department_resources:
-            # Store assignment data (not XML yet)
-            assignment_data_list.append({
-                "AssignmentUID": assignment_uid,
-                "TaskUID": uid,
-                "ResourceUID": department_resources[department],
-                "WorkHours": work_hours,
-                "Cost": work_hours * (blended_rate or 150),
-                "Start": task.find("{%s}Start" % ns).text,
-                "Finish": task.find("{%s}Finish" % ns).text
-            })
+            assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
+            ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
+            ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
+            ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
+            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
+            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}Start" % ns).text = task.find("{%s}Start" % ns).text
+            ET.SubElement(assign, "{%s}Finish" % ns).text = task.find("{%s}Finish" % ns).text
+            ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
+            ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
+            ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
+            ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
+            ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
+            ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Cost" % ns).text = str(work_hours * (blended_rate or 150))
+            ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
+            ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}SV" % ns).text = "0"
+            ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
+            ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
+            
             assignment_uid += 1
     
-    # FIX: Process role rows and create assignment data (not XML yet)
-    logging.info("[ROLE ASSIGNMENTS] Processing role rows to create assignment data")
+    # FIX: Process role rows and create Assignments instead of duplicate Tasks
+    logging.info("[ROLE ASSIGNMENTS] Processing role rows to create Assignments")
     role_assignment_count = 0
     skipped_role_rows = 0
     
@@ -2015,36 +1632,29 @@ def convert_excel_to_mspdi(
             # Look up parent task UID using ORIGINAL WBS_ID mapping
             task_uid_for_assignment = original_wbs_to_uid.get(parent_wbs)
             if task_uid_for_assignment is None:
-                # CRITICAL FIX: Skip assignments with no valid task UID (prevents TaskUID=None errors)
-                logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Parent WBS '{parent_wbs}' not found in task mapping for Role={role}, Seniority={seniority}")
-                logging.warning(f"[ROLE ASSIGNMENTS] Available WBS IDs: {list(original_wbs_to_uid.keys())[:20]}")
+                logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Parent WBS '{parent_wbs}' not found for Role={role}")
                 skipped_role_rows += 1
                 continue
             
-            # FIX: Look up resource UID using normalized (role, seniority) mapping
-            # Normalize role/seniority for lookup
-            normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
-            resource_uid = resource_uid_map.get(normalized_key)
-            
+            # FIX: Look up resource UID using (role, seniority) mapping (NOT resource_map)
+            resource_uid = resource_uid_map.get((role, seniority))
             if resource_uid is None:
-                # Try without seniority as fallback (normalized key with empty seniority)
-                fallback_key = f"{normalize_resource_name(role)}|"
-                resource_uid = resource_uid_map.get(fallback_key)
+                # Try without seniority as fallback
+                resource_uid = resource_uid_map.get((role, ""))
                 if resource_uid is None:
                     # Final fallback: try resource_map (role only, may not have correct seniority)
                     resource_uid = resource_map.get(str(role))
                     if resource_uid is None:
                         logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Resource not found for Role='{role}', Seniority='{seniority}'")
-                        logging.warning(f"[ROLE ASSIGNMENTS] Normalized key attempted: '{normalized_key}'")
                         logging.warning(f"[ROLE ASSIGNMENTS] Available resources in resource_uid_map: {list(resource_uid_map.keys())[:20]}")
                         skipped_role_rows += 1
                         continue
                     else:
                         logging.warning(f"[ROLE ASSIGNMENTS] Using fallback resource_map lookup for Role='{role}' (UID={resource_uid}). Seniority '{seniority}' not matched.")
                 else:
-                    logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}' with empty seniority (UID={resource_uid}, normalized_key='{fallback_key}')")
+                    logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}' with empty seniority (UID={resource_uid})")
             else:
-                logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}', Seniority='{seniority}' -> UID={resource_uid} (normalized_key='{normalized_key}')")
+                logging.info(f"[ROLE ASSIGNMENTS] Matched Role='{role}', Seniority='{seniority}' -> UID={resource_uid}")
             
             # Get hours (Planned_Hours or Hours column)
             hours_value = row.get("Planned_Hours")
@@ -2056,17 +1666,23 @@ def convert_excel_to_mspdi(
             except (ValueError, TypeError):
                 hours = 0.0
             
-            # FIX B: If hours <= 0, try to get hours from child_hours_by_parent
-            if hours <= 0 and parent_wbs in child_hours_by_parent:
-                role_hours_map = child_hours_by_parent[parent_wbs]
-                if role in role_hours_map:
-                    hours = role_hours_map[role]
-                    logging.info(f"[FIX B] Using aggregated hours {hours} from children for Role={role}, Parent WBS={parent_wbs}")
-            
             if hours <= 0:
                 logging.warning(f"[ROLE ASSIGNMENTS] Skipping role row at index {idx}: Hours={hours} (must be > 0)")
                 skipped_role_rows += 1
                 continue
+            
+            # Create Assignment element
+            assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
+            ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
+            ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(task_uid_for_assignment)
+            ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(resource_uid)
+            ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
+            
+            # Work in minutes (PT format)
+            work_minutes = int(hours * 60)
+            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{work_minutes}M"
+            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{work_minutes}M"
+            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{work_minutes}M"
             
             # Get task start/finish dates from the parent task
             parent_task_elem = None
@@ -2079,27 +1695,44 @@ def convert_excel_to_mspdi(
             if parent_task_elem is not None:
                 start_elem = parent_task_elem.find("{%s}Start" % ns)
                 finish_elem = parent_task_elem.find("{%s}Finish" % ns)
-                task_start_text = start_elem.text if start_elem is not None else project_start.isoformat()
-                task_finish_text = finish_elem.text if finish_elem is not None else project_start.isoformat()
+                if start_elem is not None:
+                    ET.SubElement(assign, "{%s}Start" % ns).text = start_elem.text
+                if finish_elem is not None:
+                    ET.SubElement(assign, "{%s}Finish" % ns).text = finish_elem.text
             else:
-                task_start_text = project_start.isoformat()
-                task_finish_text = project_start.isoformat()
+                # Fallback to project start if parent task not found
+                ET.SubElement(assign, "{%s}Start" % ns).text = project_start.isoformat()
+                ET.SubElement(assign, "{%s}Finish" % ns).text = project_start.isoformat()
             
-            # Store assignment data (not XML yet)
-            assignment_data_list.append({
-                "AssignmentUID": assignment_uid,
-                "TaskUID": task_uid_for_assignment,
-                "ResourceUID": resource_uid,
-                "WorkHours": hours,
-                "Cost": hours * (blended_rate or 150),
-                "Start": task_start_text,
-                "Finish": task_finish_text
-            })
+            # Standard assignment fields
+            ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
+            ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Leveling" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingCanSplit" % ns).text = "1"
+            ET.SubElement(assign, "{%s}LevelingDelay" % ns).text = "0"
+            ET.SubElement(assign, "{%s}LevelingDelayFormat" % ns).text = "8"
+            ET.SubElement(assign, "{%s}VariableRateUnits" % ns).text = "0"
+            ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ResponsePending" % ns).text = "0"
+            ET.SubElement(assign, "{%s}UpdateNeeded" % ns).text = "0"
+            ET.SubElement(assign, "{%s}Cost" % ns).text = str(hours * (blended_rate or 150))
+            ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
+            ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}ACWP" % ns).text = "0"
+            ET.SubElement(assign, "{%s}SV" % ns).text = "0"
+            ET.SubElement(assign, "{%s}CostVariance" % ns).text = "0"
+            ET.SubElement(assign, "{%s}WorkContour" % ns).text = "0"  # Flat
+            ET.SubElement(assign, "{%s}StartSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}FinishSlack" % ns).text = "0"
+            ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
             
             assignment_uid += 1
             role_assignment_count += 1
             
-            logging.info(f"[ROLE ASSIGNMENTS] Created assignment data #{role_assignment_count}: Role='{role}', Seniority='{seniority}' -> Task UID={task_uid_for_assignment}, Resource UID={resource_uid}, Hours={hours}")
+            logging.info(f"[ROLE ASSIGNMENTS] Created assignment #{role_assignment_count}: Role='{role}', Seniority='{seniority}' -> Task UID={task_uid_for_assignment}, Resource UID={resource_uid}, Hours={hours}")
             
         except Exception as e:
             logging.error(f"[ROLE ASSIGNMENTS] Error processing role row at index {idx}: {e}")
@@ -2112,507 +1745,10 @@ def convert_excel_to_mspdi(
     logging.info(f"[ROLE ASSIGNMENTS] Success rate: {(role_assignment_count / (role_assignment_count + skipped_role_rows) * 100) if (role_assignment_count + skipped_role_rows) > 0 else 0:.1f}%")
     logging.info(f"[ROLE ASSIGNMENTS] ===============================")
     
-    # ============================================================================
-    # CRITICAL: Filter out assignments for tasks that were removed during generation
-    # This MUST happen BEFORE aggregates are built to ensure they only contain valid data
-    # ============================================================================
-    logging.info("[ASSIGNMENT CLEANUP] Filtering assignments for removed tasks...")
-    original_assignment_count = len(assignment_data_list)
-    filtered_assignments = []
-    removed_task_uids = set()
-    
-    for assign_data in assignment_data_list:
-        task_uid = assign_data.get("TaskUID")
-        if task_uid in valid_task_uids:
-            filtered_assignments.append(assign_data)
-        else:
-            removed_task_uids.add(task_uid)
-    
-    # Replace assignment list with filtered version
-    assignment_data_list = filtered_assignments
-    
-    removed_count = original_assignment_count - len(assignment_data_list)
-    if removed_count > 0:
-        logging.warning(f"[ASSIGNMENT CLEANUP] Removed {removed_count} assignments for {len(removed_task_uids)} filtered tasks")
-        logging.info(f"[ASSIGNMENT CLEANUP] Removed task UIDs: {sorted(removed_task_uids)[:20]}")
-    else:
-        logging.info(f"[ASSIGNMENT CLEANUP] No orphaned assignments found - all tasks are valid")
-    
-    logging.info(f"[ASSIGNMENT CLEANUP] ✓ Final assignment count: {len(assignment_data_list)} (removed {removed_count} orphaned)")
-    logging.info(f"[ASSIGNMENT CLEANUP] ✓ All remaining assignments reference valid Task UIDs")
-    
-    # FIX A: Aggregate work by task from assignments (AFTER cleanup)
-    logging.info("[FIX A] Aggregating work by task from assignments")
-    work_by_task = {}
-    cost_by_task = {}
-    for a in assignment_data_list:
-        task_uid = a["TaskUID"]
-        work_by_task[task_uid] = work_by_task.get(task_uid, 0.0) + float(a["WorkHours"])
-        cost_by_task[task_uid] = cost_by_task.get(task_uid, 0.0) + float(a["Cost"])
-    
-    logging.info(f"[FIX A] Aggregated work for {len(work_by_task)} tasks")
-    
-    # VALIDATION GUARD: Ensure all assignments reference valid Resource UIDs
-    logging.info("[ASSIGNMENT VALIDATION] Validating assignment ResourceUIDs...")
-    invalid_assignments = []
-    resource_uid_usage = {}  # Track which resource UIDs are actually used
-    
-    for assign_data in assignment_data_list:
-        res_uid = assign_data.get("ResourceUID")
-        task_uid = assign_data.get("TaskUID")
-        
-        # FIX ISSUE 2: Verify resource UID exists in resource_data_list
-        if res_uid not in valid_resource_uids:
-            invalid_assignments.append({
-                "task_uid": task_uid,
-                "resource_uid": res_uid,
-                "assignment_uid": assign_data.get("AssignmentUID")
-            })
-        else:
-            # Track resource UID usage for reporting
-            resource_uid_usage[res_uid] = resource_uid_usage.get(res_uid, 0) + 1
-    
-    if len(invalid_assignments) > 0:
-        logging.error(f"[ASSIGNMENT VALIDATION] ❌ CRITICAL: {len(invalid_assignments)} assignments reference invalid ResourceUIDs!")
-        logging.error(f"[ASSIGNMENT VALIDATION] Valid resource UIDs: {sorted(valid_resource_uids)[:20]} ...")
-        logging.error(f"[ASSIGNMENT VALIDATION] Invalid assignments: {invalid_assignments[:10]}")
-        raise ValueError(
-            f"CRITICAL: {len(invalid_assignments)} assignments reference resource UIDs that don't exist in resource_data_list. "
-            f"First invalid: Task UID={invalid_assignments[0]['task_uid']}, Resource UID={invalid_assignments[0]['resource_uid']}"
-        )
-    
-    logging.info(f"[ASSIGNMENT VALIDATION] ✓ All {len(assignment_data_list)} assignments reference valid Resource UIDs")
-    logging.info(f"[ASSIGNMENT VALIDATION] ✓ {len(resource_uid_usage)} unique resources are assigned to tasks")
-    logging.info(f"[ASSIGNMENT VALIDATION] ✓ All assignments reference valid Task UIDs (cleanup performed earlier)")
-    
-    # FIX ISSUE 2: Verify resource UIDs are from 1000+ range (not sequential from 1)
-    all_resource_uids_in_assignments = [a["ResourceUID"] for a in assignment_data_list]
-    min_res_uid = min(all_resource_uids_in_assignments) if all_resource_uids_in_assignments else None
-    max_res_uid = max(all_resource_uids_in_assignments) if all_resource_uids_in_assignments else None
-    
-    if min_res_uid is not None and min_res_uid < 1000:
-        logging.warning(f"[ASSIGNMENT VALIDATION] ⚠ WARNING: Found resource UID {min_res_uid} < 1000. Expected UIDs >= 1000 to avoid collision with Task UIDs.")
-    
-    logging.info(f"[ASSIGNMENT VALIDATION] ✓ Resource UID range in assignments: {min_res_uid} to {max_res_uid}")
-    logging.info(f"[ASSIGNMENT VALIDATION] ✓ Issue 2 validation passed: All assignments use actual resource UIDs from resource_uid_map")
-    
-    # ============================================================================
-    # FIX ISSUE 3: APPLY WORK AGGREGATION TO TASK XML ELEMENTS
-    # ============================================================================
-    # This section takes the work_by_task aggregation calculated from assignments
-    # and applies it to the Task XML elements BEFORE Phase 2 serialization.
-    # This ensures Task.Work fields accurately reflect assignment totals.
-    logging.info("[FIX ISSUE 3] Applying work_by_task aggregation to Task XML elements...")
-    logging.info(f"[FIX ISSUE 3] work_by_task contains aggregated work for {len(work_by_task)} tasks")
-    
-    tasks_updated_count = 0
-    tasks_skipped_summary = 0
-    tasks_not_found = 0
-    
-    for task_uid, work_hours in work_by_task.items():
-        # Find task element by UID
-        for task_elem in tasks.findall("{%s}Task" % ns):
-            uid_elem = task_elem.find("{%s}UID" % ns)
-            if uid_elem is not None and int(uid_elem.text) == task_uid:
-                # Check if this is a summary task (skip work updates for summary tasks)
-                summary_elem = task_elem.find("{%s}Summary" % ns)
-                task_is_summary = summary_elem is not None and summary_elem.text == "1"
-                
-                if not task_is_summary:
-                    # Update Work, RemainingWork, RegularWork
-                    planned_minutes = int(round(60 * work_hours))
-                    
-                    work_elem = task_elem.find("{%s}Work" % ns)
-                    if work_elem is not None:
-                        old_work_value = work_elem.text
-                        work_elem.text = f"PT{planned_minutes}M"
-                    else:
-                        old_work_value = "MISSING"
-                        ET.SubElement(task_elem, "{%s}Work" % ns).text = f"PT{planned_minutes}M"
-                    
-                    remaining_work_elem = task_elem.find("{%s}RemainingWork" % ns)
-                    if remaining_work_elem is not None:
-                        remaining_work_elem.text = f"PT{planned_minutes}M"
-                    
-                    regular_work_elem = task_elem.find("{%s}RegularWork" % ns)
-                    if regular_work_elem is not None:
-                        regular_work_elem.text = f"PT{planned_minutes}M"
-                    
-                    # FIX E: Update Task.Cost from assignment costs
-                    task_cost = cost_by_task.get(task_uid, 0.0)
-                    cost_elem = task_elem.find("{%s}Cost" % ns)
-                    if cost_elem is not None:
-                        cost_elem.text = str(task_cost)
-                    else:
-                        ET.SubElement(task_elem, "{%s}Cost" % ns).text = str(task_cost)
-                    
-                    # FIX E: Ensure FixedCost is set to match Cost (create if missing)
-                    fixed_cost_elem = task_elem.find("{%s}FixedCost" % ns)
-                    if fixed_cost_elem is not None:
-                        fixed_cost_elem.text = str(task_cost)
-                    else:
-                        ET.SubElement(task_elem, "{%s}FixedCost" % ns).text = str(task_cost)
-                    
-                    task_name_elem = task_elem.find("{%s}Name" % ns)
-                    task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
-                    
-                    # Log update details
-                    logging.info(f"[FIX ISSUE 3] Updated task '{task_name}' (UID={task_uid}): Work={old_work_value} → PT{planned_minutes}M ({work_hours}h), Cost=${task_cost:.2f}")
-                    tasks_updated_count += 1
-                else:
-                    # Log skipped summary task
-                    task_name_elem = task_elem.find("{%s}Name" % ns)
-                    task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
-                    logging.info(f"[FIX ISSUE 3] Skipped summary task '{task_name}' (UID={task_uid}) - summary tasks auto-calculate work from children")
-                    tasks_skipped_summary += 1
-                break
-        else:
-            # Task UID not found in XML tree
-            tasks_not_found += 1
-            logging.warning(f"[FIX ISSUE 3] Task UID={task_uid} not found in XML tree (work={work_hours}h cannot be applied)")
-    
-    # FIX ISSUE 3: Summary and validation
-    logging.info(f"[FIX ISSUE 3] ========== WORK AGGREGATION SUMMARY ==========")
-    logging.info(f"[FIX ISSUE 3] Tasks with aggregated work: {len(work_by_task)}")
-    logging.info(f"[FIX ISSUE 3] Leaf tasks updated: {tasks_updated_count}")
-    logging.info(f"[FIX ISSUE 3] Summary tasks skipped: {tasks_skipped_summary}")
-    logging.info(f"[FIX ISSUE 3] Tasks not found: {tasks_not_found}")
-    
-    # Validation: Ensure most tasks were updated successfully
-    if tasks_updated_count == 0 and len(work_by_task) > 0:
-        logging.warning(f"[FIX ISSUE 3] ⚠ WARNING: No tasks were updated despite {len(work_by_task)} tasks in work_by_task!")
-        logging.warning(f"[FIX ISSUE 3] This may indicate that work aggregation is not being applied correctly.")
-    elif tasks_updated_count > 0:
-        success_rate = (tasks_updated_count / len(work_by_task) * 100) if len(work_by_task) > 0 else 0
-        logging.info(f"[FIX ISSUE 3] ✓ Success rate: {success_rate:.1f}% ({tasks_updated_count}/{len(work_by_task)} tasks updated)")
-        logging.info(f"[FIX ISSUE 3] ✓ Issue 3 fix COMPLETE: work_by_task aggregation successfully applied to Task XML elements")
-    
-    logging.info(f"[FIX ISSUE 3] ================================================")
-
-    # ============================================================================
-    # FIX B: Final Validation - Ensure NO PredecessorUID points to Summary tasks
-    # ============================================================================
-    logging.info("[FIX B] ========== PREDECESSOR VALIDATION ==========")
-    logging.info(f"[FIX B] Summary predecessors rewritten: {predecessors_rewritten}")
-    logging.info(f"[FIX B] Invalid predecessors dropped: {predecessors_dropped}")
-    logging.info(f"[LINK CLEANUP] Rewrote {predecessors_rewritten} summary predecessors; Dropped {predecessors_dropped} invalid predecessors")
-    
-    # Validate: Check all PredecessorUID elements to ensure none point to summary tasks
-    logging.info("[FIX B] Validating all PredecessorUID elements in XML...")
-    illegal_summary_preds = []
-    missing_preds = []
-    
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        task_uid_elem = task_elem.find("{%s}UID" % ns)
-        if task_uid_elem is None:
-            continue
-        task_uid = int(task_uid_elem.text)
-        
-        for pred_link in task_elem.findall("{%s}PredecessorLink" % ns):
-            pred_uid_elem = pred_link.find("{%s}PredecessorUID" % ns)
-            if pred_uid_elem is None:
-                continue
-            pred_uid = int(pred_uid_elem.text)
-            
-            # Check if predecessor UID exists in valid tasks
-            if pred_uid not in valid_task_uids:
-                missing_preds.append((task_uid, pred_uid))
-            # Check if predecessor points to a summary task
-            elif is_summary.get(pred_uid, False):
-                illegal_summary_preds.append((task_uid, pred_uid))
-    
-    # Log results
-    logging.info(f"[FIX B CHECK] Predecessors -> missing: {len(missing_preds)}, summary: {len(illegal_summary_preds)}")
-    
-    if illegal_summary_preds:
-        logging.error(f"[FIX B] ❌ CRITICAL: {len(illegal_summary_preds)} PredecessorUID elements still point to summary tasks!")
-        for task_uid, pred_uid in illegal_summary_preds[:10]:
-            logging.error(f"[FIX B]   - Task UID {task_uid} → Summary Task UID {pred_uid}")
-        raise ValueError(
-            f"CRITICAL: {len(illegal_summary_preds)} PredecessorUID elements point to summary tasks. "
-            f"Workfront will reject this file. First illegal: Task UID={illegal_summary_preds[0][0]} → Summary UID={illegal_summary_preds[0][1]}"
-        )
-    
-    if missing_preds:
-        logging.error(f"[FIX B] ❌ CRITICAL: {len(missing_preds)} PredecessorUID elements reference non-existent tasks!")
-        for task_uid, pred_uid in missing_preds[:10]:
-            logging.error(f"[FIX B]   - Task UID {task_uid} → Missing Task UID {pred_uid}")
-        raise ValueError(
-            f"CRITICAL: {len(missing_preds)} PredecessorUID elements reference tasks that don't exist. "
-            f"First missing: Task UID={missing_preds[0][0]} → Missing UID={missing_preds[0][1]}"
-        )
-    
-    logging.info(f"[FIX B] ✓✓ VALIDATION PASSED: All PredecessorUID elements point to valid LEAF tasks!")
-    logging.info(f"[FIX B] ✓✓ No summary predecessors remaining - Workfront will accept this file")
-    logging.info(f"[FIX B] ================================================")
-
-    # ============================================================================
-    # PHASE 2: ASSIGNMENTS SECTION - DISABLED TO MATCH NOV 7 BASELINE
-    # ============================================================================
-    # CRITICAL DISCOVERY: Working Nov 7 baseline has empty <Assignments /> element with ZERO children.
-    # Workfront REQUIRES the <Assignments /> container but does NOT want Assignment children.
-    # The empty element is created at line 2723 in create_empty_mspdi_xml().
-    # 
-    # The assignment population loop has been disabled to match the working format.
-    logging.info("[PHASE 2] SKIPPING Assignment children generation - matching Nov 7 working baseline (empty <Assignments />)")
-    logging.info("[PHASE 2] Nov 7 baseline evidence: <Assignments /> element present but empty, Workfront import SUCCESSFUL")
-    logging.info(f"[PHASE 2] Will create empty <Assignments /> container without children (built {len(assignment_data_list)} assignments but will not write them)")
-    
-    # NOTE: Assignment child generation is disabled. The empty <Assignments /> container is created elsewhere.
-    # Nov 7 working format: <Assignments /> self-closing tag with no children.
-    # Do not populate with Assignment children unless Workfront's import requirements change.
-    
-    # WORKFRONT COMPATIBILITY: Safety passes to normalize values
-    logging.info("[WORKFRONT FIX] Running safety passes to ensure Workfront compatibility...")
-    
-    # Safety Pass A: Normalize PredecessorLink Type (0 or invalid → 1 for FS)
-    type_fixed = 0
-    for t in root.findall(".//{%s}PredecessorLink/{%s}Type" % (ns, ns)):
-        current_val = (t.text or "").strip()
-        if current_val not in {"1", "2", "3"}:  # Type 0 or blank → Force FS (Type 1)
-            t.text = "1"
-            type_fixed += 1
-    logging.info(f"[WORKFRONT FIX] Fixed {type_fixed} PredecessorLink Type values")
-    logging.info("[WORKFRONT FIX] ✓ Safety pass completed")
-    
-    # GPT-5 Pro Regression Guard: Validate task-level ExtendedAttributes schema
-    logging.info("[REGRESSION GUARD] Validating task-level ExtendedAttribute schema...")
-    schema_violations = []
-    tasks_elem = root.find("{%s}Tasks" % ns)
-    if tasks_elem is not None:
-        for task in tasks_elem.findall("{%s}Task" % ns):
-            uid_elem = task.find("{%s}UID" % ns)
-            task_uid_text = uid_elem.text if uid_elem is not None else "Unknown"
-            
-            # Check for ExtendedAttributes wrapper (WRONG)
-            ext_attrs_wrapper = task.find("{%s}ExtendedAttributes" % ns)
-            if ext_attrs_wrapper is not None:
-                schema_violations.append(f"Task UID={task_uid_text}: Has ExtendedAttributes wrapper (should be flat siblings)")
-            
-            # Check each ExtendedAttribute for proper structure
-            for ea in task.findall("{%s}ExtendedAttribute" % ns):
-                # Must have FieldID and Value
-                if ea.find("{%s}FieldID" % ns) is None:
-                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute missing FieldID")
-                if ea.find("{%s}Value" % ns) is None:
-                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute missing Value")
-                
-                # Must NOT have UID, CfType, or ElementType at task level
-                if ea.find("{%s}UID" % ns) is not None:
-                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute has UID (task-level should NOT have UID)")
-                if ea.find("{%s}CfType" % ns) is not None:
-                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute has CfType (task-level should NOT have CfType)")
-                if ea.find("{%s}ElementType" % ns) is not None:
-                    schema_violations.append(f"Task UID={task_uid_text}: ExtendedAttribute has ElementType (task-level should NOT have ElementType)")
-    
-    if schema_violations:
-        logging.error(f"[REGRESSION GUARD] ❌ SCHEMA VIOLATIONS DETECTED! {len(schema_violations)} violations:")
-        for violation in schema_violations[:10]:  # Show first 10
-            logging.error(f"  - {violation}")
-        if len(schema_violations) > 10:
-            logging.error(f"  ... and {len(schema_violations) - 10} more violations")
-        raise ValueError(f"Task-level ExtendedAttribute schema violations detected. Export aborted.")
-    else:
-        logging.info("[REGRESSION GUARD] ✓ All task-level ExtendedAttributes have correct flat schema (FieldID + Value only)")
-    
-    # CRITICAL VALIDATION: Check for empty summary tasks before export
-    # Workfront rejects XML with summary tasks that have no children
-    logging.info("[HIERARCHY VALIDATION] Validating task hierarchy...")
-    
-    # Ensure tasks_elem exists before validation
-    if tasks_elem is None:
-        logging.warning("[HIERARCHY VALIDATION] No Tasks element found in XML, skipping validation")
-        hierarchy_violations = []
-    else:
-        hierarchy_violations = validate_task_hierarchy(tasks_elem, ns)
-    
-    if hierarchy_violations:
-        logging.error(f"[HIERARCHY VALIDATION] ❌ CRITICAL: Found {len(hierarchy_violations)} empty summary tasks!")
-        logging.error(f"[HIERARCHY VALIDATION] Workfront will reject this XML with 'plan has to link' error")
-        
-        # Log first 10 violations
-        for i, violation in enumerate(hierarchy_violations[:10]):
-            logging.error(f"  {i+1}. Empty summary task: UID={violation['uid']}, Name='{violation['name']}', WBS={violation['wbs']}, Level={violation['outline_level']}")
-        
-        if len(hierarchy_violations) > 10:
-            logging.error(f"  ... and {len(hierarchy_violations) - 10} more empty summary tasks")
-        
-        # Raise error to abort export
-        raise ValueError(
-            f"Export aborted: Found {len(hierarchy_violations)} empty summary tasks. "
-            f"Workfront requires all summary tasks (Summary=1) to have at least one child task. "
-            f"First violation: UID={hierarchy_violations[0]['uid']}, Name='{hierarchy_violations[0]['name']}'"
-        )
-    else:
-        logging.info("[HIERARCHY VALIDATION] ✓ All summary tasks have at least one child - hierarchy is valid")
-    
-    # CRITICAL VALIDATION: Count Summary elements before export
-    logging.info("[SUMMARY VALIDATION] Counting Summary elements in XML tree...")
-    summary_count = 0
-    if tasks_elem is not None:
-        for task in tasks_elem.findall("{%s}Task" % ns):
-            summary_elem = task.find("{%s}Summary" % ns)
-            if summary_elem is not None:
-                summary_count += 1
-                if summary_elem.text == "1":
-                    uid_elem = task.find("{%s}UID" % ns)
-                    name_elem = task.find("{%s}Name" % ns)
-                    level_elem = task.find("{%s}OutlineLevel" % ns)
-                    logging.info(f"[SUMMARY CHECK] Found Summary=1: UID={uid_elem.text if uid_elem is not None else '?'}, Name='{name_elem.text if name_elem is not None else '?'}', Level={level_elem.text if level_elem is not None else '?'}")
-    
-    logging.info(f"[SUMMARY VALIDATION] Found {summary_count} tasks with Summary element")
-    if summary_count == 0:
-        logging.error("[SUMMARY VALIDATION] ❌ CRITICAL: NO Summary elements found in XML tree!")
-        logging.error("[SUMMARY VALIDATION] Workfront requires Summary=1 for all deliverables and components")
-        raise ValueError("Export aborted: No Summary elements found in XML tree. This will cause Workfront import to fail.")
-    
-    # ============================================================================
-    # FINAL VALIDATION: Verify All Three Critical Issues Are Resolved
-    # ============================================================================
-    logging.info("[FINAL VALIDATION] ========== COMPREHENSIVE REGRESSION CHECK ==========")
-    
-    # Issue 1 Validation: Resource UID Mapping Consistency
-    logging.info("[FINAL VALIDATION] Issue 1: Checking resource_uid_map and resource_data_list synchronization...")
-    resource_xml_uids = set()
-    for res_elem in resources.findall("{%s}Resource" % ns):
-        uid_elem = res_elem.find("{%s}UID" % ns)
-        if uid_elem is not None:
-            resource_xml_uids.add(int(uid_elem.text))
-    
-    if resource_xml_uids == valid_resource_uids:
-        logging.info(f"[FINAL VALIDATION] ✓ Issue 1 PASSED: All {len(resource_xml_uids)} resources in XML match resource_data_list")
-    else:
-        missing = valid_resource_uids - resource_xml_uids
-        extra = resource_xml_uids - valid_resource_uids
-        raise ValueError(f"Issue 1 FAILED: Resource UID mismatch! Missing: {missing}, Extra: {extra}")
-    
-    # Issue 2 Validation: SKIPPED - No Assignments in Nov 7 baseline format
-    logging.info("[FINAL VALIDATION] Issue 2: SKIPPED - Assignments section omitted to match Nov 7 working baseline")
-    logging.info("[FINAL VALIDATION] ✓ Issue 2 N/A: No assignments to validate (matching Nov 7 format with 0 assignments)")
-    
-    # Issue 3 Validation: Task Work Aggregation Applied
-    logging.info("[FINAL VALIDATION] Issue 3: Checking task work aggregation...")
-    tasks_with_nonzero_work = 0
-    tasks_with_zero_work = 0
-    
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        work_elem = task_elem.find("{%s}Work" % ns)
-        summary_elem = task_elem.find("{%s}Summary" % ns)
-        task_is_summary = summary_elem is not None and summary_elem.text == "1"
-        
-        if work_elem is not None and not task_is_summary:
-            work_val = work_elem.text
-            if work_val and work_val != "PT0M":
-                tasks_with_nonzero_work += 1
-            else:
-                tasks_with_zero_work += 1
-    
-    if tasks_with_nonzero_work > 0:
-        logging.info(f"[FINAL VALIDATION] ✓ Issue 3 PASSED: {tasks_with_nonzero_work} leaf tasks have non-zero Work values")
-        if tasks_with_zero_work > 0:
-            logging.info(f"[FINAL VALIDATION]   ({tasks_with_zero_work} tasks still have PT0M - may be tasks without assignments)")
-    else:
-        logging.warning(f"[FINAL VALIDATION] ⚠ Issue 3 WARNING: No tasks have non-zero Work values! work_by_task may not have been applied.")
-    
-    # NOTE: Task/Resource UID Overlap is ALLOWED by Workfront
-    # The working Nov 7 file had overlapping UIDs (Task UIDs 0-293, Resource UIDs 1-20)
-    # and Workfront accepted it successfully. UID uniqueness is only required WITHIN each type.
-    logging.info("[FINAL VALIDATION] Skipping Global UID Uniqueness check - Workfront tolerates Task/Resource UID overlap")
-    logging.info(f"[FINAL VALIDATION] Nov 7 baseline: Task/Resource UIDs can overlap - Workfront accepts this")
-    
-    # ============================================================================
-    # WORKFRONT SCHEMA COMPLIANCE: Final validation for schema-breaking issues
-    # ============================================================================
-    logging.info("[WORKFRONT SCHEMA] ========== SCHEMA-BREAKING ISSUE VALIDATION ==========")
-    
-    # Issue 1: Orphaned Assignments - SKIPPED (No Assignments in Nov 7 baseline)
-    logging.info("[WORKFRONT SCHEMA] Issue 1: SKIPPED - No Assignments section in export (matching Nov 7 working baseline)")
-    logging.info(f"[WORKFRONT SCHEMA] ✓ Issue 1 N/A: Zero assignments in XML (Nov 7 baseline format - Workfront accepted)")
-    
-    # Issue 2: Summary Predecessors (already validated in Fix B section at lines 2318-2362)
-    # Verify: Zero PredecessorLinks point to summary tasks
-    # Note: This was already validated and would have thrown an error if any summary predecessors existed
-    logging.info("[WORKFRONT SCHEMA] Issue 2: Summary predecessor validation...")
-    logging.info(f"[WORKFRONT SCHEMA] ✓ Issue 2 RESOLVED: Fix B validation passed (lines 2318-2362)")
-    logging.info(f"[WORKFRONT SCHEMA]   - {predecessors_rewritten} summary predecessors rewritten to leaf tasks")
-    logging.info(f"[WORKFRONT SCHEMA]   - {predecessors_dropped} invalid predecessors dropped")
-    logging.info(f"[WORKFRONT SCHEMA]   - Zero summary predecessors remain in final XML")
-    
-    logging.info("[WORKFRONT SCHEMA] ========== SCHEMA COMPLIANCE: PASSED ==========")
-    logging.info("[WORKFRONT SCHEMA] ✓ Issue 1: Orphaned assignments = 0")
-    logging.info("[WORKFRONT SCHEMA] ✓ Issue 2: Summary predecessors = 0")
-    logging.info("[WORKFRONT SCHEMA] ✓ All cross-references valid, file is schema-compliant")
-    
-    logging.info("[FINAL VALIDATION] ========== ALL REGRESSIONS CHECKED ==========")
-    logging.info("[FINAL VALIDATION] ✓ All three critical issues validated successfully")
-    logging.info("[FINAL VALIDATION] ✓ Global UID uniqueness confirmed")
-    logging.info("[FINAL VALIDATION] ✓ Schema-breaking issues resolved")
-    logging.info("[FINAL VALIDATION] ✓ XML is ready for export")
-    
-    # ============================================================================
-    # CRITICAL: Add empty <Assignments /> element to match Nov 7 working baseline
-    # ============================================================================
-    # Nov 7 working file has: <Assignments /> (self-closing empty tag)
-    # Workfront's MSPDI schema REQUIRES this element to be present, even if empty
-    logging.info("[ASSIGNMENTS] Creating empty <Assignments /> element (Nov 7 baseline format)")
-    ET.SubElement(root, "{%s}Assignments" % ns)
-    logging.info("[ASSIGNMENTS] ✓ Empty <Assignments /> container added (no Assignment children)")
-    
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
-    
-    # WORKFRONT FIX: Write in BINARY mode to prevent UTF-8 BOM
-    # Workfront rejects files with BOM (EF BB BF) at the start
-    # Binary mode gives us complete control over bytes written
-    
-    # First, get XML content as string (without declaration)
-    import io
-    xml_buffer = io.BytesIO()
-    tree.write(xml_buffer, encoding="utf-8", xml_declaration=False)
-    xml_content = xml_buffer.getvalue().decode('utf-8')
-    
-    # Write to file in BINARY mode with manual UTF-8 encoding (no BOM)
-    with open(output_xml, 'wb') as f:
-        # Write declaration manually as UTF-8 bytes (no BOM) - WORKFRONT FORMAT
-        f.write(b"<?xml version='1.0' encoding='utf-8'?>\n")
-        # Write content as UTF-8 bytes (no BOM)
-        f.write(xml_content.encode('utf-8'))
-    
-    # FIX: Verify PredecessorLink elements were created
-    # Count all PredecessorLink elements in the XML
-    pred_links_in_xml = root.findall(".//{%s}PredecessorLink" % ns)
-    pred_link_count = len(pred_links_in_xml)
-    
-    logging.info(f"[VERIFICATION] ==================== FINAL XML VERIFICATION ====================")
-    logging.info(f"[VERIFICATION] XML contains {pred_link_count} PredecessorLink elements")
-    if pred_link_count > 0:
-        logging.info(f"[VERIFICATION] ✓ SUCCESS! PredecessorLink elements were created in XML")
-        # Sample a few for logging
-        for i, pred_link in enumerate(pred_links_in_xml[:5]):
-            pred_uid_elem = pred_link.find("{%s}PredecessorUID" % ns)
-            pred_type_elem = pred_link.find("{%s}Type" % ns)
-            # Find parent task
-            parent_task = None
-            for task in root.findall(".//{%s}Task" % ns):
-                if pred_link in list(task):
-                    parent_task = task
-                    break
-            parent_uid = "Unknown"
-            parent_name = "Unknown"
-            if parent_task is not None:
-                uid_elem = parent_task.find("{%s}UID" % ns)
-                name_elem = parent_task.find("{%s}Name" % ns)
-                if uid_elem is not None:
-                    parent_uid = uid_elem.text
-                if name_elem is not None:
-                    parent_name = name_elem.text
-            
-            if pred_uid_elem is not None:
-                logging.info(f"[VERIFICATION] Sample #{i+1}: Task '{parent_name}' (UID={parent_uid}) → Predecessor UID={pred_uid_elem.text}, Type={pred_type_elem.text if pred_type_elem is not None else 'N/A'}")
-    else:
-        logging.warning(f"[VERIFICATION] ✗ WARNING! No PredecessorLink elements found in XML despite dependency processing")
-    logging.info(f"[VERIFICATION] ==================================================================")
+    tree.write(output_xml, encoding="utf-8", xml_declaration=True)
     
     # Return enhanced statistics
     deliverable_count = 0
@@ -2645,7 +1781,7 @@ def convert_excel_to_mspdi(
     stats = {
         "task_count": task_uid - 1,
         "resource_count": len(resource_map) + len(department_resources),
-        "assignment_count": 0,  # Assignments disabled for Workfront compatibility
+        "assignment_count": assignment_uid - 1,
         "project_start": project_start.isoformat(),
         "project_end": current_date.isoformat() if current_date else project_start.isoformat(),
         "deliverable_count": deliverable_count,
@@ -2656,10 +1792,10 @@ def convert_excel_to_mspdi(
         "has_dependencies": add_dependencies,
         "has_custom_fields": add_custom_fields,
         "has_calendars": True,
-        "predecessor_links_count": pred_link_count
+        "has_phase_gates": add_phase_gates
     }
     
-    logging.info(f"[Enhanced MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources, {stats['milestone_count']} milestones, {stats['predecessor_links_count']} dependencies")
+    logging.info(f"[Enhanced MSPDI] Created {output_xml}: {stats['task_count']} tasks, {stats['resource_count']} resources, {stats['milestone_count']} milestones")
     
     return stats
 
@@ -2693,7 +1829,6 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
     
     # Add minimal project task
-    # CRITICAL FIX: Root task MUST have OutlineLevel=0 (not 1) for Workfront compatibility
     project_task = ET.SubElement(tasks, "{%s}Task" % ns)
     ET.SubElement(project_task, "{%s}UID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}ID" % ns).text = "0"
@@ -2709,9 +1844,7 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}Summary" % ns).text = "1"
     
-    # CRITICAL: Workfront REQUIRES empty <Assignments /> element (Nov 7 baseline evidence)
-    # Do NOT populate with Assignment children - just create the empty container
-    ET.SubElement(root, "{%s}Assignments" % ns)  # Creates self-closing <Assignments /> tag
+    ET.SubElement(root, "{%s}Assignments" % ns)
     
     return root
 
@@ -2746,26 +1879,20 @@ def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
 
 
 if __name__ == "__main__":
-    # Support command-line arguments or use default test files
-    import sys
-    
-    if len(sys.argv) >= 3:
-        test_xlsx = sys.argv[1]
-        test_xml = sys.argv[2]
-    else:
-        test_xlsx = "test.xlsx"
-        test_xml = "test_enhanced.xml"
+    # Test the enhanced converter
+    test_xlsx = "test.xlsx"
+    test_xml = "test_enhanced.xml"
     
     if os.path.exists(test_xlsx):
         stats = convert_excel_to_mspdi(
             input_xlsx=test_xlsx,
             output_xml=test_xml,
             project_name="Enhanced Test Project",
+            add_deliverable_milestones=True,
+            add_phase_gates=True,
             add_dependencies=True,
             add_custom_fields=True
         )
-        print(f"Conversion complete: {stats}")
-        print(f"\n✓ Output written to: {test_xml}")
-        print(f"✓ Verify the three critical issues are resolved in the output above")
+        print(f"Enhanced conversion complete: {stats}")
     else:
         print(f"Test file {test_xlsx} not found")
