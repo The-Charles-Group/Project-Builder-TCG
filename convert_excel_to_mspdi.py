@@ -532,7 +532,7 @@ def convert_excel_to_mspdi(
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
     
     # Add project summary task (Task 0)
-    # FIX: Workfront requires OutlineLevel 1-3 (no level 0 allowed)
+    # CRITICAL FIX: Root task MUST have OutlineLevel=0 (not 1) for Workfront compatibility
     project_task = ET.SubElement(tasks, "{%s}Task" % ns)
     ET.SubElement(project_task, "{%s}UID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}ID" % ns).text = "0"
@@ -542,7 +542,7 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}CreateDate" % ns).text = datetime.now().isoformat()
     ET.SubElement(project_task, "{%s}WBS" % ns).text = "0"
     ET.SubElement(project_task, "{%s}OutlineNumber" % ns).text = "0"
-    ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "1"
+    ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Start" % ns).text = project_start.isoformat()
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
@@ -2059,7 +2059,7 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
     
     # Add minimal project task
-    # FIX: Workfront requires OutlineLevel 1-3 (no level 0 allowed)
+    # CRITICAL FIX: Root task MUST have OutlineLevel=0 (not 1) for Workfront compatibility
     project_task = ET.SubElement(tasks, "{%s}Task" % ns)
     ET.SubElement(project_task, "{%s}UID" % ns).text = "0"
     ET.SubElement(project_task, "{%s}ID" % ns).text = "0"
@@ -2068,7 +2068,7 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(project_task, "{%s}IsNull" % ns).text = "0"
     ET.SubElement(project_task, "{%s}WBS" % ns).text = "0"
     ET.SubElement(project_task, "{%s}OutlineNumber" % ns).text = "0"
-    ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "1"
+    ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
