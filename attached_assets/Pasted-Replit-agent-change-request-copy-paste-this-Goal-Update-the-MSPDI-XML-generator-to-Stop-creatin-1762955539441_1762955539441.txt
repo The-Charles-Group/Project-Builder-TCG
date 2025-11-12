@@ -1,0 +1,200 @@
+Replit agent change request (copy/paste this)
+
+Goal
+Update the MSPDI XML generator to:
+
+Stop creating/keeping wrapper rows like Phase 1, Phase 2, Client Approval, and name suffixes like - COMPLETE.
+
+De‑duplicate leaf tasks inside each component (same deliverable code + component + task name), keeping the first and merging links.
+
+Make roll‑ups behave (no manual dates or “must start” constraints on summary rows).
+
+Emit correct task hours, dates, dependencies, and revenue in the fields Workfront reads.
+
+Acceptance criteria
+
+No task names include “Phase”, “Client Approval”, or the suffix “- COMPLETE” unless they are legitimate leaf tasks; deliverable names are clean (e.g., “Creative Strategy / Campaign Plan Deck”)【turn2file19】.
+
+No duplicate leaf tasks within a component (same Deliverable Code + Component Name + Task Name results in one task).
+
+Summary (OutlineLevel 1–2) rows: Duration=PT0M, no <ManualStart>, <ManualFinish>, and ConstraintType=0 (ASAP). Their Start/Finish roll up from children (as in the 11‑07 file)【turn2file0】.
+
+Leaf tasks include:
+
+Start, Finish, Duration (ISO 8601, minutes)
+
+Work (planned hours, ISO 8601)
+
+<Cost> and <FixedCost> set to planned revenue; <FixedCostAccrual>2</…>; ExtendedAttribute Number3 (Alias “Revenue”) equals the same value【turn1file6】【turn2file13】.
+
+Dependencies via <PredecessorLink> with the correct predecessor UIDs and Type (use 1 for Finish‑to‑Start where you mean sequential, 2 if you intentionally need Start‑to‑Start — both appear in the accepted files)【turn1file5】【turn1file7】.
+
+Project header keeps MinutesPerDay=480 and existing calendar blocks【turn2file0】.
+
+Implementation details
+
+Sanitize names (no wrappers).
+
+Before writing task names, run:
+
+strip trailing - COMPLETE (case/space tolerant)
+
+drop top‑level “Phase *” or “Client Approval” rows entirely (do not emit them).
+
+If your input uses such rows as structure, replace them with a true leaf task named e.g., “Client Review & Revisions” where needed (this exists in the accepted files as a normal leaf task, not a suffix)【turn1file10】【turn1file11】.
+
+De‑dupe leaf tasks inside components.
+
+Build a key: (deliverable_code, component_name, task_name).
+
+If a duplicate appears, merge:
+
+keep the earliest Start and latest Finish if timings differ,
+
+sum Work (hours) and sum Revenue (for <Cost>, <FixedCost>, and Revenue extended attribute),
+
+union predecessor links (unique by PredecessorUID + Type).
+
+Only write one <Task> for that key.
+
+Summary rows (deliverables/components).
+
+For OutlineLevel 1–2 rows (deliverable + component):
+
+Summary=1, Duration=PT0M, no <ManualStart>/<ManualFinish>, ConstraintType=0.
+
+Don’t set Start/Finish directly; compute after all children: Start=min(child.Start), Finish=max(child.Finish).
+
+Don’t add predecessors to summaries.
+
+Remove any carry‑over ConstraintType=2 (“must start on”) from summaries — that’s what caused inflated timelines in the “11‑06” XML【turn2file19】.
+
+Leaf tasks: hours, dates, revenue.
+
+Work = planned hours → encode as ISO8601 duration (PT{hours}H or PT{minutes}M).
+
+Duration = planned duration in minutes: PT{minutes}M (your accepted files use minutes like PT1440M)【turn2file10】.
+
+Start/Finish are wall‑clock datetimes (localize as you currently do).
+
+Set revenue in three places on each task (mirroring the accepted exports):
+
+<Cost> and <FixedCost> = planned revenue amount; <FixedCostAccrual>2</FixedCostAccrual>【turn2file13】.
+
+Add an ExtendedAttribute entry where FieldID=188743715 (Number3) and Value={same revenue} (this is the “Revenue” field defined in the header)【turn1file6】【turn1file14】.
+
+Dependencies / predecessors.
+
+Only create <PredecessorLink> on leaf tasks.
+
+Default to Type=1 (Finish‑to‑Start) for “B starts after A finishes”. Use Type=2 when you explicitly mean Start‑to‑Start (your accepted files contain both)【turn1file5】【turn1file7】.
+
+Ensure every referenced PredecessorUID actually exists after de‑dupe and re‑numbering.
+
+UIDs, IDs, WBS after de‑dupe.
+
+Re‑assign UID/ID sequentially in write order and recompute WBS/OutlineNumber.
+
+When you change UIDs, update every <PredecessorLink><PredecessorUID> accordingly.
+
+Project header & calendar.
+
+Keep header values including MinutesPerDay=480 and the existing calendar week (Mon‑Sat working in your file) so durations map correctly to dates【turn2file0】.
+
+Post‑processing function (drop‑in)
+Implement and call this right before writing XML:
+
+def clean_for_workfront(tasks):
+    """
+    tasks: iterable of dicts with at least:
+      deliverable_code, component_name, name, is_summary (bool),
+      start, finish, duration_minutes, work_hours, revenue,
+      predecessors=[(pred_uid, type)], children=[...]
+    Returns: cleaned, de-duped tree with correct summaries and links.
+    """
+    # 1) strip wrappers/suffixes
+    def sanitize(n):
+        n = n.strip()
+        n = re.sub(r'\s*-\s*complete$', '', n, flags=re.I)
+        return n
+
+    for t in tasks:
+        t["name"] = sanitize(t["name"])
+
+    # 2) drop phase/client-approval pseudo-rows unless they are true leaf tasks
+    def is_wrapper(n):
+        return bool(re.match(r'^(phase\s*\d+|client\s*approval)$', n, re.I))
+    tasks = [t for t in tasks if not (t["is_summary"] and is_wrapper(t["name"]))]
+
+    # 3) de-dupe by (deliverable_code, component_name, task_name) on LEAF tasks
+    key = lambda t: (t["deliverable_code"], t["component_name"], t["name"])
+    merged = {}
+    for t in tasks:
+        if t["is_summary"]:
+            merged.setdefault(("__summary__", id(t)), t)
+            continue
+        k = key(t)
+        if k not in merged:
+            merged[k] = t
+        else:
+            m = merged[k]
+            # merge timings
+            m["start"]  = min(m["start"],  t["start"])
+            m["finish"] = max(m["finish"], t["finish"])
+            m["duration_minutes"] = max(m["duration_minutes"], t["duration_minutes"])
+            # merge quantitative fields
+            m["work_hours"] += t.get("work_hours", 0) or 0
+            m["revenue"]    += t.get("revenue", 0) or 0
+            # merge predecessor links (set by (uid,type))
+            seen = {(p[0], p[1]) for p in m.get("predecessors", [])}
+            for p in t.get("predecessors", []):
+                if (p[0], p[1]) not in seen:
+                    m.setdefault("predecessors", []).append(p)
+    tasks = list(merged.values())
+
+    # 4) recompute summaries: no manual dates, duration=0; roll up dates
+    def rollup(node):
+        if not node["children"]:
+            node["is_summary"] = False
+            return node["start"], node["finish"]
+        starts, finishes = [], []
+        for c in node["children"]:
+            s, f = rollup(c)
+            starts.append(s); finishes.append(f)
+        node["is_summary"] = True
+        node["duration_minutes"] = 0
+        node["start"], node["finish"] = min(starts), max(finishes)
+        node["manual_start"] = node["manual_finish"] = None
+        node["constraint_type"] = 0
+        return node["start"], node["finish"]
+
+    # build tree from tasks and call rollup(root)
+    ...
+    return tasks
+
+
+MSPDI writing notes
+
+For revenue, write all three:
+
+<Cost>{revenue:.2f}</Cost>
+
+<FixedCost>{revenue:.2f}</FixedCost><FixedCostAccrual>2</FixedCostAccrual>【turn2file13】
+
+<ExtendedAttribute><FieldID>188743715</FieldID><Value>{revenue:.2f}</Value></ExtendedAttribute> with the header defining Number3 as “Revenue” (keep the header block that declares it)【turn1file6】.
+
+For hours, write Work in ISO 8601, e.g. PT16H (or PT960M) and keep MinutesPerDay=480 in the Project header so Workfront interprets duration consistently【turn2file0】.
+
+For dependencies, only on leaf tasks; ensure each <PredecessorUID> maps to the current UID after reindexing. Your accepted files include both Type=1 and Type=2 examples — keep using those where appropriate【turn1file5】【turn1file7】.
+
+Tests
+
+Unit‑test a component that used to generate:
+
+Phase 1, Client Approval, and X - COMPLETE — confirm they don’t appear.
+
+Two “Idea Write‑Ups” rows with same component — confirm they merge into one with summed hours/revenue.
+
+Validate that deliverable/component summaries have Duration=PT0M, no <ManualStart>/<ManualFinish>, and ConstraintType=0 (compare to the 11‑07 file)【turn2file0】.
+
+Spot‑check that a leaf task shows Cost=FixedCost=Revenue and an ExtendedAttribute Revenue with the same value (compare to the accepted files)【turn2file13】【turn1file6】.

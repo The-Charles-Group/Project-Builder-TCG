@@ -1,0 +1,144 @@
+One clear set of instructions to give the Replit agent
+
+Goal: Generate Workfront‑compatible MSP XML with no duplicate tasks under the same component and without “Phase 1/2,” “Client Approval/Review,” or “ – COMPLETE” suffixes. Keep a simple 3‑level structure: Deliverable (OutlineLevel=1, Summary=1) → Component (OutlineLevel=2, Summary=1) → Leaf Tasks (OutlineLevel=3, Summary=0).
+
+1) Remove wrapper tasks & suffixes at source
+
+Do not generate any task whose normalized name matches:
+
+/^(phase\s*\d+|client\s*(approval|review|revisions?)|internal\s*review.*)$/i
+
+Do not append “ – COMPLETE” to any name. If names come in with it, trim with name = name.replace(/\s*-\s*complete$/i, '').
+
+Why: these “approval/phase” leaves are what extend your dates, because they become the latest child of the component/deliverable. You can see many Client Review & Revisions leaves as the last child under components in your accepted XML.
+
+2) Deduplicate tasks within a component
+
+Before pushing a leaf task into a component’s children array, deduplicate by key:
+
+key = (deliverable_code, component_name, normalize(task_name))
+if key in seen: skip
+else: seen.add(key); append
+
+
+Where:
+
+def normalize(s: str) -> str:
+    return re.sub(r'\s+', ' ', s.strip().lower())
+
+
+Optional: if two tasks have same normalized name but different durations, keep the first and log a warning.
+
+Evidence of the duplication problem: multiple “Idea Write‑Ups” rows under the same component. 
+
+St.Regis_Nashville_Branding_Age…
+
+3) Keep dates driven by real work only
+
+For summary tasks (deliverable & component):
+
+Summary=1, Duration=PT0M, omit ManualStart, ManualFinish, and do not set far‑future ConstraintDate; let Workfront compute Start/Finish from children.
+
+For leaf tasks:
+
+Summary=0
+
+Set Start, Finish, Duration as the actual work requires.
+
+Use ConstraintType=0 (ASAP) unless you truly need SNET/SNLT, to avoid artificial extensions.
+
+4) Preserve the extended attributes (they’re good)
+
+Keep your extended attributes exactly as in the accepted files:
+
+Text2 = Deliverable Code,
+
+Text3 = Component Name,
+
+Text4 = Service Category,
+
+Number3 = Revenue, etc. 
+
+St.Regis_Nashville_Branding_Age…
+
+5) Ensure WBS / Outline values are consistent
+
+Root project: UID=0, OutlineLevel=0.
+
+Deliverable summaries: OutlineLevel=1, Summary=1.
+
+Component summaries: OutlineLevel=2, Summary=1.
+
+Leaves: OutlineLevel=3, Summary=0.
+
+Generate WBS like 1, 1.1, 1.1.1… based on insert order within each parent.
+
+6) Predecessors: safe removal strategy
+
+If you remove a wrapper/approval task that has predecessors but no one depends on it, just drop it.
+
+If any later task does depend on a removed wrapper, rewire to the removed task’s predecessors (fan‑in):
+
+for each task T that had predecessor P_removed:
+    T.predecessors.remove(P_removed)
+    T.predecessors.update(P_removed.predecessors)
+
+
+This keeps the logical order without a dangling reference.
+
+Minimal patch the Replit agent can add (Python‑style pseudocode)
+BANNED_RE = re.compile(r'^(phase\s*\d+|client\s*(approval|review|revisions?)|internal\s*review.*)$', re.I)
+
+def sanitize_name(name: str) -> str:
+    name = re.sub(r'\s*-\s*complete$', '', name, flags=re.I)
+    return re.sub(r'\s+', ' ', name.strip())
+
+def should_drop_task(name: str) -> bool:
+    return bool(BANNED_RE.match(name.strip()))
+
+def dedup_and_filter(component_tasks, deliverable_code, component_name):
+    seen = set()
+    cleaned = []
+    for t in component_tasks:
+        n = sanitize_name(t['Name'])
+        if should_drop_task(n):
+            continue
+        key = (deliverable_code, component_name, n.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        t['Name'] = n
+        cleaned.append(t)
+    return cleaned
+
+def make_summary(task):
+    task['Summary'] = 1
+    task['Duration'] = 'PT0M'
+    for k in ('ManualStart','ManualFinish','ConstraintDate'):
+        task.pop(k, None)
+    return task
+
+
+Call dedup_and_filter() right after you build each component’s task list, and call make_summary() for deliverable/component summary rows before emitting XML. If your code currently autogenerates “client review” rows, stop producing them.
+
+(Your existing XML shows the content fields you want to keep—Component Name, Deliverable Code, Service Category, etc.—so leave those as‑is. 
+
+St.Regis_Nashville_Branding_Age…
+
+)
+
+Quick pre‑export validations (add as unit checks)
+
+Have the agent add assertions before writing the XML:
+
+No banned names present.
+
+No duplicates per (deliverable_code, component_name, normalized task name).
+
+All summary rows have Duration=PT0M and no ManualStart/ManualFinish/ConstraintDate.
+
+All leaf rows have Summary=0.
+
+WBS monotonic and OutlineLevels in {0,1,2,3}.
+
+No PredecessorUID references a task that was removed.
