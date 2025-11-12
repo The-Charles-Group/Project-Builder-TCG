@@ -510,6 +510,12 @@ def convert_excel_to_mspdi(
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
     
+    # WORKFRONT FIX: Add empty Baseline container (Workfront expects this even if empty)
+    ET.SubElement(root, "{%s}Baseline" % ns)
+    
+    # WORKFRONT FIX: Add empty OutlineCodes container (Workfront expects this even if empty)
+    ET.SubElement(root, "{%s}OutlineCodes" % ns)
+    
     # Create Resources container with enhanced resource definitions
     resources = ET.SubElement(root, "{%s}Resources" % ns)
     
@@ -2135,17 +2141,22 @@ def convert_excel_to_mspdi(
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
     
-    # Write without declaration first
-    tree.write(output_xml, encoding="utf-8", xml_declaration=False)
+    # WORKFRONT FIX: Write in BINARY mode to prevent UTF-8 BOM
+    # Workfront rejects files with BOM (EF BB BF) at the start
+    # Binary mode gives us complete control over bytes written
     
-    # Read the file and prepend the correct declaration
-    with open(output_xml, 'r', encoding='utf-8') as f:
-        content = f.read()
+    # First, get XML content as string (without declaration)
+    import io
+    xml_buffer = io.BytesIO()
+    tree.write(xml_buffer, encoding="utf-8", xml_declaration=False)
+    xml_content = xml_buffer.getvalue().decode('utf-8')
     
-    # Write back with Workfront-compliant declaration (double quotes, uppercase UTF-8)
-    with open(output_xml, 'w', encoding='utf-8') as f:
-        f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-        f.write(content)
+    # Write to file in BINARY mode with manual UTF-8 encoding (no BOM)
+    with open(output_xml, 'wb') as f:
+        # Write declaration manually as UTF-8 bytes (no BOM)
+        f.write(b'<?xml version="1.0" encoding="UTF-8"?>\n')
+        # Write content as UTF-8 bytes (no BOM)
+        f.write(xml_content.encode('utf-8'))
     
     # FIX: Verify PredecessorLink elements were created
     # Count all PredecessorLink elements in the XML
