@@ -1735,14 +1735,6 @@ def convert_excel_to_mspdi(
     
     logging.info(f"[FIX B] Built child hours aggregator for {len(child_hours_by_parent)} parent tasks")
     
-    # FIX 6: REMOVE ALL ASSIGNMENT GENERATION
-    # Assignment generation has been disabled per Workfront compatibility requirements
-    # All assignment-related code is commented out below
-    assignment_data_list = []  # Keep empty list to prevent errors in later code
-    
-    # COMMENTED OUT: Assignment data building and XML creation
-    # The following section (lines 1531-1820) has been disabled
-    """
     # FIX A: Build assignment data list BEFORE creating XML elements
     # This allows us to aggregate work by task and update Task.Work elements
     logging.info("[FIX A] Building assignment data structure before creating XML")
@@ -2033,10 +2025,6 @@ def convert_excel_to_mspdi(
         ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
     
     logging.info(f"[FIX A] Created {len(assignment_data_list)} Assignment XML elements")
-    """
-    # END OF COMMENTED OUT ASSIGNMENT GENERATION SECTION
-    
-    logging.info("[FIX 6] Assignment generation DISABLED - no assignments will be created")
     
     # WORKFRONT COMPATIBILITY: Safety passes to normalize values
     logging.info("[WORKFRONT FIX] Running safety passes to ensure Workfront compatibility...")
