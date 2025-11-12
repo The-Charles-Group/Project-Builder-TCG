@@ -185,9 +185,6 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",
     rate_band: str = "Standard_US",
     blended_rate: Optional[float] = None,
-    add_deliverable_milestones: bool = False,
-    add_phase_gates: bool = False,
-    add_client_approval_milestone: bool = False,
     add_dependencies: bool = True,
     add_custom_fields: bool = True
 ) -> Dict[str, Any]:
@@ -206,9 +203,6 @@ def convert_excel_to_mspdi(
         pricing_mode: Pricing mode for the project
         rate_band: Rate band for pricing
         blended_rate: Blended rate if using flat pricing
-        add_deliverable_milestones: Add START/END anchor milestones for deliverables
-        add_phase_gates: Add phase gate milestones at 25%, 50%, 75%
-        add_client_approval_milestone: Add CLIENT APPROVAL - FINAL milestone at end
         add_dependencies: Add task dependencies
         add_custom_fields: Add ExtendedAttribute elements for Workfront with proper MSPDI schema structure
         
@@ -2030,7 +2024,6 @@ def convert_excel_to_mspdi(
         "has_dependencies": add_dependencies,
         "has_custom_fields": add_custom_fields,
         "has_calendars": True,
-        "has_phase_gates": add_phase_gates,
         "predecessor_links_count": pred_link_count
     }
     
