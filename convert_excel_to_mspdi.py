@@ -389,7 +389,8 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CurrencySymbol" % ns).text = "$"
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
-    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
+    # WORKFRONT FIX: Reference Calendar UID 9999 to avoid collision with Task UIDs
+    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "9999"
     ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
     ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
     ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
@@ -481,9 +482,12 @@ def convert_excel_to_mspdi(
         ET.SubElement(ext_attr7, "{%s}Guid" % ns).text = "000039B7-8BBE-4CEB-82C4-FA8C0B400039"
     
     # Add Calendar definition
+    # WORKFRONT FIX: Use UID=9999 for Calendar to avoid collision with Task UIDs (0-N)
+    # Workfront requires globally unique UIDs across ALL element types (Calendar, Tasks, Resources, Assignments)
+    CALENDAR_UID = "9999"
     calendars = ET.SubElement(root, "{%s}Calendars" % ns)
     calendar = ET.SubElement(calendars, "{%s}Calendar" % ns)
-    ET.SubElement(calendar, "{%s}UID" % ns).text = "1"
+    ET.SubElement(calendar, "{%s}UID" % ns).text = CALENDAR_UID
     ET.SubElement(calendar, "{%s}Name" % ns).text = "Standard"
     ET.SubElement(calendar, "{%s}IsBaseCalendar" % ns).text = "1"
     ET.SubElement(calendar, "{%s}IsBaselineCalendar" % ns).text = "0"
@@ -557,7 +561,8 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
-        ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
+        # WORKFRONT FIX: Reference Calendar UID 9999
+        ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
         
         department_resources[str(dept)] = resource_id
         resource_id += 1
@@ -622,7 +627,8 @@ def convert_excel_to_mspdi(
             ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
             ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
-            ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
+            # WORKFRONT FIX: Reference Calendar UID 9999
+            ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
             
             # Store in resource_uid_map using NORMALIZED key
             resource_uid_map[normalized_key] = resource_id
@@ -2266,7 +2272,8 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     else:
         ET.SubElement(root, "{%s}StartDate" % ns).text = datetime.now().isoformat()
     
-    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
+    # WORKFRONT FIX: Reference Calendar UID 9999 to avoid collision with Task UIDs
+    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "9999"
     ET.SubElement(root, "{%s}DefaultTaskType" % ns).text = "0"
     ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"
     ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = "0"
