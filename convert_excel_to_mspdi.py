@@ -389,8 +389,8 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CurrencySymbol" % ns).text = "$"
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
-    # WORKFRONT FIX: Reference Calendar UID 9999 to avoid collision with Task UIDs
-    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "9999"
+    # WORKFRONT FIX: Reference Default Calendar UID 9999
+    ET.SubElement(root, "{%s}DefaultCalendarUID" % ns).text = "9999"
     ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
     ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
     ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
@@ -421,7 +421,6 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}BaselineForEarnedValue" % ns).text = "0"
     ET.SubElement(root, "{%s}AutoAddNewResourcesAndTasks" % ns).text = "1"
     ET.SubElement(root, "{%s}CurrentDate" % ns).text = datetime.now().isoformat()
-    ET.SubElement(root, "{%s}MicrosoftProjectServerURL" % ns).text = "1"
     ET.SubElement(root, "{%s}Autolink" % ns).text = "1"
     ET.SubElement(root, "{%s}NewTaskStartDate" % ns).text = "0"  # Project Start Date
     ET.SubElement(root, "{%s}NewTasksAreManual" % ns).text = "0"
@@ -517,147 +516,7 @@ def convert_excel_to_mspdi(
     # WORKFRONT FIX: DO NOT add empty Baseline or OutlineCodes - Workfront rejects self-closing complex types
     # These elements require child nodes when present, so omit them entirely when no data exists
     
-    # Create Resources container with enhanced resource definitions
-    resources = ET.SubElement(root, "{%s}Resources" % ns)
-    
-    # Add resources from the DataFrame with enhanced properties
-    resource_map = {}
-    resource_uid_map = {}  # FIX: New mapping for (role, seniority) -> resource_uid
-    department_resources = {}
-    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
-    # Tasks start at UID=1, Resources must be in separate namespace
-    resource_id = 1000
-    
-    # Extract unique departments and roles
-    departments = set()
-    if "Department" in df.columns:
-        departments.update(df["Department"].dropna().unique())
-    
-    # Add department-level resources first
-    for dept in departments:
-        res = ET.SubElement(resources, "{%s}Resource" % ns)
-        ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
-        ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
-        ET.SubElement(res, "{%s}Name" % ns).text = f"{dept} Team"
-        ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(dept).split()[:2]])
-        ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
-        ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
-        ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-        ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
-        ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
-        ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
-        ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
-        ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
-        ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
-        ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate or 150:.2f}"
-        ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
-        ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
-        ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
-        # WORKFRONT FIX: Reference Calendar UID 9999
-        ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
-        
-        department_resources[str(dept)] = resource_id
-        resource_id += 1
-    
-    # FIX: Add individual role resources with (role, seniority) mapping
-    if "Role" in df.columns:
-        # Extract unique (role, seniority) combinations from role rows
-        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
-        
-        # Build registry with normalized keys for deduplication
-        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
-        
-        for _, row in role_rows.iterrows():
-            role = str(row.get("Role", "")).strip()
-            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
-            if role:
-                # Create display name (original case/formatting)
-                display_name = f"{role} ({seniority})" if seniority else role
-                
-                # Create normalized key for deduplication
-                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
-                
-                # Store in registry (will automatically dedupe by normalized key)
-                if normalized_key not in resource_registry:
-                    resource_registry[normalized_key] = {
-                        "display_name": display_name,
-                        "role": role,
-                        "seniority": seniority,
-                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
-                    }
-        
-        # Create resources from registry (sorted for consistency)
-        for normalized_key in sorted(resource_registry.keys()):
-            res_data = resource_registry[normalized_key]
-            res = ET.SubElement(resources, "{%s}Resource" % ns)
-            ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
-            ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
-            ET.SubElement(res, "{%s}Name" % ns).text = res_data["display_name"]
-            ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(res_data["role"]).split()[:3]])
-            ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
-            ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
-            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
-            ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
-            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
-            ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
-            ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
-            ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
-            ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
-            ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
-            ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"
-            
-            # Add rate if available
-            if blended_rate:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate:.2f}"
-            elif res_data["rate"] is not None:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['rate']:.2f}"
-            else:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = "150.00"
-            
-            ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
-            ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
-            # WORKFRONT FIX: Reference Calendar UID 9999
-            ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
-            
-            # Store in resource_uid_map using NORMALIZED key
-            resource_uid_map[normalized_key] = resource_id
-            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
-            
-            logging.info(f"[RESOURCE CREATION] Created resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}', Name='{res_data['display_name']}' (normalized_key='{normalized_key}')")
-            
-            resource_id += 1
-    
-    # VALIDATION GUARD: Ensure no duplicate Resource UIDs
-    logging.info("[RESOURCE VALIDATION] Running post-creation validation...")
-    
-    # Collect all Resource UIDs from XML
-    resource_uids_in_xml = []
-    for res_elem in resources.findall("{%s}Resource" % ns):
-        uid_elem = res_elem.find("{%s}UID" % ns)
-        if uid_elem is not None:
-            resource_uids_in_xml.append(int(uid_elem.text))
-    
-    # Check for duplicates
-    assert len(resource_uids_in_xml) == len(set(resource_uids_in_xml)), \
-        f"CRITICAL: Duplicate ResourceUIDs found in XML! UIDs: {resource_uids_in_xml}"
-    
-    logging.info(f"[RESOURCE VALIDATION] ✓ All {len(resource_uids_in_xml)} Resource UIDs are unique")
-    
-    # Build valid resource UID set for assignment validation later
-    valid_resource_uids = set(resource_uids_in_xml)
-    
-    # FIX: Log resource mapping summary for debugging
-    logging.info(f"[RESOURCE VALIDATION] Created {len(resource_uid_map)} role-seniority resources")
-    logging.info(f"[RESOURCE VALIDATION] resource_uid_map keys (first 10): {list(resource_uid_map.keys())[:10]}")
-    
+
     # Create Tasks container
     tasks = ET.SubElement(root, "{%s}Tasks" % ns)
     
@@ -1977,6 +1836,147 @@ def convert_excel_to_mspdi(
                     logging.info(f"[FIX A & E] Updated task '{task_name}' (UID={task_uid}): Work={planned_minutes}M, Cost=${task_cost:.2f}")
                 break
     
+
+    # Create Resources container with enhanced resource definitions
+    resources = ET.SubElement(root, "{%s}Resources" % ns)
+    
+    # Add resources from the DataFrame with enhanced properties
+    resource_map = {}
+    resource_uid_map = {}  # FIX: New mapping for (role, seniority) -> resource_uid
+    department_resources = {}
+    # WORKFRONT FIX: Start resource UIDs at 1000 to avoid collision with task UIDs
+    # Tasks start at UID=1, Resources must be in separate namespace
+    resource_id = 1000
+    
+    # Extract unique departments and roles
+    departments = set()
+    if "Department" in df.columns:
+        departments.update(df["Department"].dropna().unique())
+    
+    # Add department-level resources first
+    for dept in departments:
+        res = ET.SubElement(resources, "{%s}Resource" % ns)
+        ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
+        ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
+        ET.SubElement(res, "{%s}Name" % ns).text = f"{dept} Team"
+        ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(dept).split()[:2]])
+        ET.SubElement(res, "{%s}Group" % ns).text = str(dept)
+        ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
+        ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
+        ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+        ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+        ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
+        ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+        ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+        ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
+        ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
+        ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate or 150:.2f}"
+        ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+        ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
+        ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
+        # WORKFRONT FIX: Reference Calendar UID 9999
+        ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
+        
+        department_resources[str(dept)] = resource_id
+        resource_id += 1
+    
+    # FIX: Add individual role resources with (role, seniority) mapping
+    if "Role" in df.columns:
+        # Extract unique (role, seniority) combinations from role rows
+        role_rows = df[df["Role"].notna() & (df["Role"] != "")]
+        
+        # Build registry with normalized keys for deduplication
+        resource_registry = {}  # normalized_key -> {display_name, role, seniority, rate}
+        
+        for _, row in role_rows.iterrows():
+            role = str(row.get("Role", "")).strip()
+            seniority = str(row.get("Seniority", "")).strip() if pd.notna(row.get("Seniority")) else ""
+            if role:
+                # Create display name (original case/formatting)
+                display_name = f"{role} ({seniority})" if seniority else role
+                
+                # Create normalized key for deduplication
+                normalized_key = f"{normalize_resource_name(role)}|{normalize_resource_name(seniority)}"
+                
+                # Store in registry (will automatically dedupe by normalized key)
+                if normalized_key not in resource_registry:
+                    resource_registry[normalized_key] = {
+                        "display_name": display_name,
+                        "role": role,
+                        "seniority": seniority,
+                        "rate": row.get("Rate_USD") if pd.notna(row.get("Rate_USD")) else None
+                    }
+        
+        # Create resources from registry (sorted for consistency)
+        for normalized_key in sorted(resource_registry.keys()):
+            res_data = resource_registry[normalized_key]
+            res = ET.SubElement(resources, "{%s}Resource" % ns)
+            ET.SubElement(res, "{%s}UID" % ns).text = str(resource_id)
+            ET.SubElement(res, "{%s}ID" % ns).text = str(resource_id)
+            ET.SubElement(res, "{%s}Name" % ns).text = res_data["display_name"]
+            ET.SubElement(res, "{%s}Initials" % ns).text = "".join([w[0] for w in str(res_data["role"]).split()[:3]])
+            ET.SubElement(res, "{%s}Type" % ns).text = "1"  # Work resource
+            ET.SubElement(res, "{%s}MaterialLabel" % ns).text = "hrs"
+            ET.SubElement(res, "{%s}MaxUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+            ET.SubElement(res, "{%s}PeakUnits" % ns).text = "1.0"  # Workfront requires fractional format: 1.0 = 100%
+            ET.SubElement(res, "{%s}OverAllocated" % ns).text = "0"
+            ET.SubElement(res, "{%s}AvailableFrom" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}AvailableTo" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}Start" % ns).text = project_start.isoformat()
+            ET.SubElement(res, "{%s}Finish" % ns).text = (project_start + timedelta(days=365)).isoformat()
+            ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
+            ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
+            ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"
+            
+            # Add rate if available
+            if blended_rate:
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{blended_rate:.2f}"
+            elif res_data["rate"] is not None:
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"{res_data['rate']:.2f}"
+            else:
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = "150.00"
+            
+            ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
+            ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
+            ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
+            # WORKFRONT FIX: Reference Calendar UID 9999
+            ET.SubElement(res, "{%s}CalendarUID" % ns).text = "9999"
+            
+            # Store in resource_uid_map using NORMALIZED key
+            resource_uid_map[normalized_key] = resource_id
+            resource_map[res_data["role"]] = resource_id  # Keep for backward compatibility
+            
+            logging.info(f"[RESOURCE CREATION] Created resource UID={resource_id} for Role='{res_data['role']}', Seniority='{res_data['seniority']}', Name='{res_data['display_name']}' (normalized_key='{normalized_key}')")
+            
+            resource_id += 1
+    
+    # VALIDATION GUARD: Ensure no duplicate Resource UIDs
+    logging.info("[RESOURCE VALIDATION] Running post-creation validation...")
+    
+    # Collect all Resource UIDs from XML
+    resource_uids_in_xml = []
+    for res_elem in resources.findall("{%s}Resource" % ns):
+        uid_elem = res_elem.find("{%s}UID" % ns)
+        if uid_elem is not None:
+            resource_uids_in_xml.append(int(uid_elem.text))
+    
+    # Check for duplicates
+    assert len(resource_uids_in_xml) == len(set(resource_uids_in_xml)), \
+        f"CRITICAL: Duplicate ResourceUIDs found in XML! UIDs: {resource_uids_in_xml}"
+    
+    logging.info(f"[RESOURCE VALIDATION] ✓ All {len(resource_uids_in_xml)} Resource UIDs are unique")
+    
+    # Build valid resource UID set for assignment validation later
+    valid_resource_uids = set(resource_uids_in_xml)
+    
+    # FIX: Log resource mapping summary for debugging
+    logging.info(f"[RESOURCE VALIDATION] Created {len(resource_uid_map)} role-seniority resources")
+    logging.info(f"[RESOURCE VALIDATION] resource_uid_map keys (first 10): {list(resource_uid_map.keys())[:10]}")
     # Create Assignments container with enhanced resource assignments
     logging.info("[FIX A] Creating Assignment XML elements from assignment data")
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
@@ -2249,8 +2249,8 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     else:
         ET.SubElement(root, "{%s}StartDate" % ns).text = datetime.now().isoformat()
     
-    # WORKFRONT FIX: Reference Calendar UID 9999 to avoid collision with Task UIDs
-    ET.SubElement(root, "{%s}CalendarUID" % ns).text = "9999"
+    # WORKFRONT FIX: Reference Default Calendar UID 9999
+    ET.SubElement(root, "{%s}DefaultCalendarUID" % ns).text = "9999"
     ET.SubElement(root, "{%s}DefaultTaskType" % ns).text = "0"
     ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"
     ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = "0"
