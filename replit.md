@@ -3,6 +3,16 @@
 ## Overview
 This project is a web-based Agency Project Builder designed to streamline the proposal creation process for creative and digital agencies. It analyzes Request for Proposal (RFP) content to suggest relevant deliverables, builds project scenarios based on different complexity and tier combinations, calculates pricing using role rates and hours, and generates timeline projections with built-in slack. The system aims to automate and enhance the efficiency of creating project estimates and timelines, thereby enhancing efficiency and accuracy in project proposal generation.
 
+## Recent Changes (Nov 12, 2025)
+**Workfront XML Export - Ghost Task Fix**
+- **Critical Bug Fix**: Moved task filtering (deduplication, wrapper task removal) to occur BEFORE XML task element creation
+- **Impact**: Eliminated 140 "ghost" tasks (empty task elements with no Name/Cost/Revenue fields)
+- **Root Cause**: Previous code created `<Task>` element first, then ran filters that would `continue` on duplicates/wrappers, leaving empty task shells in XML
+- **Fix**: Reordered logic to validate/filter task rows BEFORE calling `ET.SubElement(tasks, "Task")`
+- **Revenue Fields**: Fixed to always add Cost, FixedCost, and Revenue ExtendedAttribute to ALL leaf tasks (even if revenue=0)
+- **Validation**: All exports now pass 4 critical checks: 0 assignments, 0 ghost tasks, 0 wrapper tasks, 100% revenue coverage
+- **File**: `convert_excel_to_mspdi.py` lines 886-925
+
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 

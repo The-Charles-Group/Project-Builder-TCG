@@ -34,6 +34,81 @@ def normalize_resource_name(name: str) -> str:
     return str(name).strip().lower()
 
 
+def sanitize_task_name(name: str) -> str:
+    """
+    Sanitize task name by removing banned suffixes and normalizing whitespace.
+    
+    Removes:
+    - " – COMPLETE" suffix (case-insensitive, handles various dash types)
+    - " - COMPLETE" suffix
+    - Extra whitespace
+    
+    Args:
+        name: Raw task name
+    
+    Returns:
+        Sanitized task name
+    """
+    import re
+    name = str(name).strip()
+    # Remove " – COMPLETE" or " - COMPLETE" suffix (case-insensitive)
+    name = re.sub(r'\s*[-–]\s*complete\s*$', '', name, flags=re.IGNORECASE)
+    # Normalize multiple spaces to single space
+    name = re.sub(r'\s+', ' ', name)
+    return name.strip()
+
+
+def should_drop_wrapper_task(name: str) -> bool:
+    """
+    Check if a task name matches banned wrapper patterns.
+    
+    Wrapper tasks to exclude:
+    - Anything starting with "Phase" followed by digits (Phase 1, Phase 2 Kickoff, etc.)
+    - Anything starting with "Client Approval" (Client Approval, Client Approval - Final, etc.)
+    - Anything starting with "Client Review" (Client Review, Client Review & Revisions, etc.)
+    - Anything starting with "Internal Review"
+    
+    Args:
+        name: Task name to check
+    
+    Returns:
+        True if task should be dropped, False otherwise
+    """
+    import re
+    name_normalized = name.strip().lower()
+    
+    # Pattern: Check if name STARTS WITH these banned prefixes (not exact match)
+    # This catches "Phase 1 Kickoff", "Client Approval - Final", etc.
+    banned_patterns = [
+        r'^phase\s*\d+',              # Phase 1, Phase 2, Phase 3 Kickoff, etc.
+        r'^client\s*approval',         # Client Approval, Client Approval - Final, etc.
+        r'^client\s*review',           # Client Review, Client Review & Revisions, etc.
+        r'^client\s*revisions?',       # Client Revision, Client Revisions, etc.
+        r'^internal\s*review',         # Internal Review, Internal Review - Draft, etc.
+    ]
+    
+    for pattern in banned_patterns:
+        if re.match(pattern, name_normalized, re.IGNORECASE):
+            return True
+    
+    return False
+
+
+def normalize_task_name_for_dedup(name: str) -> str:
+    """
+    Normalize task name for deduplication key.
+    
+    Args:
+        name: Task name
+    
+    Returns:
+        Normalized lowercase name with single spaces
+    """
+    import re
+    name = str(name).strip().lower()
+    return re.sub(r'\s+', ' ', name)
+
+
 class DependencyType(Enum):
     """Types of task dependencies for MS Project"""
     FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
@@ -568,9 +643,12 @@ def convert_excel_to_mspdi(
             
             logging.info(f"[WBS SEQUENTIAL] Deliverable '{deliverable_name}': Sequential WBS={deliv_wbs} (Original WBS_ID={original_deliv_wbs_id})")
             
+            # FIX 1: Sanitize deliverable name to remove "– COMPLETE" suffix
+            deliverable_name = sanitize_task_name(str(deliverable_name))
+            
             ET.SubElement(deliv_task, "{%s}UID" % ns).text = str(deliv_uid)
             ET.SubElement(deliv_task, "{%s}ID" % ns).text = str(deliv_uid)
-            ET.SubElement(deliv_task, "{%s}Name" % ns).text = str(deliverable_name)
+            ET.SubElement(deliv_task, "{%s}Name" % ns).text = deliverable_name
             ET.SubElement(deliv_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
             ET.SubElement(deliv_task, "{%s}IsNull" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}WBS" % ns).text = deliv_wbs
@@ -615,34 +693,10 @@ def convert_excel_to_mspdi(
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             
-            # Add constraint type based on Gantt-sourced dates
-            has_gantt_start = False
-            has_gantt_end = False
-            
-            # Check if Start_Date was successfully parsed from Gantt
-            if not group.empty and "Start_Date" in group.columns:
-                first_row_start = group.iloc[0].get("Start_Date")
-                if pd.notna(first_row_start):
-                    has_gantt_start = True
-            
-            # Check if End_Date was successfully parsed from Gantt
-            if not group.empty and "End_Date" in group.columns:
-                first_row_end = group.iloc[0].get("End_Date")
-                if pd.notna(first_row_end):
-                    has_gantt_end = True
-            
-            # Apply constraint type
-            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
-            if has_gantt_start and has_gantt_end:
-                # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
-                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
-            elif has_gantt_start:
-                # Only start date from Gantt: Must Start On
-                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            # FIX 4: Summary tasks (deliverables) must have ConstraintType=0 (ASAP) and no manual scheduling
+            # Remove ManualStart, ManualFinish, ManualDuration, ConstraintDate - these prevent Workfront from rolling up dates
+            ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
+            logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': ASAP (Type 0) - summary task")
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
@@ -773,6 +827,11 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
+                
+                # FIX 4: Component summary tasks must have ConstraintType=0 (ASAP) and no manual scheduling
+                ET.SubElement(comp_task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
+                logging.info(f"[CONSTRAINT] Component '{component_name}': ASAP (Type 0) - summary task")
+                
                 ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"
                 ET.SubElement(comp_task, "{%s}Work" % ns).text = "PT0M"
                 ET.SubElement(comp_task, "{%s}EffortDriven" % ns).text = "0"
@@ -818,6 +877,9 @@ def convert_excel_to_mspdi(
                 if comp_key not in task_counter_per_comp:
                     task_counter_per_comp[comp_key] = 1
                 
+                # FIX 3: Task deduplication - track seen tasks by (deliverable_code, component_name, normalized_task_name)
+                seen_tasks = set()
+                
                 # Loop through tasks within this component (Level 3)
                 for idx, row in component_group.iterrows():
                     try:
@@ -828,17 +890,37 @@ def convert_excel_to_mspdi(
                             logging.info(f"[ROLE ROW] Skipping task creation for role row at index {idx}: Role={role_value}")
                             continue  # Skip to next row without creating a Task
                         
+                        # Get task details - FIX: Use proper L3 task name, NOT Component as fallback
+                        # CRITICAL: Do this BEFORE creating task element to prevent ghost tasks
+                        task_name = (row.get("Task_Name") or 
+                                    row.get("L3_Task") or 
+                                    row.get("Task_Label") or 
+                                    f"{component_name} - Task {task_num_in_component + 1}")
+                        
+                        # FIX 1: Sanitize task name to remove "– COMPLETE" suffix
+                        task_name = sanitize_task_name(str(task_name))
+                        
+                        # FIX 2: Filter wrapper tasks (Phase 1, Client Approval, etc.)
+                        # CRITICAL: Do this BEFORE creating task element
+                        if should_drop_wrapper_task(task_name):
+                            logging.info(f"[WRAPPER FILTER] Skipping banned wrapper task: '{task_name}'")
+                            continue
+                        
+                        # FIX 3: Task deduplication - check if task already seen in this component
+                        # CRITICAL: Do this BEFORE creating task element to prevent ghost tasks
+                        dedup_key = (deliv_code, component_name, normalize_task_name_for_dedup(task_name))
+                        if dedup_key in seen_tasks:
+                            logging.info(f"[DEDUP] Skipping duplicate task: '{task_name}' in component '{component_name}'")
+                            continue
+                        seen_tasks.add(dedup_key)
+                        
+                        # NOW create the task element (after all filtering checks passed)
                         task_num_in_component += 1
                         task = ET.SubElement(tasks, "{%s}Task" % ns)
                         uid = task_uid
                         task_uid += 1
                         all_task_uids.append(uid)
                         
-                        # Get task details - FIX: Use proper L3 task name, NOT Component as fallback
-                        task_name = (row.get("Task_Name") or 
-                                    row.get("L3_Task") or 
-                                    row.get("Task_Label") or 
-                                    f"{component_name} - Task {task_num_in_component}")
                         department = row.get("Department", "")
                         
                         # Get Service_Department for this task
@@ -1008,27 +1090,34 @@ def convert_excel_to_mspdi(
                             ET.SubElement(task, "{%s}Manual" % ns).text = "0"
                             logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                         
-                        # Add cost if available and accumulate into component and deliverable totals
-                        price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
-                        if price_usd is not None and pd.notna(price_usd):
-                            try:
-                                price_value = float(price_usd)
-                                if price_value > 0:  # Only add positive costs
-                                    ET.SubElement(task, "{%s}Cost" % ns).text = str(price_value)
-                                    ET.SubElement(task, "{%s}FixedCost" % ns).text = str(price_value)
-                                    ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
-                                    
-                                    # Accumulate cost into component and deliverable totals
-                                    component_costs[comp_uid] += price_value
-                                    deliverable_costs[deliv_uid] += price_value
-                                    
-                                    # Add Revenue extended attribute (same as cost for flat billing)
-                                    if add_custom_fields:
-                                        add_task_extended_attribute(task, ns, "188743715", str(price_value))
-                                else:
-                                    logging.warning(f"Skipping zero or negative price for task '{task_name}': {price_value}")
-                            except (ValueError, TypeError) as e:
-                                logging.warning(f"Could not parse Price_USD for task '{task_name}': {e}")
+                        # FIX 5: Add revenue fields to leaf tasks
+                        # Get revenue from multiple possible sources
+                        revenue = None
+                        if "Revenue" in row.index and pd.notna(row.get("Revenue")):
+                            revenue = float(row.get("Revenue"))
+                        elif "Planned_Cost" in row.index and pd.notna(row.get("Planned_Cost")):
+                            revenue = float(row.get("Planned_Cost"))
+                        elif "Price_USD" in row.index and pd.notna(row.get("Price_USD")):
+                            revenue = float(row.get("Price_USD"))
+                        else:
+                            # Default: hours * 150
+                            revenue = hours * 150
+                        
+                        # FIX: Always add revenue fields, even if revenue=0 (Workfront requirement)
+                        # Set Cost, FixedCost, FixedCostAccrual
+                        ET.SubElement(task, "{%s}Cost" % ns).text = f"{revenue:.2f}"
+                        ET.SubElement(task, "{%s}FixedCost" % ns).text = f"{revenue:.2f}"
+                        ET.SubElement(task, "{%s}FixedCostAccrual" % ns).text = "2"  # Prorated
+                        
+                        # Accumulate cost into component and deliverable totals
+                        component_costs[comp_uid] += revenue
+                        deliverable_costs[deliv_uid] += revenue
+                        
+                        # Add Revenue extended attribute (Number3 = FieldID 188743715)
+                        if add_custom_fields:
+                            add_task_extended_attribute(task, ns, "188743715", f"{revenue:.2f}")
+                        
+                        logging.info(f"[REVENUE] Task '{task_name}': Revenue=${revenue:.2f}")
                         
                         # Add extended attributes (custom fields) for each task (flat MSPDI schema)
                         if add_custom_fields:
@@ -1080,12 +1169,11 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
-                # Update component summary with calculated duration
-                # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
-                # This prevents Duration=PT0M when component_start == component_finish
-                component_duration_minutes = int((component_finish - component_start).total_seconds() / 60)
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{component_duration_minutes}M"
+                # FIX 4: Component summary tasks must have Duration=PT0M to let Workfront auto-calculate from children
+                # Do NOT calculate duration from time span - this causes issues with Workfront rollup
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
+                logging.info(f"[SUMMARY] Component '{component_name}': Duration=PT0M (will auto-calculate from children)")
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
@@ -1115,13 +1203,12 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
-            # Update deliverable summary with calculated duration
-            # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
-            # This prevents Duration=PT0M when dates match or business hours = 0
-            deliverable_duration_minutes = int((deliverable_finish - deliverable_start).total_seconds() / 60)
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{deliverable_duration_minutes}M"
+            # FIX 4: Deliverable summary tasks must have Duration=PT0M to let Workfront auto-calculate from children
+            # Do NOT calculate duration from time span - this causes issues with Workfront rollup
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
+            logging.info(f"[SUMMARY] Deliverable '{deliverable_name}': Duration=PT0M (will auto-calculate from children)")
             
             # Add aggregated cost/revenue to deliverable summary task
             deliv_total_cost = deliverable_costs.get(deliv_uid, 0.0)
@@ -1453,6 +1540,14 @@ def convert_excel_to_mspdi(
     
     logging.info(f"[FIX B] Built child hours aggregator for {len(child_hours_by_parent)} parent tasks")
     
+    # FIX 6: REMOVE ALL ASSIGNMENT GENERATION
+    # Assignment generation has been disabled per Workfront compatibility requirements
+    # All assignment-related code is commented out below
+    assignment_data_list = []  # Keep empty list to prevent errors in later code
+    
+    # COMMENTED OUT: Assignment data building and XML creation
+    # The following section (lines 1531-1820) has been disabled
+    """
     # FIX A: Build assignment data list BEFORE creating XML elements
     # This allows us to aggregate work by task and update Task.Work elements
     logging.info("[FIX A] Building assignment data structure before creating XML")
@@ -1743,6 +1838,10 @@ def convert_excel_to_mspdi(
         ET.SubElement(assign, "{%s}VAC" % ns).text = "0"
     
     logging.info(f"[FIX A] Created {len(assignment_data_list)} Assignment XML elements")
+    """
+    # END OF COMMENTED OUT ASSIGNMENT GENERATION SECTION
+    
+    logging.info("[FIX 6] Assignment generation DISABLED - no assignments will be created")
     
     # WORKFRONT COMPATIBILITY: Safety passes to normalize values
     logging.info("[WORKFRONT FIX] Running safety passes to ensure Workfront compatibility...")
@@ -1879,7 +1978,7 @@ def convert_excel_to_mspdi(
     stats = {
         "task_count": task_uid - 1,
         "resource_count": len(resource_map) + len(department_resources),
-        "assignment_count": assignment_uid - 1,
+        "assignment_count": 0,  # Assignments disabled for Workfront compatibility
         "project_start": project_start.isoformat(),
         "project_end": current_date.isoformat() if current_date else project_start.isoformat(),
         "deliverable_count": deliverable_count,
