@@ -1,0 +1,77 @@
+🔍 Root cause (confirmed in your latest XML)
+
+The <Assignments /> element is still missing at the end of the document.
+The XML ends with </Tasks></Project> instead of
+
+</Tasks>
+<Assignments />
+</Project>
+
+
+Workfront’s MSPDI importer fails instantly without that tag .
+
+Tasks still have mismatched WBS and OutlineNumber.
+At least one task shows WBS="8.12" but OutlineNumber="8.". That invalid “dangling period” breaks the MSP hierarchy validator inside Workfront .
+
+Duplicate task UIDs still exist.
+The same <UID> appears twice in <Tasks>—Workfront requires every UID (across Tasks and Resources) to be unique .
+
+Summary tasks have manual fields (ManualStart, ManualFinish, or ManualDuration).
+Any <Summary>1</Summary> task with these manual fields will trip Workfront’s structural checks .
+
+✅ Here’s how to fix it—and test it locally before another upload
+
+In your Replit export script:
+
+import xml.etree.ElementTree as ET
+
+def fix_for_workfront(xml_path):
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # 1️⃣ Ensure <Assignments /> is present
+    if root.find("Assignments") is None:
+        ET.SubElement(root, "Assignments")
+
+    # 2️⃣ Fix invalid OutlineNumbers
+    for task in root.findall(".//Task"):
+        wbs = task.findtext("WBS")
+        outline = task.find("OutlineNumber")
+        if outline is not None and (not outline.text or outline.text.endswith(".")):
+            outline.text = wbs or outline.text.strip(".")
+
+    # 3️⃣ Deduplicate UIDs
+    seen = set()
+    for node in root.findall(".//Task") + root.findall(".//Resource"):
+        uid = node.findtext("UID")
+        if uid in seen:
+            node.find("UID").text = str(max(map(int, seen)) + 1)
+        seen.add(node.findtext("UID"))
+
+    # 4️⃣ Remove manual scheduling fields from summary tasks
+    for task in root.findall(".//Task"):
+        if task.findtext("Summary") == "1":
+            for tag in ["ManualStart", "ManualFinish", "ManualDuration"]:
+                bad = task.find(tag)
+                if bad is not None:
+                    task.remove(bad)
+
+    tree.write("fixed_export.xml", encoding="utf-8", xml_declaration=True)
+
+
+Run this once on your generated XML before uploading fixed_export.xml to Workfront.
+
+🧪 Quick self‑check before uploading
+
+Open fixed_export.xml in any text editor and confirm:
+
+✅ It ends with:
+
+</Tasks>
+<Assignments />
+</Project>
+
+
+✅ No <OutlineNumber> values end with a period (.).
+✅ Each <UID> appears only once in the entire file.
+✅ No <ManualStart>, <ManualFinish>, or <ManualDuration> exist under any <Summary>1</Summary> task.
