@@ -780,9 +780,17 @@ def convert_excel_to_mspdi(
             
             # Loop through each component (Level 2)
             for component_name, component_group in component_grouped:
+                # GPT-5 Pro FIX: Sanitize component name BEFORE any processing
+                component_name = sanitize_task_name(str(component_name)) if component_name else "Uncategorized"
+                
+                # GPT-5 Pro FIX: Filter wrapper components BEFORE creating task element
+                if component_name != "Uncategorized" and should_drop_wrapper_task(component_name):
+                    logging.info(f"[WRAPPER FILTER] Skipping banned wrapper component: '{component_name}'")
+                    continue  # Skip this entire component
+                
                 component_num += 1
                 
-                # Create component summary task (Level 2)
+                # NOW create component summary task (Level 2) - AFTER sanitization and filtering
                 comp_task = ET.SubElement(tasks, "{%s}Task" % ns)
                 comp_uid = task_uid
                 task_uid += 1
@@ -819,7 +827,7 @@ def convert_excel_to_mspdi(
                 # Component task properties
                 ET.SubElement(comp_task, "{%s}UID" % ns).text = str(comp_uid)
                 ET.SubElement(comp_task, "{%s}ID" % ns).text = str(comp_uid)
-                ET.SubElement(comp_task, "{%s}Name" % ns).text = str(component_name) if component_name else "Uncategorized"
+                ET.SubElement(comp_task, "{%s}Name" % ns).text = component_name
                 ET.SubElement(comp_task, "{%s}Type" % ns).text = "1"  # Fixed Duration
                 ET.SubElement(comp_task, "{%s}IsNull" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}WBS" % ns).text = comp_wbs
@@ -1914,6 +1922,12 @@ def convert_excel_to_mspdi(
         raise ValueError(f"Task-level ExtendedAttribute schema violations detected. Export aborted.")
     else:
         logging.info("[REGRESSION GUARD] ✓ All task-level ExtendedAttributes have correct flat schema (FieldID + Value only)")
+    
+    # GPT-5 Pro CRITICAL FIX: Always include <Assignments /> even when empty
+    # MSPDI schema requires this section for Workfront import compatibility
+    logging.info("[GPT-5 PRO FIX] Adding empty <Assignments /> section (required by MSPDI schema)")
+    assignments = ET.SubElement(root, "{%s}Assignments" % ns)
+    logging.info(f"[GPT-5 PRO FIX] ✓ Created <Assignments /> element with 0 assignments")
     
     # Write the XML file
     tree = ET.ElementTree(root)
