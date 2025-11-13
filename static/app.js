@@ -943,12 +943,25 @@ async function initializeGanttChart(tasks = []) {
           } else {
             const errorText = await response.text();
             console.error('[Gantt] ✗ Backend sync failed for', taskId, ':', errorText);
-            alert(`Failed to save changes to ${taskId}. Please try again.`);
+            
+            // Show user-friendly error message
+            let errorMsg = 'Unable to save timeline changes';
+            if (errorText.includes('404') || errorText.includes('not found')) {
+              errorMsg = 'Timeline data not found. Please regenerate the timeline and try again.';
+            } else if (errorText.includes('session')) {
+              errorMsg = 'Session expired. Please rebuild your scenario and regenerate the timeline.';
+            }
+            
+            console.warn('[Gantt] User-friendly error:', errorMsg);
+            // Don't show alert for every failed drag - just log it. User can still manually save.
           }
         }
       } catch (error) {
         console.error('[Gantt] ✗ Error syncing task to backend:', error);
-        alert(`Network error while saving changes. Please check your connection and try again.`);
+        // Only show alert for network errors (not 404s)
+        if (error.message && !error.message.includes('404')) {
+          alert(`Network error while saving changes. Please check your connection and try again.`);
+        }
       } finally {
         pendingSyncs--;
       }

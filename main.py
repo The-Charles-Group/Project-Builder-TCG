@@ -5201,7 +5201,63 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 if session_id in SCENARIO_STORE:
                     # Update existing scenario with timeline
                     SCENARIO_STORE[session_id]['timeline'] = result
+                    
+                    # CRITICAL FIX: Sync timeline tasks to 'items' array with WBS_ID for drag-and-drop updates
+                    # This allows ALL deliverables (all 1,900+ in AgencyDB) to save when dragged on Gantt
+                    # KEY FIX: Index by task.id (WBS_ID) NOT deliverable_code to handle components/retainers/monthly slices
+                    timeline_tasks = result.get('tasks', [])
+                    existing_items = SCENARIO_STORE[session_id].get('items', [])
+                    
+                    # Create a map of WBS_ID -> existing item AND deliverable_code -> existing item for preservation
+                    existing_by_wbs = {item.get('WBS_ID'): item for item in existing_items if item.get('WBS_ID')}
+                    existing_by_code = {item.get('deliverable_code'): item for item in existing_items if item.get('deliverable_code') and not item.get('WBS_ID')}
+                    
+                    # Update items with WBS_ID from timeline tasks
+                    # CRITICAL: Process ALL tasks (deliverables, components, retainers, milestones, buffers)
+                    # to ensure universal drag-and-drop support for entire 1,900+ AgencyDB catalog
+                    updated_items = []
+                    for task in timeline_tasks:
+                        task_id = task.get('id', '')
+                        if not task_id:
+                            continue  # Skip tasks without IDs (shouldn't happen)
+                        
+                        deliv_code = task.get('deliverable_code', '')
+                        
+                        # Get existing item by WBS_ID first, then by deliverable_code, or create new
+                        if task_id in existing_by_wbs:
+                            # Found existing item with this exact WBS_ID - update it
+                            item = existing_by_wbs[task_id].copy()
+                        elif deliv_code and deliv_code in existing_by_code:
+                            # Found existing item with this deliverable_code but no WBS_ID - update it
+                            item = existing_by_code[deliv_code].copy()
+                            existing_by_code.pop(deliv_code)  # Remove so we don't duplicate
+                        else:
+                            # Create minimal item structure for ALL tasks (including milestones/buffers/components)
+                            item = {
+                                'deliverable_code': deliv_code or 'SYSTEM',  # Use 'SYSTEM' for tasks without codes
+                                'deliverable_name': task.get('name', task_id),
+                                'total_hours': task.get('hours', 0),
+                                'price': task.get('hours', 0) * SCENARIO_STORE[session_id].get('blended_rate', 195)
+                            }
+                        
+                        # Add/update WBS_ID and timeline fields - CRITICAL: WBS_ID must match task.id
+                        item['WBS_ID'] = task_id
+                        item['Start_Date'] = task.get('start', '')
+                        item['End_Date'] = task.get('end', '')
+                        item['Duration_Days'] = task.get('duration_days', 0)
+                        item['Planned_Hours'] = task.get('hours', 0)
+                        item['Department'] = task.get('department', 'Strategy')
+                        item['Deliverable_Code'] = deliv_code or 'SYSTEM'
+                        
+                        updated_items.append(item)
+                    
+                    # Add any remaining items from existing_by_code that weren't in timeline (edge case)
+                    for remaining_item in existing_by_code.values():
+                        updated_items.append(remaining_item)
+                    
+                    SCENARIO_STORE[session_id]['items'] = updated_items
                     print(f"[Timeline] Stored timeline result in SCENARIO_STORE for session {session_id}")
+                    print(f"[Timeline] Synced {len(updated_items)} items with WBS_ID for drag-and-drop updates")
                 else:
                     # Create new scenario with timeline
                     SCENARIO_STORE[session_id] = {
