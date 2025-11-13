@@ -1006,6 +1006,10 @@ async function initializeGanttChart(tasks = []) {
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
         
+        // Recalculate and update project stats (Total Duration, Tasks, Critical Tasks)
+        const updatedMetadata = calculateMetadataFromTasks(currentTimelineTasks);
+        updateTimelineMetadata(updatedMetadata);
+        
         // Recalculate resource risks based on updated timeline
         updateResourceRiskTable(currentTimelineTasks, timelineReasoning);
         
@@ -3892,6 +3896,9 @@ async function generateAITimeline(retryAttempt = 0) {
     currentTimelineTasks = window.currentTimelineTasks;
     timelineReasoning = result.reasoning || {};
     
+    // Reset current metadata for new timeline generation (prevents stale data from previous timelines)
+    currentTimelineMetadata = null;
+    
     // Update reasoning panel
     updateReasoningPanel(result.reasoning);
     
@@ -3901,7 +3908,7 @@ async function generateAITimeline(retryAttempt = 0) {
       panel.style.display = 'block';
     }
     
-    // Update metadata
+    // Update metadata (will store the new backend metadata in currentTimelineMetadata)
     updateTimelineMetadata(result.metadata);
     
     // Update resource risk table
@@ -4372,8 +4379,56 @@ function updateReasoningPanel(reasoning) {
   }
 }
 
+// Store current metadata (updated whenever updateTimelineMetadata is called)
+let currentTimelineMetadata = null;
+
+// Calculate metadata from current tasks array (for dynamic updates when tasks are moved)
+// Preserves ALL existing metadata and only updates dynamic fields that change when tasks move
+function calculateMetadataFromTasks(tasks) {
+  // Clone the most recent metadata to preserve all fields (project_start, project_end, phases, milestones, etc.)
+  const updatedMetadata = currentTimelineMetadata ? JSON.parse(JSON.stringify(currentTimelineMetadata)) : {};
+  
+  if (!tasks || tasks.length === 0) {
+    updatedMetadata.total_duration_days = 0;
+    updatedMetadata.total_tasks = 0;
+    updatedMetadata.critical_tasks = 0;
+    updatedMetadata.departments_involved = [];
+    return updatedMetadata;
+  }
+  
+  // Calculate total duration from earliest start to latest end (INCLUSIVE)
+  const startDates = tasks.map(t => new Date(t.start));
+  const endDates = tasks.map(t => new Date(t.end));
+  const minStart = new Date(Math.min(...startDates));
+  const maxEnd = new Date(Math.max(...endDates));
+  // FIX: Add +1 to make duration inclusive (e.g., Nov 1 to Nov 5 = 5 days, not 4)
+  const totalDurationDays = Math.ceil((maxEnd - minStart) / (1000 * 60 * 60 * 24)) + 1;
+  
+  // Count total tasks
+  const totalTasks = tasks.length;
+  
+  // Count critical path tasks
+  const criticalTasks = tasks.filter(t => t.critical_path).length;
+  
+  // Extract unique departments
+  const departments = [...new Set(tasks.map(t => t.department).filter(Boolean))];
+  
+  // Update only the dynamic fields that change when tasks are moved
+  updatedMetadata.total_duration_days = totalDurationDays;
+  updatedMetadata.total_tasks = totalTasks;
+  updatedMetadata.critical_tasks = criticalTasks;
+  updatedMetadata.departments_involved = departments;
+  // All other fields (project_start, project_end, phases, milestones, etc.) preserved via deep clone
+  
+  return updatedMetadata;
+}
+
 function updateTimelineMetadata(metadata) {
   if (!metadata) return;
+  
+  // ALWAYS update current metadata to latest value (preserves all fields for recalculation)
+  currentTimelineMetadata = JSON.parse(JSON.stringify(metadata));
+  console.log('[Metadata] Updated current metadata:', currentTimelineMetadata);
   
   const elements = {
     'meta-duration': metadata.total_duration_days ? `${metadata.total_duration_days} days` : '-',
