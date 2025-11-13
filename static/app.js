@@ -878,6 +878,20 @@ function readSelectedCodesFromUI() {
 // ================================================================================
 // Gantt Chart and AI Timeline Functions
 // ================================================================================
+
+// Debounce utility to prevent excessive API calls during drag operations
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
 async function initializeGanttChart(tasks = []) {
   const container = document.querySelector('#gantt');
   if (!container || !window.Gantt) {
@@ -895,6 +909,51 @@ async function initializeGanttChart(tasks = []) {
   }
   
   try {
+    // Track pending sync operations to prevent premature saves
+    let pendingSyncs = 0;
+    
+    // Debounced backend sync function (150ms delay to prevent UI freeze during drag)
+    const syncToBackend = debounce(async (taskId, startDate, endDate) => {
+      // Recalculate duration_days fresh when sync executes to avoid stale data
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+      
+      pendingSyncs++;
+      try {
+        const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+        
+        if (session_id && taskId) {
+          const response = await fetch('/api/timeline/update_task', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: session_id,
+              wbs_id: taskId,
+              start_date: startDate,
+              end_date: endDate,
+              duration_days: duration_days,
+              hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
+            })
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            console.log('[Gantt] ✓ Task updated in SCENARIO_STORE:', taskId);
+          } else {
+            const errorText = await response.text();
+            console.error('[Gantt] ✗ Backend sync failed for', taskId, ':', errorText);
+            alert(`Failed to save changes to ${taskId}. Please try again.`);
+          }
+        }
+      } catch (error) {
+        console.error('[Gantt] ✗ Error syncing task to backend:', error);
+        alert(`Network error while saving changes. Please check your connection and try again.`);
+      } finally {
+        pendingSyncs--;
+      }
+    }, 150);
+    
     // Initialize Frappe Gantt with drag-enabled configuration
     const ganttOptions = {
       view_mode: document.getElementById('gantt-view-mode')?.value || 'Day',
@@ -924,47 +983,19 @@ async function initializeGanttChart(tasks = []) {
       on_click: function(task) {
         console.log('Task clicked:', task);
       },
-      on_date_change: async function(task, start, end) {
+      on_date_change: function(task, start, end) {
         console.log('Task date changed:', task.name, start, end);
         
-        // Update the task in our local state
+        // Update local state immediately for smooth UI
         const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
         if (taskIndex >= 0) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
         
-        // Sync to backend SCENARIO_STORE (GPT-5's plan: call /api/timeline/update_task)
-        try {
-          const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-          // Get fresh session_id directly from SessionManager (no caching)
-          const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
-          
-          if (session_id && task.id) {
-            const response = await fetch('/api/timeline/update_task', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                session_id: session_id,
-                wbs_id: task.id,
-                start_date: start.toISOString().split('T')[0],
-                end_date: end.toISOString().split('T')[0],
-                duration_days: duration_days,
-                hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
-              })
-            });
-            
-            if (response.ok) {
-              const result = await response.json();
-              console.log('[Gantt] Task updated in backend SCENARIO_STORE:', result);
-              // TODO: Refresh pricing table with result.totals if needed
-            } else {
-              console.warn('[Gantt] Failed to sync task to backend:', await response.text());
-            }
-          }
-        } catch (error) {
-          console.error('[Gantt] Error syncing task to backend:', error);
-        }
+        // Debounced backend sync to prevent freeze during drag
+        // Duration is recalculated inside syncToBackend to avoid stale data
+        syncToBackend(task.id, start.toISOString().split('T')[0], end.toISOString().split('T')[0]);
         
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
