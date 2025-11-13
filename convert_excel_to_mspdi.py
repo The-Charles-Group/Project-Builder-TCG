@@ -40,6 +40,23 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
+class TaskRecord:
+    """
+    Container for task data before writing to XML in chronological order
+    """
+    def __init__(self, task_element: ET.Element, original_uid: int, start_date: datetime, 
+                 outline_level: int, creation_order: int):
+        self.task_element = task_element
+        self.original_uid = original_uid
+        self.start_date = start_date
+        self.outline_level = outline_level
+        self.creation_order = creation_order
+        
+    def sort_key(self):
+        """Return tuple for sorting: (start_date, outline_level, creation_order)"""
+        return (self.start_date, self.outline_level, self.creation_order)
+
+
 def create_governance_milestone_task(
     task_uid: int,
     ns: str,
@@ -1644,6 +1661,120 @@ def convert_excel_to_mspdi(
     logging.info(f"[ROLE ASSIGNMENTS] Success rate: {(role_assignment_count / (role_assignment_count + skipped_role_rows) * 100) if (role_assignment_count + skipped_role_rows) > 0 else 0:.1f}%")
     logging.info(f"[ROLE ASSIGNMENTS] ===============================")
     
+    # FIX: Resequence tasks in chronological order for Workfront display
+    # Extract all tasks, sort by Start Date, reassign UIDs, and update all references
+    logging.info("[CHRONOLOGICAL SORT] Reordering tasks by Start Date for Workfront import...")
+    
+    def parse_datetime_from_text(text: str, default: datetime) -> datetime:
+        """Parse datetime from ISO string, return default if parsing fails"""
+        if not text:
+            return default
+        try:
+            return datetime.fromisoformat(text.replace('Z', '+00:00')).replace(tzinfo=None)
+        except:
+            return default
+    
+    # Extract all non-project tasks (exclude UID 0)
+    all_tasks = []
+    project_summary_task = None
+    
+    for task_elem in list(tasks.findall("{%s}Task" % ns)):
+        uid_elem = task_elem.find("{%s}UID" % ns)
+        if uid_elem is not None:
+            uid = int(uid_elem.text)
+            if uid == 0:
+                project_summary_task = task_elem
+                continue
+            
+            # Get Start Date for sorting
+            start_elem = task_elem.find("{%s}Start" % ns)
+            start_date = parse_datetime_from_text(start_elem.text if start_elem is not None else None, project_start)
+            
+            # Get OutlineLevel for secondary sorting (keep parents before children)
+            outline_level_elem = task_elem.find("{%s}OutlineLevel" % ns)
+            outline_level = int(outline_level_elem.text) if outline_level_elem is not None else 99
+            
+            all_tasks.append({
+                'element': task_elem,
+                'original_uid': uid,
+                'start_date': start_date,
+                'outline_level': outline_level,
+                'original_order': len(all_tasks)
+            })
+    
+    # Sort by (Start Date, OutlineLevel, original order)
+    all_tasks.sort(key=lambda t: (t['start_date'], t['outline_level'], t['original_order']))
+    
+    # Build UID remapping: old_uid → new_uid
+    uid_remap = {0: 0}  # Keep project summary at UID 0
+    for idx, task_info in enumerate(all_tasks):
+        old_uid = task_info['original_uid']
+        new_uid = idx + 1  # Start from 1 (0 is reserved for project summary)
+        uid_remap[old_uid] = new_uid
+    
+    logging.info(f"[CHRONOLOGICAL SORT] Sorted {len(all_tasks)} tasks by Start Date")
+    logging.info(f"[CHRONOLOGICAL SORT] UID remapping: {len(uid_remap)} mappings created")
+    
+    # Update UID and ID in each task element
+    for idx, task_info in enumerate(all_tasks):
+        task_elem = task_info['element']
+        new_uid = idx + 1
+        
+        uid_elem = task_elem.find("{%s}UID" % ns)
+        id_elem = task_elem.find("{%s}ID" % ns)
+        
+        if uid_elem is not None:
+            uid_elem.text = str(new_uid)
+        if id_elem is not None:
+            id_elem.text = str(new_uid)
+    
+    # Clear tasks container and rebuild in chronological order
+    tasks.clear()
+    
+    # Add project summary task first (UID 0)
+    if project_summary_task is not None:
+        tasks.append(project_summary_task)
+    
+    # Add sorted tasks
+    for task_info in all_tasks:
+        tasks.append(task_info['element'])
+    
+    # Update all TaskUID references in Assignments
+    for assign_elem in assignments.findall("{%s}Assignment" % ns):
+        task_uid_elem = assign_elem.find("{%s}TaskUID" % ns)
+        if task_uid_elem is not None:
+            old_uid = int(task_uid_elem.text)
+            if old_uid in uid_remap:
+                task_uid_elem.text = str(uid_remap[old_uid])
+    
+    # Update all PredecessorUID references in PredecessorLink elements
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        for pred_link in task_elem.findall("{%s}PredecessorLink" % ns):
+            pred_uid_elem = pred_link.find("{%s}PredecessorUID" % ns)
+            if pred_uid_elem is not None:
+                old_pred_uid = int(pred_uid_elem.text)
+                if old_pred_uid in uid_remap:
+                    pred_uid_elem.text = str(uid_remap[old_pred_uid])
+    
+    # Update all potential parent UID references in tasks (defensive programming)
+    # This handles OutlineParentUID, ParentTaskUID, or any other parent reference fields
+    parent_uid_fields = ['OutlineParentUID', 'ParentTaskUID', 'OutlineParent']
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        for field_name in parent_uid_fields:
+            parent_uid_elem = task_elem.find("{%s}%s" % (ns, field_name))
+            if parent_uid_elem is not None and parent_uid_elem.text:
+                try:
+                    old_parent_uid = int(parent_uid_elem.text)
+                    if old_parent_uid in uid_remap:
+                        parent_uid_elem.text = str(uid_remap[old_parent_uid])
+                        logging.debug(f"[CHRONOLOGICAL SORT] Remapped {field_name}: {old_parent_uid} → {uid_remap[old_parent_uid]}")
+                except (ValueError, AttributeError):
+                    pass  # Field exists but isn't a UID reference
+    
+    logging.info(f"[CHRONOLOGICAL SORT] Reordered {len(all_tasks)} tasks in chronological order")
+    logging.info(f"[CHRONOLOGICAL SORT] First task: {all_tasks[0]['element'].find('{%s}Name' % ns).text if all_tasks else 'None'}")
+    logging.info(f"[CHRONOLOGICAL SORT] Last task: {all_tasks[-1]['element'].find('{%s}Name' % ns).text if all_tasks else 'None'}")
+    
     # FIX: Aggregate assignment hours back to task Work elements
     # This fixes the PT0M bug where leaf tasks show 0 minutes instead of actual assignment hours
     logging.info("[WORK AGGREGATION] Aggregating assignment hours to task Work elements...")
@@ -1742,7 +1873,7 @@ def convert_excel_to_mspdi(
             total_cost = 0.0
     
     stats = {
-        "task_count": task_uid - 1,
+        "task_count": len(all_tasks),  # Use sorted task count instead of task_uid
         "resource_count": len(resource_map) + len(department_resources),
         "assignment_count": assignment_uid - 1,
         "project_start": project_start.isoformat(),
