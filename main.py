@@ -9547,6 +9547,11 @@ def convert_excel_to_mspdi(
             if actual_pred != actual_succ:
                 normalized_edges.append((actual_pred, actual_succ))
 
+        # IMPORTANT: Timeline dates are already business days (Monday-Friday only)
+        # Import BusinessCalendar for consistent business-day logic
+        from datetime import time, date
+        from business_calendar import BusinessCalendar
+        
         # Calculate project start date
         if fixed_start_iso:
             project_start = datetime.datetime.fromisoformat(fixed_start_iso.replace('Z', '+00:00'))
@@ -9561,33 +9566,15 @@ def convert_excel_to_mspdi(
             project_start = datetime.datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
         else:
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
-
-        # Business calendar helpers (using same Mon-Fri, 8-12 & 13-17 schedule)
-        from datetime import time, date
+        
+        # CRITICAL: Ensure project start is on a business day (auto-roll weekend to Monday)
+        project_start = BusinessCalendar.next_business_day(project_start)
         
         BUS_BLOCKS = [(time(8,0), time(12,0)), (time(13,0), time(17,0))]
 
+        # Delegate to BusinessCalendar for consistent business-day logic
         def is_business_day(d):
-            return d.weekday() < 5  # Mon–Fri
-
-        def next_business_day(d):
-            """Roll date forward to the next business day if it falls on a weekend."""
-            while not is_business_day(d):
-                d = d + datetime.timedelta(days=1)
-            return d
-
-        def add_business_days(start_date, num_days):
-            """Add num_days business days to start_date, skipping weekends."""
-            current = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
-            days_added = 0
-            while days_added < num_days:
-                current = current + datetime.timedelta(days=1)
-                if is_business_day(current):
-                    days_added += 1
-            # Preserve time component from original start_date
-            if isinstance(start_date, datetime.datetime):
-                return datetime.datetime.combine(current, start_date.time())
-            return current
+            return BusinessCalendar.is_business_day(d)
 
         def business_minutes_in_range(day: date, start_t: time, end_t: time) -> int:
             # minutes worked on a single day between start_t and end_t
@@ -9623,12 +9610,25 @@ def convert_excel_to_mspdi(
             minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
             return minutes
 
-        # Calculate task schedules
+        # Calculate task schedules using BUSINESS DAYS (Mon-Fri only, no weekends)
         uid_to_sched = {}
         for r in rows:
-            start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+            # CRITICAL: StartOffset is in days (can be fractional for intraday offsets)
+            # Convert to business hours to preserve partial-day timing from timeline
+            offset_hours = r["StartOffset"] * hours_per_day
+            
+            # Calculate start date/time using business hours from project start
+            # This preserves timeline's intraday offsets (e.g., 0.5 days = 1pm start)
+            start_date = BusinessCalendar.add_business_hours(project_start, offset_hours)
+            
+            # If start falls before work hours, snap to 8:00 AM
+            if start_date.time() < datetime.time(8, 0):
+                start_date = datetime.datetime.combine(start_date.date(), datetime.time(8, 0))
+            
             duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
-            end_date = start_date + datetime.timedelta(hours=duration_hours)
+            
+            # Calculate end date using business hours (respects 8-12, 13-17 work blocks)
+            end_date = BusinessCalendar.add_business_hours(start_date, duration_hours)
             
             uid_to_sched[r["UID"]] = {
                 "Start": start_date,
