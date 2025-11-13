@@ -4260,10 +4260,10 @@ function showUserFriendlyError(title, message) {
   // Create a nice modal or alert with the error
   const modalHTML = `
     <div style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-                background: white; padding: 24px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); 
+                background: var(--card); border: 1px solid var(--border); padding: 24px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
                 z-index: 10000; max-width: 400px;">
-      <h3 style="margin: 0 0 12px 0; color: #dc2626;">⚠️ ${title}</h3>
-      <p style="margin: 0 0 16px 0; color: #4b5563;">${message}</p>
+      <h3 style="margin: 0 0 12px 0; color: #ef4444;">⚠️ ${title}</h3>
+      <p style="margin: 0 0 16px 0; color: var(--text);">${message}</p>
       <button onclick="this.parentElement.remove()" 
               style="padding: 8px 16px; background: #3b82f6; color: white; border: none; 
                      border-radius: 4px; cursor: pointer;">
@@ -5647,13 +5647,13 @@ window.setAnalysisMode = function(mode) {
   if (mode === 'fast') {
     fastBtn.style.background = '#10b981';
     fastBtn.style.color = 'white';
-    deepBtn.style.background = 'white';
+    deepBtn.style.background = 'var(--surface)';
     deepBtn.style.color = '#6366f1';
     modeInput.value = 'fast';
   } else {
     deepBtn.style.background = '#6366f1';
     deepBtn.style.color = 'white';
-    fastBtn.style.background = 'white';
+    fastBtn.style.background = 'var(--surface)';
     fastBtn.style.color = '#10b981';
     modeInput.value = 'deep';
   }
@@ -6296,7 +6296,7 @@ function renderAIPlan(aiPlan) {
                 </summary>
                 <div style="margin-top: 8px; margin-left: 16px;">
                   ${deliv.components.map((comp, idx) => `
-                    <div style="margin-bottom: 8px; padding: 8px; background: white; border-radius: 4px;">
+                    <div style="margin-bottom: 8px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px;">
                       <div style="display: flex; align-items: start; gap: 8px;">
                         <input type="checkbox" 
                                class="ai-comp-checkbox" 
@@ -10273,69 +10273,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 })();
 // ================================================================================
-// Gantt Theme Toggle Functions
+// Gantt Theme - Permanent Dark Mode (no toggle)
 // ================================================================================
-
-function toggleGanttTheme() {
-  const container = document.getElementById('gantt-container');
-  const icon = document.getElementById('gantt-theme-icon');
-  const text = document.getElementById('gantt-theme-text');
-  const button = document.getElementById('gantt-theme-toggle');
-  
-  if (!container) return;
-  
-  // Toggle dark mode class
-  const isDark = container.classList.toggle('gantt-dark-mode');
-  
-  // Update button UI
-  if (isDark) {
-    icon.textContent = '☀️';
-    text.textContent = 'Light';
-    button.classList.add('active');
-  } else {
-    icon.textContent = '🌙';
-    text.textContent = 'Dark';
-    button.classList.remove('active');
-  }
-  
-  // Save preference to localStorage
-  localStorage.setItem('gantt-theme', isDark ? 'dark' : 'light');
-  
-  console.log('[Gantt Theme] Switched to', isDark ? 'dark' : 'light', 'mode');
-}
-
-function initializeGanttTheme() {
-  const container = document.getElementById('gantt-container');
-  const icon = document.getElementById('gantt-theme-icon');
-  const text = document.getElementById('gantt-theme-text');
-  const button = document.getElementById('gantt-theme-toggle');
-  
-  if (!container) return;
-  
-  // Load saved preference (default to light mode to match Frappe Gantt default)
-  const savedTheme = localStorage.getItem('gantt-theme') || 'light';
-  const isDark = savedTheme === 'dark';
-  
-  // Apply theme
-  if (isDark) {
-    container.classList.add('gantt-dark-mode');
-    icon.textContent = '☀️';
-    text.textContent = 'Light';
-    button.classList.add('active');
-  } else {
-    container.classList.remove('gantt-dark-mode');
-    icon.textContent = '🌙';
-    text.textContent = 'Dark';
-    button.classList.remove('active');
-  }
-  
-  console.log('[Gantt Theme] Initialized with', savedTheme, 'theme');
-}
-
-// Initialize theme on page load
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initializeGanttTheme);
-} else {
-  initializeGanttTheme();
-}
-
+// Theme toggle removed - app is now permanently in dark mode
