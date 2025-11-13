@@ -1662,118 +1662,79 @@ def convert_excel_to_mspdi(
     logging.info(f"[ROLE ASSIGNMENTS] ===============================")
     
     # FIX: Resequence tasks in chronological order for Workfront display
-    # Extract all tasks, sort by Start Date, reassign UIDs, and update all references
-    logging.info("[CHRONOLOGICAL SORT] Reordering tasks by Start Date for Workfront import...")
+    # FIX: Enforce waterfall sequencing - make each deliverable start when previous one ends
+    # This eliminates month-long gaps between deliverables
+    logging.info("[WATERFALL SEQUENCING] Enforcing waterfall flow between deliverables...")
     
-    def parse_datetime_from_text(text: str, default: datetime) -> datetime:
-        """Parse datetime from ISO string, return default if parsing fails"""
-        if not text:
-            return default
-        try:
-            return datetime.fromisoformat(text.replace('Z', '+00:00')).replace(tzinfo=None)
-        except:
-            return default
-    
-    # Extract all non-project tasks (exclude UID 0)
-    all_tasks = []
-    project_summary_task = None
-    
-    for task_elem in list(tasks.findall("{%s}Task" % ns)):
-        uid_elem = task_elem.find("{%s}UID" % ns)
-        if uid_elem is not None:
-            uid = int(uid_elem.text)
-            if uid == 0:
-                project_summary_task = task_elem
-                continue
-            
-            # Get Start Date for sorting
+    # Find all deliverable tasks (OutlineLevel = 1)
+    deliverable_elements = []
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        outline_elem = task_elem.find("{%s}OutlineLevel" % ns)
+        if outline_elem is not None and outline_elem.text == "1":
+            uid_elem = task_elem.find("{%s}UID" % ns)
+            name_elem = task_elem.find("{%s}Name" % ns)
             start_elem = task_elem.find("{%s}Start" % ns)
-            start_date = parse_datetime_from_text(start_elem.text if start_elem is not None else None, project_start)
+            finish_elem = task_elem.find("{%s}Finish" % ns)
             
-            # Get OutlineLevel for secondary sorting (keep parents before children)
-            outline_level_elem = task_elem.find("{%s}OutlineLevel" % ns)
-            outline_level = int(outline_level_elem.text) if outline_level_elem is not None else 99
-            
-            all_tasks.append({
-                'element': task_elem,
-                'original_uid': uid,
-                'start_date': start_date,
-                'outline_level': outline_level,
-                'original_order': len(all_tasks)
-            })
+            if uid_elem is not None and start_elem is not None:
+                deliverable_elements.append({
+                    'uid': int(uid_elem.text),
+                    'name': name_elem.text if name_elem is not None else 'Unknown',
+                    'element': task_elem,
+                    'start_elem': start_elem,
+                    'finish_elem': finish_elem
+                })
     
-    # Sort by (Start Date, OutlineLevel, original order)
-    all_tasks.sort(key=lambda t: (t['start_date'], t['outline_level'], t['original_order']))
+    logging.info(f"[WATERFALL SEQUENCING] Found {len(deliverable_elements)} deliverables")
     
-    # Build UID remapping: old_uid → new_uid
-    uid_remap = {0: 0}  # Keep project summary at UID 0
-    for idx, task_info in enumerate(all_tasks):
-        old_uid = task_info['original_uid']
-        new_uid = idx + 1  # Start from 1 (0 is reserved for project summary)
-        uid_remap[old_uid] = new_uid
-    
-    logging.info(f"[CHRONOLOGICAL SORT] Sorted {len(all_tasks)} tasks by Start Date")
-    logging.info(f"[CHRONOLOGICAL SORT] UID remapping: {len(uid_remap)} mappings created")
-    
-    # Update UID and ID in each task element
-    for idx, task_info in enumerate(all_tasks):
-        task_elem = task_info['element']
-        new_uid = idx + 1
+    # Don't re-sort deliverables - they're already in the order created from the Excel
+    # Just enforce that each one starts when the previous one ends
+    for i in range(1, len(deliverable_elements)):
+        prev_deliv = deliverable_elements[i - 1]
+        curr_deliv = deliverable_elements[i]
         
-        uid_elem = task_elem.find("{%s}UID" % ns)
-        id_elem = task_elem.find("{%s}ID" % ns)
-        
-        if uid_elem is not None:
-            uid_elem.text = str(new_uid)
-        if id_elem is not None:
-            id_elem.text = str(new_uid)
-    
-    # Clear tasks container and rebuild in chronological order
-    tasks.clear()
-    
-    # Add project summary task first (UID 0)
-    if project_summary_task is not None:
-        tasks.append(project_summary_task)
-    
-    # Add sorted tasks
-    for task_info in all_tasks:
-        tasks.append(task_info['element'])
-    
-    # Update all TaskUID references in Assignments
-    for assign_elem in assignments.findall("{%s}Assignment" % ns):
-        task_uid_elem = assign_elem.find("{%s}TaskUID" % ns)
-        if task_uid_elem is not None:
-            old_uid = int(task_uid_elem.text)
-            if old_uid in uid_remap:
-                task_uid_elem.text = str(uid_remap[old_uid])
-    
-    # Update all PredecessorUID references in PredecessorLink elements
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        for pred_link in task_elem.findall("{%s}PredecessorLink" % ns):
-            pred_uid_elem = pred_link.find("{%s}PredecessorUID" % ns)
-            if pred_uid_elem is not None:
-                old_pred_uid = int(pred_uid_elem.text)
-                if old_pred_uid in uid_remap:
-                    pred_uid_elem.text = str(uid_remap[old_pred_uid])
-    
-    # Update all potential parent UID references in tasks (defensive programming)
-    # This handles OutlineParentUID, ParentTaskUID, or any other parent reference fields
-    parent_uid_fields = ['OutlineParentUID', 'ParentTaskUID', 'OutlineParent']
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        for field_name in parent_uid_fields:
-            parent_uid_elem = task_elem.find("{%s}%s" % (ns, field_name))
-            if parent_uid_elem is not None and parent_uid_elem.text:
-                try:
-                    old_parent_uid = int(parent_uid_elem.text)
-                    if old_parent_uid in uid_remap:
-                        parent_uid_elem.text = str(uid_remap[old_parent_uid])
-                        logging.debug(f"[CHRONOLOGICAL SORT] Remapped {field_name}: {old_parent_uid} → {uid_remap[old_parent_uid]}")
-                except (ValueError, AttributeError):
-                    pass  # Field exists but isn't a UID reference
-    
-    logging.info(f"[CHRONOLOGICAL SORT] Reordered {len(all_tasks)} tasks in chronological order")
-    logging.info(f"[CHRONOLOGICAL SORT] First task: {all_tasks[0]['element'].find('{%s}Name' % ns).text if all_tasks else 'None'}")
-    logging.info(f"[CHRONOLOGICAL SORT] Last task: {all_tasks[-1]['element'].find('{%s}Name' % ns).text if all_tasks else 'None'}")
+        # Get previous deliverable's finish date
+        if prev_deliv['finish_elem'] is not None:
+            try:
+                prev_finish_str = prev_deliv['finish_elem'].text
+                prev_finish = datetime.fromisoformat(prev_finish_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                
+                # Get current deliverable's start and calculate duration
+                curr_start_str = curr_deliv['start_elem'].text
+                curr_start = datetime.fromisoformat(curr_start_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                
+                curr_finish_str = curr_deliv['finish_elem'].text if curr_deliv['finish_elem'] is not None else None
+                if curr_finish_str:
+                    curr_finish = datetime.fromisoformat(curr_finish_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                    duration = (curr_finish - curr_start).days
+                    
+                    # Set new start = previous finish (next business day)
+                    new_start = prev_finish
+                    new_finish = new_start + timedelta(days=duration)
+                    
+                    # Update start and finish dates
+                    curr_deliv['start_elem'].text = new_start.isoformat()
+                    if curr_deliv['finish_elem'] is not None:
+                        curr_deliv['finish_elem'].text = new_finish.isoformat()
+                    
+                    # Update constraint date if it exists
+                    constraint_date_elem = curr_deliv['element'].find("{%s}ConstraintDate" % ns)
+                    if constraint_date_elem is not None:
+                        constraint_date_elem.text = new_start.isoformat()
+                    
+                    logging.info(f"[WATERFALL SEQUENCING] '{curr_deliv['name']}' moved from {curr_start.date()} to {new_start.date()} (after '{prev_deliv['name']}' ends {prev_finish.date()})")
+                    
+                    # Add Finish-to-Start dependency to lock waterfall flow in Workfront
+                    pred_link = ET.SubElement(curr_deliv['element'], "{%s}PredecessorLink" % ns)
+                    ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(prev_deliv['uid'])
+                    ET.SubElement(pred_link, "{%s}Type" % ns).text = "1"  # Finish-to-Start (FS)
+                    ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
+                    ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
+                    ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
+                    
+                    logging.info(f"[WATERFALL DEPENDENCIES] Added FS dependency: '{prev_deliv['name']}' (UID {prev_deliv['uid']}) → '{curr_deliv['name']}' (UID {curr_deliv['uid']})")
+            except Exception as e:
+                logging.warning(f"[WATERFALL SEQUENCING] Could not adjust deliverable '{curr_deliv['name']}': {e}")
     
     # FIX: Aggregate assignment hours back to task Work elements
     # This fixes the PT0M bug where leaf tasks show 0 minutes instead of actual assignment hours
