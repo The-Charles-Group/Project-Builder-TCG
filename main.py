@@ -9680,7 +9680,7 @@ def convert_excel_to_mspdi(
                     })
                     assign_uid += 1
 
-        # FIX: Calculate actual PlannedHours from assignments and update uid_to_sched
+        # FIX: Calculate actual PlannedHours from assignments and update uid_to_sched AND row dictionaries
         # This ensures tasks show correct <Work> values instead of PT0M
         task_hours_from_assignments = {}
         for assign in assignments:
@@ -9688,25 +9688,41 @@ def convert_excel_to_mspdi(
             work_hours = assign["WorkHours"]
             task_hours_from_assignments[task_uid] = task_hours_from_assignments.get(task_uid, 0) + work_hours
         
-        # Update uid_to_sched with actual hours from assignments
+        # Update uid_to_sched AND row dictionaries with actual hours from assignments
+        # Update both to ensure XML generation gets the correct values regardless of which source it reads
+        # CRITICAL: Row dictionaries use "Planned_Hours" (underscore), not "PlannedHours" (camel case)
         for task_uid, total_hours in task_hours_from_assignments.items():
             if task_uid in uid_to_sched:
                 uid_to_sched[task_uid]["PlannedHours"] = total_hours
+            # Also update the row dictionary with the correct field name (underscore!)
+            for r in rows:
+                if r["UID"] == task_uid:
+                    r["Planned_Hours"] = total_hours  # Note: underscore, not camelCase
+                    break
 
-        # FIX: Filter out milestone tasks that extend timeline (COMPLETE, CLIENT APPROVAL, Phase Complete)
+        # FIX: Filter out milestone tasks that extend timeline (X - COMPLETE, CLIENT APPROVAL - X, Phase Complete)
         # These are auto-generated milestones that push out the project end date unnecessarily
+        # Be specific to avoid removing legitimate action tasks like "Complete creative brief" or "Client Approval Prep"
         filtered_rows = []
-        excluded_milestone_patterns = [
-            r'COMPLETE',
-            r'CLIENT\s+APPROVAL',
-            r'Phase\s+\d+\s+Complete',
-            r'Phase.*Complete'
-        ]
         
         for r in rows:
-            task_name = r.get("Name", "")
-            # Check if task name matches any excluded pattern
-            is_excluded_milestone = any(re.search(pattern, task_name, re.IGNORECASE) for pattern in excluded_milestone_patterns)
+            task_name = r.get("Name", "").strip()
+            task_name_upper = task_name.upper()
+            
+            # Check if this is a milestone to exclude (not an action task)
+            is_excluded_milestone = (
+                # Pattern: "Something - COMPLETE" (milestone marker at end)
+                task_name_upper.endswith(" - COMPLETE") or
+                task_name_upper.endswith("- COMPLETE") or
+                # Pattern: "X COMPLETE" where there's a dash before COMPLETE (e.g., "Design - COMPLETE")
+                (task_name_upper.endswith("COMPLETE") and " - " in task_name) or
+                # Pattern: "CLIENT APPROVAL - X" or "CLIENT APPROVAL (X)" (milestone with marker)
+                (task_name_upper.startswith("CLIENT APPROVAL") and (" - " in task_name_upper or "(" in task_name_upper)) or
+                # Pattern: Ends with "CLIENT APPROVAL" (standalone milestone)
+                task_name_upper.endswith("CLIENT APPROVAL") or
+                # Pattern: "Phase 2 Complete (50%)" or "Phase 2 Complete" (phase milestones)
+                (task_name_upper.startswith("PHASE") and "COMPLETE" in task_name_upper)
+            )
             
             if not is_excluded_milestone:
                 filtered_rows.append(r)
