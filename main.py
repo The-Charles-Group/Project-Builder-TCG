@@ -3390,6 +3390,13 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         for kk in order[:max(0, rem)]:
                             flo[kk] += 1
 
+                        # CRITICAL FIX: Populate task row Planned_Hours by summing role hours
+                        # This ensures XML generation has correct hours for Work field
+                        task_total_hours = sum(flo.values())
+                        # Update the task row we just added (it's the last row before role rows)
+                        rows[-1]["Planned_Hours"] = task_total_hours
+                        print(f"[WBS Builder] Task {wbs_task} ({label}): total_hours={task_total_hours} from {len(flo)} roles")
+
                         prev_role_wbs = ""
                         r_index = 0
                         for (role, sen), h in flo.items():
