@@ -3342,6 +3342,11 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 # Per-month target hours for each task group, then repeat Month 01..N
                 tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
                 tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
+                
+                # DIAGNOSTIC: Log task group hours
+                print(f"[WBS Builder DEBUG] Component: {comp}, tg_in_comp: {tg_in_comp}")
+                print(f"[WBS Builder DEBUG] tg_hours_month: {tg_hours_month}")
+                print(f"[WBS Builder DEBUG] tg_target_month: {tg_target_month}")
 
                 # Build month-by-month repetition
                 total_tasks_per_month = len(tg_in_comp)
@@ -3379,8 +3384,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         role_rows = hrs_role_df.to_dict(orient="records")
                         target_task_hours = int(tg_target_month.get(tg, 0)) if months else int(tg_target_month.get(tg, 0))
 
+                        # DIAGNOSTIC: Log role query results
+                        print(f"[WBS Builder DEBUG] TaskGroup: {tg}, hrs_role_df rows: {len(hrs_role_df)}, target_task_hours: {target_task_hours}")
+                        
                         raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
                         if not raw_map:
+                            print(f"[WBS Builder WARNING] No role assignments for {dcode}/{comp}/{tg} - using fallback with target_task_hours={target_task_hours}")
                             raw_map = {("","Mid"): float(target_task_hours)}
                         total = sum(raw_map.values()) or 1.0
                         raw_scaled = {key: (val/total)*target_task_hours for key, val in raw_map.items()}
