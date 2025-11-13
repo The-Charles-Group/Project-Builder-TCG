@@ -20,6 +20,28 @@ import random
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
+def hours_to_iso8601_duration(hours: float) -> str:
+    """
+    Convert decimal hours to ISO8601 duration format for MSPDI.
+    
+    Args:
+        hours: Decimal hours (e.g., 4.5 for 4 hours 30 minutes)
+        
+    Returns:
+        ISO8601 duration string (e.g., "PT270M" for 4.5 hours)
+        
+    Examples:
+        4.0 hours → PT240M
+        8.5 hours → PT510M
+        0.5 hours → PT30M
+    """
+    if hours <= 0:
+        return "PT0M"
+    
+    total_minutes = int(hours * 60)
+    return f"PT{total_minutes}M"
+
+
 class DependencyType(Enum):
     """Types of task dependencies for MS Project"""
     FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
@@ -986,13 +1008,17 @@ def convert_excel_to_mspdi(
                         duration_minutes = int((task_end - task_start).total_seconds() / 60)
                         ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
                         ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
-                        # FIX: Set Work to PT0M on leaf tasks to prevent double-counting in Workfront
-                        # Work will be calculated automatically from Assignment elements per MSPDI standard
-                        ET.SubElement(task, "{%s}Work" % ns).text = "PT0M"
-                        ET.SubElement(task, "{%s}RegularWork" % ns).text = "PT0M"
+                        
+                        # CRITICAL FIX: Populate Work hours from DataFrame to eliminate 0-hour tasks in Workfront
+                        # Workfront reads Task.Work directly (not assignment aggregates) per MSPDI import behavior
+                        work_iso8601 = hours_to_iso8601_duration(hours)
+                        ET.SubElement(task, "{%s}Work" % ns).text = work_iso8601
+                        ET.SubElement(task, "{%s}RegularWork" % ns).text = work_iso8601
+                        logging.info(f"[WORK HOURS] Task '{task_name}': {hours}h → {work_iso8601}")
+                        
                         # RemainingDuration must match Duration (same calendar time span)
                         ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{duration_minutes}M"
-                        ET.SubElement(task, "{%s}RemainingWork" % ns).text = "PT0M"
+                        ET.SubElement(task, "{%s}RemainingWork" % ns).text = work_iso8601
                         ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
@@ -1442,6 +1468,85 @@ def convert_excel_to_mspdi(
                             ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "4800"  # 1 day lag (in minutes)
                             ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
                             break
+    
+    # CRITICAL: Roll up work hours from leaf tasks to summary tasks (components/deliverables)
+    # This ensures Workfront displays correct hours for all hierarchy levels
+    logging.info("[SUMMARY ROLLUP] Calculating work hours for summary tasks from children")
+    
+    # Get all Task elements from the Tasks container
+    tasks_container = root.find("{%s}Tasks" % ns)
+    all_task_elements = tasks_container.findall("{%s}Task" % ns)
+    
+    # Build UID to task element mapping for quick lookup
+    uid_to_task_elem = {}
+    for task_elem in all_task_elements:
+        task_uid_elem = task_elem.find("{%s}UID" % ns)
+        if task_uid_elem is not None:
+            uid_to_task_elem[int(task_uid_elem.text)] = task_elem
+    
+    # Process tasks in reverse order (bottom-up: level 3 → level 2 → level 1 → level 0)
+    # Level 3 (leaf tasks) already have Work hours populated
+    # Roll up to level 2 (components), then level 1 (deliverables), then level 0 (project)
+    for outline_level in [2, 1, 0]:
+        for task_elem in all_task_elements:
+            level_elem = task_elem.find("{%s}OutlineLevel" % ns)
+            if level_elem is None or int(level_elem.text) != outline_level:
+                continue
+            
+            summary_elem = task_elem.find("{%s}Summary" % ns)
+            if summary_elem is None or summary_elem.text != "1":
+                continue  # Skip non-summary tasks
+            
+            # This is a summary task - sum up children's work hours
+            task_uid = int(task_elem.find("{%s}UID" % ns).text)
+            task_name = task_elem.find("{%s}Name" % ns).text
+            task_wbs = task_elem.find("{%s}WBS" % ns).text
+            
+            # Find all child tasks (WBS starts with this task's WBS + ".")
+            total_work_minutes = 0
+            child_count = 0
+            
+            for potential_child in all_task_elements:
+                child_wbs_elem = potential_child.find("{%s}WBS" % ns)
+                if child_wbs_elem is None:
+                    continue
+                
+                child_wbs = child_wbs_elem.text
+                # Check if child (e.g., "1.2.3") starts with parent WBS + "." (e.g., "1.2.")
+                if child_wbs.startswith(task_wbs + "."):
+                    # This is a direct child - extract its work hours
+                    child_work_elem = potential_child.find("{%s}Work" % ns)
+                    if child_work_elem is not None and child_work_elem.text:
+                        work_str = child_work_elem.text.replace("PT", "").replace("M", "")
+                        if work_str.isdigit():
+                            total_work_minutes += int(work_str)
+                            child_count += 1
+            
+            # Update summary task's Work elements
+            if total_work_minutes > 0:
+                work_iso8601 = f"PT{total_work_minutes}M"
+                
+                # Find and update Work element
+                work_elem = task_elem.find("{%s}Work" % ns)
+                if work_elem is not None:
+                    work_elem.text = work_iso8601
+                
+                # Find and update RegularWork element (if exists)
+                regular_work_elem = task_elem.find("{%s}RegularWork" % ns)
+                if regular_work_elem is not None:
+                    regular_work_elem.text = work_iso8601
+                
+                # Find and update RemainingWork element (if exists)
+                remaining_work_elem = task_elem.find("{%s}RemainingWork" % ns)
+                if remaining_work_elem is not None:
+                    remaining_work_elem.text = work_iso8601
+                
+                total_hours = total_work_minutes / 60
+                logging.info(f"[SUMMARY ROLLUP] Level {outline_level} '{task_name}' (WBS={task_wbs}): {child_count} children = {total_hours}h ({work_iso8601})")
+            else:
+                logging.warning(f"[SUMMARY ROLLUP] Level {outline_level} '{task_name}' (WBS={task_wbs}): No children with work hours found")
+    
+    logging.info("[SUMMARY ROLLUP] Summary work hour rollup complete")
     
     # Create Assignments container with enhanced resource assignments
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
