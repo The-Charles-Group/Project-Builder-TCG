@@ -1031,9 +1031,15 @@ function addDayOfWeekLabels(container) {
     let currentYear = projectStartDate.getFullYear();
     let currentMonth = projectStartDate.getMonth();
     
-    const lowerTexts = container.querySelectorAll('.lower-text');
-    const upperTexts = container.querySelectorAll('.upper-text');
-    console.log('[Gantt] Found', lowerTexts.length, 'date header elements');
+    const lowerTexts = container.querySelectorAll('.lower-header text');
+    const upperTexts = container.querySelectorAll('.upper-header text');
+    console.log('[Gantt] Found', lowerTexts.length, 'lower header text elements');
+    console.log('[Gantt] Found', upperTexts.length, 'upper header text elements');
+    
+    if (lowerTexts.length === 0) {
+      console.warn('[Gantt] No date headers found - Gantt may not be fully rendered');
+      return;
+    }
     
     lowerTexts.forEach((lowerText, index) => {
       const dayText = lowerText.textContent.trim();
@@ -1058,7 +1064,7 @@ function addDayOfWeekLabels(container) {
         const dayLabel = dayAbbr[dayOfWeek];
         
         const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
-        const color = isWeekend ? 'rgba(255, 107, 107, 0.7)' : 'rgba(102, 126, 234, 0.5)';
+        const color = isWeekend ? '#ff6b6b' : '#667eea';
         
         const existingDayLabel = lowerText.parentNode.querySelector('.day-of-week-label[data-index="' + index + '"]');
         if (!existingDayLabel) {
@@ -1066,9 +1072,9 @@ function addDayOfWeekLabels(container) {
           dayLabelElement.setAttribute('class', 'day-of-week-label');
           dayLabelElement.setAttribute('data-index', index);
           dayLabelElement.setAttribute('x', lowerText.getAttribute('x'));
-          dayLabelElement.setAttribute('y', parseFloat(lowerText.getAttribute('y')) + 14);
-          dayLabelElement.setAttribute('font-size', '9');
-          dayLabelElement.setAttribute('font-weight', '600');
+          dayLabelElement.setAttribute('y', parseFloat(lowerText.getAttribute('y')) + 16);
+          dayLabelElement.setAttribute('font-size', '10');
+          dayLabelElement.setAttribute('font-weight', 'bold');
           dayLabelElement.setAttribute('text-anchor', 'middle');
           dayLabelElement.setAttribute('fill', color);
           dayLabelElement.textContent = dayLabel;
@@ -1078,7 +1084,7 @@ function addDayOfWeekLabels(container) {
       }
     });
     
-    console.log('[Gantt] Day-of-week labels added successfully');
+    console.log('[Gantt] Day-of-week labels added successfully -', lowerTexts.length, 'labels processed');
   } catch (error) {
     console.error('[Gantt] Error adding day-of-week labels:', error);
   }
