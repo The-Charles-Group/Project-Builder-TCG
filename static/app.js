@@ -1000,9 +1000,6 @@ async function initializeGanttChart(tasks = []) {
         }
       });
       
-      // Add day-of-week indicators to Gantt date headers
-      addDayOfWeekLabels(container);
-      
       // Show PDF download button after Gantt is successfully rendered
       showPDFDownloadButton();
     }, 100);
@@ -1010,77 +1007,6 @@ async function initializeGanttChart(tasks = []) {
   } catch (error) {
     console.error('Error initializing Gantt chart:', error);
     showFallbackTable(tasks);
-  }
-}
-
-function addDayOfWeekLabels(container) {
-  try {
-    console.log('[Gantt] Adding day-of-week labels to date headers');
-    
-    const dayAbbr = ['Su', 'M', 'T', 'W', 'Th', 'F', 'S'];
-    const monthMap = {
-      'Jan': 0, 'January': 0, 'Feb': 1, 'February': 1, 'Mar': 2, 'March': 2,
-      'Apr': 3, 'April': 3, 'May': 4, 'Jun': 5, 'June': 5,
-      'Jul': 6, 'July': 6, 'Aug': 7, 'August': 7, 'Sep': 8, 'September': 8,
-      'Oct': 9, 'October': 9, 'Nov': 10, 'November': 10, 'Dec': 11, 'December': 11
-    };
-    
-    const projectStartDate = window.currentTimelineTasks && window.currentTimelineTasks.length > 0
-      ? new Date(window.currentTimelineTasks[0].start)
-      : new Date();
-    let currentYear = projectStartDate.getFullYear();
-    let currentMonth = projectStartDate.getMonth();
-    
-    const lowerTexts = container.querySelectorAll('.lower-text');
-    const upperTexts = container.querySelectorAll('.upper-text');
-    console.log('[Gantt] Found', lowerTexts.length, 'date header elements');
-    
-    lowerTexts.forEach((lowerText, index) => {
-      const dayText = lowerText.textContent.trim();
-      const dayMatch = dayText.match(/^\d+$/);
-      
-      if (dayMatch) {
-        const day = parseInt(dayText);
-        
-        const upperText = upperTexts[index];
-        if (upperText) {
-          const monthText = upperText.textContent.trim();
-          if (monthText && monthMap.hasOwnProperty(monthText)) {
-            currentMonth = monthMap[monthText];
-            if (currentMonth === 0 && index > 0) {
-              currentYear++;
-            }
-          }
-        }
-        
-        const date = new Date(currentYear, currentMonth, day);
-        const dayOfWeek = date.getDay();
-        const dayLabel = dayAbbr[dayOfWeek];
-        
-        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
-        const color = isWeekend ? 'rgba(255, 107, 107, 0.7)' : 'rgba(102, 126, 234, 0.5)';
-        
-        const existingDayLabel = lowerText.parentNode.querySelector('.day-of-week-label[data-index="' + index + '"]');
-        if (!existingDayLabel) {
-          const dayLabelElement = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-          dayLabelElement.setAttribute('class', 'day-of-week-label');
-          dayLabelElement.setAttribute('data-index', index);
-          dayLabelElement.setAttribute('x', lowerText.getAttribute('x'));
-          dayLabelElement.setAttribute('y', parseFloat(lowerText.getAttribute('y')) + 14);
-          dayLabelElement.setAttribute('font-size', '9');
-          dayLabelElement.setAttribute('font-weight', '600');
-          dayLabelElement.setAttribute('text-anchor', 'middle');
-          dayLabelElement.setAttribute('fill', color);
-          dayLabelElement.textContent = dayLabel;
-          
-          lowerText.parentNode.appendChild(dayLabelElement);
-        }
-      }
-    });
-    
-    console.log('[Gantt] Day-of-week labels added successfully');
-  } catch (error) {
-    console.error('[Gantt] Error adding day-of-week labels:', error);
   }
 }
 
