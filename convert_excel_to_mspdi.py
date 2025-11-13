@@ -277,9 +277,9 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
     ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
-    # CRITICAL: Hard-coded 8 AM - 5 PM (08:00-17:00) to match Workfront and BusinessCalendar exactly
-    ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "08:00:00"
-    ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "17:00:00"
+    # CRITICAL: Hard-coded 9 AM - 6 PM (09:00-18:00) to match Workfront and BusinessCalendar exactly
+    ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
+    ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
     ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
     ET.SubElement(root, "{%s}MinutesPerWeek" % ns).text = str(int(hours_per_day * 60 * 5))
     ET.SubElement(root, "{%s}DaysPerMonth" % ns).text = "20"
@@ -386,15 +386,15 @@ def convert_excel_to_mspdi(
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "1"
             working_times = ET.SubElement(weekday, "{%s}WorkingTimes" % ns)
             
-            # Morning shift: 8 AM - 12 PM (4 hours)
+            # Morning shift: 9 AM - 1 PM (4 hours)
             wt1 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
-            ET.SubElement(wt1, "{%s}FromTime" % ns).text = "08:00:00"
-            ET.SubElement(wt1, "{%s}ToTime" % ns).text = "12:00:00"
+            ET.SubElement(wt1, "{%s}FromTime" % ns).text = "09:00:00"
+            ET.SubElement(wt1, "{%s}ToTime" % ns).text = "13:00:00"
             
-            # Afternoon shift: 1 PM - 5 PM (4 hours), total 8 hours/day
+            # Afternoon shift: 2 PM - 6 PM (4 hours), total 8 hours/day
             wt2 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
-            ET.SubElement(wt2, "{%s}FromTime" % ns).text = "13:00:00"
-            ET.SubElement(wt2, "{%s}ToTime" % ns).text = "17:00:00"
+            ET.SubElement(wt2, "{%s}FromTime" % ns).text = "14:00:00"
+            ET.SubElement(wt2, "{%s}ToTime" % ns).text = "18:00:00"
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
     
@@ -1813,6 +1813,115 @@ def convert_excel_to_mspdi(
                 logging.warning(f"[WORK AGGREGATION] Failed to update task work: {e}")
     
     logging.info(f"[WORK AGGREGATION] Updated Work for {updated_tasks} tasks based on {len(task_work_totals)} tasks with assignments")
+    
+    # FIX: Create fallback assignments for tasks without any assignments
+    # This ensures all tasks show hours in Workfront (Workfront reads Assignment.Work, not Task.Work)
+    logging.info("[FALLBACK ASSIGNMENTS] Creating assignments for tasks without role-specific assignments...")
+    
+    # Find first available resource UID (prioritize role resources, then departments)
+    fallback_resource_uid = None
+    if len(resource_uid_map) > 0:
+        # Use first role-based resource
+        fallback_resource_uid = next(iter(resource_uid_map.values()))
+    elif len(department_resources) > 0:
+        # Use first department resource
+        fallback_resource_uid = next(iter(department_resources.values()))
+    elif len(resource_map) > 0:
+        # Use first generic resource
+        fallback_resource_uid = 1
+    
+    if fallback_resource_uid is None:
+        logging.warning("[FALLBACK ASSIGNMENTS] No resources available - cannot create fallback assignments")
+    else:
+        logging.info(f"[FALLBACK ASSIGNMENTS] Using resource UID {fallback_resource_uid} for fallback assignments")
+    
+    fallback_assignments_created = 0
+    
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        task_uid_elem = task_elem.find("{%s}UID" % ns)
+        if task_uid_elem is None:
+            continue
+            
+        task_uid_val = int(task_uid_elem.text)
+        
+        # Skip if this task already has assignments
+        if task_uid_val in task_work_totals:
+            continue
+        
+        # Skip summary tasks (they roll up from children)
+        summary_elem = task_elem.find("{%s}Summary" % ns)
+        if summary_elem is not None and summary_elem.text == "1":
+            continue
+        
+        # Get task hours
+        work_elem = task_elem.find("{%s}Work" % ns)
+        if work_elem is None or not work_elem.text:
+            continue
+            
+        work_text = work_elem.text
+        if work_text == "PT0M":
+            continue  # Skip tasks with 0 hours
+        
+        # Parse work hours
+        try:
+            work_minutes = 0
+            if work_text and work_text.startswith("PT"):
+                if "M" in work_text:
+                    minutes_part = work_text.split("M")[0]
+                    if "H" in minutes_part:
+                        hours_part = minutes_part.split("H")[0].replace("PT", "")
+                        mins_part = minutes_part.split("H")[1]
+                        work_minutes = int(hours_part) * 60 + int(mins_part)
+                    else:
+                        work_minutes = int(minutes_part.replace("PT", ""))
+                elif "H" in work_text:
+                    hours_part = work_text.replace("PT", "").replace("H", "")
+                    work_minutes = int(hours_part) * 60
+            
+            if work_minutes == 0:
+                continue
+            
+            # Create fallback assignment using first available resource
+            if fallback_resource_uid is not None:
+                assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
+                ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
+                ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(task_uid_val)
+                ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(fallback_resource_uid)
+                ET.SubElement(assign, "{%s}Units" % ns).text = "100"
+                ET.SubElement(assign, "{%s}Work" % ns).text = work_text
+                ET.SubElement(assign, "{%s}RegularWork" % ns).text = work_text
+                ET.SubElement(assign, "{%s}RemainingWork" % ns).text = work_text
+                
+                # Get task start/finish dates
+                task_start_elem = task_elem.find("{%s}Start" % ns)
+                task_finish_elem = task_elem.find("{%s}Finish" % ns)
+                if task_start_elem is not None:
+                    ET.SubElement(assign, "{%s}Start" % ns).text = task_start_elem.text
+                if task_finish_elem is not None:
+                    ET.SubElement(assign, "{%s}Finish" % ns).text = task_finish_elem.text
+                
+                # Standard assignment properties
+                ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
+                ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
+                ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
+                ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
+                ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
+                ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
+                ET.SubElement(assign, "{%s}Cost" % ns).text = str((work_minutes / 60) * (blended_rate or 150))
+                ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
+                ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
+                
+                assignment_uid += 1
+                fallback_assignments_created += 1
+                
+                task_name = task_elem.find("{%s}Name" % ns)
+                task_name_text = task_name.text if task_name is not None else "Unknown"
+                logging.info(f"[FALLBACK ASSIGNMENTS] Created assignment for task '{task_name_text}' (UID={task_uid_val}): {work_text}")
+        
+        except Exception as e:
+            logging.warning(f"[FALLBACK ASSIGNMENTS] Failed to create fallback assignment for task UID={task_uid_val}: {e}")
+    
+    logging.info(f"[FALLBACK ASSIGNMENTS] Created {fallback_assignments_created} fallback assignments")
     
     # Write the XML file
     tree = ET.ElementTree(root)
