@@ -9680,6 +9680,40 @@ def convert_excel_to_mspdi(
                     })
                     assign_uid += 1
 
+        # FIX: Calculate actual PlannedHours from assignments and update uid_to_sched
+        # This ensures tasks show correct <Work> values instead of PT0M
+        task_hours_from_assignments = {}
+        for assign in assignments:
+            task_uid = assign["TaskUID"]
+            work_hours = assign["WorkHours"]
+            task_hours_from_assignments[task_uid] = task_hours_from_assignments.get(task_uid, 0) + work_hours
+        
+        # Update uid_to_sched with actual hours from assignments
+        for task_uid, total_hours in task_hours_from_assignments.items():
+            if task_uid in uid_to_sched:
+                uid_to_sched[task_uid]["PlannedHours"] = total_hours
+
+        # FIX: Filter out milestone tasks that extend timeline (COMPLETE, CLIENT APPROVAL, Phase Complete)
+        # These are auto-generated milestones that push out the project end date unnecessarily
+        filtered_rows = []
+        excluded_milestone_patterns = [
+            r'COMPLETE',
+            r'CLIENT\s+APPROVAL',
+            r'Phase\s+\d+\s+Complete',
+            r'Phase.*Complete'
+        ]
+        
+        for r in rows:
+            task_name = r.get("Name", "")
+            # Check if task name matches any excluded pattern
+            is_excluded_milestone = any(re.search(pattern, task_name, re.IGNORECASE) for pattern in excluded_milestone_patterns)
+            
+            if not is_excluded_milestone:
+                filtered_rows.append(r)
+        
+        # Use filtered rows for XML generation
+        rows = filtered_rows
+
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
