@@ -1792,14 +1792,30 @@ def convert_excel_to_mspdi(
             except (ValueError, AttributeError) as e:
                 logging.warning(f"[WORK AGGREGATION] Failed to parse assignment work: {e}")
     
-    # Update task Work elements with aggregated totals
+    # Update task Work elements with aggregated totals (ONLY for leaf tasks, NOT summary tasks)
+    # Summary tasks (deliverables/components) should roll up hours from children naturally
     updated_tasks = 0
+    skipped_summary_tasks = 0
+    
     for task_elem in tasks.findall("{%s}Task" % ns):
         task_uid_elem = task_elem.find("{%s}UID" % ns)
         if task_uid_elem is not None:
             try:
                 task_uid_val = int(task_uid_elem.text)
                 if task_uid_val in task_work_totals:
+                    # Check if this is a summary task (has children)
+                    summary_elem = task_elem.find("{%s}Summary" % ns)
+                    is_summary = summary_elem is not None and summary_elem.text == "1"
+                    
+                    if is_summary:
+                        # SKIP summary tasks - they will roll up from children
+                        task_name_elem = task_elem.find("{%s}Name" % ns)
+                        task_name = task_name_elem.text if task_name_elem is not None else f"UID={task_uid_val}"
+                        logging.info(f"[WORK AGGREGATION] SKIPPING summary task '{task_name}' (UID={task_uid_val}) - will roll up from children")
+                        skipped_summary_tasks += 1
+                        continue
+                    
+                    # Update ONLY leaf tasks (non-summary tasks)
                     total_minutes = task_work_totals[task_uid_val]
                     
                     # Find and update existing Work element
@@ -1808,11 +1824,18 @@ def convert_excel_to_mspdi(
                         old_value = work_elem.text
                         work_elem.text = f"PT{total_minutes}M"
                         updated_tasks += 1
-                        logging.debug(f"[WORK AGGREGATION] Task UID={task_uid_val}: {old_value} -> PT{total_minutes}M")
+                        
+                        task_name_elem = task_elem.find("{%s}Name" % ns)
+                        task_name = task_name_elem.text if task_name_elem is not None else f"UID={task_uid_val}"
+                        logging.info(f"[WORK AGGREGATION] Updated leaf task '{task_name}' (UID={task_uid_val}): {old_value} -> PT{total_minutes}M ({total_minutes/60:.1f} hours)")
             except (ValueError, AttributeError) as e:
                 logging.warning(f"[WORK AGGREGATION] Failed to update task work: {e}")
     
-    logging.info(f"[WORK AGGREGATION] Updated Work for {updated_tasks} tasks based on {len(task_work_totals)} tasks with assignments")
+    logging.info(f"[WORK AGGREGATION] ========== SUMMARY ==========")
+    logging.info(f"[WORK AGGREGATION] Updated Work for {updated_tasks} LEAF tasks")
+    logging.info(f"[WORK AGGREGATION] Skipped {skipped_summary_tasks} SUMMARY tasks (will roll up from children)")
+    logging.info(f"[WORK AGGREGATION] Total tasks with assignments: {len(task_work_totals)}")
+    logging.info(f"[WORK AGGREGATION] ================================")
     
     # FIX: Create fallback assignments for tasks without any assignments
     # This ensures all tasks show hours in Workfront (Workfront reads Assignment.Work, not Task.Work)
