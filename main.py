@@ -7923,6 +7923,13 @@ def _export_single_scenario_xml(
     if not DB.loaded:
         DB.load()
     
+    # CRITICAL DIAGNOSTIC: Use logger.info instead of print to ensure visibility
+    import logging
+    logger = logging.getLogger("uvicorn.error")
+    logger.info(f"[EXPORT_XML ENTRY] Starting export for {scenario_label}")
+    logger.info(f"[EXPORT_XML ENTRY] Scenario keys: {list(scenario.keys())}")
+    logger.info(f"[EXPORT_XML ENTRY] Has timeline_tasks: {'timeline_tasks' in scenario}")
+    logger.info(f"[EXPORT_XML ENTRY] Has timeline: {'timeline' in scenario}")
     print(f"[EXPORT_XML] Starting export for {scenario_label}")
     print(f"[EXPORT_XML] Scenario keys: {list(scenario.keys())}")
     print(f"[EXPORT_XML] Has timeline_tasks: {'timeline_tasks' in scenario}")
