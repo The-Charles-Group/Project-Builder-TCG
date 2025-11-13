@@ -9570,6 +9570,25 @@ def convert_excel_to_mspdi(
         def is_business_day(d):
             return d.weekday() < 5  # Mon–Fri
 
+        def next_business_day(d):
+            """Roll date forward to the next business day if it falls on a weekend."""
+            while not is_business_day(d):
+                d = d + datetime.timedelta(days=1)
+            return d
+
+        def add_business_days(start_date, num_days):
+            """Add num_days business days to start_date, skipping weekends."""
+            current = start_date.date() if isinstance(start_date, datetime.datetime) else start_date
+            days_added = 0
+            while days_added < num_days:
+                current = current + datetime.timedelta(days=1)
+                if is_business_day(current):
+                    days_added += 1
+            # Preserve time component from original start_date
+            if isinstance(start_date, datetime.datetime):
+                return datetime.datetime.combine(current, start_date.time())
+            return current
+
         def business_minutes_in_range(day: date, start_t: time, end_t: time) -> int:
             # minutes worked on a single day between start_t and end_t
             if not is_business_day(day): 
@@ -9920,8 +9939,9 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
-                # Set leaf tasks as Fixed Duration (Type=1) so duration is canonical
-                SubElement(task, "Type").text = "1"  # Fixed Duration
+                # CRITICAL FIX: Set as Fixed Work (Type=2) to prevent Workfront from recalculating hours
+                # This ensures Workfront keeps our exported hours instead of deriving them from duration
+                SubElement(task, "Type").text = "2"  # Fixed Work
                 SubElement(task, "IsEffortDriven").text = "0"
                 
                 # All non-root tasks: As Soon As Possible (rely on predecessors + calendar)
@@ -9947,18 +9967,14 @@ def convert_excel_to_mspdi(
             SubElement(assignment, "Start").text = assign["Start"]
             SubElement(assignment, "Finish").text = assign["Finish"]
             
-            # Compute Units = work_min / dur_min for Fixed Duration tasks
+            # CRITICAL FIX: Lock hours for Fixed Work tasks
+            # Set Units=1.0 and Work=RemainingWork to prevent Workfront from recalculating
             work_hours = assign['WorkHours']
-            work_min = work_hours * 60
-            # Get duration from the task schedule
-            dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
-            dur_min = dur_hours * 60
-            # Snap to 480-minute blocks as done in tasks
-            dur_min = ((int(dur_min) + 479) // 480) * 480
-            units = 0 if dur_min == 0 else work_min / dur_min
+            work_min = int(work_hours * 60)
             
-            SubElement(assignment, "Units").text = str(units)
-            SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+            SubElement(assignment, "Units").text = "1.0"  # Lock at 100% allocation
+            SubElement(assignment, "Work").text = f"PT{work_min}M"
+            SubElement(assignment, "RemainingWork").text = f"PT{work_min}M"  # Match Work to lock hours
             
             # TASK 16: Use stored Rate_USD from scenario pricing instead of re-computing
             task_uid = assign["TaskUID"]
