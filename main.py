@@ -3062,7 +3062,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         print(f"  ✓ Merged Start_Offset_Days={start_offset}")
                     if hours is not None:
                         item["hours"] = hours
-                        print(f"  ✓ Merged hours={hours}")
+                        item["total_hours"] = hours  # CRITICAL FIX: Ensure timeline hours override scenario build hours
+                        print(f"  ✓ Merged hours={hours} → total_hours (will cascade to components/tasks/roles)")
                     break
             
             if not matched and deliv_name:
@@ -3197,7 +3198,26 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             
             # Ensure total_hours is calculated correctly
             calculated_total = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
-            if not d.get("total_hours") or float(d.get("total_hours", 0.0)) == 0.0:
+            timeline_total = float(d.get("total_hours", 0.0))
+            
+            # CRITICAL FIX: If timeline changed hours, recalculate hours_by_role proportionally
+            if timeline_total > 0 and calculated_total > 0 and abs(timeline_total - calculated_total) > 0.1:
+                scale_factor = timeline_total / calculated_total
+                print(f"[WBS Builder] 📊 Timeline hours differ for {dcode}: {calculated_total:.1f}h → {timeline_total:.1f}h (scale: {scale_factor:.3f}x)")
+                print(f"  Recalculating hours_by_role to distribute {timeline_total}h across roles")
+                
+                # Scale each role's hours proportionally
+                scaled_hours_by_role = []
+                for row in hrs_df.to_dict("records"):
+                    scaled_row = row.copy()
+                    scaled_row["Hours"] = row.get("Hours", 0) * scale_factor
+                    scaled_hours_by_role.append(scaled_row)
+                
+                d["hours_by_role"] = scaled_hours_by_role
+                hrs_df = pd.DataFrame(scaled_hours_by_role)
+                d["total_hours"] = timeline_total  # Ensure timeline hours take precedence
+                print(f"  ✓ Scaled {len(scaled_hours_by_role)} role assignments to match timeline hours")
+            elif not d.get("total_hours") or timeline_total == 0.0:
                 d["total_hours"] = calculated_total
             
             # hours (use exact for pricing, round for display)
