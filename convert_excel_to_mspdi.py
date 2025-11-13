@@ -1644,6 +1644,70 @@ def convert_excel_to_mspdi(
     logging.info(f"[ROLE ASSIGNMENTS] Success rate: {(role_assignment_count / (role_assignment_count + skipped_role_rows) * 100) if (role_assignment_count + skipped_role_rows) > 0 else 0:.1f}%")
     logging.info(f"[ROLE ASSIGNMENTS] ===============================")
     
+    # FIX: Aggregate assignment hours back to task Work elements
+    # This fixes the PT0M bug where leaf tasks show 0 minutes instead of actual assignment hours
+    logging.info("[WORK AGGREGATION] Aggregating assignment hours to task Work elements...")
+    task_work_totals = {}  # Map task_uid -> total_work_minutes
+    
+    # Sum up all assignment Work for each task
+    for assign_elem in assignments.findall("{%s}Assignment" % ns):
+        task_uid_elem = assign_elem.find("{%s}TaskUID" % ns)
+        work_elem = assign_elem.find("{%s}Work" % ns)
+        
+        if task_uid_elem is not None and work_elem is not None:
+            try:
+                task_uid_val = int(task_uid_elem.text)
+                work_text = work_elem.text  # Format: "PT123M" or "PT5H30M"
+                
+                # Parse work minutes from various PT formats
+                work_minutes = 0
+                if work_text and work_text.startswith("PT"):
+                    # Handle PT123M format
+                    if "M" in work_text:
+                        minutes_part = work_text.split("M")[0]
+                        if "H" in minutes_part:
+                            # Handle PT5H30M format
+                            hours_part = minutes_part.split("H")[0].replace("PT", "")
+                            mins_part = minutes_part.split("H")[1]
+                            work_minutes = int(hours_part) * 60 + int(mins_part)
+                        else:
+                            # Handle PT123M format
+                            work_minutes = int(minutes_part.replace("PT", ""))
+                    elif "H" in work_text:
+                        # Handle PT5H format
+                        hours_part = work_text.replace("PT", "").replace("H", "")
+                        work_minutes = int(hours_part) * 60
+                
+                # Accumulate to task total
+                if task_uid_val not in task_work_totals:
+                    task_work_totals[task_uid_val] = 0
+                task_work_totals[task_uid_val] += work_minutes
+                
+            except (ValueError, AttributeError) as e:
+                logging.warning(f"[WORK AGGREGATION] Failed to parse assignment work: {e}")
+    
+    # Update task Work elements with aggregated totals
+    updated_tasks = 0
+    for task_elem in tasks.findall("{%s}Task" % ns):
+        task_uid_elem = task_elem.find("{%s}UID" % ns)
+        if task_uid_elem is not None:
+            try:
+                task_uid_val = int(task_uid_elem.text)
+                if task_uid_val in task_work_totals:
+                    total_minutes = task_work_totals[task_uid_val]
+                    
+                    # Find and update existing Work element
+                    work_elem = task_elem.find("{%s}Work" % ns)
+                    if work_elem is not None:
+                        old_value = work_elem.text
+                        work_elem.text = f"PT{total_minutes}M"
+                        updated_tasks += 1
+                        logging.debug(f"[WORK AGGREGATION] Task UID={task_uid_val}: {old_value} -> PT{total_minutes}M")
+            except (ValueError, AttributeError) as e:
+                logging.warning(f"[WORK AGGREGATION] Failed to update task work: {e}")
+    
+    logging.info(f"[WORK AGGREGATION] Updated Work for {updated_tasks} tasks based on {len(task_work_totals)} tasks with assignments")
+    
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
