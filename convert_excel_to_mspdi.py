@@ -40,23 +40,6 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
-class TaskRecord:
-    """
-    Container for task data before writing to XML in chronological order
-    """
-    def __init__(self, task_element: ET.Element, original_uid: int, start_date: datetime, 
-                 outline_level: int, creation_order: int):
-        self.task_element = task_element
-        self.original_uid = original_uid
-        self.start_date = start_date
-        self.outline_level = outline_level
-        self.creation_order = creation_order
-        
-    def sort_key(self):
-        """Return tuple for sorting: (start_date, outline_level, creation_order)"""
-        return (self.start_date, self.outline_level, self.creation_order)
-
-
 def create_governance_milestone_task(
     task_uid: int,
     ns: str,
@@ -1661,81 +1644,6 @@ def convert_excel_to_mspdi(
     logging.info(f"[ROLE ASSIGNMENTS] Success rate: {(role_assignment_count / (role_assignment_count + skipped_role_rows) * 100) if (role_assignment_count + skipped_role_rows) > 0 else 0:.1f}%")
     logging.info(f"[ROLE ASSIGNMENTS] ===============================")
     
-    # FIX: Resequence tasks in chronological order for Workfront display
-    # FIX: Enforce waterfall sequencing - make each deliverable start when previous one ends
-    # This eliminates month-long gaps between deliverables
-    logging.info("[WATERFALL SEQUENCING] Enforcing waterfall flow between deliverables...")
-    
-    # Find all deliverable tasks (OutlineLevel = 1)
-    deliverable_elements = []
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        outline_elem = task_elem.find("{%s}OutlineLevel" % ns)
-        if outline_elem is not None and outline_elem.text == "1":
-            uid_elem = task_elem.find("{%s}UID" % ns)
-            name_elem = task_elem.find("{%s}Name" % ns)
-            start_elem = task_elem.find("{%s}Start" % ns)
-            finish_elem = task_elem.find("{%s}Finish" % ns)
-            
-            if uid_elem is not None and start_elem is not None:
-                deliverable_elements.append({
-                    'uid': int(uid_elem.text),
-                    'name': name_elem.text if name_elem is not None else 'Unknown',
-                    'element': task_elem,
-                    'start_elem': start_elem,
-                    'finish_elem': finish_elem
-                })
-    
-    logging.info(f"[WATERFALL SEQUENCING] Found {len(deliverable_elements)} deliverables")
-    
-    # Don't re-sort deliverables - they're already in the order created from the Excel
-    # Just enforce that each one starts when the previous one ends
-    for i in range(1, len(deliverable_elements)):
-        prev_deliv = deliverable_elements[i - 1]
-        curr_deliv = deliverable_elements[i]
-        
-        # Get previous deliverable's finish date
-        if prev_deliv['finish_elem'] is not None:
-            try:
-                prev_finish_str = prev_deliv['finish_elem'].text
-                prev_finish = datetime.fromisoformat(prev_finish_str.replace('Z', '+00:00')).replace(tzinfo=None)
-                
-                # Get current deliverable's start and calculate duration
-                curr_start_str = curr_deliv['start_elem'].text
-                curr_start = datetime.fromisoformat(curr_start_str.replace('Z', '+00:00')).replace(tzinfo=None)
-                
-                curr_finish_str = curr_deliv['finish_elem'].text if curr_deliv['finish_elem'] is not None else None
-                if curr_finish_str:
-                    curr_finish = datetime.fromisoformat(curr_finish_str.replace('Z', '+00:00')).replace(tzinfo=None)
-                    duration = (curr_finish - curr_start).days
-                    
-                    # Set new start = previous finish (next business day)
-                    new_start = prev_finish
-                    new_finish = new_start + timedelta(days=duration)
-                    
-                    # Update start and finish dates
-                    curr_deliv['start_elem'].text = new_start.isoformat()
-                    if curr_deliv['finish_elem'] is not None:
-                        curr_deliv['finish_elem'].text = new_finish.isoformat()
-                    
-                    # Update constraint date if it exists
-                    constraint_date_elem = curr_deliv['element'].find("{%s}ConstraintDate" % ns)
-                    if constraint_date_elem is not None:
-                        constraint_date_elem.text = new_start.isoformat()
-                    
-                    logging.info(f"[WATERFALL SEQUENCING] '{curr_deliv['name']}' moved from {curr_start.date()} to {new_start.date()} (after '{prev_deliv['name']}' ends {prev_finish.date()})")
-                    
-                    # Add Finish-to-Start dependency to lock waterfall flow in Workfront
-                    pred_link = ET.SubElement(curr_deliv['element'], "{%s}PredecessorLink" % ns)
-                    ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(prev_deliv['uid'])
-                    ET.SubElement(pred_link, "{%s}Type" % ns).text = "1"  # Finish-to-Start (FS)
-                    ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
-                    ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
-                    ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
-                    
-                    logging.info(f"[WATERFALL DEPENDENCIES] Added FS dependency: '{prev_deliv['name']}' (UID {prev_deliv['uid']}) → '{curr_deliv['name']}' (UID {curr_deliv['uid']})")
-            except Exception as e:
-                logging.warning(f"[WATERFALL SEQUENCING] Could not adjust deliverable '{curr_deliv['name']}': {e}")
-    
     # FIX: Aggregate assignment hours back to task Work elements
     # This fixes the PT0M bug where leaf tasks show 0 minutes instead of actual assignment hours
     logging.info("[WORK AGGREGATION] Aggregating assignment hours to task Work elements...")
@@ -1834,7 +1742,7 @@ def convert_excel_to_mspdi(
             total_cost = 0.0
     
     stats = {
-        "task_count": len(all_tasks),  # Use sorted task count instead of task_uid
+        "task_count": task_uid - 1,
         "resource_count": len(resource_map) + len(department_resources),
         "assignment_count": assignment_uid - 1,
         "project_start": project_start.isoformat(),
