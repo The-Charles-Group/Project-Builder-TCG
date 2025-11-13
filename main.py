@@ -3402,6 +3402,15 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         # CRITICAL FIX: Populate task row Planned_Hours by summing role hours
                         # This ensures XML generation has correct hours for Work field
                         task_total_hours = sum(flo.values())
+                        
+                        # ZERO-HOUR TASK FIX: Skip tasks with no hours (phantom work items)
+                        if task_total_hours <= 0:
+                            print(f"[WBS Builder WARNING] Skipping 0-hour task: {dcode}/{comp}/{tg} - target_hours={target_task_hours}, scen_col={scen_col}")
+                            print(f"[WBS Builder WARNING] Context: hrs_role_df rows={len(hrs_role_df)}, tg_target_month[{tg}]={tg_target_month.get(tg, 'N/A')}")
+                            # Remove the empty task row we just added
+                            rows.pop()
+                            continue
+                        
                         # Update the task row we just added (it's the last row before role rows)
                         rows[-1]["Planned_Hours"] = task_total_hours
                         print(f"[WBS Builder] Task {wbs_task} ({label}): total_hours={task_total_hours} from {len(flo)} roles")
