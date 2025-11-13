@@ -1166,3 +1166,121 @@ body.chatgpt-sidebar-expanded {
   font-size: 12px;
   color: var(--text);
 }
+
+/* ========================================
+   Gantt Chart Dark Mode Overrides
+   ======================================== */
+
+/* Default light mode (Frappe Gantt default) */
+#gantt {
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Dark mode overrides - applied when .gantt-dark-mode class is present */
+.gantt-dark-mode #gantt {
+  background: var(--card) !important;
+}
+
+.gantt-dark-mode .gantt-container {
+  background: var(--card) !important;
+}
+
+/* Grid and timeline background */
+.gantt-dark-mode .grid-background,
+.gantt-dark-mode .grid-header {
+  fill: var(--card) !important;
+}
+
+/* Grid lines */
+.gantt-dark-mode .grid-row {
+  fill: rgba(255, 255, 255, 0.02) !important;
+}
+
+.gantt-dark-mode .grid-row:nth-child(even) {
+  fill: rgba(255, 255, 255, 0.04) !important;
+}
+
+.gantt-dark-mode .row-line,
+.gantt-dark-mode .tick {
+  stroke: var(--border) !important;
+}
+
+/* Date labels and text */
+.gantt-dark-mode .upper-text,
+.gantt-dark-mode .lower-text {
+  fill: var(--text) !important;
+  font-weight: 500;
+}
+
+/* Task bar labels */
+.gantt-dark-mode .bar-label {
+  fill: white !important;
+  font-weight: 500;
+}
+
+/* Task bars - keep vibrant colors but adjust opacity for dark mode */
+.gantt-dark-mode .bar {
+  opacity: 0.9;
+}
+
+.gantt-dark-mode .bar-progress {
+  opacity: 0.8;
+}
+
+/* Handle (resize) indicators */
+.gantt-dark-mode .handle {
+  fill: rgba(255, 255, 255, 0.3) !important;
+}
+
+.gantt-dark-mode .handle:hover {
+  fill: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* Today marker */
+.gantt-dark-mode .today-highlight {
+  fill: rgba(106, 163, 255, 0.15) !important;
+}
+
+/* Popup/tooltip dark mode */
+.gantt-dark-mode .popup-wrapper {
+  background: var(--card) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+}
+
+.gantt-dark-mode .popup-wrapper .title {
+  color: var(--text) !important;
+  border-bottom-color: var(--border) !important;
+}
+
+.gantt-dark-mode .popup-wrapper .subtitle {
+  color: var(--muted) !important;
+}
+
+/* Gantt theme toggle button */
+#gantt-theme-toggle {
+  padding: 8px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#gantt-theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent);
+}
+
+#gantt-theme-toggle.active {
+  background: var(--accent);
+  color: #08121e;
+  border-color: var(--accent);
+}

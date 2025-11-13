@@ -993,6 +993,9 @@ async function initializeGanttChart(tasks = []) {
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
         
+        // Recalculate resource risks based on updated timeline
+        updateResourceRiskTable(currentTimelineTasks, timelineReasoning);
+        
         // Debounced backend sync to prevent freeze during drag
         // Duration is recalculated inside syncToBackend to avoid stale data
         syncToBackend(task.id, start.toISOString().split('T')[0], end.toISOString().split('T')[0]);
@@ -6197,9 +6200,9 @@ function renderAIPlan(aiPlan) {
         </div>
       </div>
       
-      <div style="background: #f0f9ff; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
-        <h4 style="margin: 0 0 8px 0; color: #1e40af;">📊 Project Flow & Department Sequencing</h4>
-        <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: #1e3a8a;">
+      <div style="background: var(--card); padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
+        <h4 style="margin: 0 0 8px 0; color: var(--accent);">📊 Project Flow & Department Sequencing</h4>
+        <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: var(--text);">
           <strong>From a PM perspective, here's how these departments flow together:</strong><br>
           <strong>1. Strategy</strong> → Sets foundation & direction<br>
           <strong>2. Creative</strong> → Develops visual identity & concepts<br>
@@ -6228,10 +6231,10 @@ function renderAIPlan(aiPlan) {
       };
       
       html += `
-        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
-          <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: #1f2937; margin-bottom: 12px;">
+        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
+          <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: var(--text); margin-bottom: 12px;">
             <span style="color: ${deptColors[dept]}; margin-right: 8px;">●</span>
-            ${dept} <span style="color: #6b7280; font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
+            ${dept} <span style="color: var(--muted); font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
           </summary>
       `;
       
@@ -6241,7 +6244,7 @@ function renderAIPlan(aiPlan) {
         const delivCode = deliv.deliverable_code || deliv.code;
         
         html += `
-          <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
+          <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: var(--card); padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
               <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
                 <input type="checkbox" 
@@ -6251,7 +6254,7 @@ function renderAIPlan(aiPlan) {
                        data-dept="${dept}"
                        style="cursor: pointer;">
                 <div style="flex: 1;">
-                  <h4 style="margin: 0; color: #111827;">
+                  <h4 style="margin: 0; color: var(--text);">
                     <span style="color: ${deptColors[dept]}; font-weight: 500; font-size: 0.85em;">[${dept}]</span>
                     ${deliv.title}
                   </h4>
@@ -6259,7 +6262,7 @@ function renderAIPlan(aiPlan) {
               </div>
               <div style="display: flex; gap: 8px; align-items: center;">
                 <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}% confidence</span>
-                <span style="font-size: 0.85em; color: #6b7280;">${deliv.planned_hours || 0}h</span>
+                <span style="font-size: 0.85em; color: var(--muted);">${deliv.planned_hours || 0}h</span>
                 <button class="btn-small" 
                         onclick="addAIDeliverableToSelection('${delivCode}', this)"
                         style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
@@ -6269,7 +6272,7 @@ function renderAIPlan(aiPlan) {
             </div>
             
             ${deliv.why ? `
-              <p style="margin: 8px 0; font-size: 0.9em; color: #4b5563; line-height: 1.5;">${deliv.why}</p>
+              <p style="margin: 8px 0; font-size: 0.9em; color: var(--muted); line-height: 1.5;">${deliv.why}</p>
             ` : ''}
             
             ${deliv.risks ? `
@@ -10269,3 +10272,70 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 })();
+// ================================================================================
+// Gantt Theme Toggle Functions
+// ================================================================================
+
+function toggleGanttTheme() {
+  const container = document.getElementById('gantt-container');
+  const icon = document.getElementById('gantt-theme-icon');
+  const text = document.getElementById('gantt-theme-text');
+  const button = document.getElementById('gantt-theme-toggle');
+  
+  if (!container) return;
+  
+  // Toggle dark mode class
+  const isDark = container.classList.toggle('gantt-dark-mode');
+  
+  // Update button UI
+  if (isDark) {
+    icon.textContent = '☀️';
+    text.textContent = 'Light';
+    button.classList.add('active');
+  } else {
+    icon.textContent = '🌙';
+    text.textContent = 'Dark';
+    button.classList.remove('active');
+  }
+  
+  // Save preference to localStorage
+  localStorage.setItem('gantt-theme', isDark ? 'dark' : 'light');
+  
+  console.log('[Gantt Theme] Switched to', isDark ? 'dark' : 'light', 'mode');
+}
+
+function initializeGanttTheme() {
+  const container = document.getElementById('gantt-container');
+  const icon = document.getElementById('gantt-theme-icon');
+  const text = document.getElementById('gantt-theme-text');
+  const button = document.getElementById('gantt-theme-toggle');
+  
+  if (!container) return;
+  
+  // Load saved preference (default to light mode to match Frappe Gantt default)
+  const savedTheme = localStorage.getItem('gantt-theme') || 'light';
+  const isDark = savedTheme === 'dark';
+  
+  // Apply theme
+  if (isDark) {
+    container.classList.add('gantt-dark-mode');
+    icon.textContent = '☀️';
+    text.textContent = 'Light';
+    button.classList.add('active');
+  } else {
+    container.classList.remove('gantt-dark-mode');
+    icon.textContent = '🌙';
+    text.textContent = 'Dark';
+    button.classList.remove('active');
+  }
+  
+  console.log('[Gantt Theme] Initialized with', savedTheme, 'theme');
+}
+
+// Initialize theme on page load
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeGanttTheme);
+} else {
+  initializeGanttTheme();
+}
+
