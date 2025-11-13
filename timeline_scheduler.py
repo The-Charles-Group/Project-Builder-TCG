@@ -888,7 +888,6 @@ class TimelineScheduler:
                 "start": task.start_date.strftime('%Y-%m-%d'),
                 "end": task.end_date.strftime('%Y-%m-%d'),
                 "progress": 0,
-                "dependencies": ",".join([d.predecessor for d in task.dependencies]),
                 "custom_class": f"workstream-{task.workstream.lower().replace(' ', '-')}",
                 "deliverable_code": task.deliverable_code,
                 "workstream": task.workstream,
