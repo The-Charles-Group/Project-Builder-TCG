@@ -255,8 +255,9 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
     ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
-    ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
-    ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
+    # CRITICAL: Hard-coded 8 AM - 5 PM (08:00-17:00) to match Workfront and BusinessCalendar exactly
+    ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "08:00:00"
+    ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "17:00:00"
     ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
     ET.SubElement(root, "{%s}MinutesPerWeek" % ns).text = str(int(hours_per_day * 60 * 5))
     ET.SubElement(root, "{%s}DaysPerMonth" % ns).text = "20"
@@ -363,15 +364,15 @@ def convert_excel_to_mspdi(
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "1"
             working_times = ET.SubElement(weekday, "{%s}WorkingTimes" % ns)
             
-            # Morning shift
+            # Morning shift: 8 AM - 12 PM (4 hours)
             wt1 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
-            ET.SubElement(wt1, "{%s}FromTime" % ns).text = "09:00:00"
+            ET.SubElement(wt1, "{%s}FromTime" % ns).text = "08:00:00"
             ET.SubElement(wt1, "{%s}ToTime" % ns).text = "12:00:00"
             
-            # Afternoon shift
+            # Afternoon shift: 1 PM - 5 PM (4 hours), total 8 hours/day
             wt2 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
             ET.SubElement(wt2, "{%s}FromTime" % ns).text = "13:00:00"
-            ET.SubElement(wt2, "{%s}ToTime" % ns).text = "18:00:00"
+            ET.SubElement(wt2, "{%s}ToTime" % ns).text = "17:00:00"
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
     
