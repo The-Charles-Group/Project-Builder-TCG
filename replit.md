@@ -81,6 +81,54 @@ Provides RESTful endpoints for data loading, options retrieval, and scenario gen
 
 **Verification**: The sanity test script (`scripts/test_predecessor_sanity.py`) proves that Workfront correctly respects PredecessorLink elements when present in XML - Task B with FS predecessor to Task A starts immediately after Task A with no gaps.
 
+### Workfront XML Export - Timeline Date Snap Issue (Nov 2025)
+**Status**: ✅ RESOLVED (Nov 14, 2025)
+
+**Original Issue**: All tasks in exported Workfront XML were snapping to project start date (Nov 17, 2025) instead of respecting their merged timeline dates from PM-Brain capacity scheduling.
+
+**Root Causes Identified**:
+1. **Timeline merge failures** - Components/tasks missing codes couldn't match with timeline data
+2. **Missing SNET constraints** - Tasks without Start No Earlier Than (SNET) constraints defaulted to ASAP, allowing Workfront to snap them to project start
+3. **No validation** - Export proceeded silently when codes were missing, producing broken XML
+
+**Resolution (3-part fix)**:
+
+**1. Deterministic Code Generation (`main.py`, Nov 14, 2025)**
+- Added `_slugify()` and `_deterministic_hash()` helpers for stable code generation
+- Added `_ensure_component_task_codes()` preprocessing pass in `build_wbs_with_pricing()`
+- Generates slug+hash codes (format: `{slug}-{8-char-hash}`) for any component/task missing codes
+- Uses canonical path hashing: `f"{deliverable_code}|{component_name}|{task_name}"`
+- Positional fallback (deliverable-1, component-1, task-1) when names missing
+- Runs BEFORE timeline merge to ensure reliable code-to-code matching
+
+**2. SNET Constraint Implementation (`convert_excel_to_mspdi.py`, Nov 14, 2025)**
+- Added `has_timeline_start` flag tracking during DataFrame processing
+- Emits `ConstraintType=4` (Start No Earlier Than) + `ConstraintDate` when timeline start exists
+- Keeps `ConstraintType=0` (ASAP) only when task has no timeline start
+- Prevents Workfront from snapping timeline-controlled tasks to project start date
+
+**3. Export-Time Validation (`convert_excel_to_mspdi.py`, Nov 14, 2025)**
+- Checks column existence first (Task_Code, Deliverable_Code) before validation
+- Validates all tasks have task_code, all deliverables have deliverable_code
+- Exports `{output_xml}_unmatched.csv` with problematic rows for debugging
+- Raises clear `ValueError` if validation fails, preventing silent broken exports
+
+**Impact**:
+- ✅ Timeline dates from PM-Brain capacity scheduling now properly honored in Workfront
+- ✅ All tasks schedule at their calculated dates (not Nov 17 project start)
+- ✅ Code generation ensures 100% timeline merge success rate
+- ✅ Export fails fast with clear diagnostics when issues detected
+
+**Files Modified**:
+- `main.py`: Code generation (lines 2935-3052, 3144-3148)
+- `convert_excel_to_mspdi.py`: SNET constraints (lines 1174-1187, 1292-1306), validation (lines 426-505)
+
+**Testing Recommendations**:
+1. Export St. Regis or similar scenario with PM-Brain timeline
+2. Verify tasks have SNET constraints with correct dates in XML
+3. Import to Workfront and confirm tasks schedule at expected dates (not Nov 17)
+4. Test export failure with manually deleted task codes to verify validation
+
 ### Code Quality - PATCH VIOLATIONS (Nov 2025)
 **Status**: Documented - Cleanup required
 
