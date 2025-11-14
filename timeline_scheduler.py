@@ -12,9 +12,6 @@ import json
 import math
 from collections import defaultdict
 
-# Import BusinessCalendar for holiday-aware scheduling
-from business_calendar import BusinessCalendar
-
 # Project phases with typical durations (in business days)
 @dataclass
 class ProjectPhase:
@@ -187,14 +184,12 @@ class TimelineScheduler:
         ]
     }
     
-    def __init__(self, calendar: Optional[BusinessCalendar] = None):
+    def __init__(self):
         self.tasks = []
         self.dependencies = []
         self.workstreams = defaultdict(list)  # workstream -> list of tasks
         self.phases = defaultdict(list)  # phase -> list of tasks
         self.resource_calendar = defaultdict(set)  # date -> set of busy resources
-        # Initialize BusinessCalendar for holiday-aware scheduling
-        self.calendar = calendar if calendar is not None else BusinessCalendar()
         
     def identify_workstream(self, deliverable_name: str, department: Optional[str] = None) -> str:
         """Identify which workstream a deliverable belongs to"""
@@ -403,15 +398,13 @@ class TimelineScheduler:
                     for resource in task.resources
                 )
                 
-                # Use BusinessCalendar to check business days (skips weekends AND holidays)
-                if resources_available and self.calendar.is_business_day(current_date):
+                if resources_available and current_date.weekday() < 5:  # Business days only
                     # Allocate hours for this day
                     daily_hours = min(max_hours_per_day, task_hours_remaining)
                     for resource in task.resources:
                         resource_calendar[date_str][resource] += daily_hours
                     task_hours_remaining -= daily_hours
                 
-                # Move to next day (will be filtered by is_business_day check)
                 current_date += timedelta(days=1)
             
             # Update task end date if needed
@@ -476,8 +469,7 @@ class TimelineScheduler:
                         else:
                             max_pred_finish = task.start_date
                         earliest_start[task.id] = max(task.start_date, max_pred_finish)
-                        # Use business days for finish calculation
-                        earliest_finish[task.id] = self.calendar.add_business_days(earliest_start[task.id], task.duration_days)
+                        earliest_finish[task.id] = earliest_start[task.id] + timedelta(days=task.duration_days)
                     else:
                         earliest_start[task.id] = task.start_date
                         earliest_finish[task.id] = task.end_date
@@ -513,8 +505,7 @@ class TimelineScheduler:
         for task in tasks:
             if task.id not in successors or not successors[task.id]:
                 latest_finish[task.id] = project_end
-                # Use business days for backward calculation (negative duration)
-                latest_start[task.id] = self.calendar.add_business_days(latest_finish[task.id], -task.duration_days)
+                latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
         
         print(f"[Scheduler] Backward pass: {len(latest_finish)} tasks with no successors")
         
@@ -544,12 +535,10 @@ class TimelineScheduler:
                         else:
                             min_succ_start = project_end
                         latest_finish[task.id] = min_succ_start
-                        # Use business days for backward calculation (negative duration)
-                        latest_start[task.id] = self.calendar.add_business_days(latest_finish[task.id], -task.duration_days)
+                        latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
                     else:
                         latest_finish[task.id] = project_end
-                        # Use business days for backward calculation (negative duration)
-                        latest_start[task.id] = self.calendar.add_business_days(latest_finish[task.id], -task.duration_days)
+                        latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
                     
                     processed.add(task.id)
                     progress_made = True
@@ -561,8 +550,7 @@ class TimelineScheduler:
                 for task in tasks:
                     if task.id not in processed:
                         latest_finish[task.id] = project_end
-                        # Use business days for backward calculation (negative duration)
-                        latest_start[task.id] = self.calendar.add_business_days(latest_finish[task.id], -task.duration_days)
+                        latest_start[task.id] = latest_finish[task.id] - timedelta(days=task.duration_days)
                         processed.add(task.id)
                 break
         
@@ -619,7 +607,7 @@ class TimelineScheduler:
             phase_config = next((p for p in PROJECT_PHASES if p.name == phase.value), None)
             if phase_config:
                 phase_start_offset = (phase_config.start_week - 1) * 5  # Business days
-                task_start = self.calendar.add_business_days(project_start, phase_start_offset)
+                task_start = self.add_business_days(project_start, phase_start_offset)
             else:
                 task_start = project_start
             
@@ -630,7 +618,7 @@ class TimelineScheduler:
                 workstream=workstream,
                 phase=phase,
                 start_date=task_start,
-                end_date=self.calendar.add_business_days(task_start, duration_days),
+                end_date=self.add_business_days(task_start, duration_days),
                 duration_days=duration_days,
                 hours=hours,
                 resources=self.identify_resources(deliv),
@@ -714,22 +702,22 @@ class TimelineScheduler:
                 
                 if dep.type == "FS":  # Finish-to-Start
                     # Task starts after predecessor finishes plus lag
-                    min_start = self.calendar.add_business_days(pred_task.end_date, dep.lag_days)
+                    min_start = self.add_business_days(pred_task.end_date, dep.lag_days)
                     if task.start_date < min_start:
                         task.start_date = min_start
-                        task.end_date = self.calendar.add_business_days(task.start_date, task.duration_days)
+                        task.end_date = self.add_business_days(task.start_date, task.duration_days)
                         
                 elif dep.type == "SS":  # Start-to-Start
                     # Task can start when predecessor reaches certain percentage
                     if dep.lag_percentage > 0:
                         pred_partial_days = int(pred_task.duration_days * dep.lag_percentage)
-                        min_start = self.calendar.add_business_days(pred_task.start_date, pred_partial_days)
+                        min_start = self.add_business_days(pred_task.start_date, pred_partial_days)
                     else:
-                        min_start = self.calendar.add_business_days(pred_task.start_date, dep.lag_days)
+                        min_start = self.add_business_days(pred_task.start_date, dep.lag_days)
                     
                     if task.start_date < min_start:
                         task.start_date = min_start
-                        task.end_date = self.calendar.add_business_days(task.start_date, task.duration_days)
+                        task.end_date = self.add_business_days(task.start_date, task.duration_days)
         
         return tasks
     
@@ -853,6 +841,18 @@ class TimelineScheduler:
         
         return max(1, duration)  # Minimum 1 day
     
+    def add_business_days(self, start_date: datetime, days: int) -> datetime:
+        """Add business days to a date (skip weekends)"""
+        current = start_date
+        days_added = 0
+        
+        while days_added < days:
+            current += timedelta(days=1)
+            if current.weekday() < 5:  # Monday = 0, Friday = 4
+                days_added += 1
+        
+        return current
+    
     def identify_resources(self, deliverable: Dict[str, Any]) -> List[str]:
         """Identify required resources for a deliverable"""
         resources = []
@@ -888,6 +888,7 @@ class TimelineScheduler:
                 "start": task.start_date.strftime('%Y-%m-%d'),
                 "end": task.end_date.strftime('%Y-%m-%d'),
                 "progress": 0,
+                "dependencies": ",".join([d.predecessor for d in task.dependencies]),
                 "custom_class": f"workstream-{task.workstream.lower().replace(' ', '-')}",
                 "deliverable_code": task.deliverable_code,
                 "workstream": task.workstream,
@@ -1027,13 +1028,13 @@ async def generate_intelligent_timeline(
     if project_start:
         start_date = datetime.fromisoformat(project_start)
     else:
-        # Default to next business day (using BusinessCalendar to skip holidays)
+        # Default to next Monday
         today = datetime.now()
-        calendar = BusinessCalendar()
-        start_date = calendar.next_business_day(today)
+        days_until_monday = (7 - today.weekday()) % 7 or 7
+        start_date = today + timedelta(days=days_until_monday)
     
-    # Create scheduler instance with calendar
-    scheduler = TimelineScheduler(calendar=BusinessCalendar())
+    # Create scheduler instance
+    scheduler = TimelineScheduler()
     
     # Generate optimized timeline
     timeline = await scheduler.optimize_timeline(

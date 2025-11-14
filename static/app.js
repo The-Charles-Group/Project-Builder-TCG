@@ -5,105 +5,6 @@ let DELIV_INDEX = {};     // code -> deliverable object lookup for fast renderin
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ================================================================================
-// TCG Business Calendar - Holidays & Weekend Handling
-// ================================================================================
-// Hard-coded TCG + US holiday dates (2025-2026)
-// Weekday holidays (Mon-Fri): Visible in Gantt Day view with red styling, counted as non-working
-// Weekend holidays (Sat-Sun): Not visible in Day view (weekends always removed), but still non-working for duration calculations
-const TCG_HOLIDAYS = [
-  // 2025 Holidays
-  '2025-01-01', // New Year's Day
-  '2025-01-20', // MLK Jr. Day
-  '2025-02-17', // Presidents' Day
-  '2025-05-26', // Memorial Day
-  '2025-06-19', // Juneteenth
-  '2025-07-04', // Independence Day
-  '2025-08-28', // Mental Health Break - Thu
-  '2025-08-29', // Mental Health Break - Fri
-  '2025-09-01', // Labor Day (also end of Mental Health Break)
-  '2025-10-13', // Indigenous Peoples' Day
-  '2025-11-27', // Thanksgiving
-  '2025-11-28', // Day after Thanksgiving
-  '2025-12-22', // Winter Closure Start
-  '2025-12-23',
-  '2025-12-24',
-  '2025-12-25', // Christmas
-  '2025-12-26',
-  '2025-12-27', // MISSING - Winter Closure
-  '2025-12-28', // MISSING - Winter Closure
-  '2025-12-29',
-  '2025-12-30',
-  '2025-12-31', // New Year's Eve
-  '2026-01-01', // New Year's Day
-  '2026-01-02', // Manager Regroup / Return prep day
-  // 2026 Holidays (for future use)
-  '2026-01-19', // MLK Jr. Day
-  '2026-02-16', // Presidents' Day
-  '2026-05-25', // Memorial Day
-  '2026-06-19', // Juneteenth
-  '2026-07-03', // Independence Day observed
-  '2026-09-07', // Labor Day
-  '2026-10-12', // Indigenous Peoples' Day
-  '2026-11-26', // Thanksgiving
-  '2026-11-27', // Day after Thanksgiving
-  '2026-12-25'  // Christmas
-];
-
-// Convert to Set for O(1) lookup
-const HolidaysSet = new Set(TCG_HOLIDAYS);
-
-// Helper: Format date to YYYY-MM-DD in local timezone (avoids toISOString timezone shift)
-function formatLocalDate(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-// Helper: Check if date is weekend (Saturday or Sunday)
-function isWeekend(date) {
-  const day = date.getDay();
-  return day === 0 || day === 6; // Sunday=0, Saturday=6
-}
-
-// Helper: Check if date is a TCG holiday
-function isHoliday(date) {
-  const dateStr = formatLocalDate(date);
-  return HolidaysSet.has(dateStr);
-}
-
-// Helper: Check if date is a business day (Mon-Fri, not a holiday)
-function isBusinessDay(date) {
-  return !isWeekend(date) && !isHoliday(date);
-}
-
-// Helper: Get next business day
-function nextBusinessDate(date) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + 1);
-  while (!isBusinessDay(next)) {
-    next.setDate(next.getDate() + 1);
-  }
-  return next;
-}
-
-// Helper: Count business days between two dates (inclusive)
-function countBusinessDays(startDate, endDate) {
-  let count = 0;
-  const current = new Date(startDate);
-  const end = new Date(endDate);
-  
-  while (current <= end) {
-    if (isBusinessDay(current)) {
-      count++;
-    }
-    current.setDate(current.getDate() + 1);
-  }
-  
-  return count;
-}
-
-// ================================================================================
 // Session Management - Data Isolation Between RFPs
 // ================================================================================
 const SessionManager = {
@@ -977,20 +878,6 @@ function readSelectedCodesFromUI() {
 // ================================================================================
 // Gantt Chart and AI Timeline Functions
 // ================================================================================
-
-// Debounce utility to prevent excessive API calls during drag operations
-function debounce(func, wait) {
-  let timeout;
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
-}
-
 async function initializeGanttChart(tasks = []) {
   const container = document.querySelector('#gantt');
   if (!container || !window.Gantt) {
@@ -1008,64 +895,6 @@ async function initializeGanttChart(tasks = []) {
   }
   
   try {
-    // Track pending sync operations to prevent premature saves
-    let pendingSyncs = 0;
-    
-    // Debounced backend sync function (150ms delay to prevent UI freeze during drag)
-    const syncToBackend = debounce(async (taskId, startDate, endDate) => {
-      // Recalculate duration_days fresh when sync executes to avoid stale data
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-      
-      pendingSyncs++;
-      try {
-        const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
-        
-        if (session_id && taskId) {
-          const response = await fetch('/api/timeline/update_task', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              session_id: session_id,
-              wbs_id: taskId,
-              start_date: startDate,
-              end_date: endDate,
-              duration_days: duration_days,
-              hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
-            })
-          });
-          
-          if (response.ok) {
-            const result = await response.json();
-            console.log('[Gantt] ✓ Task updated in SCENARIO_STORE:', taskId);
-          } else {
-            const errorText = await response.text();
-            console.error('[Gantt] ✗ Backend sync failed for', taskId, ':', errorText);
-            
-            // Show user-friendly error message
-            let errorMsg = 'Unable to save timeline changes';
-            if (errorText.includes('404') || errorText.includes('not found')) {
-              errorMsg = 'Timeline data not found. Please regenerate the timeline and try again.';
-            } else if (errorText.includes('session')) {
-              errorMsg = 'Session expired. Please rebuild your scenario and regenerate the timeline.';
-            }
-            
-            console.warn('[Gantt] User-friendly error:', errorMsg);
-            // Don't show alert for every failed drag - just log it. User can still manually save.
-          }
-        }
-      } catch (error) {
-        console.error('[Gantt] ✗ Error syncing task to backend:', error);
-        // Only show alert for network errors (not 404s)
-        if (error.message && !error.message.includes('404')) {
-          alert(`Network error while saving changes. Please check your connection and try again.`);
-        }
-      } finally {
-        pendingSyncs--;
-      }
-    }, 150);
-    
     // Initialize Frappe Gantt with drag-enabled configuration
     const ganttOptions = {
       view_mode: document.getElementById('gantt-view-mode')?.value || 'Day',
@@ -1078,7 +907,7 @@ async function initializeGanttChart(tasks = []) {
       custom_popup_html: function(task) {
         const start = new Date(task._start);
         const end = new Date(task._end);
-        const businessDaysDuration = countBusinessDays(start, end);
+        const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
         
         return `
           <div class="gantt-popup" style="padding:12px;">
@@ -1086,7 +915,7 @@ async function initializeGanttChart(tasks = []) {
             <p style="margin:4px 0;"><strong>Department:</strong> ${task.department || 'N/A'}</p>
             <p style="margin:4px 0;"><strong>Start:</strong> ${task.start}</p>
             <p style="margin:4px 0;"><strong>End:</strong> ${task.end}</p>
-            <p style="margin:4px 0;"><strong>Duration:</strong> ${businessDaysDuration} business days</p>
+            <p style="margin:4px 0;"><strong>Duration:</strong> ${duration} days</p>
             <p style="margin:4px 0;"><strong>Hours:</strong> ${task.hours || 0}</p>
             ${task.critical_path ? '<p style="margin:4px 0;color:#fbbf24;"><strong>⚡ Critical Path</strong></p>' : ''}
           </div>
@@ -1095,26 +924,47 @@ async function initializeGanttChart(tasks = []) {
       on_click: function(task) {
         console.log('Task clicked:', task);
       },
-      on_date_change: function(task, start, end) {
+      on_date_change: async function(task, start, end) {
         console.log('Task date changed:', task.name, start, end);
         
-        // Update local state immediately for smooth UI
+        // Update the task in our local state
         const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
         if (taskIndex >= 0) {
           currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
           currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
         }
         
-        // Recalculate and update project stats (Total Duration, Tasks, Critical Tasks)
-        const updatedMetadata = calculateMetadataFromTasks(currentTimelineTasks);
-        updateTimelineMetadata(updatedMetadata);
-        
-        // Recalculate resource risks based on updated timeline
-        updateResourceRiskTable(currentTimelineTasks, timelineReasoning);
-        
-        // Debounced backend sync to prevent freeze during drag
-        // Duration is recalculated inside syncToBackend to avoid stale data
-        syncToBackend(task.id, start.toISOString().split('T')[0], end.toISOString().split('T')[0]);
+        // Sync to backend SCENARIO_STORE (GPT-5's plan: call /api/timeline/update_task)
+        try {
+          const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+          // Get fresh session_id directly from SessionManager (no caching)
+          const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+          
+          if (session_id && task.id) {
+            const response = await fetch('/api/timeline/update_task', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                session_id: session_id,
+                wbs_id: task.id,
+                start_date: start.toISOString().split('T')[0],
+                end_date: end.toISOString().split('T')[0],
+                duration_days: duration_days,
+                hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
+              })
+            });
+            
+            if (response.ok) {
+              const result = await response.json();
+              console.log('[Gantt] Task updated in backend SCENARIO_STORE:', result);
+              // TODO: Refresh pricing table with result.totals if needed
+            } else {
+              console.warn('[Gantt] Failed to sync task to backend:', await response.text());
+            }
+          }
+        } catch (error) {
+          console.error('[Gantt] Error syncing task to backend:', error);
+        }
         
         // Show save button
         const saveBtn = document.getElementById('btn-save-timeline');
@@ -1150,8 +1000,8 @@ async function initializeGanttChart(tasks = []) {
         }
       });
       
-      // Apply holiday styling to Gantt SVG columns
-      applyHolidayStyling(container);
+      // Add day-of-week indicators to Gantt date headers
+      addDayOfWeekLabels(container);
       
       // Show PDF download button after Gantt is successfully rendered
       showPDFDownloadButton();
@@ -1163,97 +1013,80 @@ async function initializeGanttChart(tasks = []) {
   }
 }
 
-// Apply holiday styling to Frappe Gantt SVG columns
-function applyHolidayStyling(container) {
-  console.log('[Holiday Styling] Applying holiday column styles to Gantt chart...');
-  
+function addDayOfWeekLabels(container) {
   try {
-    const svg = container.querySelector('svg');
-    if (!svg) {
-      console.warn('[Holiday Styling] SVG element not found');
+    console.log('[Gantt] Adding day-of-week labels to date headers');
+    
+    const dayAbbr = ['Su', 'M', 'T', 'W', 'Th', 'F', 'S'];
+    const monthMap = {
+      'Jan': 0, 'January': 0, 'Feb': 1, 'February': 1, 'Mar': 2, 'March': 2,
+      'Apr': 3, 'April': 3, 'May': 4, 'Jun': 5, 'June': 5,
+      'Jul': 6, 'July': 6, 'Aug': 7, 'August': 7, 'Sep': 8, 'September': 8,
+      'Oct': 9, 'October': 9, 'Nov': 10, 'November': 10, 'Dec': 11, 'December': 11
+    };
+    
+    const projectStartDate = window.currentTimelineTasks && window.currentTimelineTasks.length > 0
+      ? new Date(window.currentTimelineTasks[0].start)
+      : new Date();
+    let currentYear = projectStartDate.getFullYear();
+    let currentMonth = projectStartDate.getMonth();
+    
+    const lowerTexts = container.querySelectorAll('.lower-header text');
+    const upperTexts = container.querySelectorAll('.upper-header text');
+    console.log('[Gantt] Found', lowerTexts.length, 'lower header text elements');
+    console.log('[Gantt] Found', upperTexts.length, 'upper header text elements');
+    
+    if (lowerTexts.length === 0) {
+      console.warn('[Gantt] No date headers found - Gantt may not be fully rendered');
       return;
     }
     
-    // Only apply in Day view mode
-    const viewMode = document.getElementById('gantt-view-mode')?.value || 'Day';
-    if (viewMode !== 'Day') {
-      console.log('[Holiday Styling] Skipping - not in Day view');
-      return;
-    }
-    
-    // Get all grid row rectangles (these are the vertical date columns)
-    const gridRows = svg.querySelectorAll('g.grid-row rect');
-    console.log(`[Holiday Styling] Found ${gridRows.length} grid row rectangles`);
-    
-    // Get all date header text elements to extract dates
-    const lowerTexts = svg.querySelectorAll('.lower-text');
-    console.log(`[Holiday Styling] Found ${lowerTexts.length} date labels`);
-    
-    let holidayCount = 0;
-    
-    // Frappe Gantt's grid rows correspond 1:1 with date labels
-    // Each rect in grid-row has the same x-position as its date label
-    lowerTexts.forEach((textElement, index) => {
-      // Get x position of this date label
-      const textX = parseFloat(textElement.getAttribute('x'));
+    lowerTexts.forEach((lowerText, index) => {
+      const dayText = lowerText.textContent.trim();
+      const dayMatch = dayText.match(/^\d+$/);
       
-      // Parse the date - Frappe Gantt doesn't add data attributes, so we need to
-      // reconstruct it from the visible text
-      const dayText = textElement.textContent.trim();
-      
-      // Find the corresponding upper-text (month/year) for this date
-      // Upper texts are grouped differently, but we can find the one at a similar x position
-      const upperTexts = svg.querySelectorAll('.upper-text');
-      let monthYearText = '';
-      
-      // Find the upper text that's closest to our current x position (to the left)
-      for (let i = upperTexts.length - 1; i >= 0; i--) {
-        const upperX = parseFloat(upperTexts[i].getAttribute('x'));
-        if (upperX <= textX) {
-          monthYearText = upperTexts[i].textContent.trim();
-          break;
-        }
-      }
-      
-      // Parse the date from "November 2025" (or "Nov 2025") + day number
-      if (monthYearText && dayText) {
-        try {
-          // Parse month and year from string like "November 2025" or "Nov 2025"
-          const monthYearParts = monthYearText.split(' ');
-          if (monthYearParts.length >= 2) {
-            const monthName = monthYearParts[0];
-            const year = monthYearParts[1];
-            
-            // Construct date string
-            const dateStr = `${monthName} ${dayText}, ${year}`;
-            const date = new Date(dateStr);
-            
-            // Check if this is a holiday
-            if (isHoliday(date)) {
-              // Find the grid rect at this x position
-              const matchingRect = Array.from(gridRows).find(rect => {
-                const rectX = parseFloat(rect.getAttribute('x'));
-                return Math.abs(rectX - textX) < 2; // Allow small tolerance
-              });
-              
-              if (matchingRect) {
-                matchingRect.classList.add('holiday-column');
-                textElement.classList.add('holiday-column');
-                holidayCount++;
-                console.log(`[Holiday Styling] Marked ${formatLocalDate(date)} as holiday`);
-              }
+      if (dayMatch) {
+        const day = parseInt(dayText);
+        
+        const upperText = upperTexts[index];
+        if (upperText) {
+          const monthText = upperText.textContent.trim();
+          if (monthText && monthMap.hasOwnProperty(monthText)) {
+            currentMonth = monthMap[monthText];
+            if (currentMonth === 0 && index > 0) {
+              currentYear++;
             }
           }
-        } catch (err) {
-          // Silently skip dates we can't parse
+        }
+        
+        const date = new Date(currentYear, currentMonth, day);
+        const dayOfWeek = date.getDay();
+        const dayLabel = dayAbbr[dayOfWeek];
+        
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+        const color = isWeekend ? '#ff6b6b' : '#667eea';
+        
+        const existingDayLabel = lowerText.parentNode.querySelector('.day-of-week-label[data-index="' + index + '"]');
+        if (!existingDayLabel) {
+          const dayLabelElement = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          dayLabelElement.setAttribute('class', 'day-of-week-label');
+          dayLabelElement.setAttribute('data-index', index);
+          dayLabelElement.setAttribute('x', lowerText.getAttribute('x'));
+          dayLabelElement.setAttribute('y', parseFloat(lowerText.getAttribute('y')) + 16);
+          dayLabelElement.setAttribute('font-size', '10');
+          dayLabelElement.setAttribute('font-weight', 'bold');
+          dayLabelElement.setAttribute('text-anchor', 'middle');
+          dayLabelElement.setAttribute('fill', color);
+          dayLabelElement.textContent = dayLabel;
+          
+          lowerText.parentNode.appendChild(dayLabelElement);
         }
       }
     });
     
-    console.log(`[Holiday Styling] ✅ Applied holiday styling to ${holidayCount} columns`);
-    
+    console.log('[Gantt] Day-of-week labels added successfully -', lowerTexts.length, 'labels processed');
   } catch (error) {
-    console.error('[Holiday Styling] Error applying holiday styling:', error);
+    console.error('[Gantt] Error adding day-of-week labels:', error);
   }
 }
 
@@ -1279,7 +1112,7 @@ function showFallbackTable(tasks) {
 function calculateDuration(start, end) {
   const startDate = new Date(start);
   const endDate = new Date(end);
-  return countBusinessDays(startDate, endDate);
+  return Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
 }
 
 // ================================================================================
@@ -1391,25 +1224,10 @@ function generateDateColumns(startDate, endDate, groupBy) {
   
   if (groupBy === 'day') {
     let current = new Date(start);
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
     while (current <= end) {
-      const dayName = dayNames[current.getDay()];
-      const dateLabel = `${current.getMonth() + 1}/${current.getDate()}`;
-      
-      // ALWAYS skip weekends (Sat/Sun) regardless of holiday status
-      // Weekends are NEVER shown in Day view, even if they are company holidays
-      if (isWeekend(current)) {
-        current.setDate(current.getDate() + 1);
-        continue;
-      }
-      
-      // For weekdays (Mon-Fri), check if it's a holiday and mark it
-      const isHolidayDate = isHoliday(current);
       columns.push({
         date: new Date(current),
-        label: `${dayName} ${dateLabel}`,
-        isHoliday: isHolidayDate
+        label: `${current.getMonth() + 1}/${current.getDate()}`
       });
       current.setDate(current.getDate() + 1);
     }
@@ -4107,9 +3925,6 @@ async function generateAITimeline(retryAttempt = 0) {
     currentTimelineTasks = window.currentTimelineTasks;
     timelineReasoning = result.reasoning || {};
     
-    // Reset current metadata for new timeline generation (prevents stale data from previous timelines)
-    currentTimelineMetadata = null;
-    
     // Update reasoning panel
     updateReasoningPanel(result.reasoning);
     
@@ -4119,7 +3934,7 @@ async function generateAITimeline(retryAttempt = 0) {
       panel.style.display = 'block';
     }
     
-    // Update metadata (will store the new backend metadata in currentTimelineMetadata)
+    // Update metadata
     updateTimelineMetadata(result.metadata);
     
     // Update resource risk table
@@ -4491,10 +4306,10 @@ function showUserFriendlyError(title, message) {
   // Create a nice modal or alert with the error
   const modalHTML = `
     <div style="position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-                background: var(--card); border: 1px solid var(--border); padding: 24px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
+                background: white; padding: 24px; border-radius: 8px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); 
                 z-index: 10000; max-width: 400px;">
-      <h3 style="margin: 0 0 12px 0; color: #ef4444;">⚠️ ${title}</h3>
-      <p style="margin: 0 0 16px 0; color: var(--text);">${message}</p>
+      <h3 style="margin: 0 0 12px 0; color: #dc2626;">⚠️ ${title}</h3>
+      <p style="margin: 0 0 16px 0; color: #4b5563;">${message}</p>
       <button onclick="this.parentElement.remove()" 
               style="padding: 8px 16px; background: #3b82f6; color: white; border: none; 
                      border-radius: 4px; cursor: pointer;">
@@ -4590,56 +4405,8 @@ function updateReasoningPanel(reasoning) {
   }
 }
 
-// Store current metadata (updated whenever updateTimelineMetadata is called)
-let currentTimelineMetadata = null;
-
-// Calculate metadata from current tasks array (for dynamic updates when tasks are moved)
-// Preserves ALL existing metadata and only updates dynamic fields that change when tasks move
-function calculateMetadataFromTasks(tasks) {
-  // Clone the most recent metadata to preserve all fields (project_start, project_end, phases, milestones, etc.)
-  const updatedMetadata = currentTimelineMetadata ? JSON.parse(JSON.stringify(currentTimelineMetadata)) : {};
-  
-  if (!tasks || tasks.length === 0) {
-    updatedMetadata.total_duration_days = 0;
-    updatedMetadata.total_tasks = 0;
-    updatedMetadata.critical_tasks = 0;
-    updatedMetadata.departments_involved = [];
-    return updatedMetadata;
-  }
-  
-  // Calculate total duration from earliest start to latest end (INCLUSIVE) - using business days
-  const startDates = tasks.map(t => new Date(t.start));
-  const endDates = tasks.map(t => new Date(t.end));
-  const minStart = new Date(Math.min(...startDates));
-  const maxEnd = new Date(Math.max(...endDates));
-  // Use business days calculation instead of calendar days
-  const totalDurationDays = countBusinessDays(minStart, maxEnd);
-  
-  // Count total tasks
-  const totalTasks = tasks.length;
-  
-  // Count critical path tasks
-  const criticalTasks = tasks.filter(t => t.critical_path).length;
-  
-  // Extract unique departments
-  const departments = [...new Set(tasks.map(t => t.department).filter(Boolean))];
-  
-  // Update only the dynamic fields that change when tasks are moved
-  updatedMetadata.total_duration_days = totalDurationDays;
-  updatedMetadata.total_tasks = totalTasks;
-  updatedMetadata.critical_tasks = criticalTasks;
-  updatedMetadata.departments_involved = departments;
-  // All other fields (project_start, project_end, phases, milestones, etc.) preserved via deep clone
-  
-  return updatedMetadata;
-}
-
 function updateTimelineMetadata(metadata) {
   if (!metadata) return;
-  
-  // ALWAYS update current metadata to latest value (preserves all fields for recalculation)
-  currentTimelineMetadata = JSON.parse(JSON.stringify(metadata));
-  console.log('[Metadata] Updated current metadata:', currentTimelineMetadata);
   
   const elements = {
     'meta-duration': metadata.total_duration_days ? `${metadata.total_duration_days} days` : '-',
@@ -5926,13 +5693,13 @@ window.setAnalysisMode = function(mode) {
   if (mode === 'fast') {
     fastBtn.style.background = '#10b981';
     fastBtn.style.color = 'white';
-    deepBtn.style.background = 'var(--surface)';
+    deepBtn.style.background = 'white';
     deepBtn.style.color = '#6366f1';
     modeInput.value = 'fast';
   } else {
     deepBtn.style.background = '#6366f1';
     deepBtn.style.color = 'white';
-    fastBtn.style.background = 'var(--surface)';
+    fastBtn.style.background = 'white';
     fastBtn.style.color = '#10b981';
     modeInput.value = 'deep';
   }
@@ -6479,9 +6246,9 @@ function renderAIPlan(aiPlan) {
         </div>
       </div>
       
-      <div style="background: var(--card); padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
-        <h4 style="margin: 0 0 8px 0; color: var(--accent);">📊 Project Flow & Department Sequencing</h4>
-        <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: var(--text);">
+      <div style="background: #f0f9ff; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
+        <h4 style="margin: 0 0 8px 0; color: #1e40af;">📊 Project Flow & Department Sequencing</h4>
+        <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: #1e3a8a;">
           <strong>From a PM perspective, here's how these departments flow together:</strong><br>
           <strong>1. Strategy</strong> → Sets foundation & direction<br>
           <strong>2. Creative</strong> → Develops visual identity & concepts<br>
@@ -6510,10 +6277,10 @@ function renderAIPlan(aiPlan) {
       };
       
       html += `
-        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
-          <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: var(--text); margin-bottom: 12px;">
+        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
+          <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: #1f2937; margin-bottom: 12px;">
             <span style="color: ${deptColors[dept]}; margin-right: 8px;">●</span>
-            ${dept} <span style="color: var(--muted); font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
+            ${dept} <span style="color: #6b7280; font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
           </summary>
       `;
       
@@ -6523,7 +6290,7 @@ function renderAIPlan(aiPlan) {
         const delivCode = deliv.deliverable_code || deliv.code;
         
         html += `
-          <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: var(--card); padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
+          <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
               <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
                 <input type="checkbox" 
@@ -6533,7 +6300,7 @@ function renderAIPlan(aiPlan) {
                        data-dept="${dept}"
                        style="cursor: pointer;">
                 <div style="flex: 1;">
-                  <h4 style="margin: 0; color: var(--text);">
+                  <h4 style="margin: 0; color: #111827;">
                     <span style="color: ${deptColors[dept]}; font-weight: 500; font-size: 0.85em;">[${dept}]</span>
                     ${deliv.title}
                   </h4>
@@ -6541,7 +6308,7 @@ function renderAIPlan(aiPlan) {
               </div>
               <div style="display: flex; gap: 8px; align-items: center;">
                 <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}% confidence</span>
-                <span style="font-size: 0.85em; color: var(--muted);">${deliv.planned_hours || 0}h</span>
+                <span style="font-size: 0.85em; color: #6b7280;">${deliv.planned_hours || 0}h</span>
                 <button class="btn-small" 
                         onclick="addAIDeliverableToSelection('${delivCode}', this)"
                         style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
@@ -6551,7 +6318,7 @@ function renderAIPlan(aiPlan) {
             </div>
             
             ${deliv.why ? `
-              <p style="margin: 8px 0; font-size: 0.9em; color: var(--muted); line-height: 1.5;">${deliv.why}</p>
+              <p style="margin: 8px 0; font-size: 0.9em; color: #4b5563; line-height: 1.5;">${deliv.why}</p>
             ` : ''}
             
             ${deliv.risks ? `
@@ -6575,7 +6342,7 @@ function renderAIPlan(aiPlan) {
                 </summary>
                 <div style="margin-top: 8px; margin-left: 16px;">
                   ${deliv.components.map((comp, idx) => `
-                    <div style="margin-bottom: 8px; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px;">
+                    <div style="margin-bottom: 8px; padding: 8px; background: white; border-radius: 4px;">
                       <div style="display: flex; align-items: start; gap: 8px;">
                         <input type="checkbox" 
                                class="ai-comp-checkbox" 
@@ -10551,7 +10318,3 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 })();
-// ================================================================================
-// Gantt Theme - Permanent Dark Mode (no toggle)
-// ================================================================================
-// Theme toggle removed - app is now permanently in dark mode

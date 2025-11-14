@@ -1,9 +1,6 @@
 """
 AI Timeline Manager - Intelligent project scheduling using GPT-5
 Generates optimized timelines with dependency analysis and resource allocation
-
-IMPORTANT: All timeline dates use BUSINESS DAYS (Monday-Friday) with no weekends.
-This ensures exported timelines match Workfront's business calendar exactly.
 """
 
 import os
@@ -14,15 +11,6 @@ from typing import List, Dict, Any, Optional, Tuple, Set
 from dataclasses import dataclass, field
 from enum import Enum
 import random
-
-# Business calendar for Monday-Friday scheduling (no weekends)
-from business_timeline_adapter import (
-    BusinessTimelineAdapter,
-    ensure_business_day,
-    add_business_days_timeline,
-    business_duration,
-    next_task_start
-)
 
 # OpenAI client initialization
 try:
@@ -333,7 +321,16 @@ class CPMCalculator:
         try:
             start = datetime.fromisoformat(start_date)
             end = datetime.fromisoformat(end_date)
-            return business_duration(start, end)
+
+            # Count only business days
+            business_days = 0
+            current = start
+            while current <= end:
+                if current.weekday() < 5:  # Monday = 0, Friday = 4
+                    business_days += 1
+                current += timedelta(days=1)
+
+            return max(1, business_days)  # Minimum 1 day
         except (ValueError, TypeError) as e:
             # Log the specific error for debugging
             print(f"[CPM] Error calculating duration between {start_date} and {end_date}: {e}")
@@ -376,7 +373,7 @@ class CCPMBufferManager:
 
         # Create buffer task
         buffer_start = datetime.fromisoformat(last_critical.end_date)
-        buffer_end = BusinessTimelineAdapter.add_buffer_days(buffer_start, buffer_duration)
+        buffer_end = buffer_start + timedelta(days=buffer_duration)
 
         buffer_task = TimelineTask(
             id=f"buffer_project_{last_critical.id}",
@@ -423,9 +420,9 @@ class CCPMBufferManager:
                                 color="#FFA500"
                             )
 
-                            # Adjust end date using business days
+                            # Adjust end date
                             start = datetime.fromisoformat(buffer_task.start_date)
-                            end = BusinessTimelineAdapter.add_buffer_days(start, buffer_duration)
+                            end = start + timedelta(days=buffer_duration)
                             buffer_task.end_date = end.strftime('%Y-%m-%d')
 
                             feeding_buffers.append(buffer_task)
@@ -508,8 +505,8 @@ class ResourceLeveler:
                             start = datetime.fromisoformat(next_task.start_date)
                             end = datetime.fromisoformat(next_task.end_date)
 
-                            new_start = add_business_days_timeline(start, int(delay))
-                            new_end = add_business_days_timeline(end, int(delay))
+                            new_start = start + timedelta(days=int(delay))
+                            new_end = end + timedelta(days=int(delay))
 
                             next_task.leveled_start = new_start.strftime('%Y-%m-%d')
                             next_task.leveled_end = new_end.strftime('%Y-%m-%d')
@@ -653,9 +650,11 @@ class GovernanceFramework:
         percentages = [0.25, 0.50, 0.75]
 
         for pct in percentages:
-            review_date = BusinessTimelineAdapter.milestone_at_percentage(
-                self.project_start, self.project_end, pct
-            )
+            review_date = self.project_start + timedelta(days=int(self.project_duration_days * pct))
+
+            # Skip weekends
+            while review_date.weekday() >= 5:
+                review_date += timedelta(days=1)
 
             milestone = TimelineTask(
                 id=f"gov_steering_{int(pct*100)}",
@@ -700,10 +699,10 @@ class GovernanceFramework:
         for i in range(len(sorted_phases) - 1):
             from_dept, from_date = sorted_phases[i]
             to_dept, to_date = sorted_phases[i+1]
-            # Schedule briefing 1 business day before transition
-            briefing_date = next_task_start(to_date)
-            briefing_date = briefing_date - timedelta(days=1)
-            briefing_date = ensure_business_day(briefing_date)
+            # Schedule briefing 1 day before transition
+            briefing_date = to_date - timedelta(days=1)
+            while briefing_date.weekday() >= 5:
+                briefing_date -= timedelta(days=1)
 
             milestone = TimelineTask(
                 id=f"gov_exec_briefing_{from_dept.lower()}_{to_dept.lower()}",
@@ -731,10 +730,10 @@ class GovernanceFramework:
 
         for task in self.tasks:
             if task.department in high_risk_departments and task.hours > 20:
-                # Schedule risk review 2 business days before task starts
-                task_start = datetime.fromisoformat(task.start_date)
-                review_date = task_start - timedelta(days=3)  # Go back to find business day
-                review_date = ensure_business_day(review_date)
+                # Schedule risk review 2 days before task starts
+                review_date = datetime.fromisoformat(task.start_date) - timedelta(days=2)
+                while review_date.weekday() >= 5:
+                    review_date -= timedelta(days=1)
 
                 # Don't create if before project start
                 if review_date < self.project_start:
@@ -800,8 +799,11 @@ class GovernanceFramework:
             num_checkpoints = min(int(self.project_duration_months), 6)  # Max 6 checkpoints
 
             for i in range(num_checkpoints):
-                # Calculate checkpoint at business day intervals
-                checkpoint_date = add_business_days_timeline(self.project_start, 20 * (i + 1))
+                checkpoint_date = self.project_start + timedelta(days=30 * (i + 1))
+
+                # Skip weekends
+                while checkpoint_date.weekday() >= 5:
+                    checkpoint_date += timedelta(days=1)
 
                 # Don't exceed project end
                 if checkpoint_date > self.project_end:
@@ -831,11 +833,15 @@ class GovernanceFramework:
         # Only add weekly meetings for first 2 months to avoid clutter
         max_weeks = min(8, int(self.project_duration_weeks))
 
-        current_date = ensure_business_day(self.project_start)
+        current_date = self.project_start
+        # Find first Monday
+        days_until_monday = (7 - current_date.weekday()) % 7
+        if days_until_monday == 0 and current_date.weekday() != 0:
+            days_until_monday = 7
+        current_date = current_date + timedelta(days=days_until_monday)
 
         for week in range(max_weeks):
-            # Schedule weekly meetings at regular 5-business-day intervals
-            meeting_date = add_business_days_timeline(current_date, 5 * week)
+            meeting_date = current_date + timedelta(weeks=week)
 
             if meeting_date > self.project_end:
                 break
@@ -862,11 +868,11 @@ class GovernanceFramework:
         updates = []
 
         for month in range(int(self.project_duration_months)):
-            # Calculate monthly intervals in business days
-            update_date = add_business_days_timeline(self.project_start, 20 * (month + 1))
-            
-            # Ensure it's a business day
-            update_date = ensure_business_day(update_date)
+            update_date = self.project_start + timedelta(days=30 * (month + 1))
+
+            # Schedule for last Friday of the month
+            while update_date.weekday() != 4:  # Friday
+                update_date -= timedelta(days=1)
 
             if update_date > self.project_end:
                 break
@@ -894,11 +900,12 @@ class GovernanceFramework:
         quarters = int(self.project_duration_months / 3)
 
         for q in range(min(quarters, 4)):  # Max 4 quarterly reviews
-            # Calculate quarterly milestones as percentages of project duration
-            pct = (q + 1) * 0.25  # 25%, 50%, 75%, 100%
-            review_date = BusinessTimelineAdapter.milestone_at_percentage(
-                self.project_start, self.project_end, pct
-            )
+            review_date = self.project_start + timedelta(days=90 * (q + 1))
+
+            # Schedule for mid-month
+            review_date = review_date.replace(day=15)
+            while review_date.weekday() >= 5:
+                review_date += timedelta(days=1)
 
             if review_date > self.project_end:
                 break
@@ -930,11 +937,15 @@ class GovernanceFramework:
         for phase in critical_phases[:2]:  # Limit to 2 critical phases
             phase_start = datetime.fromisoformat(phase.start_date)
             phase_end = datetime.fromisoformat(phase.end_date)
-            phase_duration_days = business_duration(phase_start, phase_end)
+            phase_duration_days = (phase_end - phase_start).days
 
-            # Add daily standups for first week of critical phase (business days only)
-            for day in range(min(5, phase_duration_days)):  # Max 5 business days
-                standup_date = add_business_days_timeline(phase_start, day)
+            # Add daily standups for first week of critical phase
+            for day in range(min(5, phase_duration_days)):  # Max 5 days
+                standup_date = phase_start + timedelta(days=day)
+
+                # Skip weekends
+                if standup_date.weekday() >= 5:
+                    continue
 
                 standup = TimelineTask(
                     id=f"comm_daily_standup_{phase.id}_{day+1}",
@@ -961,9 +972,11 @@ class GovernanceFramework:
         percentages = [0.30, 0.60, 0.90]
 
         for pct in percentages:
-            touchpoint_date = BusinessTimelineAdapter.milestone_at_percentage(
-                self.project_start, self.project_end, pct
-            )
+            touchpoint_date = self.project_start + timedelta(days=int(self.project_duration_days * pct))
+
+            # Schedule for Tuesday/Thursday
+            while touchpoint_date.weekday() not in [1, 3]:  # Tuesday or Thursday
+                touchpoint_date += timedelta(days=1)
 
             if touchpoint_date > self.project_end:
                 continue
@@ -993,10 +1006,11 @@ class GovernanceFramework:
         major_deliverables = [t for t in self.tasks if t.hours > 20 and t.department in ["Creative", "Content", "Technology"]]
 
         for task in major_deliverables[:5]:  # Limit to 5 peer reviews
-            # Schedule peer review 1 business day before task ends
-            task_end = datetime.fromisoformat(task.end_date)
-            review_date = task_end - timedelta(days=2)  # Go back to find business day
-            review_date = ensure_business_day(review_date)
+            # Schedule peer review 1 day before task ends
+            review_date = datetime.fromisoformat(task.end_date) - timedelta(days=1)
+
+            while review_date.weekday() >= 5:
+                review_date -= timedelta(days=1)
 
             review = TimelineTask(
                 id=f"qa_peer_review_{task.id}",
@@ -1024,10 +1038,15 @@ class GovernanceFramework:
         digital_tasks = [t for t in self.tasks if t.department == "Technology" and t.hours > 30]
 
         for task in digital_tasks[:3]:  # Limit to 3 UAT phases
-            # Schedule UAT after task completion (next business day)
-            task_end = datetime.fromisoformat(task.end_date)
-            uat_start = next_task_start(task_end)
-            uat_end = add_business_days_timeline(uat_start, 5)  # 5 business days UAT period
+            # Schedule UAT after task completion
+            uat_start = datetime.fromisoformat(task.end_date) + timedelta(days=1)
+            uat_end = uat_start + timedelta(days=5)  # 5-day UAT period
+
+            # Skip weekends
+            while uat_start.weekday() >= 5:
+                uat_start += timedelta(days=1)
+            while uat_end.weekday() >= 5:
+                uat_end += timedelta(days=1)
 
             uat_phase = TimelineTask(
                 id=f"qa_uat_{task.id}",
@@ -1054,9 +1073,10 @@ class GovernanceFramework:
         # Add compliance reviews at key milestones
         if self.project_complexity in ["medium", "high"]:
             # Initial compliance review at 20% completion
-            review_date = BusinessTimelineAdapter.milestone_at_percentage(
-                self.project_start, self.project_end, 0.20
-            )
+            review_date = self.project_start + timedelta(days=int(self.project_duration_days * 0.20))
+
+            while review_date.weekday() >= 5:
+                review_date += timedelta(days=1)
 
             initial_review = TimelineTask(
                 id="qa_compliance_initial",
@@ -1074,9 +1094,10 @@ class GovernanceFramework:
             reviews.append(initial_review)
 
             # Final compliance review at 80% completion
-            final_review_date = BusinessTimelineAdapter.milestone_at_percentage(
-                self.project_start, self.project_end, 0.80
-            )
+            final_review_date = self.project_start + timedelta(days=int(self.project_duration_days * 0.80))
+
+            while final_review_date.weekday() >= 5:
+                final_review_date += timedelta(days=1)
 
             final_review = TimelineTask(
                 id="qa_compliance_final",
@@ -1132,10 +1153,11 @@ class GovernanceFramework:
         tech_tasks = [t for t in self.tasks if t.department == "Technology" and t.hours > 25]
 
         for task in tech_tasks[:3]:  # Limit to 3 performance tests
-            # Schedule performance testing before task ends (2 business days before)
-            task_end = datetime.fromisoformat(task.end_date)
-            test_date = task_end - timedelta(days=3)  # Go back to find business day
-            test_date = ensure_business_day(test_date)
+            # Schedule performance testing before task ends
+            test_date = datetime.fromisoformat(task.end_date) - timedelta(days=2)
+
+            while test_date.weekday() >= 5:
+                test_date -= timedelta(days=1)
 
             test = TimelineTask(
                 id=f"qa_performance_{task.id}",
@@ -1167,8 +1189,11 @@ class GovernanceFramework:
                 phase_starts[task.department] = datetime.fromisoformat(task.start_date)
 
         for dept, start_date in phase_starts.items():
-            # Schedule risk assessment at phase start (ensure business day)
-            assessment_date = ensure_business_day(start_date)
+            # Schedule risk assessment at phase start
+            assessment_date = start_date
+
+            while assessment_date.weekday() >= 5:
+                assessment_date += timedelta(days=1)
 
             assessment = TimelineTask(
                 id=f"risk_assessment_{dept.lower()}",
@@ -1195,9 +1220,10 @@ class GovernanceFramework:
         if self.project_complexity == "high":
             # Add contingency reviews at 33% and 66% completion
             for pct in [0.33, 0.66]:
-                review_date = BusinessTimelineAdapter.milestone_at_percentage(
-                    self.project_start, self.project_end, pct
-                )
+                review_date = self.project_start + timedelta(days=int(self.project_duration_days * pct))
+
+                while review_date.weekday() >= 5:
+                    review_date += timedelta(days=1)
 
                 review = TimelineTask(
                     id=f"risk_contingency_{int(pct*100)}",
@@ -1224,10 +1250,11 @@ class GovernanceFramework:
         critical_tasks = [t for t in self.tasks if t.is_critical and t.hours > 35]
 
         for task in critical_tasks[:3]:  # Limit to 3 escalation points
-            # Schedule escalation point 3 business days before critical task
-            task_start = datetime.fromisoformat(task.start_date)
-            escalation_date = task_start - timedelta(days=4)  # Go back to find business day
-            escalation_date = ensure_business_day(escalation_date)
+            # Schedule escalation point 3 days before critical task
+            escalation_date = datetime.fromisoformat(task.start_date) - timedelta(days=3)
+
+            while escalation_date.weekday() >= 5:
+                escalation_date -= timedelta(days=1)
 
             # Don't create if before project start
             if escalation_date < self.project_start:
@@ -1259,8 +1286,11 @@ class GovernanceFramework:
             num_checkpoints = min(int(self.project_duration_weeks / 2), 8)  # Max 8 checkpoints
 
             for i in range(num_checkpoints):
-                # Calculate bi-weekly checkpoints in business days
-                checkpoint_date = add_business_days_timeline(self.project_start, 10 * (i + 1))
+                checkpoint_date = self.project_start + timedelta(weeks=2 * (i + 1))
+
+                # Schedule for Wednesday
+                while checkpoint_date.weekday() != 2:  # Wednesday
+                    checkpoint_date += timedelta(days=1)
 
                 if checkpoint_date > self.project_end:
                     break
@@ -1418,7 +1448,15 @@ class TimelineOptimizer:
 
     def calculate_business_days(self, start_date: datetime, duration_days: int) -> datetime:
         """Calculate end date considering only business days (Mon-Fri)"""
-        return add_business_days_timeline(start_date, duration_days)
+        current = start_date
+        days_added = 0
+
+        while days_added < duration_days:
+            current += timedelta(days=1)
+            if current.weekday() < 5:  # Monday = 0, Friday = 4
+                days_added += 1
+
+        return current
 
     def get_deliverable_category(self, deliverable_name: str) -> str:
         """Extract category from deliverable name for dependency matching"""
@@ -1975,14 +2013,14 @@ def process_ai_timeline(
 ) -> Dict[str, Any]:
     """Process AI timeline response into Gantt-compatible format with enhanced dependencies"""
 
-    # Parse project start date and ensure it's on a business day
+    # Parse project start date
     if project_start:
         start_date = datetime.fromisoformat(project_start)
-        start_date = ensure_business_day(start_date)
     else:
-        # Default to next business day
+        # Default to next Monday
         today = datetime.now()
-        start_date = ensure_business_day(today)
+        days_until_monday = (7 - today.weekday()) % 7 or 7
+        start_date = today + timedelta(days=days_until_monday)
 
     optimizer = TimelineOptimizer()
     tasks = []
@@ -2207,14 +2245,13 @@ def generate_fallback_timeline(
 ) -> Dict[str, Any]:
     """Generate a comprehensive timeline with CPM analysis when AI is not available"""
 
-    # Parse project start date and ensure it's on a business day
+    # Parse project start date  
     if project_start:
         start_date = datetime.fromisoformat(project_start)
-        start_date = ensure_business_day(start_date)
     else:
-        # Default to next business day
         today = datetime.now()
-        start_date = ensure_business_day(today)
+        days_until_monday = (7 - today.weekday()) % 7 or 7
+        start_date = today + timedelta(days=days_until_monday)
 
     optimizer = TimelineOptimizer()
     tasks = []
@@ -2316,8 +2353,21 @@ def generate_retainer_tasks(
         month_name = month_names[month_idx]
         year = current_date.year
 
-        # Calculate month boundaries using business calendar
-        first_day, last_day = BusinessTimelineAdapter.align_month_window(year, current_date.month)
+        # Calculate month boundaries (first and last business day of month)
+        first_day = current_date.replace(day=1)
+        if first_day.weekday() >= 5:  # Skip weekend
+            days_until_monday = 7 - first_day.weekday() + 1
+            first_day = first_day + timedelta(days=days_until_monday % 7)
+
+        # Get last day of month
+        if current_date.month == 12:
+            last_day = current_date.replace(day=31)
+        else:
+            last_day = (current_date.replace(month=current_date.month + 1, day=1) - timedelta(days=1))
+
+        # Skip weekend for last day
+        while last_day.weekday() >= 5:
+            last_day = last_day - timedelta(days=1)
 
         # Get hours for this month
         if monthly_hours and f"{month_name}" in monthly_hours:

@@ -2,7 +2,6 @@ import os, re, io, math, json, datetime, urllib.parse, tempfile, base64
 import uuid
 import importlib
 import asyncio
-import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict, Any, Tuple, Set, Union
@@ -804,8 +803,48 @@ SCENARIO_MULT = {
     "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True}
 }
 
-# Note: Holiday calendar is now managed by BusinessCalendar class (business_calendar.py)
-# which includes all 34 TCG company holidays for accurate business-day scheduling.
+# US & Mexico holidays for business day calendar
+def _get_us_mx_holidays(year: int) -> list:
+    """Get US federal and Mexico holidays for a given year."""
+    holidays = []
+    
+    # US Federal Holidays
+    holidays.append(np.datetime64(f'{year}-01-01'))  # New Year's Day
+    # MLK Day (3rd Monday in January)
+    mlk_day = 15 + (7 - datetime.date(year, 1, 15).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-01-{mlk_day:02d}'))
+    # Presidents Day (3rd Monday in February)
+    pres_day = 15 + (7 - datetime.date(year, 2, 15).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-02-{pres_day:02d}'))
+    # Memorial Day (last Monday in May)
+    last_may = datetime.date(year, 5, 31)
+    # Roll back from May 31 to the last Monday (weekday 0)
+    days_since_monday = last_may.weekday()  # 0=Mon, 6=Sun
+    memorial = last_may - datetime.timedelta(days=days_since_monday)
+    holidays.append(np.datetime64(memorial))
+    holidays.append(np.datetime64(f'{year}-07-04'))  # Independence Day
+    # Labor Day (1st Monday in September)
+    labor_day = 1 + (7 - datetime.date(year, 9, 1).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-09-{labor_day:02d}'))
+    # Columbus Day (2nd Monday in October)
+    columbus_day = 8 + (7 - datetime.date(year, 10, 8).weekday()) % 7
+    holidays.append(np.datetime64(f'{year}-10-{columbus_day:02d}'))
+    holidays.append(np.datetime64(f'{year}-11-11'))  # Veterans Day
+    # Thanksgiving (4th Thursday in November)
+    first_nov = datetime.date(year, 11, 1)
+    thanksgiving = first_nov + datetime.timedelta(days=(3 - first_nov.weekday()) % 7 + 21)
+    holidays.append(np.datetime64(thanksgiving))
+    holidays.append(np.datetime64(f'{year}-12-25'))  # Christmas
+    
+    # Mexico holidays
+    holidays.append(np.datetime64(f'{year}-02-05'))  # Constitution Day
+    holidays.append(np.datetime64(f'{year}-03-21'))  # Benito Juárez's Birthday
+    holidays.append(np.datetime64(f'{year}-05-01'))  # Labor Day (Mexico)
+    holidays.append(np.datetime64(f'{year}-09-16'))  # Independence Day (Mexico)
+    holidays.append(np.datetime64(f'{year}-11-20'))  # Revolution Day
+    
+    return holidays
+
 
 def _find_v4_path() -> str | None:
     import glob
@@ -1702,8 +1741,12 @@ class AgencyDB:
         else:
             start_date = datetime.date.today()
         
-        # GPT-5 Pro: Use BusinessCalendar with full TCG holiday calendar
-        from business_calendar import BusinessCalendar
+        # Build business day calendar with US/MX holidays
+        year = start_date.year
+        holidays = _get_us_mx_holidays(year)
+        # Also get holidays for next year in case project spans years
+        if start_date.month >= 10:  # If starting in Q4, include next year's holidays
+            holidays.extend(_get_us_mx_holidays(year + 1))
 
         # Task 7: Build dependencies between task groups
         dependencies = self._build_task_dependencies(tgs, slack_after_internal, slack_after_client)
@@ -1730,8 +1773,7 @@ class AgencyDB:
         active_tasks_by_date = {}  # date_str -> count of active tasks
         
         # Build schedule with dependencies and resource leveling
-        # GPT-5 Pro: Use datetime.datetime instead of np.datetime64
-        cursor = datetime.datetime.combine(start_date, datetime.time(9, 0))
+        cursor = np.datetime64(start_date)
         rows = []
         task_end_dates = {}  # task_group -> end_date (for dependency calculation)
         
@@ -1755,9 +1797,8 @@ class AgencyDB:
                     
                     if dep["type"] == "FS":
                         # Finish-to-Start: start after predecessor ends + lag
-                        # GPT-5 Pro: Use BusinessCalendar instead of np.busday_offset
                         lag_days = dep.get("lag_days", 0)
-                        actual_start = BusinessCalendar.add_business_days(pred_end, lag_days)
+                        actual_start = np.busday_offset(pred_end, lag_days, roll='forward', holidays=holidays)
                     
                     elif dep["type"] == "SS":
                         # Start-to-Start: start when predecessor is X% complete
@@ -1765,19 +1806,17 @@ class AgencyDB:
                         if pred_tg in rows:
                             pred_row = next((r for r in rows if r["task_group"] == pred_tg), None)
                             if pred_row:
-                                # GPT-5 Pro: Parse datetime from string instead of np.datetime64
-                                pred_start = datetime.datetime.fromisoformat(pred_row["start_date"])
+                                pred_start = np.datetime64(pred_row["start_date"])
                                 pred_duration = pred_row["duration_days"]
                                 lag_days = int(pred_duration * lag_pct)
-                                actual_start = BusinessCalendar.add_business_days(pred_start, lag_days)
+                                actual_start = np.busday_offset(pred_start, lag_days, roll='forward', holidays=holidays)
             
             # Task 6: Resource leveling - check if we're over capacity
             # If too many tasks running in parallel, push start forward
-            # GPT-5 Pro: Use BusinessCalendar instead of np.busday_offset
-            start_candidate = BusinessCalendar.add_business_days(actual_start, 0)
+            start_candidate = np.busday_offset(actual_start, 0, roll='forward', holidays=holidays)
             while True:
                 # Check how many tasks are active on this date
-                date_str = start_candidate.date().isoformat()
+                date_str = str(start_candidate)
                 active_count = active_tasks_by_date.get(date_str, 0)
                 
                 if active_count < max_parallel:
@@ -1786,24 +1825,22 @@ class AgencyDB:
                     break
                 else:
                     # Over capacity - try next business day
-                    start_candidate = BusinessCalendar.add_business_days(start_candidate, 1)
+                    start_candidate = np.busday_offset(start_candidate, 1, roll='forward', holidays=holidays)
             
-            # Calculate end date using BusinessCalendar
-            start = BusinessCalendar.add_business_days(actual_start, 0)
-            # Duration is inclusive: 1 day = same day start/end at 18:00, so subtract 1
-            end = BusinessCalendar.add_business_days(start, business_days_needed - 1)
-            end = end.replace(hour=18, minute=0, second=0, microsecond=0)
+            # Calculate end date
+            start = np.busday_offset(actual_start, 0, roll='forward', holidays=holidays)
+            end = np.busday_offset(start, business_days_needed, roll='forward', holidays=holidays)
             
             # Task 6: Track active tasks for resource leveling
             current_date = start
-            while current_date.date() < end.date():
-                date_str = current_date.date().isoformat()
+            while current_date < end:
+                date_str = str(current_date)
                 active_tasks_by_date[date_str] = active_tasks_by_date.get(date_str, 0) + 1
-                current_date = BusinessCalendar.add_business_days(current_date, 1)
+                current_date = np.busday_offset(current_date, 1, roll='forward', holidays=holidays)
             
-            # Convert datetime to ISO strings for JSON serialization
-            start_str = start.isoformat()
-            end_str = end.isoformat()
+            # Convert numpy dates back to strings for JSON serialization
+            start_str = str(start)
+            end_str = str(end)
             
             # Get resource assignments for this task
             resources_assigned = []
@@ -1846,11 +1883,10 @@ class AgencyDB:
             cursor = end
 
             # Slack after reviews (in business days)
-            # GPT-5 Pro: Use BusinessCalendar instead of np.busday_offset
             if use_slack and tg == "internal_review":
-                cursor = BusinessCalendar.add_business_days(cursor, int(slack_after_internal))
+                cursor = np.busday_offset(cursor, int(slack_after_internal), roll='forward', holidays=holidays)
             if use_slack and tg == "client_review":
-                cursor = BusinessCalendar.add_business_days(cursor, int(slack_after_client))
+                cursor = np.busday_offset(cursor, int(slack_after_client), roll='forward', holidays=holidays)
 
         return rows
 
@@ -2930,209 +2966,6 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
     
     return scenario
 
-def _slugify(text: str) -> str:
-    """
-    Normalize string to slug format: lowercase, strip punctuation, collapse whitespace, replace with hyphen.
-    Used for generating deterministic codes from component/task names.
-    """
-    import re
-    if not text:
-        return ""
-    # Lowercase and strip
-    slug = text.lower().strip()
-    # Remove punctuation except spaces and hyphens
-    slug = re.sub(r'[^\w\s-]', '', slug)
-    # Collapse whitespace and replace with hyphen
-    slug = re.sub(r'[\s_]+', '-', slug)
-    # Remove leading/trailing hyphens
-    slug = slug.strip('-')
-    return slug
-
-def _deterministic_hash(canonical_path: str) -> str:
-    """
-    Generate 8-character deterministic hash from canonical path string.
-    Uses SHA-1 for stability and takes first 8 characters.
-    """
-    import hashlib
-    digest = hashlib.sha1(canonical_path.encode('utf-8')).hexdigest()
-    return digest[:8]
-
-def _ensure_component_task_codes(items: list, project_name: str) -> dict:
-    """
-    Preprocessing pass: Walk scenario items and generate deterministic slug+hash codes
-    for any component/task missing component_code/task_code.
-    
-    Mutates items in-place, injecting generated codes into component['component_code']
-    and task['task_code'] to ensure timeline merge matching works reliably.
-    
-    Returns diagnostics dict with counts of generated vs original codes.
-    """
-    diagnostics = {
-        "components_generated": 0,
-        "components_original": 0,
-        "tasks_generated": 0,
-        "tasks_original": 0,
-        "errors": []
-    }
-    
-    for deliv_idx, item in enumerate(items):
-        deliverable_code = str(item.get("deliverable_code") or item.get("code") or "").strip()
-        deliverable_name = str(item.get("deliverable") or "").strip()
-        
-        # If deliverable has no code, generate one
-        if not deliverable_code:
-            if not deliverable_name:
-                # Use positional fallback when both missing
-                deliverable_name = f"deliverable-{deliv_idx+1}"
-                item["deliverable"] = deliverable_name
-                logging.warning(f"[CODE GEN] Deliverable at index {deliv_idx} has no name or code, using fallback: {deliverable_name}")
-            
-            slug = _slugify(deliverable_name)
-            canonical_path = f"{project_name}|{deliverable_name}"
-            hash_suffix = _deterministic_hash(canonical_path)
-            deliverable_code = f"{slug}-{hash_suffix}"
-            item["deliverable_code"] = deliverable_code
-            logging.info(f"[CODE GEN] Generated deliverable_code: {deliverable_code} for '{deliverable_name}'")
-        
-        # Walk components
-        components = item.get("components", [])
-        for comp_idx, component in enumerate(components):
-            component_name = str(component.get("name") or component.get("component") or "").strip()
-            component_code = str(component.get("component_code") or "").strip()
-            
-            # Generate component code if missing
-            if not component_code:
-                if not component_name:
-                    # Use positional fallback
-                    component_name = f"component-{comp_idx+1}"
-                    component["name"] = component_name
-                
-                slug = _slugify(component_name)
-                canonical_path = f"{deliverable_code}|{component_name}"
-                hash_suffix = _deterministic_hash(canonical_path)
-                component_code = f"{slug}-{hash_suffix}"
-                component["component_code"] = component_code
-                diagnostics["components_generated"] += 1
-                logging.info(f"[CODE GEN] Generated component_code: {component_code} for '{component_name}' in {deliverable_code}")
-            else:
-                diagnostics["components_original"] += 1
-            
-            # Walk tasks
-            tasks = component.get("tasks", [])
-            for task_idx, task in enumerate(tasks):
-                task_name = str(task.get("name") or task.get("task") or "").strip()
-                task_code = str(task.get("task_code") or "").strip()
-                
-                # Generate task code if missing
-                if not task_code:
-                    if not task_name:
-                        # Use positional fallback
-                        task_name = f"task-{task_idx+1}"
-                        task["name"] = task_name
-                    
-                    slug = _slugify(task_name)
-                    canonical_path = f"{deliverable_code}|{component_name}|{task_name}"
-                    hash_suffix = _deterministic_hash(canonical_path)
-                    task_code = f"{slug}-{hash_suffix}"
-                    task["task_code"] = task_code
-                    diagnostics["tasks_generated"] += 1
-                    logging.info(f"[CODE GEN] Generated task_code: {task_code} for '{task_name}' in {component_code}")
-                else:
-                    diagnostics["tasks_original"] += 1
-    
-    # Log summary
-    logging.info(f"[CODE GEN] Summary: {diagnostics['components_generated']} components generated, "
-                 f"{diagnostics['components_original']} original; "
-                 f"{diagnostics['tasks_generated']} tasks generated, "
-                 f"{diagnostics['tasks_original']} original")
-    
-    if diagnostics["errors"]:
-        for error in diagnostics["errors"]:
-            logging.warning(f"[CODE GEN] {error}")
-    
-    return diagnostics
-
-def _fill_missing_task_codes_in_rows(rows: list, project_name: str) -> int:
-    """
-    Post-merge pass: Scan assembled rows and generate task_code for any row 
-    with a Task name but missing Task_Code.
-    
-    This catches timeline-injected tasks that weren't processed by the pre-merge
-    code generation pass (which only walks scenario.items hierarchy).
-    
-    Mutates rows in-place. Returns count of codes generated.
-    """
-    codes_generated = 0
-    
-    for row in rows:
-        task_name = str(row.get("Task") or "").strip()
-        task_code = str(row.get("Task_Code") or "").strip()
-        
-        if task_name and not task_code:
-            deliverable_code = str(row.get("Deliverable_Code") or "").strip()
-            component_name = str(row.get("Component") or "").strip()
-            
-            slug = _slugify(task_name)
-            canonical_path = f"{deliverable_code}|{component_name}|{task_name}"
-            hash_suffix = _deterministic_hash(canonical_path)
-            task_code = f"{slug}-{hash_suffix}"
-            
-            row["Task_Code"] = task_code
-            codes_generated += 1
-            logging.info(f"[POST-MERGE CODE GEN] Generated task_code: {task_code} for '{task_name}' in component '{component_name}'")
-    
-    if codes_generated > 0:
-        logging.info(f"[POST-MERGE CODE GEN] Summary: {codes_generated} task codes generated after timeline merge")
-    
-    return codes_generated
-
-def _build_timeline_lookup(timeline_tasks):
-    """
-    Build lookup dictionary from timeline_tasks.
-    
-    Keys: (deliverable_code, component_code_or_name, task_code_or_name) tuples
-    Values: dict with start_date, end_date, start_time_iso, finish_time_iso, hours, is_summary
-    
-    Simplified: Match by codes when available, by names as fallback. No normalization to avoid mismatches.
-    """
-    lookup = {}
-    
-    for task in timeline_tasks:
-        # Extract identifiers as-is (no normalization to avoid mismatches)
-        dcode = str(task.get("deliverable_code") or "").strip()
-        ccode = str(task.get("component_code") or "").strip() or None
-        tcode = str(task.get("task_code") or "").strip() or None
-        name = str(task.get("name") or "").strip()  # Task name
-        component_name = str(task.get("component") or "").strip() or None  # Component name
-        is_summary = task.get("is_summary", False)
-        
-        # Extract timeline fields
-        entry = {
-            "start_date": task.get("start_date"),
-            "end_date": task.get("end_date"),
-            "start_time_iso": task.get("start_time_iso"),
-            "finish_time_iso": task.get("finish_time_iso"),
-            "hours": task.get("hours"),
-            "is_summary": is_summary
-        }
-        
-        # Build lookup key and store
-        # Key format: (deliverable_code, component_identifier, task_identifier)
-        # Use component_code if available, else fall back to component name
-        # Use task_code if available, else fall back to task name
-        comp_key = ccode if ccode else component_name
-        task_key = tcode if tcode else (name if name else None)
-        
-        # Only store if not a blank placeholder
-        if comp_key or task_key:
-            lookup[(dcode, comp_key, task_key)] = entry
-        
-        # Deliverable-level summary: only if explicitly marked
-        if not comp_key and not task_key and is_summary:
-            lookup[(dcode, None, None)] = entry
-    
-    return lookup
-
 def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     """
     Adds Rate_USD and Price_USD at deliverable/component/task level.
@@ -3176,12 +3009,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     print(f"[WBS Builder] Has timeline_tasks: {'timeline_tasks' in scenario}")
     print(f"[WBS Builder] Has timeline: {'timeline' in scenario}")
 
-    # CRITICAL: Generate deterministic codes for components/tasks BEFORE timeline merge
-    # This ensures timeline lookup matching works reliably (code-to-code vs. brittle name matching)
-    code_gen_diagnostics = _ensure_component_task_codes(items, project_name)
-    print(f"[WBS Builder] Code generation: {code_gen_diagnostics['components_generated']} components, "
-          f"{code_gen_diagnostics['tasks_generated']} tasks generated")
-
     # MERGE TIMELINE DATA: Copy Start_Date/End_Date from timeline tasks into deliverables
     # Support both formats: timeline_tasks (manual Gantt saves) and timeline.tasks (AI-generated)
     # IMPORTANT: Check timeline_tasks FIRST since it has priority over AI-generated timeline
@@ -3198,12 +3025,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     if timeline_tasks:
         print(f"[WBS Builder] Found {len(timeline_tasks)} timeline tasks to merge")
         print(f"[WBS Builder DEBUG] First 3 timeline tasks: {timeline_tasks[:3]}")
-    
-    # Build lookup dictionary for O(1) access
-    timeline_lookup = _build_timeline_lookup(timeline_tasks) if timeline_tasks else {}
-    print(f"[WBS Builder] Built timeline lookup with {len(timeline_lookup)} entries")
-    
-    if timeline_tasks:
+        
         for item in items:
             deliv_name = str(item.get("deliverable", "")).strip()
             deliv_code = str(item.get("deliverable_code", item.get("code", ""))).strip()
@@ -3240,8 +3062,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         print(f"  ✓ Merged Start_Offset_Days={start_offset}")
                     if hours is not None:
                         item["hours"] = hours
-                        item["total_hours"] = hours  # CRITICAL FIX: Ensure timeline hours override scenario build hours
-                        print(f"  ✓ Merged hours={hours} → total_hours (will cascade to components/tasks/roles)")
+                        print(f"  ✓ Merged hours={hours}")
                     break
             
             if not matched and deliv_name:
@@ -3376,26 +3197,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             
             # Ensure total_hours is calculated correctly
             calculated_total = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
-            timeline_total = float(d.get("total_hours", 0.0))
-            
-            # CRITICAL FIX: If timeline changed hours, recalculate hours_by_role proportionally
-            if timeline_total > 0 and calculated_total > 0 and abs(timeline_total - calculated_total) > 0.1:
-                scale_factor = timeline_total / calculated_total
-                print(f"[WBS Builder] 📊 Timeline hours differ for {dcode}: {calculated_total:.1f}h → {timeline_total:.1f}h (scale: {scale_factor:.3f}x)")
-                print(f"  Recalculating hours_by_role to distribute {timeline_total}h across roles")
-                
-                # Scale each role's hours proportionally
-                scaled_hours_by_role = []
-                for row in hrs_df.to_dict("records"):
-                    scaled_row = row.copy()
-                    scaled_row["Hours"] = row.get("Hours", 0) * scale_factor
-                    scaled_hours_by_role.append(scaled_row)
-                
-                d["hours_by_role"] = scaled_hours_by_role
-                hrs_df = pd.DataFrame(scaled_hours_by_role)
-                d["total_hours"] = timeline_total  # Ensure timeline hours take precedence
-                print(f"  ✓ Scaled {len(scaled_hours_by_role)} role assignments to match timeline hours")
-            elif not d.get("total_hours") or timeline_total == 0.0:
+            if not d.get("total_hours") or float(d.get("total_hours", 0.0)) == 0.0:
                 d["total_hours"] = calculated_total
             
             # hours (use exact for pricing, round for display)
@@ -3502,21 +3304,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 wbs_comp = f"{wbs_deliv}.{j}"
                 svc_comp = (DB.service_department_for_component(dcode, comp, tg_in_comp)
                             or DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col))
-                
-                # Match timeline data for component
-                # Try: (deliverable, component, None) then deliverable summary
-                comp_timeline = timeline_lookup.get((dcode, comp, None)) or {}
-                # Only use deliverable summary if it's marked as summary (not a component collision)
-                if not comp_timeline and timeline_lookup.get((dcode, None, None), {}).get("is_summary"):
-                    comp_timeline = timeline_lookup.get((dcode, None, None), {})
-                comp_start_date = comp_timeline.get("start_date", "")
-                comp_end_date = comp_timeline.get("end_date", "")
-                comp_start_time_iso = comp_timeline.get("start_time_iso", "")
-                comp_finish_time_iso = comp_timeline.get("finish_time_iso", "")
-                comp_timeline_hours = comp_timeline.get("hours", "")
-                if comp_start_date or comp_end_date:
-                    print(f"[WBS Builder] 🔍 Matched timeline for component '{comp}': start={comp_start_date}, end={comp_end_date}, hours={comp_timeline_hours}")
-                
                 rows.append({
                     "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                     "Deliverable": deliv_label,
@@ -3528,25 +3315,13 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs),
                     "Assignee_External_ID": "", "Notes": "",
                     "Rate_USD": round(comp_rate if pricing_mode=="Flat_Blended" else _eff_rate(comp_price, comp_hours_total_display or 0), 2),
-                    "Price_USD": round(comp_price, 2),
-                    "Start_Date": comp_start_date,
-                    "End_Date": comp_end_date,
-                    "start_date": comp_start_date,  # Lowercase for XML exporter
-                    "end_date": comp_end_date,
-                    "start_time_iso": comp_start_time_iso,
-                    "finish_time_iso": comp_finish_time_iso,
-                    "timeline_hours": comp_timeline_hours  # Hours from timeline (not scenario)
+                    "Price_USD": round(comp_price, 2)
                 })
 
                 # --- Tasks under the component ---
                 # Per-month target hours for each task group, then repeat Month 01..N
                 tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
                 tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
-                
-                # DIAGNOSTIC: Log task group hours
-                print(f"[WBS Builder DEBUG] Component: {comp}, tg_in_comp: {tg_in_comp}")
-                print(f"[WBS Builder DEBUG] tg_hours_month: {tg_hours_month}")
-                print(f"[WBS Builder DEBUG] tg_target_month: {tg_target_month}")
 
                 # Build month-by-month repetition
                 total_tasks_per_month = len(tg_in_comp)
@@ -3566,23 +3341,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
                         base_offset = dstart + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
 
-                        # Match timeline data for task
-                        # Try: (deliverable, component, task_label) or (deliverable, component, task_group) or (deliverable, None, task_label)
-                        task_timeline = (
-                            timeline_lookup.get((dcode, comp, label)) or
-                            timeline_lookup.get((dcode, comp, tg)) or
-                            timeline_lookup.get((dcode, None, label)) or  # When timeline has no component_code
-                            timeline_lookup.get((dcode, None, tg)) or
-                            {}
-                        )
-                        task_start_date = task_timeline.get("start_date", "")
-                        task_end_date = task_timeline.get("end_date", "")
-                        task_start_time_iso = task_timeline.get("start_time_iso", "")
-                        task_finish_time_iso = task_timeline.get("finish_time_iso", "")
-                        task_hours = task_timeline.get("hours", "")
-                        if task_start_date or task_end_date:
-                            print(f"[WBS Builder] 🔍 Matched timeline for task '{label}': start={task_start_date}, end={task_end_date}, hours={task_hours}")
-
                         rows.append({
                             "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                             "Deliverable": deliv_label,
@@ -3593,14 +3351,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             "Start_Offset_Days": base_offset,
                             "Duration_Days": dur,
                             "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
-                            "Assignee_External_ID": "", "Notes": "",
-                            "Start_Date": task_start_date,
-                            "End_Date": task_end_date,
-                            "start_date": task_start_date,
-                            "end_date": task_end_date,
-                            "start_time_iso": task_start_time_iso,
-                            "finish_time_iso": task_finish_time_iso,
-                            "timeline_hours": task_hours  # Hours from timeline (not scenario)
+                            "Assignee_External_ID": "", "Notes": ""
                         })
 
                         # Role rows for this task in this month
@@ -3608,12 +3359,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         role_rows = hrs_role_df.to_dict(orient="records")
                         target_task_hours = int(tg_target_month.get(tg, 0)) if months else int(tg_target_month.get(tg, 0))
 
-                        # DIAGNOSTIC: Log role query results
-                        print(f"[WBS Builder DEBUG] TaskGroup: {tg}, hrs_role_df rows: {len(hrs_role_df)}, target_task_hours: {target_task_hours}")
-                        
                         raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
                         if not raw_map:
-                            print(f"[WBS Builder WARNING] No role assignments for {dcode}/{comp}/{tg} - using fallback with target_task_hours={target_task_hours}")
                             raw_map = {("","Mid"): float(target_task_hours)}
                         total = sum(raw_map.values()) or 1.0
                         raw_scaled = {key: (val/total)*target_task_hours for key, val in raw_map.items()}
@@ -3622,22 +3369,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         order = sorted(raw_map.keys(), key=lambda kk: (raw_scaled[kk]-flo[kk]), reverse=True)
                         for kk in order[:max(0, rem)]:
                             flo[kk] += 1
-
-                        # CRITICAL FIX: Populate task row Planned_Hours by summing role hours
-                        # This ensures XML generation has correct hours for Work field
-                        task_total_hours = sum(flo.values())
-                        
-                        # ZERO-HOUR TASK FIX: Skip tasks with no hours (phantom work items)
-                        if task_total_hours <= 0:
-                            print(f"[WBS Builder WARNING] Skipping 0-hour task: {dcode}/{comp}/{tg} - target_hours={target_task_hours}, scen_col={scen_col}")
-                            print(f"[WBS Builder WARNING] Context: hrs_role_df rows={len(hrs_role_df)}, tg_target_month[{tg}]={tg_target_month.get(tg, 'N/A')}")
-                            # Remove the empty task row we just added
-                            rows.pop()
-                            continue
-                        
-                        # Update the task row we just added (it's the last row before role rows)
-                        rows[-1]["Planned_Hours"] = task_total_hours
-                        print(f"[WBS Builder] Task {wbs_task} ({label}): total_hours={task_total_hours} from {len(flo)} roles")
 
                         prev_role_wbs = ""
                         r_index = 0
@@ -3697,11 +3428,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             # Advance cursor based on actual start used (preserves ordering for next deliverable)
             day_cursor = max(day_cursor, dstart) + total_deliv_duration
             prev_deliv_wbs = wbs_deliv
-
-    # POST-MERGE CODE GENERATION: Fill any missing task codes after timeline merge
-    # This catches timeline-injected tasks that weren't in the original scenario.items hierarchy
-    post_merge_codes = _fill_missing_task_codes_in_rows(rows, project_name)
-    print(f"[WBS Builder] Post-merge code generation: {post_merge_codes} task codes added")
 
     df = pd.DataFrame(rows)
     
@@ -5475,63 +5201,7 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 if session_id in SCENARIO_STORE:
                     # Update existing scenario with timeline
                     SCENARIO_STORE[session_id]['timeline'] = result
-                    
-                    # CRITICAL FIX: Sync timeline tasks to 'items' array with WBS_ID for drag-and-drop updates
-                    # This allows ALL deliverables (all 1,900+ in AgencyDB) to save when dragged on Gantt
-                    # KEY FIX: Index by task.id (WBS_ID) NOT deliverable_code to handle components/retainers/monthly slices
-                    timeline_tasks = result.get('tasks', [])
-                    existing_items = SCENARIO_STORE[session_id].get('items', [])
-                    
-                    # Create a map of WBS_ID -> existing item AND deliverable_code -> existing item for preservation
-                    existing_by_wbs = {item.get('WBS_ID'): item for item in existing_items if item.get('WBS_ID')}
-                    existing_by_code = {item.get('deliverable_code'): item for item in existing_items if item.get('deliverable_code') and not item.get('WBS_ID')}
-                    
-                    # Update items with WBS_ID from timeline tasks
-                    # CRITICAL: Process ALL tasks (deliverables, components, retainers, milestones, buffers)
-                    # to ensure universal drag-and-drop support for entire 1,900+ AgencyDB catalog
-                    updated_items = []
-                    for task in timeline_tasks:
-                        task_id = task.get('id', '')
-                        if not task_id:
-                            continue  # Skip tasks without IDs (shouldn't happen)
-                        
-                        deliv_code = task.get('deliverable_code', '')
-                        
-                        # Get existing item by WBS_ID first, then by deliverable_code, or create new
-                        if task_id in existing_by_wbs:
-                            # Found existing item with this exact WBS_ID - update it
-                            item = existing_by_wbs[task_id].copy()
-                        elif deliv_code and deliv_code in existing_by_code:
-                            # Found existing item with this deliverable_code but no WBS_ID - update it
-                            item = existing_by_code[deliv_code].copy()
-                            existing_by_code.pop(deliv_code)  # Remove so we don't duplicate
-                        else:
-                            # Create minimal item structure for ALL tasks (including milestones/buffers/components)
-                            item = {
-                                'deliverable_code': deliv_code or 'SYSTEM',  # Use 'SYSTEM' for tasks without codes
-                                'deliverable_name': task.get('name', task_id),
-                                'total_hours': task.get('hours', 0),
-                                'price': task.get('hours', 0) * SCENARIO_STORE[session_id].get('blended_rate', 195)
-                            }
-                        
-                        # Add/update WBS_ID and timeline fields - CRITICAL: WBS_ID must match task.id
-                        item['WBS_ID'] = task_id
-                        item['Start_Date'] = task.get('start', '')
-                        item['End_Date'] = task.get('end', '')
-                        item['Duration_Days'] = task.get('duration_days', 0)
-                        item['Planned_Hours'] = task.get('hours', 0)
-                        item['Department'] = task.get('department', 'Strategy')
-                        item['Deliverable_Code'] = deliv_code or 'SYSTEM'
-                        
-                        updated_items.append(item)
-                    
-                    # Add any remaining items from existing_by_code that weren't in timeline (edge case)
-                    for remaining_item in existing_by_code.values():
-                        updated_items.append(remaining_item)
-                    
-                    SCENARIO_STORE[session_id]['items'] = updated_items
                     print(f"[Timeline] Stored timeline result in SCENARIO_STORE for session {session_id}")
-                    print(f"[Timeline] Synced {len(updated_items)} items with WBS_ID for drag-and-drop updates")
                 else:
                     # Create new scenario with timeline
                     SCENARIO_STORE[session_id] = {
@@ -8152,13 +7822,6 @@ def _export_single_scenario_xml(
     if not DB.loaded:
         DB.load()
     
-    # CRITICAL DIAGNOSTIC: Use logger.info instead of print to ensure visibility
-    import logging
-    logger = logging.getLogger("uvicorn.error")
-    logger.info(f"[EXPORT_XML ENTRY] Starting export for {scenario_label}")
-    logger.info(f"[EXPORT_XML ENTRY] Scenario keys: {list(scenario.keys())}")
-    logger.info(f"[EXPORT_XML ENTRY] Has timeline_tasks: {'timeline_tasks' in scenario}")
-    logger.info(f"[EXPORT_XML ENTRY] Has timeline: {'timeline' in scenario}")
     print(f"[EXPORT_XML] Starting export for {scenario_label}")
     print(f"[EXPORT_XML] Scenario keys: {list(scenario.keys())}")
     print(f"[EXPORT_XML] Has timeline_tasks: {'timeline_tasks' in scenario}")
@@ -9283,14 +8946,11 @@ def api_reorder_timeline(p: ReorderPayload):
         updated_item["schedule"] = sched
         reordered_items.append(updated_item)
 
-        # advance cursor to the next business day after this deliverable's last end date
+        # advance cursor to the day after this deliverable's last end date
         if sched:
             last_end = sched[-1]["end_date"]
-            # Import BusinessCalendar for holiday-aware scheduling
-            from business_calendar import BusinessCalendar
-            # Parse the end date and advance to next business day
-            last_end_dt = datetime.datetime.fromisoformat(last_end)
-            cursor_date = BusinessCalendar.add_business_days(last_end_dt, 1).date()
+            y, m, d = map(int, last_end.split("-"))
+            cursor_date = datetime.date(y, m, d) + datetime.timedelta(days=1)
 
     # Update scenario with new order and persist
     scen["items"] = reordered_items
@@ -9804,11 +9464,6 @@ def convert_excel_to_mspdi(
             if actual_pred != actual_succ:
                 normalized_edges.append((actual_pred, actual_succ))
 
-        # IMPORTANT: Timeline dates are already business days (Monday-Friday only)
-        # Import BusinessCalendar for consistent business-day logic
-        from datetime import time, date
-        from business_calendar import BusinessCalendar
-        
         # Calculate project start date
         if fixed_start_iso:
             project_start = datetime.datetime.fromisoformat(fixed_start_iso.replace('Z', '+00:00'))
@@ -9823,15 +9478,14 @@ def convert_excel_to_mspdi(
             project_start = datetime.datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
         else:
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
-        
-        # CRITICAL: Ensure project start is on a business day (auto-roll weekend to Monday)
-        project_start = BusinessCalendar.next_business_day(project_start)
+
+        # Business calendar helpers (using same Mon-Fri, 8-12 & 13-17 schedule)
+        from datetime import time, date
         
         BUS_BLOCKS = [(time(8,0), time(12,0)), (time(13,0), time(17,0))]
 
-        # Delegate to BusinessCalendar for consistent business-day logic
         def is_business_day(d):
-            return BusinessCalendar.is_business_day(d)
+            return d.weekday() < 5  # Mon–Fri
 
         def business_minutes_in_range(day: date, start_t: time, end_t: time) -> int:
             # minutes worked on a single day between start_t and end_t
@@ -9867,25 +9521,12 @@ def convert_excel_to_mspdi(
             minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
             return minutes
 
-        # Calculate task schedules using BUSINESS DAYS (Mon-Fri only, no weekends)
+        # Calculate task schedules
         uid_to_sched = {}
         for r in rows:
-            # CRITICAL: StartOffset is in days (can be fractional for intraday offsets)
-            # Convert to business hours to preserve partial-day timing from timeline
-            offset_hours = r["StartOffset"] * hours_per_day
-            
-            # Calculate start date/time using business hours from project start
-            # This preserves timeline's intraday offsets (e.g., 0.5 days = 1pm start)
-            start_date = BusinessCalendar.add_business_hours(project_start, offset_hours)
-            
-            # If start falls before work hours, snap to 8:00 AM
-            if start_date.time() < datetime.time(8, 0):
-                start_date = datetime.datetime.combine(start_date.date(), datetime.time(8, 0))
-            
+            start_date = project_start + datetime.timedelta(days=r["StartOffset"])
             duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
-            
-            # Calculate end date using business hours (respects 8-12, 13-17 work blocks)
-            end_date = BusinessCalendar.add_business_hours(start_date, duration_hours)
+            end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
                 "Start": start_date,
@@ -10196,9 +9837,8 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Work").text = f"PT{planned_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
-                # CRITICAL FIX: Set as Fixed Work (Type=2) to prevent Workfront from recalculating hours
-                # This ensures Workfront keeps our exported hours instead of deriving them from duration
-                SubElement(task, "Type").text = "2"  # Fixed Work
+                # Set leaf tasks as Fixed Duration (Type=1) so duration is canonical
+                SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
                 
                 # All non-root tasks: As Soon As Possible (rely on predecessors + calendar)
@@ -10224,14 +9864,18 @@ def convert_excel_to_mspdi(
             SubElement(assignment, "Start").text = assign["Start"]
             SubElement(assignment, "Finish").text = assign["Finish"]
             
-            # CRITICAL FIX: Lock hours for Fixed Work tasks
-            # Set Units=1.0 and Work=RemainingWork to prevent Workfront from recalculating
+            # Compute Units = work_min / dur_min for Fixed Duration tasks
             work_hours = assign['WorkHours']
-            work_min = int(work_hours * 60)
+            work_min = work_hours * 60
+            # Get duration from the task schedule
+            dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
+            dur_min = dur_hours * 60
+            # Snap to 480-minute blocks as done in tasks
+            dur_min = ((int(dur_min) + 479) // 480) * 480
+            units = 0 if dur_min == 0 else work_min / dur_min
             
-            SubElement(assignment, "Units").text = "1.0"  # Lock at 100% allocation
-            SubElement(assignment, "Work").text = f"PT{work_min}M"
-            SubElement(assignment, "RemainingWork").text = f"PT{work_min}M"  # Match Work to lock hours
+            SubElement(assignment, "Units").text = str(units)
+            SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
             
             # TASK 16: Use stored Rate_USD from scenario pricing instead of re-computing
             task_uid = assign["TaskUID"]

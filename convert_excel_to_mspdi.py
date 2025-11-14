@@ -16,201 +16,8 @@ import logging
 import hashlib
 import random
 
-# Import BusinessCalendar for holiday-aware scheduling
-from business_calendar import BusinessCalendar
-
 # Configure logging for debugging
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-
-
-def work_hours_to_minutes(hours: float) -> str:
-    """
-    Convert work hours directly to ISO8601 minutes format for Work/RemainingWork fields.
-    
-    Args:
-        hours: Work hours (effort, e.g., 64 hours of effort)
-        
-    Returns:
-        ISO8601 duration string in MINUTES format (e.g., "PT3840M" for 64 hours)
-        
-    Examples:
-        64.0 hours → PT3840M
-        8.0 hours → PT480M
-        0.5 hours → PT30M
-        
-    Note: GPT-5 Pro plan requires all Work fields in minutes format for Workfront compatibility.
-    """
-    if hours <= 0:
-        return "PT0M"
-    
-    minutes = int(hours * 60)
-    return f"PT{minutes}M"
-
-
-def work_hours_to_duration_minutes(work_hours: float) -> str:
-    """
-    Convert work hours to calendar duration in minutes using the GPT-5 Pro formula.
-    
-    Formula: duration_minutes = ceil(work_hours / 8) * 480
-    This converts work effort into working days, then to minutes.
-    
-    Args:
-        work_hours: Work hours (effort, e.g., 64 hours)
-        
-    Returns:
-        ISO8601 duration string in MINUTES format (e.g., "PT4320M" for 64 hours)
-        
-    Examples:
-        64 hours → ceil(64/8) * 480 = 8 * 480 = 3840M (8 working days)
-        20 hours → ceil(20/8) * 480 = 3 * 480 = 1440M (3 working days)
-        8 hours → ceil(8/8) * 480 = 1 * 480 = 480M (1 working day)
-        
-    Note: GPT-5 Pro plan specifies this formula to prevent duration/hours mismatches in Workfront.
-    """
-    if work_hours <= 0:
-        return "PT0M"
-    
-    import math
-    # Formula from GPT-5 Pro plan
-    working_days = math.ceil(work_hours / 8)
-    duration_minutes = working_days * 480  # 8 hours/day * 60 min/hour
-    return f"PT{duration_minutes}M"
-
-
-def calculate_working_minutes_between(start: datetime, finish: datetime) -> int:
-    """
-    Calculate working minutes between two datetimes using day-by-day iteration.
-    Respects 9-12, 13-18 work blocks (8 hours/day) and skips weekends/holidays.
-    
-    Args:
-        start: Start datetime
-        finish: Finish datetime
-        
-    Returns:
-        Total working minutes (accurate for same-day and multi-day spans)
-        
-    Examples:
-        Same day: Mon 09:00 → Mon 18:00 = 480 minutes
-        Partial day: Mon 10:00 → Mon 15:00 = 120 + 120 = 240 minutes
-        Multi-day: Mon 09:00 → Tue 18:00 = 480 + 480 = 960 minutes
-        Cross-lunch: Mon 11:00 → Mon 14:00 = 60 + 60 = 120 minutes
-    """
-    from datetime import time, timedelta, date
-    
-    if finish <= start:
-        return 0
-    
-    def minutes_in_day(day_date: date, day_start: datetime, day_finish: datetime) -> int:
-        """Calculate working minutes for a single day"""
-        # Check if this day is a business day
-        if not BusinessCalendar.is_business_day(day_date):
-            return 0
-        
-        # Clamp times to this day and business hours (9-18)
-        day_start_time = day_start.time() if day_start.date() == day_date else time(9, 0)
-        day_finish_time = day_finish.time() if day_finish.date() == day_date else time(18, 0)
-        
-        # Clamp to business hours
-        if day_start_time < time(9, 0):
-            day_start_time = time(9, 0)
-        if day_start_time >= time(18, 0):
-            return 0
-        if day_finish_time > time(18, 0):
-            day_finish_time = time(18, 0)
-        if day_finish_time <= time(9, 0):
-            return 0
-        
-        total = 0
-        
-        # Morning block (9-12)
-        morning_start = max(day_start_time, time(9, 0))
-        morning_end = min(day_finish_time, time(12, 0))
-        if morning_start < morning_end:
-            total += int((datetime.combine(day_date, morning_end) - 
-                         datetime.combine(day_date, morning_start)).total_seconds() / 60)
-        
-        # Afternoon block (13-18)
-        afternoon_start = max(day_start_time, time(13, 0))
-        afternoon_end = min(day_finish_time, time(18, 0))
-        if afternoon_start < afternoon_end:
-            total += int((datetime.combine(day_date, afternoon_end) - 
-                         datetime.combine(day_date, afternoon_start)).total_seconds() / 60)
-        
-        return total
-    
-    # Iterate day-by-day from start to finish
-    total_minutes = 0
-    current_date = start.date()
-    finish_date = finish.date()
-    
-    while current_date <= finish_date:
-        total_minutes += minutes_in_day(current_date, start, finish)
-        current_date += timedelta(days=1)
-    
-    return max(0, total_minutes)
-
-
-# Deprecated: Old hours format function (kept for reference, but should not be used)
-def hours_to_iso8601_duration_DEPRECATED(hours: float) -> str:
-    """
-    DEPRECATED: This function returns hours format which causes Workfront import issues.
-    Use work_hours_to_minutes() or work_hours_to_duration_minutes() instead.
-    """
-    if hours <= 0:
-        return "PT0H0M0S"
-    
-    whole_hours = int(hours)
-    remaining_minutes = int((hours - whole_hours) * 60)
-    return f"PT{whole_hours}H{remaining_minutes}M0S"
-
-
-def parse_iso8601_duration(duration_str: str) -> float:
-    """
-    Parse ISO8601 duration string (both legacy minutes-only and new hours format) to decimal hours.
-    
-    Args:
-        duration_str: ISO8601 duration string (e.g., "PT1860M" or "PT31H0M0S")
-        
-    Returns:
-        Decimal hours (e.g., 31.0)
-        
-    Examples:
-        "PT1860M" → 31.0 hours (legacy minutes-only format)
-        "PT31H0M0S" → 31.0 hours (new hours format)
-        "PT4H30M0S" → 4.5 hours
-        "PT0H0M0S" → 0.0 hours
-        
-    Note: Handles both legacy (PTxxxM) and new (PTxxHxxMxxS) formats for backwards compatibility.
-    Falls back to 0.0 for malformed strings.
-    """
-    if not duration_str or not isinstance(duration_str, str):
-        return 0.0
-    
-    try:
-        import re
-        # Remove PT prefix
-        duration_str = duration_str.replace("PT", "")
-        
-        # Try to match hours/minutes/seconds format (e.g., "31H0M0S")
-        match = re.match(r'(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str)
-        if match:
-            hours = int(match.group(1) or 0)
-            minutes = int(match.group(2) or 0)
-            seconds = int(match.group(3) or 0)
-            
-            # Convert to decimal hours
-            total_hours = hours + (minutes / 60.0) + (seconds / 3600.0)
-            return total_hours
-        
-        # Legacy fallback: if no match, assume it's just minutes (e.g., "1860M")
-        if "M" in duration_str and "H" not in duration_str:
-            minutes = int(duration_str.replace("M", ""))
-            return minutes / 60.0
-        
-        return 0.0
-    except (ValueError, AttributeError):
-        logging.warning(f"[PARSE] Failed to parse duration string: {duration_str}, defaulting to 0.0 hours")
-        return 0.0
 
 
 class DependencyType(Enum):
@@ -278,32 +85,18 @@ def create_governance_milestone_task(
     # Mark as milestone if no hours
     if hours == 0:
         ET.SubElement(task, "{%s}Milestone" % ns).text = "1"
-        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0M"  # GPT-5 Pro: Minutes format
+        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0H0M0S"
     else:
         ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
-        # GPT-5 Pro: Use formula for duration
-        ET.SubElement(task, "{%s}Duration" % ns).text = work_hours_to_duration_minutes(hours)
+        duration_days = max(1, int(hours / 8))
+        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
     
-    # Set dates - MUST use BusinessCalendar to match Duration formula and avoid weekends/holidays
-    # Import here to avoid circular dependency
-    from business_calendar import BusinessCalendar
-    import math
-    
+    # Set dates
     ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
     if hours > 0:
-        # Match the Duration formula: ceil(hours / 8) working days
-        # Finish time must be end of work day (18:00) on the last working day
-        working_days = math.ceil(hours / 8)
-        if working_days == 1:
-            # 1-day duration: same day, finish at 18:00
-            end_date = milestone_date.replace(hour=18, minute=0, second=0, microsecond=0)
-        else:
-            # Multi-day: advance (working_days - 1) business days, then set to 18:00
-            end_date = BusinessCalendar.add_business_days(milestone_date, working_days - 1)
-            end_date = end_date.replace(hour=18, minute=0, second=0, microsecond=0)
+        end_date = milestone_date + timedelta(days=max(1, int(hours / 8)))
         ET.SubElement(task, "{%s}Finish" % ns).text = end_date.isoformat()
     else:
-        # Zero-hour milestone: start and finish on same day
         ET.SubElement(task, "{%s}Finish" % ns).text = milestone_date.isoformat()
     
     # Priority based on governance type
@@ -319,9 +112,9 @@ def create_governance_milestone_task(
     }
     ET.SubElement(task, "{%s}Priority" % ns).text = priority_map.get(governance_type, "500")
     
-    # Work and duration format - GPT-5 Pro: Minutes format
-    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
-    ET.SubElement(task, "{%s}Work" % ns).text = work_hours_to_minutes(hours)
+    # Work and duration format
+    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "39"  # Hours
+    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{hours}H0M0S"
     ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
     ET.SubElement(task, "{%s}Summary" % ns).text = "0"
     ET.SubElement(task, "{%s}Critical" % ns).text = "0"
@@ -420,98 +213,17 @@ def convert_excel_to_mspdi(
         tree.write(output_xml, encoding="utf-8", xml_declaration=True)
         return {"task_count": 0, "warning": "Empty input data"}
     
-    # CRITICAL: Validate all tasks have codes before export (fail-fast)
-    # This ensures timeline merge worked correctly and all tasks are matchable
-    validation_errors = []
-    unmatched_rows_list = []
-    
-    # Check if required code columns exist
-    required_columns = {
-        "Task_Code": "Task code column missing - code generation may have failed",
-        "Deliverable_Code": "Deliverable code column missing - code generation may have failed"
-    }
-    
-    for col, msg in required_columns.items():
-        if col not in df.columns:
-            validation_errors.append(msg)
-            logging.error(f"[VALIDATION] {msg}")
-    
-    # If columns are missing, fail immediately
-    if validation_errors:
-        error_msg = f"Export validation failed: {'; '.join(validation_errors)}"
-        logging.error(f"[VALIDATION] {error_msg}")
-        raise ValueError(error_msg)
-    
-    # Check for missing codes at task level (most critical)
-    task_rows = df[df["Task"].notna() & (df["Task"] != "")]
-    if not task_rows.empty:
-        # Safely check for missing task codes
-        missing_task_codes = task_rows[
-            ~task_rows["Task_Code"].notna() | (task_rows["Task_Code"] == "")
-        ]
-        
-        if not missing_task_codes.empty:
-            validation_errors.append(f"{len(missing_task_codes)} tasks missing task_code")
-            unmatched_rows_list.append(missing_task_codes)
-            logging.error(f"[VALIDATION] {len(missing_task_codes)} tasks missing task_code:")
-            for idx, row in missing_task_codes.head(10).iterrows():  # Show first 10
-                task_name = row.get("Task", "UNKNOWN")
-                component_name = row.get("Component", "UNKNOWN")
-                deliverable_name = row.get("Deliverable", "UNKNOWN")
-                logging.error(f"  - Task '{task_name}' in component '{component_name}' of deliverable '{deliverable_name}'")
-    
-    # Check component codes (optional, warn only)
-    if "Component_Code" in df.columns:
-        component_rows = df[df["Component"].notna() & (df["Component"] != "")]
-        if not component_rows.empty:
-            missing_component_codes = component_rows[
-                ~component_rows["Component_Code"].notna() | 
-                (component_rows["Component_Code"] == "")
-            ]
-            
-            if not missing_component_codes.empty:
-                unmatched_rows_list.append(missing_component_codes)
-                logging.warning(f"[VALIDATION] {len(missing_component_codes)} components missing component_code")
-    
-    # Check deliverable codes
-    deliverable_rows = df[df["Deliverable"].notna() & (df["Deliverable"] != "")]
-    if not deliverable_rows.empty:
-        missing_deliverable_codes = deliverable_rows[
-            ~deliverable_rows["Deliverable_Code"].notna() | 
-            (deliverable_rows["Deliverable_Code"] == "")
-        ]
-        
-        if not missing_deliverable_codes.empty:
-            validation_errors.append(f"{len(missing_deliverable_codes)} deliverables missing deliverable_code")
-            unmatched_rows_list.append(missing_deliverable_codes)
-            logging.error(f"[VALIDATION] {len(missing_deliverable_codes)} deliverables missing deliverable_code")
-    
-    # Export unmatched.csv for debugging if validation fails
-    if validation_errors:
-        unmatched_csv = output_xml.replace(".xml", "_unmatched.csv")
-        if unmatched_rows_list:
-            unmatched_rows = pd.concat(unmatched_rows_list, ignore_index=True)
-            unmatched_rows.to_csv(unmatched_csv, index=False)
-            logging.error(f"[VALIDATION] Exported unmatched rows to: {unmatched_csv}")
-        
-        error_msg = f"Export validation failed: {'; '.join(validation_errors)}. " \
-                   f"Unmatched rows exported to: {unmatched_csv if unmatched_rows_list else 'N/A'}"
-        logging.error(f"[VALIDATION] {error_msg}")
-        raise ValueError(error_msg)
-    
-    logging.info(f"[VALIDATION] ✅ All tasks/components/deliverables have codes - validation passed")
-    
     # Determine project start date
     if fixed_start_iso:
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
         # Remove timezone info to ensure all datetimes are timezone-naive for consistent comparisons
         project_start = project_start.replace(tzinfo=None)
-        # CRITICAL: Normalize to 9 AM business start time (matching Workfront and BusinessCalendar)
-        project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
     elif start_date_mode == "next_monday":
         today = datetime.now()
-        # Use BusinessCalendar to get next business day (skips holidays)
-        project_start = BusinessCalendar.next_business_day(today)
+        days_ahead = 0 - today.weekday()  # Monday is 0
+        if days_ahead <= 0:
+            days_ahead += 7
+        project_start = today + timedelta(days=days_ahead)
         project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
     else:
         project_start = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
@@ -543,7 +255,6 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
     ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
-    # CRITICAL: Hard-coded 9 AM - 6 PM (09:00-18:00) to match Workfront and BusinessCalendar exactly
     ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
     ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
     ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
@@ -652,53 +363,17 @@ def convert_excel_to_mspdi(
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "1"
             working_times = ET.SubElement(weekday, "{%s}WorkingTimes" % ns)
             
-            # Morning shift: 9 AM - 12 PM (3 hours)
+            # Morning shift
             wt1 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
             ET.SubElement(wt1, "{%s}FromTime" % ns).text = "09:00:00"
             ET.SubElement(wt1, "{%s}ToTime" % ns).text = "12:00:00"
             
-            # Afternoon shift: 1 PM - 6 PM (5 hours), total 8 hours/day
+            # Afternoon shift
             wt2 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
             ET.SubElement(wt2, "{%s}FromTime" % ns).text = "13:00:00"
             ET.SubElement(wt2, "{%s}ToTime" % ns).text = "18:00:00"
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
-    
-    # Add TCG 2025-2026 holiday exceptions (non-working days)
-    # Using DayWorking=0 to mark these days as closures
-    exceptions = ET.SubElement(calendar, "{%s}Exceptions" % ns)
-    
-    # Define all company holidays and closures
-    tcg_holidays = [
-        # Single-day federal holidays (2025)
-        ("2025-01-01", "2025-01-01", "New Year's Day"),
-        ("2025-01-20", "2025-01-20", "MLK Day"),
-        ("2025-02-17", "2025-02-17", "Presidents Day"),
-        ("2025-05-26", "2025-05-26", "Memorial Day"),
-        ("2025-06-19", "2025-06-19", "Juneteenth"),
-        ("2025-07-04", "2025-07-04", "Independence Day"),
-        ("2025-10-13", "2025-10-13", "Indigenous People Day"),
-        
-        # Multi-day company closures
-        ("2025-08-28", "2025-09-01", "Mental Health Break"),
-        ("2025-11-27", "2025-11-28", "Thanksgiving"),
-        ("2025-12-22", "2026-01-02", "Holiday Break"),
-    ]
-    
-    # Create exception elements for each holiday period
-    for from_date, to_date, name in tcg_holidays:
-        exception = ET.SubElement(exceptions, "{%s}Exception" % ns)
-        ET.SubElement(exception, "{%s}Type" % ns).text = "1"
-        
-        # Wrap dates in TimePeriod structure (Workfront requirement)
-        timeperiod = ET.SubElement(exception, "{%s}TimePeriod" % ns)
-        ET.SubElement(timeperiod, "{%s}FromDate" % ns).text = f"{from_date}T00:00:00"
-        ET.SubElement(timeperiod, "{%s}ToDate" % ns).text = f"{to_date}T23:59:59"
-        
-        ET.SubElement(exception, "{%s}DayWorking" % ns).text = "0"
-        ET.SubElement(exception, "{%s}Name" % ns).text = name
-        ET.SubElement(exception, "{%s}Occurrences" % ns).text = "1"
-        ET.SubElement(exception, "{%s}EnteredByOccurrences" % ns).text = "0"
     
     # Create Resources container with enhanced resource definitions
     resources = ET.SubElement(root, "{%s}Resources" % ns)
@@ -835,7 +510,7 @@ def convert_excel_to_mspdi(
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Start" % ns).text = project_start.isoformat()
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
-    ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "7"
+    ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}Stop" % ns).text = project_start.isoformat()
     ET.SubElement(project_task, "{%s}Resume" % ns).text = project_start.isoformat()
@@ -948,47 +623,40 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = deliv_outline_level
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
             
-            # FIX: Check if first row of deliverable has start_date (from Gantt merge)
-            # Prefer lowercase (new convention) with fallback to uppercase (backward compat)
+            # FIX: Check if first row of deliverable has Start_Date (from Gantt merge)
             deliverable_start_date = current_date
             deliverable_end_date = None  # Will be set from Gantt or calculated
             
-            if not group.empty:
-                # Try lowercase first, then uppercase fallback
-                start_col = "start_date" if "start_date" in group.columns else "Start_Date"
-                if start_col in group.columns:
-                    first_row_start = group.iloc[0].get(start_col)
-                    if pd.notna(first_row_start):
-                        try:
-                            start_val = str(first_row_start)
-                            if 'T' in start_val:
-                                deliverable_start_date = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
-                                # Remove timezone info to make it timezone-naive for consistent comparisons
-                                deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
-                            else:
-                                deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
-                            logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
-                        except Exception as e:
-                            logging.warning(f"Could not parse deliverable {start_col} '{first_row_start}': {e}")
+            if not group.empty and "Start_Date" in group.columns:
+                first_row_start = group.iloc[0].get("Start_Date")
+                if pd.notna(first_row_start):
+                    try:
+                        start_val = str(first_row_start)
+                        if 'T' in start_val:
+                            deliverable_start_date = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
+                            # Remove timezone info to make it timezone-naive for consistent comparisons
+                            deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
+                        else:
+                            deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                        logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
+                    except Exception as e:
+                        logging.warning(f"Could not parse deliverable Start_Date '{first_row_start}': {e}")
             
-            # FIX: Check if first row of deliverable has end_date (from Gantt merge)
-            if not group.empty:
-                # Try lowercase first, then uppercase fallback
-                end_col = "end_date" if "end_date" in group.columns else "End_Date"
-                if end_col in group.columns:
-                    first_row_end = group.iloc[0].get(end_col)
-                    if pd.notna(first_row_end):
-                        try:
-                            end_val = str(first_row_end)
-                            if 'T' in end_val:
-                                deliverable_end_date = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
-                                # Remove timezone info to make it timezone-naive for consistent comparisons
-                                deliverable_end_date = deliverable_end_date.replace(tzinfo=None)
-                            else:
-                                deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
-                            logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
-                        except Exception as e:
-                            logging.warning(f"Could not parse deliverable {end_col} '{first_row_end}': {e}")
+            # FIX: Check if first row of deliverable has End_Date (from Gantt merge)
+            if not group.empty and "End_Date" in group.columns:
+                first_row_end = group.iloc[0].get("End_Date")
+                if pd.notna(first_row_end):
+                    try:
+                        end_val = str(first_row_end)
+                        if 'T' in end_val:
+                            deliverable_end_date = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
+                            # Remove timezone info to make it timezone-naive for consistent comparisons
+                            deliverable_end_date = deliverable_end_date.replace(tzinfo=None)
+                        else:
+                            deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
+                        logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
+                    except Exception as e:
+                        logging.warning(f"Could not parse deliverable End_Date '{first_row_end}': {e}")
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             
@@ -996,29 +664,33 @@ def convert_excel_to_mspdi(
             has_gantt_start = False
             has_gantt_end = False
             
-            # Check if start_date was successfully parsed from Gantt (prefer lowercase, fallback uppercase)
-            if not group.empty:
-                start_col = "start_date" if "start_date" in group.columns else "Start_Date"
-                if start_col in group.columns:
-                    first_row_start = group.iloc[0].get(start_col)
-                    if pd.notna(first_row_start):
-                        has_gantt_start = True
+            # Check if Start_Date was successfully parsed from Gantt
+            if not group.empty and "Start_Date" in group.columns:
+                first_row_start = group.iloc[0].get("Start_Date")
+                if pd.notna(first_row_start):
+                    has_gantt_start = True
             
-            # Check if end_date was successfully parsed from Gantt (prefer lowercase, fallback uppercase)
-            if not group.empty:
-                end_col = "end_date" if "end_date" in group.columns else "End_Date"
-                if end_col in group.columns:
-                    first_row_end = group.iloc[0].get(end_col)
-                    if pd.notna(first_row_end):
-                        has_gantt_end = True
+            # Check if End_Date was successfully parsed from Gantt
+            if not group.empty and "End_Date" in group.columns:
+                first_row_end = group.iloc[0].get("End_Date")
+                if pd.notna(first_row_end):
+                    has_gantt_end = True
             
-            # FIX: Use ASAP for summary tasks too - let children drive timing
-            ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
-            logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': ASAP (Type 0) - children will drive timing")
+            # Apply constraint type
+            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
+            if has_gantt_start and has_gantt_end:
+                # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            elif has_gantt_start:
+                # Only start date from Gantt: Must Start On
+                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
+                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
+                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
             
-            ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"  # Days
+            ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
-            ET.SubElement(deliv_task, "{%s}RemainingWork" % ns).text = "PT0M"  # GPT-5 Pro: Summary tasks
             ET.SubElement(deliv_task, "{%s}EffortDriven" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}Recurring" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}OverAllocated" % ns).text = "0"
@@ -1146,9 +818,8 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
-                ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"  # Days
+                ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"
                 ET.SubElement(comp_task, "{%s}Work" % ns).text = "PT0M"
-                ET.SubElement(comp_task, "{%s}RemainingWork" % ns).text = "PT0M"  # GPT-5 Pro: Summary tasks
                 ET.SubElement(comp_task, "{%s}EffortDriven" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}Recurring" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}OverAllocated" % ns).text = "0"
@@ -1222,38 +893,24 @@ def convert_excel_to_mspdi(
                         
                         logging.info(f"[3-LEVEL HIERARCHY] Creating L3 task: '{task_name}' (UID={uid}, Component={component_name})")
                         
-                        # Safely get hours - prefer timeline_hours (from scheduler), fallback to Planned_Hours (from scenario)
-                        timeline_hours = row.get("timeline_hours")
+                        # Safely get hours
                         planned_hours = row.get("Planned_Hours")
-                        
-                        # Use timeline_hours if available (from PM-Brain capacity scheduling)
-                        if pd.notna(timeline_hours) and timeline_hours is not None and timeline_hours != "":
-                            hours = float(timeline_hours)
-                            logging.info(f"[HOURS MATCH] Using timeline_hours={hours} for '{task_name}'")
-                        # Fall back to Planned_Hours (from scenario)
-                        elif pd.notna(planned_hours) and planned_hours is not None:
-                            hours = float(planned_hours)
-                        # Fall back to generic Hours column
-                        elif pd.notna(row.get("Hours")):
-                            hours = float(row.get("Hours"))
-                        # Last resort default
-                        else:
-                            hours = 8.0
+                        if pd.isna(planned_hours) or planned_hours is None:
+                            planned_hours = row.get("Hours", 8)
+                        if pd.isna(planned_hours) or planned_hours is None:
+                            planned_hours = 8
+                        hours = float(planned_hours)
                         duration_days = max(1, int(np.ceil(hours / hours_per_day)))
                         
-                        # FIX: Use merged timeline dates (start_date/end_date) from Gantt if available
-                        # Prefer lowercase (new convention) with fallback to uppercase (backward compat)
+                        # FIX: Use merged timeline dates (Start_Date/End_Date) from Gantt if available
                         # Only fall back to calculated dates if missing
                         task_start = None
                         task_end = None
                         
-                        # Check for start_date field (from Gantt merge) - prefer lowercase, fallback uppercase
-                        # Track whether start came from timeline (for SNET constraint later)
-                        has_timeline_start = False
-                        start_col = "start_date" if "start_date" in row.index else "Start_Date"
-                        if start_col in row.index and pd.notna(row.get(start_col)):
+                        # Check for Start_Date field (from Gantt merge)
+                        if "Start_Date" in row.index and pd.notna(row.get("Start_Date")):
                             try:
-                                start_val = str(row.get(start_col))
+                                start_val = str(row.get("Start_Date"))
                                 # Handle ISO format: 2025-11-16 or 2025-11-16T01:00:00
                                 if 'T' in start_val:
                                     task_start = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
@@ -1262,16 +919,14 @@ def convert_excel_to_mspdi(
                                 else:
                                     # Date only - add default 9 AM time
                                     task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
-                                has_timeline_start = True
-                                logging.info(f"[GANTT MERGE] Using merged {start_col} for '{task_name}': {task_start.isoformat()}")
+                                logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
                             except Exception as e:
-                                logging.warning(f"Could not parse {start_col} '{row.get(start_col)}': {e}")
+                                logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
                         
-                        # Check for end_date field (from Gantt merge) - prefer lowercase, fallback uppercase
-                        end_col = "end_date" if "end_date" in row.index else "End_Date"
-                        if end_col in row.index and pd.notna(row.get(end_col)):
+                        # Check for End_Date field (from Gantt merge)
+                        if "End_Date" in row.index and pd.notna(row.get("End_Date")):
                             try:
-                                end_val = str(row.get(end_col))
+                                end_val = str(row.get("End_Date"))
                                 # Handle ISO format: 2025-11-27 or 2025-11-27T17:00:00
                                 if 'T' in end_val:
                                     task_end = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
@@ -1280,9 +935,9 @@ def convert_excel_to_mspdi(
                                 else:
                                     # Date only - add default 5 PM time
                                     task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
-                                logging.info(f"[GANTT MERGE] Using merged {end_col} for '{task_name}': {task_end.isoformat()}")
+                                logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
                             except Exception as e:
-                                logging.warning(f"Could not parse {end_col} '{row.get(end_col)}': {e}")
+                                logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
                         
                         # Fall back to calculated dates if Start_Date/End_Date missing
                         if task_start is None:
@@ -1324,23 +979,19 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
                         ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
                         
-                        # GPT-5 Pro: Calculate Duration from Work hours using formula: ceil(work_hours / 8) * 480
-                        # This ensures Workfront's duration calculation matches our timeline exactly
-                        # Formula converts work effort into working days, then to minutes (1 day = 480 min)
-                        duration_iso8601 = work_hours_to_duration_minutes(hours)
-                        ET.SubElement(task, "{%s}Duration" % ns).text = duration_iso8601
+                        # FIX: Calculate Duration from actual time span (Finish - Start), not from hours
+                        # This prevents invalid XML where Duration=PT0M but Start≠Finish (Workfront rejects this)
+                        # Duration = calendar time span, Work = effort hours (different concepts)
+                        duration_minutes = int((task_end - task_start).total_seconds() / 60)
+                        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
                         ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
-                        
-                        # GPT-5 Pro: Populate Work hours in minutes format (direct conversion)
-                        # Workfront reads Task.Work directly (not assignment aggregates) per MSPDI import behavior
-                        work_iso8601 = work_hours_to_minutes(hours)
-                        ET.SubElement(task, "{%s}Work" % ns).text = work_iso8601
-                        ET.SubElement(task, "{%s}RegularWork" % ns).text = work_iso8601
-                        logging.info(f"[WORK HOURS] Task '{task_name}': {hours}h → Duration={duration_iso8601}, Work={work_iso8601}")
-                        
-                        # RemainingDuration and RemainingWork match their non-remaining counterparts
-                        ET.SubElement(task, "{%s}RemainingDuration" % ns).text = duration_iso8601
-                        ET.SubElement(task, "{%s}RemainingWork" % ns).text = work_iso8601
+                        # FIX: Set Work to PT0M on leaf tasks to prevent double-counting in Workfront
+                        # Work will be calculated automatically from Assignment elements per MSPDI standard
+                        ET.SubElement(task, "{%s}Work" % ns).text = "PT0M"
+                        ET.SubElement(task, "{%s}RegularWork" % ns).text = "PT0M"
+                        # RemainingDuration must match Duration (same calendar time span)
+                        ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{duration_minutes}M"
+                        ET.SubElement(task, "{%s}RemainingWork" % ns).text = "PT0M"
                         ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}ResumeValid" % ns).text = "0"
@@ -1361,27 +1012,46 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}BCWP" % ns).text = "0"
                         ET.SubElement(task, "{%s}PhysicalPercentComplete" % ns).text = "0"
                         ET.SubElement(task, "{%s}EarnedValueMethod" % ns).text = "0"
-                        ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0M"  # GPT-5 Pro: Minutes
-                        ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0M"  # GPT-5 Pro: Minutes
+                        ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0H0M0S"
+                        ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0H0M0S"
                         ET.SubElement(task, "{%s}Active" % ns).text = "1"
                         ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
                         ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
                         
-                        # CRITICAL FIX: Use SNET constraint when task has timeline start date
-                        # This prevents Workfront from snapping all tasks to project start (Nov 17)
-                        # Only use ASAP when task has no timeline start (let predecessors drive timing)
-                        if has_timeline_start:
-                            # SNET (Start No Earlier Than) - respects the timeline start date
-                            # ConstraintType=4 is SNET (not 2, which is Must Start On)
-                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "4"  # SNET
+                        # Add constraint type based on Gantt-sourced dates
+                        has_gantt_start = "Start_Date" in row.index and pd.notna(row.get("Start_Date"))
+                        has_gantt_end = "End_Date" in row.index and pd.notna(row.get("End_Date"))
+                        
+                        # Apply constraint type and manual scheduling fields based on Gantt-sourced dates
+                        if has_gantt_start and has_gantt_end:
+                            # Both dates from Gantt: Lock BOTH start and finish dates
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
                             ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
-                            ET.SubElement(task, "{%s}Manual" % ns).text = "0"  # Auto-scheduled
-                            logging.info(f"[CONSTRAINT] Task '{task_name}': SNET (Type 4) with ConstraintDate={task_start.isoformat()}")
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "1"
+                            # CRITICAL: Add ManualStart, ManualFinish, ManualDuration to lock dates in Workfront
+                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}ManualFinish" % ns).text = task_end.isoformat()
+                            # Calculate duration from start to finish dates
+                            duration_minutes = int((task_end - task_start).total_seconds() / 60)
+                            ET.SubElement(task, "{%s}ManualDuration" % ns).text = f"PT{duration_minutes}M"
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                            logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start/finish/duration")
+                        elif has_gantt_start:
+                            # Only start date from Gantt: Lock start date only
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "1"
+                            # CRITICAL: Add ManualStart to lock start date in Workfront
+                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
+                            # ManualFinish and ManualDuration not set - will use standard fields
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
+                            logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start")
                         else:
-                            # ASAP - let predecessors or project start drive timing
-                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
-                            ET.SubElement(task, "{%s}Manual" % ns).text = "0"  # Auto-scheduled
-                            logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0) - no timeline start, using calculated date")
+                            # No Gantt dates: ASAP scheduling (auto-scheduled)
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "0"
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
                         
                         # Add cost if available and accumulate into component and deliverable totals
                         price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
@@ -1469,13 +1139,12 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
-                # FIX: Calculate component summary duration using WORKING minutes (not calendar)
-                # This prevents Workfront from collapsing summary tasks to zero duration
-                component_start = current_date  # Set at line 983
-                duration_minutes = calculate_working_minutes_between(component_start, component_finish)
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
+                # Update component summary with calculated duration
+                # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+                # This prevents Duration=PT0M when component_start == component_finish
+                component_duration_minutes = int((component_finish - component_start).total_seconds() / 60)
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{component_duration_minutes}M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
-                logging.info(f"[DURATION] Component '{component_name}': {duration_minutes} working minutes ({component_start.isoformat()} → {component_finish.isoformat()})")
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
@@ -1507,12 +1176,12 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
-            # FIX: Calculate deliverable summary duration using WORKING minutes (not calendar)
-            # This prevents Workfront from collapsing summary tasks to zero duration
-            duration_minutes = calculate_working_minutes_between(deliverable_start_date, deliverable_finish)
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
+            # Update deliverable summary with calculated duration
+            # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
+            # This prevents Duration=PT0M when dates match or business hours = 0
+            deliverable_duration_minutes = int((deliverable_finish - deliverable_start).total_seconds() / 60)
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{deliverable_duration_minutes}M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
-            logging.info(f"[DURATION] Deliverable '{deliverable_name}': {duration_minutes} working minutes ({deliverable_start_date.isoformat()} → {deliverable_finish.isoformat()})")
             deliverable_ends[deliverable_name] = deliverable_finish
             
             # Add aggregated cost/revenue to deliverable summary task
@@ -1773,85 +1442,6 @@ def convert_excel_to_mspdi(
                             ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "12"  # Minutes
                             break
     
-    # CRITICAL: Roll up work hours from leaf tasks to summary tasks (components/deliverables)
-    # This ensures Workfront displays correct hours for all hierarchy levels
-    logging.info("[SUMMARY ROLLUP] Calculating work hours for summary tasks from children")
-    
-    # Get all Task elements from the Tasks container
-    tasks_container = root.find("{%s}Tasks" % ns)
-    all_task_elements = tasks_container.findall("{%s}Task" % ns)
-    
-    # Build UID to task element mapping for quick lookup
-    uid_to_task_elem = {}
-    for task_elem in all_task_elements:
-        task_uid_elem = task_elem.find("{%s}UID" % ns)
-        if task_uid_elem is not None:
-            uid_to_task_elem[int(task_uid_elem.text)] = task_elem
-    
-    # Process tasks in reverse order (bottom-up: level 3 → level 2 → level 1 → level 0)
-    # Level 3 (leaf tasks) already have Work hours populated
-    # Roll up to level 2 (components), then level 1 (deliverables), then level 0 (project)
-    for outline_level in [2, 1, 0]:
-        for task_elem in all_task_elements:
-            level_elem = task_elem.find("{%s}OutlineLevel" % ns)
-            if level_elem is None or int(level_elem.text) != outline_level:
-                continue
-            
-            summary_elem = task_elem.find("{%s}Summary" % ns)
-            if summary_elem is None or summary_elem.text != "1":
-                continue  # Skip non-summary tasks
-            
-            # This is a summary task - sum up children's work hours
-            task_uid = int(task_elem.find("{%s}UID" % ns).text)
-            task_name = task_elem.find("{%s}Name" % ns).text
-            task_wbs = task_elem.find("{%s}WBS" % ns).text
-            
-            # Find all child tasks (WBS starts with this task's WBS + ".")
-            total_work_minutes = 0
-            child_count = 0
-            
-            for potential_child in all_task_elements:
-                child_wbs_elem = potential_child.find("{%s}WBS" % ns)
-                if child_wbs_elem is None:
-                    continue
-                
-                child_wbs = child_wbs_elem.text
-                # Check if child (e.g., "1.2.3") starts with parent WBS + "." (e.g., "1.2.")
-                if child_wbs.startswith(task_wbs + "."):
-                    # This is a direct child - extract its work hours
-                    child_work_elem = potential_child.find("{%s}Work" % ns)
-                    if child_work_elem is not None and child_work_elem.text:
-                        work_str = child_work_elem.text.replace("PT", "").replace("M", "")
-                        if work_str.isdigit():
-                            total_work_minutes += int(work_str)
-                            child_count += 1
-            
-            # Update summary task's Work elements
-            if total_work_minutes > 0:
-                work_iso8601 = f"PT{total_work_minutes}M"
-                
-                # Find and update Work element
-                work_elem = task_elem.find("{%s}Work" % ns)
-                if work_elem is not None:
-                    work_elem.text = work_iso8601
-                
-                # Find and update RegularWork element (if exists)
-                regular_work_elem = task_elem.find("{%s}RegularWork" % ns)
-                if regular_work_elem is not None:
-                    regular_work_elem.text = work_iso8601
-                
-                # Find and update RemainingWork element (if exists)
-                remaining_work_elem = task_elem.find("{%s}RemainingWork" % ns)
-                if remaining_work_elem is not None:
-                    remaining_work_elem.text = work_iso8601
-                
-                total_hours = total_work_minutes / 60
-                logging.info(f"[SUMMARY ROLLUP] Level {outline_level} '{task_name}' (WBS={task_wbs}): {child_count} children = {total_hours}h ({work_iso8601})")
-            else:
-                logging.warning(f"[SUMMARY ROLLUP] Level {outline_level} '{task_name}' (WBS={task_wbs}): No children with work hours found")
-    
-    logging.info("[SUMMARY ROLLUP] Summary work hour rollup complete")
-    
     # Create Assignments container with enhanced resource assignments
     assignments = ET.SubElement(root, "{%s}Assignments" % ns)
     assignment_uid = 1
@@ -1860,10 +1450,11 @@ def convert_excel_to_mspdi(
     for uid, task_data in task_map.items():
         task = task_data["task"]
         
-        # Get task hours using centralized parser (handles both PTxxxM and PTxxHxxMxxS formats)
+        # Get task hours
         work_elem = task.find("{%s}Work" % ns)
         if work_elem is not None and work_elem.text:
-            work_hours = parse_iso8601_duration(work_elem.text)
+            work_minutes = int(work_elem.text.replace("PT", "").replace("M", ""))
+            work_hours = work_minutes / 60
         else:
             work_hours = 8.0
         
@@ -1875,10 +1466,9 @@ def convert_excel_to_mspdi(
             ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
             ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
             ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
-            # GPT-5 Pro: Use minutes format (PT*M) for Workfront compatibility
-            ET.SubElement(assign, "{%s}Work" % ns).text = work_hours_to_minutes(work_hours)
-            ET.SubElement(assign, "{%s}RegularWork" % ns).text = work_hours_to_minutes(work_hours)
-            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = work_hours_to_minutes(work_hours)
+            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{int(work_hours * 60)}M"
+            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{int(work_hours * 60)}M"
             ET.SubElement(assign, "{%s}Start" % ns).text = task.find("{%s}Start" % ns).text
             ET.SubElement(assign, "{%s}Finish" % ns).text = task.find("{%s}Finish" % ns).text
             ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
@@ -2096,30 +1686,14 @@ def convert_excel_to_mspdi(
             except (ValueError, AttributeError) as e:
                 logging.warning(f"[WORK AGGREGATION] Failed to parse assignment work: {e}")
     
-    # Update task Work elements with aggregated totals (ONLY for leaf tasks, NOT summary tasks)
-    # Summary tasks (deliverables/components) should roll up hours from children naturally
+    # Update task Work elements with aggregated totals
     updated_tasks = 0
-    skipped_summary_tasks = 0
-    
     for task_elem in tasks.findall("{%s}Task" % ns):
         task_uid_elem = task_elem.find("{%s}UID" % ns)
         if task_uid_elem is not None:
             try:
                 task_uid_val = int(task_uid_elem.text)
                 if task_uid_val in task_work_totals:
-                    # Check if this is a summary task (has children)
-                    summary_elem = task_elem.find("{%s}Summary" % ns)
-                    is_summary = summary_elem is not None and summary_elem.text == "1"
-                    
-                    if is_summary:
-                        # SKIP summary tasks - they will roll up from children
-                        task_name_elem = task_elem.find("{%s}Name" % ns)
-                        task_name = task_name_elem.text if task_name_elem is not None else f"UID={task_uid_val}"
-                        logging.info(f"[WORK AGGREGATION] SKIPPING summary task '{task_name}' (UID={task_uid_val}) - will roll up from children")
-                        skipped_summary_tasks += 1
-                        continue
-                    
-                    # Update ONLY leaf tasks (non-summary tasks)
                     total_minutes = task_work_totals[task_uid_val]
                     
                     # Find and update existing Work element
@@ -2128,178 +1702,11 @@ def convert_excel_to_mspdi(
                         old_value = work_elem.text
                         work_elem.text = f"PT{total_minutes}M"
                         updated_tasks += 1
-                        
-                        task_name_elem = task_elem.find("{%s}Name" % ns)
-                        task_name = task_name_elem.text if task_name_elem is not None else f"UID={task_uid_val}"
-                        logging.info(f"[WORK AGGREGATION] Updated leaf task '{task_name}' (UID={task_uid_val}): {old_value} -> PT{total_minutes}M ({total_minutes/60:.1f} hours)")
+                        logging.debug(f"[WORK AGGREGATION] Task UID={task_uid_val}: {old_value} -> PT{total_minutes}M")
             except (ValueError, AttributeError) as e:
                 logging.warning(f"[WORK AGGREGATION] Failed to update task work: {e}")
     
-    logging.info(f"[WORK AGGREGATION] ========== SUMMARY ==========")
-    logging.info(f"[WORK AGGREGATION] Updated Work for {updated_tasks} LEAF tasks")
-    logging.info(f"[WORK AGGREGATION] Skipped {skipped_summary_tasks} SUMMARY tasks (will roll up from children)")
-    logging.info(f"[WORK AGGREGATION] Total tasks with assignments: {len(task_work_totals)}")
-    logging.info(f"[WORK AGGREGATION] ================================")
-    
-    # FIX: Create fallback assignments for tasks without any assignments
-    # This ensures all tasks show hours in Workfront (Workfront reads Assignment.Work, not Task.Work)
-    logging.info("[FALLBACK ASSIGNMENTS] Creating assignments for tasks without role-specific assignments...")
-    
-    # Find first available resource UID (prioritize role resources, then departments)
-    fallback_resource_uid = None
-    if len(resource_uid_map) > 0:
-        # Use first role-based resource
-        fallback_resource_uid = next(iter(resource_uid_map.values()))
-    elif len(department_resources) > 0:
-        # Use first department resource
-        fallback_resource_uid = next(iter(department_resources.values()))
-    elif len(resource_map) > 0:
-        # Use first generic resource
-        fallback_resource_uid = 1
-    
-    if fallback_resource_uid is None:
-        logging.warning("[FALLBACK ASSIGNMENTS] No resources available - cannot create fallback assignments")
-    else:
-        logging.info(f"[FALLBACK ASSIGNMENTS] Using resource UID {fallback_resource_uid} for fallback assignments")
-    
-    fallback_assignments_created = 0
-    
-    for task_elem in tasks.findall("{%s}Task" % ns):
-        task_uid_elem = task_elem.find("{%s}UID" % ns)
-        if task_uid_elem is None:
-            continue
-            
-        task_uid_val = int(task_uid_elem.text)
-        
-        # Skip if this task already has assignments
-        if task_uid_val in task_work_totals:
-            continue
-        
-        # Skip summary tasks (they roll up from children)
-        summary_elem = task_elem.find("{%s}Summary" % ns)
-        if summary_elem is not None and summary_elem.text == "1":
-            continue
-        
-        # Get task hours
-        work_elem = task_elem.find("{%s}Work" % ns)
-        if work_elem is None or not work_elem.text:
-            continue
-            
-        work_text = work_elem.text
-        if work_text == "PT0M":
-            continue  # Skip tasks with 0 hours
-        
-        # Parse work hours
-        try:
-            work_minutes = 0
-            if work_text and work_text.startswith("PT"):
-                if "M" in work_text:
-                    minutes_part = work_text.split("M")[0]
-                    if "H" in minutes_part:
-                        hours_part = minutes_part.split("H")[0].replace("PT", "")
-                        mins_part = minutes_part.split("H")[1]
-                        work_minutes = int(hours_part) * 60 + int(mins_part)
-                    else:
-                        work_minutes = int(minutes_part.replace("PT", ""))
-                elif "H" in work_text:
-                    hours_part = work_text.replace("PT", "").replace("H", "")
-                    work_minutes = int(hours_part) * 60
-            
-            if work_minutes == 0:
-                continue
-            
-            # Create fallback assignment using first available resource
-            if fallback_resource_uid is not None:
-                assign = ET.SubElement(assignments, "{%s}Assignment" % ns)
-                ET.SubElement(assign, "{%s}UID" % ns).text = str(assignment_uid)
-                ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(task_uid_val)
-                ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(fallback_resource_uid)
-                ET.SubElement(assign, "{%s}Units" % ns).text = "100"
-                ET.SubElement(assign, "{%s}Work" % ns).text = work_text
-                ET.SubElement(assign, "{%s}RegularWork" % ns).text = work_text
-                ET.SubElement(assign, "{%s}RemainingWork" % ns).text = work_text
-                
-                # Get task start/finish dates
-                task_start_elem = task_elem.find("{%s}Start" % ns)
-                task_finish_elem = task_elem.find("{%s}Finish" % ns)
-                if task_start_elem is not None:
-                    ET.SubElement(assign, "{%s}Start" % ns).text = task_start_elem.text
-                if task_finish_elem is not None:
-                    ET.SubElement(assign, "{%s}Finish" % ns).text = task_finish_elem.text
-                
-                # Standard assignment properties
-                ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
-                ET.SubElement(assign, "{%s}FinishVariance" % ns).text = "0"
-                ET.SubElement(assign, "{%s}WorkVariance" % ns).text = "0"
-                ET.SubElement(assign, "{%s}HasFixedRateUnits" % ns).text = "1"
-                ET.SubElement(assign, "{%s}FixedMaterial" % ns).text = "0"
-                ET.SubElement(assign, "{%s}OverAllocated" % ns).text = "0"
-                ET.SubElement(assign, "{%s}Cost" % ns).text = str((work_minutes / 60) * (blended_rate or 150))
-                ET.SubElement(assign, "{%s}BCWS" % ns).text = "0"
-                ET.SubElement(assign, "{%s}BCWP" % ns).text = "0"
-                
-                assignment_uid += 1
-                fallback_assignments_created += 1
-                
-                task_name = task_elem.find("{%s}Name" % ns)
-                task_name_text = task_name.text if task_name is not None else "Unknown"
-                logging.info(f"[FALLBACK ASSIGNMENTS] Created assignment for task '{task_name_text}' (UID={task_uid_val}): {work_text}")
-        
-        except Exception as e:
-            logging.warning(f"[FALLBACK ASSIGNMENTS] Failed to create fallback assignment for task UID={task_uid_val}: {e}")
-    
-    logging.info(f"[FALLBACK ASSIGNMENTS] Created {fallback_assignments_created} fallback assignments")
-    
-    # GPT-5 Pro: PRE-EXPORT VALIDATION - Fail build if any task falls on weekend/holiday
-    from business_calendar import BusinessCalendar
-    logging.info("[PRE-EXPORT VALIDATION] Checking all task dates against TCG holiday calendar...")
-    
-    invalid_tasks = []
-    all_tasks = root.findall(".//{%s}Task" % ns)
-    
-    for task_elem in all_tasks:
-        task_name_elem = task_elem.find("{%s}Name" % ns)
-        task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
-        
-        # Skip summary tasks (they auto-calculate from children)
-        summary_elem = task_elem.find("{%s}Summary" % ns)
-        if summary_elem is not None and summary_elem.text == "1":
-            continue
-        
-        # Check Start date
-        start_elem = task_elem.find("{%s}Start" % ns)
-        if start_elem is not None and start_elem.text:
-            try:
-                start_date = datetime.fromisoformat(start_elem.text.replace('Z', '+00:00'))
-                if not BusinessCalendar.is_business_day(start_date):
-                    invalid_tasks.append(f"'{task_name}' starts on {start_date.strftime('%Y-%m-%d %A')} (non-working day)")
-            except Exception as e:
-                logging.warning(f"[PRE-EXPORT VALIDATION] Could not parse Start date for task '{task_name}': {e}")
-        
-        # Check Finish date
-        finish_elem = task_elem.find("{%s}Finish" % ns)
-        if finish_elem is not None and finish_elem.text:
-            try:
-                finish_date = datetime.fromisoformat(finish_elem.text.replace('Z', '+00:00'))
-                if not BusinessCalendar.is_business_day(finish_date):
-                    invalid_tasks.append(f"'{task_name}' ends on {finish_date.strftime('%Y-%m-%d %A')} (non-working day)")
-            except Exception as e:
-                logging.warning(f"[PRE-EXPORT VALIDATION] Could not parse Finish date for task '{task_name}': {e}")
-    
-    # FAIL THE BUILD if any invalid tasks found
-    if invalid_tasks:
-        error_msg = (
-            "❌ PRE-EXPORT VALIDATION FAILED: Tasks scheduled on weekends or holidays detected!\n"
-            f"Found {len(invalid_tasks)} invalid task date(s):\n" +
-            "\n".join(f"  - {task}" for task in invalid_tasks[:10]) +  # Show first 10
-            (f"\n  ... and {len(invalid_tasks) - 10} more" if len(invalid_tasks) > 10 else "") +
-            "\n\nAll tasks must be scheduled on business days (Mon-Fri, excluding TCG holidays).\n"
-            "Fix: Update task scheduling logic to skip weekends and holidays."
-        )
-        logging.error(error_msg)
-        raise ValueError(error_msg)
-    
-    logging.info(f"[PRE-EXPORT VALIDATION] ✅ All {len([t for t in all_tasks if t.find('{%s}Summary' % ns) is None or t.find('{%s}Summary' % ns).text != '1'])} non-summary tasks fall on valid business days")
+    logging.info(f"[WORK AGGREGATION] Updated Work for {updated_tasks} tasks based on {len(task_work_totals)} tasks with assignments")
     
     # Write the XML file
     tree = ET.ElementTree(root)
@@ -2376,7 +1783,7 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"
     ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = "0"
     ET.SubElement(root, "{%s}DefaultOvertimeRate" % ns).text = "0"
-    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "7"  # Days
+    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "7"
     ET.SubElement(root, "{%s}WorkFormat" % ns).text = "2"
     
     # Add empty containers
@@ -2396,7 +1803,7 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(project_task, "{%s}OutlineLevel" % ns).text = "0"
     ET.SubElement(project_task, "{%s}Priority" % ns).text = "500"
     ET.SubElement(project_task, "{%s}Duration" % ns).text = "PT0M"
-    ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "7"
+    ET.SubElement(project_task, "{%s}DurationFormat" % ns).text = "53"
     ET.SubElement(project_task, "{%s}Work" % ns).text = "PT0M"
     ET.SubElement(project_task, "{%s}Summary" % ns).text = "1"
     
@@ -2406,29 +1813,32 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
 
 
 def add_business_days(start_date: datetime, days: int) -> datetime:
-    """
-    Add business days to a date, skipping weekends AND holidays.
+    """Add business days to a date, skipping weekends"""
+    current = start_date
+    days_added = 0
     
-    DEPRECATED: Use BusinessCalendar.add_business_days() directly instead.
-    This wrapper exists for backwards compatibility only.
-    """
-    return BusinessCalendar.add_business_days(start_date, days)
+    while days_added < days:
+        current += timedelta(days=1)
+        if current.weekday() < 5:  # Monday = 0, Friday = 4
+            days_added += 1
+    
+    return current
 
 
 def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
-    """
-    Calculate business hours between two dates.
-    
-    Now uses BusinessCalendar to properly count only business days (excluding holidays).
-    """
+    """Calculate business hours between two dates"""
     if end_date <= start_date:
         return 0.0
     
-    # Use BusinessCalendar to count only business days (excludes weekends AND holidays)
-    business_days = BusinessCalendar.business_days_between(start_date, end_date)
+    current = start_date
+    total_hours = 0.0
     
-    # 8 hours per business day
-    return float(business_days * 8.0)
+    while current < end_date:
+        if current.weekday() < 5:  # Business day
+            total_hours += 8.0  # 8 hours per business day
+        current += timedelta(days=1)
+    
+    return total_hours
 
 
 if __name__ == "__main__":
