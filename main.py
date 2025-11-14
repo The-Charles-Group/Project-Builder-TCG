@@ -1741,12 +1741,8 @@ class AgencyDB:
         else:
             start_date = datetime.date.today()
         
-        # Build business day calendar with US/MX holidays
-        year = start_date.year
-        holidays = _get_us_mx_holidays(year)
-        # Also get holidays for next year in case project spans years
-        if start_date.month >= 10:  # If starting in Q4, include next year's holidays
-            holidays.extend(_get_us_mx_holidays(year + 1))
+        # GPT-5 Pro: Use BusinessCalendar with full TCG holiday calendar
+        from business_calendar import BusinessCalendar
 
         # Task 7: Build dependencies between task groups
         dependencies = self._build_task_dependencies(tgs, slack_after_internal, slack_after_client)
@@ -1773,7 +1769,8 @@ class AgencyDB:
         active_tasks_by_date = {}  # date_str -> count of active tasks
         
         # Build schedule with dependencies and resource leveling
-        cursor = np.datetime64(start_date)
+        # GPT-5 Pro: Use datetime.datetime instead of np.datetime64
+        cursor = datetime.datetime.combine(start_date, datetime.time(9, 0))
         rows = []
         task_end_dates = {}  # task_group -> end_date (for dependency calculation)
         
@@ -1797,8 +1794,9 @@ class AgencyDB:
                     
                     if dep["type"] == "FS":
                         # Finish-to-Start: start after predecessor ends + lag
+                        # GPT-5 Pro: Use BusinessCalendar instead of np.busday_offset
                         lag_days = dep.get("lag_days", 0)
-                        actual_start = np.busday_offset(pred_end, lag_days, roll='forward', holidays=holidays)
+                        actual_start = BusinessCalendar.add_business_days(pred_end, lag_days)
                     
                     elif dep["type"] == "SS":
                         # Start-to-Start: start when predecessor is X% complete
@@ -1806,17 +1804,19 @@ class AgencyDB:
                         if pred_tg in rows:
                             pred_row = next((r for r in rows if r["task_group"] == pred_tg), None)
                             if pred_row:
-                                pred_start = np.datetime64(pred_row["start_date"])
+                                # GPT-5 Pro: Parse datetime from string instead of np.datetime64
+                                pred_start = datetime.datetime.fromisoformat(pred_row["start_date"])
                                 pred_duration = pred_row["duration_days"]
                                 lag_days = int(pred_duration * lag_pct)
-                                actual_start = np.busday_offset(pred_start, lag_days, roll='forward', holidays=holidays)
+                                actual_start = BusinessCalendar.add_business_days(pred_start, lag_days)
             
             # Task 6: Resource leveling - check if we're over capacity
             # If too many tasks running in parallel, push start forward
-            start_candidate = np.busday_offset(actual_start, 0, roll='forward', holidays=holidays)
+            # GPT-5 Pro: Use BusinessCalendar instead of np.busday_offset
+            start_candidate = BusinessCalendar.add_business_days(actual_start, 0)
             while True:
                 # Check how many tasks are active on this date
-                date_str = str(start_candidate)
+                date_str = start_candidate.date().isoformat()
                 active_count = active_tasks_by_date.get(date_str, 0)
                 
                 if active_count < max_parallel:
@@ -1825,22 +1825,24 @@ class AgencyDB:
                     break
                 else:
                     # Over capacity - try next business day
-                    start_candidate = np.busday_offset(start_candidate, 1, roll='forward', holidays=holidays)
+                    start_candidate = BusinessCalendar.add_business_days(start_candidate, 1)
             
-            # Calculate end date
-            start = np.busday_offset(actual_start, 0, roll='forward', holidays=holidays)
-            end = np.busday_offset(start, business_days_needed, roll='forward', holidays=holidays)
+            # Calculate end date using BusinessCalendar
+            start = BusinessCalendar.add_business_days(actual_start, 0)
+            # Duration is inclusive: 1 day = same day start/end at 18:00, so subtract 1
+            end = BusinessCalendar.add_business_days(start, business_days_needed - 1)
+            end = end.replace(hour=18, minute=0, second=0, microsecond=0)
             
             # Task 6: Track active tasks for resource leveling
             current_date = start
-            while current_date < end:
-                date_str = str(current_date)
+            while current_date.date() < end.date():
+                date_str = current_date.date().isoformat()
                 active_tasks_by_date[date_str] = active_tasks_by_date.get(date_str, 0) + 1
-                current_date = np.busday_offset(current_date, 1, roll='forward', holidays=holidays)
+                current_date = BusinessCalendar.add_business_days(current_date, 1)
             
-            # Convert numpy dates back to strings for JSON serialization
-            start_str = str(start)
-            end_str = str(end)
+            # Convert datetime to ISO strings for JSON serialization
+            start_str = start.isoformat()
+            end_str = end.isoformat()
             
             # Get resource assignments for this task
             resources_assigned = []
@@ -1883,10 +1885,11 @@ class AgencyDB:
             cursor = end
 
             # Slack after reviews (in business days)
+            # GPT-5 Pro: Use BusinessCalendar instead of np.busday_offset
             if use_slack and tg == "internal_review":
-                cursor = np.busday_offset(cursor, int(slack_after_internal), roll='forward', holidays=holidays)
+                cursor = BusinessCalendar.add_business_days(cursor, int(slack_after_internal))
             if use_slack and tg == "client_review":
-                cursor = np.busday_offset(cursor, int(slack_after_client), roll='forward', holidays=holidays)
+                cursor = BusinessCalendar.add_business_days(cursor, int(slack_after_client))
 
         return rows
 
