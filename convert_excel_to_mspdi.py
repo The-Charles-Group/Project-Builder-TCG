@@ -22,24 +22,28 @@ logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 def hours_to_iso8601_duration(hours: float) -> str:
     """
-    Convert decimal hours to ISO8601 duration format for MSPDI.
+    Convert decimal hours to ISO8601 duration format for MSPDI (HOURS format for Workfront compatibility).
     
     Args:
         hours: Decimal hours (e.g., 4.5 for 4 hours 30 minutes)
         
     Returns:
-        ISO8601 duration string (e.g., "PT270M" for 4.5 hours)
+        ISO8601 duration string in HOURS format (e.g., "PT4H30M0S" for 4.5 hours)
         
     Examples:
-        4.0 hours → PT240M
-        8.5 hours → PT510M
-        0.5 hours → PT30M
+        4.0 hours → PT4H0M0S
+        8.5 hours → PT8H30M0S
+        0.5 hours → PT0H30M0S
+        
+    Note: Workfront/MS Project requires PT format in HOURS (PTxxHxxMxxS), not minutes (PTxxM),
+    to correctly interpret durations based on working calendar (8-hour workdays).
     """
     if hours <= 0:
-        return "PT0M"
+        return "PT0H0M0S"
     
-    total_minutes = int(hours * 60)
-    return f"PT{total_minutes}M"
+    whole_hours = int(hours)
+    remaining_minutes = int((hours - whole_hours) * 60)
+    return f"PT{whole_hours}H{remaining_minutes}M0S"
 
 
 class DependencyType(Enum):
@@ -1167,10 +1171,9 @@ def convert_excel_to_mspdi(
                         task_uid -= 1  # Decrement to maintain correct count
                 
                 # Update component summary with calculated duration
-                # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
-                # This prevents Duration=PT0M when component_start == component_finish
-                component_duration_minutes = int((component_finish - component_start).total_seconds() / 60)
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{component_duration_minutes}M"
+                # FIX: Calculate Duration from actual time span (Finish - Start), converted to hours format for Workfront
+                component_duration_hours = (component_finish - component_start).total_seconds() / 3600
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = hours_to_iso8601_duration(component_duration_hours)
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task

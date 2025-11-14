@@ -18,22 +18,42 @@ from datetime import date, time, timedelta
 from typing import Union
 import numpy as np
 
-# US/MX Holiday Calendar (existing holidays from main.py)
+# TCG 2025-2026 Holiday Calendar
 # These dates are excluded from business day calculations
 US_MX_HOLIDAYS = [
-    # 2025 Holidays
+    # 2025 TCG Holidays
     date(2025, 1, 1),   # New Year's Day
+    date(2025, 1, 20),  # Martin Luther King, Jr. Day
+    date(2025, 2, 17),  # Presidents Day
     date(2025, 5, 26),  # Memorial Day
+    date(2025, 6, 19),  # Juneteenth National Independence Day
     date(2025, 7, 4),   # Independence Day
-    date(2025, 9, 1),   # Labor Day
-    date(2025, 11, 27), # Thanksgiving
-    date(2025, 12, 25), # Christmas
-    # 2026 Holidays
-    date(2026, 1, 1),   # New Year's Day
-    date(2026, 5, 25),  # Memorial Day
-    date(2026, 7, 4),   # Independence Day (observed)
-    date(2026, 9, 7),   # Labor Day
-    date(2026, 11, 26), # Thanksgiving
+    date(2025, 8, 28),  # Mental Health Break - Thu
+    date(2025, 8, 29),  # Mental Health Break - Fri
+    date(2025, 9, 1),   # Labor Day (also end of Mental Health Break)
+    date(2025, 10, 13), # Indigenous People Day
+    date(2025, 11, 27), # Thanksgiving Day
+    date(2025, 11, 28), # Day After Thanksgiving
+    date(2025, 12, 22), # Holiday Break starts
+    date(2025, 12, 23), # Holiday Break
+    date(2025, 12, 24), # Holiday Break
+    date(2025, 12, 25), # Christmas Day
+    date(2025, 12, 26), # Holiday Break
+    date(2025, 12, 29), # Holiday Break
+    date(2025, 12, 30), # Holiday Break
+    date(2025, 12, 31), # Holiday Break
+    date(2026, 1, 1),   # New Year's Day (Holiday Break)
+    date(2026, 1, 2),   # Manager Regroup (half-day, marked as full holiday for safety)
+    # 2026 TCG Holidays (repeating pattern)
+    date(2026, 1, 19),  # Martin Luther King, Jr. Day (estimated)
+    date(2026, 2, 16),  # Presidents Day (estimated)
+    date(2026, 5, 25),  # Memorial Day (estimated)
+    date(2026, 6, 19),  # Juneteenth National Independence Day
+    date(2026, 7, 3),   # Independence Day observed (estimated)
+    date(2026, 9, 7),   # Labor Day (estimated)
+    date(2026, 10, 12), # Indigenous People Day (estimated)
+    date(2026, 11, 26), # Thanksgiving (estimated)
+    date(2026, 11, 27), # Day After Thanksgiving (estimated)
     date(2026, 12, 25), # Christmas
 ]
 
