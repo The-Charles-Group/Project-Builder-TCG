@@ -39,11 +39,13 @@ US_MX_HOLIDAYS = [
     date(2025, 12, 24), # Holiday Break
     date(2025, 12, 25), # Christmas Day
     date(2025, 12, 26), # Holiday Break
+    date(2025, 12, 27), # Holiday Break (ADDED - was missing)
+    date(2025, 12, 28), # Holiday Break (ADDED - was missing)
     date(2025, 12, 29), # Holiday Break
     date(2025, 12, 30), # Holiday Break
     date(2025, 12, 31), # Holiday Break
     date(2026, 1, 1),   # New Year's Day (Holiday Break)
-    date(2026, 1, 2),   # Manager Regroup (half-day, marked as full holiday for safety)
+    date(2026, 1, 2),   # Manager Regroup / Return prep day
     # 2026 TCG Holidays (repeating pattern)
     date(2026, 1, 19),  # Martin Luther King, Jr. Day (estimated)
     date(2026, 2, 16),  # Presidents Day (estimated)
@@ -57,11 +59,12 @@ US_MX_HOLIDAYS = [
     date(2026, 12, 25), # Christmas
 ]
 
-# Business hours blocks: 8-12 (4h) and 13-17 (4h) = 8 hours/day
+# Business hours blocks: 9-13 (4h) and 14-18 (4h) = 8 hours/day
+# MUST match XML calendar exactly: 09:00-13:00, 14:00-18:00
 BUSINESS_HOURS_PER_DAY = 8
 WORK_BLOCKS = [
-    (time(8, 0), time(12, 0)),   # Morning: 4 hours
-    (time(13, 0), time(17, 0)),  # Afternoon: 4 hours
+    (time(9, 0), time(13, 0)),   # Morning: 4 hours
+    (time(14, 0), time(18, 0)),  # Afternoon: 4 hours
 ]
 
 
@@ -213,31 +216,31 @@ class BusinessCalendar:
         current = BusinessCalendar.next_business_day(start_datetime)
         remaining_hours = hours
         
-        # Start at beginning of workday if before 8am
-        if current.time() < time(8, 0):
-            current = datetime.datetime.combine(current.date(), time(8, 0))
-        # Start at 1pm if during lunch (12-1pm)
-        elif time(12, 0) <= current.time() < time(13, 0):
-            current = datetime.datetime.combine(current.date(), time(13, 0))
+        # Start at beginning of workday if before 9am
+        if current.time() < time(9, 0):
+            current = datetime.datetime.combine(current.date(), time(9, 0))
+        # Start at 2pm if during lunch (13:00-14:00)
+        elif time(13, 0) <= current.time() < time(14, 0):
+            current = datetime.datetime.combine(current.date(), time(14, 0))
         # Roll to next day if after work hours
-        elif current.time() >= time(17, 0):
+        elif current.time() >= time(18, 0):
             current = BusinessCalendar.add_business_days(current, 1)
-            current = datetime.datetime.combine(current.date(), time(8, 0))
+            current = datetime.datetime.combine(current.date(), time(9, 0))
         
         # Add hours block by block
         while remaining_hours > 0:
             # Determine current block
-            if time(8, 0) <= current.time() < time(12, 0):
-                block_end = time(12, 0)
-            elif time(13, 0) <= current.time() < time(17, 0):
-                block_end = time(17, 0)
+            if time(9, 0) <= current.time() < time(13, 0):
+                block_end = time(13, 0)
+            elif time(14, 0) <= current.time() < time(18, 0):
+                block_end = time(18, 0)
             else:
                 # Between blocks or after hours, jump to next block
-                if current.time() < time(13, 0):
-                    current = datetime.datetime.combine(current.date(), time(13, 0))
+                if current.time() < time(14, 0):
+                    current = datetime.datetime.combine(current.date(), time(14, 0))
                 else:
                     current = BusinessCalendar.add_business_days(current, 1)
-                    current = datetime.datetime.combine(current.date(), time(8, 0))
+                    current = datetime.datetime.combine(current.date(), time(9, 0))
                 continue
             
             # Calculate hours available in current block
@@ -254,11 +257,11 @@ class BusinessCalendar:
                 current = block_end_dt
                 
                 # Move to next block or next day
-                if current.time() == time(12, 0):
-                    current = datetime.datetime.combine(current.date(), time(13, 0))
+                if current.time() == time(13, 0):
+                    current = datetime.datetime.combine(current.date(), time(14, 0))
                 else:
                     current = BusinessCalendar.add_business_days(current, 1)
-                    current = datetime.datetime.combine(current.date(), time(8, 0))
+                    current = datetime.datetime.combine(current.date(), time(9, 0))
         
         return current
     

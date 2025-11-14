@@ -20,23 +20,65 @@ import random
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
 
-def hours_to_iso8601_duration(hours: float) -> str:
+def work_hours_to_minutes(hours: float) -> str:
     """
-    Convert decimal hours to ISO8601 duration format for MSPDI (HOURS format for Workfront compatibility).
+    Convert work hours directly to ISO8601 minutes format for Work/RemainingWork fields.
     
     Args:
-        hours: Decimal hours (e.g., 4.5 for 4 hours 30 minutes)
+        hours: Work hours (effort, e.g., 64 hours of effort)
         
     Returns:
-        ISO8601 duration string in HOURS format (e.g., "PT4H30M0S" for 4.5 hours)
+        ISO8601 duration string in MINUTES format (e.g., "PT3840M" for 64 hours)
         
     Examples:
-        4.0 hours → PT4H0M0S
-        8.5 hours → PT8H30M0S
-        0.5 hours → PT0H30M0S
+        64.0 hours → PT3840M
+        8.0 hours → PT480M
+        0.5 hours → PT30M
         
-    Note: Workfront/MS Project requires PT format in HOURS (PTxxHxxMxxS), not minutes (PTxxM),
-    to correctly interpret durations based on working calendar (8-hour workdays).
+    Note: GPT-5 Pro plan requires all Work fields in minutes format for Workfront compatibility.
+    """
+    if hours <= 0:
+        return "PT0M"
+    
+    minutes = int(hours * 60)
+    return f"PT{minutes}M"
+
+
+def work_hours_to_duration_minutes(work_hours: float) -> str:
+    """
+    Convert work hours to calendar duration in minutes using the GPT-5 Pro formula.
+    
+    Formula: duration_minutes = ceil(work_hours / 8) * 480
+    This converts work effort into working days, then to minutes.
+    
+    Args:
+        work_hours: Work hours (effort, e.g., 64 hours)
+        
+    Returns:
+        ISO8601 duration string in MINUTES format (e.g., "PT4320M" for 64 hours)
+        
+    Examples:
+        64 hours → ceil(64/8) * 480 = 8 * 480 = 3840M (8 working days)
+        20 hours → ceil(20/8) * 480 = 3 * 480 = 1440M (3 working days)
+        8 hours → ceil(8/8) * 480 = 1 * 480 = 480M (1 working day)
+        
+    Note: GPT-5 Pro plan specifies this formula to prevent duration/hours mismatches in Workfront.
+    """
+    if work_hours <= 0:
+        return "PT0M"
+    
+    import math
+    # Formula from GPT-5 Pro plan
+    working_days = math.ceil(work_hours / 8)
+    duration_minutes = working_days * 480  # 8 hours/day * 60 min/hour
+    return f"PT{duration_minutes}M"
+
+
+# Deprecated: Old hours format function (kept for reference, but should not be used)
+def hours_to_iso8601_duration_DEPRECATED(hours: float) -> str:
+    """
+    DEPRECATED: This function returns hours format which causes Workfront import issues.
+    Use work_hours_to_minutes() or work_hours_to_duration_minutes() instead.
     """
     if hours <= 0:
         return "PT0H0M0S"
@@ -160,18 +202,32 @@ def create_governance_milestone_task(
     # Mark as milestone if no hours
     if hours == 0:
         ET.SubElement(task, "{%s}Milestone" % ns).text = "1"
-        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0H0M0S"
+        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0M"  # GPT-5 Pro: Minutes format
     else:
         ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
-        duration_days = max(1, int(hours / 8))
-        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
+        # GPT-5 Pro: Use formula for duration
+        ET.SubElement(task, "{%s}Duration" % ns).text = work_hours_to_duration_minutes(hours)
     
-    # Set dates
+    # Set dates - MUST use BusinessCalendar to match Duration formula and avoid weekends/holidays
+    # Import here to avoid circular dependency
+    from business_calendar import BusinessCalendar
+    import math
+    
     ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
     if hours > 0:
-        end_date = milestone_date + timedelta(days=max(1, int(hours / 8)))
+        # Match the Duration formula: ceil(hours / 8) working days
+        # Finish time must be end of work day (18:00) on the last working day
+        working_days = math.ceil(hours / 8)
+        if working_days == 1:
+            # 1-day duration: same day, finish at 18:00
+            end_date = milestone_date.replace(hour=18, minute=0, second=0, microsecond=0)
+        else:
+            # Multi-day: advance (working_days - 1) business days, then set to 18:00
+            end_date = BusinessCalendar.add_business_days(milestone_date, working_days - 1)
+            end_date = end_date.replace(hour=18, minute=0, second=0, microsecond=0)
         ET.SubElement(task, "{%s}Finish" % ns).text = end_date.isoformat()
     else:
+        # Zero-hour milestone: start and finish on same day
         ET.SubElement(task, "{%s}Finish" % ns).text = milestone_date.isoformat()
     
     # Priority based on governance type
@@ -187,9 +243,9 @@ def create_governance_milestone_task(
     }
     ET.SubElement(task, "{%s}Priority" % ns).text = priority_map.get(governance_type, "500")
     
-    # Work and duration format
-    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "39"  # Hours
-    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{hours}H0M0S"
+    # Work and duration format - GPT-5 Pro: Minutes format
+    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "53"  # Minutes (was 39=Hours)
+    ET.SubElement(task, "{%s}Work" % ns).text = work_hours_to_minutes(hours)
     ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
     ET.SubElement(task, "{%s}Summary" % ns).text = "0"
     ET.SubElement(task, "{%s}Critical" % ns).text = "0"
@@ -342,7 +398,7 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"  # Prorated
     ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = f"{blended_rate or 150:.2f}"
     ET.SubElement(root, "{%s}DefaultOvertimeRate" % ns).text = f"{(blended_rate or 150) * 1.5:.2f}"
-    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "7"  # Days
+    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "53"  # Minutes (GPT-5 Pro requirement)
     ET.SubElement(root, "{%s}WorkFormat" % ns).text = "2"  # Hours
     ET.SubElement(root, "{%s}EditableActualCosts" % ns).text = "0"
     ET.SubElement(root, "{%s}HonorConstraints" % ns).text = "1"
@@ -452,6 +508,35 @@ def convert_excel_to_mspdi(
             ET.SubElement(wt2, "{%s}ToTime" % ns).text = "18:00:00"
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
+    
+    # Add TCG 2025-2026 holiday exceptions (non-working days)
+    # Using DayWorking=0 to mark these days as closures
+    exceptions = ET.SubElement(calendar, "{%s}Exceptions" % ns)
+    
+    # Define all company holidays and closures
+    tcg_holidays = [
+        # Single-day federal holidays (2025)
+        ("2025-01-01", "2025-01-01", "New Year's Day"),
+        ("2025-01-20", "2025-01-20", "MLK Day"),
+        ("2025-02-17", "2025-02-17", "Presidents Day"),
+        ("2025-05-26", "2025-05-26", "Memorial Day"),
+        ("2025-06-19", "2025-06-19", "Juneteenth"),
+        ("2025-07-04", "2025-07-04", "Independence Day"),
+        ("2025-10-13", "2025-10-13", "Indigenous People Day"),
+        
+        # Multi-day company closures
+        ("2025-08-28", "2025-09-01", "Mental Health Break"),
+        ("2025-11-27", "2025-11-28", "Thanksgiving"),
+        ("2025-12-22", "2026-01-02", "Holiday Break"),
+    ]
+    
+    # Create exception elements for each holiday period
+    for from_date, to_date, name in tcg_holidays:
+        exception = ET.SubElement(exceptions, "{%s}Exception" % ns)
+        ET.SubElement(exception, "{%s}FromDate" % ns).text = f"{from_date}T00:00:00"
+        ET.SubElement(exception, "{%s}ToDate" % ns).text = f"{to_date}T23:59:59"
+        ET.SubElement(exception, "{%s}DayWorking" % ns).text = "0"
+        ET.SubElement(exception, "{%s}Name" % ns).text = name
     
     # Create Resources container with enhanced resource definitions
     resources = ET.SubElement(root, "{%s}Resources" % ns)
@@ -767,8 +852,9 @@ def convert_excel_to_mspdi(
                 ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
                 logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
             
-            ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"
+            ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "53"  # Minutes format
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
+            ET.SubElement(deliv_task, "{%s}RemainingWork" % ns).text = "PT0M"  # GPT-5 Pro: Summary tasks
             ET.SubElement(deliv_task, "{%s}EffortDriven" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}Recurring" % ns).text = "0"
             ET.SubElement(deliv_task, "{%s}OverAllocated" % ns).text = "0"
@@ -896,8 +982,9 @@ def convert_excel_to_mspdi(
                 ET.SubElement(comp_task, "{%s}OutlineLevel" % ns).text = comp_outline_level
                 ET.SubElement(comp_task, "{%s}Priority" % ns).text = "500"
                 ET.SubElement(comp_task, "{%s}Start" % ns).text = current_date.isoformat()
-                ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "7"
+                ET.SubElement(comp_task, "{%s}DurationFormat" % ns).text = "53"  # Minutes format
                 ET.SubElement(comp_task, "{%s}Work" % ns).text = "PT0M"
+                ET.SubElement(comp_task, "{%s}RemainingWork" % ns).text = "PT0M"  # GPT-5 Pro: Summary tasks
                 ET.SubElement(comp_task, "{%s}EffortDriven" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}Recurring" % ns).text = "0"
                 ET.SubElement(comp_task, "{%s}OverAllocated" % ns).text = "0"
@@ -1057,22 +1144,21 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
                         ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
                         
-                        # FIX: Calculate Duration from actual time span (Finish - Start), converted to hours format for Workfront
-                        # This prevents invalid XML where Duration=PT0M but Start≠Finish (Workfront rejects this)
-                        # Duration = calendar time span, Work = effort hours (different concepts)
-                        duration_hours = (task_end - task_start).total_seconds() / 3600
-                        duration_iso8601 = hours_to_iso8601_duration(duration_hours)
+                        # GPT-5 Pro: Calculate Duration from Work hours using formula: ceil(work_hours / 8) * 480
+                        # This ensures Workfront's duration calculation matches our timeline exactly
+                        # Formula converts work effort into working days, then to minutes (1 day = 480 min)
+                        duration_iso8601 = work_hours_to_duration_minutes(hours)
                         ET.SubElement(task, "{%s}Duration" % ns).text = duration_iso8601
-                        ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
+                        ET.SubElement(task, "{%s}DurationFormat" % ns).text = "53"  # Minutes (changed from 7=Days)
                         
-                        # CRITICAL FIX: Populate Work hours from DataFrame to eliminate 0-hour tasks in Workfront
+                        # GPT-5 Pro: Populate Work hours in minutes format (direct conversion)
                         # Workfront reads Task.Work directly (not assignment aggregates) per MSPDI import behavior
-                        work_iso8601 = hours_to_iso8601_duration(hours)
+                        work_iso8601 = work_hours_to_minutes(hours)
                         ET.SubElement(task, "{%s}Work" % ns).text = work_iso8601
                         ET.SubElement(task, "{%s}RegularWork" % ns).text = work_iso8601
-                        logging.info(f"[WORK HOURS] Task '{task_name}': {hours}h → {work_iso8601}")
+                        logging.info(f"[WORK HOURS] Task '{task_name}': {hours}h → Duration={duration_iso8601}, Work={work_iso8601}")
                         
-                        # RemainingDuration must match Duration (same calendar time span)
+                        # RemainingDuration and RemainingWork match their non-remaining counterparts
                         ET.SubElement(task, "{%s}RemainingDuration" % ns).text = duration_iso8601
                         ET.SubElement(task, "{%s}RemainingWork" % ns).text = work_iso8601
                         ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
@@ -1095,8 +1181,8 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}BCWP" % ns).text = "0"
                         ET.SubElement(task, "{%s}PhysicalPercentComplete" % ns).text = "0"
                         ET.SubElement(task, "{%s}EarnedValueMethod" % ns).text = "0"
-                        ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0H0M0S"
-                        ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0H0M0S"
+                        ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0M"  # GPT-5 Pro: Minutes
+                        ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0M"  # GPT-5 Pro: Minutes
                         ET.SubElement(task, "{%s}Active" % ns).text = "1"
                         ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
                         ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
@@ -1222,9 +1308,9 @@ def convert_excel_to_mspdi(
                         task_uid -= 1  # Decrement to maintain correct count
                 
                 # Update component summary with calculated duration
-                # FIX: Calculate Duration from actual time span (Finish - Start), converted to hours format for Workfront
-                component_duration_hours = (component_finish - component_start).total_seconds() / 3600
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = hours_to_iso8601_duration(component_duration_hours)
+                # GPT-5 Pro: Duration will be auto-calculated by Workfront from children (set to 0 for summaries)
+                # Summary tasks should NOT have duration explicitly set from date spans
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
                 
                 # Add aggregated cost/revenue to component summary task
@@ -1258,9 +1344,9 @@ def convert_excel_to_mspdi(
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
             # Update deliverable summary with calculated duration
-            # FIX: Calculate Duration from actual time span (Finish - Start), converted to hours format for Workfront
-            deliverable_duration_hours = (deliverable_finish - deliverable_start).total_seconds() / 3600
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = hours_to_iso8601_duration(deliverable_duration_hours)
+            # GPT-5 Pro: Duration will be auto-calculated by Workfront from children (set to 0 for summaries)
+            # Summary tasks should NOT have duration explicitly set from date spans
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
@@ -1624,10 +1710,10 @@ def convert_excel_to_mspdi(
             ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
             ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
             ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
-            # CRITICAL: Use hours format (PTxxHxxMxxS) for Workfront compatibility
-            ET.SubElement(assign, "{%s}Work" % ns).text = hours_to_iso8601_duration(work_hours)
-            ET.SubElement(assign, "{%s}RegularWork" % ns).text = hours_to_iso8601_duration(work_hours)
-            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = hours_to_iso8601_duration(work_hours)
+            # GPT-5 Pro: Use minutes format (PT*M) for Workfront compatibility
+            ET.SubElement(assign, "{%s}Work" % ns).text = work_hours_to_minutes(work_hours)
+            ET.SubElement(assign, "{%s}RegularWork" % ns).text = work_hours_to_minutes(work_hours)
+            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = work_hours_to_minutes(work_hours)
             ET.SubElement(assign, "{%s}Start" % ns).text = task.find("{%s}Start" % ns).text
             ET.SubElement(assign, "{%s}Finish" % ns).text = task.find("{%s}Finish" % ns).text
             ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
@@ -1999,6 +2085,57 @@ def convert_excel_to_mspdi(
     
     logging.info(f"[FALLBACK ASSIGNMENTS] Created {fallback_assignments_created} fallback assignments")
     
+    # GPT-5 Pro: PRE-EXPORT VALIDATION - Fail build if any task falls on weekend/holiday
+    from business_calendar import BusinessCalendar
+    logging.info("[PRE-EXPORT VALIDATION] Checking all task dates against TCG holiday calendar...")
+    
+    invalid_tasks = []
+    all_tasks = root.findall(".//{%s}Task" % ns)
+    
+    for task_elem in all_tasks:
+        task_name_elem = task_elem.find("{%s}Name" % ns)
+        task_name = task_name_elem.text if task_name_elem is not None else "Unknown"
+        
+        # Skip summary tasks (they auto-calculate from children)
+        summary_elem = task_elem.find("{%s}Summary" % ns)
+        if summary_elem is not None and summary_elem.text == "1":
+            continue
+        
+        # Check Start date
+        start_elem = task_elem.find("{%s}Start" % ns)
+        if start_elem is not None and start_elem.text:
+            try:
+                start_date = datetime.fromisoformat(start_elem.text.replace('Z', '+00:00'))
+                if not BusinessCalendar.is_business_day(start_date):
+                    invalid_tasks.append(f"'{task_name}' starts on {start_date.strftime('%Y-%m-%d %A')} (non-working day)")
+            except Exception as e:
+                logging.warning(f"[PRE-EXPORT VALIDATION] Could not parse Start date for task '{task_name}': {e}")
+        
+        # Check Finish date
+        finish_elem = task_elem.find("{%s}Finish" % ns)
+        if finish_elem is not None and finish_elem.text:
+            try:
+                finish_date = datetime.fromisoformat(finish_elem.text.replace('Z', '+00:00'))
+                if not BusinessCalendar.is_business_day(finish_date):
+                    invalid_tasks.append(f"'{task_name}' ends on {finish_date.strftime('%Y-%m-%d %A')} (non-working day)")
+            except Exception as e:
+                logging.warning(f"[PRE-EXPORT VALIDATION] Could not parse Finish date for task '{task_name}': {e}")
+    
+    # FAIL THE BUILD if any invalid tasks found
+    if invalid_tasks:
+        error_msg = (
+            "❌ PRE-EXPORT VALIDATION FAILED: Tasks scheduled on weekends or holidays detected!\n"
+            f"Found {len(invalid_tasks)} invalid task date(s):\n" +
+            "\n".join(f"  - {task}" for task in invalid_tasks[:10]) +  # Show first 10
+            (f"\n  ... and {len(invalid_tasks) - 10} more" if len(invalid_tasks) > 10 else "") +
+            "\n\nAll tasks must be scheduled on business days (Mon-Fri, excluding TCG holidays).\n"
+            "Fix: Update task scheduling logic to skip weekends and holidays."
+        )
+        logging.error(error_msg)
+        raise ValueError(error_msg)
+    
+    logging.info(f"[PRE-EXPORT VALIDATION] ✅ All {len([t for t in all_tasks if t.find('{%s}Summary' % ns) is None or t.find('{%s}Summary' % ns).text != '1'])} non-summary tasks fall on valid business days")
+    
     # Write the XML file
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
@@ -2074,7 +2211,7 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.SubElement(root, "{%s}DefaultFixedCostAccrual" % ns).text = "2"
     ET.SubElement(root, "{%s}DefaultStandardRate" % ns).text = "0"
     ET.SubElement(root, "{%s}DefaultOvertimeRate" % ns).text = "0"
-    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "7"
+    ET.SubElement(root, "{%s}DurationFormat" % ns).text = "53"  # Minutes (GPT-5 Pro requirement)
     ET.SubElement(root, "{%s}WorkFormat" % ns).text = "2"
     
     # Add empty containers
