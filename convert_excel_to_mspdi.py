@@ -77,6 +77,79 @@ def work_hours_to_duration_minutes(work_hours: float) -> str:
     return f"PT{duration_minutes}M"
 
 
+def calculate_working_minutes_between(start: datetime, finish: datetime) -> int:
+    """
+    Calculate working minutes between two datetimes using day-by-day iteration.
+    Respects 9-12, 13-18 work blocks (8 hours/day) and skips weekends/holidays.
+    
+    Args:
+        start: Start datetime
+        finish: Finish datetime
+        
+    Returns:
+        Total working minutes (accurate for same-day and multi-day spans)
+        
+    Examples:
+        Same day: Mon 09:00 → Mon 18:00 = 480 minutes
+        Partial day: Mon 10:00 → Mon 15:00 = 120 + 120 = 240 minutes
+        Multi-day: Mon 09:00 → Tue 18:00 = 480 + 480 = 960 minutes
+        Cross-lunch: Mon 11:00 → Mon 14:00 = 60 + 60 = 120 minutes
+    """
+    from datetime import time, timedelta, date
+    
+    if finish <= start:
+        return 0
+    
+    def minutes_in_day(day_date: date, day_start: datetime, day_finish: datetime) -> int:
+        """Calculate working minutes for a single day"""
+        # Check if this day is a business day
+        if not BusinessCalendar.is_business_day(day_date):
+            return 0
+        
+        # Clamp times to this day and business hours (9-18)
+        day_start_time = day_start.time() if day_start.date() == day_date else time(9, 0)
+        day_finish_time = day_finish.time() if day_finish.date() == day_date else time(18, 0)
+        
+        # Clamp to business hours
+        if day_start_time < time(9, 0):
+            day_start_time = time(9, 0)
+        if day_start_time >= time(18, 0):
+            return 0
+        if day_finish_time > time(18, 0):
+            day_finish_time = time(18, 0)
+        if day_finish_time <= time(9, 0):
+            return 0
+        
+        total = 0
+        
+        # Morning block (9-12)
+        morning_start = max(day_start_time, time(9, 0))
+        morning_end = min(day_finish_time, time(12, 0))
+        if morning_start < morning_end:
+            total += int((datetime.combine(day_date, morning_end) - 
+                         datetime.combine(day_date, morning_start)).total_seconds() / 60)
+        
+        # Afternoon block (13-18)
+        afternoon_start = max(day_start_time, time(13, 0))
+        afternoon_end = min(day_finish_time, time(18, 0))
+        if afternoon_start < afternoon_end:
+            total += int((datetime.combine(day_date, afternoon_end) - 
+                         datetime.combine(day_date, afternoon_start)).total_seconds() / 60)
+        
+        return total
+    
+    # Iterate day-by-day from start to finish
+    total_minutes = 0
+    current_date = start.date()
+    finish_date = finish.date()
+    
+    while current_date <= finish_date:
+        total_minutes += minutes_in_day(current_date, start, finish)
+        current_date += timedelta(days=1)
+    
+    return max(0, total_minutes)
+
+
 # Deprecated: Old hours format function (kept for reference, but should not be used)
 def hours_to_iso8601_duration_DEPRECATED(hours: float) -> str:
     """
@@ -847,18 +920,9 @@ def convert_excel_to_mspdi(
                 if pd.notna(first_row_end):
                     has_gantt_end = True
             
-            # Apply constraint type
-            # NOTE: Manual tag removed for summary tasks - they auto-calculate from children
-            if has_gantt_start and has_gantt_end:
-                # Both dates from Gantt: Must Start On (locks start date, duration determines finish)
-                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
-            elif has_gantt_start:
-                # Only start date from Gantt: Must Start On
-                ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "2"
-                ET.SubElement(deliv_task, "{%s}ConstraintDate" % ns).text = deliverable_start_date.isoformat()
-                logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': Must Start On (Type 2)")
+            # FIX: Use ASAP for summary tasks too - let children drive timing
+            ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
+            logging.info(f"[CONSTRAINT] Deliverable '{deliverable_name}': ASAP (Type 0) - children will drive timing")
             
             ET.SubElement(deliv_task, "{%s}DurationFormat" % ns).text = "7"  # Days
             ET.SubElement(deliv_task, "{%s}Work" % ns).text = "PT0M"
@@ -1195,39 +1259,11 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
                         ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
                         
-                        # Add constraint type based on Gantt-sourced dates
-                        has_gantt_start = "Start_Date" in row.index and pd.notna(row.get("Start_Date"))
-                        has_gantt_end = "End_Date" in row.index and pd.notna(row.get("End_Date"))
-                        
-                        # Apply constraint type and manual scheduling fields based on Gantt-sourced dates
-                        if has_gantt_start and has_gantt_end:
-                            # Both dates from Gantt: Lock BOTH start and finish dates
-                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
-                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
-                            ET.SubElement(task, "{%s}Manual" % ns).text = "1"
-                            # CRITICAL: Add ManualStart, ManualFinish, ManualDuration to lock dates in Workfront
-                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
-                            ET.SubElement(task, "{%s}ManualFinish" % ns).text = task_end.isoformat()
-                            # ManualDuration must use same hours format as Duration
-                            ET.SubElement(task, "{%s}ManualDuration" % ns).text = duration_iso8601
-                            logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
-                            logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start/finish/duration")
-                        elif has_gantt_start:
-                            # Only start date from Gantt: Lock start date only
-                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "2"
-                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
-                            ET.SubElement(task, "{%s}Manual" % ns).text = "1"
-                            # CRITICAL: Add ManualStart to lock start date in Workfront
-                            ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
-                            # ManualFinish and ManualDuration not set - will use standard fields
-                            logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
-                            logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start")
-                        else:
-                            # No Gantt dates: ASAP scheduling (auto-scheduled)
-                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"
-                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
-                            ET.SubElement(task, "{%s}Manual" % ns).text = "0"
-                            logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0)")
+                        # FIX: Use ASAP scheduling (ConstraintType=0) so predecessor links drive timing
+                        # instead of pinning dates which creates gaps in Workfront
+                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
+                        ET.SubElement(task, "{%s}Manual" % ns).text = "0"  # Auto-scheduled
+                        logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0) - predecessors will drive timing")
                         
                         # Add cost if available and accumulate into component and deliverable totals
                         price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
@@ -1315,11 +1351,13 @@ def convert_excel_to_mspdi(
                         logging.error(f"Error processing task at index {idx}: {e}")
                         task_uid -= 1  # Decrement to maintain correct count
                 
-                # Update component summary with calculated duration
-                # GPT-5 Pro: Duration will be auto-calculated by Workfront from children (set to 0 for summaries)
-                # Summary tasks should NOT have duration explicitly set from date spans
-                ET.SubElement(comp_task, "{%s}Duration" % ns).text = "PT0M"
+                # FIX: Calculate component summary duration using WORKING minutes (not calendar)
+                # This prevents Workfront from collapsing summary tasks to zero duration
+                component_start = current_date  # Set at line 983
+                duration_minutes = calculate_working_minutes_between(component_start, component_finish)
+                ET.SubElement(comp_task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
                 ET.SubElement(comp_task, "{%s}Finish" % ns).text = component_finish.isoformat()
+                logging.info(f"[DURATION] Component '{component_name}': {duration_minutes} working minutes ({component_start.isoformat()} → {component_finish.isoformat()})")
                 
                 # Add aggregated cost/revenue to component summary task
                 comp_total_cost = component_costs.get(comp_uid, 0.0)
@@ -1351,11 +1389,12 @@ def convert_excel_to_mspdi(
                 
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
-            # Update deliverable summary with calculated duration
-            # GPT-5 Pro: Duration will be auto-calculated by Workfront from children (set to 0 for summaries)
-            # Summary tasks should NOT have duration explicitly set from date spans
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = "PT0M"
+            # FIX: Calculate deliverable summary duration using WORKING minutes (not calendar)
+            # This prevents Workfront from collapsing summary tasks to zero duration
+            duration_minutes = calculate_working_minutes_between(deliverable_start_date, deliverable_finish)
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
+            logging.info(f"[DURATION] Deliverable '{deliverable_name}': {duration_minutes} working minutes ({deliverable_start_date.isoformat()} → {deliverable_finish.isoformat()})")
             deliverable_ends[deliverable_name] = deliverable_finish
             
             # Add aggregated cost/revenue to deliverable summary task
