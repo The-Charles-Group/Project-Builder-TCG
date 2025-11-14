@@ -2929,6 +2929,128 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
     
     return scenario
 
+def _slugify(text: str) -> str:
+    """
+    Normalize string to slug format: lowercase, strip punctuation, collapse whitespace, replace with hyphen.
+    Used for generating deterministic codes from component/task names.
+    """
+    import re
+    if not text:
+        return ""
+    # Lowercase and strip
+    slug = text.lower().strip()
+    # Remove punctuation except spaces and hyphens
+    slug = re.sub(r'[^\w\s-]', '', slug)
+    # Collapse whitespace and replace with hyphen
+    slug = re.sub(r'[\s_]+', '-', slug)
+    # Remove leading/trailing hyphens
+    slug = slug.strip('-')
+    return slug
+
+def _deterministic_hash(canonical_path: str) -> str:
+    """
+    Generate 8-character deterministic hash from canonical path string.
+    Uses SHA-1 for stability and takes first 8 characters.
+    """
+    import hashlib
+    digest = hashlib.sha1(canonical_path.encode('utf-8')).hexdigest()
+    return digest[:8]
+
+def _ensure_component_task_codes(items: list, project_name: str) -> dict:
+    """
+    Preprocessing pass: Walk scenario items and generate deterministic slug+hash codes
+    for any component/task missing component_code/task_code.
+    
+    Mutates items in-place, injecting generated codes into component['component_code']
+    and task['task_code'] to ensure timeline merge matching works reliably.
+    
+    Returns diagnostics dict with counts of generated vs original codes.
+    """
+    diagnostics = {
+        "components_generated": 0,
+        "components_original": 0,
+        "tasks_generated": 0,
+        "tasks_original": 0,
+        "errors": []
+    }
+    
+    for deliv_idx, item in enumerate(items):
+        deliverable_code = str(item.get("deliverable_code") or item.get("code") or "").strip()
+        deliverable_name = str(item.get("deliverable") or "").strip()
+        
+        # If deliverable has no code, generate one
+        if not deliverable_code:
+            if not deliverable_name:
+                # Use positional fallback when both missing
+                deliverable_name = f"deliverable-{deliv_idx+1}"
+                item["deliverable"] = deliverable_name
+                logging.warning(f"[CODE GEN] Deliverable at index {deliv_idx} has no name or code, using fallback: {deliverable_name}")
+            
+            slug = _slugify(deliverable_name)
+            canonical_path = f"{project_name}|{deliverable_name}"
+            hash_suffix = _deterministic_hash(canonical_path)
+            deliverable_code = f"{slug}-{hash_suffix}"
+            item["deliverable_code"] = deliverable_code
+            logging.info(f"[CODE GEN] Generated deliverable_code: {deliverable_code} for '{deliverable_name}'")
+        
+        # Walk components
+        components = item.get("components", [])
+        for comp_idx, component in enumerate(components):
+            component_name = str(component.get("name") or component.get("component") or "").strip()
+            component_code = str(component.get("component_code") or "").strip()
+            
+            # Generate component code if missing
+            if not component_code:
+                if not component_name:
+                    # Use positional fallback
+                    component_name = f"component-{comp_idx+1}"
+                    component["name"] = component_name
+                
+                slug = _slugify(component_name)
+                canonical_path = f"{deliverable_code}|{component_name}"
+                hash_suffix = _deterministic_hash(canonical_path)
+                component_code = f"{slug}-{hash_suffix}"
+                component["component_code"] = component_code
+                diagnostics["components_generated"] += 1
+                logging.info(f"[CODE GEN] Generated component_code: {component_code} for '{component_name}' in {deliverable_code}")
+            else:
+                diagnostics["components_original"] += 1
+            
+            # Walk tasks
+            tasks = component.get("tasks", [])
+            for task_idx, task in enumerate(tasks):
+                task_name = str(task.get("name") or task.get("task") or "").strip()
+                task_code = str(task.get("task_code") or "").strip()
+                
+                # Generate task code if missing
+                if not task_code:
+                    if not task_name:
+                        # Use positional fallback
+                        task_name = f"task-{task_idx+1}"
+                        task["name"] = task_name
+                    
+                    slug = _slugify(task_name)
+                    canonical_path = f"{deliverable_code}|{component_name}|{task_name}"
+                    hash_suffix = _deterministic_hash(canonical_path)
+                    task_code = f"{slug}-{hash_suffix}"
+                    task["task_code"] = task_code
+                    diagnostics["tasks_generated"] += 1
+                    logging.info(f"[CODE GEN] Generated task_code: {task_code} for '{task_name}' in {component_code}")
+                else:
+                    diagnostics["tasks_original"] += 1
+    
+    # Log summary
+    logging.info(f"[CODE GEN] Summary: {diagnostics['components_generated']} components generated, "
+                 f"{diagnostics['components_original']} original; "
+                 f"{diagnostics['tasks_generated']} tasks generated, "
+                 f"{diagnostics['tasks_original']} original")
+    
+    if diagnostics["errors"]:
+        for error in diagnostics["errors"]:
+            logging.warning(f"[CODE GEN] {error}")
+    
+    return diagnostics
+
 def _build_timeline_lookup(timeline_tasks):
     """
     Build lookup dictionary from timeline_tasks.
@@ -3018,6 +3140,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     print(f"[WBS Builder] Has items: {len(items)} deliverables")
     print(f"[WBS Builder] Has timeline_tasks: {'timeline_tasks' in scenario}")
     print(f"[WBS Builder] Has timeline: {'timeline' in scenario}")
+
+    # CRITICAL: Generate deterministic codes for components/tasks BEFORE timeline merge
+    # This ensures timeline lookup matching works reliably (code-to-code vs. brittle name matching)
+    code_gen_diagnostics = _ensure_component_task_codes(items, project_name)
+    print(f"[WBS Builder] Code generation: {code_gen_diagnostics['components_generated']} components, "
+          f"{code_gen_diagnostics['tasks_generated']} tasks generated")
 
     # MERGE TIMELINE DATA: Copy Start_Date/End_Date from timeline tasks into deliverables
     # Support both formats: timeline_tasks (manual Gantt saves) and timeline.tasks (AI-generated)
