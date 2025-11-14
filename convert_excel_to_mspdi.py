@@ -420,6 +420,87 @@ def convert_excel_to_mspdi(
         tree.write(output_xml, encoding="utf-8", xml_declaration=True)
         return {"task_count": 0, "warning": "Empty input data"}
     
+    # CRITICAL: Validate all tasks have codes before export (fail-fast)
+    # This ensures timeline merge worked correctly and all tasks are matchable
+    validation_errors = []
+    unmatched_rows_list = []
+    
+    # Check if required code columns exist
+    required_columns = {
+        "Task_Code": "Task code column missing - code generation may have failed",
+        "Deliverable_Code": "Deliverable code column missing - code generation may have failed"
+    }
+    
+    for col, msg in required_columns.items():
+        if col not in df.columns:
+            validation_errors.append(msg)
+            logging.error(f"[VALIDATION] {msg}")
+    
+    # If columns are missing, fail immediately
+    if validation_errors:
+        error_msg = f"Export validation failed: {'; '.join(validation_errors)}"
+        logging.error(f"[VALIDATION] {error_msg}")
+        raise ValueError(error_msg)
+    
+    # Check for missing codes at task level (most critical)
+    task_rows = df[df["Task"].notna() & (df["Task"] != "")]
+    if not task_rows.empty:
+        # Safely check for missing task codes
+        missing_task_codes = task_rows[
+            ~task_rows["Task_Code"].notna() | (task_rows["Task_Code"] == "")
+        ]
+        
+        if not missing_task_codes.empty:
+            validation_errors.append(f"{len(missing_task_codes)} tasks missing task_code")
+            unmatched_rows_list.append(missing_task_codes)
+            logging.error(f"[VALIDATION] {len(missing_task_codes)} tasks missing task_code:")
+            for idx, row in missing_task_codes.head(10).iterrows():  # Show first 10
+                task_name = row.get("Task", "UNKNOWN")
+                component_name = row.get("Component", "UNKNOWN")
+                deliverable_name = row.get("Deliverable", "UNKNOWN")
+                logging.error(f"  - Task '{task_name}' in component '{component_name}' of deliverable '{deliverable_name}'")
+    
+    # Check component codes (optional, warn only)
+    if "Component_Code" in df.columns:
+        component_rows = df[df["Component"].notna() & (df["Component"] != "")]
+        if not component_rows.empty:
+            missing_component_codes = component_rows[
+                ~component_rows["Component_Code"].notna() | 
+                (component_rows["Component_Code"] == "")
+            ]
+            
+            if not missing_component_codes.empty:
+                unmatched_rows_list.append(missing_component_codes)
+                logging.warning(f"[VALIDATION] {len(missing_component_codes)} components missing component_code")
+    
+    # Check deliverable codes
+    deliverable_rows = df[df["Deliverable"].notna() & (df["Deliverable"] != "")]
+    if not deliverable_rows.empty:
+        missing_deliverable_codes = deliverable_rows[
+            ~deliverable_rows["Deliverable_Code"].notna() | 
+            (deliverable_rows["Deliverable_Code"] == "")
+        ]
+        
+        if not missing_deliverable_codes.empty:
+            validation_errors.append(f"{len(missing_deliverable_codes)} deliverables missing deliverable_code")
+            unmatched_rows_list.append(missing_deliverable_codes)
+            logging.error(f"[VALIDATION] {len(missing_deliverable_codes)} deliverables missing deliverable_code")
+    
+    # Export unmatched.csv for debugging if validation fails
+    if validation_errors:
+        unmatched_csv = output_xml.replace(".xml", "_unmatched.csv")
+        if unmatched_rows_list:
+            unmatched_rows = pd.concat(unmatched_rows_list, ignore_index=True)
+            unmatched_rows.to_csv(unmatched_csv, index=False)
+            logging.error(f"[VALIDATION] Exported unmatched rows to: {unmatched_csv}")
+        
+        error_msg = f"Export validation failed: {'; '.join(validation_errors)}. " \
+                   f"Unmatched rows exported to: {unmatched_csv if unmatched_rows_list else 'N/A'}"
+        logging.error(f"[VALIDATION] {error_msg}")
+        raise ValueError(error_msg)
+    
+    logging.info(f"[VALIDATION] ✅ All tasks/components/deliverables have codes - validation passed")
+    
     # Determine project start date
     if fixed_start_iso:
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
