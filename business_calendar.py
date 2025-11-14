@@ -10,7 +10,7 @@ Key Features:
 - US/MX holiday calendar support
 - Auto-roll weekend dates to next Monday
 - Business-day duration calculations
-- Working hours: 8:00-12:00, 13:00-17:00 (8 hours/day)
+- Working hours: 9:00-12:00, 13:00-18:00 (8 hours/day)
 """
 
 import datetime
@@ -59,12 +59,12 @@ US_MX_HOLIDAYS = [
     date(2026, 12, 25), # Christmas
 ]
 
-# Business hours blocks: 9-13 (4h) and 14-18 (4h) = 8 hours/day
-# MUST match XML calendar exactly: 09:00-13:00, 14:00-18:00
+# Business hours blocks: 9-12 (3h) and 13-18 (5h) = 8 hours/day
+# MUST match XML calendar exactly: 09:00-12:00, 13:00-18:00 (Workfront standard)
 BUSINESS_HOURS_PER_DAY = 8
 WORK_BLOCKS = [
-    (time(9, 0), time(13, 0)),   # Morning: 4 hours
-    (time(14, 0), time(18, 0)),  # Afternoon: 4 hours
+    (time(9, 0), time(12, 0)),   # Morning: 3 hours
+    (time(13, 0), time(18, 0)),  # Afternoon: 5 hours
 ]
 
 
@@ -201,7 +201,7 @@ class BusinessCalendar:
     @staticmethod
     def add_business_hours(start_datetime: datetime.datetime, hours: float) -> datetime.datetime:
         """
-        Add business hours to a datetime, respecting 8-12, 13-17 work blocks.
+        Add business hours to a datetime, respecting 9-12, 13-18 work blocks.
         
         Args:
             start_datetime: Starting datetime
@@ -219,9 +219,9 @@ class BusinessCalendar:
         # Start at beginning of workday if before 9am
         if current.time() < time(9, 0):
             current = datetime.datetime.combine(current.date(), time(9, 0))
-        # Start at 2pm if during lunch (13:00-14:00)
-        elif time(13, 0) <= current.time() < time(14, 0):
-            current = datetime.datetime.combine(current.date(), time(14, 0))
+        # Start at 1pm if during lunch (12:00-13:00)
+        elif time(12, 0) <= current.time() < time(13, 0):
+            current = datetime.datetime.combine(current.date(), time(13, 0))
         # Roll to next day if after work hours
         elif current.time() >= time(18, 0):
             current = BusinessCalendar.add_business_days(current, 1)
@@ -230,14 +230,14 @@ class BusinessCalendar:
         # Add hours block by block
         while remaining_hours > 0:
             # Determine current block
-            if time(9, 0) <= current.time() < time(13, 0):
-                block_end = time(13, 0)
-            elif time(14, 0) <= current.time() < time(18, 0):
+            if time(9, 0) <= current.time() < time(12, 0):
+                block_end = time(12, 0)
+            elif time(13, 0) <= current.time() < time(18, 0):
                 block_end = time(18, 0)
             else:
                 # Between blocks or after hours, jump to next block
-                if current.time() < time(14, 0):
-                    current = datetime.datetime.combine(current.date(), time(14, 0))
+                if current.time() < time(13, 0):
+                    current = datetime.datetime.combine(current.date(), time(13, 0))
                 else:
                     current = BusinessCalendar.add_business_days(current, 1)
                     current = datetime.datetime.combine(current.date(), time(9, 0))
@@ -257,8 +257,8 @@ class BusinessCalendar:
                 current = block_end_dt
                 
                 # Move to next block or next day
-                if current.time() == time(13, 0):
-                    current = datetime.datetime.combine(current.date(), time(14, 0))
+                if current.time() == time(12, 0):
+                    current = datetime.datetime.combine(current.date(), time(13, 0))
                 else:
                     current = BusinessCalendar.add_business_days(current, 1)
                     current = datetime.datetime.combine(current.date(), time(9, 0))
