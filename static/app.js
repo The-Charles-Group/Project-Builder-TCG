@@ -5,6 +5,103 @@ let DELIV_INDEX = {};     // code -> deliverable object lookup for fast renderin
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
 // ================================================================================
+// TCG Business Calendar - Holidays & Weekend Handling
+// ================================================================================
+// Hard-coded TCG + US holiday dates (2025-2026) - visible in Gantt but non-working
+const TCG_HOLIDAYS = [
+  // 2025 Holidays
+  '2025-01-01', // New Year's Day
+  '2025-01-20', // MLK Jr. Day
+  '2025-02-17', // Presidents' Day
+  '2025-05-26', // Memorial Day
+  '2025-06-19', // Juneteenth
+  '2025-07-04', // Independence Day
+  '2025-08-28', // Mental Health Break - Thu
+  '2025-08-29', // Mental Health Break - Fri
+  '2025-09-01', // Labor Day (also end of Mental Health Break)
+  '2025-10-13', // Indigenous Peoples' Day
+  '2025-11-27', // Thanksgiving
+  '2025-11-28', // Day after Thanksgiving
+  '2025-12-22', // Winter Closure Start
+  '2025-12-23',
+  '2025-12-24',
+  '2025-12-25', // Christmas
+  '2025-12-26',
+  '2025-12-27', // MISSING - Winter Closure
+  '2025-12-28', // MISSING - Winter Closure
+  '2025-12-29',
+  '2025-12-30',
+  '2025-12-31', // New Year's Eve
+  '2026-01-01', // New Year's Day
+  '2026-01-02', // Manager Regroup / Return prep day
+  // 2026 Holidays (for future use)
+  '2026-01-19', // MLK Jr. Day
+  '2026-02-16', // Presidents' Day
+  '2026-05-25', // Memorial Day
+  '2026-06-19', // Juneteenth
+  '2026-07-03', // Independence Day observed
+  '2026-09-07', // Labor Day
+  '2026-10-12', // Indigenous Peoples' Day
+  '2026-11-26', // Thanksgiving
+  '2026-11-27', // Day after Thanksgiving
+  '2026-12-25'  // Christmas
+];
+
+// Convert to Set for O(1) lookup
+const HolidaysSet = new Set(TCG_HOLIDAYS);
+
+// Helper: Format date to YYYY-MM-DD in local timezone (avoids toISOString timezone shift)
+function formatLocalDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Helper: Check if date is weekend (Saturday or Sunday)
+function isWeekend(date) {
+  const day = date.getDay();
+  return day === 0 || day === 6; // Sunday=0, Saturday=6
+}
+
+// Helper: Check if date is a TCG holiday
+function isHoliday(date) {
+  const dateStr = formatLocalDate(date);
+  return HolidaysSet.has(dateStr);
+}
+
+// Helper: Check if date is a business day (Mon-Fri, not a holiday)
+function isBusinessDay(date) {
+  return !isWeekend(date) && !isHoliday(date);
+}
+
+// Helper: Get next business day
+function nextBusinessDate(date) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + 1);
+  while (!isBusinessDay(next)) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next;
+}
+
+// Helper: Count business days between two dates (inclusive)
+function countBusinessDays(startDate, endDate) {
+  let count = 0;
+  const current = new Date(startDate);
+  const end = new Date(endDate);
+  
+  while (current <= end) {
+    if (isBusinessDay(current)) {
+      count++;
+    }
+    current.setDate(current.getDate() + 1);
+  }
+  
+  return count;
+}
+
+// ================================================================================
 // Session Management - Data Isolation Between RFPs
 // ================================================================================
 const SessionManager = {
@@ -1195,10 +1292,34 @@ function generateDateColumns(startDate, endDate, groupBy) {
   
   if (groupBy === 'day') {
     let current = new Date(start);
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    
     while (current <= end) {
+      const dayName = dayNames[current.getDay()];
+      const dateLabel = `${current.getMonth() + 1}/${current.getDate()}`;
+      
+      // Check if holiday FIRST - holidays are always visible even if they fall on weekends
+      if (isHoliday(current)) {
+        columns.push({
+          date: new Date(current),
+          label: `${dayName} ${dateLabel}`,
+          isHoliday: true
+        });
+        current.setDate(current.getDate() + 1);
+        continue;
+      }
+      
+      // Skip weekends (but NOT holidays that fall on weekends)
+      if (isWeekend(current)) {
+        current.setDate(current.getDate() + 1);
+        continue;
+      }
+      
+      // Regular business day
       columns.push({
         date: new Date(current),
-        label: `${current.getMonth() + 1}/${current.getDate()}`
+        label: `${dayName} ${dateLabel}`,
+        isHoliday: false
       });
       current.setDate(current.getDate() + 1);
     }
