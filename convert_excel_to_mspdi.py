@@ -46,6 +46,55 @@ def hours_to_iso8601_duration(hours: float) -> str:
     return f"PT{whole_hours}H{remaining_minutes}M0S"
 
 
+def parse_iso8601_duration(duration_str: str) -> float:
+    """
+    Parse ISO8601 duration string (both legacy minutes-only and new hours format) to decimal hours.
+    
+    Args:
+        duration_str: ISO8601 duration string (e.g., "PT1860M" or "PT31H0M0S")
+        
+    Returns:
+        Decimal hours (e.g., 31.0)
+        
+    Examples:
+        "PT1860M" → 31.0 hours (legacy minutes-only format)
+        "PT31H0M0S" → 31.0 hours (new hours format)
+        "PT4H30M0S" → 4.5 hours
+        "PT0H0M0S" → 0.0 hours
+        
+    Note: Handles both legacy (PTxxxM) and new (PTxxHxxMxxS) formats for backwards compatibility.
+    Falls back to 0.0 for malformed strings.
+    """
+    if not duration_str or not isinstance(duration_str, str):
+        return 0.0
+    
+    try:
+        import re
+        # Remove PT prefix
+        duration_str = duration_str.replace("PT", "")
+        
+        # Try to match hours/minutes/seconds format (e.g., "31H0M0S")
+        match = re.match(r'(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration_str)
+        if match:
+            hours = int(match.group(1) or 0)
+            minutes = int(match.group(2) or 0)
+            seconds = int(match.group(3) or 0)
+            
+            # Convert to decimal hours
+            total_hours = hours + (minutes / 60.0) + (seconds / 3600.0)
+            return total_hours
+        
+        # Legacy fallback: if no match, assume it's just minutes (e.g., "1860M")
+        if "M" in duration_str and "H" not in duration_str:
+            minutes = int(duration_str.replace("M", ""))
+            return minutes / 60.0
+        
+        return 0.0
+    except (ValueError, AttributeError):
+        logging.warning(f"[PARSE] Failed to parse duration string: {duration_str}, defaulting to 0.0 hours")
+        return 0.0
+
+
 class DependencyType(Enum):
     """Types of task dependencies for MS Project"""
     FINISH_TO_START = 1  # Most common: Task B starts after Task A finishes
@@ -1560,11 +1609,10 @@ def convert_excel_to_mspdi(
     for uid, task_data in task_map.items():
         task = task_data["task"]
         
-        # Get task hours
+        # Get task hours using centralized parser (handles both PTxxxM and PTxxHxxMxxS formats)
         work_elem = task.find("{%s}Work" % ns)
         if work_elem is not None and work_elem.text:
-            work_minutes = int(work_elem.text.replace("PT", "").replace("M", ""))
-            work_hours = work_minutes / 60
+            work_hours = parse_iso8601_duration(work_elem.text)
         else:
             work_hours = 8.0
         
@@ -1576,9 +1624,10 @@ def convert_excel_to_mspdi(
             ET.SubElement(assign, "{%s}TaskUID" % ns).text = str(uid)
             ET.SubElement(assign, "{%s}ResourceUID" % ns).text = str(department_resources[department])
             ET.SubElement(assign, "{%s}Units" % ns).text = "100"  # 100% allocation
-            ET.SubElement(assign, "{%s}Work" % ns).text = f"PT{int(work_hours * 60)}M"
-            ET.SubElement(assign, "{%s}RegularWork" % ns).text = f"PT{int(work_hours * 60)}M"
-            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = f"PT{int(work_hours * 60)}M"
+            # CRITICAL: Use hours format (PTxxHxxMxxS) for Workfront compatibility
+            ET.SubElement(assign, "{%s}Work" % ns).text = hours_to_iso8601_duration(work_hours)
+            ET.SubElement(assign, "{%s}RegularWork" % ns).text = hours_to_iso8601_duration(work_hours)
+            ET.SubElement(assign, "{%s}RemainingWork" % ns).text = hours_to_iso8601_duration(work_hours)
             ET.SubElement(assign, "{%s}Start" % ns).text = task.find("{%s}Start" % ns).text
             ET.SubElement(assign, "{%s}Finish" % ns).text = task.find("{%s}Finish" % ns).text
             ET.SubElement(assign, "{%s}StartVariance" % ns).text = "0"
