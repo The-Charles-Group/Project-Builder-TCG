@@ -1,0 +1,33 @@
+What’s creating the gaps
+
+Parent (summary) tasks have zero duration in the XML
+Example: the parent task “Creative Strategy / Campaign Plan Deck” is exported with Duration=PT0M (zero) while also carrying Start=2026‑05‑14 and Finish=2026‑09‑22. Workfront doesn’t honor a parent’s explicit Finish when Duration is zero, so it falls back to a short default window, which is why it shows ~5 days instead of spanning the children. 
+
+St.Regis_Nashville_Branding_Age…
+
+
+You have the same pattern for other parents, e.g., “Brand Approach for Campaign Period” at WBS 1.3 (parent has Duration=PT0M) while its child 1.3.1 is a 3‑day task (PT1440M). The parent collapses to just a couple of days in Workfront. 
+
+St.Regis_Nashville_Branding_Age…
+
+ 
+
+St.Regis_Nashville_Branding_Age…
+
+Tasks aren’t chained with predecessors; they’re pinned by constraints
+I don’t see any <PredecessorLink> entries in this export. Instead, tasks are anchored with constraints (e.g., “Brand Positioning Strategy” is ConstraintType=2 “Start No Earlier Than” with ConstraintDate=2025‑11‑17). Without FS predecessors, Workfront doesn’t flow tasks together—it just drops each group on its own constraint date, leaving gaps. 
+
+St.Regis_Nashville_Branding_Age…
+
+Calendar mismatch encourages unexpected spacing
+Your XML calendar sets Saturday as a working day (09:00‑12:00 and 13:00‑18:00). If the Workfront schedule for your environment is Monday–Friday, the importer remaps durations to a 5‑day week and the re‑calculation can shorten spans and create apparent gaps between groups. 
+
+St.Regis_Nashville_Branding_Age…
+
+
+You do have the TCG holiday exceptions embedded (e.g., Thanksgiving, Holiday Break), so those non‑working periods are being considered—another reason you’ll see holes where the schedule jumps over a closed day. 
+
+St.Regis_Nashville_Branding_Age…
+
+Many leaf tasks are exported as 1‑day items with tiny work values
+A bunch of “Internal Review & Critique” tasks, for instance, are Duration=PT480M (1 day) with only 1 hour of Work. If a parent mostly contains short review tasks like these, the parent appears to span only a few days in Workfront.
