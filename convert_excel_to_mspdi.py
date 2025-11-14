@@ -244,6 +244,8 @@ def convert_excel_to_mspdi(
         project_start = datetime.fromisoformat(fixed_start_iso.replace("Z", "+00:00"))
         # Remove timezone info to ensure all datetimes are timezone-naive for consistent comparisons
         project_start = project_start.replace(tzinfo=None)
+        # CRITICAL: Normalize to 9 AM business start time (matching Workfront and BusinessCalendar)
+        project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
     elif start_date_mode == "next_monday":
         today = datetime.now()
         days_ahead = 0 - today.weekday()  # Monday is 0
@@ -1006,11 +1008,12 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}Start" % ns).text = task_start.isoformat()
                         ET.SubElement(task, "{%s}Finish" % ns).text = task_end.isoformat()
                         
-                        # FIX: Calculate Duration from actual time span (Finish - Start), not from hours
+                        # FIX: Calculate Duration from actual time span (Finish - Start), converted to hours format for Workfront
                         # This prevents invalid XML where Duration=PT0M but Start≠Finish (Workfront rejects this)
                         # Duration = calendar time span, Work = effort hours (different concepts)
-                        duration_minutes = int((task_end - task_start).total_seconds() / 60)
-                        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_minutes}M"
+                        duration_hours = (task_end - task_start).total_seconds() / 3600
+                        duration_iso8601 = hours_to_iso8601_duration(duration_hours)
+                        ET.SubElement(task, "{%s}Duration" % ns).text = duration_iso8601
                         ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Days
                         
                         # CRITICAL FIX: Populate Work hours from DataFrame to eliminate 0-hour tasks in Workfront
@@ -1021,7 +1024,7 @@ def convert_excel_to_mspdi(
                         logging.info(f"[WORK HOURS] Task '{task_name}': {hours}h → {work_iso8601}")
                         
                         # RemainingDuration must match Duration (same calendar time span)
-                        ET.SubElement(task, "{%s}RemainingDuration" % ns).text = f"PT{duration_minutes}M"
+                        ET.SubElement(task, "{%s}RemainingDuration" % ns).text = duration_iso8601
                         ET.SubElement(task, "{%s}RemainingWork" % ns).text = work_iso8601
                         ET.SubElement(task, "{%s}Stop" % ns).text = task_end.isoformat()
                         ET.SubElement(task, "{%s}Resume" % ns).text = task_end.isoformat()
@@ -1062,9 +1065,8 @@ def convert_excel_to_mspdi(
                             # CRITICAL: Add ManualStart, ManualFinish, ManualDuration to lock dates in Workfront
                             ET.SubElement(task, "{%s}ManualStart" % ns).text = task_start.isoformat()
                             ET.SubElement(task, "{%s}ManualFinish" % ns).text = task_end.isoformat()
-                            # Calculate duration from start to finish dates
-                            duration_minutes = int((task_end - task_start).total_seconds() / 60)
-                            ET.SubElement(task, "{%s}ManualDuration" % ns).text = f"PT{duration_minutes}M"
+                            # ManualDuration must use same hours format as Duration
+                            ET.SubElement(task, "{%s}ManualDuration" % ns).text = duration_iso8601
                             logging.info(f"[CONSTRAINT] Task '{task_name}': Must Start On (Type 2)")
                             logging.info(f"[MANUAL] Task '{task_name}': Manual scheduling enabled with locked start/finish/duration")
                         elif has_gantt_start:
@@ -1207,10 +1209,9 @@ def convert_excel_to_mspdi(
                 logging.info(f"[3-LEVEL HIERARCHY] Component '{component_name}' completed with {task_num_in_component} tasks")
             
             # Update deliverable summary with calculated duration
-            # FIX: Calculate Duration from actual time span (Finish - Start), not business hours
-            # This prevents Duration=PT0M when dates match or business hours = 0
-            deliverable_duration_minutes = int((deliverable_finish - deliverable_start).total_seconds() / 60)
-            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = f"PT{deliverable_duration_minutes}M"
+            # FIX: Calculate Duration from actual time span (Finish - Start), converted to hours format for Workfront
+            deliverable_duration_hours = (deliverable_finish - deliverable_start).total_seconds() / 3600
+            ET.SubElement(deliv_task, "{%s}Duration" % ns).text = hours_to_iso8601_duration(deliverable_duration_hours)
             ET.SubElement(deliv_task, "{%s}Finish" % ns).text = deliverable_finish.isoformat()
             deliverable_ends[deliverable_name] = deliverable_finish
             
