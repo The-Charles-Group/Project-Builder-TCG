@@ -3052,6 +3052,40 @@ def _ensure_component_task_codes(items: list, project_name: str) -> dict:
     
     return diagnostics
 
+def _fill_missing_task_codes_in_rows(rows: list, project_name: str) -> int:
+    """
+    Post-merge pass: Scan assembled rows and generate task_code for any row 
+    with a Task name but missing Task_Code.
+    
+    This catches timeline-injected tasks that weren't processed by the pre-merge
+    code generation pass (which only walks scenario.items hierarchy).
+    
+    Mutates rows in-place. Returns count of codes generated.
+    """
+    codes_generated = 0
+    
+    for row in rows:
+        task_name = str(row.get("Task") or "").strip()
+        task_code = str(row.get("Task_Code") or "").strip()
+        
+        if task_name and not task_code:
+            deliverable_code = str(row.get("Deliverable_Code") or "").strip()
+            component_name = str(row.get("Component") or "").strip()
+            
+            slug = _slugify(task_name)
+            canonical_path = f"{deliverable_code}|{component_name}|{task_name}"
+            hash_suffix = _deterministic_hash(canonical_path)
+            task_code = f"{slug}-{hash_suffix}"
+            
+            row["Task_Code"] = task_code
+            codes_generated += 1
+            logging.info(f"[POST-MERGE CODE GEN] Generated task_code: {task_code} for '{task_name}' in component '{component_name}'")
+    
+    if codes_generated > 0:
+        logging.info(f"[POST-MERGE CODE GEN] Summary: {codes_generated} task codes generated after timeline merge")
+    
+    return codes_generated
+
 def _build_timeline_lookup(timeline_tasks):
     """
     Build lookup dictionary from timeline_tasks.
@@ -3663,6 +3697,11 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             # Advance cursor based on actual start used (preserves ordering for next deliverable)
             day_cursor = max(day_cursor, dstart) + total_deliv_duration
             prev_deliv_wbs = wbs_deliv
+
+    # POST-MERGE CODE GENERATION: Fill any missing task codes after timeline merge
+    # This catches timeline-injected tasks that weren't in the original scenario.items hierarchy
+    post_merge_codes = _fill_missing_task_codes_in_rows(rows, project_name)
+    print(f"[WBS Builder] Post-merge code generation: {post_merge_codes} task codes added")
 
     df = pd.DataFrame(rows)
     
