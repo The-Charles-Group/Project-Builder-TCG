@@ -2929,6 +2929,53 @@ def _inflate_components_if_missing(scenario: dict) -> dict:
     
     return scenario
 
+def _build_timeline_lookup(timeline_tasks):
+    """
+    Build lookup dictionary from timeline_tasks.
+    
+    Keys: (deliverable_code, component_code_or_name, task_code_or_name) tuples
+    Values: dict with start_date, end_date, start_time_iso, finish_time_iso, hours, is_summary
+    
+    Simplified: Match by codes when available, by names as fallback. No normalization to avoid mismatches.
+    """
+    lookup = {}
+    
+    for task in timeline_tasks:
+        # Extract identifiers as-is (no normalization to avoid mismatches)
+        dcode = str(task.get("deliverable_code") or "").strip()
+        ccode = str(task.get("component_code") or "").strip() or None
+        tcode = str(task.get("task_code") or "").strip() or None
+        name = str(task.get("name") or "").strip()  # Task name
+        component_name = str(task.get("component") or "").strip() or None  # Component name
+        is_summary = task.get("is_summary", False)
+        
+        # Extract timeline fields
+        entry = {
+            "start_date": task.get("start_date"),
+            "end_date": task.get("end_date"),
+            "start_time_iso": task.get("start_time_iso"),
+            "finish_time_iso": task.get("finish_time_iso"),
+            "hours": task.get("hours"),
+            "is_summary": is_summary
+        }
+        
+        # Build lookup key and store
+        # Key format: (deliverable_code, component_identifier, task_identifier)
+        # Use component_code if available, else fall back to component name
+        # Use task_code if available, else fall back to task name
+        comp_key = ccode if ccode else component_name
+        task_key = tcode if tcode else (name if name else None)
+        
+        # Only store if not a blank placeholder
+        if comp_key or task_key:
+            lookup[(dcode, comp_key, task_key)] = entry
+        
+        # Deliverable-level summary: only if explicitly marked
+        if not comp_key and not task_key and is_summary:
+            lookup[(dcode, None, None)] = entry
+    
+    return lookup
+
 def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     """
     Adds Rate_USD and Price_USD at deliverable/component/task level.
@@ -2988,7 +3035,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     if timeline_tasks:
         print(f"[WBS Builder] Found {len(timeline_tasks)} timeline tasks to merge")
         print(f"[WBS Builder DEBUG] First 3 timeline tasks: {timeline_tasks[:3]}")
-        
+    
+    # Build lookup dictionary for O(1) access
+    timeline_lookup = _build_timeline_lookup(timeline_tasks) if timeline_tasks else {}
+    print(f"[WBS Builder] Built timeline lookup with {len(timeline_lookup)} entries")
+    
+    if timeline_tasks:
         for item in items:
             deliv_name = str(item.get("deliverable", "")).strip()
             deliv_code = str(item.get("deliverable_code", item.get("code", ""))).strip()
@@ -3287,6 +3339,21 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 wbs_comp = f"{wbs_deliv}.{j}"
                 svc_comp = (DB.service_department_for_component(dcode, comp, tg_in_comp)
                             or DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col))
+                
+                # Match timeline data for component
+                # Try: (deliverable, component, None) then deliverable summary
+                comp_timeline = timeline_lookup.get((dcode, comp, None)) or {}
+                # Only use deliverable summary if it's marked as summary (not a component collision)
+                if not comp_timeline and timeline_lookup.get((dcode, None, None), {}).get("is_summary"):
+                    comp_timeline = timeline_lookup.get((dcode, None, None), {})
+                comp_start_date = comp_timeline.get("start_date", "")
+                comp_end_date = comp_timeline.get("end_date", "")
+                comp_start_time_iso = comp_timeline.get("start_time_iso", "")
+                comp_finish_time_iso = comp_timeline.get("finish_time_iso", "")
+                comp_timeline_hours = comp_timeline.get("hours", "")
+                if comp_start_date or comp_end_date:
+                    print(f"[WBS Builder] 🔍 Matched timeline for component '{comp}': start={comp_start_date}, end={comp_end_date}, hours={comp_timeline_hours}")
+                
                 rows.append({
                     "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                     "Deliverable": deliv_label,
@@ -3298,7 +3365,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs),
                     "Assignee_External_ID": "", "Notes": "",
                     "Rate_USD": round(comp_rate if pricing_mode=="Flat_Blended" else _eff_rate(comp_price, comp_hours_total_display or 0), 2),
-                    "Price_USD": round(comp_price, 2)
+                    "Price_USD": round(comp_price, 2),
+                    "Start_Date": comp_start_date,
+                    "End_Date": comp_end_date,
+                    "start_date": comp_start_date,  # Lowercase for XML exporter
+                    "end_date": comp_end_date,
+                    "start_time_iso": comp_start_time_iso,
+                    "finish_time_iso": comp_finish_time_iso,
+                    "timeline_hours": comp_timeline_hours  # Hours from timeline (not scenario)
                 })
 
                 # --- Tasks under the component ---
@@ -3329,6 +3403,23 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
                         base_offset = dstart + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
 
+                        # Match timeline data for task
+                        # Try: (deliverable, component, task_label) or (deliverable, component, task_group) or (deliverable, None, task_label)
+                        task_timeline = (
+                            timeline_lookup.get((dcode, comp, label)) or
+                            timeline_lookup.get((dcode, comp, tg)) or
+                            timeline_lookup.get((dcode, None, label)) or  # When timeline has no component_code
+                            timeline_lookup.get((dcode, None, tg)) or
+                            {}
+                        )
+                        task_start_date = task_timeline.get("start_date", "")
+                        task_end_date = task_timeline.get("end_date", "")
+                        task_start_time_iso = task_timeline.get("start_time_iso", "")
+                        task_finish_time_iso = task_timeline.get("finish_time_iso", "")
+                        task_hours = task_timeline.get("hours", "")
+                        if task_start_date or task_end_date:
+                            print(f"[WBS Builder] 🔍 Matched timeline for task '{label}': start={task_start_date}, end={task_end_date}, hours={task_hours}")
+
                         rows.append({
                             "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                             "Deliverable": deliv_label,
@@ -3339,7 +3430,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             "Start_Offset_Days": base_offset,
                             "Duration_Days": dur,
                             "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
-                            "Assignee_External_ID": "", "Notes": ""
+                            "Assignee_External_ID": "", "Notes": "",
+                            "Start_Date": task_start_date,
+                            "End_Date": task_end_date,
+                            "start_date": task_start_date,
+                            "end_date": task_end_date,
+                            "start_time_iso": task_start_time_iso,
+                            "finish_time_iso": task_finish_time_iso,
+                            "timeline_hours": task_hours  # Hours from timeline (not scenario)
                         })
 
                         # Role rows for this task in this month

@@ -867,40 +867,47 @@ def convert_excel_to_mspdi(
             ET.SubElement(deliv_task, "{%s}OutlineLevel" % ns).text = deliv_outline_level
             ET.SubElement(deliv_task, "{%s}Priority" % ns).text = "500"
             
-            # FIX: Check if first row of deliverable has Start_Date (from Gantt merge)
+            # FIX: Check if first row of deliverable has start_date (from Gantt merge)
+            # Prefer lowercase (new convention) with fallback to uppercase (backward compat)
             deliverable_start_date = current_date
             deliverable_end_date = None  # Will be set from Gantt or calculated
             
-            if not group.empty and "Start_Date" in group.columns:
-                first_row_start = group.iloc[0].get("Start_Date")
-                if pd.notna(first_row_start):
-                    try:
-                        start_val = str(first_row_start)
-                        if 'T' in start_val:
-                            deliverable_start_date = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
-                            # Remove timezone info to make it timezone-naive for consistent comparisons
-                            deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
-                        else:
-                            deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
-                        logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
-                    except Exception as e:
-                        logging.warning(f"Could not parse deliverable Start_Date '{first_row_start}': {e}")
+            if not group.empty:
+                # Try lowercase first, then uppercase fallback
+                start_col = "start_date" if "start_date" in group.columns else "Start_Date"
+                if start_col in group.columns:
+                    first_row_start = group.iloc[0].get(start_col)
+                    if pd.notna(first_row_start):
+                        try:
+                            start_val = str(first_row_start)
+                            if 'T' in start_val:
+                                deliverable_start_date = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
+                                # Remove timezone info to make it timezone-naive for consistent comparisons
+                                deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
+                            else:
+                                deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                            logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
+                        except Exception as e:
+                            logging.warning(f"Could not parse deliverable {start_col} '{first_row_start}': {e}")
             
-            # FIX: Check if first row of deliverable has End_Date (from Gantt merge)
-            if not group.empty and "End_Date" in group.columns:
-                first_row_end = group.iloc[0].get("End_Date")
-                if pd.notna(first_row_end):
-                    try:
-                        end_val = str(first_row_end)
-                        if 'T' in end_val:
-                            deliverable_end_date = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
-                            # Remove timezone info to make it timezone-naive for consistent comparisons
-                            deliverable_end_date = deliverable_end_date.replace(tzinfo=None)
-                        else:
-                            deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
-                        logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
-                    except Exception as e:
-                        logging.warning(f"Could not parse deliverable End_Date '{first_row_end}': {e}")
+            # FIX: Check if first row of deliverable has end_date (from Gantt merge)
+            if not group.empty:
+                # Try lowercase first, then uppercase fallback
+                end_col = "end_date" if "end_date" in group.columns else "End_Date"
+                if end_col in group.columns:
+                    first_row_end = group.iloc[0].get(end_col)
+                    if pd.notna(first_row_end):
+                        try:
+                            end_val = str(first_row_end)
+                            if 'T' in end_val:
+                                deliverable_end_date = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
+                                # Remove timezone info to make it timezone-naive for consistent comparisons
+                                deliverable_end_date = deliverable_end_date.replace(tzinfo=None)
+                            else:
+                                deliverable_end_date = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
+                            logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' End: {deliverable_end_date.isoformat()}")
+                        except Exception as e:
+                            logging.warning(f"Could not parse deliverable {end_col} '{first_row_end}': {e}")
             
             ET.SubElement(deliv_task, "{%s}Start" % ns).text = deliverable_start_date.isoformat()
             
@@ -908,17 +915,21 @@ def convert_excel_to_mspdi(
             has_gantt_start = False
             has_gantt_end = False
             
-            # Check if Start_Date was successfully parsed from Gantt
-            if not group.empty and "Start_Date" in group.columns:
-                first_row_start = group.iloc[0].get("Start_Date")
-                if pd.notna(first_row_start):
-                    has_gantt_start = True
+            # Check if start_date was successfully parsed from Gantt (prefer lowercase, fallback uppercase)
+            if not group.empty:
+                start_col = "start_date" if "start_date" in group.columns else "Start_Date"
+                if start_col in group.columns:
+                    first_row_start = group.iloc[0].get(start_col)
+                    if pd.notna(first_row_start):
+                        has_gantt_start = True
             
-            # Check if End_Date was successfully parsed from Gantt
-            if not group.empty and "End_Date" in group.columns:
-                first_row_end = group.iloc[0].get("End_Date")
-                if pd.notna(first_row_end):
-                    has_gantt_end = True
+            # Check if end_date was successfully parsed from Gantt (prefer lowercase, fallback uppercase)
+            if not group.empty:
+                end_col = "end_date" if "end_date" in group.columns else "End_Date"
+                if end_col in group.columns:
+                    first_row_end = group.iloc[0].get(end_col)
+                    if pd.notna(first_row_end):
+                        has_gantt_end = True
             
             # FIX: Use ASAP for summary tasks too - let children drive timing
             ET.SubElement(deliv_task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
@@ -1130,24 +1141,36 @@ def convert_excel_to_mspdi(
                         
                         logging.info(f"[3-LEVEL HIERARCHY] Creating L3 task: '{task_name}' (UID={uid}, Component={component_name})")
                         
-                        # Safely get hours
+                        # Safely get hours - prefer timeline_hours (from scheduler), fallback to Planned_Hours (from scenario)
+                        timeline_hours = row.get("timeline_hours")
                         planned_hours = row.get("Planned_Hours")
-                        if pd.isna(planned_hours) or planned_hours is None:
-                            planned_hours = row.get("Hours", 8)
-                        if pd.isna(planned_hours) or planned_hours is None:
-                            planned_hours = 8
-                        hours = float(planned_hours)
+                        
+                        # Use timeline_hours if available (from PM-Brain capacity scheduling)
+                        if pd.notna(timeline_hours) and timeline_hours is not None and timeline_hours != "":
+                            hours = float(timeline_hours)
+                            logging.info(f"[HOURS MATCH] Using timeline_hours={hours} for '{task_name}'")
+                        # Fall back to Planned_Hours (from scenario)
+                        elif pd.notna(planned_hours) and planned_hours is not None:
+                            hours = float(planned_hours)
+                        # Fall back to generic Hours column
+                        elif pd.notna(row.get("Hours")):
+                            hours = float(row.get("Hours"))
+                        # Last resort default
+                        else:
+                            hours = 8.0
                         duration_days = max(1, int(np.ceil(hours / hours_per_day)))
                         
-                        # FIX: Use merged timeline dates (Start_Date/End_Date) from Gantt if available
+                        # FIX: Use merged timeline dates (start_date/end_date) from Gantt if available
+                        # Prefer lowercase (new convention) with fallback to uppercase (backward compat)
                         # Only fall back to calculated dates if missing
                         task_start = None
                         task_end = None
                         
-                        # Check for Start_Date field (from Gantt merge)
-                        if "Start_Date" in row.index and pd.notna(row.get("Start_Date")):
+                        # Check for start_date field (from Gantt merge) - prefer lowercase, fallback uppercase
+                        start_col = "start_date" if "start_date" in row.index else "Start_Date"
+                        if start_col in row.index and pd.notna(row.get(start_col)):
                             try:
-                                start_val = str(row.get("Start_Date"))
+                                start_val = str(row.get(start_col))
                                 # Handle ISO format: 2025-11-16 or 2025-11-16T01:00:00
                                 if 'T' in start_val:
                                     task_start = datetime.fromisoformat(start_val.replace('Z', '+00:00'))
@@ -1156,14 +1179,15 @@ def convert_excel_to_mspdi(
                                 else:
                                     # Date only - add default 9 AM time
                                     task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
-                                logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
+                                logging.info(f"[GANTT MERGE] Using merged {start_col} for '{task_name}': {task_start.isoformat()}")
                             except Exception as e:
-                                logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
+                                logging.warning(f"Could not parse {start_col} '{row.get(start_col)}': {e}")
                         
-                        # Check for End_Date field (from Gantt merge)
-                        if "End_Date" in row.index and pd.notna(row.get("End_Date")):
+                        # Check for end_date field (from Gantt merge) - prefer lowercase, fallback uppercase
+                        end_col = "end_date" if "end_date" in row.index else "End_Date"
+                        if end_col in row.index and pd.notna(row.get(end_col)):
                             try:
-                                end_val = str(row.get("End_Date"))
+                                end_val = str(row.get(end_col))
                                 # Handle ISO format: 2025-11-27 or 2025-11-27T17:00:00
                                 if 'T' in end_val:
                                     task_end = datetime.fromisoformat(end_val.replace('Z', '+00:00'))
@@ -1172,9 +1196,9 @@ def convert_excel_to_mspdi(
                                 else:
                                     # Date only - add default 5 PM time
                                     task_end = datetime.fromisoformat(end_val).replace(hour=17, minute=0, second=0)
-                                logging.info(f"[GANTT MERGE] Using merged End_Date for '{task_name}': {task_end.isoformat()}")
+                                logging.info(f"[GANTT MERGE] Using merged {end_col} for '{task_name}': {task_end.isoformat()}")
                             except Exception as e:
-                                logging.warning(f"Could not parse End_Date '{row.get('End_Date')}': {e}")
+                                logging.warning(f"Could not parse {end_col} '{row.get(end_col)}': {e}")
                         
                         # Fall back to calculated dates if Start_Date/End_Date missing
                         if task_start is None:
