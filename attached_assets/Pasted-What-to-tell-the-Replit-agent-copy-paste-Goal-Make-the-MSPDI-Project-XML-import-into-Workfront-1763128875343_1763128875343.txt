@@ -1,0 +1,98 @@
+What to tell the Replit agent (copy/paste)
+
+Goal: Make the MSPDI (Project XML) import into Workfront produce the same Start, Finish, Duration, and Planned Hours you see in your app.
+
+A) Create a TCG base calendar with exceptions
+
+Base calendar: Monday–Friday working 09:00–13:00 and 14:00–18:00 (8h/day); Saturday/Sunday non‑working. Keep MinutesPerDay=480, MinutesPerWeek=2400. (These are already present—don’t change them.) 
+
+St.Regis_Nashville_Branding_Age…
+
+Add <Exceptions> to the calendar for every 2025 company holiday/closure (and early 2026 return), using all‑day ranges with DayWorking=0. Encode at least these dates from TCG’s list:
+
+Jan 1 (New Year’s Day)
+
+Jan 20 (MLK Day)
+
+Feb 17 (Presidents Day)
+
+May 26 (Memorial Day)
+
+Jun 19 (Juneteenth)
+
+Jul 4 (Independence Day)
+
+Sep 1 (Labor Day)
+
+Aug 28–Sep 1 (Mental Health Break)
+
+Oct 13 (Indigenous People Day)
+
+Nov 27–28 (Thanksgiving & Day After)
+
+Dec 22, 2025 – Jan 2, 2026 (Holiday Break)
+
+Return to Office Mon Jan 5, 2026 (Jan 3–4 are weekend anyway) 
+
+2025 TCG HOLIDAY CALENDAR
+
+Implementation hint (minimal MSPDI structure):
+
+<Calendars>
+  <Calendar>
+    <UID>1</UID>
+    <Name>TCG 2025–2026</Name>
+    <IsBaseCalendar>1</IsBaseCalendar>
+    <WeekDays>…</WeekDays>
+    <Exceptions>
+      <Exception>
+        <FromDate>2025-11-27T00:00:00</FromDate>
+        <ToDate>2025-11-28T23:59:59</ToDate>
+        <DayWorking>0</DayWorking>
+      </Exception>
+      <Exception>
+        <FromDate>2025-12-22T00:00:00</FromDate>
+        <ToDate>2026-01-02T23:59:59</ToDate>
+        <DayWorking>0</DayWorking>
+      </Exception>
+      <!-- Add all other 2025 dates above similarly -->
+    </Exceptions>
+  </Calendar>
+</Calendars>
+
+
+Then set the project and all resources to CalendarUID pointing to this calendar.
+
+B) Never place tasks on non‑working days
+
+Update your scheduler so the earliest start function skips weekends and these calendar exceptions before it chooses a Start date/time. Your latest XML still schedules tasks to Dec 22 and Dec 24—don’t do that.
+
+If a task would land on a non‑working day, roll it forward to the next working day at DefaultStartTime (09:00). Keep the midday break implicit; just count 8 hours per working day. 
+
+St.Regis_Nashville_Branding_Age…
+
+C) Standardize time units and calculations
+
+Emit all <Duration>, <RemainingDuration>, <Work>, and <RemainingWork> in minutes (e.g., 1 day = PT480M, 9 days = PT4320M, 3 hours = PT180M). Do not mix hour‑based ISO codes like PT120H0M0S.
+
+Compute Duration (in working minutes) from Work using duration_minutes = ceil(work_hours / 8) * 480, not calendar date differences. This prevents the “16 days on the Gantt vs 12 days in Workfront” issue you’re seeing.
+
+On summary tasks (<Summary>1</Summary>), it’s fine to let Workfront recalc Work from children; you can set <Work>PT0M</Work> on summaries to avoid double counting.
+
+D) Guardrails that keep dates matching
+
+If you must anchor a task, use SNET (“Start No Earlier Than”) constraints only when required; otherwise let dependencies drive.
+
+Ensure no task’s <Start> or <Finish> falls within an exception date/time block after scheduling. Add a pre‑export validation that fails the build if any do (right now they do—e.g., 2025‑12‑22 and 2025‑12‑24).
+
+E) Quick test cases the agent should pass (using your plan)
+
+Brand Positioning Strategy starts Mon 2025‑11‑17 and ends Fri 2025‑12‑05 with 12 working days (Thanksgiving Thu/Fri excluded). The export should not include any sub‑tasks starting on 11/27 or 11/28. 
+
+St.Regis_Nashville_Branding_Age…
+
+Any task that would start Dec 22–Jan 2 must be moved to Mon Jan 5, 2026 at 09:00 (since the whole period is closed). Your current XML starts tasks on Dec 22 and Dec 24—that must be corrected.
+
+Why this will fix your numbers
+
+Workfront calculates Pln Hrs from <Work> and Duration from the project calendar. If your calendar has no exceptions and tasks fall on holidays, Workfront shifts them—changing both durations and visible dates. Encoding the holiday exceptions and keeping all times in minutes on a 5×8 calendar makes Workfront’s math identical to your app’s. (Holiday list reference: TCG 2025 calendar.)
