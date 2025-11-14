@@ -1,0 +1,274 @@
+Prompt for Replit Agent
+
+Title: Normalize MS Project XML for Workfront Sandbox (hours, dates, durations)
+
+Goal: Produce a Python script that rewrites an MS Project XML so that, when imported into Adobe Workfront Sandbox, each task’s Planned Hours, Start, Due, and Duration match the intended schedule.
+
+What the script must do
+
+Use Python 3.11 with xml.etree.ElementTree. Preserve the default MSP namespace http://schemas.microsoft.com/project.
+
+Project constants
+
+Set or keep: <MinutesPerDay>=480, <MinutesPerWeek>=2400, <DaysPerMonth>=20, <WorkFormat>=2 (minutes).
+(These are already present but must be enforced.) 
+
+St.Regis_Nashville_Branding_Age…
+
+Calendar model for working time
+
+Assume the base calendar in the XML: Mon–Fri, two working windows 09:00–13:00 and 14:00–18:00; Sat/Sun non‑working. (Matches your file.) 
+
+St.Regis_Nashville_Branding_Age…
+
+Leaf tasks (Summary=0)
+
+Do not change <Work> minutes.
+
+Snap Start/Finish to working time: if a task starts/ends outside 09:00–13:00/14:00–18:00, clamp to the nearest in‑window time on a working day.
+
+Recompute <Duration> as working minutes between Start and Finish using the calendar above (1 workday = 480 minutes). Replace <RemainingDuration> similarly if present.
+Reason: your file encodes 1 day as PT1440M (calendar), which inflates durations on import. 
+
+St.Regis_Nashville_Branding_Age…
+
+Summary tasks (Summary=1)
+
+Set <Work> to the sum of all descendant leaf <Work> minutes.
+
+Set <Start> to the earliest descendant leaf Start; <Finish> to the latest descendant leaf Finish.
+
+Set <Duration> to working minutes between that Start and Finish using the same calendar function.
+
+If <RegularWork> / <RemainingWork> exist on a summary, set them to the same rolled‑up minutes.
+
+Note: Workfront will still recompute these, but now the XML and the import will agree.
+
+Cost fields
+
+Remove <Cost> and <FixedCost> from every task to prevent Workfront (or other tools) from back‑calculating Work from dollars at the default rate. Your current summaries have costs that don’t align with their work. 
+
+St.Regis_Nashville_Branding_Age…
+
+Output
+
+Save as <input>_wf_fixed.xml.
+
+Print a short report: for each summary task, show
+Name | OldWork(h) → NewWork(h) | OldDuration(d) → NewDuration(d) | NewStart → NewFinish.
+
+Acceptance criteria (verify in Workfront Sandbox)
+
+In the Tasks view after import:
+
+Planned Hours on each summary equals the sum of its children (no inflated parent hours).
+
+Start/Due on summaries reflect the earliest start / latest finish of their children.
+
+Durations show working days (e.g., a 5‑day task imports as ~5 days, not 5×24h).
+
+No task shows unexpected changes from cost back‑calculation.
+
+Implementation skeleton (the agent should fill in)
+import re, sys, datetime as dt
+import xml.etree.ElementTree as ET
+
+MSP_NS = "http://schemas.microsoft.com/project"
+NS = {'msp': MSP_NS}
+ET.register_namespace('', MSP_NS)
+
+DUR_RE = re.compile(r'^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$')
+WORK_WINDOWS = [(dt.time(9,0), dt.time(13,0)), (dt.time(14,0), dt.time(18,0))]
+WORKING_WEEKDAYS = {0,1,2,3,4}  # Mon–Fri
+MINUTES_PER_DAY = 480
+
+def parse_pt_to_minutes(s):
+    if not s: return 0
+    m = DUR_RE.match(s.strip())
+    if not m: return 0
+    h = int(m.group(1) or 0); mns = int(m.group(2) or 0); sec = int(m.group(3) or 0)
+    return h*60 + mns + (sec // 60)
+
+def minutes_to_pt(m): return f"PT{int(round(m))}M"
+
+def parse_dt(s): return dt.datetime.fromisoformat(s)
+
+def clamp_to_work_window(ts):
+    # Move ts forward into the next working minute according to WORK_WINDOWS / WORKING_WEEKDAYS
+    d = ts
+    while d.weekday() not in WORKING_WEEKDAYS:
+        d = (d + dt.timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    for start,end in WORK_WINDOWS:
+        if d.time() < start: return d.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+        if start <= d.time() <= end: return d
+    # past last window → next day at 09:00
+    d = (d + dt.timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    while d.weekday() not in WORKING_WEEKDAYS:
+        d = (d + dt.timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    return d
+
+def move_back_into_window(ts):
+    # Move ts backward into a working minute
+    d = ts
+    while d.weekday() not in WORKING_WEEKDAYS:
+        d = (d - dt.timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
+    for start,end in reversed(WORK_WINDOWS):
+        if d.time() > end: return d.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+        if start <= d.time() <= end: return d
+    # before first window → previous day 18:00
+    d = (d - dt.timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
+    while d.weekday() not in WORKING_WEEKDAYS:
+        d = (d - dt.timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
+    return d
+
+def working_minutes_between(a, b):
+    if b <= a: return 0
+    total = 0
+    cur = a
+    # iterate day by day, summing overlaps with WORK_WINDOWS on working weekdays
+    while cur.date() <= b.date():
+        if cur.weekday() in WORKING_WEEKDAYS:
+            for start,end in WORK_WINDOWS:
+                sw = dt.datetime.combine(cur.date(), start)
+                ew = dt.datetime.combine(cur.date(), end)
+                s = max(sw, a)
+                e = min(ew, b)
+                if e > s:
+                    total += int((e - s).total_seconds() // 60)
+        cur += dt.timedelta(days=1)
+    return total
+
+def text(elem, tag, default=''):
+    x = elem.find(f'msp:{tag}', NS)
+    return x.text if x is not None and x.text is not None else default
+
+def set_text(elem, tag, value):
+    x = elem.find(f'msp:{tag}', NS)
+    if x is None: x = ET.SubElement(elem, f'{{{MSP_NS}}}{tag}')
+    x.text = value
+
+def remove(elem, tag):
+    x = elem.find(f'msp:{tag}', NS)
+    if x is not None: elem.remove(x)
+
+def main(in_path, out_path):
+    tree = ET.parse(in_path)
+    root = tree.getroot()
+
+    # enforce project constants
+    for k, v in (('MinutesPerDay','480'), ('MinutesPerWeek','2400'),
+                 ('DaysPerMonth','20'), ('WorkFormat','2')):
+        f = root.find(f'msp:{k}', NS)
+        if f is not None: f.text = v
+
+    tasks = root.findall('.//msp:Task', NS)
+    rows = []
+    for t in tasks:
+        summ = text(t,'Summary','0') == '1'
+        onum = text(t,'OutlineNumber')
+        name = text(t,'Name')
+        start = text(t,'Start')
+        finish = text(t,'Finish')
+        work_m = parse_pt_to_minutes(text(t,'Work','PT0M'))
+        rows.append({'elem':t,'summary':summ,'onum':onum,'name':name,
+                     'start':start,'finish':finish,'work_m':work_m})
+
+    # Normalize leaves: snap to working time and set Duration to working minutes
+    for r in rows:
+        if r['summary']: continue
+        if r['start'] and r['finish']:
+            s = clamp_to_work_window(parse_dt(r['start']))
+            f = move_back_into_window(parse_dt(r['finish']))
+            if f <= s:
+                f = clamp_to_work_window(s + dt.timedelta(minutes=max(r['work_m'], MINUTES_PER_DAY//2)))
+            set_text(r['elem'],'Start', s.isoformat())
+            set_text(r['elem'],'Finish', f.isoformat())
+            dur = working_minutes_between(s,f)
+            set_text(r['elem'],'Duration', minutes_to_pt(dur))
+            # mirror RemainingDuration if present
+            if r['elem'].find('msp:RemainingDuration', NS) is not None:
+                set_text(r['elem'],'RemainingDuration', minutes_to_pt(dur))
+
+    # Build outline → descendants index
+    leaves_by_parent = {}
+    for p in rows:
+        prefix = p['onum'] + '.'
+        leaves_by_parent[p['onum']] = [c for c in rows if not c['summary'] and c['onum'].startswith(prefix)]
+
+    # Update summaries: Work, Start/Finish, Duration; remove cost fields later
+    changes = []
+    for r in rows:
+        if not r['summary'] or r['onum'] in ('','0'): continue
+        leaves = leaves_by_parent.get(r['onum'], [])
+        if not leaves:  # no children; leave as-is
+            continue
+        # compute rollups from leaves
+        total_work = sum(c['work_m'] for c in leaves)
+        starts = [parse_dt(text(c['elem'],'Start')) for c in leaves if text(c['elem'],'Start')]
+        finishes = [parse_dt(text(c['elem'],'Finish')) for c in leaves if text(c['elem'],'Finish')]
+        if starts and finishes:
+            s = min(starts); f = max(finishes)
+            dur = working_minutes_between(clamp_to_work_window(s), move_back_into_window(f))
+            old_h = r['work_m']/60.0
+            set_text(r['elem'],'Work', minutes_to_pt(total_work))
+            set_text(r['elem'],'Start', clamp_to_work_window(s).isoformat())
+            set_text(r['elem'],'Finish', move_back_into_window(f).isoformat())
+            set_text(r['elem'],'Duration', minutes_to_pt(dur))
+            for tag in ('RegularWork','RemainingWork'):
+                if r['elem'].find(f'msp:{tag}', NS) is not None:
+                    set_text(r['elem'],tag, minutes_to_pt(total_work))
+            changes.append((r['name'], old_h, total_work/60.0))
+        # strip cost fields
+        remove(r['elem'],'Cost'); remove(r['elem'],'FixedCost')
+
+    for r in rows:
+        remove(r['elem'],'Cost'); remove(r['elem'],'FixedCost')
+
+    tree.write(out_path, encoding='utf-8', xml_declaration=True)
+    print(f"Updated {len(changes)} summary tasks:")
+    for name, old_h, new_h in changes:
+        print(f"  - {name}: {old_h:.2f}h → {new_h:.2f}h")
+    print("Saved:", out_path)
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Usage: python fix_workfront_xml.py input.xml [output.xml]")
+        sys.exit(1)
+    in_xml = sys.argv[1]
+    out_xml = sys.argv[2] if len(sys.argv) > 2 else in_xml.replace('.xml', '_wf_fixed.xml')
+    main(in_xml, out_xml)
+
+
+How to run
+
+python fix_workfront_xml.py \
+  St.Regis_Nashville_Branding_Agency_RFP_10.22.2024_Workfront_Export_Scenario_A_2025-11-13_05-50PM_EST.xml
+# Produces ..._wf_fixed.xml for import
+
+Why this will align Sandbox with your app
+
+Parents are roll‑ups in Workfront. The script makes each summary’s Work, Start, Finish, Duration equal to the roll‑up from its children, so the XML and Workfront agree. (Your originals have oversized parent Work and calendar-based Duration like PT101760M and PT180480M.) 
+
+St.Regis_Nashville_Branding_Age…
+
+Durations become working time (8‑h days) instead of calendar time, eliminating 24‑hour‑day inflation.
+
+Start/Finish are snapped to working windows, avoiding odd “01:00” timestamps that kick tasks outside calendar and change durations.
+
+Cost fields are removed, so Workfront won’t try to back‑derive hours from inconsistent dollar values. 
+
+St.Regis_Nashville_Branding_Age…
+
+Quick Sandbox checklist after import
+
+In the Tasks view, show Planned Hours, Duration, Start On, Due On.
+
+Pick a phase (e.g., Creative Strategy / Campaign Plan Deck). Confirm:
+
+Parent Planned Hours equals the sum of its children.
+
+Parent Start/Due equals earliest child start & latest child finish.
+
+Duration looks like working days (not 24h days).
+
+Spot‑check a few leaves: their Planned Hours and dates should match your app.
