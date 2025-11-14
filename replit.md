@@ -40,7 +40,6 @@ Preferred communication style: Simple, everyday language.
 - **State Management**: Centralized `selectionStore` with Proxy-backed compatibility layer.
 - **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, enhanced summary panel, and new unified AI Planner UI with real-time progress bar, evidence-backed suggestions, and risk indicators. Includes "Select All/Deselect All" buttons and department grouping for deliverables.
 - **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends.
-- **Gantt Chart Enhancements**: Day-of-week labels (M/T/W/Th/F/S/Su) appear on timeline headers with color-coded weekend highlighting (red for Sat/Sun, blue for weekdays). Uses stateful month/year tracking to handle Frappe Gantt's sparse date labels and correctly processes cross-year timelines.
 - **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
 
 ### Data Storage Pattern
