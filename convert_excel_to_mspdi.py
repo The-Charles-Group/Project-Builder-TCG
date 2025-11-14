@@ -1167,6 +1167,8 @@ def convert_excel_to_mspdi(
                         task_end = None
                         
                         # Check for start_date field (from Gantt merge) - prefer lowercase, fallback uppercase
+                        # Track whether start came from timeline (for SNET constraint later)
+                        has_timeline_start = False
                         start_col = "start_date" if "start_date" in row.index else "Start_Date"
                         if start_col in row.index and pd.notna(row.get(start_col)):
                             try:
@@ -1179,6 +1181,7 @@ def convert_excel_to_mspdi(
                                 else:
                                     # Date only - add default 9 AM time
                                     task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                                has_timeline_start = True
                                 logging.info(f"[GANTT MERGE] Using merged {start_col} for '{task_name}': {task_start.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse {start_col} '{row.get(start_col)}': {e}")
@@ -1283,11 +1286,21 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
                         ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
                         
-                        # FIX: Use ASAP scheduling (ConstraintType=0) so predecessor links drive timing
-                        # instead of pinning dates which creates gaps in Workfront
-                        ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
-                        ET.SubElement(task, "{%s}Manual" % ns).text = "0"  # Auto-scheduled
-                        logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0) - predecessors will drive timing")
+                        # CRITICAL FIX: Use SNET constraint when task has timeline start date
+                        # This prevents Workfront from snapping all tasks to project start (Nov 17)
+                        # Only use ASAP when task has no timeline start (let predecessors drive timing)
+                        if has_timeline_start:
+                            # SNET (Start No Earlier Than) - respects the timeline start date
+                            # ConstraintType=4 is SNET (not 2, which is Must Start On)
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "4"  # SNET
+                            ET.SubElement(task, "{%s}ConstraintDate" % ns).text = task_start.isoformat()
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "0"  # Auto-scheduled
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': SNET (Type 4) with ConstraintDate={task_start.isoformat()}")
+                        else:
+                            # ASAP - let predecessors or project start drive timing
+                            ET.SubElement(task, "{%s}ConstraintType" % ns).text = "0"  # ASAP
+                            ET.SubElement(task, "{%s}Manual" % ns).text = "0"  # Auto-scheduled
+                            logging.info(f"[CONSTRAINT] Task '{task_name}': ASAP (Type 0) - no timeline start, using calculated date")
                         
                         # Add cost if available and accumulate into component and deliverable totals
                         price_usd = row.get("Price_USD") if hasattr(row, 'get') else row["Price_USD"] if "Price_USD" in row.index else None
