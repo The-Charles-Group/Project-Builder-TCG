@@ -1076,7 +1076,7 @@ async function initializeGanttChart(tasks = []) {
       custom_popup_html: function(task) {
         const start = new Date(task._start);
         const end = new Date(task._end);
-        const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+        const businessDaysDuration = countBusinessDays(start, end);
         
         return `
           <div class="gantt-popup" style="padding:12px;">
@@ -1084,7 +1084,7 @@ async function initializeGanttChart(tasks = []) {
             <p style="margin:4px 0;"><strong>Department:</strong> ${task.department || 'N/A'}</p>
             <p style="margin:4px 0;"><strong>Start:</strong> ${task.start}</p>
             <p style="margin:4px 0;"><strong>End:</strong> ${task.end}</p>
-            <p style="margin:4px 0;"><strong>Duration:</strong> ${duration} days</p>
+            <p style="margin:4px 0;"><strong>Duration:</strong> ${businessDaysDuration} business days</p>
             <p style="margin:4px 0;"><strong>Hours:</strong> ${task.hours || 0}</p>
             ${task.critical_path ? '<p style="margin:4px 0;color:#fbbf24;"><strong>⚡ Critical Path</strong></p>' : ''}
           </div>
@@ -1148,6 +1148,9 @@ async function initializeGanttChart(tasks = []) {
         }
       });
       
+      // Apply holiday styling to Gantt SVG columns
+      applyHolidayStyling(container);
+      
       // Show PDF download button after Gantt is successfully rendered
       showPDFDownloadButton();
     }, 100);
@@ -1155,6 +1158,100 @@ async function initializeGanttChart(tasks = []) {
   } catch (error) {
     console.error('Error initializing Gantt chart:', error);
     showFallbackTable(tasks);
+  }
+}
+
+// Apply holiday styling to Frappe Gantt SVG columns
+function applyHolidayStyling(container) {
+  console.log('[Holiday Styling] Applying holiday column styles to Gantt chart...');
+  
+  try {
+    const svg = container.querySelector('svg');
+    if (!svg) {
+      console.warn('[Holiday Styling] SVG element not found');
+      return;
+    }
+    
+    // Only apply in Day view mode
+    const viewMode = document.getElementById('gantt-view-mode')?.value || 'Day';
+    if (viewMode !== 'Day') {
+      console.log('[Holiday Styling] Skipping - not in Day view');
+      return;
+    }
+    
+    // Get all grid row rectangles (these are the vertical date columns)
+    const gridRows = svg.querySelectorAll('g.grid-row rect');
+    console.log(`[Holiday Styling] Found ${gridRows.length} grid row rectangles`);
+    
+    // Get all date header text elements to extract dates
+    const lowerTexts = svg.querySelectorAll('.lower-text');
+    console.log(`[Holiday Styling] Found ${lowerTexts.length} date labels`);
+    
+    let holidayCount = 0;
+    
+    // Frappe Gantt's grid rows correspond 1:1 with date labels
+    // Each rect in grid-row has the same x-position as its date label
+    lowerTexts.forEach((textElement, index) => {
+      // Get x position of this date label
+      const textX = parseFloat(textElement.getAttribute('x'));
+      
+      // Parse the date - Frappe Gantt doesn't add data attributes, so we need to
+      // reconstruct it from the visible text
+      const dayText = textElement.textContent.trim();
+      
+      // Find the corresponding upper-text (month/year) for this date
+      // Upper texts are grouped differently, but we can find the one at a similar x position
+      const upperTexts = svg.querySelectorAll('.upper-text');
+      let monthYearText = '';
+      
+      // Find the upper text that's closest to our current x position (to the left)
+      for (let i = upperTexts.length - 1; i >= 0; i--) {
+        const upperX = parseFloat(upperTexts[i].getAttribute('x'));
+        if (upperX <= textX) {
+          monthYearText = upperTexts[i].textContent.trim();
+          break;
+        }
+      }
+      
+      // Parse the date from "November 2025" (or "Nov 2025") + day number
+      if (monthYearText && dayText) {
+        try {
+          // Parse month and year from string like "November 2025" or "Nov 2025"
+          const monthYearParts = monthYearText.split(' ');
+          if (monthYearParts.length >= 2) {
+            const monthName = monthYearParts[0];
+            const year = monthYearParts[1];
+            
+            // Construct date string
+            const dateStr = `${monthName} ${dayText}, ${year}`;
+            const date = new Date(dateStr);
+            
+            // Check if this is a holiday
+            if (isHoliday(date)) {
+              // Find the grid rect at this x position
+              const matchingRect = Array.from(gridRows).find(rect => {
+                const rectX = parseFloat(rect.getAttribute('x'));
+                return Math.abs(rectX - textX) < 2; // Allow small tolerance
+              });
+              
+              if (matchingRect) {
+                matchingRect.classList.add('holiday-column');
+                textElement.classList.add('holiday-column');
+                holidayCount++;
+                console.log(`[Holiday Styling] Marked ${formatLocalDate(date)} as holiday`);
+              }
+            }
+          }
+        } catch (err) {
+          // Silently skip dates we can't parse
+        }
+      }
+    });
+    
+    console.log(`[Holiday Styling] ✅ Applied holiday styling to ${holidayCount} columns`);
+    
+  } catch (error) {
+    console.error('[Holiday Styling] Error applying holiday styling:', error);
   }
 }
 
@@ -1180,7 +1277,7 @@ function showFallbackTable(tasks) {
 function calculateDuration(start, end) {
   const startDate = new Date(start);
   const endDate = new Date(end);
-  return Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+  return countBusinessDays(startDate, endDate);
 }
 
 // ================================================================================
@@ -4517,13 +4614,13 @@ function calculateMetadataFromTasks(tasks) {
     return updatedMetadata;
   }
   
-  // Calculate total duration from earliest start to latest end (INCLUSIVE)
+  // Calculate total duration from earliest start to latest end (INCLUSIVE) - using business days
   const startDates = tasks.map(t => new Date(t.start));
   const endDates = tasks.map(t => new Date(t.end));
   const minStart = new Date(Math.min(...startDates));
   const maxEnd = new Date(Math.max(...endDates));
-  // FIX: Add +1 to make duration inclusive (e.g., Nov 1 to Nov 5 = 5 days, not 4)
-  const totalDurationDays = Math.ceil((maxEnd - minStart) / (1000 * 60 * 60 * 24)) + 1;
+  // Use business days calculation instead of calendar days
+  const totalDurationDays = countBusinessDays(minStart, maxEnd);
   
   // Count total tasks
   const totalTasks = tasks.length;

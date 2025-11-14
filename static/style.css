@@ -1254,3 +1254,15 @@ body.chatgpt-sidebar-expanded {
 .popup-wrapper .subtitle {
   color: var(--muted) !important;
 }
+
+/* Holiday column styling - visible but grayed out */
+.holiday-column {
+  background: rgba(255, 0, 0, 0.08) !important;
+  border-left: 1px dashed rgba(255, 0, 0, 0.2) !important;
+  border-right: 1px dashed rgba(255, 0, 0, 0.2) !important;
+}
+
+.holiday-column .lower-text {
+  fill: rgba(255, 100, 100, 0.9) !important;
+  font-style: italic;
+}
