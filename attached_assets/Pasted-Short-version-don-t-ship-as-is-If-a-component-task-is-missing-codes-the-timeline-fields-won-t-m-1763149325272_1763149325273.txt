@@ -1,0 +1,94 @@
+Short version: don’t ship “as‑is.” If a component/task is missing codes, the timeline fields won’t merge and Workfront will schedule those tasks at the project start (Nov 17 in your file) because they come in as ASAP with no constraints/dependencies. That is exactly what you’re seeing now. Your current XML sets the project StartDate to 2025‑11‑17 09:00; without a constraint on each task, Workfront snaps everything to that date. 
+
+sa-server-file-api-user-upload
+
+Below is what I recommend, in order of safety.
+
+1) Make code‑based matching mandatory (preferred)
+
+Generate deterministic codes for any component/task that lacks one (e.g., slug of the name + stable hash) before you build the WBS DataFrame. Then merge by codes only.
+
+If any component/task still has a null code at export time, fail the build and print a clear report (deliverable, component name, task name).
+
+Why: Names are brittle (punctuation, spacing, rewording) and a silent name match can mis‑merge hours/dates. Codes are stable.
+
+Why this matters right now: Your latest XML schedules the project from start (11/17) and uses a standard Mon–Fri calendar with holidays; if a task’s timeline values don’t merge, it arrives with ASAP default behavior and shifts to 11/17. That’s consistent with your file header. 
+
+sa-server-file-api-user-upload
+
+2) If you must ship today: add a strict, visible name‑based fallback (tasks only)
+
+If a code is missing:
+
+Match only leaf tasks by (deliverable_code + component name + task name), after normalizing (lowercase; strip punctuation/whitespace; collapse spaces; remove “&” vs “and” variation).
+
+Only accept the match if it’s unique inside that deliverable+component. If more than one candidate matches, do not merge—emit a warning row in an “unmatched.csv”.
+
+Never apply name fallback to components (too much ambiguity). If component_code is missing, either:
+
+generate a component_code from component name up‑front, or
+
+require the user to pick from a list; don’t guess.
+
+This gets you working results without risking silent, wrong merges.
+
+3) Guardrails that prevent “everything starts Nov 17” again
+
+Add these to the exporter now, independent of the merge strategy:
+
+Write SNET for tasks that have explicit start dates.
+For every leaf task with a start_date after merge, emit:
+
+<ConstraintType>2</ConstraintType>        <!-- SNET -->
+<ConstraintDate>YYYY-MM-DDT09:00:00</ConstraintDate>
+
+
+(Keep <Manual>0</Manual>.) Otherwise Workfront ignores <Start> and pulls ASAP tasks to the project start. Your header StartDate is 2025‑11‑17 09:00, so that’s where they went. 
+
+sa-server-file-api-user-upload
+
+Only use ASAP (ConstraintType=0) when the task has a predecessor.
+If you also export <PredecessorLink> chains, ASAP is fine—the network holds the dates. If there’s no predecessor, use SNET as above.
+
+Keep durations/work in minutes and in working time.
+Your header is already MinutesPerDay=480 and DurationFormat 7 (days)—good; keep it that way. Holidays are included using <TimePeriod>—also good. 
+
+sa-server-file-api-user-upload
+
+4) Minimal implementation plan (what to tell the Replit architect)
+
+Upstream (scenario builder):
+
+Ensure every component/task has a code. If missing, generate one (slug + short hash) and persist it in the scenario so future runs are stable.
+
+Timeline merge:
+
+Primary key: (deliverable_code, component_code, task_code).
+
+Fallback (only if codes missing):
+
+If component_code is null but component name is present, synthesize component_code from name and use it (don’t fuzzy match to existing components unless unique).
+
+If task_code is null, name‑match within the resolved component; accept only unique matches; otherwise leave unmatched and log.
+
+Exporter:
+
+When a task row has merged start_date, write SNET with matching ConstraintDate.
+
+If a task has a predecessor, you may keep ASAP.
+
+Continue emitting durations/work as PT###M; keep project DurationFormat=7 and the holiday exceptions as you do now. 
+
+sa-server-file-api-user-upload
+
+Pre‑flight checks (fail fast):
+
+Count of tasks with (no code and no unique name match) == 0. If >0, abort and write unmatched.csv for the user.
+
+Count of tasks with explicit start but no SNET == 0.
+
+(Optional) Count of tasks with neither SNET nor predecessors == 0.
+
+Why I don’t recommend “ship as‑is”
+
+If you ship code‑only matching without filling missing codes, any row with null codes will bypass the merge. Those tasks import as ASAP and snap to the project start (11/17), which is precisely the failure you’re chasing. The project header in your file fixes the start at 11/17, so you’ll keep re‑creating the issue.
