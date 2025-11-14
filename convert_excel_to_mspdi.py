@@ -40,6 +40,36 @@ class ConstraintType(Enum):
     FINISH_NO_LATER_THAN = 7
 
 
+def format_duration_minutes(hours: float) -> str:
+    """
+    Convert hours to ISO 8601 duration format in minutes (PTxxxM) as required by MS Project.
+    
+    Args:
+        hours: Number of hours (can be fractional)
+        
+    Returns:
+        ISO 8601 duration string in minutes format (e.g., "PT480M" for 8 hours)
+    """
+    if hours is None or hours == 0:
+        return "PT0M"
+    minutes = round(hours * 60)
+    return f"PT{minutes}M"
+
+
+def format_rate(rate: float) -> str:
+    """
+    Format rate as plain decimal without currency symbols or time units.
+    MS Project XML requires plain decimal format (e.g., "195.00" not "$195.00/h").
+    
+    Args:
+        rate: Hourly rate
+        
+    Returns:
+        Plain decimal string (e.g., "195.00")
+    """
+    return f"{rate:.2f}"
+
+
 def create_governance_milestone_task(
     task_uid: int,
     ns: str,
@@ -85,11 +115,10 @@ def create_governance_milestone_task(
     # Mark as milestone if no hours
     if hours == 0:
         ET.SubElement(task, "{%s}Milestone" % ns).text = "1"
-        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0H0M0S"
+        ET.SubElement(task, "{%s}Duration" % ns).text = "PT0M"
     else:
         ET.SubElement(task, "{%s}Milestone" % ns).text = "0"
-        duration_days = max(1, int(hours / 8))
-        ET.SubElement(task, "{%s}Duration" % ns).text = f"PT{duration_days * 8}H0M0S"
+        ET.SubElement(task, "{%s}Duration" % ns).text = format_duration_minutes(hours)
     
     # Set dates
     ET.SubElement(task, "{%s}Start" % ns).text = milestone_date.isoformat()
@@ -113,8 +142,8 @@ def create_governance_milestone_task(
     ET.SubElement(task, "{%s}Priority" % ns).text = priority_map.get(governance_type, "500")
     
     # Work and duration format
-    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "39"  # Hours
-    ET.SubElement(task, "{%s}Work" % ns).text = f"PT{hours}H0M0S"
+    ET.SubElement(task, "{%s}DurationFormat" % ns).text = "7"  # Minutes
+    ET.SubElement(task, "{%s}Work" % ns).text = format_duration_minutes(hours)
     ET.SubElement(task, "{%s}EffortDriven" % ns).text = "0"
     ET.SubElement(task, "{%s}Summary" % ns).text = "0"
     ET.SubElement(task, "{%s}Critical" % ns).text = "0"
@@ -224,9 +253,9 @@ def convert_excel_to_mspdi(
         if days_ahead <= 0:
             days_ahead += 7
         project_start = today + timedelta(days=days_ahead)
-        project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
+        project_start = project_start.replace(hour=8, minute=0, second=0, microsecond=0)
     else:
-        project_start = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        project_start = datetime.now().replace(hour=8, minute=0, second=0, microsecond=0)
     
     # Create MSPDI XML structure
     ns = "http://schemas.microsoft.com/project"
@@ -235,7 +264,6 @@ def convert_excel_to_mspdi(
     root = ET.Element("{%s}Project" % ns)
     
     # Add enhanced project properties
-    ET.SubElement(root, "{%s}SaveVersion" % ns).text = "14"  # MS Project 2010 format
     ET.SubElement(root, "{%s}Name" % ns).text = project_name or "Project"
     ET.SubElement(root, "{%s}Title" % ns).text = project_name or "Project"
     ET.SubElement(root, "{%s}Subject" % ns).text = "Agency Project Plan"
@@ -255,8 +283,8 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}CurrencyCode" % ns).text = "USD"
     ET.SubElement(root, "{%s}CurrencySymbolPosition" % ns).text = "0"
     ET.SubElement(root, "{%s}CalendarUID" % ns).text = "1"
-    ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "09:00:00"
-    ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "18:00:00"
+    ET.SubElement(root, "{%s}DefaultStartTime" % ns).text = "08:00:00"
+    ET.SubElement(root, "{%s}DefaultFinishTime" % ns).text = "17:00:00"
     ET.SubElement(root, "{%s}MinutesPerDay" % ns).text = str(int(hours_per_day * 60))
     ET.SubElement(root, "{%s}MinutesPerWeek" % ns).text = str(int(hours_per_day * 60 * 5))
     ET.SubElement(root, "{%s}DaysPerMonth" % ns).text = "20"
@@ -285,7 +313,6 @@ def convert_excel_to_mspdi(
     ET.SubElement(root, "{%s}BaselineForEarnedValue" % ns).text = "0"
     ET.SubElement(root, "{%s}AutoAddNewResourcesAndTasks" % ns).text = "1"
     ET.SubElement(root, "{%s}CurrentDate" % ns).text = datetime.now().isoformat()
-    ET.SubElement(root, "{%s}MicrosoftProjectServerURL" % ns).text = "1"
     ET.SubElement(root, "{%s}Autolink" % ns).text = "1"
     ET.SubElement(root, "{%s}NewTaskStartDate" % ns).text = "0"  # Project Start Date
     ET.SubElement(root, "{%s}NewTasksAreManual" % ns).text = "0"
@@ -365,13 +392,13 @@ def convert_excel_to_mspdi(
             
             # Morning shift
             wt1 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
-            ET.SubElement(wt1, "{%s}FromTime" % ns).text = "09:00:00"
+            ET.SubElement(wt1, "{%s}FromTime" % ns).text = "08:00:00"
             ET.SubElement(wt1, "{%s}ToTime" % ns).text = "12:00:00"
             
             # Afternoon shift
             wt2 = ET.SubElement(working_times, "{%s}WorkingTime" % ns)
             ET.SubElement(wt2, "{%s}FromTime" % ns).text = "13:00:00"
-            ET.SubElement(wt2, "{%s}ToTime" % ns).text = "18:00:00"
+            ET.SubElement(wt2, "{%s}ToTime" % ns).text = "17:00:00"
         else:
             ET.SubElement(weekday, "{%s}DayWorking" % ns).text = "0"
     
@@ -409,9 +436,9 @@ def convert_excel_to_mspdi(
         ET.SubElement(res, "{%s}CanLevel" % ns).text = "1"
         ET.SubElement(res, "{%s}AccrueAt" % ns).text = "3"  # Prorated
         ET.SubElement(res, "{%s}WorkGroup" % ns).text = "0"  # Default
-        ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate or 150:.2f}/h"
+        ET.SubElement(res, "{%s}StandardRate" % ns).text = format_rate(blended_rate or 150)
         ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"  # Per hour
-        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+        ET.SubElement(res, "{%s}OvertimeRate" % ns).text = format_rate((blended_rate or 150) * 1.5)
         ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
         ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
         ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
@@ -461,7 +488,7 @@ def convert_excel_to_mspdi(
             
             # Add rate if available
             if blended_rate:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${blended_rate:.2f}/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = format_rate(blended_rate)
             elif "Rate_USD" in df.columns:
                 # Try to find rate for this specific role
                 role_rate_rows = role_rows[role_rows["Role"] == role]
@@ -469,12 +496,12 @@ def convert_excel_to_mspdi(
                     role_rate = role_rate_rows["Rate_USD"].dropna().iloc[0] if not role_rate_rows["Rate_USD"].dropna().empty else 150
                 else:
                     role_rate = 150
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = f"${role_rate:.2f}/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = format_rate(role_rate)
             else:
-                ET.SubElement(res, "{%s}StandardRate" % ns).text = "$150.00/h"
+                ET.SubElement(res, "{%s}StandardRate" % ns).text = format_rate(150)
             
             ET.SubElement(res, "{%s}StandardRateFormat" % ns).text = "2"
-            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = f"${(blended_rate or 150) * 1.5:.2f}/h"
+            ET.SubElement(res, "{%s}OvertimeRate" % ns).text = format_rate((blended_rate or 150) * 1.5)
             ET.SubElement(res, "{%s}OvertimeRateFormat" % ns).text = "2"
             ET.SubElement(res, "{%s}CostPerUse" % ns).text = "0"
             ET.SubElement(res, "{%s}CalendarUID" % ns).text = "1"
@@ -637,7 +664,7 @@ def convert_excel_to_mspdi(
                             # Remove timezone info to make it timezone-naive for consistent comparisons
                             deliverable_start_date = deliverable_start_date.replace(tzinfo=None)
                         else:
-                            deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                            deliverable_start_date = datetime.fromisoformat(start_val).replace(hour=8, minute=0, second=0)
                         logging.info(f"[GANTT MERGE] Deliverable '{deliverable_name}' Start: {deliverable_start_date.isoformat()}")
                     except Exception as e:
                         logging.warning(f"Could not parse deliverable Start_Date '{first_row_start}': {e}")
@@ -917,8 +944,8 @@ def convert_excel_to_mspdi(
                                     # Remove timezone info to make it timezone-naive for consistent comparisons
                                     task_start = task_start.replace(tzinfo=None)
                                 else:
-                                    # Date only - add default 9 AM time
-                                    task_start = datetime.fromisoformat(start_val).replace(hour=9, minute=0, second=0)
+                                    # Date only - add default 8 AM time
+                                    task_start = datetime.fromisoformat(start_val).replace(hour=8, minute=0, second=0)
                                 logging.info(f"[GANTT MERGE] Using merged Start_Date for '{task_name}': {task_start.isoformat()}")
                             except Exception as e:
                                 logging.warning(f"Could not parse Start_Date '{row.get('Start_Date')}': {e}")
@@ -1012,8 +1039,8 @@ def convert_excel_to_mspdi(
                         ET.SubElement(task, "{%s}BCWP" % ns).text = "0"
                         ET.SubElement(task, "{%s}PhysicalPercentComplete" % ns).text = "0"
                         ET.SubElement(task, "{%s}EarnedValueMethod" % ns).text = "0"
-                        ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0H0M0S"
-                        ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0H0M0S"
+                        ET.SubElement(task, "{%s}ActualWorkProtected" % ns).text = "PT0M"
+                        ET.SubElement(task, "{%s}ActualOvertimeWorkProtected" % ns).text = "PT0M"
                         ET.SubElement(task, "{%s}Active" % ns).text = "1"
                         ET.SubElement(task, "{%s}IsPublished" % ns).text = "1"
                         ET.SubElement(task, "{%s}CommitmentType" % ns).text = "0"
@@ -1392,7 +1419,7 @@ def convert_excel_to_mspdi(
                         # Create PredecessorLink element (only for leaf tasks)
                         pred_link = ET.SubElement(task_elem, "{%s}PredecessorLink" % ns)
                         ET.SubElement(pred_link, "{%s}PredecessorUID" % ns).text = str(predecessor_uid)
-                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "2"  # FINISH_TO_START
+                        ET.SubElement(pred_link, "{%s}Type" % ns).text = "1"  # FINISH_TO_START
                         ET.SubElement(pred_link, "{%s}CrossProject" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LinkLag" % ns).text = "0"
                         ET.SubElement(pred_link, "{%s}LagFormat" % ns).text = "7"  # Days
@@ -1769,7 +1796,6 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
     ET.register_namespace("", ns)
     
     root = ET.Element("{%s}Project" % ns)
-    ET.SubElement(root, "{%s}SaveVersion" % ns).text = "14"
     ET.SubElement(root, "{%s}Name" % ns).text = project_name
     ET.SubElement(root, "{%s}Title" % ns).text = project_name
     
