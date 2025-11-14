@@ -1,0 +1,70 @@
+Quick fix (edit your generator or patch the XML)
+A) Rewrite each exception to use <TimePeriod>
+
+Use this shape for every holiday/closure:
+
+<Exceptions>
+  <Exception>
+    <EnteredByOccurrences>0</EnteredByOccurrences>
+    <TimePeriod>
+      <FromDate>2025-11-27T00:00:00</FromDate>
+      <ToDate>2025-11-28T23:59:59</ToDate>
+    </TimePeriod>
+    <Occurrences>1</Occurrences>
+    <Name>Thanksgiving – Office Closed</Name>
+    <Type>1</Type>           <!-- 1 = nonworking -->
+    <DayWorking>0</DayWorking>
+  </Exception>
+
+  <Exception>
+    <EnteredByOccurrences>0</EnteredByOccurrences>
+    <TimePeriod>
+      <FromDate>2025-12-22T00:00:00</FromDate>
+      <ToDate>2026-01-02T23:59:59</ToDate>
+    </TimePeriod>
+    <Occurrences>1</Occurrences>
+    <Name>Holiday Break – Office Closed</Name>
+    <Type>1</Type>
+    <DayWorking>0</DayWorking>
+  </Exception>
+  <!-- repeat for the rest of the 2025 holidays -->
+</Exceptions>
+
+
+Your current exceptions block is in the right place (under <Calendars><Calendar>); only the inner structure needs to be changed. 
+
+St.Regis_Nashville_Branding_Age…
+
+B) Set the project header back to days
+
+Change:
+
+<DurationFormat>53</DurationFormat>
+
+
+to:
+
+<DurationFormat>7</DurationFormat>
+
+
+This matches your earlier, working exports and avoids elapsed‑duration edge cases in Workfront.
+
+Optional but recommended hardening (prevents other “can’t read file” errors)
+
+Keep all durations/work in minutes (e.g., PT480M, PT1440M) and avoid mixing hour-style codes (PT120H0M0S). The earlier files that imported used minutes consistently.
+
+Don’t put Work on summary tasks. Let Workfront roll up from children; several of your older files had large parent Work values that weren’t used by Workfront anyway. 
+
+St.Regis_Nashville_Branding_Age…
+
+“Tell Replit agent exactly this”
+
+Update the MSPDI exporter to:
+
+Wrap every calendar exception in <TimePeriod><FromDate/><ToDate/></TimePeriod>, include <Type>1</Type>, <DayWorking>0</DayWorking>, and <Occurrences>1</Occurrences>.
+
+Set <DurationFormat> to 7 in the project header.
+
+Ensure all <Duration>/<RemainingDuration>/<Work>/<RemainingWork> values are emitted as minutes (PT###M).
+
+Leave summary tasks’ <Work> as PT0M and store planned hours on leaf tasks/assignments only.
