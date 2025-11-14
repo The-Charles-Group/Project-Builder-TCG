@@ -803,48 +803,8 @@ SCENARIO_MULT = {
     "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True}
 }
 
-# US & Mexico holidays for business day calendar
-def _get_us_mx_holidays(year: int) -> list:
-    """Get US federal and Mexico holidays for a given year."""
-    holidays = []
-    
-    # US Federal Holidays
-    holidays.append(np.datetime64(f'{year}-01-01'))  # New Year's Day
-    # MLK Day (3rd Monday in January)
-    mlk_day = 15 + (7 - datetime.date(year, 1, 15).weekday()) % 7
-    holidays.append(np.datetime64(f'{year}-01-{mlk_day:02d}'))
-    # Presidents Day (3rd Monday in February)
-    pres_day = 15 + (7 - datetime.date(year, 2, 15).weekday()) % 7
-    holidays.append(np.datetime64(f'{year}-02-{pres_day:02d}'))
-    # Memorial Day (last Monday in May)
-    last_may = datetime.date(year, 5, 31)
-    # Roll back from May 31 to the last Monday (weekday 0)
-    days_since_monday = last_may.weekday()  # 0=Mon, 6=Sun
-    memorial = last_may - datetime.timedelta(days=days_since_monday)
-    holidays.append(np.datetime64(memorial))
-    holidays.append(np.datetime64(f'{year}-07-04'))  # Independence Day
-    # Labor Day (1st Monday in September)
-    labor_day = 1 + (7 - datetime.date(year, 9, 1).weekday()) % 7
-    holidays.append(np.datetime64(f'{year}-09-{labor_day:02d}'))
-    # Columbus Day (2nd Monday in October)
-    columbus_day = 8 + (7 - datetime.date(year, 10, 8).weekday()) % 7
-    holidays.append(np.datetime64(f'{year}-10-{columbus_day:02d}'))
-    holidays.append(np.datetime64(f'{year}-11-11'))  # Veterans Day
-    # Thanksgiving (4th Thursday in November)
-    first_nov = datetime.date(year, 11, 1)
-    thanksgiving = first_nov + datetime.timedelta(days=(3 - first_nov.weekday()) % 7 + 21)
-    holidays.append(np.datetime64(thanksgiving))
-    holidays.append(np.datetime64(f'{year}-12-25'))  # Christmas
-    
-    # Mexico holidays
-    holidays.append(np.datetime64(f'{year}-02-05'))  # Constitution Day
-    holidays.append(np.datetime64(f'{year}-03-21'))  # Benito Juárez's Birthday
-    holidays.append(np.datetime64(f'{year}-05-01'))  # Labor Day (Mexico)
-    holidays.append(np.datetime64(f'{year}-09-16'))  # Independence Day (Mexico)
-    holidays.append(np.datetime64(f'{year}-11-20'))  # Revolution Day
-    
-    return holidays
-
+# Note: Holiday calendar is now managed by BusinessCalendar class (business_calendar.py)
+# which includes all 34 TCG company holidays for accurate business-day scheduling.
 
 def _find_v4_path() -> str | None:
     import glob
@@ -9057,11 +9017,14 @@ def api_reorder_timeline(p: ReorderPayload):
         updated_item["schedule"] = sched
         reordered_items.append(updated_item)
 
-        # advance cursor to the day after this deliverable's last end date
+        # advance cursor to the next business day after this deliverable's last end date
         if sched:
             last_end = sched[-1]["end_date"]
-            y, m, d = map(int, last_end.split("-"))
-            cursor_date = datetime.date(y, m, d) + datetime.timedelta(days=1)
+            # Import BusinessCalendar for holiday-aware scheduling
+            from business_calendar import BusinessCalendar
+            # Parse the end date and advance to next business day
+            last_end_dt = datetime.datetime.fromisoformat(last_end)
+            cursor_date = BusinessCalendar.add_business_days(last_end_dt, 1).date()
 
     # Update scenario with new order and persist
     scen["items"] = reordered_items

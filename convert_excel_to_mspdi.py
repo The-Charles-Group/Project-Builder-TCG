@@ -16,6 +16,9 @@ import logging
 import hashlib
 import random
 
+# Import BusinessCalendar for holiday-aware scheduling
+from business_calendar import BusinessCalendar
+
 # Configure logging for debugging
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 
@@ -353,10 +356,8 @@ def convert_excel_to_mspdi(
         project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
     elif start_date_mode == "next_monday":
         today = datetime.now()
-        days_ahead = 0 - today.weekday()  # Monday is 0
-        if days_ahead <= 0:
-            days_ahead += 7
-        project_start = today + timedelta(days=days_ahead)
+        # Use BusinessCalendar to get next business day (skips holidays)
+        project_start = BusinessCalendar.next_business_day(today)
         project_start = project_start.replace(hour=9, minute=0, second=0, microsecond=0)
     else:
         project_start = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
@@ -2241,32 +2242,29 @@ def create_empty_mspdi_xml(project_name: str, start_date_iso: Optional[str] = No
 
 
 def add_business_days(start_date: datetime, days: int) -> datetime:
-    """Add business days to a date, skipping weekends"""
-    current = start_date
-    days_added = 0
+    """
+    Add business days to a date, skipping weekends AND holidays.
     
-    while days_added < days:
-        current += timedelta(days=1)
-        if current.weekday() < 5:  # Monday = 0, Friday = 4
-            days_added += 1
-    
-    return current
+    DEPRECATED: Use BusinessCalendar.add_business_days() directly instead.
+    This wrapper exists for backwards compatibility only.
+    """
+    return BusinessCalendar.add_business_days(start_date, days)
 
 
 def calculate_business_hours(start_date: datetime, end_date: datetime) -> float:
-    """Calculate business hours between two dates"""
+    """
+    Calculate business hours between two dates.
+    
+    Now uses BusinessCalendar to properly count only business days (excluding holidays).
+    """
     if end_date <= start_date:
         return 0.0
     
-    current = start_date
-    total_hours = 0.0
+    # Use BusinessCalendar to count only business days (excludes weekends AND holidays)
+    business_days = BusinessCalendar.business_days_between(start_date, end_date)
     
-    while current < end_date:
-        if current.weekday() < 5:  # Business day
-            total_hours += 8.0  # 8 hours per business day
-        current += timedelta(days=1)
-    
-    return total_hours
+    # 8 hours per business day
+    return float(business_days * 8.0)
 
 
 if __name__ == "__main__":
