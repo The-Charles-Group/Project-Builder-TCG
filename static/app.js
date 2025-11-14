@@ -7,7 +7,9 @@ let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 // ================================================================================
 // TCG Business Calendar - Holidays & Weekend Handling
 // ================================================================================
-// Hard-coded TCG + US holiday dates (2025-2026) - visible in Gantt but non-working
+// Hard-coded TCG + US holiday dates (2025-2026)
+// Weekday holidays (Mon-Fri): Visible in Gantt Day view with red styling, counted as non-working
+// Weekend holidays (Sat-Sun): Not visible in Day view (weekends always removed), but still non-working for duration calculations
 const TCG_HOLIDAYS = [
   // 2025 Holidays
   '2025-01-01', // New Year's Day
@@ -1395,28 +1397,19 @@ function generateDateColumns(startDate, endDate, groupBy) {
       const dayName = dayNames[current.getDay()];
       const dateLabel = `${current.getMonth() + 1}/${current.getDate()}`;
       
-      // Check if holiday FIRST - holidays are always visible even if they fall on weekends
-      if (isHoliday(current)) {
-        columns.push({
-          date: new Date(current),
-          label: `${dayName} ${dateLabel}`,
-          isHoliday: true
-        });
-        current.setDate(current.getDate() + 1);
-        continue;
-      }
-      
-      // Skip weekends (but NOT holidays that fall on weekends)
+      // ALWAYS skip weekends (Sat/Sun) regardless of holiday status
+      // Weekends are NEVER shown in Day view, even if they are company holidays
       if (isWeekend(current)) {
         current.setDate(current.getDate() + 1);
         continue;
       }
       
-      // Regular business day
+      // For weekdays (Mon-Fri), check if it's a holiday and mark it
+      const isHolidayDate = isHoliday(current);
       columns.push({
         date: new Date(current),
         label: `${dayName} ${dateLabel}`,
-        isHoliday: false
+        isHoliday: isHolidayDate
       });
       current.setDate(current.getDate() + 1);
     }
