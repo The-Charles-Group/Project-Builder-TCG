@@ -3458,6 +3458,14 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     
+    # --- NORMALIZE WBS VALUES AT SOURCE (CRITICAL FIX FOR TYPE MISMATCHES) ---
+    # Apply normalize_wbs to all WBS columns to ensure consistent string values
+    # This prevents float vs string mismatches that break parent-child relationships
+    if "WBS_ID" in df.columns:
+        df["WBS_ID"] = df["WBS_ID"].apply(normalize_wbs)
+    if "Parent_WBS_ID" in df.columns:
+        df["Parent_WBS_ID"] = df["Parent_WBS_ID"].apply(normalize_wbs)
+    
     # --- ENFORCE A-E COLUMN ORDER FOR v3 COMPATIBILITY ---
     order_ae = ["Row_ID","Deliverable_Code","Task_Code","Service_Department","Deliverable"]
     # Ensure all required columns exist before reordering
