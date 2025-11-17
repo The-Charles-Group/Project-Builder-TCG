@@ -9876,6 +9876,50 @@ def convert_excel_to_mspdi(
         #     ...filtering logic...
         # rows = filtered_rows
 
+        # FIX: Derive actual project StartDate and FinishDate from timeline_tasks
+        # This ensures Workfront imports show correct durations instead of inflated values
+        # (e.g., 844 days when actual work is ~250 days)
+        actual_project_start = None
+        actual_project_finish = None
+        
+        if uid_to_sched:
+            # Parse all task Start/Finish dates to find earliest and latest
+            all_starts = []
+            all_finishes = []
+            
+            for task_uid, sched in uid_to_sched.items():
+                try:
+                    # Parse the ISO format dates (YYYY-MM-DDTHH:MM:SS)
+                    start_dt = datetime.datetime.fromisoformat(sched["Start"])
+                    finish_dt = datetime.datetime.fromisoformat(sched["Finish"])
+                    all_starts.append(start_dt)
+                    all_finishes.append(finish_dt)
+                except (ValueError, KeyError, TypeError):
+                    # Skip tasks with invalid dates
+                    continue
+            
+            # Use actual task dates if we found any valid dates
+            if all_starts and all_finishes:
+                actual_project_start = min(all_starts)
+                actual_project_finish = max(all_finishes)
+                
+                # Override the calculated project_start with actual earliest task date
+                project_start = actual_project_start
+                project_finish = actual_project_finish
+                
+                print(f"[MSPDI Export] Project dates derived from timeline tasks:")
+                print(f"  - Start: {project_start.strftime('%Y-%m-%d')} (earliest task)")
+                print(f"  - Finish: {project_finish.strftime('%Y-%m-%d')} (latest task)")
+                print(f"  - Duration: {(project_finish - project_start).days} days")
+            else:
+                # Fallback: use calculated project_start for both
+                project_finish = project_start + datetime.timedelta(days=180)
+                print(f"[MSPDI Export] WARNING: No valid task dates found, using fallback project dates")
+        else:
+            # No tasks scheduled - use fallback
+            project_finish = project_start + datetime.timedelta(days=180)
+            print(f"[MSPDI Export] WARNING: No task schedules found, using fallback project dates")
+
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
