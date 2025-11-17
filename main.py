@@ -7923,7 +7923,7 @@ def _export_single_scenario_xml(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
             sheet_name=scenario_label,
-            start_date_mode="next_monday",
+            start_date_mode="fixed" if project_start_iso else "next_monday",
             fixed_start_iso=project_start_iso,
             hours_per_day=8.0,
             merge_identical_children=False,
@@ -9177,6 +9177,15 @@ def convert_excel_to_mspdi(
                     return float(value)
                 except (ValueError, TypeError):
                     return default
+            
+            def safe_str(value, default=""):
+                """Convert value to string, handling NaN and None."""
+                if pd.isna(value) or value is None:
+                    return default
+                s = str(value).strip()
+                if s.lower() in ['nan', 'none', 'nat', '']:
+                    return default
+                return s
                     
             # Clean up task name and role
             task_name = str(row.get("Task_Name", ""))
@@ -9190,6 +9199,10 @@ def convert_excel_to_mspdi(
             # TASK 16: Extract Rate_USD and Price_USD from scenario pricing (no re-computation)
             rate_usd = safe_float(row.get("Rate_USD"), None)
             price_usd = safe_float(row.get("Price_USD"), None)
+            
+            # FIX: Preserve Start_Date and End_Date from Excel if they exist (from Gantt timeline_tasks)
+            start_date_str = safe_str(row.get("Start_Date"), "")
+            end_date_str = safe_str(row.get("End_Date"), "")
             
             task_row = {
                 "WBS": str(row.get("WBS_ID", "")),
@@ -9205,7 +9218,9 @@ def convert_excel_to_mspdi(
                 "DeliverableCode": str(row.get("Deliverable_Code", "")),
                 "Component": str(row.get("Component", "")),
                 "Rate_USD": rate_usd,   # From scenario pricing
-                "Price_USD": price_usd  # From scenario pricing
+                "Price_USD": price_usd,  # From scenario pricing
+                "Start_Date": start_date_str,  # Preserve from Gantt if available
+                "End_Date": end_date_str  # Preserve from Gantt if available
             }
             rows.append(task_row)
         
@@ -9573,10 +9588,35 @@ def convert_excel_to_mspdi(
 
         # Calculate task schedules
         uid_to_sched = {}
+        preserved_dates = set()  # Track which UIDs have dates from Gantt that should not be rolled up
         for r in rows:
-            start_date = project_start + datetime.timedelta(days=r["StartOffset"])
-            duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
-            end_date = start_date + datetime.timedelta(hours=duration_hours)
+            # FIX: Check if Start_Date and End_Date already exist from Gantt timeline_tasks
+            # If they do, preserve them instead of recalculating from offsets
+            start_date_str = r.get("Start_Date", "")
+            end_date_str = r.get("End_Date", "")
+            
+            if start_date_str and end_date_str:
+                # Parse existing dates from Gantt
+                try:
+                    # Handle both date formats: YYYY-MM-DD and YYYY-MM-DDTHH:MM:SS
+                    start_date = datetime.datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
+                    end_date = datetime.datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                    
+                    # Calculate duration from the date span
+                    duration_hours = max((end_date - start_date).total_seconds() / 3600, r["PlannedHours"])
+                    
+                    # Mark this UID as having preserved dates that should not be overwritten by rollup
+                    preserved_dates.add(r["UID"])
+                except (ValueError, AttributeError):
+                    # If parsing fails, fall back to offset calculation
+                    start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                    end_date = start_date + datetime.timedelta(hours=duration_hours)
+            else:
+                # No existing dates - calculate from offsets (original logic)
+                start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+                duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
                 "Start": start_date,
@@ -9595,17 +9635,76 @@ def convert_excel_to_mspdi(
                 children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
         summary_set = set(children_by_parent.keys())
 
+        # Helper function to recursively clamp all descendants to fit within bounds
+        def clamp_descendants(uid, bound_start, bound_finish):
+            """Recursively clamp all descendants of uid to fit within specified bounds."""
+            kids = children_by_parent.get(uid, [])
+            for k in kids:
+                child_start = uid_to_sched[k]["Start"]
+                child_finish = uid_to_sched[k]["Finish"]
+                
+                # Clamp child start/finish to bounds
+                clamped_start = max(child_start, bound_start)
+                clamped_finish = min(child_finish, bound_finish)
+                
+                # Ensure finish is still after start (minimum 1 hour duration)
+                if clamped_finish <= clamped_start:
+                    clamped_finish = clamped_start + datetime.timedelta(hours=1)
+                    # But don't exceed bound finish
+                    if clamped_finish > bound_finish:
+                        clamped_finish = bound_finish
+                        clamped_start = max(bound_start, clamped_finish - datetime.timedelta(hours=1))
+                
+                # Update child schedule with clamped dates
+                uid_to_sched[k]["Start"] = clamped_start
+                uid_to_sched[k]["Finish"] = clamped_finish
+                
+                # Recalculate duration for clamped child
+                duration_hours = max(1.0, (clamped_finish - clamped_start).total_seconds() / 3600)
+                uid_to_sched[k]["DurationHours"] = duration_hours
+                
+                # Recursively clamp this child's descendants
+                if k in summary_set:
+                    clamp_descendants(k, bound_start, bound_finish)
+        
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
             kids = children_by_parent.get(uid, [])
             if not kids:
                 return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
+            
+            # Always recurse to collect child dates (for validation and non-preserved parents)
             starts, finishes = [], []
             for k in kids:
                 s,f = rollup_summary(k) if k in summary_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
                 starts.append(s); finishes.append(f)
-            uid_to_sched[uid]["Start"]  = min(starts)
-            uid_to_sched[uid]["Finish"] = max(finishes)
+            
+            child_min = min(starts)
+            child_max = max(finishes)
+            
+            # FIX: If this UID has preserved dates from Gantt, enforce entire subtree fits within parent window
+            if uid in preserved_dates:
+                parent_start = uid_to_sched[uid]["Start"]
+                parent_finish = uid_to_sched[uid]["Finish"]
+                
+                # If descendants extend beyond parent, clamp entire subtree to fit within parent window
+                # This handles cases where user compressed deliverable timeline in Gantt
+                # but components/tasks still have their original calculated durations
+                if child_min < parent_start or child_max > parent_finish:
+                    task_name = next((r["Name"] for r in rows if r["UID"] == uid), f"UID {uid}")
+                    print(f"[XML EXPORT] ⚠️ Clamping descendant subtree to fit within preserved parent '{task_name}': "
+                          f"parent={parent_start} to {parent_finish}, "
+                          f"original descendants={child_min} to {child_max}")
+                    
+                    # Recursively clamp all descendants to fit within parent window
+                    clamp_descendants(uid, parent_start, parent_finish)
+                
+                # Return preserved dates without overwriting
+                return parent_start, parent_finish
+            
+            # For non-preserved tasks, roll up from children as usual
+            uid_to_sched[uid]["Start"]  = child_min
+            uid_to_sched[uid]["Finish"] = child_max
             return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
 
         # Call it on every summary
