@@ -7573,8 +7573,8 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
 
     # Create temporary Excel file for MSPDI conversion
     base = _export_basename(project_name, scenario_label or "Scenario")
-    temp_xlsx = f"{base}_temp.xlsx"
-    output_xml = f"{base}.xml"
+    temp_xlsx = os.path.join(tempfile.gettempdir(), f"{base}_temp.xlsx")
+    output_xml = os.path.join(tempfile.gettempdir(), f"{base}.xml")
     
     try:
         # Write to temporary Excel file
@@ -7651,8 +7651,8 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
     
     try:
         # Create XML for Scenario A
-        temp_xlsx_a = f"{base}_A_temp.xlsx"
-        output_xml_a = f"{base}_Scenario_A.xml"
+        temp_xlsx_a = os.path.join(tempfile.gettempdir(), f"{base}_A_temp.xlsx")
+        output_xml_a = os.path.join(tempfile.gettempdir(), f"{base}_Scenario_A.xml")
         temp_files.extend([temp_xlsx_a, output_xml_a])
         
         with pd.ExcelWriter(temp_xlsx_a, engine="openpyxl") as xw:
@@ -7681,8 +7681,8 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             temp_files.append(final_xml_a)
         
         # Create XML for Scenario B
-        temp_xlsx_b = f"{base}_B_temp.xlsx"
-        output_xml_b = f"{base}_Scenario_B.xml"
+        temp_xlsx_b = os.path.join(tempfile.gettempdir(), f"{base}_B_temp.xlsx")
+        output_xml_b = os.path.join(tempfile.gettempdir(), f"{base}_Scenario_B.xml")
         temp_files.extend([temp_xlsx_b, output_xml_b])
         
         with pd.ExcelWriter(temp_xlsx_b, engine="openpyxl") as xw:
@@ -7712,7 +7712,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
         
         # Create zip file with both XMLs
         import zipfile
-        zip_path = f"{base}.zip"
+        zip_path = os.path.join(tempfile.gettempdir(), f"{base}.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             zipf.write(final_xml_a, f"Scenario_A.xml")
             zipf.write(final_xml_b, f"Scenario_B.xml")
@@ -7770,8 +7770,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
 
     try:
         # A
-        tmp_xlsx_a = f"{base}_A_temp.xlsx"
-        out_xml_a = f"{base}_Scenario_A.xml"
+        tmp_xlsx_a = os.path.join(tempfile.gettempdir(), f"{base}_A_temp.xlsx")
+        out_xml_a = os.path.join(tempfile.gettempdir(), f"{base}_Scenario_A.xml")
         temp_files += [tmp_xlsx_a, out_xml_a]
         with pd.ExcelWriter(tmp_xlsx_a, engine="openpyxl") as xw:
             dfA.to_excel(xw, sheet_name="Scenario A", index=False)
@@ -7793,8 +7793,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         xml_files.append(("Scenario_A.xml", final_xml_a, stats_a))
 
         # B
-        tmp_xlsx_b = f"{base}_B_temp.xlsx"
-        out_xml_b = f"{base}_Scenario_B.xml"
+        tmp_xlsx_b = os.path.join(tempfile.gettempdir(), f"{base}_B_temp.xlsx")
+        out_xml_b = os.path.join(tempfile.gettempdir(), f"{base}_Scenario_B.xml")
         temp_files += [tmp_xlsx_b, out_xml_b]
         with pd.ExcelWriter(tmp_xlsx_b, engine="openpyxl") as xw:
             dfB.to_excel(xw, sheet_name="Scenario B", index=False)
@@ -7816,8 +7816,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
         xml_files.append(("Scenario_B.xml", final_xml_b, stats_b))
 
         # C
-        tmp_xlsx_c = f"{base}_C_temp.xlsx"
-        out_xml_c = f"{base}_Scenario_C.xml"
+        tmp_xlsx_c = os.path.join(tempfile.gettempdir(), f"{base}_C_temp.xlsx")
+        out_xml_c = os.path.join(tempfile.gettempdir(), f"{base}_Scenario_C.xml")
         temp_files += [tmp_xlsx_c, out_xml_c]
         with pd.ExcelWriter(tmp_xlsx_c, engine="openpyxl") as xw:
             dfC.to_excel(xw, sheet_name="Scenario C", index=False)
@@ -7840,7 +7840,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
 
         # Zip all 3
         import zipfile
-        zip_path = f"{base}.zip"
+        zip_path = os.path.join(tempfile.gettempdir(), f"{base}.zip")
         with zipfile.ZipFile(zip_path, "w") as z:
             for alias, real, _ in xml_files:
                 z.write(real, alias)
@@ -7904,8 +7904,8 @@ def _export_single_scenario_xml(
     
     # Create temporary Excel file for MSPDI conversion
     base = _export_basename(project, scenario_label)
-    temp_xlsx = f"{base}_temp.xlsx"
-    output_xml = f"{base}.xml"
+    temp_xlsx = os.path.join(tempfile.gettempdir(), f"{base}_temp.xlsx")
+    output_xml = os.path.join(tempfile.gettempdir(), f"{base}.xml")
     
     try:
         # Write to temporary Excel file
@@ -10857,8 +10857,8 @@ def api_xml_export_flexible(payload: XMLExportPayload):
     
     # Create temporary Excel file for MSPDI conversion
     base = _export_basename(project_name, payload.sheet_name)
-    temp_xlsx = f"{base}_temp.xlsx"
-    output_xml = f"{base}.xml"
+    temp_xlsx = os.path.join(tempfile.gettempdir(), f"{base}_temp.xlsx")
+    output_xml = os.path.join(tempfile.gettempdir(), f"{base}.xml")
     
     try:
         # Write to temporary Excel file
