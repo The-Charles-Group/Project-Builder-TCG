@@ -14,6 +14,66 @@ function toggleTheme() {
   if (toggleBtn) {
     toggleBtn.textContent = newTheme === 'light' ? '🌙' : '☀️';
   }
+  
+  // Apply theme to Gantt chart if it exists
+  applyGanttTheme();
+}
+
+// FEATURE: Apply dark/light theme to Gantt chart (override Frappe's inline styles)
+function applyGanttTheme() {
+  const container = document.getElementById('gantt-chart');
+  if (!container) return;
+  
+  const currentTheme = document.documentElement.getAttribute('data-theme');
+  const isDark = currentTheme !== 'light';
+  
+  // Override SVG background colors
+  const svg = container.querySelector('svg');
+  if (svg) {
+    // Set main SVG background
+    svg.style.backgroundColor = isDark ? '#151a22' : '#ffffff';
+    
+    // Update grid background
+    const gridBackground = svg.querySelector('.grid-background');
+    if (gridBackground) {
+      gridBackground.setAttribute('fill', isDark ? '#151a22' : '#ffffff');
+    }
+    
+    // Update grid header
+    const gridHeader = svg.querySelector('.grid-header');
+    if (gridHeader) {
+      gridHeader.setAttribute('fill', isDark ? '#151a22' : '#f7fafc');
+      gridHeader.setAttribute('stroke', isDark ? '#232a35' : '#e2e8f0');
+    }
+    
+    // Update grid rows
+    const gridRows = svg.querySelectorAll('.grid-row');
+    gridRows.forEach((row, index) => {
+      if (index % 2 === 1) {
+        row.setAttribute('fill', isDark ? 'rgba(255, 255, 255, 0.02)' : '#f7fafc');
+      } else {
+        row.setAttribute('fill', isDark ? '#151a22' : '#ffffff');
+      }
+    });
+    
+    // Update all text elements
+    const textElements = svg.querySelectorAll('text');
+    textElements.forEach(text => {
+      text.setAttribute('fill', isDark ? '#e6eaf2' : '#1a202c');
+    });
+    
+    // Update today highlight
+    const todayHighlight = svg.querySelector('.today-highlight');
+    if (todayHighlight) {
+      todayHighlight.setAttribute('fill', isDark ? 'rgba(106, 163, 255, 0.1)' : 'rgba(49, 130, 206, 0.1)');
+    }
+    
+    // Update arrows if any
+    const arrows = svg.querySelectorAll('.arrow');
+    arrows.forEach(arrow => {
+      arrow.setAttribute('stroke', isDark ? '#232a35' : '#e2e8f0');
+    });
+  }
 }
 
 // Initialize theme on page load
@@ -1036,7 +1096,21 @@ async function initializeGanttChart(tasks = []) {
     // Apply custom classes for department colors and critical path, and add hover tooltips
     setTimeout(() => {
       tasks.forEach(task => {
-        const taskElement = container.querySelector(`.bar[data-id="${task.id}"]`);
+        // Try multiple selectors to find the bar element (Frappe Gantt structure varies)
+        let taskElement = container.querySelector(`.bar[data-id="${task.id}"]`);
+        if (!taskElement) {
+          taskElement = container.querySelector(`[data-id="${task.id}"]`);
+        }
+        if (!taskElement) {
+          // Try finding by text content
+          const allBars = container.querySelectorAll('.bar');
+          taskElement = Array.from(allBars).find(bar => {
+            const barWrapper = bar.closest('.bar-wrapper');
+            const label = barWrapper?.querySelector('.bar-label');
+            return label?.textContent?.trim() === task.name;
+          });
+        }
+        
         if (taskElement) {
           // Add department class
           if (task.custom_class) {
@@ -1051,12 +1125,23 @@ async function initializeGanttChart(tasks = []) {
           const taskData = tasks.find(t => t.id === task.id);
           if (taskData) {
             const duration = calculateDuration(taskData.start, taskData.end);
-            const tooltipText = `${taskData.name}\nStart: ${taskData.start}\nEnd: ${taskData.end}\nDuration: ${duration} days`;
+            const tooltipText = `${taskData.name} | Start: ${taskData.start} | End: ${taskData.end} | Duration: ${duration} days`;
+            
+            // Try to add tooltip to both the bar and its wrapper
             taskElement.setAttribute('title', tooltipText);
             taskElement.style.cursor = 'pointer';
+            
+            const barWrapper = taskElement.closest('.bar-wrapper');
+            if (barWrapper) {
+              barWrapper.setAttribute('title', tooltipText);
+              barWrapper.style.cursor = 'pointer';
+            }
           }
         }
       });
+      
+      // Apply Gantt dark mode if theme is dark
+      applyGanttTheme();
       
       // Show PDF download button after Gantt is successfully rendered
       showPDFDownloadButton();
@@ -6208,7 +6293,7 @@ function renderAIPlan(aiPlan) {
                    max="100" 
                    value="60"
                    placeholder="Min relevancy %" 
-                   style="width: 100px; padding: 6px 10px; background: #0b0e13; border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                   style="width: 100px; padding: 6px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
             <span style="color: var(--muted); font-size: 0.9em;">%</span>
           </div>
           <button onclick="applySmartSelection()" 
@@ -6224,9 +6309,9 @@ function renderAIPlan(aiPlan) {
         </div>
       </div>
       
-      <div style="background: #f0f9ff; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #3b82f6;">
-        <h4 style="margin: 0 0 8px 0; color: #1e40af;">📊 Project Flow & Department Sequencing</h4>
-        <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: #1e3a8a;">
+      <div style="background: var(--card); padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid var(--accent);">
+        <h4 style="margin: 0 0 8px 0; color: var(--text);">📊 Project Flow & Department Sequencing</h4>
+        <p style="margin: 0; font-size: 0.9em; line-height: 1.6; color: var(--text);">
           <strong>From a PM perspective, here's how these departments flow together:</strong><br>
           <strong>1. Strategy</strong> → Sets foundation & direction<br>
           <strong>2. Creative</strong> → Develops visual identity & concepts<br>
@@ -6255,10 +6340,10 @@ function renderAIPlan(aiPlan) {
       };
       
       html += `
-        <details class="ai-dept-group" open style="margin-bottom: 16px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
-          <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: #1f2937; margin-bottom: 12px;">
+        <details class="ai-dept-group" style="margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: linear-gradient(to right, ${deptColors[dept]}15 0%, transparent 100%);">
+          <summary style="cursor: pointer; font-weight: 600; font-size: 1.1em; color: var(--text); margin-bottom: 12px;">
             <span style="color: ${deptColors[dept]}; margin-right: 8px;">●</span>
-            ${dept} <span style="color: #6b7280; font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
+            ${dept} <span style="color: var(--muted); font-weight: normal; font-size: 0.9em;">(${deliverables.length} deliverable${deliverables.length > 1 ? 's' : ''})</span>
           </summary>
       `;
       
@@ -6268,7 +6353,7 @@ function renderAIPlan(aiPlan) {
         const delivCode = deliv.deliverable_code || deliv.code;
         
         html += `
-          <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: #f9fafb; padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
+          <div class="ai-deliverable" data-deliv-code="${delivCode}" data-department="${dept}" style="background: var(--card); padding: 12px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid ${confidenceColor};">
             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
               <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
                 <input type="checkbox" 
@@ -6278,7 +6363,7 @@ function renderAIPlan(aiPlan) {
                        data-dept="${dept}"
                        style="cursor: pointer;">
                 <div style="flex: 1;">
-                  <h4 style="margin: 0; color: #111827;">
+                  <h4 style="margin: 0; color: var(--text);">
                     <span style="color: ${deptColors[dept]}; font-weight: 500; font-size: 0.85em;">[${dept}]</span>
                     ${deliv.title}
                   </h4>
@@ -6286,7 +6371,7 @@ function renderAIPlan(aiPlan) {
               </div>
               <div style="display: flex; gap: 8px; align-items: center;">
                 <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}% confidence</span>
-                <span style="font-size: 0.85em; color: #6b7280;">${deliv.planned_hours || 0}h</span>
+                <span style="font-size: 0.85em; color: var(--muted);">${deliv.planned_hours || 0}h</span>
                 <button class="btn-small" 
                         onclick="addAIDeliverableToSelection('${delivCode}', this)"
                         style="padding: 4px 12px; font-size: 0.85em; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
@@ -6296,31 +6381,31 @@ function renderAIPlan(aiPlan) {
             </div>
             
             ${deliv.why ? `
-              <p style="margin: 8px 0; font-size: 0.9em; color: #4b5563; line-height: 1.5;">${deliv.why}</p>
+              <p style="margin: 8px 0; font-size: 0.9em; color: var(--text); line-height: 1.5;">${deliv.why}</p>
             ` : ''}
             
             ${deliv.risks ? `
-              <div style="background: rgba(239, 68, 68, 0.1); padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 0.85em; color: #991b1b;">
+              <div style="background: rgba(239, 68, 68, 0.1); padding: 8px; border-radius: 4px; margin: 8px 0; font-size: 0.85em; color: var(--text);">
                 <strong>⚠️ Risks:</strong> ${deliv.risks}
               </div>
             ` : ''}
             
             ${(deliv.components || []).length > 0 ? `
               <details style="margin-top: 8px;">
-                <summary style="cursor: pointer; font-size: 0.9em; color: #4b5563; font-weight: 500;">
+                <summary style="cursor: pointer; font-size: 0.9em; color: var(--text); font-weight: 500;">
                   Components (${deliv.components.length})
                   <button onclick="event.stopPropagation(); selectAllComponents('${delivCode}', true)" 
-                          style="margin-left: 8px; padding: 2px 8px; font-size: 0.8em; background: #e5e7eb; border: none; border-radius: 3px;">
+                          style="margin-left: 8px; padding: 2px 8px; font-size: 0.8em; background: var(--border); color: var(--text); border: none; border-radius: 3px;">
                     Select All
                   </button>
                   <button onclick="event.stopPropagation(); selectAllComponents('${delivCode}', false)" 
-                          style="margin-left: 4px; padding: 2px 8px; font-size: 0.8em; background: #e5e7eb; border: none; border-radius: 3px;">
+                          style="margin-left: 4px; padding: 2px 8px; font-size: 0.8em; background: var(--border); color: var(--text); border: none; border-radius: 3px;">
                     Deselect All
                   </button>
                 </summary>
                 <div style="margin-top: 8px; margin-left: 16px;">
                   ${deliv.components.map((comp, idx) => `
-                    <div style="margin-bottom: 8px; padding: 8px; background: white; border-radius: 4px;">
+                    <div style="margin-bottom: 8px; padding: 8px; background: var(--card); border-radius: 4px;">
                       <div style="display: flex; align-items: start; gap: 8px;">
                         <input type="checkbox" 
                                class="ai-comp-checkbox" 
@@ -6329,22 +6414,22 @@ function renderAIPlan(aiPlan) {
                                data-comp-id="${comp.id || comp.title}"
                                style="cursor: pointer; margin-top: 2px;">
                         <div style="flex: 1;">
-                          <div style="font-weight: 500; color: #374151;">${comp.title}</div>
-                          <div style="font-size: 0.85em; color: #6b7280; margin-top: 4px;">${comp.why || ''}</div>
-                          <div style="font-size: 0.85em; color: #9ca3af; margin-top: 2px;">${comp.planned_hours || 0}h</div>
+                          <div style="font-weight: 500; color: var(--text);">${comp.title}</div>
+                          <div style="font-size: 0.85em; color: var(--muted); margin-top: 4px;">${comp.why || ''}</div>
+                          <div style="font-size: 0.85em; color: var(--muted); margin-top: 2px;">${comp.planned_hours || 0}h</div>
                         </div>
                       </div>
                       
                       ${(comp.tasks || []).length > 0 ? `
                         <details style="margin-top: 8px; margin-left: 24px;">
-                          <summary style="cursor: pointer; font-size: 0.85em; color: #6b7280;">
+                          <summary style="cursor: pointer; font-size: 0.85em; color: var(--muted);">
                             ✓ AI-Selected Tasks (${comp.tasks.length})
                             <button onclick="event.stopPropagation(); selectAllTasks('${delivCode}', '${comp.title}', true)" 
-                                    style="margin-left: 8px; padding: 2px 6px; font-size: 0.75em; background: #e5e7eb; border: none; border-radius: 3px;">
+                                    style="margin-left: 8px; padding: 2px 6px; font-size: 0.75em; background: var(--border); color: var(--text); border: none; border-radius: 3px;">
                               Select All
                             </button>
                             <button onclick="event.stopPropagation(); selectAllTasks('${delivCode}', '${comp.title}', false)" 
-                                    style="margin-left: 4px; padding: 2px 6px; font-size: 0.75em; background: #e5e7eb; border: none; border-radius: 3px;">
+                                    style="margin-left: 4px; padding: 2px 6px; font-size: 0.75em; background: var(--border); color: var(--text); border: none; border-radius: 3px;">
                               Deselect All
                             </button>
                           </summary>
@@ -6361,16 +6446,16 @@ function renderAIPlan(aiPlan) {
                                          ${task.ai_selected ? 'checked' : ''}
                                          style="cursor: pointer; margin-top: 2px;">
                                   <div style="flex: 1;">
-                                    <div style="font-size: 0.85em; color: #065f46; font-weight: 500;">${task.title}</div>
-                                    ${task.why ? `<div style="font-size: 0.8em; color: #6b7280; margin-top: 2px;">${task.why}</div>` : ''}
-                                    <div style="font-size: 0.8em; color: #9ca3af; margin-top: 2px;">${task.planned_hours || 0}h</div>
+                                    <div style="font-size: 0.85em; color: var(--text); font-weight: 500;">${task.title}</div>
+                                    ${task.why ? `<div style="font-size: 0.8em; color: var(--muted); margin-top: 2px;">${task.why}</div>` : ''}
+                                    <div style="font-size: 0.8em; color: var(--muted); margin-top: 2px;">${task.planned_hours || 0}h</div>
                                   </div>
                                 </div>
                               </div>
                             `).join('')}
                           </div>
                         </details>
-                      ` : '<div style="font-size: 0.85em; color: #9ca3af; margin-top: 6px; font-style: italic; margin-left: 24px;">No specific tasks selected by AI</div>'}
+                      ` : '<div style="font-size: 0.85em; color: var(--muted); margin-top: 6px; font-style: italic; margin-left: 24px;">No specific tasks selected by AI</div>'}
                     </div>
                   `).join('')}
                 </div>
@@ -6385,7 +6470,7 @@ function renderAIPlan(aiPlan) {
     
     // Add button to apply all selected items
     html += `
-      <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e5e7eb; display: flex; gap: 12px;">
+      <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid var(--border); display: flex; gap: 12px;">
         <button onclick="applyAllSelectedFromAI()" 
                 style="padding: 10px 24px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
           Apply Selected to Manual Selection
