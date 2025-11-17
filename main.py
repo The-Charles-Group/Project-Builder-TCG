@@ -7861,15 +7861,12 @@ def _export_single_scenario_xml(
             df.to_excel(xw, sheet_name=scenario_label, index=False)
             _apply_number_formats(xw.sheets[scenario_label], df)
         
-        # Convert to MSPDI XML
+        # Convert to MSPDI XML using the simple, correct version (not the bloated enhanced version)
         project_start_iso = scenario.get("project_start")
         
-        # Force reload of convert_excel_to_mspdi module to pick up any code changes
-        import convert_excel_to_mspdi as mspdi_module
-        importlib.reload(mspdi_module)
-        
-        # CRITICAL: Use the reloaded module's function, not the old imported one
-        stats = mspdi_module.convert_excel_to_mspdi(
+        # Use the simple convert_excel_to_mspdi function defined in this file (line 9053)
+        # This version produces clean XML matching the Nov 12 reference without bloat
+        stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
             sheet_name=scenario_label,
