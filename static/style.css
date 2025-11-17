@@ -2,6 +2,29 @@
   --bg:#0f1117; --card:#151a22; --text:#e6eaf2; --muted:#9aa4b2;
   --accent:#6aa3ff; --accent2:#3ddc97; --border:#232a35;
 }
+
+/* FEATURE: Light mode theme */
+[data-theme="light"]{
+  --bg:#f5f7fa; --card:#ffffff; --text:#1a202c; --muted:#718096;
+  --accent:#3182ce; --accent2:#38a169; --border:#e2e8f0;
+}
+
+[data-theme="light"] textarea,
+[data-theme="light"] input,
+[data-theme="light"] select{
+  background:#ffffff;
+  color:#1a202c;
+  border-color:#e2e8f0;
+}
+
+[data-theme="light"] .selection-item{
+  background:#f7fafc;
+  border-color:#e2e8f0;
+}
+
+[data-theme="light"] header{
+  background:linear-gradient(180deg,#ffffff,#f7fafc);
+}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,Segoe UI,Roboto,Helvetica,Arial;min-height:100vh}
 header{padding:24px 28px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#121620,#0f1117)}

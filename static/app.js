@@ -1,3 +1,38 @@
+// ================================================================================
+// Theme Management - Dark/Light Mode Toggle
+// ================================================================================
+function toggleTheme() {
+  const html = document.documentElement;
+  const currentTheme = html.getAttribute('data-theme');
+  const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+  
+  html.setAttribute('data-theme', newTheme);
+  localStorage.setItem('apb.theme', newTheme);
+  
+  // Update toggle button icon
+  const toggleBtn = document.getElementById('theme-toggle');
+  if (toggleBtn) {
+    toggleBtn.textContent = newTheme === 'light' ? '🌙' : '☀️';
+  }
+}
+
+// Initialize theme on page load
+(function initTheme() {
+  const savedTheme = localStorage.getItem('apb.theme') || 'dark';
+  const html = document.documentElement;
+  
+  if (savedTheme === 'light') {
+    html.setAttribute('data-theme', 'light');
+    const toggleBtn = document.getElementById('theme-toggle');
+    if (toggleBtn) {
+      toggleBtn.textContent = '🌙';
+    }
+  }
+})();
+
+// ================================================================================
+// Global Variables and State
+// ================================================================================
 let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
@@ -812,6 +847,8 @@ let ganttChart = null;
 window.currentTimelineTasks = [];
 let currentTimelineTasks = window.currentTimelineTasks;
 let timelineReasoning = null;
+// CRITICAL FIX: Prevent reentrancy freeze when dragging tasks
+let isSyncing = false;
 
 // Pricing and Retainer State
 let pricingData = {
@@ -925,50 +962,62 @@ async function initializeGanttChart(tasks = []) {
         console.log('Task clicked:', task);
       },
       on_date_change: async function(task, start, end) {
-        console.log('Task date changed:', task.name, start, end);
-        
-        // Update the task in our local state
-        const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
-        if (taskIndex >= 0) {
-          currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
-          currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
+        // CRITICAL FIX: Prevent reentrancy freeze - exit if already syncing
+        if (isSyncing) {
+          console.log('[Gantt] Skipping date change (already syncing)');
+          return;
         }
         
-        // Sync to backend SCENARIO_STORE (GPT-5's plan: call /api/timeline/update_task)
+        isSyncing = true;
         try {
-          const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
-          // Get fresh session_id directly from SessionManager (no caching)
-          const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+          console.log('Task date changed:', task.name, start, end);
           
-          if (session_id && task.id) {
-            const response = await fetch('/api/timeline/update_task', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                session_id: session_id,
-                wbs_id: task.id,
-                start_date: start.toISOString().split('T')[0],
-                end_date: end.toISOString().split('T')[0],
-                duration_days: duration_days,
-                hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
-              })
-            });
-            
-            if (response.ok) {
-              const result = await response.json();
-              console.log('[Gantt] Task updated in backend SCENARIO_STORE:', result);
-              // TODO: Refresh pricing table with result.totals if needed
-            } else {
-              console.warn('[Gantt] Failed to sync task to backend:', await response.text());
-            }
+          // Update the task in our local state
+          const taskIndex = currentTimelineTasks.findIndex(t => t.id === task.id);
+          if (taskIndex >= 0) {
+            currentTimelineTasks[taskIndex].start = start.toISOString().split('T')[0];
+            currentTimelineTasks[taskIndex].end = end.toISOString().split('T')[0];
           }
-        } catch (error) {
-          console.error('[Gantt] Error syncing task to backend:', error);
+          
+          // Sync to backend SCENARIO_STORE (GPT-5's plan: call /api/timeline/update_task)
+          try {
+            const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+            // Get fresh session_id directly from SessionManager (no caching)
+            const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+            
+            if (session_id && task.id) {
+              const response = await fetch('/api/timeline/update_task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  session_id: session_id,
+                  wbs_id: task.id,
+                  start_date: start.toISOString().split('T')[0],
+                  end_date: end.toISOString().split('T')[0],
+                  duration_days: duration_days,
+                  hours_per_day: window.ScenarioStore?.state?.hoursPerDay || 8
+                })
+              });
+              
+              if (response.ok) {
+                const result = await response.json();
+                console.log('[Gantt] Task updated in backend SCENARIO_STORE:', result);
+                // TODO: Refresh pricing table with result.totals if needed
+              } else {
+                console.warn('[Gantt] Failed to sync task to backend:', await response.text());
+              }
+            }
+          } catch (error) {
+            console.error('[Gantt] Error syncing task to backend:', error);
+          }
+          
+          // Show save button
+          const saveBtn = document.getElementById('btn-save-timeline');
+          if (saveBtn) saveBtn.style.display = '';
+        } finally {
+          // CRITICAL FIX: Always release lock, even if error occurs
+          isSyncing = false;
         }
-        
-        // Show save button
-        const saveBtn = document.getElementById('btn-save-timeline');
-        if (saveBtn) saveBtn.style.display = '';
       },
       on_progress_change: function(task, progress) {
         console.log('Task progress changed:', task.name, progress);
@@ -984,7 +1033,7 @@ async function initializeGanttChart(tasks = []) {
     // Create Gantt instance
     ganttChart = new Gantt(container, tasks, ganttOptions);
     
-    // Apply custom classes for department colors and critical path
+    // Apply custom classes for department colors and critical path, and add hover tooltips
     setTimeout(() => {
       tasks.forEach(task => {
         const taskElement = container.querySelector(`.bar[data-id="${task.id}"]`);
@@ -996,6 +1045,15 @@ async function initializeGanttChart(tasks = []) {
           // Add critical path class
           if (task.critical_path) {
             taskElement.classList.add('critical-path');
+          }
+          
+          // FEATURE: Add hover tooltip showing start/end dates and duration
+          const taskData = tasks.find(t => t.id === task.id);
+          if (taskData) {
+            const duration = calculateDuration(taskData.start, taskData.end);
+            const tooltipText = `${taskData.name}\nStart: ${taskData.start}\nEnd: ${taskData.end}\nDuration: ${duration} days`;
+            taskElement.setAttribute('title', tooltipText);
+            taskElement.style.cursor = 'pointer';
           }
         }
       });
@@ -9373,7 +9431,7 @@ function s2RenderRight(filter) {
     return (aIdx === -1 ? 999 : aIdx) - (bIdx === -1 ? 999 : bIdx);
   });
   
-  // Render grouped deliverables
+  // Render grouped deliverables with collapsible sections (FEATURE: collapsed by default)
   const html = sortedDepts.map(dept => {
     const deptItems = grouped[dept].sort((a, b) => {
       const sortA = a.Sort_Order ?? 999;
@@ -9382,8 +9440,12 @@ function s2RenderRight(filter) {
       return (a.Deliverable || '').localeCompare(b.Deliverable || '');
     });
     
-    const deptHeader = `<div style="font-weight:600; padding:8px 8px 4px; color:#ffffff; border-top:1px solid rgba(255,255,255,0.1); margin-top:4px; background:rgba(139,92,246,0.15);">${dept}</div>`;
-    const deptRows = deptItems.map(d => `
+    const deptId = `dept-${dept.replace(/\s+/g, '-')}`;
+    const deptHeader = `<div class="dept-header" data-dept="${deptId}" style="font-weight:600; padding:8px 8px 4px; color:#ffffff; border-top:1px solid rgba(255,255,255,0.1); margin-top:4px; background:rgba(139,92,246,0.15); cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span>${dept} (${deptItems.length})</span>
+      <span class="collapse-icon">▶</span>
+    </div>`;
+    const deptRows = `<div id="${deptId}" style="display:none;">${deptItems.map(d => `
       <label class="row" data-deliv-row="1" data-search="${(d.Deliverable + ' ' + (d.Category || '') + ' ' + (d['Service Department'] || '')).toLowerCase()}" 
              style="display:flex;gap:8px;align-items:center;padding:6px 8px;">
         <input type="checkbox" class="s2chk"
@@ -9394,11 +9456,26 @@ function s2RenderRight(filter) {
         <span>${d.Deliverable}</span>
         <small style="margin-left:auto;opacity:.75">${d.Category || ''}</small>
       </label>
-    `).join('');
+    `).join('')}</div>`;
     return deptHeader + deptRows;
   }).join('');
   
   host.innerHTML = html || '<div style="opacity:.7;padding:8px">No deliverables</div>';
+
+  // FEATURE: Add collapse/expand functionality for department headers
+  host.querySelectorAll('.dept-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const deptId = header.getAttribute('data-dept');
+      const deptContent = document.getElementById(deptId);
+      const icon = header.querySelector('.collapse-icon');
+      
+      if (deptContent && icon) {
+        const isCollapsed = deptContent.style.display === 'none';
+        deptContent.style.display = isCollapsed ? 'block' : 'none';
+        icon.textContent = isCollapsed ? '▼' : '▶';
+      }
+    });
+  });
 
   host.querySelectorAll('.s2chk').forEach(cb => {
     cb.addEventListener('change', e => {

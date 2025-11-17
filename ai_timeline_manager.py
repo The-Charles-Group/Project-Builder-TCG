@@ -90,7 +90,7 @@ class TimelineTask:
             "start": self.leveled_start or self.start_date,  # Use leveled dates if available
             "end": self.leveled_end or self.end_date,
             "progress": self.progress,
-            "dependencies": ",".join(self.dependencies) if self.dependencies else "",
+            "dependencies": "",  # CRITICAL FIX: Empty to enable free task movement (no dependency arrows)
             "custom_class": f"dept-{self.department.lower().replace(' ', '-')}",
             "deliverable_code": self.deliverable_code,
             "component": self.component,

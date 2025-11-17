@@ -15,6 +15,10 @@
   <header>
     <h1>Agency Project Builder</h1>
     <div class="sub">Build project estimates from RFPs with 2‑step AI assistance</div>
+    <button id="theme-toggle" onclick="toggleTheme()" 
+            style="position: absolute; top: 24px; right: 28px; background: transparent; border: 1px solid var(--border); padding: 8px 12px; border-radius: 6px; cursor: pointer; color: var(--text); font-size: 1.2em; transition: all 0.2s;">
+      🌙
+    </button>
   </header>
 
   <main>
@@ -553,11 +557,10 @@
           <label style="display:flex; align-items:center; gap:6px;">
             <span style="font-size:0.9em; color:var(--muted);">View:</span>
             <select id="gantt-view-mode" style="padding:6px 10px; border-radius:6px;">
-              <option value="Quarter Day">Quarter Day</option>
-              <option value="Half Day">Half Day</option>
               <option value="Day" selected>Day</option>
               <option value="Week">Week</option>
               <option value="Month">Month</option>
+              <option value="Year">Year</option>
             </select>
           </label>
           
