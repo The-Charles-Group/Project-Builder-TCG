@@ -3679,14 +3679,39 @@ def _get_scenarios(session_id: Optional[str] = None) -> dict:
             print(f"[GET_SCENARIOS] timeline_tasks count: {len(scenario['timeline_tasks'])}")
             print(f"[GET_SCENARIOS] First timeline task: {scenario['timeline_tasks'][0] if scenario['timeline_tasks'] else 'EMPTY'}")
         
-        # DEFENSIVE: Strip any anchor-related settings from cached scenarios
+        # DEFENSIVE: Strip any anchor-related settings AND tasks from cached scenarios
         # This prevents old cached settings from overriding our Workfront compatibility fixes
         def clean_anchor_settings(scen):
-            """Remove any cached anchor milestone settings"""
+            """Remove any cached anchor milestone settings and ANCHOR_ tasks (recursive deep clean)"""
             if isinstance(scen, dict):
+                # Remove anchor flags at this level
                 scen.pop("add_deliverable_milestones", None)
                 scen.pop("add_anchors", None)
                 scen.pop("include_anchors", None)
+                scen.pop("deliverable_anchor_map", None)
+                
+                # Recursively clean all nested dicts and lists
+                for key, value in list(scen.items()):
+                    if key == "timeline_tasks" and isinstance(value, list):
+                        # Filter out ANCHOR_ tasks
+                        original_count = len(value)
+                        scen[key] = [
+                            task for task in value
+                            if not (isinstance(task, dict) and 
+                                   str(task.get("Task_Label", "")).startswith("ANCHOR_"))
+                        ]
+                        removed = original_count - len(scen[key])
+                        if removed > 0:
+                            print(f"[CLEAN_ANCHORS] Removed {removed} ANCHOR_ tasks from {key}")
+                    elif isinstance(value, dict):
+                        # Recursively clean nested dicts
+                        scen[key] = clean_anchor_settings(value)
+                    elif isinstance(value, list):
+                        # Recursively clean items in lists
+                        scen[key] = [
+                            clean_anchor_settings(item) if isinstance(item, dict) else item
+                            for item in value
+                        ]
             return scen
         
         scenario = clean_anchor_settings(scenario)
