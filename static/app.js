@@ -9673,8 +9673,8 @@ S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
 // ========== XML Export Functions ==========
 async function exportXMLScenario(letter) {
-  // Always include Start/End anchors (checkbox removed - now always enabled)
-  const addAnchors = true;
+  // WORKFRONT COMPATIBILITY: Anchors disabled (alphanumeric WBS breaks Workfront import)
+  const addAnchors = false;
   
   // Get fresh session_id directly from SessionManager (no caching)
   // This ensures we use the canonical ID that matches backend SCENARIO_STORE keys
