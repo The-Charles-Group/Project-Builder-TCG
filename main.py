@@ -5257,6 +5257,12 @@ async def generate_timeline(request: TimelineGenerationRequest):
                     }
                     print(f"[Timeline] Created new scenario in SCENARIO_STORE for session {session_id}")
             
+            # CRITICAL FIX: Strip all dependencies from tasks to enable free movement
+            if 'tasks' in result and isinstance(result['tasks'], list):
+                for task in result['tasks']:
+                    if isinstance(task, dict):
+                        task['dependencies'] = ""  # Force empty string
+            
             # Complete the job - ENSURE status is COMPLETED not just processing at 100%
             update_sse_job(job_id,
                           status=StreamJobStatus.COMPLETED,

@@ -1189,3 +1189,80 @@ body.chatgpt-sidebar-expanded {
   font-size: 12px;
   color: var(--text);
 }
+
+/* FEATURE: Dark Mode for AI Planner (Step 3) */
+#ai-suggestions-panel {
+  background: var(--card);
+  color: var(--text);
+}
+
+#ai-suggestions-panel .ai-dept-group {
+  background: var(--card);
+  border-color: var(--border);
+}
+
+#ai-suggestions-panel .ai-deliv-card {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+#ai-suggestions-panel details summary {
+  color: var(--text);
+}
+
+#ai-suggestions-panel p,
+#ai-suggestions-panel div {
+  color: var(--text);
+}
+
+/* FEATURE: Dark Mode for Gantt Chart (Step 4) */
+#gantt-chart,
+.gantt-container {
+  background: var(--card);
+}
+
+.gantt .grid-background {
+  fill: var(--card);
+}
+
+.gantt .grid-header {
+  fill: var(--card);
+  stroke: var(--border);
+}
+
+.gantt .grid-row {
+  fill: var(--card);
+}
+
+.gantt .grid-row:nth-child(even) {
+  fill: rgba(255, 255, 255, 0.02);
+}
+
+.gantt .today-highlight {
+  fill: rgba(106, 163, 255, 0.1);
+}
+
+.gantt .arrow {
+  stroke: var(--border);
+}
+
+.gantt text {
+  fill: var(--text);
+}
+
+[data-theme="light"] .gantt .grid-background {
+  fill: #ffffff;
+}
+
+[data-theme="light"] .gantt .grid-header {
+  fill: #f7fafc;
+}
+
+[data-theme="light"] .gantt .grid-row:nth-child(even) {
+  fill: #f7fafc;
+}
+
+[data-theme="light"] .gantt text {
+  fill: #1a202c;
+}
