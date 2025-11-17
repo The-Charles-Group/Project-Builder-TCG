@@ -7491,7 +7491,8 @@ def _assert_has_items(scen: dict, label: str):
 
 def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
     """
-    Validate that deliverable-level rows (OutlineLevel=1) have Start_Date and End_Date.
+    Validate that all deliverable-level rows have Start_Date and End_Date, and that
+    all component/task rows can resolve their parent deliverable.
     This ensures the Gantt timeline (Step 4) was completed before exporting to Workfront.
     
     Raises HTTPException if validation fails with a clear user message.
@@ -7502,18 +7503,20 @@ def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
             f"{label} requires timeline dates. Please complete Step 4 (Timeline) before exporting."
         )
     
-    # Find deliverable-level rows (OutlineLevel == 1)
-    if "OutlineLevel" in df.columns:
-        deliverables = df[df["OutlineLevel"] == 1].copy()
-    else:
-        # Fallback: use WBS_ID pattern (e.g., "1.1", "1.2") to identify deliverables
-        deliverables = df[df["WBS_ID"].str.match(r"^1\.\d+$", na=False)].copy()
+    # Identify deliverables by non-empty Deliverable_Code (handles nested hierarchies)
+    df_copy = df.copy()
+    df_copy["Deliverable_Code_Clean"] = df_copy["Deliverable_Code"].fillna("").astype(str).str.strip()
+    deliverables = df_copy[df_copy["Deliverable_Code_Clean"] != ""].copy()
     
     if deliverables.empty:
-        # No deliverables found - this shouldn't happen but don't block export
-        return
+        # No deliverables found - require at least one deliverable
+        raise HTTPException(
+            400,
+            f"{label} requires at least one deliverable with timeline dates. "
+            f"Please build a scenario in Step 3 and complete the timeline in Step 4."
+        )
     
-    # Check for missing dates
+    # Check for missing dates on deliverables
     missing_start = deliverables["Start_Date"].isna() | (deliverables["Start_Date"] == "")
     missing_end = deliverables["End_Date"].isna() | (deliverables["End_Date"] == "")
     missing_dates = deliverables[missing_start | missing_end]
@@ -7530,6 +7533,55 @@ def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
             f"{label} requires timeline dates for all deliverables. "
             f"Missing dates for: {names_str}. "
             f"Please complete Step 4 (Timeline) and ensure all deliverables have dates before exporting."
+        )
+    
+    # Build WBS parent map to verify component/task parent relationships
+    wbs_parent_map = {}
+    if "WBS_ID" in df_copy.columns and "Parent_WBS_ID" in df_copy.columns:
+        for idx, row in df_copy.iterrows():
+            parent_wbs = str(row.get("Parent_WBS_ID", "")).strip()
+            if parent_wbs:
+                wbs_parent_map[row["WBS_ID"]] = parent_wbs
+    
+    # Build deliverable WBS set for validation
+    deliverable_wbs_set = set(deliverables["WBS_ID"].tolist())
+    
+    # Check that all non-deliverable rows can resolve to a deliverable parent
+    non_deliverables = df_copy[df_copy["Deliverable_Code_Clean"] == ""]
+    orphaned_rows = []
+    
+    for idx, row in non_deliverables.iterrows():
+        wbs = row["WBS_ID"]
+        
+        # Walk up the WBS hierarchy to find a deliverable parent
+        current = wbs
+        visited = set()
+        found_deliverable = False
+        
+        while current in wbs_parent_map and current not in visited:
+            visited.add(current)
+            parent_wbs = wbs_parent_map[current]
+            
+            if parent_wbs in deliverable_wbs_set:
+                found_deliverable = True
+                break
+            
+            current = parent_wbs
+        
+        if not found_deliverable:
+            orphaned_rows.append(row["Task_Name"])
+    
+    if orphaned_rows:
+        # Found rows that can't resolve to a deliverable parent
+        orphan_names = orphaned_rows[:3]
+        names_str = ", ".join([f"'{name}'" for name in orphan_names])
+        if len(orphaned_rows) > 3:
+            names_str += f" (and {len(orphaned_rows) - 3} more)"
+        
+        raise HTTPException(
+            400,
+            f"{label} contains tasks/components that cannot resolve to a parent deliverable: {names_str}. "
+            f"This indicates a broken WBS hierarchy. Please rebuild the scenario in Step 3."
         )
 
 @app.post("/api/export/xml")
@@ -9661,17 +9713,43 @@ def convert_excel_to_mspdi(
             if parent_wbs:
                 wbs_parent_map[r["WBS"]] = parent_wbs
         
-        def find_deliverable_parent(wbs):
-            """Find the top-level deliverable (OutlineLevel=1) for a given WBS."""
+        # Build deliverable code set for fast lookup
+        deliverable_codes = set()
+        deliverable_wbs_map = {}  # Map deliverable_code -> WBS for fast lookup
+        for r in rows:
+            deliv_code = str(r.get("Deliverable_Code", "")).strip()
+            if deliv_code and deliv_code != "":
+                deliverable_codes.add(deliv_code)
+                deliverable_wbs_map[deliv_code] = r["WBS"]
+        
+        def find_deliverable_parent(wbs, row):
+            """
+            Find the parent deliverable for a given WBS.
+            Deliverables are identified by having a non-empty Deliverable_Code, not by OutlineLevel.
+            This handles nested hierarchies (phase → sub-phase → deliverable).
+            """
+            # First check if this row itself is a deliverable
+            deliv_code = str(row.get("Deliverable_Code", "")).strip()
+            if deliv_code and deliv_code != "":
+                # This row is itself a deliverable
+                return wbs, row
+            
+            # Walk up the WBS hierarchy to find a parent with a Deliverable_Code
             current = wbs
             visited = set()
             while current in wbs_parent_map and current not in visited:
                 visited.add(current)
                 parent_wbs = wbs_parent_map[current]
                 parent_row = wbs_to_row.get(parent_wbs)
-                if parent_row and parent_row.get("OutlineLevel") == 1:
-                    return parent_wbs, parent_row
+                
+                if parent_row:
+                    parent_deliv_code = str(parent_row.get("Deliverable_Code", "")).strip()
+                    if parent_deliv_code and parent_deliv_code != "":
+                        # Found a deliverable parent
+                        return parent_wbs, parent_row
+                
                 current = parent_wbs
+            
             return None, None
         
         # Calculate task schedules (TWO-PASS to handle parent-child relationships)
@@ -9732,39 +9810,41 @@ def convert_excel_to_mspdi(
             if r["UID"] in uid_to_sched:
                 continue
             
-            # Find parent deliverable (OutlineLevel=1)
-            deliv_wbs, deliv_row = find_deliverable_parent(r["WBS"])
+            # Find parent deliverable (by Deliverable_Code, handles nested hierarchies)
+            deliv_wbs, deliv_row = find_deliverable_parent(r["WBS"], r)
             
-            if deliv_wbs and deliv_row:
-                deliv_uid = wbs_to_uid.get(deliv_wbs)
-                if deliv_uid and deliv_uid in uid_to_sched:
-                    # Parent deliverable has timeline dates - calculate child dates from parent
-                    parent_sched = uid_to_sched[deliv_uid]
-                    parent_start = parent_sched["Start"]
-                    
-                    # Calculate child dates using StartOffset relative to parent
-                    start_offset_days = r.get("StartOffset", 0)
-                    duration_days = r.get("Duration", 1)
-                    
-                    # Add offset to parent start (business days)
-                    start_date = parent_start + datetime.timedelta(days=start_offset_days)
-                    duration_hours = max(duration_days * hours_per_day, r["PlannedHours"])
-                    end_date = start_date + datetime.timedelta(hours=duration_hours)
-                    
-                    uid_to_sched[r["UID"]] = {
-                        "Start": start_date,
-                        "Finish": end_date,
-                        "PlannedHours": r["PlannedHours"],
-                        "DurationHours": duration_hours
-                    }
-                    
-                    print(f"  ✓ {r['TaskName'][:50]}: Calculated from parent '{deliv_row['TaskName'][:30]}' + {start_offset_days}d offset")
-                    continue
+            if not deliv_wbs or not deliv_row:
+                # FAIL HARD: No parent deliverable found - this indicates missing timeline data
+                # Don't fall back to offset calculation - force user to complete Step 4 (Timeline)
+                task_name = r.get("TaskName", "Unknown")
+                wbs = r.get("WBS", "")
+                raise ValueError(
+                    f"Cannot export '{task_name}' (WBS: {wbs}): No parent deliverable with timeline dates found. "
+                    f"This usually means Step 4 (Timeline) is incomplete or the WBS hierarchy is broken. "
+                    f"Please ensure all deliverables have Start_Date and End_Date from the Gantt timeline."
+                )
             
-            # FALLBACK: If no parent deliverable found, use project_start + offset
-            # This should only happen for top-level summary tasks or orphaned rows
-            start_date = project_start + datetime.timedelta(days=r.get("StartOffset", 0))
-            duration_hours = max(r.get("Duration", 1) * hours_per_day, r["PlannedHours"])
+            deliv_uid = wbs_to_uid.get(deliv_wbs)
+            if not deliv_uid or deliv_uid not in uid_to_sched:
+                # FAIL HARD: Parent deliverable exists but has no schedule
+                task_name = r.get("TaskName", "Unknown")
+                deliv_name = deliv_row.get("TaskName", "Unknown")
+                raise ValueError(
+                    f"Cannot export '{task_name}': Parent deliverable '{deliv_name}' has no timeline dates. "
+                    f"Please complete Step 4 (Timeline) and ensure all deliverables have dates before exporting."
+                )
+            
+            # Parent deliverable has timeline dates - calculate child dates from parent
+            parent_sched = uid_to_sched[deliv_uid]
+            parent_start = parent_sched["Start"]
+            
+            # Calculate child dates using StartOffset relative to parent
+            start_offset_days = r.get("StartOffset", 0)
+            duration_days = r.get("Duration", 1)
+            
+            # Add offset to parent start (business days)
+            start_date = parent_start + datetime.timedelta(days=start_offset_days)
+            duration_hours = max(duration_days * hours_per_day, r["PlannedHours"])
             end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
@@ -9774,7 +9854,7 @@ def convert_excel_to_mspdi(
                 "DurationHours": duration_hours
             }
             
-            print(f"  ⚠ {r['TaskName'][:50]}: Using project_start fallback (no parent deliverable found)")
+            print(f"  ✓ {r['TaskName'][:50]}: Calculated from parent '{deliv_row['TaskName'][:30]}' + {start_offset_days}d offset")
 
         # Build UID-based children mapping for rollup (as expected by patch)
         # Note: wbs_to_uid already created at line 9602 for parent lookups
