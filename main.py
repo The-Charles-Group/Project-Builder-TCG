@@ -10147,6 +10147,61 @@ def convert_excel_to_mspdi(
                 if proj_summary_elem is not None:
                     proj_summary_elem.text = "1"
 
+        # VALIDATION: Check project-level dates match task-level date ranges
+        # This catches issues like inflated durations before the user imports into Workfront
+        try:
+            project_start_elem = project.find("StartDate")
+            project_finish_elem = project.find("FinishDate")
+            
+            if project_start_elem is not None and project_finish_elem is not None:
+                proj_start_str = project_start_elem.text
+                proj_finish_str = project_finish_elem.text
+                
+                # Parse project dates
+                proj_start_dt = datetime.datetime.fromisoformat(proj_start_str.replace('T', ' ').replace('Z', ''))
+                proj_finish_dt = datetime.datetime.fromisoformat(proj_finish_str.replace('T', ' ').replace('Z', ''))
+                
+                # Get min/max from actual tasks (excluding root task UID=1)
+                tasks_elem = project.find("Tasks")
+                if tasks_elem is not None:
+                    task_starts = []
+                    task_finishes = []
+                    
+                    for task in tasks_elem.findall("Task"):
+                        uid_elem = task.find("UID")
+                        start_elem = task.find("Start")
+                        finish_elem = task.find("Finish")
+                        
+                        # Skip root task (UID=1) for validation
+                        if (uid_elem is not None and uid_elem.text != "1" and 
+                            start_elem is not None and finish_elem is not None):
+                            try:
+                                task_start = datetime.datetime.fromisoformat(start_elem.text.replace('T', ' ').replace('Z', ''))
+                                task_finish = datetime.datetime.fromisoformat(finish_elem.text.replace('T', ' ').replace('Z', ''))
+                                task_starts.append(task_start)
+                                task_finishes.append(task_finish)
+                            except:
+                                pass
+                    
+                    if task_starts and task_finishes:
+                        actual_min = min(task_starts)
+                        actual_max = max(task_finishes)
+                        
+                        print(f"[MSPDI Validation] Date alignment check:")
+                        print(f"  Project StartDate:  {proj_start_dt.strftime('%Y-%m-%d')}")
+                        print(f"  Earliest task:      {actual_min.strftime('%Y-%m-%d')}")
+                        print(f"  Match: {'✓' if proj_start_dt.date() == actual_min.date() else '✗ MISMATCH'}")
+                        print(f"  Project FinishDate: {proj_finish_dt.strftime('%Y-%m-%d')}")
+                        print(f"  Latest task:        {actual_max.strftime('%Y-%m-%d')}")
+                        print(f"  Match: {'✓' if proj_finish_dt.date() == actual_max.date() else '✗ MISMATCH'}")
+                        
+                        # Warn if dates don't align (shouldn't happen with the fix)
+                        if proj_start_dt.date() != actual_min.date() or proj_finish_dt.date() != actual_max.date():
+                            print(f"[MSPDI Validation] ⚠️  WARNING: Project dates don't match task dates!")
+                            print(f"  This may cause Workfront to show inflated durations.")
+        except Exception as e:
+            print(f"[MSPDI Validation] Could not validate dates: {e}")
+
         # Write XML file with proper formatting and error handling
         xml_string = tostring(project, encoding='unicode')
         
