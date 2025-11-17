@@ -1041,7 +1041,7 @@ async function initializeGanttChart(tasks = []) {
           
           // Sync to backend SCENARIO_STORE (GPT-5's plan: call /api/timeline/update_task)
           try {
-            const duration_days = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+            const duration_days = window.businessDaysInclusive ? window.businessDaysInclusive(start, end) : Math.ceil((end - start) / (1000 * 60 * 60 * 24));
             // Get fresh session_id directly from SessionManager (no caching)
             const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
             
@@ -1192,6 +1192,9 @@ function showFallbackTable(tasks) {
 function calculateDuration(start, end) {
   const startDate = new Date(start);
   const endDate = new Date(end);
+  if (window.businessDaysInclusive) {
+    return window.businessDaysInclusive(startDate, endDate);
+  }
   return Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
 }
 
