@@ -9907,6 +9907,18 @@ def convert_excel_to_mspdi(
                 project_start = actual_project_start
                 project_finish = actual_project_finish
                 
+                # FIX: Update root task (WBS=1, Project Summary) to match project dates
+                # The root task should span the entire project timeline
+                root_task_uid = None
+                for r in rows:
+                    if r["WBS"] == "1":
+                        root_task_uid = r["UID"]
+                        break
+                
+                if root_task_uid and root_task_uid in uid_to_sched:
+                    uid_to_sched[root_task_uid]["Start"] = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+                    uid_to_sched[root_task_uid]["Finish"] = project_finish.strftime("%Y-%m-%dT%H:%M:%S")
+                
                 print(f"[MSPDI Export] Project dates derived from timeline tasks:")
                 print(f"  - Start: {project_start.strftime('%Y-%m-%d')} (earliest task)")
                 print(f"  - Finish: {project_finish.strftime('%Y-%m-%d')} (latest task)")
@@ -9926,7 +9938,11 @@ def convert_excel_to_mspdi(
         # Project info - use explicit project_name if provided, otherwise fall back to derived title
         SubElement(project, "Name").text = (project_name or project_title)
         SubElement(project, "CreationDate").text = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        
+        # FIX: Use actual project dates derived from timeline tasks (not fallback calculations)
         SubElement(project, "StartDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
+        SubElement(project, "FinishDate").text = project_finish.strftime("%Y-%m-%dT%H:%M:%S")
+        SubElement(project, "CurrentDate").text = project_start.strftime("%Y-%m-%dT%H:%M:%S")
         
         # Project header tuning
         SubElement(project, "DefaultCalendarUID").text = "1"
