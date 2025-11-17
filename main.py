@@ -9592,22 +9592,30 @@ def convert_excel_to_mspdi(
         for r in rows:
             # FIX: Check if Start_Date and End_Date already exist from Gantt timeline_tasks
             # If they do, preserve them instead of recalculating from offsets
+            # CRITICAL: Use date-only format (YYYY-MM-DD) not UTC timestamps to avoid timezone shifts
+            # for distributed teams (e.g., Manila vs Eastern Time)
             start_date_str = r.get("Start_Date", "")
             end_date_str = r.get("End_Date", "")
             
             if start_date_str and end_date_str:
-                # Parse existing dates from Gantt
+                # Parse existing dates from Gantt (date-only format for timezone consistency)
                 try:
-                    # Handle both date formats: YYYY-MM-DD and YYYY-MM-DDTHH:MM:SS
-                    start_date = datetime.datetime.fromisoformat(start_date_str.replace('Z', '+00:00'))
-                    end_date = datetime.datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                    # Parse date-only strings (YYYY-MM-DD) and add standard work hours
+                    # This ensures the same calendar date for all users regardless of timezone
+                    start_date_only = datetime.date.fromisoformat(start_date_str[:10])  # Extract YYYY-MM-DD
+                    end_date_only = datetime.date.fromisoformat(end_date_str[:10])      # Extract YYYY-MM-DD
+                    
+                    # Combine with standard work hours (08:00 AM start, 05:00 PM end)
+                    # This matches the existing export behavior (project_start + offsets)
+                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
+                    end_date = datetime.datetime.combine(end_date_only, datetime.time(17, 0))
                     
                     # Calculate duration from the date span
                     duration_hours = max((end_date - start_date).total_seconds() / 3600, r["PlannedHours"])
                     
                     # Mark this UID as having preserved dates that should not be overwritten by rollup
                     preserved_dates.add(r["UID"])
-                except (ValueError, AttributeError):
+                except (ValueError, AttributeError, TypeError):
                     # If parsing fails, fall back to offset calculation
                     start_date = project_start + datetime.timedelta(days=r["StartOffset"])
                     duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
