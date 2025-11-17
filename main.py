@@ -9739,6 +9739,22 @@ def convert_excel_to_mspdi(
             span_min = business_minutes_between(sched["Start"], sched["Finish"])
             # cache as hours for later; the XML writer will multiply by 60 again
             sched["DurationHours"] = span_min / 60.0
+        
+        # VALIDATION: Log sample deliverable durations to verify business day calculation
+        print("\n[XML EXPORT VALIDATION] Sample Deliverable Durations (Business Days):")
+        print("-" * 100)
+        sample_count = 0
+        for r in rows:
+            if r["WBS"].count(".") == 1 and sample_count < 5:  # Deliverable level (e.g., "1.1")
+                uid = r["UID"]
+                sched = uid_to_sched[uid]
+                start = sched["Start"]
+                finish = sched["Finish"]
+                dur_hours = sched["DurationHours"]
+                dur_days = dur_hours / 8.0  # 8-hour workdays
+                print(f"  {r['Name'][:50]:50} | Start: {str(start)[:10]} | Finish: {str(finish)[:10]} | Duration: {dur_days:.1f} business days ({dur_hours:.1f}h)")
+                sample_count += 1
+        print("-" * 100 + "\n")
             
         # Convert datetime objects back to strings for XML output
         for uid, sched in uid_to_sched.items():
