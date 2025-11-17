@@ -3105,6 +3105,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
     day_cursor = 0
     prev_deliv_wbs = ""
+    prev_deliv_start = -1  # Track previous deliverable's start offset to detect parallel tasks
     dept_counter = 0
     deliv_counter_global = 0
 
@@ -3245,6 +3246,15 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             except Exception:
                 pass  # fall back to sequential start on any parse issue
             
+            # FIX: Only chain deliverables if they have DIFFERENT start offsets (prevent parallel tasks from being forced sequential)
+            # If deliverables have the same start offset, they should run in parallel - NO dependency
+            deliv_dependency = ""
+            if prev_deliv_wbs and dstart != prev_deliv_start:
+                deliv_dependency = prev_deliv_wbs
+                print(f"[WBS] 🔗 Deliverable '{deliv_label}' (offset={dstart}) chained after '{prev_deliv_wbs}' (offset={prev_deliv_start})")
+            elif prev_deliv_wbs and dstart == prev_deliv_start:
+                print(f"[WBS] ⚡ Deliverable '{deliv_label}' (offset={dstart}) runs in PARALLEL with '{prev_deliv_wbs}' (same start offset)")
+            
             rows.append({
                 "Row_ID": "",
                 "Deliverable_Code": dcode,
@@ -3259,7 +3269,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Duration_Days": "",  # Task 8: Leave empty for summary bar - computed from children
                 "Start_Date": d.get("Start_Date", ""),
                 "End_Date": d.get("End_Date", ""),
-                "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": deliv_notes,
+                "Dependencies": deliv_dependency, "Assignee_External_ID": "", "Notes": deliv_notes,
                 "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
                 "Price_USD": round(deliv_price, 2),
                 "Type": deliverable_type  # NEW: Add Type column
@@ -3430,6 +3440,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             # Advance cursor based on actual start used (preserves ordering for next deliverable)
             day_cursor = max(day_cursor, dstart) + total_deliv_duration
             prev_deliv_wbs = wbs_deliv
+            prev_deliv_start = dstart  # Track this deliverable's start for next iteration
 
     df = pd.DataFrame(rows)
     
