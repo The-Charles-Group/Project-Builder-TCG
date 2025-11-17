@@ -8064,7 +8064,7 @@ def api_export_xml_all_scenarios(session_id: Optional[str] = None):
         # Create ZIP file with all three XMLs
         import zipfile
         base = _export_basename(project, "Scenarios A, B & C")
-        zip_path = f"{base}.zip"
+        zip_path = os.path.join(tempfile.gettempdir(), f"{base}.zip")
         
         with zipfile.ZipFile(zip_path, "w") as zipf:
             for alias, real_path in xml_files:
