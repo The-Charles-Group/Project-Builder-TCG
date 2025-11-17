@@ -3679,11 +3679,29 @@ def _get_scenarios(session_id: Optional[str] = None) -> dict:
             print(f"[GET_SCENARIOS] timeline_tasks count: {len(scenario['timeline_tasks'])}")
             print(f"[GET_SCENARIOS] First timeline task: {scenario['timeline_tasks'][0] if scenario['timeline_tasks'] else 'EMPTY'}")
         
+        # DEFENSIVE: Strip any anchor-related settings from cached scenarios
+        # This prevents old cached settings from overriding our Workfront compatibility fixes
+        def clean_anchor_settings(scen):
+            """Remove any cached anchor milestone settings"""
+            if isinstance(scen, dict):
+                scen.pop("add_deliverable_milestones", None)
+                scen.pop("add_anchors", None)
+                scen.pop("include_anchors", None)
+            return scen
+        
+        scenario = clean_anchor_settings(scenario)
+        
         # Wrap in letter format if needed for compatibility
         if "items" in scenario:
             # This is a single scenario, return it as "A"
             print(f"[GET_SCENARIOS] Wrapping single scenario as 'A'")
             return {"A": scenario}
+        
+        # If it has letter keys, clean each one
+        for letter in ["A", "B", "C"]:
+            if letter in scenario:
+                scenario[letter] = clean_anchor_settings(scenario[letter])
+        
         print(f"[GET_SCENARIOS] Returning scenario as-is (already has letter keys)")
         return scenario
     
@@ -7869,6 +7887,7 @@ def _export_single_scenario_xml(
         
         # Use the simple convert_excel_to_mspdi function defined in this file (line 9053)
         # This version produces clean XML matching the Nov 12 reference without bloat
+        # FORCE add_deliverable_milestones=False to override any cached scenario settings
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
@@ -7881,7 +7900,7 @@ def _export_single_scenario_xml(
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=add_deliverable_milestones
+            add_deliverable_milestones=False  # WORKFRONT COMPAT: Always False (ignore parameter)
         )
         
         # Post-process XML to parallelize identical task names (optional)
