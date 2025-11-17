@@ -17,7 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import pandas as pd
 import numpy as np
-from convert_excel_to_mspdi import convert_excel_to_mspdi
+# REMOVED: from convert_excel_to_mspdi import convert_excel_to_mspdi
+# This imported the bloated enhanced version with hardcoded FinishDate and milestone bloat
+# Now using the simple version defined in this file at line 9050 which matches Nov 12 reference
 from contextlib import asynccontextmanager
 import httpx
 import hashlib
