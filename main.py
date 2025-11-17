@@ -9734,10 +9734,11 @@ def convert_excel_to_mspdi(
             rollup_summary(top_uid)
 
         # 2) Recompute Duration for ALL tasks from Start/Finish span (business minutes)
+        # CRITICAL FIX: Use ONLY business day calculation, not max() to avoid calendar day inflation
         for uid, sched in uid_to_sched.items():
             span_min = business_minutes_between(sched["Start"], sched["Finish"])
             # cache as hours for later; the XML writer will multiply by 60 again
-            sched["DurationHours"] = max(sched.get("DurationHours", 0), span_min / 60.0)
+            sched["DurationHours"] = span_min / 60.0
             
         # Convert datetime objects back to strings for XML output
         for uid, sched in uid_to_sched.items():
