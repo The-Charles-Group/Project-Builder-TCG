@@ -877,6 +877,31 @@ from openai import OpenAI
 # do not change this unless explicitly requested by the user
 # Initialize OpenAI client - will be set after models are defined
 
+# ---------- WBS Normalization Helper ----------
+def normalize_wbs(wbs_value):
+    """
+    Normalize WBS identifiers to canonical string format.
+    
+    Handles mixed typing from Excel/CSV imports where WBS values may be:
+    - Floats: 1.0, 1.1, 2.3
+    - Integers: 1, 2, 3
+    - Strings: "1", "1.1", "2.3"
+    
+    Returns: Canonical string (e.g., "1", "1.1", "2.3")
+    Removes trailing .0 from whole numbers.
+    """
+    if wbs_value is None or wbs_value == "":
+        return ""
+    
+    # Convert to string
+    wbs_str = str(wbs_value).strip()
+    
+    # Remove trailing .0 for whole numbers (1.0 → "1")
+    if wbs_str.endswith('.0'):
+        wbs_str = wbs_str[:-2]
+    
+    return wbs_str
+
 # ---------- Helper: DB Loader ----------
 class AgencyDB:
     def __init__(self):
@@ -7539,19 +7564,19 @@ def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
     wbs_parent_map = {}
     if "WBS_ID" in df_copy.columns and "Parent_WBS_ID" in df_copy.columns:
         for idx, row in df_copy.iterrows():
-            parent_wbs = str(row.get("Parent_WBS_ID", "")).strip()
+            parent_wbs = normalize_wbs(row.get("Parent_WBS_ID", ""))
             if parent_wbs:
-                wbs_parent_map[row["WBS_ID"]] = parent_wbs
+                wbs_parent_map[normalize_wbs(row["WBS_ID"])] = parent_wbs
     
     # Build deliverable WBS set for validation
-    deliverable_wbs_set = set(deliverables["WBS_ID"].tolist())
+    deliverable_wbs_set = set(normalize_wbs(wbs) for wbs in deliverables["WBS_ID"].tolist())
     
     # Check that all non-deliverable rows can resolve to a deliverable parent
     non_deliverables = df_copy[df_copy["Deliverable_Code_Clean"] == ""]
     orphaned_rows = []
     
     for idx, row in non_deliverables.iterrows():
-        wbs = row["WBS_ID"]
+        wbs = normalize_wbs(row["WBS_ID"])
         
         # Walk up the WBS hierarchy to find a deliverable parent
         current = wbs
@@ -9374,12 +9399,12 @@ def convert_excel_to_mspdi(
 
         if merge_identical_children:
             # index helpers
-            by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+            by_wbs = {normalize_wbs(r["WBS"]): r for r in rows if r.get("WBS")}
             kids_by_parent: Dict[str, List[str]] = {}
             for r in rows:
-                p = r.get("ParentWBS")
+                p = normalize_wbs(r.get("ParentWBS"))
                 if p:
-                    kids_by_parent.setdefault(p, []).append(r["WBS"])
+                    kids_by_parent.setdefault(p, []).append(normalize_wbs(r["WBS"]))
 
             for parent_wbs, kid_wbs_list in list(kids_by_parent.items()):
                 # Only immediate children and all must be leaves
@@ -9427,17 +9452,17 @@ def convert_excel_to_mspdi(
 
         # If we merged anything, drop the children now
         if removed_child_wbs:
-            rows = [r for r in rows if r["WBS"] not in removed_child_wbs]
+            rows = [r for r in rows if normalize_wbs(r["WBS"]) not in removed_child_wbs]
 
         # Build a universal WBS index (needed even when merge is OFF)
-        by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+        by_wbs = {normalize_wbs(r["WBS"]): r for r in rows if r.get("WBS")}
 
         # Build children_by_parent map and child_to_parent for dep rewrites
         children_by_parent: Dict[str, List[str]] = {}
         for r in rows:
-            p = r["ParentWBS"]
+            p = normalize_wbs(r["ParentWBS"])
             if p:
-                children_by_parent.setdefault(p, []).append(r["WBS"])
+                children_by_parent.setdefault(p, []).append(normalize_wbs(r["WBS"]))
         summary_set: Set[str] = set(children_by_parent.keys())
 
         child_to_parent: Dict[str, str] = {}
@@ -9448,7 +9473,8 @@ def convert_excel_to_mspdi(
 
         # Helper functions for dependency normalization
         def is_ancestor(ancestor_wbs: str, descendant_wbs: str) -> bool:
-            current = descendant_wbs
+            ancestor_wbs = normalize_wbs(ancestor_wbs)
+            current = normalize_wbs(descendant_wbs)
             visited = set()
             while current and current not in visited:
                 visited.add(current)
@@ -9457,16 +9483,17 @@ def convert_excel_to_mspdi(
                 # Find parent of current
                 parent_found = None
                 for r in rows:
-                    if r["WBS"] == current:
-                        parent_found = r.get("ParentWBS")
+                    if normalize_wbs(r["WBS"]) == current:
+                        parent_found = normalize_wbs(r.get("ParentWBS"))
                         break
                 current = parent_found
             return False
 
         def list_leaves_under(parent_wbs: str) -> List[str]:
+            parent_wbs = normalize_wbs(parent_wbs)
             leaves = []
             for r in rows:
-                if r.get("ParentWBS") == parent_wbs and r["WBS"] not in summary_set:
+                if normalize_wbs(r.get("ParentWBS")) == parent_wbs and normalize_wbs(r["WBS"]) not in summary_set:
                     leaves.append(r["WBS"])
             return leaves
 
@@ -9519,7 +9546,7 @@ def convert_excel_to_mspdi(
             root_row = None
             other_rows = []  # Rows without DeliverableCode
             for r in rows:
-                if r["WBS"] == "1":
+                if normalize_wbs(r["WBS"]) == "1":
                     root_row = r
                     continue
                 dcode = r.get("DeliverableCode", "").strip()
@@ -9625,12 +9652,12 @@ def convert_excel_to_mspdi(
             rows = enrich_wbs_for_workfront(rows)
         
         # Rebuild indices after enrichment
-        by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+        by_wbs = {normalize_wbs(r["WBS"]): r for r in rows if r.get("WBS")}
         children_by_parent = {}
         for r in rows:
-            p = r["ParentWBS"]
+            p = normalize_wbs(r["ParentWBS"])
             if p:
-                children_by_parent.setdefault(p, []).append(r["WBS"])
+                children_by_parent.setdefault(p, []).append(normalize_wbs(r["WBS"]))
         summary_set = set(children_by_parent.keys())
         
         # Normalize dependencies & drop unsafe hierarchy edges
@@ -9639,9 +9666,9 @@ def convert_excel_to_mspdi(
             deps = r.get("Dependencies", "").strip()
             if deps:
                 for dep in deps.split(","):
-                    dep = dep.strip()
+                    dep = normalize_wbs(dep.strip())
                     if dep:
-                        init_edges.append((dep, r["WBS"]))
+                        init_edges.append((dep, normalize_wbs(r["WBS"])))
 
         normalized_edges = []
         for pred_wbs, succ_wbs in init_edges:
@@ -9728,15 +9755,16 @@ def convert_excel_to_mspdi(
             return minutes
 
         # Build WBS hierarchy first (needed for parent lookups)
-        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
-        wbs_to_row = {r["WBS"]: r for r in rows}
+        # CRITICAL: Normalize all WBS values to prevent type mismatches (float vs string)
+        wbs_to_uid = {normalize_wbs(r["WBS"]): r["UID"] for r in rows}
+        wbs_to_row = {normalize_wbs(r["WBS"]): r for r in rows}
         
         # Build parent mapping (WBS -> parent WBS)
         wbs_parent_map = {}
         for r in rows:
-            parent_wbs = r.get("ParentWBS", "").strip()
+            parent_wbs = normalize_wbs(r.get("ParentWBS", ""))
             if parent_wbs:
-                wbs_parent_map[r["WBS"]] = parent_wbs
+                wbs_parent_map[normalize_wbs(r["WBS"])] = parent_wbs
         
         # Build deliverable code set for fast lookup
         deliverable_codes = set()
@@ -9745,7 +9773,7 @@ def convert_excel_to_mspdi(
             deliv_code = str(r.get("Deliverable_Code", "")).strip()
             if deliv_code and deliv_code != "":
                 deliverable_codes.add(deliv_code)
-                deliverable_wbs_map[deliv_code] = r["WBS"]
+                deliverable_wbs_map[deliv_code] = normalize_wbs(r["WBS"])
         
         def find_deliverable_parent(wbs, row):
             """
@@ -9753,6 +9781,9 @@ def convert_excel_to_mspdi(
             Deliverables are identified by having a non-empty Deliverable_Code, not by OutlineLevel.
             This handles nested hierarchies (phase → sub-phase → deliverable).
             """
+            # Normalize WBS input to ensure consistent lookups
+            wbs = normalize_wbs(wbs)
+            
             # First check if this row itself is a deliverable
             deliv_code = str(row.get("Deliverable_Code", "")).strip()
             if deliv_code and deliv_code != "":
@@ -9838,7 +9869,7 @@ def convert_excel_to_mspdi(
                 continue
             
             # Skip root project node (WBS:1) - it gets project-level dates, not parent deliverable dates
-            if r.get("WBS") == "1" or r.get("OutlineLevel") == 1:
+            if normalize_wbs(r.get("WBS")) == "1" or r.get("OutlineLevel") == 1:
                 # Root node gets default project dates if not already set in PASS 1
                 if r["UID"] not in uid_to_sched:
                     # Calculate realistic project start/finish from processed deliverables
@@ -9916,9 +9947,9 @@ def convert_excel_to_mspdi(
         wbs_children = children_by_parent  # Save original WBS-based mapping
         children_by_parent = {}  # UID-based mapping for rollup
         for wbs, child_wbs_list in wbs_children.items():
-            parent_uid = wbs_to_uid.get(wbs)
+            parent_uid = wbs_to_uid.get(normalize_wbs(wbs))
             if parent_uid:
-                children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
+                children_by_parent[parent_uid] = [wbs_to_uid.get(normalize_wbs(child_wbs)) for child_wbs in child_wbs_list if wbs_to_uid.get(normalize_wbs(child_wbs))]
         summary_set = set(children_by_parent.keys())
 
         # Helper function to recursively clamp all descendants to fit within bounds
@@ -10051,9 +10082,9 @@ def convert_excel_to_mspdi(
         # Map prealloc from WBS -> UID (after UIDs exist)
         prealloc_by_task_uid: Dict[int, Dict[str, float]] = {}
         if prealloc_by_parent_wbs:
-            wbs_to_uid = {r["WBS"]: r["UID"] for r in rows if r["WBS"]}
+            wbs_to_uid = {normalize_wbs(r["WBS"]): r["UID"] for r in rows if r["WBS"]}
             for wbs, role_hours in prealloc_by_parent_wbs.items():
-                uid = wbs_to_uid.get(wbs)
+                uid = wbs_to_uid.get(normalize_wbs(wbs))
                 if uid:
                     prealloc_by_task_uid[uid] = role_hours
 
@@ -10061,7 +10092,7 @@ def convert_excel_to_mspdi(
         assignments = []
         assign_uid = 1
         for r in rows:
-            if r["WBS"] in summary_set:
+            if normalize_wbs(r["WBS"]) in summary_set:
                 continue
 
             task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
@@ -10197,7 +10228,7 @@ def convert_excel_to_mspdi(
                 # The root task should span the entire project timeline
                 root_task_uid = None
                 for r in rows:
-                    if r["WBS"] == "1":
+                    if normalize_wbs(r["WBS"]) == "1":
                         root_task_uid = r["UID"]
                         break
                 
@@ -10283,7 +10314,7 @@ def convert_excel_to_mspdi(
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
             # Use "Project Summary" for root task, otherwise use the actual name
-            is_root = r["WBS"] == "1"
+            is_root = normalize_wbs(r["WBS"]) == "1"
             name_txt = "Project Summary" if is_root else r["Name"]
             SubElement(task, "Name").text = name_txt
             
@@ -10295,7 +10326,7 @@ def convert_excel_to_mspdi(
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             # Summary task flag
-            is_summary = r["WBS"] in summary_set or is_root
+            is_summary = normalize_wbs(r["WBS"]) in summary_set or is_root
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # Emit DurationFormat=7 (Days) for all tasks
@@ -10375,12 +10406,12 @@ def convert_excel_to_mspdi(
             SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
         # Add PredecessorLinks for dependencies
-        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+        wbs_to_uid = {normalize_wbs(r["WBS"]): r["UID"] for r in rows}
         
         # Add PredecessorLink elements to tasks that have dependencies
         for pred_wbs, succ_wbs in normalized_edges:
-            pred_uid = wbs_to_uid.get(pred_wbs)
-            succ_uid = wbs_to_uid.get(succ_wbs)
+            pred_uid = wbs_to_uid.get(normalize_wbs(pred_wbs))
+            succ_uid = wbs_to_uid.get(normalize_wbs(succ_wbs))
             if pred_uid and succ_uid:
                 # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
                 for task_elem in tasks_elem.findall("Task"):
