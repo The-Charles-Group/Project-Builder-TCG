@@ -7548,7 +7548,8 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             project_name=project_name,
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
-            blended_rate=scenario.get("blended_rate")
+            blended_rate=scenario.get("blended_rate"),
+            add_deliverable_milestones=False  # Workfront compatibility: no alphanumeric WBS
         )
         
         # Post-process XML to parallelize identical task names (optional)
