@@ -877,28 +877,49 @@ from openai import OpenAI
 # do not change this unless explicitly requested by the user
 # Initialize OpenAI client - will be set after models are defined
 
-# ---------- WBS Normalization Helper ----------
+# ---------- WBS Normalization Helpers ----------
+def is_wbs_like(value):
+    """
+    Detect if a value looks like a WBS identifier.
+    Returns True for patterns like: "1", "1.1", "1.2.3", etc.
+    """
+    if value is None or value == "":
+        return False
+    
+    s = str(value).strip()
+    if not s:
+        return False
+    
+    # WBS is dot-separated segments
+    segments = s.split('.')
+    if len(segments) == 0:
+        return False
+    
+    # Each segment should be numeric (possibly with leading zeros)
+    for seg in segments:
+        if not seg:
+            return False
+        # Allow numeric segments: "1", "10", "01", etc.
+        if not all(c.isdigit() for c in seg):
+            return False
+    
+    return True
+
 def normalize_wbs(wbs_value):
     """
     Normalize WBS identifiers to canonical string format per architect guidance.
     
-    This system's WBS format: dot-separated positive integers as strings.
-    Generated examples: "1", "1.1", "1.2", "1.10", "2.3.4"
-    
-    Normalization rules:
-    1. Convert any type to string
-    2. Remove .0 suffix ONLY if it's a type artifact (1.0 → "1", NOT 1.10 → "1.1")
+    Handles the ONLY real issue: pandas/Excel float type artifacts.
+    - Float 1.0 → "1" (type artifact removed)
+    - Float 1.1 → "1.1" (preserved)
+    - String "1.10" → "1.10" (preserved as-is, already canonical)
+    - String "1.2.3" → "1.2.3" (multi-level, preserved)
     
     Algorithm:
-    - If value ends with ".0" exactly, remove it (handles float type artifacts)
-    - Otherwise keep as-is (preserves "1.10", "2.30", etc.)
-    
-    Examples:
-    - 1.0 (float) → "1.0" → "1" (artifact removed)
-    - 1.1 (float) → "1.1" (preserved)
-    - 1.10 (string or pandas) → "1.10" (preserved)
-    - 1 (int) → "1" (converted)
-    - "1" (string) → "1" (unchanged)
+    1. Convert to string
+    2. Count dots to determine if it's simple (0-1 dots) or multi-level (2+ dots)
+    3. For simple values, try float conversion to clean artifacts
+    4. For multi-level, keep as-is (already in canonical string format)
     """
     if wbs_value is None or wbs_value == "":
         return ""
@@ -906,13 +927,34 @@ def normalize_wbs(wbs_value):
     # Convert to string
     wbs_str = str(wbs_value).strip()
     
-    # Remove ONLY the .0 suffix (type artifact), preserve everything else
-    # This handles: 1.0 → "1", 2.0 → "2"
-    # But preserves: 1.10 → "1.10", 2.30 → "2.30"
-    if wbs_str.endswith('.0'):
-        wbs_str = wbs_str[:-2]
+    # Count dots to detect multi-level WBS
+    dot_count = wbs_str.count('.')
     
-    return wbs_str
+    if dot_count >= 2:
+        # Multi-level WBS like "1.2.3" - these are ALWAYS strings in this system
+        # They can't be floats, so no normalization needed
+        return wbs_str
+    
+    # Single-level (no dots) or two-level (one dot) - could be float artifacts
+    try:
+        as_float = float(wbs_str)
+        
+        # If it's a whole number disguised as float (1.0, 2.0), simplify
+        if as_float == int(as_float):
+            return str(int(as_float))
+        else:
+            # It's a genuine decimal (1.1, 1.2, etc.)
+            # Use Python's float representation to clean precision noise
+            cleaned = str(as_float)
+            
+            # Remove trailing .0 if still present
+            if cleaned.endswith('.0'):
+                cleaned = cleaned[:-2]
+            
+            return cleaned
+    except ValueError:
+        # Can't convert to float - return as-is
+        return wbs_str
 
 def normalize_scenario_wbs(data):
     """
