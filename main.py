@@ -7489,49 +7489,6 @@ def _assert_has_items(scen: dict, label: str):
     if not scen or not scen.get("items"):
         raise HTTPException(400, f"No build context for {label}. Run Build once in Step 3.")
 
-def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
-    """
-    Validate that deliverable-level rows (OutlineLevel=1) have Start_Date and End_Date.
-    This ensures the Gantt timeline (Step 4) was completed before exporting to Workfront.
-    
-    Raises HTTPException if validation fails with a clear user message.
-    """
-    if "Start_Date" not in df.columns or "End_Date" not in df.columns:
-        raise HTTPException(
-            400, 
-            f"{label} requires timeline dates. Please complete Step 4 (Timeline) before exporting."
-        )
-    
-    # Find deliverable-level rows (OutlineLevel == 1)
-    if "OutlineLevel" in df.columns:
-        deliverables = df[df["OutlineLevel"] == 1].copy()
-    else:
-        # Fallback: use WBS_ID pattern (e.g., "1.1", "1.2") to identify deliverables
-        deliverables = df[df["WBS_ID"].str.match(r"^1\.\d+$", na=False)].copy()
-    
-    if deliverables.empty:
-        # No deliverables found - this shouldn't happen but don't block export
-        return
-    
-    # Check for missing dates
-    missing_start = deliverables["Start_Date"].isna() | (deliverables["Start_Date"] == "")
-    missing_end = deliverables["End_Date"].isna() | (deliverables["End_Date"] == "")
-    missing_dates = deliverables[missing_start | missing_end]
-    
-    if not missing_dates.empty:
-        # Get deliverable names for error message
-        deliv_names = missing_dates["Task_Name"].head(3).tolist()
-        names_str = ", ".join([f"'{name}'" for name in deliv_names])
-        if len(missing_dates) > 3:
-            names_str += f" (and {len(missing_dates) - 3} more)"
-        
-        raise HTTPException(
-            400,
-            f"{label} requires timeline dates for all deliverables. "
-            f"Missing dates for: {names_str}. "
-            f"Please complete Step 4 (Timeline) and ensure all deliverables have dates before exporting."
-        )
-
 @app.post("/api/export/xml")
 def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
     """
@@ -7613,9 +7570,6 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
     # Build WBS DataFrame
     df = build_wbs_dataframe_from_scenario(scenario, project_name)
     df = _ensure_v3_ae_columns(df)
-    
-    # Validate timeline dates exist before export
-    _validate_timeline_dates(df, f"{scenario_label or 'Scenario'} XML export")
 
     # Create temporary Excel file for MSPDI conversion with unique ID to prevent collisions
     base = _export_basename(project_name, scenario_label or "Scenario")
@@ -7692,10 +7646,6 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
     
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
-    
-    # Validate timeline dates exist before export
-    _validate_timeline_dates(dfA, "Scenario A XML export")
-    _validate_timeline_dates(dfB, "Scenario B XML export")
     
     base = _export_basename(project, "Scenarios A & B XML")
     unique_id = uuid.uuid4().hex[:8]
@@ -7816,11 +7766,6 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
     dfC = _ensure_v3_ae_columns(dfC)
-    
-    # Validate timeline dates exist before export
-    _validate_timeline_dates(dfA, "Scenario A XML export")
-    _validate_timeline_dates(dfB, "Scenario B XML export")
-    _validate_timeline_dates(dfC, "Scenario C XML export")
 
     base = _export_basename(project, "Scenarios A, B & C XML")
     unique_id = uuid.uuid4().hex[:8]
@@ -9650,122 +9595,45 @@ def convert_excel_to_mspdi(
             minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
             return minutes
 
-        # Build WBS hierarchy first (needed for parent lookups)
-        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
-        wbs_to_row = {r["WBS"]: r for r in rows}
-        
-        # Build parent mapping (WBS -> parent WBS)
-        wbs_parent_map = {}
-        for r in rows:
-            parent_wbs = r.get("ParentWBS", "").strip()
-            if parent_wbs:
-                wbs_parent_map[r["WBS"]] = parent_wbs
-        
-        def find_deliverable_parent(wbs):
-            """Find the top-level deliverable (OutlineLevel=1) for a given WBS."""
-            current = wbs
-            visited = set()
-            while current in wbs_parent_map and current not in visited:
-                visited.add(current)
-                parent_wbs = wbs_parent_map[current]
-                parent_row = wbs_to_row.get(parent_wbs)
-                if parent_row and parent_row.get("OutlineLevel") == 1:
-                    return parent_wbs, parent_row
-                current = parent_wbs
-            return None, None
-        
-        # Calculate task schedules (TWO-PASS to handle parent-child relationships)
+        # Calculate task schedules
         uid_to_sched = {}
         preserved_dates = set()  # Track which UIDs have dates from Gantt that should not be rolled up
-        
-        # PASS 1: Process all rows with explicit Start_Date/End_Date (deliverables from Gantt)
-        rows_with_dates = []
-        rows_without_dates = []
-        
         for r in rows:
+            # FIX: Check if Start_Date and End_Date already exist from Gantt timeline_tasks
+            # If they do, preserve them instead of recalculating from offsets
+            # CRITICAL: Use date-only format (YYYY-MM-DD) not UTC timestamps to avoid timezone shifts
+            # for distributed teams (e.g., Manila vs Eastern Time)
             start_date_str = r.get("Start_Date", "")
             end_date_str = r.get("End_Date", "")
             
             if start_date_str and end_date_str:
-                rows_with_dates.append(r)
-            else:
-                rows_without_dates.append(r)
-        
-        print(f"\n[Date Preservation] PASS 1: Processing {len(rows_with_dates)} rows WITH timeline dates")
-        for r in rows_with_dates:
-            start_date_str = r.get("Start_Date", "")
-            end_date_str = r.get("End_Date", "")
-            
-            try:
-                # Parse date-only strings (YYYY-MM-DD) and add standard work hours
-                start_date_only = datetime.date.fromisoformat(start_date_str[:10])
-                end_date_only = datetime.date.fromisoformat(end_date_str[:10])
-                
-                # Combine with standard work hours (08:00 AM start, 05:00 PM end)
-                start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
-                end_date = datetime.datetime.combine(end_date_only, datetime.time(17, 0))
-                
-                # Calculate duration from the date span
-                duration_hours = max((end_date - start_date).total_seconds() / 3600, r["PlannedHours"])
-                
-                # Mark this UID as having preserved dates that should not be overwritten by rollup
-                preserved_dates.add(r["UID"])
-                
-                uid_to_sched[r["UID"]] = {
-                    "Start": start_date,
-                    "Finish": end_date,
-                    "PlannedHours": r["PlannedHours"],
-                    "DurationHours": duration_hours
-                }
-                
-                print(f"  ✓ {r['TaskName'][:50]}: {start_date_str} → {end_date_str} (from Gantt)")
-                
-            except (ValueError, AttributeError, TypeError) as e:
-                print(f"  ✗ Failed to parse dates for {r['TaskName']}: {e}")
-                # Add to rows_without_dates for PASS 2 processing
-                rows_without_dates.append(r)
-        
-        # PASS 2: Process rows without dates - calculate from parent deliverable
-        print(f"\n[Date Preservation] PASS 2: Processing {len(rows_without_dates)} rows WITHOUT timeline dates")
-        for r in rows_without_dates:
-            # Skip if already processed in PASS 1 (parse error recovery)
-            if r["UID"] in uid_to_sched:
-                continue
-            
-            # Find parent deliverable (OutlineLevel=1)
-            deliv_wbs, deliv_row = find_deliverable_parent(r["WBS"])
-            
-            if deliv_wbs and deliv_row:
-                deliv_uid = wbs_to_uid.get(deliv_wbs)
-                if deliv_uid and deliv_uid in uid_to_sched:
-                    # Parent deliverable has timeline dates - calculate child dates from parent
-                    parent_sched = uid_to_sched[deliv_uid]
-                    parent_start = parent_sched["Start"]
+                # Parse existing dates from Gantt (date-only format for timezone consistency)
+                try:
+                    # Parse date-only strings (YYYY-MM-DD) and add standard work hours
+                    # This ensures the same calendar date for all users regardless of timezone
+                    start_date_only = datetime.date.fromisoformat(start_date_str[:10])  # Extract YYYY-MM-DD
+                    end_date_only = datetime.date.fromisoformat(end_date_str[:10])      # Extract YYYY-MM-DD
                     
-                    # Calculate child dates using StartOffset relative to parent
-                    start_offset_days = r.get("StartOffset", 0)
-                    duration_days = r.get("Duration", 1)
+                    # Combine with standard work hours (08:00 AM start, 05:00 PM end)
+                    # This matches the existing export behavior (project_start + offsets)
+                    start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
+                    end_date = datetime.datetime.combine(end_date_only, datetime.time(17, 0))
                     
-                    # Add offset to parent start (business days)
-                    start_date = parent_start + datetime.timedelta(days=start_offset_days)
-                    duration_hours = max(duration_days * hours_per_day, r["PlannedHours"])
+                    # Calculate duration from the date span
+                    duration_hours = max((end_date - start_date).total_seconds() / 3600, r["PlannedHours"])
+                    
+                    # Mark this UID as having preserved dates that should not be overwritten by rollup
+                    preserved_dates.add(r["UID"])
+                except (ValueError, AttributeError, TypeError):
+                    # If parsing fails, fall back to offset calculation
+                    start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
                     end_date = start_date + datetime.timedelta(hours=duration_hours)
-                    
-                    uid_to_sched[r["UID"]] = {
-                        "Start": start_date,
-                        "Finish": end_date,
-                        "PlannedHours": r["PlannedHours"],
-                        "DurationHours": duration_hours
-                    }
-                    
-                    print(f"  ✓ {r['TaskName'][:50]}: Calculated from parent '{deliv_row['TaskName'][:30]}' + {start_offset_days}d offset")
-                    continue
-            
-            # FALLBACK: If no parent deliverable found, use project_start + offset
-            # This should only happen for top-level summary tasks or orphaned rows
-            start_date = project_start + datetime.timedelta(days=r.get("StartOffset", 0))
-            duration_hours = max(r.get("Duration", 1) * hours_per_day, r["PlannedHours"])
-            end_date = start_date + datetime.timedelta(hours=duration_hours)
+            else:
+                # No existing dates - calculate from offsets (original logic)
+                start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+                duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
                 "Start": start_date,
@@ -9773,11 +9641,9 @@ def convert_excel_to_mspdi(
                 "PlannedHours": r["PlannedHours"],
                 "DurationHours": duration_hours
             }
-            
-            print(f"  ⚠ {r['TaskName'][:50]}: Using project_start fallback (no parent deliverable found)")
 
         # Build UID-based children mapping for rollup (as expected by patch)
-        # Note: wbs_to_uid already created at line 9602 for parent lookups
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         wbs_children = children_by_parent  # Save original WBS-based mapping
         children_by_parent = {}  # UID-based mapping for rollup
         for wbs, child_wbs_list in wbs_children.items():
