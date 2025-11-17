@@ -9773,6 +9773,10 @@ def convert_excel_to_mspdi(
             is_root = r["WBS"] == "1"
             name_txt = "Project Summary" if is_root else r["Name"]
             SubElement(task, "Name").text = name_txt
+            
+            # IMPORTANT: Keep full WBS paths for uniqueness, only OutlineLevel is capped
+            # Workfront needs full WBS (e.g., "1.2.3.1.1") for unique task identification
+            # But OutlineLevel is capped at 3 for visual hierarchy (Deliverable → Component → Task)
             SubElement(task, "WBS").text = r["WBS"]
             SubElement(task, "OutlineNumber").text = r["WBS"] 
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
