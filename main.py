@@ -9242,6 +9242,19 @@ def convert_excel_to_mspdi(
         # Load Excel data
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
         
+        # --- Normalize Task_Name column (copy from Task if missing or empty) ---
+        if "Task" in df.columns:
+            if "Task_Name" not in df.columns:
+                df["Task_Name"] = df["Task"]
+                print("[EXPORT] Task_Name column missing - copied from Task column")
+            else:
+                # Fill individual rows where Task_Name is null or blank
+                mask = df["Task_Name"].isna() | (df["Task_Name"].astype(str).str.strip() == "")
+                if mask.any():
+                    df.loc[mask, "Task_Name"] = df.loc[mask, "Task"]
+                    filled_count = mask.sum()
+                    print(f"[EXPORT] Task_Name filled {filled_count} empty rows from Task column")
+        
         # --- Validate required columns exist (fail fast with clear error) ---
         required_columns = {
             "Task_Name", "WBS_ID", "Parent_WBS_ID", "Planned_Hours", 
@@ -9822,6 +9835,32 @@ def convert_excel_to_mspdi(
         for r in rows_without_dates:
             # Skip if already processed in PASS 1 (parse error recovery)
             if r["UID"] in uid_to_sched:
+                continue
+            
+            # Skip root project node (WBS:1) - it gets project-level dates, not parent deliverable dates
+            if r.get("WBS") == "1" or r.get("OutlineLevel") == 1:
+                # Root node gets default project dates if not already set in PASS 1
+                if r["UID"] not in uid_to_sched:
+                    # Calculate realistic project start/finish from processed deliverables
+                    if uid_to_sched:
+                        # Use earliest start and latest finish from all processed tasks
+                        all_starts = [s["Start"] for s in uid_to_sched.values()]
+                        all_finishes = [s["Finish"] for s in uid_to_sched.values()]
+                        project_start = min(all_starts) if all_starts else (project_start_date or datetime.datetime.now())
+                        project_finish = max(all_finishes) if all_finishes else project_start + datetime.timedelta(days=365)
+                    else:
+                        # Fallback if no deliverables processed yet
+                        project_start = project_start_date or datetime.datetime.now()
+                        project_finish = project_start + datetime.timedelta(days=365)
+                    
+                    duration_hours = max(1.0, (project_finish - project_start).total_seconds() / 3600)
+                    uid_to_sched[r["UID"]] = {
+                        "Start": project_start,
+                        "Finish": project_finish,
+                        "PlannedHours": r["PlannedHours"],
+                        "DurationHours": duration_hours
+                    }
+                    print(f"  ✓ Root node (WBS:1): {project_start.date()} → {project_finish.date()} (computed from deliverables)")
                 continue
             
             # Find parent deliverable (by Deliverable_Code, handles nested hierarchies)
