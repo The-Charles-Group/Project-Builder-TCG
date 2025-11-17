@@ -1,0 +1,146 @@
+Here it is:
+
+# Git + Replit + GitHub Cheatsheet
+
+This is a **minimal set of commands** to feel confident working in Replit while syncing to GitHub.
+
+---
+
+## 1. Everyday Rhythm
+
+### Before you start coding
+```bash
+git pull
+
+
+Get the latest changes from GitHub (teammates, CI, etc).
+
+While you work (save a snapshot)
+git status               # see what changed
+git add -A               # stage all changes
+git commit -m "message"  # save a snapshot with a clear message
+
+
+Example:
+
+git add -A
+git commit -m "feat: add assignments gantt view"
+
+When you’re ready to sync
+git push
+
+
+Sends your local commits to GitHub (origin main in this project).
+
+2. Quick “What’s going on?” Commands
+
+See current status (changes, branch, staged files):
+
+git status
+
+
+See recent commits (short view):
+
+git log --oneline
+
+
+Check what branch you’re on:
+
+git branch --show-current
+
+
+Check your GitHub remote:
+
+git remote -v
+
+3. Confirming If Your Changes Reached GitHub
+
+From Replit shell:
+
+git fetch origin main
+git rev-parse --short HEAD
+git rev-parse --short origin/main
+
+
+If the two SHAs match → your local code and GitHub main are in sync.
+
+If they differ → you probably need to git push.
+
+4. Rollbacks (when things break)
+4.1 Team-safe rollback (preferred)
+
+Use when you want to undo bad changes, but keep history clean for everyone.
+
+See recent commits:
+
+git log --oneline
+
+
+Pick a GOOD_COMMIT (a point where things worked).
+
+Revert everything after that good commit:
+
+git revert --no-commit <GOOD_COMMIT>..HEAD
+git commit -m "Revert to <GOOD_COMMIT>"
+git push
+
+
+📌 This adds a new commit that undoes the bad stuff. It does not rewrite history.
+
+4.2 Restore a single file from an older version
+
+Use when only one file is messed up.
+
+Find a commit where the file was good:
+
+git log -- path/to/file
+
+
+Restore the file from that commit:
+
+git restore --source=<COMMIT> path/to/file
+git commit -m "Restore path/to/file from <COMMIT>"
+git push
+
+
+Everything else in the repo stays as-is.
+
+5. Replit + Checkpoints (optional)
+
+If you enable Agent/Assistant in Replit:
+
+Replit can create checkpoints (automatic milestones).
+
+Each checkpoint becomes a local Git commit.
+
+You still need to Push from the Git panel or shell:
+
+git push
+
+
+Restore flow:
+
+Replit → Agent / History → choose a checkpoint → Restore.
+
+Then run:
+
+git add -A
+git commit -m "restore: rollback to checkpoint"
+git push
+
+6. Minimal Muscle Memory
+
+These are the 4 commands you’ll use the most:
+
+git pull                               # update from GitHub
+git status                             # see what's changed
+git add -A                             # stage all changes
+git commit -m "short, clear message"   # save a snapshot
+git push                               # sync to GitHub
+
+
+If you know these, you’re already in good shape. The rollback commands are there for when you need to undo something without panicking.
+
+
+If you want, next step I can help you add a **tiny “Git for TCG” section** at the top of your README that links to this cheatsheet and the dark workflow image, so any new dev can onboard themselves in 2 minutes.
+::contentReference[oaicite:0]{index=0}
