@@ -9700,41 +9700,28 @@ def convert_excel_to_mspdi(
                     r["Planned_Hours"] = total_hours  # Note: underscore, not camelCase
                     break
 
-        # FIX: Filter out milestone tasks that extend timeline
-        # Only remove explicit milestone completion markers, not legitimate work tasks
-        # Examples to REMOVE: "Design - COMPLETE", "Phase 2 Complete (50%)", "CLIENT APPROVAL - FINAL", "CLIENT APPROVAL"
-        # Examples to KEEP: "Client Approval Prep", "Complete creative brief", "Client Approval - Feedback Loop"
+        # FIX: Filter out milestone tasks that extend timeline (X - COMPLETE, CLIENT APPROVAL - X, Phase Complete)
+        # These are auto-generated milestones that push out the project end date unnecessarily
+        # Be specific to avoid removing legitimate action tasks like "Complete creative brief" or "Client Approval Prep"
         filtered_rows = []
         
         for r in rows:
             task_name = r.get("Name", "").strip()
-            # CRITICAL: Normalize Unicode dashes (en dash \u2013, em dash \u2014) to ASCII hyphen
-            # Many milestone names use en dashes which won't match "- COMPLETE" patterns
-            task_name = task_name.replace('\u2013', '-').replace('\u2014', '-')  # – and — to -
             task_name_upper = task_name.upper()
             
-            # Conservative patterns - only catch explicit milestone markers:
+            # Check if this is a milestone to exclude (not an action task)
             is_excluded_milestone = (
-                # Pattern 1: Ends with "- COMPLETE" (explicit completion milestone)
+                # Pattern: "Something - COMPLETE" (milestone marker at end)
                 task_name_upper.endswith(" - COMPLETE") or
                 task_name_upper.endswith("- COMPLETE") or
-                # Pattern 2: Has percentage marker like "(50%)" or "(100%)" indicating phase milestone
-                ("(" in task_name and "%" in task_name and ")" in task_name) or
-                # Pattern 3: Ends with "- FINAL" (explicit final milestone)
-                task_name_upper.endswith(" - FINAL") or
-                task_name_upper.endswith("- FINAL") or
-                # Pattern 4: "Phase X Complete" (but NOT "Complete Phase X" which is an action)
-                (task_name_upper.startswith("PHASE") and task_name_upper.endswith("COMPLETE")) or
-                # Pattern 5: CLIENT APPROVAL milestones
-                (task_name_upper == "CLIENT APPROVAL") or
-                # Ends with "CLIENT APPROVAL" but NOT work task suffixes
-                (task_name_upper.endswith("CLIENT APPROVAL") and not any(
-                    task_name_upper.endswith(f"CLIENT APPROVAL - {suffix}") 
-                    for suffix in ["PREP", "FEEDBACK", "REVIEW", "REVISIONS", "UPDATES", "CHANGES"]
-                )) or
-                # CLIENT APPROVAL with parenthetical milestone markers (e.g., "CLIENT APPROVAL (milestone)")
-                ("CLIENT APPROVAL" in task_name_upper and "(" in task_name and ")" in task_name and
-                 not any(suffix in task_name_upper for suffix in [" - PREP", " - FEEDBACK", " - REVIEW", " - REVISIONS"]))
+                # Pattern: "X COMPLETE" where there's a dash before COMPLETE (e.g., "Design - COMPLETE")
+                (task_name_upper.endswith("COMPLETE") and " - " in task_name) or
+                # Pattern: "CLIENT APPROVAL - X" or "CLIENT APPROVAL (X)" (milestone with marker)
+                (task_name_upper.startswith("CLIENT APPROVAL") and (" - " in task_name_upper or "(" in task_name_upper)) or
+                # Pattern: Ends with "CLIENT APPROVAL" (standalone milestone)
+                task_name_upper.endswith("CLIENT APPROVAL") or
+                # Pattern: "Phase 2 Complete (50%)" or "Phase 2 Complete" (phase milestones)
+                (task_name_upper.startswith("PHASE") and "COMPLETE" in task_name_upper)
             )
             
             if not is_excluded_milestone:
