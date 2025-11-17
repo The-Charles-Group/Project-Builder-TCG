@@ -9796,10 +9796,12 @@ def convert_excel_to_mspdi(
                     "DurationHours": duration_hours
                 }
                 
-                print(f"  ✓ {r['TaskName'][:50]}: {start_date_str} → {end_date_str} (from Gantt)")
+                task_name = r.get("Task_Name", "Unknown")[:50]
+                print(f"  ✓ {task_name}: {start_date_str} → {end_date_str} (from Gantt)")
                 
             except (ValueError, AttributeError, TypeError) as e:
-                print(f"  ✗ Failed to parse dates for {r['TaskName']}: {e}")
+                task_name = r.get("Task_Name", "Unknown")
+                print(f"  ✗ Failed to parse dates for {task_name}: {e}")
                 # Add to rows_without_dates for PASS 2 processing
                 rows_without_dates.append(r)
         
@@ -9816,7 +9818,7 @@ def convert_excel_to_mspdi(
             if not deliv_wbs or not deliv_row:
                 # FAIL HARD: No parent deliverable found - this indicates missing timeline data
                 # Don't fall back to offset calculation - force user to complete Step 4 (Timeline)
-                task_name = r.get("TaskName", "Unknown")
+                task_name = r.get("Task_Name", "Unknown")
                 wbs = r.get("WBS", "")
                 raise ValueError(
                     f"Cannot export '{task_name}' (WBS: {wbs}): No parent deliverable with timeline dates found. "
@@ -9827,8 +9829,8 @@ def convert_excel_to_mspdi(
             deliv_uid = wbs_to_uid.get(deliv_wbs)
             if not deliv_uid or deliv_uid not in uid_to_sched:
                 # FAIL HARD: Parent deliverable exists but has no schedule
-                task_name = r.get("TaskName", "Unknown")
-                deliv_name = deliv_row.get("TaskName", "Unknown")
+                task_name = r.get("Task_Name", "Unknown")
+                deliv_name = deliv_row.get("Task_Name", "Unknown")
                 raise ValueError(
                     f"Cannot export '{task_name}': Parent deliverable '{deliv_name}' has no timeline dates. "
                     f"Please complete Step 4 (Timeline) and ensure all deliverables have dates before exporting."
@@ -9854,7 +9856,9 @@ def convert_excel_to_mspdi(
                 "DurationHours": duration_hours
             }
             
-            print(f"  ✓ {r['TaskName'][:50]}: Calculated from parent '{deliv_row['TaskName'][:30]}' + {start_offset_days}d offset")
+            task_name = r.get("Task_Name", "Unknown")[:50]
+            parent_name = deliv_row.get("Task_Name", "Unknown")[:30]
+            print(f"  ✓ {task_name}: Calculated from parent '{parent_name}' + {start_offset_days}d offset")
 
         # Build UID-based children mapping for rollup (as expected by patch)
         # Note: wbs_to_uid already created at line 9602 for parent lookups
