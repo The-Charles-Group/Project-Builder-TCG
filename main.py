@@ -9242,6 +9242,18 @@ def convert_excel_to_mspdi(
         # Load Excel data
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
         
+        # --- Validate required columns exist (fail fast with clear error) ---
+        required_columns = {
+            "Task_Name", "WBS", "ParentWBS", "UID", "PlannedHours", 
+            "Duration", "StartOffset", "Deliverable_Code"
+        }
+        missing_columns = required_columns - set(df.columns)
+        if missing_columns:
+            raise ValueError(
+                f"Export failed: Required columns missing from Excel data: {', '.join(sorted(missing_columns))}. "
+                f"This usually indicates a data formatting issue. Please ensure the scenario was built correctly."
+            )
+        
         # --- Derive a proper project title for the MSPDI <Project><Name> ---
         project_title = None
         try:
