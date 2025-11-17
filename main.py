@@ -880,15 +880,25 @@ from openai import OpenAI
 # ---------- WBS Normalization Helper ----------
 def normalize_wbs(wbs_value):
     """
-    Normalize WBS identifiers to canonical string format.
+    Normalize WBS identifiers to canonical string format per architect guidance.
     
-    Handles mixed typing from Excel/CSV imports where WBS values may be:
-    - Floats: 1.0, 1.1, 2.3
-    - Integers: 1, 2, 3
-    - Strings: "1", "1.1", "2.3"
+    This system's WBS format: dot-separated positive integers as strings.
+    Generated examples: "1", "1.1", "1.2", "1.10", "2.3.4"
     
-    Returns: Canonical string (e.g., "1", "1.1", "2.3")
-    Removes trailing .0 from whole numbers.
+    Normalization rules:
+    1. Convert any type to string
+    2. Remove .0 suffix ONLY if it's a type artifact (1.0 → "1", NOT 1.10 → "1.1")
+    
+    Algorithm:
+    - If value ends with ".0" exactly, remove it (handles float type artifacts)
+    - Otherwise keep as-is (preserves "1.10", "2.30", etc.)
+    
+    Examples:
+    - 1.0 (float) → "1.0" → "1" (artifact removed)
+    - 1.1 (float) → "1.1" (preserved)
+    - 1.10 (string or pandas) → "1.10" (preserved)
+    - 1 (int) → "1" (converted)
+    - "1" (string) → "1" (unchanged)
     """
     if wbs_value is None or wbs_value == "":
         return ""
@@ -896,11 +906,68 @@ def normalize_wbs(wbs_value):
     # Convert to string
     wbs_str = str(wbs_value).strip()
     
-    # Remove trailing .0 for whole numbers (1.0 → "1")
+    # Remove ONLY the .0 suffix (type artifact), preserve everything else
+    # This handles: 1.0 → "1", 2.0 → "2"
+    # But preserves: 1.10 → "1.10", 2.30 → "2.30"
     if wbs_str.endswith('.0'):
         wbs_str = wbs_str[:-2]
     
     return wbs_str
+
+def normalize_scenario_wbs(data):
+    """
+    Recursively normalize all WBS fields in any data structure (case-insensitive).
+    
+    This generic recursive normalizer handles:
+    - Dicts: Normalizes ALL WBS key variants (WBS_ID, wbs_id, WbsId, etc.)
+    - Lists: Recurses through all elements
+    - Primitives: Returns as-is
+    
+    Normalizes these WBS key variants (case-insensitive):
+    - WBS_ID, wbs_id, WbsId, WBSID
+    - Parent_WBS_ID, parent_wbs_id, ParentWbsId, parentWbsId
+    - WBS, wbs
+    - Parent_WBS, parent_wbs, ParentWbs
+    
+    This ensures data consistency regardless of:
+    - Data source (API payloads, timeline generation, session reloading)
+    - Key casing (snake_case, camelCase, UPPERCASE)
+    - Structure format (items, timeline_tasks, nested objects)
+    - Nesting level (top-level, deeply nested arrays/objects)
+    
+    Modifies data in place and returns it for chaining.
+    """
+    # Handle dictionaries - normalize ALL WBS key variants
+    if isinstance(data, dict):
+        # Create case-insensitive key mapping
+        keys_to_normalize = []
+        for key in data.keys():
+            key_lower = key.lower().replace('_', '').replace('-', '')
+            # Check for WBS_ID variants
+            if key_lower in ['wbsid', 'wbs']:
+                keys_to_normalize.append((key, 'wbs'))
+            # Check for Parent_WBS_ID variants
+            elif key_lower in ['parentwbsid', 'parentwbs']:
+                keys_to_normalize.append((key, 'parent'))
+        
+        # Normalize all found WBS keys
+        for key, key_type in keys_to_normalize:
+            data[key] = normalize_wbs(data[key])
+        
+        # Recurse through all values in the dictionary
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                data[key] = normalize_scenario_wbs(value)
+        
+        return data
+    
+    # Handle lists - recurse through all elements
+    elif isinstance(data, list):
+        return [normalize_scenario_wbs(item) for item in data]
+    
+    # Primitives - return as-is
+    else:
+        return data
 
 # ---------- Helper: DB Loader ----------
 class AgencyDB:
@@ -5278,16 +5345,23 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 session_id = request.session_id
                 if session_id in SCENARIO_STORE:
                     # Update existing scenario with timeline
+                    # Normalize entire result structure (timeline + tasks)
+                    result = normalize_scenario_wbs(result)
                     SCENARIO_STORE[session_id]['timeline'] = result
+                    # Also normalize the entire existing scenario to ensure consistency
+                    SCENARIO_STORE[session_id] = normalize_scenario_wbs(SCENARIO_STORE[session_id])
                     print(f"[Timeline] Stored timeline result in SCENARIO_STORE for session {session_id}")
                 else:
                     # Create new scenario with timeline
-                    SCENARIO_STORE[session_id] = {
+                    new_scenario = {
                         'timeline': result,
                         'project_start': request.project_start,
                         'items': [],
                         'totals': {'hours': 0.0, 'price': 0.0}
                     }
+                    # Normalize all WBS values in the new scenario
+                    new_scenario = normalize_scenario_wbs(new_scenario)
+                    SCENARIO_STORE[session_id] = new_scenario
                     print(f"[Timeline] Created new scenario in SCENARIO_STORE for session {session_id}")
             
             # CRITICAL FIX: Strip all dependencies from tasks to enable free movement
@@ -6047,6 +6121,8 @@ def api_build(payload: BuildPayload):
         scenario_data = scenarios["A"].copy()
         scenario_data['session_id'] = payload.session_id
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
+        # Normalize all WBS values before storing (defensive layer)
+        scenario_data = normalize_scenario_wbs(scenario_data)
         SCENARIO_STORE[payload.session_id] = scenario_data
         print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} (enables Gantt updates)")
     
@@ -6229,6 +6305,9 @@ async def api_save_scenario(payload: Dict[str, Any]):
         scenario_data = payload.get("scenario", payload)
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
         scenario_data['session_id'] = session_id
+        
+        # CRITICAL: Normalize all WBS values before storing (fixes type mismatches)
+        scenario_data = normalize_scenario_wbs(scenario_data)
         
         SCENARIO_STORE[session_id] = scenario_data
         
@@ -6527,6 +6606,8 @@ async def api_optimize_scenario(payload: OptimizeScenarioPayload):
         
         # Recompute totals
         scenario = _recompute_totals(scenario)
+        # Normalize WBS before storing
+        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         return {
@@ -6628,6 +6709,8 @@ async def api_retainer_suggestions(payload: RetainerSuggestionsPayload):
             "distribution": distribution
         }
         
+        # Normalize WBS before storing
+        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         return {
@@ -6684,6 +6767,8 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
         
         # Recompute totals
         scenario = _recompute_totals(scenario)
+        # Normalize WBS before storing
+        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         # Update timeline if it exists
@@ -6748,6 +6833,8 @@ async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
                     break
         
         scenario = _recompute_totals(scenario)
+        # Normalize WBS before storing
+        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         return {
@@ -10863,11 +10950,15 @@ async def save_timeline(request: dict):
             # Update the specific scenario in the bundle
             if isinstance(session_bundle, dict) and "items" in session_bundle:
                 # Direct scenario format - overwrite entire session
+                # Normalize WBS before storing
+                scen = normalize_scenario_wbs(scen)
                 SCENARIO_STORE[session_id] = scen
                 print(f"[TIMELINE SAVE] Saved direct scenario to SCENARIO_STORE[{session_id}]")
             else:
                 # Bundle format - update specific scenario letter
                 session_bundle[scenario_letter] = scen
+                # Normalize WBS before storing
+                session_bundle = normalize_scenario_wbs(session_bundle)
                 SCENARIO_STORE[session_id] = session_bundle
                 print(f"[TIMELINE SAVE] Saved to SCENARIO_STORE[{session_id}][{scenario_letter}]")
         else:
@@ -11428,8 +11519,10 @@ async def sync_scenario(payload: ScenarioSyncPayload):
     # Apply client changes if newer
     changes_applied = False
     if payload.scenario and (not has_conflicts or payload.client_version > server_version):
+        # Normalize WBS before updating server state
+        normalized_scenario = normalize_scenario_wbs(payload.scenario)
         # Update server state with client data
-        server_state["scenario"] = payload.scenario
+        server_state["scenario"] = normalized_scenario
         server_state["selections"] = payload.selections or {}
         server_state["version"] = max(server_version + 1, payload.client_version)
         server_state["last_modified"] = payload.timestamp
