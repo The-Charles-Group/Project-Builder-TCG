@@ -7489,6 +7489,49 @@ def _assert_has_items(scen: dict, label: str):
     if not scen or not scen.get("items"):
         raise HTTPException(400, f"No build context for {label}. Run Build once in Step 3.")
 
+def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
+    """
+    Validate that deliverable-level rows (OutlineLevel=1) have Start_Date and End_Date.
+    This ensures the Gantt timeline (Step 4) was completed before exporting to Workfront.
+    
+    Raises HTTPException if validation fails with a clear user message.
+    """
+    if "Start_Date" not in df.columns or "End_Date" not in df.columns:
+        raise HTTPException(
+            400, 
+            f"{label} requires timeline dates. Please complete Step 4 (Timeline) before exporting."
+        )
+    
+    # Find deliverable-level rows (OutlineLevel == 1)
+    if "OutlineLevel" in df.columns:
+        deliverables = df[df["OutlineLevel"] == 1].copy()
+    else:
+        # Fallback: use WBS_ID pattern (e.g., "1.1", "1.2") to identify deliverables
+        deliverables = df[df["WBS_ID"].str.match(r"^1\.\d+$", na=False)].copy()
+    
+    if deliverables.empty:
+        # No deliverables found - this shouldn't happen but don't block export
+        return
+    
+    # Check for missing dates
+    missing_start = deliverables["Start_Date"].isna() | (deliverables["Start_Date"] == "")
+    missing_end = deliverables["End_Date"].isna() | (deliverables["End_Date"] == "")
+    missing_dates = deliverables[missing_start | missing_end]
+    
+    if not missing_dates.empty:
+        # Get deliverable names for error message
+        deliv_names = missing_dates["Task_Name"].head(3).tolist()
+        names_str = ", ".join([f"'{name}'" for name in deliv_names])
+        if len(missing_dates) > 3:
+            names_str += f" (and {len(missing_dates) - 3} more)"
+        
+        raise HTTPException(
+            400,
+            f"{label} requires timeline dates for all deliverables. "
+            f"Missing dates for: {names_str}. "
+            f"Please complete Step 4 (Timeline) and ensure all deliverables have dates before exporting."
+        )
+
 @app.post("/api/export/xml")
 def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
     """
@@ -7570,6 +7613,9 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
     # Build WBS DataFrame
     df = build_wbs_dataframe_from_scenario(scenario, project_name)
     df = _ensure_v3_ae_columns(df)
+    
+    # Validate timeline dates exist before export
+    _validate_timeline_dates(df, f"{scenario_label or 'Scenario'} XML export")
 
     # Create temporary Excel file for MSPDI conversion with unique ID to prevent collisions
     base = _export_basename(project_name, scenario_label or "Scenario")
@@ -7646,6 +7692,10 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
     
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
+    
+    # Validate timeline dates exist before export
+    _validate_timeline_dates(dfA, "Scenario A XML export")
+    _validate_timeline_dates(dfB, "Scenario B XML export")
     
     base = _export_basename(project, "Scenarios A & B XML")
     unique_id = uuid.uuid4().hex[:8]
@@ -7766,6 +7816,11 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
     dfA = _ensure_v3_ae_columns(dfA)
     dfB = _ensure_v3_ae_columns(dfB)
     dfC = _ensure_v3_ae_columns(dfC)
+    
+    # Validate timeline dates exist before export
+    _validate_timeline_dates(dfA, "Scenario A XML export")
+    _validate_timeline_dates(dfB, "Scenario B XML export")
+    _validate_timeline_dates(dfC, "Scenario C XML export")
 
     base = _export_basename(project, "Scenarios A, B & C XML")
     unique_id = uuid.uuid4().hex[:8]
