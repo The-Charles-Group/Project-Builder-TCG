@@ -9529,9 +9529,13 @@ def convert_excel_to_mspdi(
             if actual_pred != actual_succ:
                 normalized_edges.append((actual_pred, actual_succ))
 
-        # Calculate project start date
+        # Calculate project start date (MUST be timezone-naive for MSPDI compatibility)
         if fixed_start_iso:
-            project_start = datetime.datetime.fromisoformat(fixed_start_iso.replace('Z', '+00:00'))
+            # Extract date-only portion and add standard work hours to create timezone-naive datetime
+            # This matches the approach used for Gantt date preservation and ensures consistent
+            # behavior for distributed teams across different timezones
+            start_date_only = datetime.date.fromisoformat(fixed_start_iso[:10])
+            project_start = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
         elif start_date_mode == "next_monday":
             today = datetime.date.today()
             days_ahead = 0 - today.weekday()  # Monday is 0
