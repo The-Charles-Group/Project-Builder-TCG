@@ -9244,8 +9244,8 @@ def convert_excel_to_mspdi(
         
         # --- Validate required columns exist (fail fast with clear error) ---
         required_columns = {
-            "Task_Name", "WBS", "ParentWBS", "UID", "PlannedHours", 
-            "Duration", "StartOffset", "Deliverable_Code"
+            "Task_Name", "WBS_ID", "Parent_WBS_ID", "Planned_Hours", 
+            "Duration_Days", "Start_Offset_Days", "Deliverable_Code"
         }
         missing_columns = required_columns - set(df.columns)
         if missing_columns:
