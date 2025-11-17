@@ -9700,35 +9700,15 @@ def convert_excel_to_mspdi(
                     r["Planned_Hours"] = total_hours  # Note: underscore, not camelCase
                     break
 
-        # FIX: Filter out milestone tasks that extend timeline (X - COMPLETE, CLIENT APPROVAL - X, Phase Complete)
-        # These are auto-generated milestones that push out the project end date unnecessarily
-        # Be specific to avoid removing legitimate action tasks like "Complete creative brief" or "Client Approval Prep"
-        filtered_rows = []
-        
-        for r in rows:
-            task_name = r.get("Name", "").strip()
-            task_name_upper = task_name.upper()
-            
-            # Check if this is a milestone to exclude (not an action task)
-            is_excluded_milestone = (
-                # Pattern: "Something - COMPLETE" (milestone marker at end)
-                task_name_upper.endswith(" - COMPLETE") or
-                task_name_upper.endswith("- COMPLETE") or
-                # Pattern: "X COMPLETE" where there's a dash before COMPLETE (e.g., "Design - COMPLETE")
-                (task_name_upper.endswith("COMPLETE") and " - " in task_name) or
-                # Pattern: "CLIENT APPROVAL - X" or "CLIENT APPROVAL (X)" (milestone with marker)
-                (task_name_upper.startswith("CLIENT APPROVAL") and (" - " in task_name_upper or "(" in task_name_upper)) or
-                # Pattern: Ends with "CLIENT APPROVAL" (standalone milestone)
-                task_name_upper.endswith("CLIENT APPROVAL") or
-                # Pattern: "Phase 2 Complete (50%)" or "Phase 2 Complete" (phase milestones)
-                (task_name_upper.startswith("PHASE") and "COMPLETE" in task_name_upper)
-            )
-            
-            if not is_excluded_milestone:
-                filtered_rows.append(r)
-        
-        # Use filtered rows for XML generation
-        rows = filtered_rows
+        # NOTE: Milestone filtering temporarily disabled pending user clarification on which
+        # specific task name patterns should be excluded
+        # The reference XML doesn't show these milestone patterns, so we need to verify
+        # which tasks should be filtered vs preserved
+        # filtered_rows = []
+        # for r in rows:
+        #     task_name = r.get("Name", "").strip()
+        #     ...filtering logic...
+        # rows = filtered_rows
 
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
