@@ -1095,7 +1095,13 @@ async function initializeGanttChart(tasks = []) {
     
     // Apply custom classes for department colors and critical path, and add hover tooltips
     setTimeout(() => {
-      tasks.forEach(task => {
+      console.log('[Gantt Tooltips] Starting tooltip application for', tasks.length, 'tasks');
+      console.log('[Gantt Tooltips] Container:', container);
+      console.log('[Gantt Tooltips] All .bar elements:', container.querySelectorAll('.bar').length);
+      console.log('[Gantt Tooltips] All .bar-wrapper elements:', container.querySelectorAll('.bar-wrapper').length);
+      
+      let tooltipsAdded = 0;
+      tasks.forEach((task, index) => {
         // Try multiple selectors to find the bar element (Frappe Gantt structure varies)
         let taskElement = container.querySelector(`.bar[data-id="${task.id}"]`);
         if (!taskElement) {
@@ -1136,16 +1142,27 @@ async function initializeGanttChart(tasks = []) {
               barWrapper.setAttribute('title', tooltipText);
               barWrapper.style.cursor = 'pointer';
             }
+            
+            tooltipsAdded++;
+            if (index < 3) {
+              console.log('[Gantt Tooltips] Added tooltip to task:', task.name, '| Element:', taskElement);
+            }
+          }
+        } else {
+          if (index < 3) {
+            console.log('[Gantt Tooltips] Could not find element for task:', task.name, '| ID:', task.id);
           }
         }
       });
+      
+      console.log('[Gantt Tooltips] ✅ Added tooltips to', tooltipsAdded, 'out of', tasks.length, 'tasks');
       
       // Apply Gantt dark mode if theme is dark
       applyGanttTheme();
       
       // Show PDF download button after Gantt is successfully rendered
       showPDFDownloadButton();
-    }, 100);
+    }, 500);
     
   } catch (error) {
     console.error('Error initializing Gantt chart:', error);
