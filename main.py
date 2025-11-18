@@ -10085,25 +10085,36 @@ def convert_excel_to_mspdi(
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # CRITICAL FIX: Add manual scheduling tags for deliverables with preserved Gantt dates
+            # CRITICAL FIX: Add manual scheduling tags for ANY task with preserved Gantt dates
             # This tells Workfront to lock these dates and not recalculate them on import
-            # Deliverables are at outline level 2 (WBS like "1.1", "1.2", etc.)
-            is_deliverable = outline_level == 2
+            # Apply to all preserved tasks regardless of outline level (handles multi-tier hierarchies)
             has_preserved_dates = r["UID"] in preserved_dates
             
-            if is_deliverable and has_preserved_dates:
+            if has_preserved_dates:
                 # Add manual scheduling flags to force Workfront to respect user-edited dates
                 SubElement(task, "ManualStart").text = "1"
                 SubElement(task, "ManualFinish").text = "1"
                 SubElement(task, "ManualDuration").text = "1"
                 
-                # CRITICAL FIX: Always create ConstraintType and ConstraintDate for preserved deliverables
-                # Summary deliverables don't get ConstraintType initially, so we must add it here
-                # Set to "Must Start On" (4) to lock the preserved start date
-                SubElement(task, "ConstraintType").text = "4"  # Must Start On
-                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                # CRITICAL FIX: Update or create ConstraintType and ConstraintDate for preserved tasks
+                # Leaf tasks already have ConstraintType=0, so we need to update it to avoid duplicates
+                # Summary tasks don't have ConstraintType, so we create it
+                constraint_elem = task.find("ConstraintType")
+                if constraint_elem is not None:
+                    # Update existing constraint to "Must Start On"
+                    constraint_elem.text = "4"
+                else:
+                    # Create new constraint for summary tasks
+                    SubElement(task, "ConstraintType").text = "4"
                 
-                print(f"[XML EXPORT] 🔒 Added manual scheduling tags for preserved deliverable: {name_txt} (WBS {r['WBS']})")
+                # Add or update ConstraintDate to lock the preserved start date
+                constraint_date_elem = task.find("ConstraintDate")
+                if constraint_date_elem is not None:
+                    constraint_date_elem.text = uid_to_sched[r["UID"]]["Start"]
+                else:
+                    SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                
+                print(f"[XML EXPORT] 🔒 Added manual scheduling tags for preserved task: {name_txt} (WBS {r['WBS']}, OutlineLevel {outline_level})")
             
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
