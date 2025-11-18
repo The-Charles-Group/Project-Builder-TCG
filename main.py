@@ -9624,11 +9624,12 @@ def convert_excel_to_mspdi(
                     start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
                     end_date = datetime.datetime.combine(end_date_only, datetime.time(17, 0))
                     
-                    # CRITICAL FIX: Calculate duration from business hours between Start and Finish
-                    # This ensures Duration matches the date span in the XML for Workfront consistency
-                    # Use business_minutes_between helper to account for working hours only
-                    business_mins = business_minutes_between(start_date, end_date)
-                    duration_hours = business_mins / 60.0 if business_mins > 0 else r["PlannedHours"]
+                    # CRITICAL FIX: Duration = calendar span in 8h-day units (Option C from Architect)
+                    # This prevents Workfront from recalculating dates on import
+                    # Formula: Duration_minutes = ((Finish - Start).days + 1) × 480
+                    # Work stays as PlannedHours (may differ from Duration - indicates partial allocation)
+                    calendar_days = (end_date_only - start_date_only).days + 1  # Inclusive count
+                    duration_hours = calendar_days * 8.0  # 8-hour working days
                     
                     # Mark this UID as having preserved dates that should not be overwritten by rollup
                     preserved_dates.add(r["UID"])
@@ -10079,15 +10080,44 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
             # Only set Duration/Work for non-summary leaf tasks
             elif not is_summary:
-                # Safe int conversion for time values using rolled-up duration
-                planned_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
-                dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))  # Use rolled-up duration
+                # CRITICAL FIX: For preserved Gantt dates (Option C):
+                # Duration = calendar span in 8h-day units (prevents Workfront date recalculation)
+                # Work = PlannedHours (actual effort, may be less than Duration = partial allocation)
+                is_preserved = r["UID"] in preserved_dates
                 
-                # PATCH D: Snap duration to 480-minute (8-hour day) blocks for Workfront compatibility
-                dur_minutes = ((dur_minutes + 479) // 480) * 480
+                if is_preserved:
+                    # OPTION C FIX: For preserved tasks
+                    # Duration = calendar span in 8h-day units (from Start to Finish dates)
+                    # Work = PlannedHours (actual work hours from Gantt)
+                    # Duration ≠ Work indicates partial resource allocation (Workfront accepts this)
+                    dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))
+                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
+                    
+                    # NO snapping for preserved tasks - use exact calendar span calculation
+                    # Snapping would create inconsistency with preserved Start/Finish dates
+                else:
+                    # For non-preserved tasks: Use original logic with PlannedHours and snapping
+                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
+                    dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))
+                    
+                    # Snap duration to 480-minute (8-hour day) blocks for Workfront compatibility
+                    dur_minutes = ((dur_minutes + 479) // 480) * 480
                 
-                SubElement(task, "Work").text = f"PT{planned_minutes}M"
+                SubElement(task, "Work").text = f"PT{work_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
+                
+                # VALIDATION: Log preserved task values to verify Option C implementation
+                if is_preserved:
+                    start_dt = uid_to_sched[r["UID"]]["Start"]
+                    finish_dt = uid_to_sched[r["UID"]]["Finish"]
+                    start_str = start_dt.strftime("%Y-%m-%d %H:%M")
+                    finish_str = finish_dt.strftime("%Y-%m-%d %H:%M")
+                    work_h = work_minutes / 60.0
+                    dur_h = dur_minutes / 60.0
+                    # Calculate calendar days from Start/Finish dates
+                    calendar_days = (finish_dt.date() - start_dt.date()).days + 1
+                    allocation_pct = (work_h / dur_h * 100) if dur_h > 0 else 0
+                    print(f"[XML VALIDATION] ✅ {name_txt[:30]} | Start={start_str} | Finish={finish_str} | Duration={dur_h:.1f}h ({calendar_days}d×8h) | Work={work_h:.1f}h | Allocation={allocation_pct:.0f}%")
                 
                 # Set leaf tasks as Fixed Duration (Type=1) so duration is canonical
                 SubElement(task, "Type").text = "1"  # Fixed Duration
