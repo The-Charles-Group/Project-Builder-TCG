@@ -10068,9 +10068,8 @@ def convert_excel_to_mspdi(
             is_summary = r["WBS"] in summary_set or is_root
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
-            # WORKFRONT FIX: Emit DurationFormat=5 (Minutes) for all tasks
-            # This ensures Workfront interprets PT480M and other durations consistently
-            SubElement(task, "DurationFormat").text = "5"
+            # Emit DurationFormat=7 (Days) for all tasks
+            SubElement(task, "DurationFormat").text = "7"
             
             # WORKFRONT FIX: Summary tasks get PT480M placeholder duration (not PT0M) to avoid "0.12 days" display
             # Work is always PT0M for summaries since Workfront rolls up from children
@@ -10086,19 +10085,8 @@ def convert_excel_to_mspdi(
                 else:
                     # All other summary tasks (departments, deliverables) get PT480M placeholder
                     SubElement(task, "Duration").text = "PT480M"
-                
-                # WORKFRONT FIX: Add Type and IsEffortDriven to lock summary task scheduling
-                # Type=1 (Fixed Duration) prevents Workfront from recalculating parent timelines
-                SubElement(task, "Type").text = "1"
-                SubElement(task, "IsEffortDriven").text = "0"
-                
-                # WORKFRONT FIX: Manual scheduling tags to lock parent task dates
-                # These prevent Workfront from recomputing summary spans based on children
-                SubElement(task, "ManuallyScheduled").text = "1"
-                SubElement(task, "ManualStart").text = "1"
-                SubElement(task, "ManualFinish").text = "1"
-                SubElement(task, "ManualDuration").text = "1"
-                SubElement(task, "ManualWork").text = "1"
+                # Do NOT set Type, IsEffortDriven, or other scheduling flags on summary tasks
+                # Workfront will roll up from children
             # Only set Duration/Work for non-summary leaf tasks
             else:
                 # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
@@ -10593,55 +10581,6 @@ def convert_excel_to_mspdi(
             print(f"[VALIDATION] ✅ All leaf tasks have ConstraintType=0 (ASAP): PASS")
         else:
             print(f"[VALIDATION] ⚠️  Found {leaf_constraint_issues} leaf tasks without ASAP constraint")
-        
-        # Validation 6: Check all tasks have DurationFormat=5 (Minutes)
-        duration_format_issues = 0
-        for task_elem in tasks_elem.findall("Task"):
-            format_elem = task_elem.find("DurationFormat")
-            if format_elem is None or format_elem.text != "5":
-                name_elem = task_elem.find("Name")
-                task_name = name_elem.text if name_elem is not None else "Unknown"
-                format_val = format_elem.text if format_elem is not None else "MISSING"
-                if duration_format_issues < 3:  # Only show first 3
-                    print(f"[VALIDATION] ⚠️  Task has wrong DurationFormat: {task_name[:40]} (Format={format_val}, expected 5)")
-                duration_format_issues += 1
-        
-        if duration_format_issues == 0:
-            print(f"[VALIDATION] ✅ All tasks have DurationFormat=5 (Minutes): PASS")
-        else:
-            print(f"[VALIDATION] ⚠️  Found {duration_format_issues} tasks with incorrect DurationFormat")
-        
-        # Validation 7: Check summary tasks have Manual scheduling tags
-        manual_tag_issues = 0
-        for task_elem in tasks_elem.findall("Task"):
-            summary_elem = task_elem.find("Summary")
-            uid_elem = task_elem.find("UID")
-            
-            # Check if this is a summary task (not root)
-            is_summary = summary_elem is not None and summary_elem.text == "1"
-            is_root = uid_elem is not None and uid_elem.text == "1"
-            
-            if is_summary and not is_root:
-                # Check for all required manual scheduling tags
-                required_tags = ["ManuallyScheduled", "ManualStart", "ManualFinish", "ManualDuration", "ManualWork"]
-                missing_tags = []
-                
-                for tag in required_tags:
-                    tag_elem = task_elem.find(tag)
-                    if tag_elem is None or tag_elem.text != "1":
-                        missing_tags.append(tag)
-                
-                if missing_tags:
-                    name_elem = task_elem.find("Name")
-                    task_name = name_elem.text if name_elem is not None else "Unknown"
-                    if manual_tag_issues < 3:  # Only show first 3
-                        print(f"[VALIDATION] ⚠️  Summary task missing manual tags: {task_name[:40]} (Missing: {', '.join(missing_tags)})")
-                    manual_tag_issues += 1
-        
-        if manual_tag_issues == 0:
-            print(f"[VALIDATION] ✅ All summary tasks have Manual scheduling tags: PASS")
-        else:
-            print(f"[VALIDATION] ⚠️  Found {manual_tag_issues} summary tasks with missing Manual tags")
         
         print(f"[WORKFRONT VALIDATION] ═══════════════════════════════════════\n")
         
