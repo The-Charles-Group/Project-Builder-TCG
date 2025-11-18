@@ -3231,16 +3231,33 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             deliv_notes = f'{d.get("complexity","")}/{d.get("tier","")}' + (f' | Retainer x{months} months' if months else '')
             total_deliv_duration = sum(int(t["duration_days"]) for t in schedule)  # one-cycle length
             
-            # FIX B: Respect Step 4 Gantt overrides (Start_Offset_Days or Start_Date)
+            # Calculate deliverable start offset: respect user overrides, otherwise use sequential
             dstart = day_cursor  # default sequential start
+            user_override_applied = False
+            expected_sequential_offset = day_cursor  # what the auto-generated offset would be
+            
             try:
-                if str(d.get("Start_Offset_Days", "")).strip() != "":
-                    dstart = int(float(d["Start_Offset_Days"]))
-                elif d.get("Start_Date") and scenario.get("project_start"):
+                # Check for explicit user overrides (priority order: Start_Date > Start_Offset_Source > legacy heuristic)
+                if d.get("Start_Date") and scenario.get("project_start"):
+                    # User dragged task in Gantt → calculate offset from Start_Date
                     import datetime
                     ps = datetime.date.fromisoformat(str(scenario["project_start"])[:10])
                     sd = datetime.date.fromisoformat(str(d["Start_Date"])[:10])
                     dstart = (sd - ps).days
+                    user_override_applied = True
+                elif d.get("Start_Offset_Source") == "user" and d.get("Start_Offset_Days") is not None:
+                    # User manually edited offset field (with metadata) → preserve their value
+                    dstart = int(float(d.get("Start_Offset_Days")))
+                    user_override_applied = True
+                elif d.get("Start_Offset_Days") is not None:
+                    # Fallback heuristic: Legacy offset that differs from sequential → treat as user override
+                    # This preserves existing offset-only Gantt edits until UI emits Start_Offset_Source metadata
+                    # Normalize to numeric for comparison (may be stored as string "147" vs int 147)
+                    legacy_offset = int(float(d.get("Start_Offset_Days")))
+                    if legacy_offset != expected_sequential_offset:
+                        dstart = legacy_offset
+                        user_override_applied = True
+                # else: use day_cursor (sequential auto-generated)
             except Exception:
                 pass  # fall back to sequential start on any parse issue
             
@@ -3271,12 +3288,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Type": deliverable_type  # NEW: Add Type column
             })
             
-            # Advance day_cursor for next deliverable (unless user provided explicit offset/date)
-            # This creates sequential staggering while preserving user Gantt edits
-            user_provided_offset = (str(d.get("Start_Offset_Days", "")).strip() != "" or 
-                                   (d.get("Start_Date") and scenario.get("project_start")))
-            if not user_provided_offset:
-                day_cursor += max(total_deliv_duration, 1)
+            # Advance day_cursor for next deliverable (unless user provided explicit override)
+            # This creates sequential staggering while preserving user Gantt timeline edits
+            # User overrides detected via Start_Date or Start_Offset_Source="user"
+            if not user_override_applied:
+                # Only advance by duration if >0 to avoid artificial gaps for zero-duration deliverables
+                day_cursor += total_deliv_duration if total_deliv_duration > 0 else 0
 
             comps = DB.components_for_deliverable(dcode, tg_order)
             # Robust fallback if DB returns no components
