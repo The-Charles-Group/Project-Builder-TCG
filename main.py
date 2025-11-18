@@ -10071,22 +10071,28 @@ def convert_excel_to_mspdi(
             # Emit DurationFormat=7 (Days) for all tasks
             SubElement(task, "DurationFormat").text = "7"
             
-            # WORKFRONT FIX: Summary tasks get PT480M placeholder duration (not PT0M) to avoid "0.12 days" display
-            # Work is always PT0M for summaries since Workfront rolls up from children
-            if is_summary or is_root:
+            # WORKFRONT FIX: Handle root, summaries, and leaf tasks separately per GPT-5 Pro spec
+            if is_root:
+                # ROOT TASK (OutlineLevel=1): PT0M duration, no Manual* tags
                 SubElement(task, "Work").text = "PT0M"
-                # CRITICAL: Summary tasks need PT480M (1 day) placeholder duration
-                # PT0M causes Workfront to display "0.12 days" compression artifacts
-                if is_root:
-                    # Project root gets PT0M since it's a pure container
-                    SubElement(task, "Duration").text = "PT0M"
-                    SubElement(task, "ConstraintType").text = "4"  # Must Start On
-                    SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
-                else:
-                    # All other summary tasks (departments, deliverables) get PT480M placeholder
-                    SubElement(task, "Duration").text = "PT480M"
-                # Do NOT set Type, IsEffortDriven, or other scheduling flags on summary tasks
-                # Workfront will roll up from children
+                SubElement(task, "Duration").text = "PT0M"
+                SubElement(task, "ConstraintType").text = "4"  # Must Start On
+                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
+            elif is_summary:
+                # NON-ROOT SUMMARY TASKS (OutlineLevel 2-4): PT480M duration + Manual* tags
+                SubElement(task, "Work").text = "PT0M"
+                SubElement(task, "Duration").text = "PT480M"
+                
+                # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-4) need Type, IsEffortDriven, and Manual Scheduling tags
+                # These lock parent timelines and prevent Workfront from recalculating rolled-up dates
+                SubElement(task, "Type").text = "1"  # Fixed Duration
+                SubElement(task, "IsEffortDriven").text = "0"
+                SubElement(task, "ManuallyScheduled").text = "1"
+                SubElement(task, "ManualStart").text = "1"
+                SubElement(task, "ManualFinish").text = "1"
+                SubElement(task, "ManualDuration").text = "1"
+                SubElement(task, "ManualWork").text = "1"
             # Only set Duration/Work for non-summary leaf tasks
             else:
                 # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
@@ -10581,6 +10587,76 @@ def convert_excel_to_mspdi(
             print(f"[VALIDATION] ✅ All leaf tasks have ConstraintType=0 (ASAP): PASS")
         else:
             print(f"[VALIDATION] ⚠️  Found {leaf_constraint_issues} leaf tasks without ASAP constraint")
+        
+        # Validation 6: Check all non-root summary tasks have Manual Scheduling tags (GPT-5 Pro spec)
+        manual_tag_issues = 0
+        root_has_manual_tags = False
+        for task_elem in tasks_elem.findall("Task"):
+            summary_elem = task_elem.find("Summary")
+            wbs_elem = task_elem.find("WBS")
+            
+            # Check if this is the root task (WBS="1" is always the project root)
+            is_root_task = wbs_elem is not None and wbs_elem.text == "1"
+            
+            # Check if this is a summary task (has children)
+            if summary_elem is not None and summary_elem.text == "1":
+                # Check for Manual* tags
+                manual_scheduled = task_elem.find("ManuallyScheduled")
+                manual_start = task_elem.find("ManualStart")
+                manual_finish = task_elem.find("ManualFinish")
+                manual_duration = task_elem.find("ManualDuration")
+                manual_work = task_elem.find("ManualWork")
+                
+                # Root should NOT have Manual* tags
+                if is_root_task:
+                    if any([manual_scheduled is not None, manual_start is not None, 
+                           manual_finish is not None, manual_duration is not None, manual_work is not None]):
+                        print(f"[VALIDATION] ❌ Root task should NOT have Manual* tags")
+                        root_has_manual_tags = True
+                else:
+                    # Non-root summaries MUST have Manual* tags
+                    missing_tags = []
+                    if manual_scheduled is None or manual_scheduled.text != "1":
+                        missing_tags.append("ManuallyScheduled")
+                    if manual_start is None or manual_start.text != "1":
+                        missing_tags.append("ManualStart")
+                    if manual_finish is None or manual_finish.text != "1":
+                        missing_tags.append("ManualFinish")
+                    if manual_duration is None or manual_duration.text != "1":
+                        missing_tags.append("ManualDuration")
+                    if manual_work is None or manual_work.text != "1":
+                        missing_tags.append("ManualWork")
+                    
+                    if missing_tags:
+                        name_elem = task_elem.find("Name")
+                        task_name = name_elem.text if name_elem is not None else "Unknown"
+                        if manual_tag_issues < 3:  # Only show first 3
+                            print(f"[VALIDATION] ❌ Summary task missing Manual tags: {task_name[:40]} (missing: {', '.join(missing_tags)})")
+                        manual_tag_issues += 1
+        
+        if manual_tag_issues == 0 and not root_has_manual_tags:
+            print(f"[VALIDATION] ✅ All non-root summary tasks have Manual Scheduling tags, root excluded: PASS")
+        else:
+            if manual_tag_issues > 0:
+                print(f"[VALIDATION] ❌ Found {manual_tag_issues} summary tasks missing Manual* tags")
+            if root_has_manual_tags:
+                print(f"[VALIDATION] ❌ Root task incorrectly has Manual* tags")
+        
+        # Validation 7: Verify DurationFormat=7 globally (not 5)
+        wrong_duration_format = 0
+        for task_elem in tasks_elem.findall("Task"):
+            dur_format_elem = task_elem.find("DurationFormat")
+            if dur_format_elem is not None and dur_format_elem.text != "7":
+                name_elem = task_elem.find("Name")
+                task_name = name_elem.text if name_elem is not None else "Unknown"
+                if wrong_duration_format < 3:
+                    print(f"[VALIDATION] ❌ Wrong DurationFormat: {task_name[:40]} (expected 7, got {dur_format_elem.text})")
+                wrong_duration_format += 1
+        
+        if wrong_duration_format == 0:
+            print(f"[VALIDATION] ✅ All tasks use DurationFormat=7 (Elapsed Days): PASS")
+        else:
+            print(f"[VALIDATION] ❌ Found {wrong_duration_format} tasks with wrong DurationFormat")
         
         print(f"[WORKFRONT VALIDATION] ═══════════════════════════════════════\n")
         
