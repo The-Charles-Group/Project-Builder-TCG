@@ -3270,6 +3270,13 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Price_USD": round(deliv_price, 2),
                 "Type": deliverable_type  # NEW: Add Type column
             })
+            
+            # Advance day_cursor for next deliverable (unless user provided explicit offset/date)
+            # This creates sequential staggering while preserving user Gantt edits
+            user_provided_offset = (str(d.get("Start_Offset_Days", "")).strip() != "" or 
+                                   (d.get("Start_Date") and scenario.get("project_start")))
+            if not user_provided_offset:
+                day_cursor += max(total_deliv_duration, 1)
 
             comps = DB.components_for_deliverable(dcode, tg_order)
             # Robust fallback if DB returns no components
