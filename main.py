@@ -10107,17 +10107,39 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
                 # VALIDATION: Log preserved task values to verify Option C implementation
+                # Wrap in try/except to prevent validation logging from aborting exports
                 if is_preserved:
-                    start_dt = uid_to_sched[r["UID"]]["Start"]
-                    finish_dt = uid_to_sched[r["UID"]]["Finish"]
-                    start_str = start_dt.strftime("%Y-%m-%d %H:%M")
-                    finish_str = finish_dt.strftime("%Y-%m-%d %H:%M")
-                    work_h = work_minutes / 60.0
-                    dur_h = dur_minutes / 60.0
-                    # Calculate calendar days from Start/Finish dates
-                    calendar_days = (finish_dt.date() - start_dt.date()).days + 1
-                    allocation_pct = (work_h / dur_h * 100) if dur_h > 0 else 0
-                    print(f"[XML VALIDATION] ✅ {name_txt[:30]} | Start={start_str} | Finish={finish_str} | Duration={dur_h:.1f}h ({calendar_days}d×8h) | Work={work_h:.1f}h | Allocation={allocation_pct:.0f}%")
+                    try:
+                        start_val = uid_to_sched[r["UID"]]["Start"]
+                        finish_val = uid_to_sched[r["UID"]]["Finish"]
+                        
+                        # Robust datetime conversion helper
+                        def to_datetime(val):
+                            if isinstance(val, datetime.datetime):
+                                return val
+                            elif isinstance(val, str):
+                                # Handle various ISO formats with timezone info
+                                # Remove timezone info and milliseconds for parsing
+                                val_clean = val.split('+')[0].split('-')[:3]  # Remove timezone
+                                val_clean = '-'.join(val_clean).split('.')[0]  # Remove milliseconds
+                                return datetime.datetime.fromisoformat(val_clean)
+                            else:
+                                return val  # Return as-is and let it fail gracefully
+                        
+                        start_dt = to_datetime(start_val)
+                        finish_dt = to_datetime(finish_val)
+                        start_str = start_dt.strftime("%Y-%m-%d %H:%M")
+                        finish_str = finish_dt.strftime("%Y-%m-%d %H:%M")
+                        
+                        work_h = work_minutes / 60.0
+                        dur_h = dur_minutes / 60.0
+                        # Calculate calendar days from Start/Finish dates
+                        calendar_days = (finish_dt.date() - start_dt.date()).days + 1
+                        allocation_pct = (work_h / dur_h * 100) if dur_h > 0 else 0
+                        print(f"[XML VALIDATION] ✅ {name_txt[:30]} | Start={start_str} | Finish={finish_str} | Duration={dur_h:.1f}h ({calendar_days}d×8h) | Work={work_h:.1f}h | Allocation={allocation_pct:.0f}%")
+                    except Exception as e:
+                        # Log validation failure but don't abort export
+                        print(f"[XML VALIDATION] ⚠️ Could not validate {name_txt[:30]}: {e}")
                 
                 # Set leaf tasks as Fixed Duration (Type=1) so duration is canonical
                 SubElement(task, "Type").text = "1"  # Fixed Duration
