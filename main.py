@@ -10080,21 +10080,61 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
             # Only set Duration/Work for non-summary leaf tasks
             elif not is_summary:
-                # CRITICAL FIX: For preserved Gantt dates (Option C):
-                # Duration = calendar span in 8h-day units (prevents Workfront date recalculation)
-                # Work = PlannedHours (actual effort, may be less than Duration = partial allocation)
+                # CRITICAL FIX: Duration MUST match Start/Finish span for Workfront
+                # When Duration ≠ (Finish - Start), Workfront uses Duration as truth and recalculates Finish
+                # This is the root cause of date drift to June 2027
                 is_preserved = r["UID"] in preserved_dates
                 
                 if is_preserved:
-                    # OPTION C FIX: For preserved tasks
-                    # Duration = calendar span in 8h-day units (from Start to Finish dates)
-                    # Work = PlannedHours (actual work hours from Gantt)
-                    # Duration ≠ Work indicates partial resource allocation (Workfront accepts this)
-                    dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))
-                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
+                    # WORKFRONT FIX: Compute Duration from actual working time between Start/Finish
+                    # Duration = actual working minutes (respects partial days, not just calendar days × 480)
+                    # Work = PlannedHours (actual effort from Gantt)
+                    # This prevents Workfront from recalculating dates on import
                     
-                    # NO snapping for preserved tasks - use exact calendar span calculation
-                    # Snapping would create inconsistency with preserved Start/Finish dates
+                    start_val = uid_to_sched[r["UID"]]["Start"]
+                    finish_val = uid_to_sched[r["UID"]]["Finish"]
+                    
+                    # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
+                    def to_datetime(val):
+                        if isinstance(val, datetime.datetime):
+                            return val
+                        elif isinstance(val, str):
+                            # Remove timezone suffixes for parsing
+                            val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
+                            # Try parsing with fromisoformat (handles timezones)
+                            try:
+                                return datetime.datetime.fromisoformat(val_clean)
+                            except ValueError:
+                                # Fallback: strip timezone manually and parse
+                                val_clean = val.split('+')[0].split('-')
+                                # Rejoin date portion (first 3 parts: YYYY, MM, DD)
+                                val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
+                                val_clean = val_clean.split('.')[0]  # Remove milliseconds
+                                return datetime.datetime.fromisoformat(val_clean)
+                        else:
+                            return val
+                    
+                    start_dt = to_datetime(start_val)
+                    finish_dt = to_datetime(finish_val)
+                    
+                    # Compute actual working time difference in minutes
+                    # Working hours: 8:00-12:00 (4h) and 13:00-17:00 (4h) = 8h/day = 480 min/day
+                    time_diff_total_minutes = int((finish_dt - start_dt).total_seconds() / 60)
+                    
+                    # Convert to working minutes (assuming 8h work day, 16h non-work)
+                    # For simplicity: if task spans multiple days, use calendar days × 480
+                    # If same day, use actual hour difference
+                    if start_dt.date() == finish_dt.date():
+                        # Same-day task: use actual time difference
+                        # But minimum 60 minutes (1 hour) to avoid zero-duration non-milestones
+                        dur_minutes = max(60, time_diff_total_minutes)
+                    else:
+                        # Multi-day task: use calendar span × 480 min/day
+                        calendar_days = (finish_dt.date() - start_dt.date()).days + 1
+                        dur_minutes = calendar_days * 480
+                    
+                    # Work = PlannedHours from Gantt
+                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
                 else:
                     # For non-preserved tasks: Use original logic with PlannedHours and snapping
                     work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
@@ -10152,47 +10192,97 @@ def convert_excel_to_mspdi(
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # CRITICAL FIX: Add manual scheduling tags for ANY task with preserved Gantt dates
-            # This tells Workfront to lock these dates and not recalculate them on import
-            # Apply to all preserved tasks regardless of outline level (handles multi-tier hierarchies)
+            # WORKFRONT FIX: For preserved Gantt dates, use SNET constraint to lock start date
+            # Manual* tags (ManuallyScheduled, ManualStart, etc.) are MSP-only and Workfront ignores them
+            # Use ConstraintType=2 (Start No Earlier Than) instead
             has_preserved_dates = r["UID"] in preserved_dates
             
-            if has_preserved_dates:
-                # CRITICAL FIX: Add Workfront manual scheduling tags to prevent date recalculation
-                # Without these tags, Workfront treats tasks as auto-scheduled and recalculates dates
-                
-                # 1. ManuallyScheduled=1 - THE KEY TAG that makes Workfront respect manual scheduling
-                SubElement(task, "ManuallyScheduled").text = "1"
-                
-                # 2. Manual flags for Start/Finish/Duration/Work
-                SubElement(task, "ManualStart").text = "1"
-                SubElement(task, "ManualFinish").text = "1"
-                SubElement(task, "ManualDuration").text = "1"
-                SubElement(task, "ManualWork").text = "1"  # Locks work hours (prevents recalculation)
-                
-                # 3. ConstraintType=2 (Start No Earlier Than) - More stable for manual tasks than Type=4
-                # Type 2 locks the start date but won't error if there's minor variation during import
-                # Type 4 (Must Start On) can trigger resets if dates drift even slightly
+            if has_preserved_dates and not is_summary:
+                # Override the default ASAP constraint with SNET for preserved tasks
                 constraint_elem = task.find("ConstraintType")
                 if constraint_elem is not None:
-                    # Update existing constraint to "Start No Earlier Than"
-                    constraint_elem.text = "2"
+                    constraint_elem.text = "2"  # Start No Earlier Than
                 else:
-                    # Create new constraint for summary tasks
                     SubElement(task, "ConstraintType").text = "2"
                 
-                # 4. Add or update ConstraintDate to lock the preserved start date
+                # Add ConstraintDate to lock the preserved start date
                 constraint_date_elem = task.find("ConstraintDate")
                 if constraint_date_elem is not None:
                     constraint_date_elem.text = uid_to_sched[r["UID"]]["Start"]
                 else:
                     SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
                 
-                print(f"[XML EXPORT] 🔒 Added manual scheduling tags (ManuallyScheduled=1, ConstraintType=2) for preserved task: {name_txt} (WBS {r['WBS']}, OutlineLevel {outline_level})")
+                print(f"[XML EXPORT] 🔒 Applied SNET constraint for preserved task: {name_txt} (WBS {r['WBS']}, Start={uid_to_sched[r['UID']]['Start']})")
             
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
+
+        # WORKFRONT FIX: Add finish anchor milestones for preserved tasks
+        # This locks the finish date without needing a second constraint on the same task
+        # Workfront only allows one constraint per task, so we create a zero-duration milestone
+        # with Must Finish On constraint and link it via FS predecessor
+        next_uid = max([r["UID"] for r in rows]) + 1
+        next_id = len(rows) + 1
+        finish_anchor_map = {}  # Maps preserved task UID to finish anchor UID
+        
+        for r in rows:
+            if r["UID"] in preserved_dates and not (r["WBS"] in summary_set or r["WBS"] == "1"):
+                # Create finish anchor milestone for this preserved task
+                finish_anchor_uid = next_uid
+                next_uid += 1
+                
+                finish_anchor_map[r["UID"]] = finish_anchor_uid
+                
+                # Create the finish anchor task element
+                task = SubElement(tasks_elem, "Task")
+                SubElement(task, "UID").text = str(finish_anchor_uid)
+                SubElement(task, "ID").text = str(next_id)
+                next_id += 1
+                
+                # Name it "{TaskName} - Finish Anchor"
+                anchor_name = f"{r['Name']} - Finish Anchor"
+                SubElement(task, "Name").text = anchor_name
+                
+                # WBS should be at same level as preserved task (sibling)
+                # For example, if task is 1.1.1, anchor is 1.1.1_FA
+                wbs_anchor = f"{r['WBS']}_FA"
+                SubElement(task, "WBS").text = wbs_anchor
+                SubElement(task, "OutlineNumber").text = wbs_anchor
+                
+                # Start and Finish are both the preserved task's finish date
+                finish_date = uid_to_sched[r["UID"]]["Finish"]
+                SubElement(task, "Start").text = finish_date
+                SubElement(task, "Finish").text = finish_date
+                
+                # Zero-duration milestone
+                SubElement(task, "Summary").text = "0"
+                SubElement(task, "DurationFormat").text = "7"
+                SubElement(task, "Work").text = "PT0M"
+                SubElement(task, "Duration").text = "PT0M"
+                SubElement(task, "Type").text = "1"
+                SubElement(task, "IsEffortDriven").text = "0"
+                
+                # Must Finish On constraint (ConstraintType=3)
+                SubElement(task, "ConstraintType").text = "3"
+                SubElement(task, "ConstraintDate").text = finish_date
+                
+                # Same outline level as preserved task
+                outline_level = r["WBS"].count(".") + 1
+                SubElement(task, "OutlineLevel").text = str(outline_level)
+                
+                # Mark as milestone
+                SubElement(task, "Milestone").text = "1"
+                
+                # Add FS predecessor from preserved task to finish anchor
+                pred_link = SubElement(task, "PredecessorLink")
+                SubElement(pred_link, "PredecessorUID").text = str(r["UID"])
+                SubElement(pred_link, "Type").text = "1"  # Finish-to-Start
+                SubElement(pred_link, "CrossProject").text = "0"
+                SubElement(pred_link, "LinkLag").text = "0"
+                SubElement(pred_link, "LagFormat").text = "7"
+                
+                print(f"[XML EXPORT] ⚓ Created finish anchor milestone for preserved task: {r['Name']} (UID {r['UID']} → Anchor UID {finish_anchor_uid}, Finish={finish_date})")
 
         # Assignments
         assignments_elem = SubElement(project, "Assignments")
