@@ -9598,6 +9598,11 @@ def convert_excel_to_mspdi(
         # Calculate task schedules
         uid_to_sched = {}
         preserved_dates = set()  # Track which UIDs have dates from Gantt that should not be rolled up
+        
+        # Build WBS-to-UID and parent mapping FIRST so we can look up parent dates
+        wbs_to_uid_pre = {r["WBS"]: r["UID"] for r in rows}
+        uid_to_row = {r["UID"]: r for r in rows}
+        
         for r in rows:
             # FIX: Check if Start_Date and End_Date already exist from Gantt timeline_tasks
             # If they do, preserve them instead of recalculating from offsets
@@ -9630,10 +9635,32 @@ def convert_excel_to_mspdi(
                     duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
                     end_date = start_date + datetime.timedelta(hours=duration_hours)
             else:
-                # No existing dates - calculate from offsets (original logic)
-                start_date = project_start + datetime.timedelta(days=r["StartOffset"])
-                duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
-                end_date = start_date + datetime.timedelta(hours=duration_hours)
+                # No existing dates - calculate from offsets
+                # FIX: If parent has preserved dates from Gantt, calculate relative to parent
+                # Otherwise fall back to global project_start
+                parent_wbs = r.get("ParentWBS")
+                parent_uid = wbs_to_uid_pre.get(parent_wbs) if parent_wbs else None
+                
+                if parent_uid and parent_uid in preserved_dates and parent_uid in uid_to_sched:
+                    # Parent has preserved dates - calculate this row relative to parent
+                    parent_sched = uid_to_sched[parent_uid]
+                    parent_row = uid_to_row[parent_uid]
+                    parent_offset = parent_row.get("StartOffset", 0)
+                    this_offset = r.get("StartOffset", 0)
+                    
+                    # Calculate offset RELATIVE to parent (subtract parent's offset from this offset)
+                    relative_offset = this_offset - parent_offset
+                    start_date = parent_sched["Start"] + datetime.timedelta(days=relative_offset)
+                    
+                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                    end_date = start_date + datetime.timedelta(hours=duration_hours)
+                    
+                    print(f"[XML EXPORT] 📍 Row {r['WBS']} ({r.get('TaskName', 'N/A')[:30]}): Parent {parent_wbs} preserved → calculating as parent_start + {relative_offset} days = {start_date.date()}")
+                else:
+                    # No preserved parent - use global project_start (original logic)
+                    start_date = project_start + datetime.timedelta(days=r["StartOffset"])
+                    duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
+                    end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
                 "Start": start_date,
