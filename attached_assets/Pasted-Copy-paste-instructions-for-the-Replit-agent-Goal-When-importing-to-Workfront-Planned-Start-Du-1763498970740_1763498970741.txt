@@ -1,0 +1,92 @@
+Copy/paste instructions for the Replit agent
+
+Goal: When importing to Workfront, “Planned Start / Due On / Duration” for each deliverable should match the app’s Gantt. Keep hours intact.
+
+A. Make real parents be parents (and not tasks)
+
+For every task that has children (e.g., 1, 1.1, 1.1.1, 1.1.2, 1.1.3, 1.2, 1.2.1, 1.2.2, 1.2.3, 1.2.4, 1.3, 1.3.1, 1.4, 1.4.1, 1.5, 1.5.1):
+
+Set <Summary>1</Summary>.
+
+Set <Work>PT0M</Work> and <Duration>PT0M</Duration> on the parent.
+
+Remove all <Assignment> entries that reference a parent TaskUID. (Example to remove: the assignment where <TaskUID>3</TaskUID> with Unassigned, which is currently stretching Creative Strategy / Campaign Plan Deck.) 
+
+St.Regis_Nashville_Branding_Age…
+
+Do not emit any ManuallyScheduled or Constraint* tags on parents—let Workfront roll them up from children.
+
+Why: Workfront always rolls up summary start/end from children. If a parent has hours/assignments or isn’t flagged as a summary, Workfront schedules it as a real task and your dates drift. (You can see a parent exported as <Summary>0</Summary> now. 
+
+St.Regis_Nashville_Branding_Age…
+
+)
+
+B. Make every leaf task self‑consistent
+
+For every leaf (no children):
+
+Align duration to the timestamps.
+Set <Duration> = (Finish – Start) in minutes, minimum 60 minutes. If a task is exported with Start 08:00 and Finish 09:00, the duration must be PT60M—not PT960M. (The current mix is what lets Workfront re‑plan using the 2‑day duration.) Example of the mismatch to fix: “Findings Deck.” 
+
+St.Regis_Nashville_Branding_Age…
+
+Freeze the planned dates so Workfront doesn’t recalc:
+
+<Type>1</Type>                    <!-- Fixed Duration -->
+<IsEffortDriven>0</IsEffortDriven>
+<ManuallyScheduled>1</ManuallyScheduled>
+<ManualStart>1</ManualStart>
+<ManualFinish>1</ManualFinish>
+<ManualDuration>1</ManualDuration>
+<ManualWork>1</ManualWork>
+<ConstraintType>2</ConstraintType>        <!-- Start No Earlier Than -->
+<ConstraintDate>[= Start]</ConstraintDate>
+
+
+Keep the existing Work minutes (hours) as-is.
+
+Note: Yes, this can imply high assignment units (if Work ≫ Duration). That’s fine here—we’re preserving financials/hours and using Fixed‑Duration to stop Workfront from stretching the timeline.
+
+C. Keep anchors, but point them at the right last leaf
+
+For each “*_FA” milestone:
+
+Keep:
+
+<Milestone>1</Milestone>
+<ConstraintType>3</ConstraintType>       <!-- Must Finish On -->
+<Start> = <Finish> = deliverable finish
+<Duration>PT0M</Duration>
+
+
+Set the predecessor to the last leaf task inside that deliverable, not a task from a different deliverable.
+Brand Positioning – Finish Anchor (1.1.2_FA) currently depends on UID 196 under 1.1.1—fix this to the final 1.1.2 leaf UID. 
+
+St.Regis_Nashville_Branding_Age…
+
+Implementation tip: when exporting, compute last_leaf_uid as the child within the same WBS prefix with the latest <Finish> and no children, and point the anchor’s <PredecessorUID> at that.
+
+D. Sanity checks the agent should run before handing you the file
+
+No parent has assignments.
+Grep the XML to confirm there is no <Assignment> whose <TaskUID> is a parent UID (e.g., 3). (The presence of one now is visible here. 
+
+St.Regis_Nashville_Branding_Age…
+
+)
+
+All parents have <Summary>1</Summary>.
+(Example of wrong value today for “Strategy”.) 
+
+St.Regis_Nashville_Branding_Age…
+
+Every leaf’s Duration equals Finish-Start (±1 minute) and is never PT960M when Start/Finish are 1 hour apart.
+(Example to correct: “Findings Deck.”) 
+
+St.Regis_Nashville_Branding_Age…
+
+Every “*_FA” predecessor UID belongs to the same deliverable WBS prefix.
+(Fix the 1.1.2_FA → 196 cross‑link.) 
+
+St.Regis_Nashville_Branding_Age…

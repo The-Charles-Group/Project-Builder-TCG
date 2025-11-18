@@ -10071,15 +10071,18 @@ def convert_excel_to_mspdi(
             # Emit DurationFormat=7 (Days) for all tasks
             SubElement(task, "DurationFormat").text = "7"
             
-            # Root task gets PT0M for Work/Duration (Workfront will roll up from children)
-            if is_root:
+            # Summary tasks (including root) get PT0M for Work/Duration (Workfront will roll up from children)
+            if is_summary or is_root:
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT0M"
                 # Root task uses Must Start On constraint
-                SubElement(task, "ConstraintType").text = "4"  # Must Start On
-                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                if is_root:
+                    SubElement(task, "ConstraintType").text = "4"  # Must Start On
+                    SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                # Do NOT set Type, IsEffortDriven, or other scheduling flags on summary tasks
+                # Workfront will roll up from children
             # Only set Duration/Work for non-summary leaf tasks
-            elif not is_summary:
+            else:
                 # CRITICAL FIX: Duration MUST match Start/Finish span for Workfront
                 # When Duration ≠ (Finish - Start), Workfront uses Duration as truth and recalculates Finish
                 # This is the root cause of date drift to June 2027
@@ -10117,21 +10120,16 @@ def convert_excel_to_mspdi(
                     start_dt = to_datetime(start_val)
                     finish_dt = to_datetime(finish_val)
                     
-                    # Compute actual working time difference in minutes
-                    # Working hours: 8:00-12:00 (4h) and 13:00-17:00 (4h) = 8h/day = 480 min/day
+                    # CRITICAL FIX: Use ACTUAL time difference for preserved tasks (not calendar expansion)
+                    # GPT-5 Pro spec: Duration = (Finish - Start), minimum 60 minutes
+                    # This prevents inflation of cross-day tasks (e.g., 90-min task → 960 min)
+                    
+                    # Calculate actual time difference in minutes
                     time_diff_total_minutes = int((finish_dt - start_dt).total_seconds() / 60)
                     
-                    # Convert to working minutes (assuming 8h work day, 16h non-work)
-                    # For simplicity: if task spans multiple days, use calendar days × 480
-                    # If same day, use actual hour difference
-                    if start_dt.date() == finish_dt.date():
-                        # Same-day task: use actual time difference
-                        # But minimum 60 minutes (1 hour) to avoid zero-duration non-milestones
-                        dur_minutes = max(60, time_diff_total_minutes)
-                    else:
-                        # Multi-day task: use calendar span × 480 min/day
-                        calendar_days = (finish_dt.date() - start_dt.date()).days + 1
-                        dur_minutes = calendar_days * 480
+                    # Apply minimum 60 minutes (1 hour) for non-milestone tasks
+                    # Use actual timestamp difference without calendar-day expansion
+                    dur_minutes = max(60, time_diff_total_minutes)
                     
                     # Work = PlannedHours from Gantt
                     work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
@@ -10181,11 +10179,19 @@ def convert_excel_to_mspdi(
                         # Log validation failure but don't abort export
                         print(f"[XML VALIDATION] ⚠️ Could not validate {name_txt[:30]}: {e}")
                 
-                # Set leaf tasks as Fixed Duration (Type=1) so duration is canonical
+                # WORKFRONT FIX: Set all leaf tasks as Fixed Duration with Manual scheduling
+                # This prevents Workfront from recalculating dates and durations
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
                 
-                # All non-root tasks: As Soon As Possible (rely on predecessors + calendar)
+                # Add Manual scheduling flags to prevent Workfront from auto-scheduling
+                SubElement(task, "ManuallyScheduled").text = "1"
+                SubElement(task, "ManualStart").text = "1"
+                SubElement(task, "ManualFinish").text = "1"
+                SubElement(task, "ManualDuration").text = "1"
+                SubElement(task, "ManualWork").text = "1"
+                
+                # Default constraint: As Soon As Possible (will be overridden for preserved tasks below)
                 SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
@@ -10218,17 +10224,62 @@ def convert_excel_to_mspdi(
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
 
-        # WORKFRONT FIX: Add finish anchor milestones for preserved tasks
-        # This locks the finish date without needing a second constraint on the same task
-        # Workfront only allows one constraint per task, so we create a zero-duration milestone
-        # with Must Finish On constraint and link it via FS predecessor
+        # WORKFRONT FIX: Add finish anchor milestones for preserved DELIVERABLES
+        # This locks the deliverable's finish date by creating a zero-duration milestone
+        # with Must Finish On constraint, linked to the last leaf task within that deliverable
         next_uid = max([r["UID"] for r in rows]) + 1
         next_id = len(rows) + 1
-        finish_anchor_map = {}  # Maps preserved task UID to finish anchor UID
+        finish_anchor_map = {}  # Maps preserved deliverable UID to finish anchor UID
+        
+        # Helper function to find last leaf task within a deliverable's hierarchy
+        def find_last_leaf_in_deliverable(deliverable_wbs, all_rows):
+            """Find the deepest/last leaf task by WBS traversal within a deliverable's hierarchy"""
+            # Get all direct descendants of this deliverable (children with deliverable_wbs as parent)
+            # Use proper parent-child relationships from ParentWBS, not just string prefix matching
+            def get_all_descendants(parent_wbs):
+                """Recursively get all descendants of a parent WBS"""
+                descendants = []
+                for row in all_rows:
+                    if row.get("ParentWBS") == parent_wbs:
+                        descendants.append(row)
+                        # Recursively get this child's descendants
+                        descendants.extend(get_all_descendants(row["WBS"]))
+                return descendants
+            
+            all_descendants = get_all_descendants(deliverable_wbs)
+            
+            if not all_descendants:
+                return None
+            
+            # Filter to only leaf tasks (not in summary_set)
+            leaves = [d for d in all_descendants if d["WBS"] not in summary_set]
+            
+            if not leaves:
+                return None
+            
+            # Sort by WBS depth (deepest first), then by finish date (latest first)
+            # This ensures we get the terminal leaf task
+            leaves_sorted = sorted(
+                leaves,
+                key=lambda x: (
+                    -x["WBS"].count("."),  # Deeper WBS = more dots (sort descending)
+                    -(ord(uid_to_sched.get(x["UID"], {}).get("Finish", "9999")[0]) if uid_to_sched.get(x["UID"], {}).get("Finish") else 0)  # Later finish date
+                )
+            )
+            
+            return leaves_sorted[0] if leaves_sorted else None
         
         for r in rows:
-            if r["UID"] in preserved_dates and not (r["WBS"] in summary_set or r["WBS"] == "1"):
-                # Create finish anchor milestone for this preserved task
+            # Only create finish anchors for preserved DELIVERABLES (summary tasks with preserved dates)
+            if r["UID"] in preserved_dates and r["WBS"] in summary_set and r["WBS"] != "1":
+                # Find the last leaf task under this deliverable
+                last_leaf = find_last_leaf_in_deliverable(r["WBS"], rows)
+                
+                if not last_leaf:
+                    print(f"[XML EXPORT] ⚠️ No leaf tasks found for deliverable {r['Name']} (WBS {r['WBS']}), skipping finish anchor")
+                    continue
+                
+                # Create finish anchor milestone for this deliverable
                 finish_anchor_uid = next_uid
                 next_uid += 1
                 
@@ -10240,17 +10291,16 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ID").text = str(next_id)
                 next_id += 1
                 
-                # Name it "{TaskName} - Finish Anchor"
+                # Name it "{DeliverableName} - Finish Anchor"
                 anchor_name = f"{r['Name']} - Finish Anchor"
                 SubElement(task, "Name").text = anchor_name
                 
-                # WBS should be at same level as preserved task (sibling)
-                # For example, if task is 1.1.1, anchor is 1.1.1_FA
+                # WBS: same level as deliverable (sibling): deliverable.WBS_FA
                 wbs_anchor = f"{r['WBS']}_FA"
                 SubElement(task, "WBS").text = wbs_anchor
                 SubElement(task, "OutlineNumber").text = wbs_anchor
                 
-                # Start and Finish are both the preserved task's finish date
+                # CRITICAL FIX: Use deliverable's EXACT finish date (no +1 day)
                 finish_date = uid_to_sched[r["UID"]]["Finish"]
                 SubElement(task, "Start").text = finish_date
                 SubElement(task, "Finish").text = finish_date
@@ -10267,26 +10317,44 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ConstraintType").text = "3"
                 SubElement(task, "ConstraintDate").text = finish_date
                 
-                # Same outline level as preserved task
+                # Same outline level as deliverable
                 outline_level = r["WBS"].count(".") + 1
                 SubElement(task, "OutlineLevel").text = str(outline_level)
                 
                 # Mark as milestone
                 SubElement(task, "Milestone").text = "1"
                 
-                # Add FS predecessor from preserved task to finish anchor
+                # CRITICAL FIX: Set predecessor to last leaf task within THIS deliverable
+                # Not the deliverable itself, and not a task from a different deliverable
                 pred_link = SubElement(task, "PredecessorLink")
-                SubElement(pred_link, "PredecessorUID").text = str(r["UID"])
+                SubElement(pred_link, "PredecessorUID").text = str(last_leaf["UID"])
                 SubElement(pred_link, "Type").text = "1"  # Finish-to-Start
                 SubElement(pred_link, "CrossProject").text = "0"
                 SubElement(pred_link, "LinkLag").text = "0"
                 SubElement(pred_link, "LagFormat").text = "7"
                 
-                print(f"[XML EXPORT] ⚓ Created finish anchor milestone for preserved task: {r['Name']} (UID {r['UID']} → Anchor UID {finish_anchor_uid}, Finish={finish_date})")
+                print(f"[XML EXPORT] ⚓ Created finish anchor for deliverable: {r['Name']} (WBS {r['WBS']}) → Last leaf: {last_leaf['Name']} (UID {last_leaf['UID']}, WBS {last_leaf['WBS']}), Finish={finish_date})")
 
         # Assignments
+        # CRITICAL FIX: Filter out assignments for summary/parent tasks
+        # Summary tasks should have NO assignments - Workfront will roll up from children
+        # Build set of summary task UIDs by checking which tasks have children
+        summary_task_uids = set()
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+        for parent_wbs in children_by_parent.keys():
+            if parent_wbs in wbs_to_uid:
+                summary_task_uids.add(wbs_to_uid[parent_wbs])
+        # Also add root task
+        if "1" in wbs_to_uid:
+            summary_task_uids.add(wbs_to_uid["1"])
+        
         assignments_elem = SubElement(project, "Assignments")
         for assign in assignments:
+            # Skip assignments that reference summary/parent tasks
+            task_uid = assign["TaskUID"]
+            if task_uid in summary_task_uids:
+                print(f"[XML EXPORT] 🚫 Skipping assignment for summary task UID {task_uid} (summary tasks should have no assignments)")
+                continue
             assignment = SubElement(assignments_elem, "Assignment")
             SubElement(assignment, "UID").text = str(assign["UID"])
             task_uid = assign["TaskUID"]
