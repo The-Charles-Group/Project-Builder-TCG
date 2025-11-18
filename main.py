@@ -10064,14 +10064,20 @@ def convert_excel_to_mspdi(
             SubElement(task, "OutlineNumber").text = r["WBS"] 
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
-            # Summary task flag
-            is_summary = r["WBS"] in summary_set or is_root
+            
+            # Calculate outline level EARLY (needed for deliverable detection)
+            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
+            SubElement(task, "OutlineLevel").text = str(outline_level)
+            
+            # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
+            is_deliverable = outline_level == 3 and not is_root
+            is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # Emit DurationFormat=7 (Days) for all tasks
             SubElement(task, "DurationFormat").text = "7"
             
-            # WORKFRONT FIX: Handle root, summaries, and leaf tasks separately per GPT-5 Pro spec
+            # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
             if is_root:
                 # ROOT TASK (OutlineLevel=1): PT0M duration, no Manual* tags
                 SubElement(task, "Work").text = "PT0M"
@@ -10079,6 +10085,35 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ConstraintType").text = "4"  # Must Start On
                 SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
                 # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
+            
+            elif is_deliverable:
+                # DELIVERABLE TASKS (OutlineLevel=3): SNET constraint + Manual* tags if has children
+                # Deliverables are summaries with SNET to lock start dates
+                SubElement(task, "Work").text = "PT0M"
+                SubElement(task, "Duration").text = "PT480M"
+                
+                # Manual Scheduling tags to lock parent timelines
+                SubElement(task, "Type").text = "1"  # Fixed Duration
+                SubElement(task, "IsEffortDriven").text = "0"
+                SubElement(task, "ManuallyScheduled").text = "1"
+                SubElement(task, "ManualStart").text = "1"
+                SubElement(task, "ManualFinish").text = "1"
+                SubElement(task, "ManualDuration").text = "1"
+                SubElement(task, "ManualWork").text = "1"
+                
+                # SNET constraint to lock deliverable start date
+                start_date_str = uid_to_sched[r["UID"]]["Start"]
+                if 'T' in start_date_str:
+                    date_part = start_date_str.split('T')[0]
+                    constraint_date = f"{date_part}T08:00:00"
+                else:
+                    constraint_date = f"{start_date_str}T08:00:00"
+                
+                SubElement(task, "ConstraintType").text = "2"  # Start No Earlier Than
+                SubElement(task, "ConstraintDate").text = constraint_date
+                
+                print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+            
             elif is_summary:
                 # NON-ROOT SUMMARY TASKS (OutlineLevel 2-4): PT480M duration + Manual* tags
                 SubElement(task, "Work").text = "PT0M"
@@ -10148,30 +10183,9 @@ def convert_excel_to_mspdi(
                 # ConstraintType=0 (As Soon As Possible) allows tasks to start when dependencies are met
                 SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
-            # Outline level (based on WBS hierarchy depth, count('.') + 1)
-            outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
-            SubElement(task, "OutlineLevel").text = str(outline_level)
-            
-            # WORKFRONT FIX: Add SNET constraints to ALL deliverables (OutlineLevel=3) to lock start dates
-            # Apply ConstraintType=2 (Start No Earlier Than) only to deliverables, not to children
-            # This prevents children from starting earlier than the deliverable window
-            # Use consistent T08:00:00 format for start constraints (8 AM workday start)
-            is_deliverable = outline_level == 3 and not is_root
-            
-            if is_deliverable:
-                # Extract date and ensure consistent T08:00:00 format
-                start_date_str = uid_to_sched[r["UID"]]["Start"]
-                # Parse and reformat to ensure T08:00:00
-                if 'T' in start_date_str:
-                    date_part = start_date_str.split('T')[0]
-                    constraint_date = f"{date_part}T08:00:00"
-                else:
-                    constraint_date = f"{start_date_str}T08:00:00"
-                
-                SubElement(task, "ConstraintType").text = "2"  # Start No Earlier Than
-                SubElement(task, "ConstraintDate").text = constraint_date
-                
-                print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+            # GPT-5 PRO FIX: Add CalendarUID to all tasks to enable calendar-day duration display
+            # Without this, Workfront treats durations as raw minutes and displays "0.12 days"
+            SubElement(task, "CalendarUID").text = "1"
             
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
