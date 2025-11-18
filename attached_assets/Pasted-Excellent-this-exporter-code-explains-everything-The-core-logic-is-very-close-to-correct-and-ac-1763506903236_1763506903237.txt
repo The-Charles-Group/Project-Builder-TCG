@@ -1,0 +1,127 @@
+Excellent — this exporter code explains everything.
+
+The core logic is very close to correct (and actually follows 95% of what I’d spec), but there are two subtle mistakes that explain why Workfront is still collapsing durations to hours or “0.12 days.”
+
+Let’s go line-by-line.
+
+🧩 What’s Right
+
+✅ DurationFormat = "7" — correct.
+✅ Manual scheduling tags — correct.
+✅ PT480M placeholder for summaries — correct.
+✅ Deliverable SNET (ConstraintType 2) and leaf ASAP (ConstraintType 0) — correct.
+✅ Anchor handling stub — fine.
+
+So your exporter isn’t broken.
+The issue is where it writes ConstraintType twice and how it calculates OutlineLevel and deliverable detection.
+
+⚠️ Problem 1: ConstraintType overwritten
+
+At the bottom of the leaf branch you set:
+
+SubElement(task, "ConstraintType").text = "0"  # ASAP
+
+
+Then immediately afterward, you run:
+
+if is_deliverable:
+    SubElement(task, "ConstraintType").text = "2"
+
+
+But is_deliverable = outline_level == 3 and not is_root.
+For most deliverables that are also summary tasks, this block re-writes the same <ConstraintType> you just wrote for the leaf or parent above, sometimes twice.
+Workfront’s parser encounters two <ConstraintType> tags and chooses the last one — effectively erasing the intended one.
+
+🔧 Fix:
+Before writing ConstraintType, check that it hasn’t been set already, or better, restructure:
+
+if is_root:
+    ...
+elif is_summary:
+    ...
+elif outline_level == 3:
+    # Deliverable summary (SNET)
+    ...
+else:
+    # Leaf
+    ...
+
+
+That keeps each block mutually exclusive.
+
+⚠️ Problem 2: Deliverable detection collides with summary logic
+
+You’re treating deliverables as both is_summary and is_deliverable, so they go through both branches:
+
+first the summary branch (adds manual tags, sets PT480M duration)
+
+then the deliverable branch (adds another ConstraintType and maybe overwrites dates)
+
+When Workfront sees multiple constraints + duplicate tags, it discards duration math and shows the minimum possible duration (0.12 days).
+That’s exactly the behavior in your screenshots.
+
+🔧 Fix:
+Make deliverable detection mutually exclusive with is_summary, e.g.:
+
+is_deliverable = outline_level == 3 and not is_root
+is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
+
+
+Then only one branch executes.
+
+⚠️ Problem 3: Missing <CalendarUID> on tasks
+
+Workfront assumes “minutes” unless it knows which calendar (480 min/day) to use.
+Adding the default calendar reference prevents the importer from treating everything as 60-minute tasks.
+
+🔧 Fix (add after each task block):
+
+SubElement(task, "CalendarUID").text = "1"  # default 8h/day calendar
+
+⚙️ Minimal Patch Summary
+
+Add these edits in your exporter:
+
+# Right after defining is_summary / is_root:
+is_deliverable = outline_level == 3 and not is_root
+is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
+
+
+Then re-order the branches so deliverable → summary → leaf don’t overlap, and append:
+
+SubElement(task, "CalendarUID").text = "1"
+
+
+Optional (but safe): ensure no duplicate ConstraintType nodes exist:
+
+for dup in task.findall("ConstraintType"):
+    if len(dup.text.strip()) == 0:
+        task.remove(dup)
+
+🧪 What Will Happen After This Patch
+
+Each task will have exactly one <ConstraintType> tag.
+
+Deliverables (Outline 3) will keep SNET properly.
+
+Summaries won’t get overwritten by deliverable logic.
+
+Workfront will interpret durations using calendar days again (no more 0.12 days).
+
+✅ How to Test
+
+Ask the agent to:
+
+Apply those three code adjustments.
+
+Re-export one deliverable (Brand Positioning Strategy).
+
+Import into Workfront.
+
+Confirm:
+
+Duration shows in days, not hours.
+
+Start/End dates unchanged.
+
+No duplicate <ConstraintType> in XML.
