@@ -877,140 +877,6 @@ from openai import OpenAI
 # do not change this unless explicitly requested by the user
 # Initialize OpenAI client - will be set after models are defined
 
-# ---------- WBS Normalization Helpers ----------
-def is_wbs_like(value):
-    """
-    Detect if a value looks like a WBS identifier.
-    Returns True for patterns like: "1", "1.1", "1.2.3", etc.
-    """
-    if value is None or value == "":
-        return False
-    
-    s = str(value).strip()
-    if not s:
-        return False
-    
-    # WBS is dot-separated segments
-    segments = s.split('.')
-    if len(segments) == 0:
-        return False
-    
-    # Each segment should be numeric (possibly with leading zeros)
-    for seg in segments:
-        if not seg:
-            return False
-        # Allow numeric segments: "1", "10", "01", etc.
-        if not all(c.isdigit() for c in seg):
-            return False
-    
-    return True
-
-def normalize_wbs(wbs_value):
-    """
-    Normalize WBS identifiers to canonical string format per architect guidance.
-    
-    Handles the ONLY real issue: pandas/Excel float type artifacts.
-    - Float 1.0 → "1" (type artifact removed)
-    - Float 1.1 → "1.1" (preserved)
-    - String "1.10" → "1.10" (preserved as-is, already canonical)
-    - String "1.2.3" → "1.2.3" (multi-level, preserved)
-    
-    Algorithm:
-    1. Convert to string
-    2. Count dots to determine if it's simple (0-1 dots) or multi-level (2+ dots)
-    3. For simple values, try float conversion to clean artifacts
-    4. For multi-level, keep as-is (already in canonical string format)
-    """
-    if wbs_value is None or wbs_value == "":
-        return ""
-    
-    # Convert to string
-    wbs_str = str(wbs_value).strip()
-    
-    # Count dots to detect multi-level WBS
-    dot_count = wbs_str.count('.')
-    
-    if dot_count >= 2:
-        # Multi-level WBS like "1.2.3" - these are ALWAYS strings in this system
-        # They can't be floats, so no normalization needed
-        return wbs_str
-    
-    # Single-level (no dots) or two-level (one dot) - could be float artifacts
-    try:
-        as_float = float(wbs_str)
-        
-        # If it's a whole number disguised as float (1.0, 2.0), simplify
-        if as_float == int(as_float):
-            return str(int(as_float))
-        else:
-            # It's a genuine decimal (1.1, 1.2, etc.)
-            # Use Python's float representation to clean precision noise
-            cleaned = str(as_float)
-            
-            # Remove trailing .0 if still present
-            if cleaned.endswith('.0'):
-                cleaned = cleaned[:-2]
-            
-            return cleaned
-    except ValueError:
-        # Can't convert to float - return as-is
-        return wbs_str
-
-def normalize_scenario_wbs(data):
-    """
-    Recursively normalize all WBS fields in any data structure (case-insensitive).
-    
-    This generic recursive normalizer handles:
-    - Dicts: Normalizes ALL WBS key variants (WBS_ID, wbs_id, WbsId, etc.)
-    - Lists: Recurses through all elements
-    - Primitives: Returns as-is
-    
-    Normalizes these WBS key variants (case-insensitive):
-    - WBS_ID, wbs_id, WbsId, WBSID
-    - Parent_WBS_ID, parent_wbs_id, ParentWbsId, parentWbsId
-    - WBS, wbs
-    - Parent_WBS, parent_wbs, ParentWbs
-    
-    This ensures data consistency regardless of:
-    - Data source (API payloads, timeline generation, session reloading)
-    - Key casing (snake_case, camelCase, UPPERCASE)
-    - Structure format (items, timeline_tasks, nested objects)
-    - Nesting level (top-level, deeply nested arrays/objects)
-    
-    Modifies data in place and returns it for chaining.
-    """
-    # Handle dictionaries - normalize ALL WBS key variants
-    if isinstance(data, dict):
-        # Create case-insensitive key mapping
-        keys_to_normalize = []
-        for key in data.keys():
-            key_lower = key.lower().replace('_', '').replace('-', '')
-            # Check for WBS_ID variants
-            if key_lower in ['wbsid', 'wbs']:
-                keys_to_normalize.append((key, 'wbs'))
-            # Check for Parent_WBS_ID variants
-            elif key_lower in ['parentwbsid', 'parentwbs']:
-                keys_to_normalize.append((key, 'parent'))
-        
-        # Normalize all found WBS keys
-        for key, key_type in keys_to_normalize:
-            data[key] = normalize_wbs(data[key])
-        
-        # Recurse through all values in the dictionary
-        for key, value in data.items():
-            if isinstance(value, (dict, list)):
-                data[key] = normalize_scenario_wbs(value)
-        
-        return data
-    
-    # Handle lists - recurse through all elements
-    elif isinstance(data, list):
-        return [normalize_scenario_wbs(item) for item in data]
-    
-    # Primitives - return as-is
-    else:
-        return data
-
 # ---------- Helper: DB Loader ----------
 class AgencyDB:
     def __init__(self):
@@ -3567,14 +3433,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     
-    # --- NORMALIZE WBS VALUES AT SOURCE (CRITICAL FIX FOR TYPE MISMATCHES) ---
-    # Apply normalize_wbs to all WBS columns to ensure consistent string values
-    # This prevents float vs string mismatches that break parent-child relationships
-    if "WBS_ID" in df.columns:
-        df["WBS_ID"] = df["WBS_ID"].apply(normalize_wbs)
-    if "Parent_WBS_ID" in df.columns:
-        df["Parent_WBS_ID"] = df["Parent_WBS_ID"].apply(normalize_wbs)
-    
     # --- ENFORCE A-E COLUMN ORDER FOR v3 COMPATIBILITY ---
     order_ae = ["Row_ID","Deliverable_Code","Task_Code","Service_Department","Deliverable"]
     # Ensure all required columns exist before reordering
@@ -5387,23 +5245,16 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 session_id = request.session_id
                 if session_id in SCENARIO_STORE:
                     # Update existing scenario with timeline
-                    # Normalize entire result structure (timeline + tasks)
-                    result = normalize_scenario_wbs(result)
                     SCENARIO_STORE[session_id]['timeline'] = result
-                    # Also normalize the entire existing scenario to ensure consistency
-                    SCENARIO_STORE[session_id] = normalize_scenario_wbs(SCENARIO_STORE[session_id])
                     print(f"[Timeline] Stored timeline result in SCENARIO_STORE for session {session_id}")
                 else:
                     # Create new scenario with timeline
-                    new_scenario = {
+                    SCENARIO_STORE[session_id] = {
                         'timeline': result,
                         'project_start': request.project_start,
                         'items': [],
                         'totals': {'hours': 0.0, 'price': 0.0}
                     }
-                    # Normalize all WBS values in the new scenario
-                    new_scenario = normalize_scenario_wbs(new_scenario)
-                    SCENARIO_STORE[session_id] = new_scenario
                     print(f"[Timeline] Created new scenario in SCENARIO_STORE for session {session_id}")
             
             # CRITICAL FIX: Strip all dependencies from tasks to enable free movement
@@ -6163,8 +6014,6 @@ def api_build(payload: BuildPayload):
         scenario_data = scenarios["A"].copy()
         scenario_data['session_id'] = payload.session_id
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
-        # Normalize all WBS values before storing (defensive layer)
-        scenario_data = normalize_scenario_wbs(scenario_data)
         SCENARIO_STORE[payload.session_id] = scenario_data
         print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} (enables Gantt updates)")
     
@@ -6347,9 +6196,6 @@ async def api_save_scenario(payload: Dict[str, Any]):
         scenario_data = payload.get("scenario", payload)
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
         scenario_data['session_id'] = session_id
-        
-        # CRITICAL: Normalize all WBS values before storing (fixes type mismatches)
-        scenario_data = normalize_scenario_wbs(scenario_data)
         
         SCENARIO_STORE[session_id] = scenario_data
         
@@ -6648,8 +6494,6 @@ async def api_optimize_scenario(payload: OptimizeScenarioPayload):
         
         # Recompute totals
         scenario = _recompute_totals(scenario)
-        # Normalize WBS before storing
-        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         return {
@@ -6751,8 +6595,6 @@ async def api_retainer_suggestions(payload: RetainerSuggestionsPayload):
             "distribution": distribution
         }
         
-        # Normalize WBS before storing
-        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         return {
@@ -6809,8 +6651,6 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
         
         # Recompute totals
         scenario = _recompute_totals(scenario)
-        # Normalize WBS before storing
-        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         # Update timeline if it exists
@@ -6875,8 +6715,6 @@ async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
                     break
         
         scenario = _recompute_totals(scenario)
-        # Normalize WBS before storing
-        scenario = normalize_scenario_wbs(scenario)
         SCENARIO_STORE[session_id] = scenario
         
         return {
@@ -7653,8 +7491,7 @@ def _assert_has_items(scen: dict, label: str):
 
 def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
     """
-    Validate that all deliverable-level rows have Start_Date and End_Date, and that
-    all component/task rows can resolve their parent deliverable.
+    Validate that deliverable-level rows (OutlineLevel=1) have Start_Date and End_Date.
     This ensures the Gantt timeline (Step 4) was completed before exporting to Workfront.
     
     Raises HTTPException if validation fails with a clear user message.
@@ -7665,20 +7502,18 @@ def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
             f"{label} requires timeline dates. Please complete Step 4 (Timeline) before exporting."
         )
     
-    # Identify deliverables by non-empty Deliverable_Code (handles nested hierarchies)
-    df_copy = df.copy()
-    df_copy["Deliverable_Code_Clean"] = df_copy["Deliverable_Code"].fillna("").astype(str).str.strip()
-    deliverables = df_copy[df_copy["Deliverable_Code_Clean"] != ""].copy()
+    # Find deliverable-level rows (OutlineLevel == 1)
+    if "OutlineLevel" in df.columns:
+        deliverables = df[df["OutlineLevel"] == 1].copy()
+    else:
+        # Fallback: use WBS_ID pattern (e.g., "1.1", "1.2") to identify deliverables
+        deliverables = df[df["WBS_ID"].str.match(r"^1\.\d+$", na=False)].copy()
     
     if deliverables.empty:
-        # No deliverables found - require at least one deliverable
-        raise HTTPException(
-            400,
-            f"{label} requires at least one deliverable with timeline dates. "
-            f"Please build a scenario in Step 3 and complete the timeline in Step 4."
-        )
+        # No deliverables found - this shouldn't happen but don't block export
+        return
     
-    # Check for missing dates on deliverables
+    # Check for missing dates
     missing_start = deliverables["Start_Date"].isna() | (deliverables["Start_Date"] == "")
     missing_end = deliverables["End_Date"].isna() | (deliverables["End_Date"] == "")
     missing_dates = deliverables[missing_start | missing_end]
@@ -7695,55 +7530,6 @@ def _validate_timeline_dates(df: pd.DataFrame, label: str = "XML export"):
             f"{label} requires timeline dates for all deliverables. "
             f"Missing dates for: {names_str}. "
             f"Please complete Step 4 (Timeline) and ensure all deliverables have dates before exporting."
-        )
-    
-    # Build WBS parent map to verify component/task parent relationships
-    wbs_parent_map = {}
-    if "WBS_ID" in df_copy.columns and "Parent_WBS_ID" in df_copy.columns:
-        for idx, row in df_copy.iterrows():
-            parent_wbs = normalize_wbs(row.get("Parent_WBS_ID", ""))
-            if parent_wbs:
-                wbs_parent_map[normalize_wbs(row["WBS_ID"])] = parent_wbs
-    
-    # Build deliverable WBS set for validation
-    deliverable_wbs_set = set(normalize_wbs(wbs) for wbs in deliverables["WBS_ID"].tolist())
-    
-    # Check that all non-deliverable rows can resolve to a deliverable parent
-    non_deliverables = df_copy[df_copy["Deliverable_Code_Clean"] == ""]
-    orphaned_rows = []
-    
-    for idx, row in non_deliverables.iterrows():
-        wbs = normalize_wbs(row["WBS_ID"])
-        
-        # Walk up the WBS hierarchy to find a deliverable parent
-        current = wbs
-        visited = set()
-        found_deliverable = False
-        
-        while current in wbs_parent_map and current not in visited:
-            visited.add(current)
-            parent_wbs = wbs_parent_map[current]
-            
-            if parent_wbs in deliverable_wbs_set:
-                found_deliverable = True
-                break
-            
-            current = parent_wbs
-        
-        if not found_deliverable:
-            orphaned_rows.append(row["Task_Name"])
-    
-    if orphaned_rows:
-        # Found rows that can't resolve to a deliverable parent
-        orphan_names = orphaned_rows[:3]
-        names_str = ", ".join([f"'{name}'" for name in orphan_names])
-        if len(orphaned_rows) > 3:
-            names_str += f" (and {len(orphaned_rows) - 3} more)"
-        
-        raise HTTPException(
-            400,
-            f"{label} contains tasks/components that cannot resolve to a parent deliverable: {names_str}. "
-            f"This indicates a broken WBS hierarchy. Please rebuild the scenario in Step 3."
         )
 
 @app.post("/api/export/xml")
@@ -9404,31 +9190,6 @@ def convert_excel_to_mspdi(
         # Load Excel data
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
         
-        # --- Normalize Task_Name column (copy from Task if missing or empty) ---
-        if "Task" in df.columns:
-            if "Task_Name" not in df.columns:
-                df["Task_Name"] = df["Task"]
-                print("[EXPORT] Task_Name column missing - copied from Task column")
-            else:
-                # Fill individual rows where Task_Name is null or blank
-                mask = df["Task_Name"].isna() | (df["Task_Name"].astype(str).str.strip() == "")
-                if mask.any():
-                    df.loc[mask, "Task_Name"] = df.loc[mask, "Task"]
-                    filled_count = mask.sum()
-                    print(f"[EXPORT] Task_Name filled {filled_count} empty rows from Task column")
-        
-        # --- Validate required columns exist (fail fast with clear error) ---
-        required_columns = {
-            "Task_Name", "WBS_ID", "Parent_WBS_ID", "Planned_Hours", 
-            "Duration_Days", "Start_Offset_Days", "Deliverable_Code"
-        }
-        missing_columns = required_columns - set(df.columns)
-        if missing_columns:
-            raise ValueError(
-                f"Export failed: Required columns missing from Excel data: {', '.join(sorted(missing_columns))}. "
-                f"This usually indicates a data formatting issue. Please ensure the scenario was built correctly."
-            )
-        
         # --- Derive a proper project title for the MSPDI <Project><Name> ---
         project_title = None
         try:
@@ -9536,12 +9297,12 @@ def convert_excel_to_mspdi(
 
         if merge_identical_children:
             # index helpers
-            by_wbs = {normalize_wbs(r["WBS"]): r for r in rows if r.get("WBS")}
+            by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
             kids_by_parent: Dict[str, List[str]] = {}
             for r in rows:
-                p = normalize_wbs(r.get("ParentWBS"))
+                p = r.get("ParentWBS")
                 if p:
-                    kids_by_parent.setdefault(p, []).append(normalize_wbs(r["WBS"]))
+                    kids_by_parent.setdefault(p, []).append(r["WBS"])
 
             for parent_wbs, kid_wbs_list in list(kids_by_parent.items()):
                 # Only immediate children and all must be leaves
@@ -9589,17 +9350,17 @@ def convert_excel_to_mspdi(
 
         # If we merged anything, drop the children now
         if removed_child_wbs:
-            rows = [r for r in rows if normalize_wbs(r["WBS"]) not in removed_child_wbs]
+            rows = [r for r in rows if r["WBS"] not in removed_child_wbs]
 
         # Build a universal WBS index (needed even when merge is OFF)
-        by_wbs = {normalize_wbs(r["WBS"]): r for r in rows if r.get("WBS")}
+        by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
 
         # Build children_by_parent map and child_to_parent for dep rewrites
         children_by_parent: Dict[str, List[str]] = {}
         for r in rows:
-            p = normalize_wbs(r["ParentWBS"])
+            p = r["ParentWBS"]
             if p:
-                children_by_parent.setdefault(p, []).append(normalize_wbs(r["WBS"]))
+                children_by_parent.setdefault(p, []).append(r["WBS"])
         summary_set: Set[str] = set(children_by_parent.keys())
 
         child_to_parent: Dict[str, str] = {}
@@ -9610,8 +9371,7 @@ def convert_excel_to_mspdi(
 
         # Helper functions for dependency normalization
         def is_ancestor(ancestor_wbs: str, descendant_wbs: str) -> bool:
-            ancestor_wbs = normalize_wbs(ancestor_wbs)
-            current = normalize_wbs(descendant_wbs)
+            current = descendant_wbs
             visited = set()
             while current and current not in visited:
                 visited.add(current)
@@ -9620,17 +9380,16 @@ def convert_excel_to_mspdi(
                 # Find parent of current
                 parent_found = None
                 for r in rows:
-                    if normalize_wbs(r["WBS"]) == current:
-                        parent_found = normalize_wbs(r.get("ParentWBS"))
+                    if r["WBS"] == current:
+                        parent_found = r.get("ParentWBS")
                         break
                 current = parent_found
             return False
 
         def list_leaves_under(parent_wbs: str) -> List[str]:
-            parent_wbs = normalize_wbs(parent_wbs)
             leaves = []
             for r in rows:
-                if normalize_wbs(r.get("ParentWBS")) == parent_wbs and normalize_wbs(r["WBS"]) not in summary_set:
+                if r.get("ParentWBS") == parent_wbs and r["WBS"] not in summary_set:
                     leaves.append(r["WBS"])
             return leaves
 
@@ -9683,7 +9442,7 @@ def convert_excel_to_mspdi(
             root_row = None
             other_rows = []  # Rows without DeliverableCode
             for r in rows:
-                if normalize_wbs(r["WBS"]) == "1":
+                if r["WBS"] == "1":
                     root_row = r
                     continue
                 dcode = r.get("DeliverableCode", "").strip()
@@ -9789,12 +9548,12 @@ def convert_excel_to_mspdi(
             rows = enrich_wbs_for_workfront(rows)
         
         # Rebuild indices after enrichment
-        by_wbs = {normalize_wbs(r["WBS"]): r for r in rows if r.get("WBS")}
+        by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
         children_by_parent = {}
         for r in rows:
-            p = normalize_wbs(r["ParentWBS"])
+            p = r["ParentWBS"]
             if p:
-                children_by_parent.setdefault(p, []).append(normalize_wbs(r["WBS"]))
+                children_by_parent.setdefault(p, []).append(r["WBS"])
         summary_set = set(children_by_parent.keys())
         
         # Normalize dependencies & drop unsafe hierarchy edges
@@ -9803,9 +9562,9 @@ def convert_excel_to_mspdi(
             deps = r.get("Dependencies", "").strip()
             if deps:
                 for dep in deps.split(","):
-                    dep = normalize_wbs(dep.strip())
+                    dep = dep.strip()
                     if dep:
-                        init_edges.append((dep, normalize_wbs(r["WBS"])))
+                        init_edges.append((dep, r["WBS"]))
 
         normalized_edges = []
         for pred_wbs, succ_wbs in init_edges:
@@ -9892,57 +9651,27 @@ def convert_excel_to_mspdi(
             return minutes
 
         # Build WBS hierarchy first (needed for parent lookups)
-        # CRITICAL: Normalize all WBS values to prevent type mismatches (float vs string)
-        wbs_to_uid = {normalize_wbs(r["WBS"]): r["UID"] for r in rows}
-        wbs_to_row = {normalize_wbs(r["WBS"]): r for r in rows}
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+        wbs_to_row = {r["WBS"]: r for r in rows}
         
         # Build parent mapping (WBS -> parent WBS)
         wbs_parent_map = {}
         for r in rows:
-            parent_wbs = normalize_wbs(r.get("ParentWBS", ""))
+            parent_wbs = r.get("ParentWBS", "").strip()
             if parent_wbs:
-                wbs_parent_map[normalize_wbs(r["WBS"])] = parent_wbs
+                wbs_parent_map[r["WBS"]] = parent_wbs
         
-        # Build deliverable code set for fast lookup
-        deliverable_codes = set()
-        deliverable_wbs_map = {}  # Map deliverable_code -> WBS for fast lookup
-        for r in rows:
-            deliv_code = str(r.get("Deliverable_Code", "")).strip()
-            if deliv_code and deliv_code != "":
-                deliverable_codes.add(deliv_code)
-                deliverable_wbs_map[deliv_code] = normalize_wbs(r["WBS"])
-        
-        def find_deliverable_parent(wbs, row):
-            """
-            Find the parent deliverable for a given WBS.
-            Deliverables are identified by having a non-empty Deliverable_Code, not by OutlineLevel.
-            This handles nested hierarchies (phase → sub-phase → deliverable).
-            """
-            # Normalize WBS input to ensure consistent lookups
-            wbs = normalize_wbs(wbs)
-            
-            # First check if this row itself is a deliverable
-            deliv_code = str(row.get("Deliverable_Code", "")).strip()
-            if deliv_code and deliv_code != "":
-                # This row is itself a deliverable
-                return wbs, row
-            
-            # Walk up the WBS hierarchy to find a parent with a Deliverable_Code
+        def find_deliverable_parent(wbs):
+            """Find the top-level deliverable (OutlineLevel=1) for a given WBS."""
             current = wbs
             visited = set()
             while current in wbs_parent_map and current not in visited:
                 visited.add(current)
                 parent_wbs = wbs_parent_map[current]
                 parent_row = wbs_to_row.get(parent_wbs)
-                
-                if parent_row:
-                    parent_deliv_code = str(parent_row.get("Deliverable_Code", "")).strip()
-                    if parent_deliv_code and parent_deliv_code != "":
-                        # Found a deliverable parent
-                        return parent_wbs, parent_row
-                
+                if parent_row and parent_row.get("OutlineLevel") == 1:
+                    return parent_wbs, parent_row
                 current = parent_wbs
-            
             return None, None
         
         # Calculate task schedules (TWO-PASS to handle parent-child relationships)
@@ -9989,12 +9718,10 @@ def convert_excel_to_mspdi(
                     "DurationHours": duration_hours
                 }
                 
-                task_name = r.get("Task_Name", "Unknown")[:50]
-                print(f"  ✓ {task_name}: {start_date_str} → {end_date_str} (from Gantt)")
+                print(f"  ✓ {r['TaskName'][:50]}: {start_date_str} → {end_date_str} (from Gantt)")
                 
             except (ValueError, AttributeError, TypeError) as e:
-                task_name = r.get("Task_Name", "Unknown")
-                print(f"  ✗ Failed to parse dates for {task_name}: {e}")
+                print(f"  ✗ Failed to parse dates for {r['TaskName']}: {e}")
                 # Add to rows_without_dates for PASS 2 processing
                 rows_without_dates.append(r)
         
@@ -10005,67 +9732,39 @@ def convert_excel_to_mspdi(
             if r["UID"] in uid_to_sched:
                 continue
             
-            # Skip root project node (WBS:1) - it gets project-level dates, not parent deliverable dates
-            if normalize_wbs(r.get("WBS")) == "1" or r.get("OutlineLevel") == 1:
-                # Root node gets default project dates if not already set in PASS 1
-                if r["UID"] not in uid_to_sched:
-                    # Calculate realistic project start/finish from processed deliverables
-                    if uid_to_sched:
-                        # Use earliest start and latest finish from all processed tasks
-                        all_starts = [s["Start"] for s in uid_to_sched.values()]
-                        all_finishes = [s["Finish"] for s in uid_to_sched.values()]
-                        project_start = min(all_starts) if all_starts else (project_start_date or datetime.datetime.now())
-                        project_finish = max(all_finishes) if all_finishes else project_start + datetime.timedelta(days=365)
-                    else:
-                        # Fallback if no deliverables processed yet
-                        project_start = project_start_date or datetime.datetime.now()
-                        project_finish = project_start + datetime.timedelta(days=365)
+            # Find parent deliverable (OutlineLevel=1)
+            deliv_wbs, deliv_row = find_deliverable_parent(r["WBS"])
+            
+            if deliv_wbs and deliv_row:
+                deliv_uid = wbs_to_uid.get(deliv_wbs)
+                if deliv_uid and deliv_uid in uid_to_sched:
+                    # Parent deliverable has timeline dates - calculate child dates from parent
+                    parent_sched = uid_to_sched[deliv_uid]
+                    parent_start = parent_sched["Start"]
                     
-                    duration_hours = max(1.0, (project_finish - project_start).total_seconds() / 3600)
+                    # Calculate child dates using StartOffset relative to parent
+                    start_offset_days = r.get("StartOffset", 0)
+                    duration_days = r.get("Duration", 1)
+                    
+                    # Add offset to parent start (business days)
+                    start_date = parent_start + datetime.timedelta(days=start_offset_days)
+                    duration_hours = max(duration_days * hours_per_day, r["PlannedHours"])
+                    end_date = start_date + datetime.timedelta(hours=duration_hours)
+                    
                     uid_to_sched[r["UID"]] = {
-                        "Start": project_start,
-                        "Finish": project_finish,
+                        "Start": start_date,
+                        "Finish": end_date,
                         "PlannedHours": r["PlannedHours"],
                         "DurationHours": duration_hours
                     }
-                    print(f"  ✓ Root node (WBS:1): {project_start.date()} → {project_finish.date()} (computed from deliverables)")
-                continue
+                    
+                    print(f"  ✓ {r['TaskName'][:50]}: Calculated from parent '{deliv_row['TaskName'][:30]}' + {start_offset_days}d offset")
+                    continue
             
-            # Find parent deliverable (by Deliverable_Code, handles nested hierarchies)
-            deliv_wbs, deliv_row = find_deliverable_parent(r["WBS"], r)
-            
-            if not deliv_wbs or not deliv_row:
-                # FAIL HARD: No parent deliverable found - this indicates missing timeline data
-                # Don't fall back to offset calculation - force user to complete Step 4 (Timeline)
-                task_name = r.get("Task_Name", "Unknown")
-                wbs = r.get("WBS", "")
-                raise ValueError(
-                    f"Cannot export '{task_name}' (WBS: {wbs}): No parent deliverable with timeline dates found. "
-                    f"This usually means Step 4 (Timeline) is incomplete or the WBS hierarchy is broken. "
-                    f"Please ensure all deliverables have Start_Date and End_Date from the Gantt timeline."
-                )
-            
-            deliv_uid = wbs_to_uid.get(deliv_wbs)
-            if not deliv_uid or deliv_uid not in uid_to_sched:
-                # FAIL HARD: Parent deliverable exists but has no schedule
-                task_name = r.get("Task_Name", "Unknown")
-                deliv_name = deliv_row.get("Task_Name", "Unknown")
-                raise ValueError(
-                    f"Cannot export '{task_name}': Parent deliverable '{deliv_name}' has no timeline dates. "
-                    f"Please complete Step 4 (Timeline) and ensure all deliverables have dates before exporting."
-                )
-            
-            # Parent deliverable has timeline dates - calculate child dates from parent
-            parent_sched = uid_to_sched[deliv_uid]
-            parent_start = parent_sched["Start"]
-            
-            # Calculate child dates using StartOffset relative to parent
-            start_offset_days = r.get("StartOffset", 0)
-            duration_days = r.get("Duration", 1)
-            
-            # Add offset to parent start (business days)
-            start_date = parent_start + datetime.timedelta(days=start_offset_days)
-            duration_hours = max(duration_days * hours_per_day, r["PlannedHours"])
+            # FALLBACK: If no parent deliverable found, use project_start + offset
+            # This should only happen for top-level summary tasks or orphaned rows
+            start_date = project_start + datetime.timedelta(days=r.get("StartOffset", 0))
+            duration_hours = max(r.get("Duration", 1) * hours_per_day, r["PlannedHours"])
             end_date = start_date + datetime.timedelta(hours=duration_hours)
             
             uid_to_sched[r["UID"]] = {
@@ -10075,18 +9774,16 @@ def convert_excel_to_mspdi(
                 "DurationHours": duration_hours
             }
             
-            task_name = r.get("Task_Name", "Unknown")[:50]
-            parent_name = deliv_row.get("Task_Name", "Unknown")[:30]
-            print(f"  ✓ {task_name}: Calculated from parent '{parent_name}' + {start_offset_days}d offset")
+            print(f"  ⚠ {r['TaskName'][:50]}: Using project_start fallback (no parent deliverable found)")
 
         # Build UID-based children mapping for rollup (as expected by patch)
         # Note: wbs_to_uid already created at line 9602 for parent lookups
         wbs_children = children_by_parent  # Save original WBS-based mapping
         children_by_parent = {}  # UID-based mapping for rollup
         for wbs, child_wbs_list in wbs_children.items():
-            parent_uid = wbs_to_uid.get(normalize_wbs(wbs))
+            parent_uid = wbs_to_uid.get(wbs)
             if parent_uid:
-                children_by_parent[parent_uid] = [wbs_to_uid.get(normalize_wbs(child_wbs)) for child_wbs in child_wbs_list if wbs_to_uid.get(normalize_wbs(child_wbs))]
+                children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
         summary_set = set(children_by_parent.keys())
 
         # Helper function to recursively clamp all descendants to fit within bounds
@@ -10219,9 +9916,9 @@ def convert_excel_to_mspdi(
         # Map prealloc from WBS -> UID (after UIDs exist)
         prealloc_by_task_uid: Dict[int, Dict[str, float]] = {}
         if prealloc_by_parent_wbs:
-            wbs_to_uid = {normalize_wbs(r["WBS"]): r["UID"] for r in rows if r["WBS"]}
+            wbs_to_uid = {r["WBS"]: r["UID"] for r in rows if r["WBS"]}
             for wbs, role_hours in prealloc_by_parent_wbs.items():
-                uid = wbs_to_uid.get(normalize_wbs(wbs))
+                uid = wbs_to_uid.get(wbs)
                 if uid:
                     prealloc_by_task_uid[uid] = role_hours
 
@@ -10229,7 +9926,7 @@ def convert_excel_to_mspdi(
         assignments = []
         assign_uid = 1
         for r in rows:
-            if normalize_wbs(r["WBS"]) in summary_set:
+            if r["WBS"] in summary_set:
                 continue
 
             task_hours = uid_to_sched[r["UID"]]["PlannedHours"]
@@ -10365,7 +10062,7 @@ def convert_excel_to_mspdi(
                 # The root task should span the entire project timeline
                 root_task_uid = None
                 for r in rows:
-                    if normalize_wbs(r["WBS"]) == "1":
+                    if r["WBS"] == "1":
                         root_task_uid = r["UID"]
                         break
                 
@@ -10451,7 +10148,7 @@ def convert_excel_to_mspdi(
             SubElement(task, "UID").text = str(r["UID"])
             SubElement(task, "ID").text = str(task_id)
             # Use "Project Summary" for root task, otherwise use the actual name
-            is_root = normalize_wbs(r["WBS"]) == "1"
+            is_root = r["WBS"] == "1"
             name_txt = "Project Summary" if is_root else r["Name"]
             SubElement(task, "Name").text = name_txt
             
@@ -10463,7 +10160,7 @@ def convert_excel_to_mspdi(
             SubElement(task, "Start").text = uid_to_sched[r["UID"]]["Start"]
             SubElement(task, "Finish").text = uid_to_sched[r["UID"]]["Finish"]
             # Summary task flag
-            is_summary = normalize_wbs(r["WBS"]) in summary_set or is_root
+            is_summary = r["WBS"] in summary_set or is_root
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # Emit DurationFormat=7 (Days) for all tasks
@@ -10543,12 +10240,12 @@ def convert_excel_to_mspdi(
             SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
         # Add PredecessorLinks for dependencies
-        wbs_to_uid = {normalize_wbs(r["WBS"]): r["UID"] for r in rows}
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         
         # Add PredecessorLink elements to tasks that have dependencies
         for pred_wbs, succ_wbs in normalized_edges:
-            pred_uid = wbs_to_uid.get(normalize_wbs(pred_wbs))
-            succ_uid = wbs_to_uid.get(normalize_wbs(succ_wbs))
+            pred_uid = wbs_to_uid.get(pred_wbs)
+            succ_uid = wbs_to_uid.get(succ_wbs)
             if pred_uid and succ_uid:
                 # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
                 for task_elem in tasks_elem.findall("Task"):
@@ -10992,15 +10689,11 @@ async def save_timeline(request: dict):
             # Update the specific scenario in the bundle
             if isinstance(session_bundle, dict) and "items" in session_bundle:
                 # Direct scenario format - overwrite entire session
-                # Normalize WBS before storing
-                scen = normalize_scenario_wbs(scen)
                 SCENARIO_STORE[session_id] = scen
                 print(f"[TIMELINE SAVE] Saved direct scenario to SCENARIO_STORE[{session_id}]")
             else:
                 # Bundle format - update specific scenario letter
                 session_bundle[scenario_letter] = scen
-                # Normalize WBS before storing
-                session_bundle = normalize_scenario_wbs(session_bundle)
                 SCENARIO_STORE[session_id] = session_bundle
                 print(f"[TIMELINE SAVE] Saved to SCENARIO_STORE[{session_id}][{scenario_letter}]")
         else:
@@ -11561,10 +11254,8 @@ async def sync_scenario(payload: ScenarioSyncPayload):
     # Apply client changes if newer
     changes_applied = False
     if payload.scenario and (not has_conflicts or payload.client_version > server_version):
-        # Normalize WBS before updating server state
-        normalized_scenario = normalize_scenario_wbs(payload.scenario)
         # Update server state with client data
-        server_state["scenario"] = normalized_scenario
+        server_state["scenario"] = payload.scenario
         server_state["selections"] = payload.selections or {}
         server_state["version"] = max(server_version + 1, payload.client_version)
         server_state["last_modified"] = payload.timestamp
