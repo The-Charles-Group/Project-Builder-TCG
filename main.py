@@ -10071,14 +10071,20 @@ def convert_excel_to_mspdi(
             # Emit DurationFormat=7 (Days) for all tasks
             SubElement(task, "DurationFormat").text = "7"
             
-            # Summary tasks (including root) get PT0M for Work/Duration (Workfront will roll up from children)
+            # WORKFRONT FIX: Summary tasks get PT480M placeholder duration (not PT0M) to avoid "0.12 days" display
+            # Work is always PT0M for summaries since Workfront rolls up from children
             if is_summary or is_root:
                 SubElement(task, "Work").text = "PT0M"
-                SubElement(task, "Duration").text = "PT0M"
-                # Root task uses Must Start On constraint
+                # CRITICAL: Summary tasks need PT480M (1 day) placeholder duration
+                # PT0M causes Workfront to display "0.12 days" compression artifacts
                 if is_root:
+                    # Project root gets PT0M since it's a pure container
+                    SubElement(task, "Duration").text = "PT0M"
                     SubElement(task, "ConstraintType").text = "4"  # Must Start On
                     SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                else:
+                    # All other summary tasks (departments, deliverables) get PT480M placeholder
+                    SubElement(task, "Duration").text = "PT480M"
                 # Do NOT set Type, IsEffortDriven, or other scheduling flags on summary tasks
                 # Workfront will roll up from children
             # Only set Duration/Work for non-summary leaf tasks
@@ -10130,6 +10136,11 @@ def convert_excel_to_mspdi(
                 # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
+                
+                # WORKFRONT FIX: Explicit ASAP constraint on ALL leaf tasks to prevent constraint inheritance
+                # Without this, leaf tasks inherit parent deliverable's SNET constraint, causing serial execution
+                # ConstraintType=0 (As Soon As Possible) allows tasks to start when dependencies are met
+                SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
@@ -10461,13 +10472,17 @@ def convert_excel_to_mspdi(
         if anchor_validation_passed:
             print(f"[VALIDATION] ✅ All finish anchors use numeric child WBS (.99): PASS")
         
-        # Validation 3: Check all summary tasks have Summary=1, Work=PT0M, Duration=PT0M
+        # Validation 3: Check all summary tasks have Summary=1, Work=PT0M, Duration=PT480M (except root)
         summary_validation_passed = True
+        pt0m_count = 0
         for task_elem in tasks_elem.findall("Task"):
             # Check if task has children by looking at ParentWBS references
             wbs_elem = task_elem.find("WBS")
+            uid_elem = task_elem.find("UID")
             if wbs_elem is not None:
                 task_wbs = wbs_elem.text
+                is_root = uid_elem is not None and uid_elem.text == "1"
+                
                 # Check if any other task has this as ParentWBS (indicates children)
                 has_children = False
                 for other_task in tasks_elem.findall("Task"):
@@ -10486,9 +10501,20 @@ def convert_excel_to_mspdi(
                         task_name = name_elem.text if name_elem is not None else "Unknown"
                         print(f"[VALIDATION] ❌ Parent task missing Summary=1: {task_name} (WBS {task_wbs})")
                         summary_validation_passed = False
+                    
+                    # Check duration: Root should be PT0M, all others should be PT480M
+                    if dur_elem is not None:
+                        expected_duration = "PT0M" if is_root else "PT480M"
+                        if dur_elem.text == "PT0M":
+                            pt0m_count += 1
+                        if dur_elem.text != expected_duration and not is_root:
+                            name_elem = task_elem.find("Name")
+                            task_name = name_elem.text if name_elem is not None else "Unknown"
+                            print(f"[VALIDATION] ⚠️  Summary task has wrong duration: {task_name} (WBS {task_wbs}, expected {expected_duration}, got {dur_elem.text})")
         
         if summary_validation_passed:
-            print(f"[VALIDATION] ✅ All parent tasks have Summary=1: PASS")
+            print(f"[VALIDATION] ✅ All parent tasks have Summary=1 + PT480M duration: PASS")
+        print(f"[VALIDATION] 📊 Tasks with Duration=PT0M: {pt0m_count} (should only be project root + milestones)")
         
         # Validation 4: Check duration math for sample tasks (1-hour tasks should be PT60M, not PT960M)
         duration_validation_passed = True
@@ -10528,6 +10554,33 @@ def convert_excel_to_mspdi(
         
         if duration_validation_passed:
             print(f"[VALIDATION] ✅ Duration matches Start/Finish timestamps: PASS")
+        
+        # Validation 5: Check all leaf tasks have ConstraintType=0 (ASAP) to prevent constraint inheritance
+        leaf_constraint_issues = 0
+        for task_elem in tasks_elem.findall("Task"):
+            summary_elem = task_elem.find("Summary")
+            constraint_elem = task_elem.find("ConstraintType")
+            outline_elem = task_elem.find("OutlineLevel")
+            uid_elem = task_elem.find("UID")
+            
+            # Check if this is a leaf task (Summary=0 or missing, not root UID=1)
+            is_leaf = (summary_elem is None or summary_elem.text == "0") and (uid_elem is None or uid_elem.text != "1")
+            is_deliverable = outline_elem is not None and outline_elem.text == "3"
+            
+            if is_leaf and not is_deliverable:
+                # Leaf task should have ConstraintType=0 (ASAP)
+                if constraint_elem is None or constraint_elem.text != "0":
+                    name_elem = task_elem.find("Name")
+                    task_name = name_elem.text if name_elem is not None else "Unknown"
+                    constraint_val = constraint_elem.text if constraint_elem is not None else "MISSING"
+                    if leaf_constraint_issues < 3:  # Only show first 3
+                        print(f"[VALIDATION] ⚠️  Leaf task missing ASAP constraint: {task_name[:40]} (Constraint={constraint_val}, expected 0)")
+                    leaf_constraint_issues += 1
+        
+        if leaf_constraint_issues == 0:
+            print(f"[VALIDATION] ✅ All leaf tasks have ConstraintType=0 (ASAP): PASS")
+        else:
+            print(f"[VALIDATION] ⚠️  Found {leaf_constraint_issues} leaf tasks without ASAP constraint")
         
         print(f"[WORKFRONT VALIDATION] ═══════════════════════════════════════\n")
         
