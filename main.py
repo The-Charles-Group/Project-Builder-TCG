@@ -6645,9 +6645,11 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
         
         if payload.start_date:
             target_item["Start_Date"] = payload.start_date
+            print(f"[GANTT EDIT] Saved Start_Date={payload.start_date} for WBS_ID={payload.wbs_id}")
         
         if payload.end_date:
             target_item["End_Date"] = payload.end_date
+            print(f"[GANTT EDIT] Saved End_Date={payload.end_date} for WBS_ID={payload.wbs_id}")
         
         # Recompute totals
         scenario = _recompute_totals(scenario)
@@ -9604,38 +9606,51 @@ def convert_excel_to_mspdi(
         uid_to_row = {r["UID"]: r for r in rows}
         
         for r in rows:
-            # FIX: Check if Start_Date and End_Date already exist from Gantt timeline_tasks
-            # If they do, preserve them instead of recalculating from offsets
-            # CRITICAL: Use date-only format (YYYY-MM-DD) not UTC timestamps to avoid timezone shifts
-            # for distributed teams (e.g., Manila vs Eastern Time)
+            # CRITICAL FIX: Check if Start_Date and End_Date already exist from Gantt timeline edits
+            # If they do, preserve them EXACTLY instead of recalculating from offsets
+            # This ensures Workfront imports match the Gantt UI timeline
             start_date_str = r.get("Start_Date", "")
             end_date_str = r.get("End_Date", "")
             
             if start_date_str and end_date_str:
-                # Parse existing dates from Gantt (date-only format for timezone consistency)
+                # Parse existing dates from Gantt timeline
                 try:
-                    # Parse date-only strings (YYYY-MM-DD) and add standard work hours
-                    # This ensures the same calendar date for all users regardless of timezone
-                    start_date_only = datetime.date.fromisoformat(start_date_str[:10])  # Extract YYYY-MM-DD
-                    end_date_only = datetime.date.fromisoformat(end_date_str[:10])      # Extract YYYY-MM-DD
+                    # Parse date strings (handle both YYYY-MM-DD and ISO format with time)
+                    # Extract just the date portion for timezone consistency
+                    start_date_only = datetime.date.fromisoformat(start_date_str[:10])
+                    end_date_only = datetime.date.fromisoformat(end_date_str[:10])
                     
                     # Combine with standard work hours (08:00 AM start, 05:00 PM end)
-                    # This matches the existing export behavior (project_start + offsets)
                     start_date = datetime.datetime.combine(start_date_only, datetime.time(8, 0))
                     end_date = datetime.datetime.combine(end_date_only, datetime.time(17, 0))
                     
-                    # Calculate duration from the date span
-                    duration_hours = max((end_date - start_date).total_seconds() / 3600, r["PlannedHours"])
+                    # CRITICAL FIX: Calculate duration from business hours between Start and Finish
+                    # This ensures Duration matches the date span in the XML for Workfront consistency
+                    # Use business_minutes_between helper to account for working hours only
+                    business_mins = business_minutes_between(start_date, end_date)
+                    duration_hours = business_mins / 60.0 if business_mins > 0 else r["PlannedHours"]
                     
                     # Mark this UID as having preserved dates that should not be overwritten by rollup
                     preserved_dates.add(r["UID"])
-                except (ValueError, AttributeError, TypeError):
-                    # If parsing fails, fall back to offset calculation
+                    
+                    # Log successful preservation
+                    task_name = r.get("Name", "Unknown")[:30]
+                    print(f"[XML EXPORT] ✅ Preserved Gantt dates for {task_name} (WBS {r['WBS']}): {start_date.date()} to {end_date.date()}, {duration_hours:.1f}h")
+                    
+                except (ValueError, AttributeError, TypeError) as e:
+                    # If parsing fails, fall back to offset calculation and log the issue
+                    print(f"[XML EXPORT] ⚠️ Failed to parse Gantt dates for WBS {r['WBS']}: {e}")
                     start_date = project_start + datetime.timedelta(days=r["StartOffset"])
                     duration_hours = max(r["Duration"] * hours_per_day, r["PlannedHours"])
                     end_date = start_date + datetime.timedelta(hours=duration_hours)
             else:
                 # No existing dates - calculate from offsets
+                # Log when deliverables don't have preserved dates (helps diagnose issues)
+                is_deliverable_level = r["WBS"].count(".") <= 2  # Level 2 or 3 deliverables
+                if is_deliverable_level:
+                    task_name = r.get("Name", "Unknown")[:30]
+                    print(f"[XML EXPORT] ℹ️ No Gantt dates for {task_name} (WBS {r['WBS']}) - using offset calculation")
+                
                 # FIX: If parent has preserved dates from Gantt, calculate relative to parent
                 # Otherwise fall back to global project_start
                 parent_wbs = r.get("ParentWBS")
