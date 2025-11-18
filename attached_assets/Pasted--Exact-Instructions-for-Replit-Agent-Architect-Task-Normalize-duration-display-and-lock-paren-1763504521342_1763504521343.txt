@@ -1,0 +1,68 @@
+🧩 Exact Instructions for Replit Agent + Architect
+
+Task: “Normalize duration display and lock parent tasks for Workfront import.”
+
+A) Summary Tasks (OutlineLevel ≤ 4)
+
+Add or ensure:
+
+<Summary>1</Summary>
+<Work>PT0M</Work>
+<Duration>PT480M</Duration>
+<DurationFormat>5</DurationFormat>
+<Type>1</Type>
+<IsEffortDriven>0</IsEffortDriven>
+<ManuallyScheduled>1</ManuallyScheduled>
+<ManualStart>1</ManualStart>
+<ManualFinish>1</ManualFinish>
+<ManualDuration>1</ManualDuration>
+<ManualWork>1</ManualWork>
+
+B) Leaf Tasks (OutlineLevel ≥ 5)
+
+Normalize:
+
+<Summary>0</Summary>
+<Type>1</Type>
+<IsEffortDriven>0</IsEffortDriven>
+<Work>PT60M</Work>             <!-- or real value -->
+<Duration>PT60M</Duration>     <!-- Finish - Start -->
+<ConstraintType>0</ConstraintType>   <!-- ASAP -->
+<DurationFormat>5</DurationFormat>
+
+C) Deliverable Tasks (OutlineLevel = 3)
+
+Keep:
+
+<ConstraintType>2</ConstraintType>   <!-- SNET -->
+<ConstraintDate>[planned start date]</ConstraintDate>
+<Duration>PT480M</Duration>
+<Work>PT0M</Work>
+
+D) Global Fix Pass
+
+Run a global find/replace or script to:
+
+Replace <DurationFormat>7</DurationFormat> → <DurationFormat>5</DurationFormat>
+
+Insert missing <Manual*> tags for all summaries.
+
+Ensure each deliverable has .99 finish anchor with ConstraintType=3 and FS predecessor to its last leaf.
+
+🧪 Validation Checklist
+Check	Goal
+No parent has Duration=PT0M	✅
+All parent rows have <ManuallyScheduled>1</ManuallyScheduled>	✅
+Leaf Duration = Finish - Start	✅
+All durations use DurationFormat=5	✅
+All deliverables have .99 anchors with ConstraintType=3	✅
+Import shows durations > 0.12 days for all summaries	✅
+🚀 Expected Workfront Results
+
+After re-export and import:
+
+Level	Example	Workfront Behavior
+L3 Deliverable	Brand Positioning Strategy	Displays Jan 5 – Jan 20 2026 and correct duration (≈ 16 days)
+L4 Components	Internal / External Review blocks	Parallel timelines; no compression
+L5/6 Tasks	“Client Review & Revisions” etc.	1-hour or 1-day durations as defined
+Parents	“Strategy”, “Creative Plan Deck”	No more “0.12 days”
