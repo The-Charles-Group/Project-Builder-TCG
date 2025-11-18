@@ -1,0 +1,59 @@
+Give your Replit agent this exact brief (copy/paste)
+
+Open:
+St.Regis_Nashville_Branding_Agency_RFP_10.22.2024_Workfront_Export_Scenario_A_2025-11-18_04-13PM_EST_6ff961b1.xml (and the latest e3fd71bc if needed for cross‑check).
+
+A) Break the L6 “conga line” and move sequencing to L5
+
+Remove all <PredecessorLink> elements from leaf tasks (where <Summary>0</Summary> and no children) at OutlineLevel ≥ 6. These are the L6 items that are currently serial.
+
+Re‑create order at the L5 component level only (OutlineLevel = 5):
+
+Between L5 siblings that truly must be in order, add a single FS link L5a → L5b.
+
+Inside each L5, let its L6 children run in parallel (no predecessors) unless there’s a real blocking relationship—then use SS (Type = 2) with lag, not FS, so they can overlap.
+(This mirrors your boss’s guidance: dependencies live at L5, not L6.)
+
+B) Make every “Finish Anchor” roll up the deliverable’s actual last leaf
+
+For each deliverable summary (OutlineLevel = 3):
+
+Move the “Finish Anchor” inside the deliverable as its last child:
+
+Change WBS/OutlineNumber from 1.x.y_FA (sibling) to a numeric child, e.g. 1.x.y.99.
+
+Set <OutlineLevel> to 4 (one level deeper than the deliverable).
+
+Point the anchor’s predecessor to the UID of the last leaf task (the leaf with the latest Finish) within that deliverable, not to the parent summary.
+
+Today, anchors like Brand Positioning Strategy – Finish Anchor are siblings (OutlineLevel=3) and point to the parent (UID 196). Fix both. 
+
+St.Regis_Nashville_Branding_Age…
+
+Keep <Milestone>1</Milestone>, <ConstraintType>3</ConstraintType>, and set <ConstraintDate> to the intended deliverable end date (matches your app).
+(Repeat for Creative Plan Deck, Project Kickoff, Paid Media Strategy, etc., which show the same “sibling + parent predecessor” pattern.)
+
+Optional but helpful: add a “Start Anchor” as child …01 of each deliverable with <ConstraintType>2</ConstraintType> and the intended start. Point the first L5 to this start anchor with FS, so nothing starts earlier than the window.
+
+C) Normalize leaf task durations to their actual Start/Finish span
+
+For every leaf task (no children):
+
+Compute d = Finish − Start in minutes and set <Duration>PT{d}M</Duration>.
+
+Example: if Start 08:00 and Finish 09:00, set PT60M (not PT960M).
+(There are many one‑hour tasks with Duration=PT960M right now.)
+
+Do not change <Work> or assignments (hours are already correct in Workfront, per your screenshots).
+
+D) Guardrails so Workfront respects your windows
+
+On each deliverable summary (OutlineLevel = 3), keep or set <ConstraintType>2</ConstraintType> with <ConstraintDate> equal to your planned start; this prevents children from starting earlier.
+
+Ensure every parent with children has <Summary>1</Summary> (Workfront infers from outline, but setting it is safer).
+
+E) Don’t use non‑numeric WBS/OutlineNumber values
+
+Replace 1.1.2_FA‑style codes with dotted numerics like 1.1.2.99. Non‑numeric WBS is how anchors ended up as siblings instead of children, which breaks roll‑ups. 
+
+St.Regis_Nashville_Branding_Age…
