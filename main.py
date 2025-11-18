@@ -10158,30 +10158,37 @@ def convert_excel_to_mspdi(
             has_preserved_dates = r["UID"] in preserved_dates
             
             if has_preserved_dates:
-                # Add manual scheduling flags to force Workfront to respect user-edited dates
+                # CRITICAL FIX: Add Workfront manual scheduling tags to prevent date recalculation
+                # Without these tags, Workfront treats tasks as auto-scheduled and recalculates dates
+                
+                # 1. ManuallyScheduled=1 - THE KEY TAG that makes Workfront respect manual scheduling
+                SubElement(task, "ManuallyScheduled").text = "1"
+                
+                # 2. Manual flags for Start/Finish/Duration/Work
                 SubElement(task, "ManualStart").text = "1"
                 SubElement(task, "ManualFinish").text = "1"
                 SubElement(task, "ManualDuration").text = "1"
+                SubElement(task, "ManualWork").text = "1"  # Locks work hours (prevents recalculation)
                 
-                # CRITICAL FIX: Update or create ConstraintType and ConstraintDate for preserved tasks
-                # Leaf tasks already have ConstraintType=0, so we need to update it to avoid duplicates
-                # Summary tasks don't have ConstraintType, so we create it
+                # 3. ConstraintType=2 (Start No Earlier Than) - More stable for manual tasks than Type=4
+                # Type 2 locks the start date but won't error if there's minor variation during import
+                # Type 4 (Must Start On) can trigger resets if dates drift even slightly
                 constraint_elem = task.find("ConstraintType")
                 if constraint_elem is not None:
-                    # Update existing constraint to "Must Start On"
-                    constraint_elem.text = "4"
+                    # Update existing constraint to "Start No Earlier Than"
+                    constraint_elem.text = "2"
                 else:
                     # Create new constraint for summary tasks
-                    SubElement(task, "ConstraintType").text = "4"
+                    SubElement(task, "ConstraintType").text = "2"
                 
-                # Add or update ConstraintDate to lock the preserved start date
+                # 4. Add or update ConstraintDate to lock the preserved start date
                 constraint_date_elem = task.find("ConstraintDate")
                 if constraint_date_elem is not None:
                     constraint_date_elem.text = uid_to_sched[r["UID"]]["Start"]
                 else:
                     SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
                 
-                print(f"[XML EXPORT] 🔒 Added manual scheduling tags for preserved task: {name_txt} (WBS {r['WBS']}, OutlineLevel {outline_level})")
+                print(f"[XML EXPORT] 🔒 Added manual scheduling tags (ManuallyScheduled=1, ConstraintType=2) for preserved task: {name_txt} (WBS {r['WBS']}, OutlineLevel {outline_level})")
             
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
