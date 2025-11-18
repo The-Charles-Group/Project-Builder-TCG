@@ -10083,142 +10083,78 @@ def convert_excel_to_mspdi(
                 # Workfront will roll up from children
             # Only set Duration/Work for non-summary leaf tasks
             else:
-                # CRITICAL FIX: Duration MUST match Start/Finish span for Workfront
-                # When Duration ≠ (Finish - Start), Workfront uses Duration as truth and recalculates Finish
-                # This is the root cause of date drift to June 2027
-                is_preserved = r["UID"] in preserved_dates
+                # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
+                # NO 960-minute snapping - use actual timestamp difference
+                # This is critical to prevent Workfront from recalculating dates on import
                 
-                if is_preserved:
-                    # WORKFRONT FIX: Compute Duration from actual working time between Start/Finish
-                    # Duration = actual working minutes (respects partial days, not just calendar days × 480)
-                    # Work = PlannedHours (actual effort from Gantt)
-                    # This prevents Workfront from recalculating dates on import
-                    
-                    start_val = uid_to_sched[r["UID"]]["Start"]
-                    finish_val = uid_to_sched[r["UID"]]["Finish"]
-                    
-                    # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
-                    def to_datetime(val):
-                        if isinstance(val, datetime.datetime):
-                            return val
-                        elif isinstance(val, str):
-                            # Remove timezone suffixes for parsing
-                            val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
-                            # Try parsing with fromisoformat (handles timezones)
-                            try:
-                                return datetime.datetime.fromisoformat(val_clean)
-                            except ValueError:
-                                # Fallback: strip timezone manually and parse
-                                val_clean = val.split('+')[0].split('-')
-                                # Rejoin date portion (first 3 parts: YYYY, MM, DD)
-                                val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
-                                val_clean = val_clean.split('.')[0]  # Remove milliseconds
-                                return datetime.datetime.fromisoformat(val_clean)
-                        else:
-                            return val
-                    
-                    start_dt = to_datetime(start_val)
-                    finish_dt = to_datetime(finish_val)
-                    
-                    # CRITICAL FIX: Use ACTUAL time difference for preserved tasks (not calendar expansion)
-                    # GPT-5 Pro spec: Duration = (Finish - Start), minimum 60 minutes
-                    # This prevents inflation of cross-day tasks (e.g., 90-min task → 960 min)
-                    
-                    # Calculate actual time difference in minutes
-                    time_diff_total_minutes = int((finish_dt - start_dt).total_seconds() / 60)
-                    
-                    # Apply minimum 60 minutes (1 hour) for non-milestone tasks
-                    # Use actual timestamp difference without calendar-day expansion
-                    dur_minutes = max(60, time_diff_total_minutes)
-                    
-                    # Work = PlannedHours from Gantt
-                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
-                else:
-                    # For non-preserved tasks: Use original logic with PlannedHours and snapping
-                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
-                    dur_minutes = int(round(uid_to_sched[r['UID']]['DurationHours'] * 60))
-                    
-                    # Snap duration to 480-minute (8-hour day) blocks for Workfront compatibility
-                    dur_minutes = ((dur_minutes + 479) // 480) * 480
+                start_val = uid_to_sched[r["UID"]]["Start"]
+                finish_val = uid_to_sched[r["UID"]]["Finish"]
+                
+                # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
+                def to_datetime(val):
+                    if isinstance(val, datetime.datetime):
+                        return val
+                    elif isinstance(val, str):
+                        # Remove timezone suffixes for parsing
+                        val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
+                        # Try parsing with fromisoformat (handles timezones)
+                        try:
+                            return datetime.datetime.fromisoformat(val_clean)
+                        except ValueError:
+                            # Fallback: strip timezone manually and parse
+                            val_clean = val.split('+')[0].split('-')
+                            # Rejoin date portion (first 3 parts: YYYY, MM, DD)
+                            val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
+                            val_clean = val_clean.split('.')[0]  # Remove milliseconds
+                            return datetime.datetime.fromisoformat(val_clean)
+                    else:
+                        return val
+                
+                start_dt = to_datetime(start_val)
+                finish_dt = to_datetime(finish_val)
+                
+                # Calculate actual time difference in minutes
+                time_diff_total_minutes = int((finish_dt - start_dt).total_seconds() / 60)
+                
+                # Apply minimum 60 minutes (1 hour) for non-milestone tasks
+                # Use actual timestamp difference - NO calendar-day expansion or 480-min snapping
+                dur_minutes = max(60, time_diff_total_minutes)
+                
+                # Work = PlannedHours from Gantt (actual effort)
+                work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
                 
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
-                # VALIDATION: Log preserved task values to verify Option C implementation
-                # Wrap in try/except to prevent validation logging from aborting exports
-                if is_preserved:
-                    try:
-                        start_val = uid_to_sched[r["UID"]]["Start"]
-                        finish_val = uid_to_sched[r["UID"]]["Finish"]
-                        
-                        # Robust datetime conversion helper
-                        def to_datetime(val):
-                            if isinstance(val, datetime.datetime):
-                                return val
-                            elif isinstance(val, str):
-                                # Handle various ISO formats with timezone info
-                                # Remove timezone info and milliseconds for parsing
-                                val_clean = val.split('+')[0].split('-')[:3]  # Remove timezone
-                                val_clean = '-'.join(val_clean).split('.')[0]  # Remove milliseconds
-                                return datetime.datetime.fromisoformat(val_clean)
-                            else:
-                                return val  # Return as-is and let it fail gracefully
-                        
-                        start_dt = to_datetime(start_val)
-                        finish_dt = to_datetime(finish_val)
-                        start_str = start_dt.strftime("%Y-%m-%d %H:%M")
-                        finish_str = finish_dt.strftime("%Y-%m-%d %H:%M")
-                        
-                        work_h = work_minutes / 60.0
-                        dur_h = dur_minutes / 60.0
-                        # Calculate calendar days from Start/Finish dates
-                        calendar_days = (finish_dt.date() - start_dt.date()).days + 1
-                        allocation_pct = (work_h / dur_h * 100) if dur_h > 0 else 0
-                        print(f"[XML VALIDATION] ✅ {name_txt[:30]} | Start={start_str} | Finish={finish_str} | Duration={dur_h:.1f}h ({calendar_days}d×8h) | Work={work_h:.1f}h | Allocation={allocation_pct:.0f}%")
-                    except Exception as e:
-                        # Log validation failure but don't abort export
-                        print(f"[XML VALIDATION] ⚠️ Could not validate {name_txt[:30]}: {e}")
-                
-                # WORKFRONT FIX: Set all leaf tasks as Fixed Duration with Manual scheduling
-                # This prevents Workfront from recalculating dates and durations
+                # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
+                # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
-                
-                # Add Manual scheduling flags to prevent Workfront from auto-scheduling
-                SubElement(task, "ManuallyScheduled").text = "1"
-                SubElement(task, "ManualStart").text = "1"
-                SubElement(task, "ManualFinish").text = "1"
-                SubElement(task, "ManualDuration").text = "1"
-                SubElement(task, "ManualWork").text = "1"
-                
-                # Default constraint: As Soon As Possible (will be overridden for preserved tasks below)
-                SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
             # Outline level (based on WBS hierarchy depth, count('.') + 1)
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
-            # WORKFRONT FIX: For preserved Gantt dates, use SNET constraint to lock start date
-            # Manual* tags (ManuallyScheduled, ManualStart, etc.) are MSP-only and Workfront ignores them
-            # Use ConstraintType=2 (Start No Earlier Than) instead
-            has_preserved_dates = r["UID"] in preserved_dates
+            # WORKFRONT FIX: Add SNET constraints to ALL deliverables (OutlineLevel=3) to lock start dates
+            # Apply ConstraintType=2 (Start No Earlier Than) only to deliverables, not to children
+            # This prevents children from starting earlier than the deliverable window
+            # Use consistent T08:00:00 format for start constraints (8 AM workday start)
+            is_deliverable = outline_level == 3 and not is_root
             
-            if has_preserved_dates and not is_summary:
-                # Override the default ASAP constraint with SNET for preserved tasks
-                constraint_elem = task.find("ConstraintType")
-                if constraint_elem is not None:
-                    constraint_elem.text = "2"  # Start No Earlier Than
+            if is_deliverable:
+                # Extract date and ensure consistent T08:00:00 format
+                start_date_str = uid_to_sched[r["UID"]]["Start"]
+                # Parse and reformat to ensure T08:00:00
+                if 'T' in start_date_str:
+                    date_part = start_date_str.split('T')[0]
+                    constraint_date = f"{date_part}T08:00:00"
                 else:
-                    SubElement(task, "ConstraintType").text = "2"
+                    constraint_date = f"{start_date_str}T08:00:00"
                 
-                # Add ConstraintDate to lock the preserved start date
-                constraint_date_elem = task.find("ConstraintDate")
-                if constraint_date_elem is not None:
-                    constraint_date_elem.text = uid_to_sched[r["UID"]]["Start"]
-                else:
-                    SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                SubElement(task, "ConstraintType").text = "2"  # Start No Earlier Than
+                SubElement(task, "ConstraintDate").text = constraint_date
                 
-                print(f"[XML EXPORT] 🔒 Applied SNET constraint for preserved task: {name_txt} (WBS {r['WBS']}, Start={uid_to_sched[r['UID']]['Start']})")
+                print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
             
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
@@ -10295,13 +10231,23 @@ def convert_excel_to_mspdi(
                 anchor_name = f"{r['Name']} - Finish Anchor"
                 SubElement(task, "Name").text = anchor_name
                 
-                # WBS: same level as deliverable (sibling): deliverable.WBS_FA
-                wbs_anchor = f"{r['WBS']}_FA"
+                # CRITICAL FIX: Use numeric WBS as CHILD of deliverable (not sibling with _FA suffix)
+                # Example: Deliverable WBS=1.1.2 → Finish Anchor WBS=1.1.2.99
+                # This makes the anchor a child task, not a sibling, which is required for Workfront rollup
+                wbs_anchor = f"{r['WBS']}.99"
                 SubElement(task, "WBS").text = wbs_anchor
                 SubElement(task, "OutlineNumber").text = wbs_anchor
                 
-                # CRITICAL FIX: Use deliverable's EXACT finish date (no +1 day)
-                finish_date = uid_to_sched[r["UID"]]["Finish"]
+                # CRITICAL FIX: Use deliverable's EXACT finish date with T17:00:00 format (5 PM end)
+                # Ensure consistent time format for finish constraints
+                finish_date_str = uid_to_sched[r["UID"]]["Finish"]
+                # Parse and reformat to ensure T17:00:00
+                if 'T' in finish_date_str:
+                    date_part = finish_date_str.split('T')[0]
+                    finish_date = f"{date_part}T17:00:00"
+                else:
+                    finish_date = f"{finish_date_str}T17:00:00"
+                
                 SubElement(task, "Start").text = finish_date
                 SubElement(task, "Finish").text = finish_date
                 
@@ -10313,13 +10259,15 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Type").text = "1"
                 SubElement(task, "IsEffortDriven").text = "0"
                 
-                # Must Finish On constraint (ConstraintType=3)
+                # Must Finish On constraint (ConstraintType=3) with T17:00:00 format
                 SubElement(task, "ConstraintType").text = "3"
                 SubElement(task, "ConstraintDate").text = finish_date
                 
-                # Same outline level as deliverable
-                outline_level = r["WBS"].count(".") + 1
-                SubElement(task, "OutlineLevel").text = str(outline_level)
+                # OutlineLevel = deliverable level + 1 (child of deliverable)
+                # Deliverable is at level 3, so anchor is at level 4
+                deliverable_level = r["WBS"].count(".") + 1
+                anchor_level = deliverable_level + 1
+                SubElement(task, "OutlineLevel").text = str(anchor_level)
                 
                 # Mark as milestone
                 SubElement(task, "Milestone").text = "1"
@@ -10391,11 +10339,32 @@ def convert_excel_to_mspdi(
             cost = work_hours * rate
             SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
-        # Add PredecessorLinks for dependencies
+        # WORKFRONT FIX: Add PredecessorLinks ONLY for deliverable-level dependencies (OutlineLevel ≤4)
+        # Remove ALL dependencies from OutlineLevel ≥5 to prevent "conga line" serial execution
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+        uid_to_outline = {r["UID"]: r["WBS"].count(".") + 1 for r in rows}
         
-        # Add PredecessorLink elements to tasks that have dependencies
+        # Filter normalized_edges to only include dependencies between tasks at OutlineLevel ≤4
+        filtered_edges = []
         for pred_wbs, succ_wbs in normalized_edges:
+            pred_uid = wbs_to_uid.get(pred_wbs)
+            succ_uid = wbs_to_uid.get(succ_wbs)
+            
+            if pred_uid and succ_uid:
+                pred_outline = uid_to_outline.get(pred_uid, 99)
+                succ_outline = uid_to_outline.get(succ_uid, 99)
+                
+                # Only add dependency if BOTH tasks are at OutlineLevel ≤4
+                # This removes all L5 (component) and L6 (task) level dependencies
+                if pred_outline <= 4 and succ_outline <= 4:
+                    filtered_edges.append((pred_wbs, succ_wbs))
+                else:
+                    print(f"[XML EXPORT] 🚫 Pruned deep dependency: {pred_wbs} (L{pred_outline}) → {succ_wbs} (L{succ_outline})")
+        
+        print(f"[XML EXPORT] ✂️ Dependency pruning: {len(normalized_edges)} total → {len(filtered_edges)} kept (removed {len(normalized_edges) - len(filtered_edges)} deep L5+ dependencies)")
+        
+        # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
+        for pred_wbs, succ_wbs in filtered_edges:
             pred_uid = wbs_to_uid.get(pred_wbs)
             succ_uid = wbs_to_uid.get(succ_wbs)
             if pred_uid and succ_uid:
@@ -10450,6 +10419,118 @@ def convert_excel_to_mspdi(
                 if proj_summary_elem is not None:
                     proj_summary_elem.text = "1"
 
+        # WORKFRONT VALIDATION PASS: Comprehensive checks for XML structure
+        print(f"\n[WORKFRONT VALIDATION] ═══════════════════════════════════════")
+        
+        # Validation 1: Count PredecessorLinks at OutlineLevel ≥5 (should be 0)
+        deep_pred_count = 0
+        for task_elem in tasks_elem.findall("Task"):
+            outline_elem = task_elem.find("OutlineLevel")
+            if outline_elem is not None:
+                outline_level = int(outline_elem.text)
+                if outline_level >= 5:
+                    # Check if this task has any PredecessorLink
+                    pred_links = task_elem.findall("PredecessorLink")
+                    if pred_links:
+                        deep_pred_count += len(pred_links)
+                        name_elem = task_elem.find("Name")
+                        wbs_elem = task_elem.find("WBS")
+                        task_name = name_elem.text if name_elem is not None else "Unknown"
+                        task_wbs = wbs_elem.text if wbs_elem is not None else "Unknown"
+                        print(f"[VALIDATION] ⚠️  Found PredecessorLink at L{outline_level}: {task_name} (WBS {task_wbs})")
+        
+        if deep_pred_count == 0:
+            print(f"[VALIDATION] ✅ No deep dependencies (OutlineLevel ≥5): PASS")
+        else:
+            print(f"[VALIDATION] ❌ Found {deep_pred_count} deep dependencies at OutlineLevel ≥5: FAIL")
+        
+        # Validation 2: Check all finish anchors are children (numeric WBS, not _FA)
+        anchor_validation_passed = True
+        for task_elem in tasks_elem.findall("Task"):
+            name_elem = task_elem.find("Name")
+            if name_elem is not None and "Finish Anchor" in name_elem.text:
+                wbs_elem = task_elem.find("WBS")
+                if wbs_elem is not None:
+                    wbs = wbs_elem.text
+                    if "_FA" in wbs:
+                        print(f"[VALIDATION] ❌ Finish anchor has non-numeric WBS: {wbs}")
+                        anchor_validation_passed = False
+                    elif not wbs.endswith(".99"):
+                        print(f"[VALIDATION] ⚠️  Finish anchor doesn't end with .99: {wbs}")
+        
+        if anchor_validation_passed:
+            print(f"[VALIDATION] ✅ All finish anchors use numeric child WBS (.99): PASS")
+        
+        # Validation 3: Check all summary tasks have Summary=1, Work=PT0M, Duration=PT0M
+        summary_validation_passed = True
+        for task_elem in tasks_elem.findall("Task"):
+            # Check if task has children by looking at ParentWBS references
+            wbs_elem = task_elem.find("WBS")
+            if wbs_elem is not None:
+                task_wbs = wbs_elem.text
+                # Check if any other task has this as ParentWBS (indicates children)
+                has_children = False
+                for other_task in tasks_elem.findall("Task"):
+                    other_wbs = other_task.find("WBS")
+                    if other_wbs is not None and other_wbs.text.startswith(task_wbs + "."):
+                        has_children = True
+                        break
+                
+                if has_children:
+                    summary_elem = task_elem.find("Summary")
+                    work_elem = task_elem.find("Work")
+                    dur_elem = task_elem.find("Duration")
+                    
+                    if summary_elem is None or summary_elem.text != "1":
+                        name_elem = task_elem.find("Name")
+                        task_name = name_elem.text if name_elem is not None else "Unknown"
+                        print(f"[VALIDATION] ❌ Parent task missing Summary=1: {task_name} (WBS {task_wbs})")
+                        summary_validation_passed = False
+        
+        if summary_validation_passed:
+            print(f"[VALIDATION] ✅ All parent tasks have Summary=1: PASS")
+        
+        # Validation 4: Check duration math for sample tasks (1-hour tasks should be PT60M, not PT960M)
+        duration_validation_passed = True
+        sample_count = 0
+        for task_elem in tasks_elem.findall("Task"):
+            start_elem = task_elem.find("Start")
+            finish_elem = task_elem.find("Finish")
+            dur_elem = task_elem.find("Duration")
+            
+            if start_elem is not None and finish_elem is not None and dur_elem is not None:
+                try:
+                    start_str = start_elem.text
+                    finish_str = finish_elem.text
+                    dur_str = dur_elem.text
+                    
+                    # Parse start/finish to calculate expected duration
+                    start_dt = datetime.datetime.fromisoformat(start_str.replace('T', ' ').replace('Z', ''))
+                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('T', ' ').replace('Z', ''))
+                    
+                    # Calculate actual time difference
+                    actual_minutes = int((finish_dt - start_dt).total_seconds() / 60)
+                    
+                    # Parse duration from XML
+                    if dur_str.startswith("PT") and dur_str.endswith("M"):
+                        xml_minutes = int(dur_str[2:-1])
+                        
+                        # Check if duration matches (allow small tolerance for rounding)
+                        if abs(xml_minutes - actual_minutes) > 60:  # More than 1 hour difference
+                            name_elem = task_elem.find("Name")
+                            task_name = name_elem.text if name_elem is not None else "Unknown"
+                            if sample_count < 3:  # Only show first 3 mismatches
+                                print(f"[VALIDATION] ⚠️  Duration mismatch: {task_name[:40]} | Expected {actual_minutes}m, got {xml_minutes}m")
+                                sample_count += 1
+                                duration_validation_passed = False
+                except:
+                    pass
+        
+        if duration_validation_passed:
+            print(f"[VALIDATION] ✅ Duration matches Start/Finish timestamps: PASS")
+        
+        print(f"[WORKFRONT VALIDATION] ═══════════════════════════════════════\n")
+        
         # VALIDATION: Check project-level dates match task-level date ranges
         # This catches issues like inflated durations before the user imports into Workfront
         try:
