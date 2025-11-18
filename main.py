@@ -3104,10 +3104,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         items_by_dept[dept] = list(group)
 
     day_cursor = 0
-    prev_deliv_wbs = ""
-    prev_deliv_start = -1  # Track previous deliverable's start offset to detect parallel tasks
     dept_counter = 0
     deliv_counter_global = 0
+    
+    # Smart dependency tracking: group deliverables by start offset, track latest-finishing predecessor
+    deliverables_by_offset = {}  # {start_offset: [(wbs, finish_offset, duration), ...]}
+    latest_finish_overall = {"wbs": "", "finish_offset": -1}  # Track latest-finishing deliverable across all offsets
 
     # Process each department
     for dept in sorted(items_by_dept.keys(), key=lambda d: DEPT_ORDER.index(d) if d in DEPT_ORDER else 999):
@@ -3246,14 +3248,45 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             except Exception:
                 pass  # fall back to sequential start on any parse issue
             
-            # FIX: Only chain deliverables if they have DIFFERENT start offsets (prevent parallel tasks from being forced sequential)
-            # If deliverables have the same start offset, they should run in parallel - NO dependency
+            # DEFENSIVE DEPENDENCY LOGIC:
+            # - Deliverables with SAME start offset run in PARALLEL (no dependency between them)
+            # - Deliverables with DIFFERENT start offset depend on latest-finishing deliverable from PREVIOUS offsets
+            # - If no dependency is set, explicitly populate Start_Date to prevent Workfront collapse
+            finish_offset = dstart + total_deliv_duration
+            has_explicit_start = bool(d.get("Start_Date", "").strip())
+            calculated_start_date = d.get("Start_Date", "")
+            
             deliv_dependency = ""
-            if prev_deliv_wbs and dstart != prev_deliv_start:
-                deliv_dependency = prev_deliv_wbs
-                print(f"[WBS] 🔗 Deliverable '{deliv_label}' (offset={dstart}) chained after '{prev_deliv_wbs}' (offset={prev_deliv_start})")
-            elif prev_deliv_wbs and dstart == prev_deliv_start:
-                print(f"[WBS] ⚡ Deliverable '{deliv_label}' (offset={dstart}) runs in PARALLEL with '{prev_deliv_wbs}' (same start offset)")
+            if has_explicit_start:
+                # User edited Start_Date in Gantt → no dependency needed, use their date
+                print(f"[WBS] 📅 Deliverable '{deliv_label}' has explicit Start_Date={calculated_start_date} → no dependency")
+            elif dstart > 0:
+                # This deliverable has a FUTURE start offset → find latest-finishing predecessor from PREVIOUS offsets
+                # Look for deliverables with offset < dstart and find the one with latest finish
+                candidates = []
+                for prev_offset, prev_delivs in deliverables_by_offset.items():
+                    if prev_offset < dstart:  # Only consider earlier offsets
+                        for wbs, finish, dur in prev_delivs:
+                            candidates.append((wbs, finish))
+                
+                if candidates:
+                    # Depend on the deliverable with the latest finish offset from previous offset groups
+                    latest_prev = max(candidates, key=lambda x: x[1])
+                    deliv_dependency = latest_prev[0]
+                    print(f"[WBS] 🔗 Deliverable '{deliv_label}' (offset={dstart}) depends on '{deliv_dependency}' (latest finish from offset < {dstart})")
+                else:
+                    # No prior deliverables → calculate explicit Start_Date to prevent collapse
+                    import datetime
+                    if scenario.get("project_start"):
+                        ps = datetime.date.fromisoformat(str(scenario["project_start"])[:10])
+                        calculated_start_date = (ps + datetime.timedelta(days=dstart)).isoformat()
+                        print(f"[WBS] ⭐ Deliverable '{deliv_label}' (offset={dstart}, first in timeline) → explicit Start_Date={calculated_start_date}")
+            else:
+                # dstart == 0 → calculate explicit Start_Date = project_start to prevent collapse
+                import datetime
+                if scenario.get("project_start") and not calculated_start_date:
+                    calculated_start_date = str(scenario["project_start"])[:10]
+                    print(f"[WBS] ⚡ Deliverable '{deliv_label}' (offset=0) → explicit Start_Date={calculated_start_date}")
             
             rows.append({
                 "Row_ID": "",
@@ -3267,13 +3300,23 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Planned_Hours": (monthly_hours * months) if months else parent_hours_display,
                 "Start_Offset_Days": dstart,
                 "Duration_Days": "",  # Task 8: Leave empty for summary bar - computed from children
-                "Start_Date": d.get("Start_Date", ""),
+                "Start_Date": calculated_start_date,  # Use calculated date (may be explicit or auto-generated)
                 "End_Date": d.get("End_Date", ""),
-                "Dependencies": deliv_dependency, "Assignee_External_ID": "", "Notes": deliv_notes,
+                "Dependencies": deliv_dependency,
+                "Assignee_External_ID": "", "Notes": deliv_notes,
                 "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
                 "Price_USD": round(deliv_price, 2),
                 "Type": deliverable_type  # NEW: Add Type column
             })
+            
+            # Track this deliverable for future dependency calculations
+            if dstart not in deliverables_by_offset:
+                deliverables_by_offset[dstart] = []
+            deliverables_by_offset[dstart].append((wbs_deliv, finish_offset, total_deliv_duration))
+            
+            # Update latest-finishing deliverable overall (for summary stats)
+            if finish_offset > latest_finish_overall["finish_offset"]:
+                latest_finish_overall = {"wbs": wbs_deliv, "finish_offset": finish_offset}
 
             comps = DB.components_for_deliverable(dcode, tg_order)
             # Robust fallback if DB returns no components
@@ -3439,8 +3482,6 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
             # Advance cursor based on actual start used (preserves ordering for next deliverable)
             day_cursor = max(day_cursor, dstart) + total_deliv_duration
-            prev_deliv_wbs = wbs_deliv
-            prev_deliv_start = dstart  # Track this deliverable's start for next iteration
 
     df = pd.DataFrame(rows)
     
