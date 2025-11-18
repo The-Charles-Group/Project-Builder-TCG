@@ -10085,6 +10085,26 @@ def convert_excel_to_mspdi(
             outline_level = r["WBS"].count(".") + 1  # 1 for '1', 2 for '1.1', etc.
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
+            # CRITICAL FIX: Add manual scheduling tags for deliverables with preserved Gantt dates
+            # This tells Workfront to lock these dates and not recalculate them on import
+            # Deliverables are at outline level 2 (WBS like "1.1", "1.2", etc.)
+            is_deliverable = outline_level == 2
+            has_preserved_dates = r["UID"] in preserved_dates
+            
+            if is_deliverable and has_preserved_dates:
+                # Add manual scheduling flags to force Workfront to respect user-edited dates
+                SubElement(task, "ManualStart").text = "1"
+                SubElement(task, "ManualFinish").text = "1"
+                SubElement(task, "ManualDuration").text = "1"
+                
+                # CRITICAL FIX: Always create ConstraintType and ConstraintDate for preserved deliverables
+                # Summary deliverables don't get ConstraintType initially, so we must add it here
+                # Set to "Must Start On" (4) to lock the preserved start date
+                SubElement(task, "ConstraintType").text = "4"  # Must Start On
+                SubElement(task, "ConstraintDate").text = uid_to_sched[r["UID"]]["Start"]
+                
+                print(f"[XML EXPORT] 🔒 Added manual scheduling tags for preserved deliverable: {name_txt} (WBS {r['WBS']})")
+            
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
