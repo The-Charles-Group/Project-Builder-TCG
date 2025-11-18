@@ -10074,8 +10074,11 @@ def convert_excel_to_mspdi(
             is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
-            # Emit DurationFormat=7 (Days) for all tasks
-            SubElement(task, "DurationFormat").text = "7"
+            # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
+            # 53 (Elapsed Days + Manual) for manually scheduled tasks (deliverables, non-root summaries)
+            # 7 (Elapsed Days) for auto-scheduled tasks (root, leaf)
+            is_manually_scheduled = is_deliverable or (is_summary and not is_root)
+            SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
             
             # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
             if is_root:
@@ -10114,7 +10117,7 @@ def convert_excel_to_mspdi(
                 
                 print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
             
-            elif is_summary:
+            elif is_summary and not is_root:
                 # NON-ROOT SUMMARY TASKS (OutlineLevel 2-4): PT480M duration + Manual* tags
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT480M"
