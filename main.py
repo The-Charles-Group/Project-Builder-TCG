@@ -9711,13 +9711,29 @@ def convert_excel_to_mspdi(
                 if k in summary_set:
                     clamp_descendants(k, bound_start, bound_finish)
         
+        # CRITICAL FIX Part 2: Immediately clamp descendants for all preserved deliverables
+        # This ensures child components/tasks fit within the deliverable window set in Gantt
+        # Must happen BEFORE rollup_summary runs to prevent wrong date calculations
+        for preserved_uid in preserved_dates:
+            if preserved_uid in uid_to_sched and preserved_uid in children_by_parent:
+                preserved_start = uid_to_sched[preserved_uid]["Start"]
+                preserved_finish = uid_to_sched[preserved_uid]["Finish"]
+                clamp_descendants(preserved_uid, preserved_start, preserved_finish)
+                print(f"[XML EXPORT] 🔒 Clamped descendants of preserved UID {preserved_uid} to fit within {preserved_start.date()} to {preserved_finish.date()}")
+        
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
             kids = children_by_parent.get(uid, [])
             if not kids:
                 return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
             
-            # Always recurse to collect child dates (for validation and non-preserved parents)
+            # CRITICAL FIX Part 1: If this UID has preserved dates from Gantt, return them immediately
+            # Descendants were already clamped above, so we don't need to recalculate anything
+            # This prevents rollup from overwriting Campaign Plan Deck (Mar 5) back to Jan 5
+            if uid in preserved_dates:
+                return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
+            
+            # For non-preserved summaries, recurse to collect child dates
             starts, finishes = [], []
             for k in kids:
                 s,f = rollup_summary(k) if k in summary_set else (uid_to_sched[k]["Start"], uid_to_sched[k]["Finish"])
@@ -9726,27 +9742,7 @@ def convert_excel_to_mspdi(
             child_min = min(starts)
             child_max = max(finishes)
             
-            # FIX: If this UID has preserved dates from Gantt, enforce entire subtree fits within parent window
-            if uid in preserved_dates:
-                parent_start = uid_to_sched[uid]["Start"]
-                parent_finish = uid_to_sched[uid]["Finish"]
-                
-                # If descendants extend beyond parent, clamp entire subtree to fit within parent window
-                # This handles cases where user compressed deliverable timeline in Gantt
-                # but components/tasks still have their original calculated durations
-                if child_min < parent_start or child_max > parent_finish:
-                    task_name = next((r["Name"] for r in rows if r["UID"] == uid), f"UID {uid}")
-                    print(f"[XML EXPORT] ⚠️ Clamping descendant subtree to fit within preserved parent '{task_name}': "
-                          f"parent={parent_start} to {parent_finish}, "
-                          f"original descendants={child_min} to {child_max}")
-                    
-                    # Recursively clamp all descendants to fit within parent window
-                    clamp_descendants(uid, parent_start, parent_finish)
-                
-                # Return preserved dates without overwriting
-                return parent_start, parent_finish
-            
-            # For non-preserved tasks, roll up from children as usual
+            # Roll up from children (only for non-preserved summaries)
             uid_to_sched[uid]["Start"]  = child_min
             uid_to_sched[uid]["Finish"] = child_max
             return uid_to_sched[uid]["Start"], uid_to_sched[uid]["Finish"]
