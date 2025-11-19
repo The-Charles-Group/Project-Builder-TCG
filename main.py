@@ -10270,8 +10270,14 @@ def convert_excel_to_mspdi(
                 # Use actual timestamp difference - NO calendar-day expansion or 480-min snapping
                 dur_minutes = max(60, time_diff_total_minutes)
                 
-                # Work = PlannedHours from Gantt (actual effort)
-                work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
+                # Work calculation: For multi-assignment tasks, sum all assignee hours
+                if r.get("multi_assignment") and "assignments" in r:
+                    # Multi-assignment: sum all assignee work hours
+                    total_work_hours = sum(a["work_hours"] for a in r["assignments"])
+                    work_minutes = int(total_work_hours * 60)
+                else:
+                    # Single assignment: use PlannedHours from Gantt (actual effort)
+                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
                 
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
