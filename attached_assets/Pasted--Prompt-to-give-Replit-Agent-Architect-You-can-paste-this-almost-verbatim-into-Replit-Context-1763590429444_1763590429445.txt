@@ -1,0 +1,143 @@
+🧾 Prompt to give Replit Agent + Architect
+
+You can paste this almost verbatim into Replit:
+
+Context
+
+We’re generating Workfront XML from main.py.
+Right now the exporter builds:
+
+L5 “components” (e.g. Client Review & Revisions, Define Pillar Architecture), and
+
+L6 “leaf tasks” per role (Account Manager, Copywriter, Strategist, etc.)
+
+Each L6 has its own dependency links and dates, so it behaves like 1 task = 1 assignment and produces long dependency chains.
+
+Ross and I want to change this so that L5 is the true Workfront task, and roles are modelled as Assignments on that L5 task, not separate L6 tasks.
+
+🎯 Goal
+
+Refactor the export so that:
+
+Workfront has tasks only at L5 (component) level
+
+No L6 tasks are exported.
+
+Each L5 task can have multiple assignments (one per role)
+
+This replaces the old 1-task-per-role model.
+
+All important fields live on L5
+
+Pln Hrs, Planned Revenue, Duration, Start On, Due On.
+
+Dependencies are L5 → L5 only
+
+E.g. “Client Review & Revisions (L5) → Define Pillar Architecture (L5)”
+
+No leaf-to-leaf links like “Task 10 → Task 8”.
+
+🔧 Detailed Requirements
+1. Remove L6 tasks from the exported XML
+
+The internal data (scenario DB) can still keep role-level rows, but:
+
+Do not emit a <Task> element for each L6 role.
+
+Instead, for each L5 component, build one task row that represents the whole component.
+
+Example (Brand Positioning Strategy → Key Pillars):
+
+Before (roughly):
+
+L5: Client Review & Revisions (summary only)
+
+L6: Client Review & Revisions – Account Manager (2h)
+
+L6: Client Review & Revisions – Copywriter (1h)
+
+L6: Client Review & Revisions – Strategist (1h)
+
+After:
+
+ONE <Task>: Client Review & Revisions (L5)
+
+THREE <Assignment> elements for that one TaskUID:
+
+AM 2h, CW 1h, Strat 1h
+
+2. L5 task fields (single source of truth)
+
+For each L5 task:
+
+Pln Hrs (task):
+task_planned_hours = sum(role_hours for all roles in this component)
+
+Planned Revenue (task):
+task_planned_revenue = sum(role_revenue per role)
+
+Start / Due:
+
+Use the dates from the scheduler for that component (what we currently treat as the L5 window).
+
+All roles in that component share this same Start/Finish.
+
+Duration:
+
+Continue to use the existing Workfront normalization rule you implemented:
+
+required_days = max(1, ceil(task_planned_hours / 8.0))
+
+duration_minutes = required_days * 480
+
+Milestones / 0-hour items are still exempt (Duration = 0).
+
+3. Assignments at L5 (no more L6)
+
+For each role row that used to become an L6 task:
+
+Do not create a <Task>.
+
+Instead create an <Assignment> attached to the L5 TaskUID:
+
+Assignment.TaskUID = L5_task_uid
+
+Assignment.ResourceUID = role_resource_uid
+
+Assignment.Work = role_hours * 60 minutes
+
+Assignment.Cost (or Revenue) = role_revenue
+
+Assignment.Units consistent with existing formula (work_min / dur_min, guarding dur_min == 0)
+
+So effectively:
+
+Many assignments → one L5 task, instead of many tasks → one L5 summary.
+
+4. Dependencies: L5 → L5 only
+
+When building PredecessorLink entries, map edges to L5 parents:
+
+If the current edge is between two leaf tasks under L5s:
+
+Replace their UIDs with their L5 parent UIDs.
+
+If both ends already point to L5s, keep as is.
+
+Skip duplicates where (pred_l5_uid, succ_l5_uid) is the same pair.
+
+This means in the Brand Positioning Strategy example:
+
+❌ No more Task 10 (Designer) → Task 8 (Client Review & Revisions – Strat)
+
+✅ Instead: L5 “Client Review & Revisions” → L5 “Define Pillar Architecture”
+
+Keep all deliverable / higher-level dependencies (L3/L4) as they are.
+
+5. Preserve parallel roles + shorter schedule
+
+The current “no conga line” behavior must be preserved:
+
+Roles inside one component run in parallel (same dates), but
+
+Components themselves still respect L5 → L5 dependencies.
