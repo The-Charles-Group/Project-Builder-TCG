@@ -1,0 +1,43 @@
+Text you can paste to Replit agent + architect
+
+You can give them this block almost verbatim:
+
+Goal: Keep 1 task per role, but stop Workfront from building a leaf-task conga-line. Within a component (e.g. “Content Type Matrix”), all role tasks should be scheduled in parallel according to the scheduler’s Start/Finish, instead of AM → Copywriter → Strategist chains.
+
+Required behavior change:
+
+Do not emit PredecessorLink between sibling leaf tasks.
+
+When building normalized_edges / PredecessorLinks, skip any edge where both the predecessor and successor are:
+
+OutlineLevel ≥ 5 (or WBS depth ≥ 5), and
+
+Under the same L5 group / component (same WBS prefix up to level 5, e.g. 1.2.3.1.1.x).
+
+In other words: no AM → Copywriter → Strategist chains inside Client Review & Revisions, Content Type Matrix, etc.
+
+Keep dependencies at the step level (components / L5 groups).
+
+It’s OK to keep FS dependencies between:
+
+L5 “task group” rows (e.g. Client Review & Revisions → Define Pillar Architecture → Draft Pillars & Proof Points), or
+
+L3/L4 deliverable/component summary rows.
+
+Those are the “steps” Ross wants to stay sequential. Roles inside a step should not be chained.
+
+Honor scheduler dates for roles.
+
+Leaf/role tasks should get their Start and Finish directly from the normalized schedule (uid_to_sched / normalized_schedule) and should not be rescheduled by dependencies between roles.
+
+Once leaf-to-leaf links are removed, Workfront will keep the dates as-is, as long as they’re valid with the step-level predecessors.
+
+Validation:
+
+In Workfront Gantt, under a component like Content Type Matrix or Client Review & Revisions:
+
+Role tasks should appear stacked vertically on the same dates, not as a diagonal staircase.
+
+The sequence of components (Client Review → Define Architecture → Draft Proof Points, etc.) should still show as a staircase of groups, not roles.
+
+Project duration should shrink relative to the previous “role conga-line” exports, but total hours and revenue per task stay the same.
