@@ -1,0 +1,130 @@
+High-level ask to Replit
+
+Goal:
+Make the app’s Gantt use the same “Workfront-normalized” schedule that the exporter is now using (L5 ≥ 1 day, leaf durations driven by hours, FS chains between groups). In other words:
+
+“Whatever math we used to stretch Brand Positioning Strategy to 37 days in the XML export should also be used when we generate the in-app schedule, so the app and Workfront match.”
+
+Right now those rules live only in the XML exporter, not in the timeline engine. We want to move them upstream into the scheduler so there’s a single source of truth.
+
+Message you can paste to Replit
+
+You can send something like this (feel free to copy-paste):
+
+Objective
+
+Align the in-app Gantt schedule with the Workfront-normalized schedule that the XML exporter now produces.
+
+Today:
+
+generate_intelligent_timeline (or the scheduling pipeline that builds uid_to_sched) produces a compact schedule (e.g., Brand Positioning Strategy ≈ 16 days).
+
+The XML exporter then mutates durations/dates on export only (L5 ≥ 1 day, leaf duration ≥ hours/8, FS chains) so Workfront shows a longer span (Brand Strategy = 37 days).
+
+The UI still shows the pre-normalized dates, which is why app ≠ Workfront.
+
+I want the normalization logic moved into the scheduler, so the app’s Gantt and the exported XML share the same Start/Finish/Duration for every UID.
+
+Concrete requirements
+
+Single source of truth (uid_to_sched)
+
+Whatever Start, Finish, DurationMinutes you compute for each UID in uid_to_sched should be:
+
+what the UI uses, and
+
+what the XML exporter writes out.
+
+The exporter should stop doing its own duration tweaks (no separate L5 clamp or finish-date adjustment there).
+
+Leaf task duration rule (per Ross)
+
+For leaf tasks (OutlineLevel ≥ 6, or however we detect “true leaf rows”):
+
+Let planned_hours = Planned_Hours from the DB.
+
+Compute:
+
+required_days = max(1, ceil(planned_hours / 8.0))
+
+duration_minutes = required_days * 480
+
+Set:
+
+Start = as currently scheduled
+
+Finish = Start + duration_minutes (using the same working-time/calendar logic you already use)
+
+Store DurationMinutes / DurationDays back into uid_to_sched.
+
+Milestones / 0-hour rows should be exempt and stay at PT0M.
+
+L5 “task group” rule
+
+For L5 “task group” rows (e.g., WBS like 1.2.3.4.5 such as “Client Review & Revisions”):
+
+Compute:
+
+Start = min(child.Start) across its leaf children
+
+Finish = max(child.Finish)
+
+duration_minutes = max(480, Finish - Start in minutes) (minimum 1 full day)
+
+Persist that back into uid_to_sched (this is what the app Gantt and XML should both use).
+
+Summary rows (deliverables, departments, project)
+
+For higher-level summaries (L3/L4 + project root), recompute:
+
+Start = min(child.Start)
+
+Finish = max(child.Finish)
+
+DurationMinutes = Finish - Start
+
+No extra clamping here beyond what Ross asked for (the main guarantee is the “no L5 < 1 day” rule).
+
+Dependency behavior
+
+Keep the current dependency semantics Ross expects:
+
+Leaf tasks within a component/L5 group are still chained as they are now (each role has to finish before the next can start).
+
+Component/L5 groups under a deliverable (Key Pillars, Brand Narrative, etc.) are chained FS so they execute sequentially.
+
+Deliverable-to-deliverable dependencies stay as in the current implementation.
+
+Important: after the above changes, the in-app Gantt for Brand Positioning Strategy should extend from the first child start to the last child finish, yielding the same ~37-day span Workfront shows.
+
+Exporter simplification
+
+Once the scheduler is the source of truth:
+
+The Task XML exporter should read Start, Finish, and Duration directly from uid_to_sched (or whatever schedule object we standardize on).
+
+Remove or disable the exporter-side L5 clamp and finish adjustments we recently added. They should be redundant.
+
+DurationFormat / CalendarUID / constraints logic stays as-is; only the duration/Finish math moves upstream.
+
+Validation
+
+Add/extend validation tests for one deliverable (e.g., Brand Positioning Strategy):
+
+Assert for each leaf: planned_hours <= duration_days * 8.0.
+
+Assert each L5 group has duration_days >= 1.
+
+Assert deliverable Start/Finish in JSON used by the UI = Start/Finish in exported XML = what Workfront shows after import (within calendar rounding).
+
+Success criteria
+
+In-app Gantt for St. Regis:
+
+Brand Positioning Strategy shows the same longer span as in Workfront (approx 1/5/26–2/27/26 in your latest export).
+
+L5 components like “Content Type Matrix” show at least 1 day.
+
+No more cases where a role has 11 hours in 0.12 days.
+
+XML export does not further mutate durations; it matches the app exactly.
