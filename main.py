@@ -10373,12 +10373,22 @@ def convert_excel_to_mspdi(
             cost = work_hours * rate
             SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
-        # WORKFRONT FIX: Add PredecessorLinks ONLY for deliverable-level dependencies (OutlineLevel ≤4)
-        # Remove ALL dependencies from OutlineLevel ≥5 to prevent "conga line" serial execution
+        # WORKFRONT FIX: Add PredecessorLinks for:
+        # 1. Deliverable-level dependencies (OutlineLevel ≤4 to ≤4)
+        # 2. Intra-deliverable dependencies (L5+ tasks within same deliverable)
+        # Remove ONLY cross-deliverable L5+ dependencies to prevent "conga line"
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         uid_to_outline = {r["UID"]: r["WBS"].count(".") + 1 for r in rows}
+        wbs_to_wbs = {r["UID"]: r["WBS"] for r in rows}
         
-        # Filter normalized_edges to only include dependencies between tasks at OutlineLevel ≤4
+        def get_deliverable_parent(wbs):
+            """Extract deliverable portion of WBS (first 3 levels: 1.2.3)"""
+            parts = wbs.split(".")
+            if len(parts) >= 3:
+                return ".".join(parts[:3])  # Deliverable is always WBS x.y.z
+            return wbs
+        
+        # Filter normalized_edges to keep deliverable-level AND intra-deliverable dependencies
         filtered_edges = []
         for pred_wbs, succ_wbs in normalized_edges:
             pred_uid = wbs_to_uid.get(pred_wbs)
@@ -10388,14 +10398,26 @@ def convert_excel_to_mspdi(
                 pred_outline = uid_to_outline.get(pred_uid, 99)
                 succ_outline = uid_to_outline.get(succ_uid, 99)
                 
-                # Only add dependency if BOTH tasks are at OutlineLevel ≤4
-                # This removes all L5 (component) and L6 (task) level dependencies
+                # CASE 1: Both tasks at deliverable level (≤L4) - always keep
                 if pred_outline <= 4 and succ_outline <= 4:
                     filtered_edges.append((pred_wbs, succ_wbs))
+                # CASE 2: Both tasks at component/task level (≥L5) - keep only if same deliverable
+                elif pred_outline >= 5 and succ_outline >= 5:
+                    pred_deliverable = get_deliverable_parent(pred_wbs)
+                    succ_deliverable = get_deliverable_parent(succ_wbs)
+                    
+                    if pred_deliverable == succ_deliverable:
+                        # Intra-deliverable dependency - KEEP for proper scheduling
+                        filtered_edges.append((pred_wbs, succ_wbs))
+                    else:
+                        # Cross-deliverable dependency - REMOVE to prevent conga line
+                        print(f"[XML EXPORT] 🚫 Pruned cross-deliverable dependency: {pred_wbs} ({pred_deliverable}) → {succ_wbs} ({succ_deliverable})")
+                # CASE 3: Mixed levels (e.g., L3 → L5) - remove to prevent hierarchy issues
                 else:
-                    print(f"[XML EXPORT] 🚫 Pruned deep dependency: {pred_wbs} (L{pred_outline}) → {succ_wbs} (L{succ_outline})")
+                    print(f"[XML EXPORT] 🚫 Pruned cross-level dependency: {pred_wbs} (L{pred_outline}) → {succ_wbs} (L{succ_outline})")
         
-        print(f"[XML EXPORT] ✂️ Dependency pruning: {len(normalized_edges)} total → {len(filtered_edges)} kept (removed {len(normalized_edges) - len(filtered_edges)} deep L5+ dependencies)")
+        intra_deliverable_count = sum(1 for pred_wbs, succ_wbs in filtered_edges if uid_to_outline.get(wbs_to_uid.get(pred_wbs), 0) >= 5)
+        print(f"[XML EXPORT] ✂️ Dependency filtering: {len(normalized_edges)} total → {len(filtered_edges)} kept ({intra_deliverable_count} intra-deliverable, {len(filtered_edges) - intra_deliverable_count} deliverable-level)")
         
         # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
         for pred_wbs, succ_wbs in filtered_edges:
