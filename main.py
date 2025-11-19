@@ -10571,8 +10571,8 @@ def convert_excel_to_mspdi(
 
         # WORKFRONT FIX: Add PredecessorLinks for:
         # 1. Deliverable-level dependencies (OutlineLevel ≤4 to ≤4)
-        # 2. Intra-deliverable dependencies (L5+ tasks within same deliverable)
-        # Remove ONLY cross-deliverable L5+ dependencies to prevent "conga line"
+        # 2. Component-level dependencies (L5 summary to L5 summary)
+        # 3. Skip leaf-to-leaf within same L5 component (enables parallel role execution)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         uid_to_outline = {r["UID"]: r["WBS"].count(".") + 1 for r in rows}
         wbs_to_wbs = {r["UID"]: r["WBS"] for r in rows}
@@ -10583,6 +10583,31 @@ def convert_excel_to_mspdi(
             if len(parts) >= 3:
                 return ".".join(parts[:3])  # Deliverable is always WBS x.y.z
             return wbs
+        
+        def get_l5_prefix(wbs):
+            """Extract L5 component prefix (first 5 levels: 1.2.3.1.1)"""
+            if not wbs:
+                return None
+            parts = wbs.split(".")
+            if len(parts) >= 5:
+                return ".".join(parts[:5])
+            return None  # Not deep enough to be in L5 component
+        
+        # Build metadata map for dependency filtering
+        uid_metadata = {}
+        for r in rows:
+            uid = r["UID"]
+            wbs = r["WBS"]
+            outline_level = wbs.count(".") + 1
+            is_leaf = wbs not in summary_set  # Leaf if not in summary_set
+            l5_prefix = get_l5_prefix(wbs)
+            
+            uid_metadata[uid] = {
+                "outline_level": outline_level,
+                "l5_prefix": l5_prefix,
+                "is_leaf": is_leaf,
+                "wbs": wbs
+            }
         
         # Remap dependencies through uid_alias_map (for multi-assignment merged tasks)
         # This ensures dependencies pointing to consumed UIDs redirect to the primary UID
@@ -10602,36 +10627,72 @@ def convert_excel_to_mspdi(
                 succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
                 remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
         
-        # Filter remapped edges to keep deliverable-level AND intra-deliverable dependencies
+        # Filter remapped edges with parallel role execution support
         filtered_edges = []
+        skipped_leaf_links = 0
+        kept_cross_component = 0
+        kept_summary_links = 0
+        kept_deliverable_links = 0
+        
         for pred_wbs, succ_wbs in remapped_edges:
             pred_uid = wbs_to_uid.get(pred_wbs)
             succ_uid = wbs_to_uid.get(succ_wbs)
             
             if pred_uid and succ_uid:
-                pred_outline = uid_to_outline.get(pred_uid, 99)
-                succ_outline = uid_to_outline.get(succ_uid, 99)
+                pred_meta = uid_metadata.get(pred_uid, {})
+                succ_meta = uid_metadata.get(succ_uid, {})
+                
+                pred_outline = pred_meta.get("outline_level", 99)
+                succ_outline = succ_meta.get("outline_level", 99)
                 
                 # CASE 1: Both tasks at deliverable level (≤L4) - always keep
                 if pred_outline <= 4 and succ_outline <= 4:
                     filtered_edges.append((pred_wbs, succ_wbs))
-                # CASE 2: Both tasks at component/task level (≥L5) - keep only if same deliverable
+                    kept_deliverable_links += 1
+                # CASE 2: Both tasks at component/task level (≥L5)
                 elif pred_outline >= 5 and succ_outline >= 5:
                     pred_deliverable = get_deliverable_parent(pred_wbs)
                     succ_deliverable = get_deliverable_parent(succ_wbs)
                     
-                    if pred_deliverable == succ_deliverable:
-                        # Intra-deliverable dependency - KEEP for proper scheduling
-                        filtered_edges.append((pred_wbs, succ_wbs))
-                    else:
+                    if pred_deliverable != succ_deliverable:
                         # Cross-deliverable dependency - REMOVE to prevent conga line
                         print(f"[XML EXPORT] 🚫 Pruned cross-deliverable dependency: {pred_wbs} ({pred_deliverable}) → {succ_wbs} ({succ_deliverable})")
+                        continue
+                    
+                    # Same deliverable - check if leaf-to-leaf within same L5 component
+                    pred_is_leaf = pred_meta.get("is_leaf", False)
+                    succ_is_leaf = succ_meta.get("is_leaf", False)
+                    pred_l5_prefix = pred_meta.get("l5_prefix")
+                    succ_l5_prefix = succ_meta.get("l5_prefix")
+                    
+                    # PARALLEL ROLE EXECUTION: Skip leaf-to-leaf within same L5 component
+                    # This prevents AM → Copywriter → Strategist chains, allowing parallel stacking
+                    if (pred_is_leaf and succ_is_leaf and
+                        pred_l5_prefix and succ_l5_prefix and  # Non-empty check (guardrail)
+                        pred_l5_prefix == succ_l5_prefix):
+                        # Skip this leaf-to-leaf link - roles will run in parallel
+                        skipped_leaf_links += 1
+                        continue
+                    
+                    # Keep component-level or cross-component L5 dependencies
+                    filtered_edges.append((pred_wbs, succ_wbs))
+                    if pred_l5_prefix != succ_l5_prefix:
+                        kept_cross_component += 1
+                    else:
+                        kept_summary_links += 1
                 # CASE 3: Mixed levels (e.g., L3 → L5) - remove to prevent hierarchy issues
                 else:
                     print(f"[XML EXPORT] 🚫 Pruned cross-level dependency: {pred_wbs} (L{pred_outline}) → {succ_wbs} (L{succ_outline})")
         
-        intra_deliverable_count = sum(1 for pred_wbs, succ_wbs in filtered_edges if uid_to_outline.get(wbs_to_uid.get(pred_wbs), 0) >= 5)
-        print(f"[XML EXPORT] ✂️ Dependency filtering: {len(normalized_edges)} total → {len(filtered_edges)} kept ({intra_deliverable_count} intra-deliverable, {len(filtered_edges) - intra_deliverable_count} deliverable-level)")
+        # Debug logging for dependency filtering
+        print(f"\n[DEP-FILTER] ══════════════════════════════════════════════")
+        print(f"[DEP-FILTER] Total edges processed: {len(normalized_edges)}")
+        print(f"[DEP-FILTER] Skipped {skipped_leaf_links} leaf-to-leaf links within same L5 component")
+        print(f"[DEP-FILTER] Kept {kept_deliverable_links} deliverable-level dependencies (L1-L4)")
+        print(f"[DEP-FILTER] Kept {kept_cross_component} cross-component L5+ dependencies")
+        print(f"[DEP-FILTER] Kept {kept_summary_links} L5 summary/parent dependencies")
+        print(f"[DEP-FILTER] Final edges exported: {len(filtered_edges)}")
+        print(f"[DEP-FILTER] ══════════════════════════════════════════════\n")
         
         # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
         for pred_wbs, succ_wbs in filtered_edges:
