@@ -820,25 +820,26 @@ class TimelineScheduler:
         return milestones
     
     def calculate_duration_from_hours(self, hours: float, optimization_mode: str) -> int:
-        """
-        Calculate duration in business days using Workfront normalization formula.
-        This ensures Work ≤ Duration for all tasks and matches XML export expectations.
+        """Calculate duration in business days from hours"""
+        base_hours_per_day = 6.0  # Assume 6 productive hours per day
         
-        Formula: required_days = max(1, ceil(hours / 8.0))
-        Uses 8-hour workday aligned with MinutesPerDay=480 constant.
-        Milestone exemption: 0 hours → 0 days
-        """
-        # WORKFRONT NORMALIZATION: Milestone exemption (0 hours stays 0 days)
-        if hours == 0:
-            return 0
+        # Adjust based on optimization mode
+        if optimization_mode == "speed":
+            hours_per_day = 8.0  # More aggressive
+        elif optimization_mode == "quality":
+            hours_per_day = 5.0  # More buffer time
+        else:  # balanced
+            hours_per_day = base_hours_per_day
         
-        # WORKFRONT NORMALIZATION: Use ceil(hours / 8.0) formula
-        # This guarantees Work ≤ Duration in all cases
-        required_days = max(1, math.ceil(hours / 8.0))
+        duration = math.ceil(hours / hours_per_day)
         
-        print(f"[Scheduler] Duration calc: {hours}h → {required_days} days (Workfront formula)")
+        # Add complexity buffer
+        if hours > 100:
+            duration = int(duration * 1.1)  # 10% buffer for complex tasks
+        if hours > 200:
+            duration = int(duration * 1.15)  # 15% buffer for very complex tasks
         
-        return required_days
+        return max(1, duration)  # Minimum 1 day
     
     def add_business_days(self, start_date: datetime, days: int) -> datetime:
         """Add business days to a date (skip weekends)"""
@@ -957,31 +958,6 @@ class TimelineScheduler:
             "risk_factors": self.identify_risks(tasks)
         }
         
-        # WORKFRONT NORMALIZATION: Create normalized schedule for single source of truth
-        # This schedule will be persisted to SCENARIO_STORE and used by both UI and XML exporter
-        normalized_schedule = {}
-        for task in tasks:
-            # Calculate duration in hours and minutes using Workfront formula
-            duration_hours = task.duration_days * 8.0  # 8-hour workdays
-            duration_minutes = task.duration_days * 480  # 480 minutes per day
-            
-            # Store normalized schedule data for this task
-            normalized_schedule[task.id] = {
-                "Start": task.start_date.strftime('%Y-%m-%dT%H:%M:%S'),
-                "Finish": task.end_date.strftime('%Y-%m-%dT%H:%M:%S'),
-                "PlannedHours": task.hours,
-                "DurationHours": duration_hours,
-                "DurationMinutes": duration_minutes,
-                "DurationDays": task.duration_days,
-                "IsMillestone": task.is_milestone,
-                "IsCritical": task.is_critical,
-                "Workstream": task.workstream,
-                "Phase": task.phase.value,
-                "DeliverableCode": task.deliverable_code
-            }
-            
-            print(f"[Scheduler] Normalized schedule for {task.name[:40]}: {task.hours}h work → {task.duration_days} days ({duration_hours}h duration)")
-        
         return {
             "tasks": gantt_tasks,
             "reasoning": reasoning,
@@ -994,10 +970,8 @@ class TimelineScheduler:
                 "milestones": sum(1 for t in tasks if t.is_milestone),
                 "workstreams": list(self.workstreams.keys()),
                 "phases": [phase.value for phase in PhaseType if self.phases.get(phase)],
-                "optimization_mode": optimization_mode,
-                "schedule_version": "workfront_normalized_v1"  # Version for migration tracking
-            },
-            "normalized_schedule": normalized_schedule  # Single source of truth for UI and XML
+                "optimization_mode": optimization_mode
+            }
         }
     
     def identify_risks(self, tasks: List[WorkstreamTask]) -> List[str]:

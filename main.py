@@ -5240,75 +5240,22 @@ async def generate_timeline(request: TimelineGenerationRequest):
             else:
                 result['message'] = f"Generated timeline with {task_count} tasks using {scheduler_type} scheduler"
             
-            # WORKFRONT NORMALIZATION: Extract normalized schedule from result (always do this)
-            normalized_schedule = result.get('normalized_schedule', {})
-            schedule_version = result.get('metadata', {}).get('schedule_version', 'workfront_normalized_v1')
-            
             # CRITICAL: Store result in SCENARIO_STORE if session_id is provided
-            # WORKFRONT NORMALIZATION: Persist normalized_schedule as single source of truth
             if hasattr(request, 'session_id') and request.session_id:
                 session_id = request.session_id
-                
                 if session_id in SCENARIO_STORE:
-                    # Update existing scenario with timeline and normalized schedule
+                    # Update existing scenario with timeline
                     SCENARIO_STORE[session_id]['timeline'] = result
-                    SCENARIO_STORE[session_id]['normalized_schedule'] = normalized_schedule
-                    SCENARIO_STORE[session_id]['schedule_version'] = schedule_version
-                    print(f"[Timeline] Stored timeline + normalized schedule ({len(normalized_schedule)} tasks) in SCENARIO_STORE for session {session_id}")
+                    print(f"[Timeline] Stored timeline result in SCENARIO_STORE for session {session_id}")
                 else:
-                    # Create new scenario with timeline and normalized schedule
+                    # Create new scenario with timeline
                     SCENARIO_STORE[session_id] = {
                         'timeline': result,
-                        'normalized_schedule': normalized_schedule,
-                        'schedule_version': schedule_version,
                         'project_start': request.project_start,
                         'items': [],
                         'totals': {'hours': 0.0, 'price': 0.0}
                     }
-                    print(f"[Timeline] Created new scenario in SCENARIO_STORE with normalized schedule ({len(normalized_schedule)} tasks) for session {session_id}")
-            
-            # WORKFRONT NORMALIZATION: Update tasks array to use normalized_schedule dates
-            # This ensures the UI Gantt and XML export display identical timelines
-            # CRITICAL: Must recursively update ALL tasks including nested children
-            if normalized_schedule and 'tasks' in result and isinstance(result['tasks'], list):
-                print(f"[Timeline] Updating tasks recursively to use normalized schedule dates")
-                updated_count = 0
-                
-                def update_task_recursive(task):
-                    """Recursively update task and all children with normalized dates"""
-                    nonlocal updated_count
-                    
-                    if not isinstance(task, dict):
-                        return
-                    
-                    task_id = task.get('id', '')
-                    if task_id in normalized_schedule:
-                        norm_data = normalized_schedule[task_id]
-                        
-                        # Parse normalized dates (format: 2025-01-15T00:00:00)
-                        try:
-                            start_dt = datetime.datetime.fromisoformat(norm_data['Start'])
-                            finish_dt = datetime.datetime.fromisoformat(norm_data['Finish'])
-                            
-                            # Update task with normalized dates
-                            task['start'] = start_dt.strftime('%Y-%m-%d')
-                            task['end'] = finish_dt.strftime('%Y-%m-%d')
-                            task['duration_days'] = norm_data.get('DurationDays', 1)
-                            
-                            updated_count += 1
-                        except (ValueError, KeyError) as e:
-                            print(f"[Timeline] ⚠️ Failed to parse normalized dates for task {task_id}: {e}")
-                    
-                    # Recursively update children if they exist
-                    if 'children' in task and isinstance(task['children'], list):
-                        for child in task['children']:
-                            update_task_recursive(child)
-                
-                # Update all tasks recursively
-                for task in result['tasks']:
-                    update_task_recursive(task)
-                
-                print(f"[Timeline] ✅ Updated {updated_count} tasks (including children) with normalized schedule dates")
+                    print(f"[Timeline] Created new scenario in SCENARIO_STORE for session {session_id}")
             
             # CRITICAL FIX: Strip all dependencies from tasks to enable free movement
             if 'tasks' in result and isinstance(result['tasks'], list):
@@ -7642,14 +7589,6 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
         # Use fixed_start_iso from payload, or fall back to project_start from scenario
         project_start_iso = fixed_start_iso or scenario.get("project_start")
         
-        # WORKFRONT NORMALIZATION: Extract normalized_schedule from scenario if available
-        # This provides the single source of truth for Start/Finish/Duration
-        normalized_schedule = scenario.get("normalized_schedule")
-        if normalized_schedule:
-            print(f"[XML Export] Using normalized_schedule with {len(normalized_schedule)} tasks from SCENARIO_STORE")
-        else:
-            print(f"[XML Export] No normalized_schedule found, will compute durations during export")
-        
         stats = convert_excel_to_mspdi(
             input_xlsx=temp_xlsx,
             output_xml=output_xml,
@@ -7662,8 +7601,7 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=False,  # Workfront compatibility: no alphanumeric WBS
-            normalized_schedule=normalized_schedule  # WORKFRONT: Pass normalized schedule
+            add_deliverable_milestones=False  # Workfront compatibility: no alphanumeric WBS
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -9188,8 +9126,7 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
     rate_band: str = "Standard_US",          # <— NEW: rate band
     blended_rate: Optional[float] = None,    # <— NEW: blended rate
-    add_deliverable_milestones: bool = False, # <— NEW: toggle for START/END anchors
-    normalized_schedule: Optional[Dict[str, Dict[str, Any]]] = None  # <— WORKFRONT: Normalized schedule from SCENARIO_STORE
+    add_deliverable_milestones: bool = False # <— NEW: toggle for START/END anchors
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -9747,47 +9684,6 @@ def convert_excel_to_mspdi(
                 "PlannedHours": r["PlannedHours"],
                 "DurationHours": duration_hours
             }
-
-        # WORKFRONT NORMALIZATION: Override with normalized_schedule if provided (single source of truth)
-        if normalized_schedule:
-            print(f"[XML EXPORT] 🔄 Applying normalized schedule from SCENARIO_STORE ({len(normalized_schedule)} tasks)")
-            # Map deliverable codes to UIDs for matching
-            deliverable_code_to_uids = {}
-            for r in rows:
-                dc = r.get("Deliverable_Code") or r.get("deliverable_code")
-                if dc:
-                    if dc not in deliverable_code_to_uids:
-                        deliverable_code_to_uids[dc] = []
-                    deliverable_code_to_uids[dc].append(r["UID"])
-            
-            # Apply normalized schedule values to matching tasks
-            matched_count = 0
-            for task_id, sched_data in normalized_schedule.items():
-                # Extract deliverable code from task_id (format: "task_DEL-0001")
-                if task_id.startswith("task_"):
-                    deliv_code = task_id[5:]  # Remove "task_" prefix
-                    if deliv_code in deliverable_code_to_uids:
-                        for uid in deliverable_code_to_uids[deliv_code]:
-                            # Parse dates from normalized schedule
-                            start_str = sched_data.get("Start", "")
-                            finish_str = sched_data.get("Finish", "")
-                            
-                            try:
-                                start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', '+00:00'))
-                                finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', '+00:00'))
-                                
-                                # Update uid_to_sched with normalized values
-                                uid_to_sched[uid] = {
-                                    "Start": start_dt,
-                                    "Finish": finish_dt,
-                                    "PlannedHours": sched_data.get("PlannedHours", uid_to_sched[uid]["PlannedHours"]),
-                                    "DurationHours": sched_data.get("DurationHours", uid_to_sched[uid]["DurationHours"])
-                                }
-                                matched_count += 1
-                            except (ValueError, KeyError) as e:
-                                print(f"[XML EXPORT] ⚠️ Failed to parse dates for task {task_id}: {e}")
-            
-            print(f"[XML EXPORT] ✅ Applied normalized schedule to {matched_count} tasks")
 
         # Build UID-based children mapping for rollup (as expected by patch)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
