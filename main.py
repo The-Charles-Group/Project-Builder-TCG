@@ -10050,6 +10050,115 @@ def convert_excel_to_mspdi(
             return component_buckets
         
         # ====================================================================================
+        # L5 AGGREGATION: Aggregate role data into L5 component task
+        # ====================================================================================
+        def aggregate_l5_component(component_row, role_rows, uid_to_sched_map):
+            """
+            Aggregate role-level data into a single L5 component task.
+            
+            Returns:
+                Dict with aggregated task data including:
+                - total_hours: Sum of all role hours
+                - total_revenue: Sum of all role revenue
+                - duration_minutes: Computed duration (max(1, ceil(hours/8)) * 480)
+                - start: Component start date (from scheduler or first role)
+                - finish: Component finish date (from scheduler or last role)
+            """
+            import math
+            
+            # Aggregate hours and revenue from all roles
+            total_hours = sum(float(r.get("PlannedHours", 0)) for r in role_rows)
+            total_revenue = sum(float(r.get("Price_USD", 0)) for r in role_rows)
+            
+            # Compute duration using the same formula as leaf tasks:
+            # required_days = max(1, ceil(hours / 8.0)), duration_minutes = required_days * 480
+            if total_hours == 0:
+                duration_minutes = 0  # Milestone
+            else:
+                required_days = max(1, math.ceil(total_hours / 8.0))
+                duration_minutes = required_days * 480
+            
+            # Get start/finish dates from component row's schedule
+            comp_uid = component_row["UID"]
+            if comp_uid in uid_to_sched_map:
+                start = uid_to_sched_map[comp_uid]["Start"]
+                finish = uid_to_sched_map[comp_uid]["Finish"]
+            else:
+                # Fallback: use earliest/latest from role rows
+                role_uids = [r["UID"] for r in role_rows if r["UID"] in uid_to_sched_map]
+                if role_uids:
+                    start = min(uid_to_sched_map[uid]["Start"] for uid in role_uids)
+                    finish = max(uid_to_sched_map[uid]["Finish"] for uid in role_uids)
+                else:
+                    start = "2025-01-01T08:00:00"  # Fallback
+                    finish = "2025-01-01T17:00:00"
+            
+            aggregated = {
+                "total_hours": total_hours,
+                "total_revenue": total_revenue,
+                "duration_minutes": duration_minutes,
+                "start": start,
+                "finish": finish,
+                "role_count": len(role_rows)
+            }
+            
+            print(f"[L5-AGG] {component_row.get('Name', 'Unknown')}: {len(role_rows)} roles, {total_hours}h, ${total_revenue:,.2f}, {duration_minutes}min")
+            return aggregated
+        
+        # ====================================================================================
+        # ASSIGNMENT GENERATION: Create XML Assignment elements for roles
+        # ====================================================================================
+        def generate_assignment_xml(task_uid, role_row, resource_uid_map, uid_to_sched_map, duration_minutes):
+            """
+            Generate XML Assignment element for a role on an L5 task.
+            
+            Args:
+                task_uid: UID of the L5 task this assignment belongs to
+                role_row: The role row dict with hours/revenue/rate
+                resource_uid_map: Dict mapping role name to resource UID
+                uid_to_sched_map: Scheduling data (not used for assignments, but available)
+                duration_minutes: Duration of the parent task in minutes
+                
+            Returns:
+                XML Element for Assignment
+            """
+            from xml.etree.ElementTree import Element, SubElement
+            
+            assignment = Element("Assignment")
+            
+            # Assignment UID (unique across all assignments)
+            # For now, use a combination of task UID and role UID
+            assignment_uid = f"{task_uid}{role_row['UID']}"  # Simple concatenation
+            SubElement(assignment, "UID").text = str(assignment_uid)
+            
+            # Link to task and resource
+            SubElement(assignment, "TaskUID").text = str(task_uid)
+            
+            # Get resource UID for this role
+            role_name = role_row.get("RoleStr", "Unassigned")
+            resource_uid = resource_uid_map.get(role_name, 1)  # Default to UID 1 if not found
+            SubElement(assignment, "ResourceUID").text = str(resource_uid)
+            
+            # Work in minutes
+            work_hours = float(role_row.get("PlannedHours", 0))
+            work_minutes = int(work_hours * 60)
+            SubElement(assignment, "Work").text = f"PT{work_minutes}M"
+            
+            # Units (percentage): work_minutes / duration_minutes (guard against division by zero)
+            if duration_minutes > 0:
+                units = work_minutes / duration_minutes
+            else:
+                units = 1.0  # Default to 100% for milestones
+            SubElement(assignment, "Units").text = f"{units:.2f}"
+            
+            # Cost/Revenue
+            revenue = float(role_row.get("Price_USD", 0))
+            SubElement(assignment, "Cost").text = f"{revenue:.2f}"
+            
+            print(f"[L5-ASSIGN] Task {task_uid} ← {role_name}: {work_hours}h @ {units*100:.1f}% = ${revenue:,.2f}")
+            return assignment
+        
+        # ====================================================================================
         # MULTI-ASSIGNMENT DETECTION: Group rows with identical Name+Start+Finish+WBS_Prefix
         # ====================================================================================
         def group_multi_assignments(rows_input, uid_to_sched_map):
