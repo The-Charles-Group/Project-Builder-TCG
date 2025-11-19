@@ -10282,6 +10282,85 @@ def convert_excel_to_mspdi(
         print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
         
         # ====================================================================================
+        # L5-ONLY EXPORT MODE: Transform rows to export only L5 components with assignments
+        # ====================================================================================
+        if ENABLE_L5_ONLY_EXPORT:
+            print("[L5-ONLY] ═══════════════════════════════════════════════════════════")
+            print("[L5-ONLY] L5-ONLY EXPORT MODE ENABLED")
+            print("[L5-ONLY] Transforming rows: L5 components become tasks, roles become assignments")
+            print(f"[L5-ONLY] Input: {len(rows)} total rows")
+            
+            # Group rows by L5 components
+            component_buckets = group_by_l5_components(rows)
+            
+            # Build resource name to UID mapping for assignments
+            res_name_to_uid = {r["Name"]: r["UID"] for r in resources}
+            
+            # Transform rows: keep L1-L4, replace L5+L6 with aggregated L5
+            transformed_rows = []
+            l6_to_l5_uid_map = {}  # Map L6 role UIDs to their L5 parent UID
+            assignment_counter = 1
+            
+            # First pass: collect L1-L4 rows (keep as-is)
+            for row in rows:
+                wbs = row.get("WBS", "")
+                depth = len(wbs.split(".")) if wbs else 0
+                
+                if depth < 5:  # L1-L4: keep as-is
+                    transformed_rows.append(row)
+            
+            # Second pass: process L5 components
+            for l5_wbs, bucket in component_buckets.items():
+                comp_row = bucket["component_row"]
+                role_rows = bucket["role_rows"]
+                
+                # Aggregate component data
+                agg = aggregate_l5_component(comp_row, role_rows, uid_to_sched)
+                
+                # Create aggregated L5 task row
+                aggregated_task = {
+                    **comp_row,  # Copy base L5 component row
+                    "PlannedHours": agg["total_hours"],
+                    "Price_USD": agg["total_revenue"],
+                    "l5_only_mode": True,  # Flag for downstream processing
+                    "l5_aggregated": agg,  # Store aggregated data
+                    "l5_assignments": []  # Will hold assignment XML elements
+                }
+                
+                # Generate assignment data for each role
+                for role_row in role_rows:
+                    assignment_data = {
+                        "uid": assignment_counter,
+                        "task_uid": comp_row["UID"],
+                        "resource_uid": res_name_to_uid.get(role_row.get("RoleStr", "Unassigned"), 1),
+                        "resource_name": role_row.get("RoleStr", "Unassigned"),
+                        "work_hours": float(role_row.get("PlannedHours", 0)),
+                        "work_minutes": int(float(role_row.get("PlannedHours", 0)) * 60),
+                        "rate_usd": float(role_row.get("Rate_USD", 0)),
+                        "price_usd": float(role_row.get("Price_USD", 0)),
+                        "duration_minutes": agg["duration_minutes"]
+                    }
+                    aggregated_task["l5_assignments"].append(assignment_data)
+                    assignment_counter += 1
+                    
+                    # Map L6 role UID to L5 parent UID for dependency remapping
+                    l6_to_l5_uid_map[role_row["UID"]] = comp_row["UID"]
+                
+                transformed_rows.append(aggregated_task)
+            
+            # Update rows and uid_alias_map
+            original_count = len(rows)
+            rows = transformed_rows
+            
+            # Update uid_alias_map to include L6 → L5 mappings
+            for l6_uid, l5_uid in l6_to_l5_uid_map.items():
+                uid_alias_map[l6_uid] = l5_uid
+            
+            print(f"[L5-ONLY] Transformed: {original_count} rows → {len(rows)} tasks ({len(component_buckets)} L5 components)")
+            print(f"[L5-ONLY] Created {len(l6_to_l5_uid_map)} L6→L5 UID mappings for dependency remapping")
+            print("[L5-ONLY] ═══════════════════════════════════════════════════════════")
+        
+        # ====================================================================================
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
@@ -10436,75 +10515,91 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ManualWork").text = "1"
             # Only set Duration/Work for non-summary leaf tasks
             else:
-                # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
-                # NO 960-minute snapping - use actual timestamp difference
-                # This is critical to prevent Workfront from recalculating dates on import
-                
-                start_val = uid_to_sched[r["UID"]]["Start"]
-                finish_val = uid_to_sched[r["UID"]]["Finish"]
-                
-                # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
-                def to_datetime(val):
-                    if isinstance(val, datetime.datetime):
-                        return val
-                    elif isinstance(val, str):
-                        # Remove timezone suffixes for parsing
-                        val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
-                        # Try parsing with fromisoformat (handles timezones)
-                        try:
-                            return datetime.datetime.fromisoformat(val_clean)
-                        except ValueError:
-                            # Fallback: strip timezone manually and parse
-                            val_clean = val.split('+')[0].split('-')
-                            # Rejoin date portion (first 3 parts: YYYY, MM, DD)
-                            val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
-                            val_clean = val_clean.split('.')[0]  # Remove milliseconds
-                            return datetime.datetime.fromisoformat(val_clean)
+                # L5-ONLY MODE: Handle aggregated L5 tasks with multiple assignments
+                if r.get("l5_only_mode"):
+                    agg = r["l5_aggregated"]
+                    
+                    # Use aggregated hours and duration
+                    work_minutes = int(agg["total_hours"] * 60)
+                    SubElement(task, "Work").text = f"PT{work_minutes}M"
+                    SubElement(task, "Duration").text = f"PT{agg['duration_minutes']}M"
+                    
+                    # Fixed Duration type
+                    SubElement(task, "Type").text = "1"
+                    SubElement(task, "IsEffortDriven").text = "0"
+                    SubElement(task, "ConstraintType").text = "0"  # ASAP
+                    
+                    print(f"[L5-XML] Task {r['UID']}: {r.get('Name', 'Unknown')[:40]} - {agg['total_hours']}h, {agg['duration_minutes']}min, {len(r['l5_assignments'])} assignments")
+                else:
+                    # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
+                    # NO 960-minute snapping - use actual timestamp difference
+                    # This is critical to prevent Workfront from recalculating dates on import
+                    
+                    start_val = uid_to_sched[r["UID"]]["Start"]
+                    finish_val = uid_to_sched[r["UID"]]["Finish"]
+                    
+                    # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
+                    def to_datetime(val):
+                        if isinstance(val, datetime.datetime):
+                            return val
+                        elif isinstance(val, str):
+                            # Remove timezone suffixes for parsing
+                            val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
+                            # Try parsing with fromisoformat (handles timezones)
+                            try:
+                                return datetime.datetime.fromisoformat(val_clean)
+                            except ValueError:
+                                # Fallback: strip timezone manually and parse
+                                val_clean = val.split('+')[0].split('-')
+                                # Rejoin date portion (first 3 parts: YYYY, MM, DD)
+                                val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
+                                val_clean = val_clean.split('.')[0]  # Remove milliseconds
+                                return datetime.datetime.fromisoformat(val_clean)
+                        else:
+                            return val
+                    
+                    start_dt = to_datetime(start_val)
+                    finish_dt = to_datetime(finish_val)
+                    
+                    # Work calculation: For multi-assignment tasks, sum all assignee hours
+                    if r.get("multi_assignment") and "assignments" in r:
+                        # Multi-assignment: sum all assignee work hours
+                        total_work_hours = sum(a["work_hours"] for a in r["assignments"])
+                        work_minutes = int(total_work_hours * 60)
                     else:
-                        return val
-                
-                start_dt = to_datetime(start_val)
-                finish_dt = to_datetime(finish_val)
-                
-                # Work calculation: For multi-assignment tasks, sum all assignee hours
-                if r.get("multi_assignment") and "assignments" in r:
-                    # Multi-assignment: sum all assignee work hours
-                    total_work_hours = sum(a["work_hours"] for a in r["assignments"])
-                    work_minutes = int(total_work_hours * 60)
-                else:
-                    # Single assignment: use PlannedHours from Gantt (actual effort)
-                    work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
-                    if pd.isna(work_hours):
-                        work_hours = 0
-                    work_minutes = max(0, int(work_hours * 60))
-                
-                SubElement(task, "Work").text = f"PT{work_minutes}M"
-                
-                # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
-                # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
-                work_hours = work_minutes / 60.0
-                
-                if work_hours == 0:
-                    # Milestone: zero duration
-                    dur_minutes = 0
-                else:
-                    # Regular task: required_days = max(1, ceil(hours / 8.0))
-                    # Uses 8-hour workday aligned with MinutesPerDay=480
-                    import math
-                    required_days = max(1, math.ceil(work_hours / 8.0))
-                    dur_minutes = required_days * 480
-                
-                SubElement(task, "Duration").text = f"PT{dur_minutes}M"
-                
-                # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
-                # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
-                SubElement(task, "Type").text = "1"  # Fixed Duration
-                SubElement(task, "IsEffortDriven").text = "0"
-                
-                # WORKFRONT FIX: Explicit ASAP constraint on ALL leaf tasks to prevent constraint inheritance
-                # Without this, leaf tasks inherit parent deliverable's SNET constraint, causing serial execution
-                # ConstraintType=0 (As Soon As Possible) allows tasks to start when dependencies are met
-                SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
+                        # Single assignment: use PlannedHours from Gantt (actual effort)
+                        work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
+                        if pd.isna(work_hours):
+                            work_hours = 0
+                        work_minutes = max(0, int(work_hours * 60))
+                    
+                    SubElement(task, "Work").text = f"PT{work_minutes}M"
+                    
+                    # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
+                    # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
+                    work_hours = work_minutes / 60.0
+                    
+                    if work_hours == 0:
+                        # Milestone: zero duration
+                        dur_minutes = 0
+                    else:
+                        # Regular task: required_days = max(1, ceil(hours / 8.0))
+                        # Uses 8-hour workday aligned with MinutesPerDay=480
+                        import math
+                        required_days = max(1, math.ceil(work_hours / 8.0))
+                        dur_minutes = required_days * 480
+                    
+                    SubElement(task, "Duration").text = f"PT{dur_minutes}M"
+                    
+                    # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
+                    # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
+                    SubElement(task, "Type").text = "1"  # Fixed Duration
+                    SubElement(task, "IsEffortDriven").text = "0"
+                    
+                    # WORKFRONT FIX: Explicit ASAP constraint on ALL leaf tasks to prevent constraint inheritance
+                    # Without this, leaf tasks inherit parent deliverable's SNET constraint, causing serial execution
+                    # ConstraintType=0 (As Soon As Possible) allows tasks to start when dependencies are met
+                    SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
             # GPT-5 PRO FIX: Add CalendarUID to all tasks to enable calendar-day duration display
             # Without this, Workfront treats durations as raw minutes and displays "0.12 days"
@@ -10701,6 +10796,33 @@ def convert_excel_to_mspdi(
                     SubElement(assignment, "Cost").text = f"{cost:.2f}"
                     
                 print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
+            
+            # L5-ONLY MODE: Handle aggregated L5 tasks with role assignments
+            elif row.get("l5_only_mode") and "l5_assignments" in row:
+                # L5 task with multiple role assignments
+                for assign_data in row["l5_assignments"]:
+                    assignment = SubElement(assignments_elem, "Assignment")
+                    SubElement(assignment, "UID").text = str(assign_uid_counter)
+                    assign_uid_counter += 1
+                    
+                    SubElement(assignment, "TaskUID").text = str(task_uid)
+                    SubElement(assignment, "ResourceUID").text = str(assign_data["resource_uid"])
+                    
+                    # Start/Finish from task schedule
+                    SubElement(assignment, "Start").text = uid_to_sched[task_uid]["Start"]
+                    SubElement(assignment, "Finish").text = uid_to_sched[task_uid]["Finish"]
+                    
+                    # Work and Units
+                    work_min = assign_data["work_minutes"]
+                    dur_min = assign_data["duration_minutes"]
+                    units = 0 if dur_min == 0 else work_min / dur_min
+                    
+                    SubElement(assignment, "Units").text = f"{units:.2f}"
+                    SubElement(assignment, "Work").text = f"PT{work_min}M"
+                    SubElement(assignment, "Cost").text = f"{assign_data['price_usd']:.2f}"
+                    
+                print(f"[L5-XML] ✅ Created {len(row['l5_assignments'])} role assignments for L5 task: {row['Name'][:50]} (UID {task_uid})")
+            
             else:
                 # Single-assignment task - use original logic
                 # Find the assignment for this task from the pre-built assignments list
