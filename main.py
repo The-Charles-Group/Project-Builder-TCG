@@ -5267,6 +5267,49 @@ async def generate_timeline(request: TimelineGenerationRequest):
                     }
                     print(f"[Timeline] Created new scenario in SCENARIO_STORE with normalized schedule ({len(normalized_schedule)} tasks) for session {session_id}")
             
+            # WORKFRONT NORMALIZATION: Update tasks array to use normalized_schedule dates
+            # This ensures the UI Gantt and XML export display identical timelines
+            # CRITICAL: Must recursively update ALL tasks including nested children
+            if normalized_schedule and 'tasks' in result and isinstance(result['tasks'], list):
+                print(f"[Timeline] Updating tasks recursively to use normalized schedule dates")
+                updated_count = 0
+                
+                def update_task_recursive(task):
+                    """Recursively update task and all children with normalized dates"""
+                    nonlocal updated_count
+                    
+                    if not isinstance(task, dict):
+                        return
+                    
+                    task_id = task.get('id', '')
+                    if task_id in normalized_schedule:
+                        norm_data = normalized_schedule[task_id]
+                        
+                        # Parse normalized dates (format: 2025-01-15T00:00:00)
+                        try:
+                            start_dt = datetime.datetime.fromisoformat(norm_data['Start'])
+                            finish_dt = datetime.datetime.fromisoformat(norm_data['Finish'])
+                            
+                            # Update task with normalized dates
+                            task['start'] = start_dt.strftime('%Y-%m-%d')
+                            task['end'] = finish_dt.strftime('%Y-%m-%d')
+                            task['duration_days'] = norm_data.get('DurationDays', 1)
+                            
+                            updated_count += 1
+                        except (ValueError, KeyError) as e:
+                            print(f"[Timeline] ⚠️ Failed to parse normalized dates for task {task_id}: {e}")
+                    
+                    # Recursively update children if they exist
+                    if 'children' in task and isinstance(task['children'], list):
+                        for child in task['children']:
+                            update_task_recursive(child)
+                
+                # Update all tasks recursively
+                for task in result['tasks']:
+                    update_task_recursive(task)
+                
+                print(f"[Timeline] ✅ Updated {updated_count} tasks (including children) with normalized schedule dates")
+            
             # CRITICAL FIX: Strip all dependencies from tasks to enable free movement
             if 'tasks' in result and isinstance(result['tasks'], list):
                 for task in result['tasks']:
