@@ -5240,14 +5240,14 @@ async def generate_timeline(request: TimelineGenerationRequest):
             else:
                 result['message'] = f"Generated timeline with {task_count} tasks using {scheduler_type} scheduler"
             
+            # WORKFRONT NORMALIZATION: Extract normalized schedule from result (always do this)
+            normalized_schedule = result.get('normalized_schedule', {})
+            schedule_version = result.get('metadata', {}).get('schedule_version', 'workfront_normalized_v1')
+            
             # CRITICAL: Store result in SCENARIO_STORE if session_id is provided
             # WORKFRONT NORMALIZATION: Persist normalized_schedule as single source of truth
             if hasattr(request, 'session_id') and request.session_id:
                 session_id = request.session_id
-                
-                # Extract normalized schedule from result (if available)
-                normalized_schedule = result.get('normalized_schedule', {})
-                schedule_version = result.get('metadata', {}).get('schedule_version', 'workfront_normalized_v1')
                 
                 if session_id in SCENARIO_STORE:
                     # Update existing scenario with timeline and normalized schedule
