@@ -10000,6 +10000,20 @@ def convert_excel_to_mspdi(
                 - uid_alias_map: Dict mapping consumed UIDs to their primary UID
             """
             from collections import defaultdict
+            import html
+            
+            # Helper function to normalize timestamps (round to nearest minute)
+            def normalize_timestamp(iso_str):
+                """Normalize timestamp to minute precision to handle second/millisecond drift"""
+                try:
+                    # Remove timezone suffix and parse
+                    clean_str = iso_str.replace("Z", "").split("+")[0].split("-")[0]
+                    dt = datetime.datetime.fromisoformat(clean_str)
+                    # Round to nearest minute
+                    rounded = dt.replace(second=0, microsecond=0)
+                    return rounded.strftime("%Y-%m-%dT%H:%M:00")
+                except:
+                    return iso_str
             
             buckets = defaultdict(list)
             
@@ -10024,11 +10038,18 @@ def convert_excel_to_mspdi(
                     buckets[("UNGROUPED", row["UID"], "", "")].append(row)
                     continue
                     
-                start_iso = uid_to_sched_map[task_uid]["Start"]
-                finish_iso = uid_to_sched_map[task_uid]["Finish"]
+                # Normalize timestamps to handle second/millisecond drift
+                start_iso = normalize_timestamp(uid_to_sched_map[task_uid]["Start"])
+                finish_iso = normalize_timestamp(uid_to_sched_map[task_uid]["Finish"])
+                
+                # Decode HTML entities and normalize task name for grouping
+                task_name = html.unescape(str(row.get("Name", "")).strip())
+                
+                # Debug logging for client review tasks
+                if "client review" in task_name.lower():
+                    print(f"[DEBUG MERGE] WBS={wbs} Name='{task_name}' Start={start_iso} Finish={finish_iso} Role={role_val}")
                 
                 # Grouping key: (WBS_prefix, task_name, start, finish)
-                task_name = str(row.get("Name", "")).strip()
                 key = (prefix, task_name, start_iso, finish_iso)
                 buckets[key].append(row)
             
