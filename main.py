@@ -9988,6 +9988,106 @@ def convert_excel_to_mspdi(
             project_finish = project_start + datetime.timedelta(days=180)
             print(f"[MSPDI Export] WARNING: No task schedules found, using fallback project dates")
 
+        # ====================================================================================
+        # MULTI-ASSIGNMENT DETECTION: Group rows with identical Name+Start+Finish+WBS_Prefix
+        # ====================================================================================
+        def group_multi_assignments(rows_input, uid_to_sched_map):
+            """
+            Group rows that represent shared meetings/reviews (same name, start, finish, WBS prefix).
+            
+            Returns:
+                - merged_rows: List of row dicts (single-assignment unchanged, multi-assignment merged)
+                - uid_alias_map: Dict mapping consumed UIDs to their primary UID
+            """
+            from collections import defaultdict
+            
+            buckets = defaultdict(list)
+            
+            for row in rows_input:
+                # Extract WBS prefix (first 4 segments for L4 deliverable/component scope)
+                wbs = row.get("WBS", "")
+                parts = wbs.split(".")
+                prefix = ".".join(parts[:4]) if len(parts) >= 4 else wbs
+                
+                # Only group rows with valid role/resource (skip if missing or multi-role)
+                # Check if row has a single role assignment
+                role_val = row.get("Role", "")
+                if not role_val or pd.isna(role_val) or str(role_val).strip() == "":
+                    # No role - don't group
+                    buckets[("UNGROUPED", row["UID"], "", "")].append(row)
+                    continue
+                
+                # Get Start/Finish from uid_to_sched (already normalized ISO strings)
+                task_uid = row["UID"]
+                if task_uid not in uid_to_sched_map:
+                    # No schedule - don't group
+                    buckets[("UNGROUPED", row["UID"], "", "")].append(row)
+                    continue
+                    
+                start_iso = uid_to_sched_map[task_uid]["Start"]
+                finish_iso = uid_to_sched_map[task_uid]["Finish"]
+                
+                # Grouping key: (WBS_prefix, task_name, start, finish)
+                task_name = str(row.get("Name", "")).strip()
+                key = (prefix, task_name, start_iso, finish_iso)
+                buckets[key].append(row)
+            
+            merged_rows = []
+            uid_alias_map = {}
+            
+            for key, group in buckets.items():
+                prefix, task_name, start_iso, finish_iso = key
+                
+                # UNGROUPED bucket - keep as-is
+                if prefix == "UNGROUPED":
+                    merged_rows.extend(group)
+                    continue
+                
+                # Single-assignment task - keep unchanged
+                if len(group) == 1:
+                    merged_rows.append(group[0])
+                    print(f"[MULTI-ASSIGN] Single task: {task_name[:50]} (WBS {group[0]['WBS']})")
+                    continue
+                
+                # Multi-assignment task - merge into one
+                primary_uid = group[0]["UID"]
+                total_hours = sum(float(r.get("Planned_Hours", 0)) for r in group)
+                total_price = sum(float(r.get("Price_USD", 0)) for r in group)
+                
+                # Create merged task record
+                merged = {
+                    **group[0],  # Copy first row as base
+                    "UID": primary_uid,
+                    "Planned_Hours": total_hours,
+                    "Price_USD": total_price,  # Sum of all assignee costs
+                    "multi_assignment": True,  # Flag for downstream processing
+                    "assignments": [
+                        {
+                            "source_uid": r["UID"],
+                            "resource_name": r.get("Role", "Unassigned"),
+                            "work_hours": float(r.get("Planned_Hours", 0)),
+                            "rate_usd": float(r.get("Rate_USD", 0)),  # Keep individual rate for assignment
+                            "price_usd": float(r.get("Price_USD", 0))  # Keep individual cost for assignment
+                        }
+                        for r in group
+                    ]
+                }
+                merged_rows.append(merged)
+                
+                # Map consumed UIDs to primary UID
+                for r in group[1:]:
+                    uid_alias_map[r["UID"]] = primary_uid
+                
+                role_list = [r.get("Role", "?") for r in group]
+                print(f"[MULTI-ASSIGN] ✅ Merged {len(group)} tasks: '{task_name[:50]}' (WBS {prefix}) - Roles: {', '.join(role_list)} - Total: {total_hours}h")
+            
+            print(f"[MULTI-ASSIGN] Summary: {len(rows_input)} rows → {len(merged_rows)} tasks ({len(uid_alias_map)} merged)")
+            return merged_rows, uid_alias_map
+        
+        # Apply multi-assignment grouping
+        rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
+        
+        # ====================================================================================
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
@@ -10331,47 +10431,93 @@ def convert_excel_to_mspdi(
             summary_task_uids.add(wbs_to_uid["1"])
         
         assignments_elem = SubElement(project, "Assignments")
-        for assign in assignments:
+        
+        # Build assignments for all tasks (including multi-assignment merged tasks)
+        assign_uid_counter = 1
+        for row in rows:
+            task_uid = row["UID"]
+            
             # Skip assignments that reference summary/parent tasks
-            task_uid = assign["TaskUID"]
             if task_uid in summary_task_uids:
                 print(f"[XML EXPORT] 🚫 Skipping assignment for summary task UID {task_uid} (summary tasks should have no assignments)")
                 continue
-            assignment = SubElement(assignments_elem, "Assignment")
-            SubElement(assignment, "UID").text = str(assign["UID"])
-            task_uid = assign["TaskUID"]
-            SubElement(assignment, "TaskUID").text = str(task_uid)
-            res_uid = assign["ResourceUID"]
-            SubElement(assignment, "ResourceUID").text = str(res_uid)
-            SubElement(assignment, "Start").text = assign["Start"]
-            SubElement(assignment, "Finish").text = assign["Finish"]
             
-            # Compute Units = work_min / dur_min for Fixed Duration tasks
-            work_hours = assign['WorkHours']
-            work_min = work_hours * 60
-            # Get duration from the task schedule
-            dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
-            dur_min = dur_hours * 60
-            # Snap to 480-minute blocks as done in tasks
-            dur_min = ((int(dur_min) + 479) // 480) * 480
-            units = 0 if dur_min == 0 else work_min / dur_min
-            
-            SubElement(assignment, "Units").text = str(units)
-            SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
-            
-            # TASK 16: Use stored Rate_USD from scenario pricing instead of re-computing
-            task_uid = assign["TaskUID"]
-            stored_rate = uid_to_rate.get(task_uid)
-            
-            # If stored rate exists, use it; otherwise fallback to re-computation for safety
-            if stored_rate is not None and stored_rate > 0:
-                rate = stored_rate
+            # Check if this is a multi-assignment merged task
+            if row.get("multi_assignment") and "assignments" in row:
+                # Multi-assignment task - create multiple Assignment elements
+                for assign_data in row["assignments"]:
+                    assignment = SubElement(assignments_elem, "Assignment")
+                    SubElement(assignment, "UID").text = str(assign_uid_counter)
+                    assign_uid_counter += 1
+                    
+                    SubElement(assignment, "TaskUID").text = str(task_uid)
+                    
+                    # Find resource UID for this role
+                    resource_name = assign_data["resource_name"]
+                    res_uid = res_name_to_uid.get(resource_name) or res_name_to_uid.get("Unassigned")
+                    SubElement(assignment, "ResourceUID").text = str(res_uid)
+                    
+                    SubElement(assignment, "Start").text = uid_to_sched[task_uid]["Start"]
+                    SubElement(assignment, "Finish").text = uid_to_sched[task_uid]["Finish"]
+                    
+                    # Compute Units and Work
+                    work_hours = assign_data["work_hours"]
+                    work_min = work_hours * 60
+                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
+                    dur_min = dur_hours * 60
+                    dur_min = ((int(dur_min) + 479) // 480) * 480
+                    units = 0 if dur_min == 0 else work_min / dur_min
+                    
+                    SubElement(assignment, "Units").text = str(units)
+                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+                    
+                    # Use individual rate and cost from merged assignment data
+                    rate = assign_data.get("rate_usd", 0)
+                    cost = assign_data.get("price_usd", 0)
+                    # Fallback to calculation if not available
+                    if rate == 0:
+                        rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate or 0, DB)
+                        cost = work_hours * rate
+                    SubElement(assignment, "Cost").text = f"{cost:.2f}"
+                    
+                print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
             else:
-                res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
-                rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate or 0, DB)
-            
-            cost = work_hours * rate
-            SubElement(assignment, "Cost").text = f"{cost:.2f}"
+                # Single-assignment task - use original logic
+                # Find the assignment for this task from the pre-built assignments list
+                task_assignments = [a for a in assignments if a["TaskUID"] == task_uid]
+                
+                for assign in task_assignments:
+                    assignment = SubElement(assignments_elem, "Assignment")
+                    SubElement(assignment, "UID").text = str(assign_uid_counter)
+                    assign_uid_counter += 1
+                    
+                    SubElement(assignment, "TaskUID").text = str(task_uid)
+                    res_uid = assign["ResourceUID"]
+                    SubElement(assignment, "ResourceUID").text = str(res_uid)
+                    SubElement(assignment, "Start").text = assign["Start"]
+                    SubElement(assignment, "Finish").text = assign["Finish"]
+                    
+                    # Compute Units = work_min / dur_min for Fixed Duration tasks
+                    work_hours = assign['WorkHours']
+                    work_min = work_hours * 60
+                    dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
+                    dur_min = dur_hours * 60
+                    dur_min = ((int(dur_min) + 479) // 480) * 480
+                    units = 0 if dur_min == 0 else work_min / dur_min
+                    
+                    SubElement(assignment, "Units").text = str(units)
+                    SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
+                    
+                    # Use stored Rate_USD from scenario pricing
+                    stored_rate = uid_to_rate.get(task_uid)
+                    if stored_rate is not None and stored_rate > 0:
+                        rate = stored_rate
+                    else:
+                        res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
+                        rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate or 0, DB)
+                    
+                    cost = work_hours * rate
+                    SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
         # WORKFRONT FIX: Add PredecessorLinks for:
         # 1. Deliverable-level dependencies (OutlineLevel ≤4 to ≤4)
@@ -10388,9 +10534,27 @@ def convert_excel_to_mspdi(
                 return ".".join(parts[:3])  # Deliverable is always WBS x.y.z
             return wbs
         
-        # Filter normalized_edges to keep deliverable-level AND intra-deliverable dependencies
-        filtered_edges = []
+        # Remap dependencies through uid_alias_map (for multi-assignment merged tasks)
+        # This ensures dependencies pointing to consumed UIDs redirect to the primary UID
+        remapped_edges = []
         for pred_wbs, succ_wbs in normalized_edges:
+            pred_uid = wbs_to_uid.get(pred_wbs)
+            succ_uid = wbs_to_uid.get(succ_wbs)
+            
+            # Remap through alias map if these UIDs were merged
+            pred_uid = uid_alias_map.get(pred_uid, pred_uid) if pred_uid else None
+            succ_uid = uid_alias_map.get(succ_uid, succ_uid) if succ_uid else None
+            
+            # Convert back to WBS for filtering logic
+            if pred_uid and succ_uid:
+                # Find WBS for remapped UIDs
+                pred_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == pred_uid), pred_wbs)
+                succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
+                remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
+        
+        # Filter remapped edges to keep deliverable-level AND intra-deliverable dependencies
+        filtered_edges = []
+        for pred_wbs, succ_wbs in remapped_edges:
             pred_uid = wbs_to_uid.get(pred_wbs)
             succ_uid = wbs_to_uid.get(succ_wbs)
             
