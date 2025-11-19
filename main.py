@@ -42,6 +42,12 @@ try:
 except Exception:
     Image = None
 
+# ---------- Feature Flags ----------
+# L5-Only Export: Exports L5 components as tasks with role-based assignments (no L6 tasks)
+# When enabled: L5 components become Workfront tasks, roles become Assignments on those tasks
+# When disabled: Traditional L6 leaf tasks (one task per role) with dependency filtering
+ENABLE_L5_ONLY_EXPORT = False  # Set to True to enable new export model
+
 # ---------- Performance Optimization: Cache Excel to Pickle ----------
 # Note: This function will be called after AgencyDB is defined
 def load_database_with_pickle_cache():
