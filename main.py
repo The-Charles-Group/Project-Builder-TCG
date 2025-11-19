@@ -10465,7 +10465,7 @@ def convert_excel_to_mspdi(
                     work_min = work_hours * 60
                     dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
                     dur_min = dur_hours * 60
-                    dur_min = ((int(dur_min) + 479) // 480) * 480
+                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
                     units = 0 if dur_min == 0 else work_min / dur_min
                     
                     SubElement(assignment, "Units").text = str(units)
@@ -10502,7 +10502,7 @@ def convert_excel_to_mspdi(
                     work_min = work_hours * 60
                     dur_hours = uid_to_sched[task_uid].get('DurationHours', 0)
                     dur_min = dur_hours * 60
-                    dur_min = ((int(dur_min) + 479) // 480) * 480
+                    # Use actual duration for accurate Units calculation (no 480-minute rounding)
                     units = 0 if dur_min == 0 else work_min / dur_min
                     
                     SubElement(assignment, "Units").text = str(units)
