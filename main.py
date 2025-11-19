@@ -9995,6 +9995,61 @@ def convert_excel_to_mspdi(
             print(f"[MSPDI Export] WARNING: No task schedules found, using fallback project dates")
 
         # ====================================================================================
+        # L5 COMPONENT GROUPING: Group role rows by their L5 component parent
+        # ====================================================================================
+        def group_by_l5_components(rows_input):
+            """
+            Group rows by L5 component level for L5-only export mode.
+            
+            Returns:
+                Dict[str, Dict]: {l5_wbs: {"component_row": {...}, "role_rows": [...]}}
+                
+            Logic:
+                - L5 components have WBS depth of 5 (e.g., "1.2.3.1.1")
+                - L6 leaf tasks are role rows with depth 6 (e.g., "1.2.3.1.1.1")
+                - Group all L6 rows under their L5 parent
+            """
+            from collections import defaultdict
+            
+            components = {}  # L5 components by WBS
+            role_rows_by_l5 = defaultdict(list)  # L6 role rows grouped by parent L5 WBS
+            
+            # First pass: identify L5 components and L6 role rows
+            for row in rows_input:
+                wbs = row.get("WBS", "")
+                parent_wbs = row.get("ParentWBS", "")
+                depth = len(wbs.split(".")) if wbs else 0
+                
+                # L5 component (5 segments): "1.2.3.1.1"
+                if depth == 5:
+                    components[wbs] = row
+                    print(f"[L5-GROUP] Found L5 component: {wbs} - {row.get('Name', 'Unknown')}")
+                
+                # L6 leaf task (6 segments): "1.2.3.1.1.1" - role row under L5
+                elif depth == 6:
+                    # Extract L5 parent (first 5 segments)
+                    l5_parent = ".".join(wbs.split(".")[:5])
+                    role_rows_by_l5[l5_parent].append(row)
+                    print(f"[L5-GROUP] Found L6 role row: {wbs} (Parent L5: {l5_parent}) - Role: {row.get('RoleStr', 'Unknown')}")
+                
+                # Higher levels (L1-L4) or root - keep track but don't group
+                elif depth < 5:
+                    print(f"[L5-GROUP] Skipping higher-level row: {wbs} (depth {depth})")
+            
+            # Build component buckets
+            component_buckets = {}
+            for l5_wbs, comp_row in components.items():
+                roles = role_rows_by_l5.get(l5_wbs, [])
+                component_buckets[l5_wbs] = {
+                    "component_row": comp_row,
+                    "role_rows": roles
+                }
+                print(f"[L5-GROUP] Component {l5_wbs}: {len(roles)} role(s)")
+            
+            print(f"[L5-GROUP] Summary: {len(component_buckets)} L5 components with {sum(len(b['role_rows']) for b in component_buckets.values())} total role rows")
+            return component_buckets
+        
+        # ====================================================================================
         # MULTI-ASSIGNMENT DETECTION: Group rows with identical Name+Start+Finish+WBS_Prefix
         # ====================================================================================
         def group_multi_assignments(rows_input, uid_to_sched_map):
