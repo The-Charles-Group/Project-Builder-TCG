@@ -1,0 +1,81 @@
+What I’d tell Replit agent + architect (you can paste this)
+
+Goal: Roll back the multi-assignment merging for now and fix the duration/work math so Ross’s constraints are always satisfied.
+
+1. Disable multi-assignment merging
+
+Remove / bypass group_multi_assignments and the multi_assignment / assignments flags for now.
+
+Export each role row as its own leaf task again (like the earlier working version).
+
+Keep the existing dependency logic between these leaf tasks (no changes to predecessors).
+
+2. Fix leaf task durations so they’re consistent with hours
+
+In the leaf-task branch of the XML exporter (the else: where Summary == 0), change the duration logic:
+
+Let hours = Planned_Hours for that row (or uid_to_sched[uid]['PlannedHours'] – whichever is canonical).
+
+Use an 8-hour workday.
+
+Compute:
+
+required_days = max(1, ceil(hours / 8.0))
+
+dur_minutes = required_days * 480 (480 minutes = 8 hours)
+
+Export:
+
+<Work> = hours * 60 minutes (as now)
+
+<Duration> = PT{dur_minutes}M
+
+Also update <Finish> to match the new duration:
+
+Finish = Start + required_days * 1 workday
+
+(however you currently handle adding days; just make sure Finish reflects the new Duration)
+
+This guarantees:
+
+A task with 3h → Duration = 1 day
+
+8h → 1 day
+
+11h → 2 days
+
+22h (if ever on a single task) → 3 days, etc.
+
+Importantly: you can no longer get 11 hours of work in a 0.12-day duration, which is exactly Ross’s complaint.
+
+3. Enforce “L5 ≥ 1 day” rule
+
+Identify the L5 summary level (“the level above the leaf tasks” – e.g. Content Type Matrix in the screenshot).
+
+For all L5 tasks:
+
+If their rolled-up <Duration> is less than 1 day (480 minutes), force it to PT480M.
+
+Keep them as Summary=1 with Work=PT0M and the manual scheduling tags, like the other summary levels.
+
+Don’t change deliverables or higher-level parents – just ensure every L5 summary duration is at least 1 full day.
+
+4. Acceptance checks
+
+After the change, the following must be true in Workfront:
+
+For every leaf task:
+
+Pln Hrs / 8 ≤ Duration (in days)
+
+(no more cases where a person has 11 hours in a 0.12-day task)
+
+For every L5 component (e.g. “Content Type Matrix”):
+
+Duration is ≥ 1 day even when there are only a few hours of work.
+
+Predecessors still chain the leaf tasks in the same order as before.
+
+We are not trying to merge multi-resource meetings yet – each role is still its own row.
+
+Once this is stable and passing Ross’s checks, we can come back later and re-introduce the multi-assignment grouping as a Phase 2 feature, but it’s explicitly not required for this milestone.

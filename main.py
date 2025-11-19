@@ -10105,8 +10105,11 @@ def convert_excel_to_mspdi(
             print(f"[MULTI-ASSIGN] Summary: {len(rows_input)} rows → {len(merged_rows)} tasks ({len(uid_alias_map)} merged)")
             return merged_rows, uid_alias_map
         
-        # Apply multi-assignment grouping
-        rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
+        # DISABLED: Multi-assignment grouping (deferred to Phase 2)
+        # rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
+        # Instead: Use identity mapping (each UID maps to itself for dependency safety)
+        uid_alias_map = {row["UID"]: row["UID"] for row in rows}
+        print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
         
         # ====================================================================================
         # Generate XML
@@ -10239,11 +10242,20 @@ def convert_excel_to_mspdi(
                 print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
             
             elif is_summary and not is_root:
-                # NON-ROOT SUMMARY TASKS (OutlineLevel 2-4): PT480M duration + Manual* tags
+                # NON-ROOT SUMMARY TASKS (OutlineLevel 2-5): Minimum PT480M duration + Manual* tags
                 SubElement(task, "Work").text = "PT0M"
-                SubElement(task, "Duration").text = "PT480M"
                 
-                # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-4) need Type, IsEffortDriven, and Manual Scheduling tags
+                # L5 ENFORCEMENT: Task Groups (OutlineLevel=5) MUST have minimum 1-day duration
+                # Even if children total less time, enforce PT480M minimum to meet Workfront requirements
+                if outline_level == 5:
+                    # For L5, enforce minimum 1 day (480 minutes)
+                    SubElement(task, "Duration").text = "PT480M"
+                    print(f"[XML EXPORT] 📏 Enforced L5 minimum duration: {name_txt[:40]} (WBS {r['WBS']}, Duration=PT480M)")
+                else:
+                    # For L2-L4, use standard 480M
+                    SubElement(task, "Duration").text = "PT480M"
+                
+                # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-5) need Type, IsEffortDriven, and Manual Scheduling tags
                 # These lock parent timelines and prevent Workfront from recalculating rolled-up dates
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
@@ -10284,13 +10296,6 @@ def convert_excel_to_mspdi(
                 start_dt = to_datetime(start_val)
                 finish_dt = to_datetime(finish_val)
                 
-                # Calculate actual time difference in minutes
-                time_diff_total_minutes = int((finish_dt - start_dt).total_seconds() / 60)
-                
-                # Apply minimum 60 minutes (1 hour) for non-milestone tasks
-                # Use actual timestamp difference - NO calendar-day expansion or 480-min snapping
-                dur_minutes = max(60, time_diff_total_minutes)
-                
                 # Work calculation: For multi-assignment tasks, sum all assignee hours
                 if r.get("multi_assignment") and "assignments" in r:
                     # Multi-assignment: sum all assignee work hours
@@ -10298,9 +10303,27 @@ def convert_excel_to_mspdi(
                     work_minutes = int(total_work_hours * 60)
                 else:
                     # Single assignment: use PlannedHours from Gantt (actual effort)
-                    work_minutes = max(0, int(uid_to_sched[r['UID']]['PlannedHours'] * 60)) if not pd.isna(uid_to_sched[r['UID']]['PlannedHours']) else 0
+                    work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
+                    if pd.isna(work_hours):
+                        work_hours = 0
+                    work_minutes = max(0, int(work_hours * 60))
                 
                 SubElement(task, "Work").text = f"PT{work_minutes}M"
+                
+                # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
+                # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
+                work_hours = work_minutes / 60.0
+                
+                if work_hours == 0:
+                    # Milestone: zero duration
+                    dur_minutes = 0
+                else:
+                    # Regular task: required_days = max(1, ceil(hours / 8.0))
+                    # Uses 8-hour workday aligned with MinutesPerDay=480
+                    import math
+                    required_days = max(1, math.ceil(work_hours / 8.0))
+                    dur_minutes = required_days * 480
+                
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
                 # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
