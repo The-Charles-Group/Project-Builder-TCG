@@ -53,3 +53,8 @@ pytest-cov
 pytest-html
 pytest-json-report
 pytest-xdist
+google-api-python-client
+google-auth
+pytest
+pytest-timeout
+replit-object-storage
