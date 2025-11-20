@@ -9512,47 +9512,29 @@ def convert_excel_to_mspdi(
         summary_set = set(children_by_parent.keys())
         
         # Build dependencies: Use WBS Dependencies column if flag enabled, otherwise use scheduler edges
+        # Build L5-to-L5 chain dependencies
         if ENABLE_WBS_DEPENDENCIES:
-            # WBS-BASED DEPENDENCIES: Read directly from Dependencies column
-            # This approach is safer because it uses the stable component chains from the scenario builder
-            print(f"[WBS-DEP] Using WBS Dependencies column for dependency generation")
-            init_edges = []
-            for r in rows:
-                deps = r.get("Dependencies", "").strip()
-                if not deps:
-                    continue
-                
-                # OPTIONAL: Only attach dependencies for high-level tasks (OutlineLevel ≤ 5)
-                outline = r["WBS"].count(".") + 1
-                if outline > 5:
-                    continue  # Skip leaf-to-leaf conga lines
-                
-                succ_wbs = r["WBS"]
-                for dep_wbs in deps.split(","):
-                    dep_wbs = dep_wbs.strip()
-                    if dep_wbs:
-                        init_edges.append((dep_wbs, succ_wbs))
-            
-            normalized_edges = []
-            for pred_wbs, succ_wbs in init_edges:
-                # Rewrite removed children to their parents
-                actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
-                actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
-                
-                # Skip if either doesn't exist after merge
-                if actual_pred not in by_wbs or actual_succ not in by_wbs:
-                    print(f"[WBS-DEP] ⚠️ Orphaned WBS reference: {pred_wbs} → {succ_wbs} (skipping)")
-                    continue
-                    
-                # Skip hierarchy edges (ancestor -> descendant)
-                if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
-                    continue
-                
-                # WBS mode: Do NOT convert summaries to leaves (keep L5 → L5 dependencies)
-                if actual_pred != actual_succ:
-                    normalized_edges.append((actual_pred, actual_succ))
-            
-            print(f"[WBS-DEP] Built {len(normalized_edges)} dependencies from WBS column ({len(init_edges)} initial edges)")
+            print("[WBS-DEP] Building L5→L5 dependencies between siblings")
+            wbs_dependencies = []
+            orphaned_refs = []
+
+            # Group rows by their L4 parent (everything up to 4 dots)
+            rows_sorted = sorted(rows, key=lambda r: r["WBS"])
+            last_l5_by_parent = {}
+
+            for r in rows_sorted:
+                wbs = r["WBS"]
+                outline = wbs.count(".") + 1
+                parent_prefix = ".".join(wbs.split(".")[:4]) if outline > 4 else None
+
+                if outline == 5:
+                    if parent_prefix in last_l5_by_parent:
+                        pred = last_l5_by_parent[parent_prefix]
+                        wbs_dependencies.append((pred, wbs))
+                        print(f"[WBS-DEP] L5→L5: {pred} → {wbs}")
+                    last_l5_by_parent[parent_prefix] = wbs
+
+            normalized_edges = wbs_dependencies
         else:
             # LEGACY MODE: Normalize dependencies & drop unsafe hierarchy edges
             init_edges = []
