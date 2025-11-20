@@ -1,0 +1,185 @@
+1. Why row 9 is linked to row 8 instead of row 5
+
+In the “WBS dependencies = True” exports:
+
+L5 Client Review & Revisions
+
+UID 5, WBS 1.1.1.1.1, OutlineLevel 5
+
+Its three L6 role rows:
+
+UID 6 – WBS 1.1.1.1.1.1 (Acct Mgr)
+
+UID 7 – WBS 1.1.1.1.1.2 (Copywriter)
+
+UID 8 – WBS 1.1.1.1.1.3 (Strategist)
+
+Next L5 component Define Pillar Architecture:
+
+UID 9, WBS 1.1.1.1.2, OutlineLevel 5
+
+In the XML, UID 9 has:
+
+<Task>
+  <UID>9</UID>
+  ...
+  <PredecessorLink>
+    <PredecessorUID>8</PredecessorUID>
+  </PredecessorLink>
+</Task>
+
+
+So the dependency is L6 → L5 (UID 8 → UID 9), not L5 → L5 (UID 5 → UID 9) like you want. 
+
+St.Regis_Nashville_Branding_Age…
+
+That tells us exactly what the WBS-dependency builder is doing:
+
+It parses the Dependencies column (which, in your sheet, is usually pointing at the leaf / last L6 role row of the previous component).
+
+It builds a wbs_to_uid map over all tasks (L1–L6).
+
+When it sees a predecessor like 1.1.1.1.1.3, it looks it up directly and gets UID 8.
+
+It only filters the successor by OutlineLevel <= 5, but the predecessor can still be L6.
+
+So behavior you’re seeing is exactly “use WBS literally”, no normalization up to component level.
+
+2. How to fix it: normalize both ends to L5 (or ≤5)
+
+When you talk to the Replit agent / architect again, I’d steer them to this very specific adjustment to the WBS-dependency builder:
+
+a. Build helper maps
+
+From the rows / tasks already in memory:
+
+wbs_to_uid[wbs] -> uid
+
+uid_to_outline[uid] -> outline_level
+
+uid_to_wbs[uid] -> wbs
+
+b. A parent_wbs helper
+def parent_wbs(wbs: str) -> str | None:
+    parts = wbs.split(".")
+    return ".".join(parts[:-1]) if len(parts) > 1 else None
+
+c. Normalize the predecessor WBS up to ≤5
+
+When parsing a dependency WBS value:
+
+pred_wbs = raw_pred_wbs  # from Dependencies column
+
+# 1) Map WBS → UID (could be L6)
+pred_uid = wbs_to_uid.get(pred_wbs)
+if pred_uid is None:
+    # log orphan and skip
+    continue
+
+# 2) If outline > 5, walk up parents until we hit ≤5 or run out
+outline = uid_to_outline[pred_uid]
+while outline > 5:
+    pw = parent_wbs(uid_to_wbs[pred_uid])
+    if pw is None:
+        break
+    parent_uid = wbs_to_uid.get(pw)
+    if parent_uid is None:
+        break
+    pred_uid = parent_uid
+    outline = uid_to_outline[pred_uid]
+
+
+Result:
+
+1.1.1.1.1.3 (UID 8, level 6) → parent WBS 1.1.1.1.1 (UID 5, level 5).
+
+So Define Pillar Architecture (UID 9) will get PredecessorUID=5, which is what you expect.
+
+d. Also enforce ≤5 on the successor
+
+You already filter successors by OutlineLevel <= 5, but I’d make it explicit in the logic:
+
+if successor_outline > 5:
+    continue  # only put predecessors on L5 & above
+
+
+And keep the “anti-conga” filter (skip edges where pred_uid == succ_uid).
+
+That should give:
+
+Row 9 predecessor icon → row 5
+
+Row 12 → row 11’s parent component, etc.
+Basically the same pattern as your doc spec.
+
+3. Why multi-assignment “does nothing” right now
+
+Looking at the XML with ENABLE_MULTI_ASSIGNMENT=True, the task list is structurally identical:
+
+All three L6 role rows still exist as separate tasks (UID 6, 7, 8 etc). 
+
+St.Regis_Nashville_Branding_Age…
+
+There’s no sign that L5 tasks are getting multiple <Assignment> elements referencing different resources.
+
+So even though they said “multi-assignment grouping” is implemented, in practice at least one of these is true:
+
+The grouping function is not actually wired into the final assignment export; or
+
+The grouping key they’re using doesn’t consider WBS/L5 correctly, so nothing ever groups.
+
+Concretely, in the XML you shared:
+
+Each L6 task has its own work value (120m, 60m, 60m…) and will get its own assignment.
+
+The L5 task (UID 5) has <Work>PT0M</Work> and no assignments, so Workfront has nothing to show in the L5 “Assignments” cell.
+
+That’s why turning the flag on doesn’t look any different in Workfront.
+
+4. What you want the end state to be (for the agent)
+
+Here’s the target behavior you’ve been circling:
+
+Structure
+
+Keep L6 tasks in the XML (for pricing, revenue, hours).
+
+Still have L5 components as the “client-facing” task rows.
+
+Dependencies
+
+Dependencies are only between L5+ tasks (OutlineLevel ≤ 5).
+
+When a dependency is created on a leaf role row, normalize it up to that role’s L5 component (as in section 2).
+
+Assignments
+
+For each L5 component, create one task but multiple assignments, one per role (Account Manager, Copywriter, Strategist, etc), using:
+
+TaskUID = L5 UID
+
+ResourceUID = role resource
+
+Work = role’s hours
+
+L6’s hours and revenue still exist on the leaf tasks for finance, but Workfront’s “Assignments” column at L5 shows all roles.
+
+Think of it like this for your sample:
+
+Tasks:
+
+UID 5 — L5 Client Review & Revisions (no work or 4h total, depending on what you prefer)
+
+UID 6/7/8 — L6 role tasks with detailed work and cost
+
+Assignments:
+
+3 <Assignment> rows all pointing to TaskUID=5, with different ResourceUIDs and Work values.
+
+Visually in Workfront:
+
+The Gantt / WBS still shows rows 5–8 like now (so finance is happy).
+
+Double-clicking the Assignments on row 5 shows all three roles allocated (like your “Advanced Assignments” screenshot from earlier).
+
+Dependencies on row 9 point to row 5, not the last role row.
