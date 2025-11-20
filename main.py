@@ -41,7 +41,7 @@ import pickle
 # ============================================================
 ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
-ENABLE_WBS_SCHEDULER = False    # Use WBS-based scheduler (8h/day, FS-only) to align with Workfront
+ENABLE_WBS_SCHEDULER = True     # Use WBS-based scheduler (8h/day, FS-only) to align with Workfront [PHASE 3 ENABLED]
 # ROLLBACK: Set all to False to restore legacy behavior (scheduler edges, one task per role, offset-based dates)
 # ============================================================
 
@@ -9782,6 +9782,13 @@ def convert_excel_to_mspdi(
 
 
         # Calculate task schedules
+        # PHASE 3: Check if scheduler dates exist; use them instead of legacy dates
+        scheduler_dates = scenario.get("scheduler_dates", {})
+        if scheduler_dates:
+            print(f"[PHASE3] ✅ Using SCHEDULER DATES from scenario ({len(scheduler_dates)} tasks)")
+        else:
+            print(f"[PHASE3] ℹ️ No scheduler_dates found, using legacy date calculation")
+        
         uid_to_sched = {}
         preserved_dates = set()  # Track which UIDs have dates from Gantt that should not be rolled up
         
@@ -9790,7 +9797,34 @@ def convert_excel_to_mspdi(
         uid_to_row = {r["UID"]: r for r in rows}
         
         for r in rows:
-            # CRITICAL FIX: Check if Start_Date and End_Date already exist from Gantt timeline edits
+            # PHASE 3: If scheduler dates exist for this UID, use them directly
+            uid = r["UID"]
+            if uid in scheduler_dates:
+                sched = scheduler_dates[uid]
+                start_date = sched["start"]
+                finish_date = sched["finish"]
+                
+                # Convert to datetime if needed
+                if isinstance(start_date, datetime.date) and not isinstance(start_date, datetime.datetime):
+                    start_date = datetime.datetime.combine(start_date, datetime.time(8, 0))
+                if isinstance(finish_date, datetime.date) and not isinstance(finish_date, datetime.datetime):
+                    finish_date = datetime.datetime.combine(finish_date, datetime.time(17, 0))
+                
+                # Duration from scheduler (days)
+                duration_days = sched.get("duration_days", 0)
+                duration_hours = duration_days * 8.0 if duration_days else 0
+                
+                print(f"[PHASE3] 🎯 UID {uid} {r['WBS']} using SCHEDULER: {start_date.date()} → {finish_date.date()} ({duration_days:.1f} days, {duration_hours:.1f}h)")
+                
+                uid_to_sched[uid] = {
+                    "Start": start_date,
+                    "Finish": finish_date,
+                    "PlannedHours": r["PlannedHours"],
+                    "DurationHours": duration_hours
+                }
+                continue  # Skip legacy logic below
+            
+            # LEGACY: Check if Start_Date and End_Date already exist from Gantt timeline edits
             # If they do, preserve them EXACTLY instead of recalculating from offsets
             # This ensures Workfront imports match the Gantt UI timeline
             start_date_str = r.get("Start_Date", "")
