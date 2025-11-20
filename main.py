@@ -30,10 +30,13 @@ import pickle
 # ============================================================
 # FEATURE FLAGS (GPT-5 SPECIFICATION)
 # ============================================================
-ENABLE_L5_ONLY_EXPORT = True     # Remove L6 rows, export only L5 components as tasks
+# EXPORT_MODE: Controls XML export architecture
+#   "A" = L5-only export (removes L6 rows completely)
+#   "B" = L5 summaries + L6 children with synced dates (Workfront Mode B spec)
+EXPORT_MODE = "B"                # Mode A (L5-only) or Mode B (L5+L6 with synced dates)
 ENABLE_MULTI_ASSIGNMENT = True   # Aggregate L6 role hours into L5 multi-assignments
 ENABLE_WBS_DEPENDENCIES = True   # Use WBS Dependencies with L5 normalization
-# ROLLBACK: Set all to False to restore legacy behavior (L6 rows, single assignments, scheduler edges)
+# ROLLBACK: Set EXPORT_MODE="A" to restore L5-only behavior
 # ============================================================
 
 try:
@@ -9607,8 +9610,15 @@ def convert_excel_to_mspdi(
             """
             GPT-5 SPECIFICATION: Aggregate L6 role rows into L5 parent tasks with multi-assignment.
             
-            Returns filtered rows where OutlineLevel <= 5 with aggregated data and multi-assignment structures.
-            L6 rows are completely removed from the output.
+            Mode A (EXPORT_MODE="A"): L5-only export
+            - Returns filtered rows where OutlineLevel <= 5
+            - L6 rows are completely removed from the output
+            
+            Mode B (EXPORT_MODE="B"): L5 summaries + L6 children with synced dates
+            - Returns ALL rows (both L5 and L6)
+            - L5 components get aggregated metrics and multi-assignments
+            - L6 children get dates synced to match their L5 parent (Start, Finish, Duration)
+            - L6 children retain their individual hours/revenue
             
             Each L5 component gets:
             - Summed total_hours and total_revenue from all L6 children
@@ -9684,22 +9694,21 @@ def convert_excel_to_mspdi(
                         l5_children[comp_uid].append(row)
             
             # Aggregate L6 data into L5 parents
+            # Store L5 aggregated data for Mode B date sync
+            l5_aggregated_data: dict[int, dict] = {}  # uid -> {start, finish, duration}
             aggregated_rows = []
             l6_merged_count = 0
+            l6_kept_count = 0
             l5_component_count = 0
             total_hours_sum = 0.0
             total_revenue_sum = 0.0
             
+            # Pass 1: Build L5 aggregated data
             for row in rows:
                 uid = row["UID"]
                 outline = uid_to_outline.get(uid, 99)
                 
-                # Filter 1: Remove all L6+ rows
-                if outline > 5:
-                    l6_merged_count += 1
-                    continue
-                
-                # Filter 2: Keep and aggregate L5 components that have children
+                # Aggregate L5 components that have children
                 if outline == 5 and uid in l5_children:
                     children = l5_children[uid]
                     
@@ -9756,16 +9765,71 @@ def convert_excel_to_mspdi(
                         
                         total_hours_sum += total_hours
                         total_revenue_sum += total_revenue
+                        
+                        # Store aggregated data for Mode B date sync
+                        l5_aggregated_data[uid] = {
+                            "start_date": start_date,
+                            "end_date": end_date,
+                            "duration": duration_days
+                        }
+            
+            # Pass 2: Build output rows based on export mode
+            for row in rows:
+                uid = row["UID"]
+                outline = uid_to_outline.get(uid, 99)
                 
-                # Keep all rows with OutlineLevel <= 5
+                # Mode A: Remove all L6+ rows
+                if EXPORT_MODE == "A" and outline > 5:
+                    l6_merged_count += 1
+                    continue
+                
+                # Mode B: Keep L6 rows but sync dates to L5 parent
+                if EXPORT_MODE == "B" and outline > 5:
+                    l6_kept_count += 1
+                    
+                    # Find L5 parent
+                    comp_uid = uid
+                    comp_wbs = row.get("WBS", "")
+                    comp_outline = outline
+                    depth_guard = 0
+                    max_depth = 10
+                    
+                    while comp_outline > 5 and depth_guard < max_depth:
+                        pw = parent_wbs(comp_wbs)
+                        if not pw:
+                            break
+                        parent_uid = wbs_to_uid.get(pw)
+                        if parent_uid is None:
+                            break
+                        comp_uid = parent_uid
+                        comp_wbs = pw
+                        comp_outline = uid_to_outline.get(comp_uid, comp_outline)
+                        depth_guard += 1
+                    
+                    # Sync dates to L5 parent if found
+                    if comp_outline == 5 and comp_uid in l5_aggregated_data:
+                        parent_data = l5_aggregated_data[comp_uid]
+                        row["Start_Date"] = parent_data["start_date"]
+                        row["End_Date"] = parent_data["end_date"]
+                        row["Duration"] = parent_data["duration"]
+                
+                # Keep all non-L6 rows, and L6 rows in Mode B
                 aggregated_rows.append(row)
             
             # Log aggregation summary
-            print(f"\n[L5-EXPORT] ══════════════════════════════════════════════")
-            print(f"[L5-EXPORT] {l6_merged_count} L6 roles merged into {l5_component_count} L5 components")
-            print(f"[L5-EXPORT] Total hours: {total_hours_sum:.1f}   Total revenue: ${total_revenue_sum:,.2f}")
-            print(f"[L5-EXPORT] Filtered output: {len(aggregated_rows)} tasks (OutlineLevel ≤ 5)")
-            print(f"[L5-EXPORT] ══════════════════════════════════════════════\n")
+            if EXPORT_MODE == "A":
+                print(f"\n[MODE A - L5-ONLY] ══════════════════════════════════════════")
+                print(f"[MODE A] {l6_merged_count} L6 roles merged into {l5_component_count} L5 components")
+                print(f"[MODE A] Total hours: {total_hours_sum:.1f}   Total revenue: ${total_revenue_sum:,.2f}")
+                print(f"[MODE A] Filtered output: {len(aggregated_rows)} tasks (OutlineLevel ≤ 5)")
+                print(f"[MODE A] ══════════════════════════════════════════════════════\n")
+            else:  # Mode B
+                print(f"\n[MODE B - L5+L6] ══════════════════════════════════════════")
+                print(f"[MODE B] {l6_kept_count} L6 roles kept with dates synced to L5 parent")
+                print(f"[MODE B] {l5_component_count} L5 components with multi-assignment")
+                print(f"[MODE B] Total hours: {total_hours_sum:.1f}   Total revenue: ${total_revenue_sum:,.2f}")
+                print(f"[MODE B] Full output: {len(aggregated_rows)} tasks (L5 summaries + L6 children)")
+                print(f"[MODE B] ══════════════════════════════════════════════════════\n")
             
             return aggregated_rows
 
