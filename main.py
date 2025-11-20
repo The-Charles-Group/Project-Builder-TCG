@@ -30,7 +30,7 @@ import pickle
 # ============================================================
 # FEATURE FLAGS
 # ============================================================
-ENABLE_WBS_DEPENDENCIES = False  # Use WBS Dependencies column instead of scheduler edges
+ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = False  # Group roles into multi-assignment tasks
 # ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
 # ============================================================
