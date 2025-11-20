@@ -10370,6 +10370,12 @@ def convert_excel_to_mspdi(
             for l6_uid, l5_uid in l6_to_l5_uid_map.items():
                 uid_alias_map[l6_uid] = l5_uid
             
+            # VALIDATION: Check uid_alias_map completeness
+            print(f"[L5-ONLY] UID Alias Map Validation:")
+            print(f"[L5-ONLY]   - Total aliases: {len(uid_alias_map)}")
+            print(f"[L5-ONLY]   - L6→L5 mappings: {len(l6_to_l5_uid_map)}")
+            print(f"[L5-ONLY]   - Sample L6→L5: {list(l6_to_l5_uid_map.items())[:3]}")
+            
             print(f"[L5-ONLY] Transformed: {original_count} rows → {len(rows)} tasks ({len(component_buckets)} L5 components)")
             print(f"[L5-ONLY] Created {len(l6_to_l5_uid_map)} L6→L5 UID mappings for dependency remapping")
             print("[L5-ONLY] ═══════════════════════════════════════════════════════════")
