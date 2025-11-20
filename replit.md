@@ -21,20 +21,23 @@ A critical feature is the Gantt Timeline Date Preservation and Workfront Manual 
 The system also incorporates WBS-Based Dependencies and Multi-Assignment Export, implementing GPT-5 specifications for dependency normalization to L5 (OutlineLevel ≤ 5) and parallel role execution, enhancing accuracy in project structure and resource allocation.
 
 ### XML Export Modes (Mode A vs Mode B)
-The XML export supports two architectures for Workfront compatibility, controlled by `EXPORT_MODE` flag:
+The XML export supports two architectures, controlled by `EXPORT_MODE` flag:
 
-#### Mode A - L5-Only Export (Legacy)
+#### Mode A - L5-Only Export (ACTIVE - Workfront Compatible)
 Set `EXPORT_MODE = "A"` for L5-only export:
 - **L6 Role Aggregation**: All OutlineLevel > 5 (role rows) are aggregated into their L5 parent components, completely removing L6 tasks from the export
-- **Output**: Only L5 summary tasks with multi-assignments
+- **Workfront Compatibility**: Ensures max OutlineLevel ≤ 5 (Workfront limitation)
+- **Multi-Assignment Structure**: All role hours/costs preserved in L5 `<Assignment>` elements
+- **Output**: Only L5 summary tasks with multi-assignments, fully compatible with Workfront import
 
-#### Mode B - L5 Summaries + L6 Children (Current)
-Set `EXPORT_MODE = "B"` for Mode B specification (ACTIVE):
+#### Mode B - L5 Summaries + L6 Children (Incompatible with Workfront)
+Set `EXPORT_MODE = "B"` for Mode B specification (NOT RECOMMENDED):
 - **L6 Tasks Retained**: All OutlineLevel > 5 (role rows) are kept in the task list
 - **L6 Date Synchronization**: L6 child task dates are synchronized to match their L5 parent (Start, Finish, Duration)
 - **L6 No Dependencies**: L6 tasks have NO dependency links (all dependencies normalized to L5→L5)
 - **L5 Summary Tasks**: L5 components receive aggregated metrics (min/max dates, sum hours/revenue) and multiple `<Assignment>` entries
-- **Output**: Complete task list with both L5 summary tasks (with multi-assignments) and L6 role children (with synced dates)
+- **Workfront Limitation**: XML with OutlineLevel > 5 causes Workfront import failure
+- **Output**: Complete task list with both L5 summary tasks (with multi-assignments) and L6 role children (with synced dates) - cannot be imported to Workfront
 
 #### Common Features (Both Modes)
 - **Multi-Assignment XML**: Each L5 component exports with multiple `<Assignment>` entries, one per role, with correct hours/rates
