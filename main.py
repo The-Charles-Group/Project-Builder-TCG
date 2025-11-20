@@ -7882,6 +7882,102 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
                 except:
                     pass
 
+# ---------- Phase 2: WBS Scheduler Dual-Write Integration ----------
+
+def _apply_wbs_scheduler_to_scenario(scenario: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    PHASE 2: Apply WBS scheduler to compute dates when ENABLE_WBS_SCHEDULER=True.
+    Stores scheduler_dates in scenario alongside legacy dates, logs diffs per deliverable.
+    
+    Design: Scheduler owns all children (L4/L5/L6), manual edits only apply to parents (L3).
+    After computing child dates, rollup to parents.
+    
+    Returns: Updated scenario with scheduler_dates key (or unchanged if flag disabled).
+    """
+    if not ENABLE_WBS_SCHEDULER:
+        print(f"[PHASE2] ENABLE_WBS_SCHEDULER=False, skipping scheduler (legacy dates used)")
+        return scenario
+    
+    print(f"[PHASE2] ✅ ENABLE_WBS_SCHEDULER=True, applying WBS scheduler to compute dates")
+    
+    try:
+        rows = scenario.get("items", [])
+        if not rows:
+            print(f"[PHASE2] ⚠️ No items in scenario, skipping scheduler")
+            return scenario
+        
+        project_start = scenario.get("project_start")
+        if not project_start:
+            print(f"[PHASE2] ⚠️ No project_start date, using current date")
+            project_start = datetime.date.today().isoformat()
+        
+        # Parse project_start (handle both YYYY-MM-DD and ISO format)
+        if isinstance(project_start, str):
+            project_start_date = datetime.date.fromisoformat(project_start[:10])
+            project_start_dt = datetime.datetime.combine(project_start_date, datetime.time(8, 0))
+        else:
+            project_start_dt = project_start
+        
+        # Build normalized edges from Dependencies column (WBS-based)
+        normalized_edges = []
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows if "WBS" in r}
+        
+        for r in rows:
+            deps_str = r.get("Dependencies", "")
+            if not deps_str:
+                continue
+            # Dependencies is comma-separated WBS codes
+            for dep_wbs in str(deps_str).split(","):
+                dep_wbs = dep_wbs.strip()
+                if dep_wbs and dep_wbs in wbs_to_uid:
+                    normalized_edges.append((dep_wbs, r["WBS"]))
+        
+        print(f"[PHASE2] Computing schedule for {len(rows)} tasks with {len(normalized_edges)} dependencies")
+        
+        # SCHEDULER PHASE 1: Compute child dates (leaves/L5)
+        uid_to_sched = compute_wbs_schedule(rows, normalized_edges, project_start_dt)
+        
+        # SCHEDULER PHASE 2: Roll up parent dates (L3/L4)
+        uid_to_sched = rollup_parent_dates(rows, uid_to_sched)
+        
+        print(f"[PHASE2] ✅ Schedule computed for {len(uid_to_sched)} tasks")
+        
+        # Store scheduler dates
+        scenario["scheduler_dates"] = uid_to_sched
+        
+        # Log diffs per deliverable (L3)
+        print(f"\n[PHASE2] === DIFF LOG: SCHEDULER vs LEGACY DATES ===")
+        for r in rows:
+            uid = r["UID"]
+            outline_level = r.get("OutlineLevel", 0)
+            
+            # Only log deliverables (L3) for clarity
+            if outline_level != 3:
+                continue
+            
+            if uid not in uid_to_sched:
+                continue
+            
+            sched_start = uid_to_sched[uid]["start"]
+            sched_finish = uid_to_sched[uid]["finish"]
+            legacy_start = r.get("Start_Date", "N/A")
+            legacy_finish = r.get("End_Date", "N/A")
+            
+            print(f"[PHASE2] {r['WBS']} {r.get('Task_Label', 'Unknown')[:40]}")
+            print(f"  SCHEDULER: {sched_start.date()} → {sched_finish.date()}")
+            print(f"  LEGACY:    {legacy_start} → {legacy_finish}")
+        
+        print(f"[PHASE2] === END DIFF LOG ===\n")
+        
+        return scenario
+    
+    except Exception as e:
+        print(f"[PHASE2] ❌ Error in scheduler: {str(e)[:200]}")
+        print(f"[PHASE2] Falling back to legacy dates")
+        import traceback
+        traceback.print_exc()
+        return scenario
+
 # ---------- Individual Scenario Export Endpoints (Task 4.5) ----------
 
 def _export_single_scenario_xml(
@@ -7912,6 +8008,9 @@ def _export_single_scenario_xml(
     scenario = _inflate_components_if_missing(scenario)
     
     print(f"[EXPORT_XML] After inflate, has timeline_tasks: {'timeline_tasks' in scenario}")
+    
+    # PHASE 2: Apply WBS scheduler (stores scheduler_dates, logs diffs, keeps legacy dates)
+    scenario = _apply_wbs_scheduler_to_scenario(scenario)
     
     # Determine project name
     project = (project_name 
