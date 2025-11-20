@@ -27,18 +27,6 @@ import time
 from functools import lru_cache
 import pickle
 
-# ============================================================
-# FEATURE FLAGS (GPT-5 SPECIFICATION)
-# ============================================================
-# EXPORT_MODE: Controls XML export architecture
-#   "A" = L5-only export (removes L6 rows completely) - Workfront compatible
-#   "B" = L5 summaries + L6 children with synced dates (causes Workfront import failure)
-EXPORT_MODE = "A"                # Mode A (L5-only) for Workfront compatibility
-ENABLE_MULTI_ASSIGNMENT = True   # Aggregate L6 role hours into L5 multi-assignments
-ENABLE_WBS_DEPENDENCIES = True   # Use WBS Dependencies with L5 normalization
-# ROLLBACK: Set EXPORT_MODE="A" to restore L5-only behavior
-# ============================================================
-
 try:
     from docx import Document  # pip install python-docx
 except Exception:
@@ -9366,488 +9354,6 @@ def convert_excel_to_mspdi(
                     return last_leaf(children[-1])
             return wbs
 
-        # === GPT-5 SPEC: WBS DEPENDENCY HELPERS ===
-        def parent_wbs(wbs: str) -> str | None:
-            """
-            Get parent WBS by removing last segment.
-            If wbs == '1.2.3.4.5.6' -> '1.2.3.4.5'
-            If wbs == '1'          -> None
-            """
-            if not wbs:
-                return None
-            parts = wbs.split(".")
-            if len(parts) <= 1:
-                return None
-            return ".".join(parts[:-1])
-
-        def build_wbs_dependencies(rows: list[dict]) -> list[tuple[int, int, str, int]]:
-            """
-            GPT-5 SPECIFICATION: Build WBS-based dependencies with L5 normalization.
-            
-            Returns list of (pred_uid, succ_uid, dep_type, lag) tuples.
-            - Only emits predecessors for tasks with OutlineLevel <= 5
-            - Normalizes predecessor WBS up to L5 (OutlineLevel <= 5) by walking parent chain
-            - Skips self-dependencies after normalization
-            - Logs warnings for orphaned/unresolved WBS references
-            """
-            edges: list[tuple[int, int, str, int]] = []
-            
-            # Build helper indexes (GPT-5 spec)
-            wbs_to_uid: dict[str, int] = {}
-            uid_to_wbs: dict[int, str] = {}
-            uid_to_outline: dict[int, int] = {}
-            
-            for row in rows:
-                uid = row["UID"]
-                wbs = row.get("WBS", "")
-                
-                # GPT-5 ARCHITECT FIX: Use OutlineLevel from row data, not calculated from WBS
-                # Try OutlineLevel field first, fall back to WBS depth calculation
-                outline = row.get("OutlineLevel")
-                if outline is None:
-                    if wbs:
-                        outline = wbs.count(".") + 1
-                    else:
-                        # Log warning for missing WBS (architect feedback: don't skip silently)
-                        print(f"[WBS-DEP] ⚠️  Row UID {uid} missing WBS and OutlineLevel")
-                        continue
-                
-                if wbs:  # Only add to indexes if WBS exists
-                    wbs_to_uid[wbs] = uid
-                    uid_to_wbs[uid] = wbs
-                    uid_to_outline[uid] = outline
-            
-            # Process dependencies
-            for row in rows:
-                orig_succ_uid = row["UID"]
-                succ_wbs = row.get("WBS", "")
-                
-                deps_str = (row.get("Dependencies") or "").strip()
-                if not deps_str:
-                    continue
-                
-                # GPT-5 ARCHITECT FIX: Normalize successor to L5 if needed
-                succ_uid = orig_succ_uid
-                succ_outline = row.get("OutlineLevel")
-                if succ_outline is None:
-                    succ_outline = uid_to_outline.get(succ_uid, 99)
-                
-                # If successor is deeper than L5, walk up to L5 parent
-                if succ_outline > 5:
-                    depth_guard = 0
-                    max_depth = 10
-                    while succ_outline > 5 and depth_guard < max_depth:
-                        pw = parent_wbs(uid_to_wbs.get(succ_uid, ""))
-                        if not pw:
-                            print(f"[WBS-DEP] ⚠️  Successor UID {orig_succ_uid} missing parent WBS")
-                            break
-                        parent_uid = wbs_to_uid.get(pw)
-                        if parent_uid is None:
-                            print(f"[WBS-DEP] ⚠️  Successor UID {orig_succ_uid} parent {pw} not found")
-                            break
-                        succ_uid = parent_uid
-                        succ_outline = uid_to_outline.get(succ_uid, 99)
-                        depth_guard += 1
-                    
-                    # If we couldn't find ≤L5 successor, skip this row's dependencies
-                    if succ_outline > 5:
-                        print(f"[WBS-DEP] ⚠️  Could not find ≤L5 parent for successor UID {orig_succ_uid}")
-                        continue
-                
-                for raw_dep in deps_str.split(","):
-                    dep_wbs = raw_dep.strip()
-                    if not dep_wbs:
-                        continue
-                    
-                    # 1) Direct lookup WBS -> UID
-                    pred_uid = wbs_to_uid.get(dep_wbs)
-                    if pred_uid is None:
-                        print(f"[WBS-DEP] ⚠️  Orphan dependency {dep_wbs} on UID {orig_succ_uid}")
-                        continue
-                    
-                    # 2) If that UID is deeper than level 5, walk up until <=5
-                    outline = uid_to_outline.get(pred_uid)
-                    if outline is None:
-                        print(f"[WBS-DEP] ⚠️  Predecessor {dep_wbs} (UID {pred_uid}) missing OutlineLevel")
-                        continue
-                    
-                    depth_guard = 0
-                    max_depth = 10  # Prevent infinite loops in malformed hierarchies
-                    
-                    while outline > 5 and depth_guard < max_depth:
-                        pw = parent_wbs(uid_to_wbs.get(pred_uid, ""))
-                        if not pw:
-                            print(f"[WBS-DEP] ⚠️  Predecessor {dep_wbs} (UID {pred_uid}) missing parent WBS")
-                            break
-                        parent_uid = wbs_to_uid.get(pw)
-                        if parent_uid is None:
-                            print(f"[WBS-DEP] ⚠️  Predecessor {dep_wbs} parent {pw} not found")
-                            break
-                        pred_uid = parent_uid
-                        outline = uid_to_outline.get(pred_uid)
-                        if outline is None:
-                            print(f"[WBS-DEP] ⚠️  Predecessor parent UID {pred_uid} missing OutlineLevel")
-                            break
-                        depth_guard += 1
-                    
-                    # If we still don't have a ≤5 task, skip
-                    if outline > 5:
-                        print(
-                            f"[WBS-DEP] ⚠️  Could not find ≤L5 parent for {dep_wbs} "
-                            f"(UID {pred_uid}) used by UID {orig_succ_uid}"
-                        )
-                        continue
-                    
-                    # Avoid self-deps after normalization
-                    if pred_uid == succ_uid:
-                        continue
-                    
-                    # Add edge: (pred_uid, succ_uid, "FS", 0)
-                    # GPT-5 NOTE: Dependencies column currently doesn't include type/lag notation
-                    # Future enhancement: parse "1.1.1FS", "1.1.2SS+2d" etc.
-                    edges.append((pred_uid, succ_uid, "FS", 0))
-            
-            # Validation: Ensure all dependencies are L5→L5 (no L6 successors or predecessors)
-            l6_dep_violations = []
-            for pred_uid, succ_uid, dep_type, lag in edges:
-                pred_outline = uid_to_outline.get(pred_uid, 99)
-                succ_outline = uid_to_outline.get(succ_uid, 99)
-                if pred_outline > 5 or succ_outline > 5:
-                    l6_dep_violations.append((pred_uid, pred_outline, succ_uid, succ_outline))
-            
-            if l6_dep_violations:
-                print(f"\n[WBS-DEP] ❌ CRITICAL: Found {len(l6_dep_violations)} L6 dependency violations!")
-                for pred_uid, pred_ol, succ_uid, succ_ol in l6_dep_violations[:5]:
-                    print(f"[WBS-DEP] ❌  Pred UID {pred_uid} (L{pred_ol}) → Succ UID {succ_uid} (L{succ_ol})")
-            else:
-                print(f"[WBS-DEP] ✅ Validation passed: All {len(edges)} dependencies are L5→L5")
-            
-            return edges
-
-        # === GPT-5 SPEC PART 2: MULTI-ASSIGNMENT (PHASE 2 - READ-ONLY) ===
-        from dataclasses import dataclass
-        
-        @dataclass
-        class RoleSummary:
-            """GPT-5 spec: Role aggregation data for L5 components"""
-            total_hours: float = 0.0  # sum of L6 role hours under the component
-        
-        def build_component_role_summary(rows: list[dict]) -> dict[tuple[int, str], RoleSummary]:
-            """
-            GPT-5 SPECIFICATION PART 2: Build component role summary (READ-ONLY).
-            
-            Returns a map: (l5_uid, role_name_or_id) -> RoleSummary
-            Used as data source for FUTURE L5 multi-assignments.
-            
-            IMPORTANT: This does NOT change XML assignments yet.
-            This is phase 2 - data collection only for validation.
-            """
-            from collections import defaultdict
-            
-            # Build same indexes as Part 1
-            wbs_to_uid: dict[str, int] = {}
-            uid_to_wbs: dict[int, str] = {}
-            uid_to_outline: dict[int, int] = {}
-            
-            for row in rows:
-                uid = row["UID"]
-                wbs = row.get("WBS", "")
-                
-                # Use OutlineLevel from row data (consistent with Part 1)
-                outline = row.get("OutlineLevel")
-                if outline is None:
-                    if wbs:
-                        outline = wbs.count(".") + 1
-                    else:
-                        continue  # Skip rows without WBS or OutlineLevel
-                
-                if wbs:
-                    wbs_to_uid[wbs] = uid
-                    uid_to_wbs[uid] = wbs
-                    uid_to_outline[uid] = outline
-            
-            summary: dict[tuple[int, str], RoleSummary] = defaultdict(RoleSummary)
-            
-            for row in rows:
-                uid = row["UID"]
-                wbs = row.get("WBS", "")
-                if not wbs:
-                    continue
-                
-                outline = uid_to_outline.get(uid, 99)
-                
-                # We only care about true leaf / role rows here (L6)
-                if outline <= 5:
-                    continue
-                
-                # Get role from row (try multiple possible fields)
-                role = row.get("RoleName") or row.get("RoleID") or row.get("Role")
-                if not role:
-                    # Try RoleList if it exists and has one element
-                    role_list = row.get("RoleList", [])
-                    if role_list and len(role_list) == 1:
-                        role = role_list[0]
-                    else:
-                        continue  # Skip rows without clear role assignment
-                
-                hours = float(row.get("PlanHrs", 0) or row.get("PlannedHours", 0) or 0)
-                
-                # Find this task's L5 component ancestor
-                comp_uid = uid
-                comp_wbs = wbs
-                comp_outline = outline
-                depth_guard = 0
-                max_depth = 10
-                
-                while comp_outline > 5 and depth_guard < max_depth:
-                    pw = parent_wbs(comp_wbs)
-                    if not pw:
-                        break
-                    parent_uid = wbs_to_uid.get(pw)
-                    if parent_uid is None:
-                        break
-                    comp_uid = parent_uid
-                    comp_wbs = pw
-                    comp_outline = uid_to_outline.get(comp_uid, comp_outline)
-                    depth_guard += 1
-                
-                # We *only* summarize under real L5 components
-                if comp_outline != 5:
-                    continue
-                
-                key = (comp_uid, role)
-                summary[key].total_hours += hours
-            
-            return summary
-
-        # === GPT-5 SPEC: L5 AGGREGATION AND MULTI-ASSIGNMENT EXPORT ===
-        def aggregate_l5_tasks(rows: list[dict]) -> list[dict]:
-            """
-            GPT-5 SPECIFICATION: Aggregate L6 role rows into L5 parent tasks with multi-assignment.
-            
-            Mode A (EXPORT_MODE="A"): L5-only export
-            - Returns filtered rows where OutlineLevel <= 5
-            - L6 rows are completely removed from the output
-            
-            Mode B (EXPORT_MODE="B"): L5 summaries + L6 children with synced dates
-            - Returns ALL rows (both L5 and L6)
-            - L5 components get aggregated metrics and multi-assignments
-            - L6 children get dates synced to match their L5 parent (Start, Finish, Duration)
-            - L6 children retain their individual hours/revenue
-            
-            Each L5 component gets:
-            - Summed total_hours and total_revenue from all L6 children
-            - Duration = ceil(total_hours / 8) days
-            - Start = min(child starts), Finish = max(child finishes)
-            - Multi-assignment data: list of (role, hours, rate) for each L6 child
-            """
-            import math
-            from collections import defaultdict
-            
-            # Build indexes
-            wbs_to_uid: dict[str, int] = {}
-            uid_to_wbs: dict[int, str] = {}
-            uid_to_outline: dict[int, int] = {}
-            uid_to_row: dict[int, dict] = {}
-            
-            for row in rows:
-                uid = row["UID"]
-                wbs = row.get("WBS", "")
-                
-                # Get OutlineLevel from row data
-                outline = row.get("OutlineLevel")
-                if outline is None and wbs:
-                    outline = wbs.count(".") + 1
-                
-                if wbs:
-                    wbs_to_uid[wbs] = uid
-                    uid_to_wbs[uid] = wbs
-                    if outline is not None:
-                        uid_to_outline[uid] = outline
-                
-                uid_to_row[uid] = row
-            
-            # Group L6 children by their L5 parent
-            l5_children: dict[int, list[dict]] = defaultdict(list)
-            l5_uids: set[int] = set()
-            
-            for row in rows:
-                uid = row["UID"]
-                wbs = row.get("WBS", "")
-                if not wbs:
-                    continue
-                
-                outline = uid_to_outline.get(uid, 99)
-                
-                # Identify L5 tasks (these will be kept and aggregated)
-                if outline == 5:
-                    l5_uids.add(uid)
-                
-                # Identify L6+ tasks (these will be aggregated into L5 and removed)
-                elif outline > 5:
-                    # Find L5 parent by walking up
-                    comp_uid = uid
-                    comp_wbs = wbs
-                    comp_outline = outline
-                    depth_guard = 0
-                    max_depth = 10
-                    
-                    while comp_outline > 5 and depth_guard < max_depth:
-                        pw = parent_wbs(comp_wbs)
-                        if not pw:
-                            break
-                        parent_uid = wbs_to_uid.get(pw)
-                        if parent_uid is None:
-                            break
-                        comp_uid = parent_uid
-                        comp_wbs = pw
-                        comp_outline = uid_to_outline.get(comp_uid, comp_outline)
-                        depth_guard += 1
-                    
-                    # Only aggregate under true L5 components
-                    if comp_outline == 5:
-                        l5_children[comp_uid].append(row)
-            
-            # Aggregate L6 data into L5 parents
-            # Store L5 aggregated data for Mode B date sync
-            l5_aggregated_data: dict[int, dict] = {}  # uid -> {start, finish, duration}
-            aggregated_rows = []
-            l6_merged_count = 0
-            l6_kept_count = 0
-            l5_component_count = 0
-            total_hours_sum = 0.0
-            total_revenue_sum = 0.0
-            
-            # Pass 1: Build L5 aggregated data
-            for row in rows:
-                uid = row["UID"]
-                outline = uid_to_outline.get(uid, 99)
-                
-                # Aggregate L5 components that have children
-                if outline == 5 and uid in l5_children:
-                    children = l5_children[uid]
-                    
-                    if children:
-                        l5_component_count += 1
-                        
-                        # Aggregate hours and revenue
-                        total_hours = sum(float(c.get("PlannedHours", 0) or 0) for c in children)
-                        total_revenue = sum(float(c.get("Price_USD", 0) or 0) for c in children)
-                        
-                        # Calculate duration (ceil to ensure minimum 1 day)
-                        duration_days = max(1, math.ceil(total_hours / 8.0))
-                        
-                        # Aggregate dates (min start, max finish)
-                        child_starts = [c.get("Start_Date", "") for c in children if c.get("Start_Date")]
-                        child_finishes = [c.get("End_Date", "") for c in children if c.get("End_Date")]
-                        
-                        start_date = min(child_starts) if child_starts else row.get("Start_Date", "")
-                        end_date = max(child_finishes) if child_finishes else row.get("End_Date", "")
-                        
-                        # Build multi-assignment list
-                        assignments = []
-                        for child in children:
-                            role = child.get("RoleStr") or child.get("Role") or "Unassigned"
-                            # Handle RoleList if it exists
-                            if isinstance(child.get("RoleList"), list) and len(child.get("RoleList", [])) == 1:
-                                role = child["RoleList"][0]
-                            
-                            hours = float(child.get("PlannedHours", 0) or 0)
-                            rate = float(child.get("Rate_USD", 0) or 0)
-                            price = float(child.get("Price_USD", 0) or 0)
-                            
-                            assignments.append({
-                                "resource_name": role,
-                                "work_hours": hours,
-                                "rate_usd": rate,
-                                "price_usd": price
-                            })
-                        
-                        # Update row with aggregated data
-                        row["PlannedHours"] = total_hours
-                        row["Price_USD"] = total_revenue
-                        row["Duration"] = duration_days
-                        row["Start_Date"] = start_date
-                        row["End_Date"] = end_date
-                        
-                        # Mark as multi-assignment and attach assignment data
-                        row["multi_assignment"] = True
-                        row["assignments"] = assignments
-                        
-                        # Set RoleList to all unique roles
-                        row["RoleList"] = list(set(a["resource_name"] for a in assignments))
-                        row["RoleStr"] = ",".join(row["RoleList"])
-                        
-                        total_hours_sum += total_hours
-                        total_revenue_sum += total_revenue
-                        
-                        # Store aggregated data for Mode B date sync
-                        l5_aggregated_data[uid] = {
-                            "start_date": start_date,
-                            "end_date": end_date,
-                            "duration": duration_days
-                        }
-            
-            # Pass 2: Build output rows based on export mode
-            for row in rows:
-                uid = row["UID"]
-                outline = uid_to_outline.get(uid, 99)
-                
-                # Mode A: Remove all L6+ rows
-                if EXPORT_MODE == "A" and outline > 5:
-                    l6_merged_count += 1
-                    continue
-                
-                # Mode B: Keep L6 rows but sync dates to L5 parent
-                if EXPORT_MODE == "B" and outline > 5:
-                    l6_kept_count += 1
-                    
-                    # Find L5 parent
-                    comp_uid = uid
-                    comp_wbs = row.get("WBS", "")
-                    comp_outline = outline
-                    depth_guard = 0
-                    max_depth = 10
-                    
-                    while comp_outline > 5 and depth_guard < max_depth:
-                        pw = parent_wbs(comp_wbs)
-                        if not pw:
-                            break
-                        parent_uid = wbs_to_uid.get(pw)
-                        if parent_uid is None:
-                            break
-                        comp_uid = parent_uid
-                        comp_wbs = pw
-                        comp_outline = uid_to_outline.get(comp_uid, comp_outline)
-                        depth_guard += 1
-                    
-                    # Sync dates to L5 parent if found
-                    if comp_outline == 5 and comp_uid in l5_aggregated_data:
-                        parent_data = l5_aggregated_data[comp_uid]
-                        row["Start_Date"] = parent_data["start_date"]
-                        row["End_Date"] = parent_data["end_date"]
-                        row["Duration"] = parent_data["duration"]
-                
-                # Keep all non-L6 rows, and L6 rows in Mode B
-                aggregated_rows.append(row)
-            
-            # Log aggregation summary
-            if EXPORT_MODE == "A":
-                print(f"\n[MODE A - L5-ONLY] ══════════════════════════════════════════")
-                print(f"[MODE A] {l6_merged_count} L6 roles merged into {l5_component_count} L5 components")
-                print(f"[MODE A] Total hours: {total_hours_sum:.1f}   Total revenue: ${total_revenue_sum:,.2f}")
-                print(f"[MODE A] Filtered output: {len(aggregated_rows)} tasks (OutlineLevel ≤ 5)")
-                print(f"[MODE A] ══════════════════════════════════════════════════════\n")
-            else:  # Mode B
-                print(f"\n[MODE B - L5+L6] ══════════════════════════════════════════")
-                print(f"[MODE B] {l6_kept_count} L6 roles kept with dates synced to L5 parent")
-                print(f"[MODE B] {l5_component_count} L5 components with multi-assignment")
-                print(f"[MODE B] Total hours: {total_hours_sum:.1f}   Total revenue: ${total_revenue_sum:,.2f}")
-                print(f"[MODE B] Full output: {len(aggregated_rows)} tasks (L5 summaries + L6 children)")
-                print(f"[MODE B] ══════════════════════════════════════════════════════\n")
-            
-            return aggregated_rows
-
         # === WORKFRONT SEQUENCING ENRICHMENT ===
         # Add anchor tasks per deliverable and chain components properly
         def safe_code(name: str, code: str | None, unique_index: int = 0) -> str:
@@ -9997,129 +9503,38 @@ def convert_excel_to_mspdi(
                 children_by_parent.setdefault(p, []).append(r["WBS"])
         summary_set = set(children_by_parent.keys())
         
-        # Build dependencies: GPT-5 SPEC - Use WBS Dependencies with L5 normalization if flag enabled
-        if ENABLE_WBS_DEPENDENCIES:
-            # GPT-5 SPEC: Call build_wbs_dependencies() for L5-normalized edges
-            print(f"[WBS-DEP] Using GPT-5 WBS Dependencies with L5 normalization")
-            uid_edges = build_wbs_dependencies(rows)
-            
-            # Group edges by successor UID (GPT-5 spec integration pattern)
-            from collections import defaultdict
-            edges_by_succ: dict[int, list[tuple[int, str, int]]] = defaultdict(list)
-            for pred_uid, succ_uid, dep_type, lag in uid_edges:
-                edges_by_succ[succ_uid].append((pred_uid, dep_type, lag))
-            
-            # Convert to normalized_edges format for compatibility with existing code
-            # (pred_wbs, succ_wbs) tuples - needed by downstream filtering logic
-            normalized_edges = []
-            uid_to_wbs_map = {r["UID"]: r["WBS"] for r in rows if r.get("WBS")}
-            for pred_uid, succ_uid, dep_type, lag in uid_edges:
-                pred_wbs = uid_to_wbs_map.get(pred_uid)
-                succ_wbs = uid_to_wbs_map.get(succ_uid)
-                if pred_wbs and succ_wbs:
-                    normalized_edges.append((pred_wbs, succ_wbs))
-            
-            print(f"[WBS-DEP] Built {len(uid_edges)} dependencies with L5 normalization (Result: UID 9 → UID 5)")
-        else:
-            # LEGACY MODE: Normalize dependencies & drop unsafe hierarchy edges
-            init_edges = []
-            for r in rows:
-                deps = r.get("Dependencies", "").strip()
-                if deps:
-                    for dep in deps.split(","):
-                        dep = dep.strip()
-                        if dep:
-                            init_edges.append((dep, r["WBS"]))
+        # Normalize dependencies & drop unsafe hierarchy edges
+        init_edges = []
+        for r in rows:
+            deps = r.get("Dependencies", "").strip()
+            if deps:
+                for dep in deps.split(","):
+                    dep = dep.strip()
+                    if dep:
+                        init_edges.append((dep, r["WBS"]))
 
-            normalized_edges = []
-            for pred_wbs, succ_wbs in init_edges:
-                # Rewrite removed children to their parents
-                actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
-                actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
+        normalized_edges = []
+        for pred_wbs, succ_wbs in init_edges:
+            # Rewrite removed children to their parents
+            actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
+            actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
+            
+            # Skip if either doesn't exist after merge
+            if actual_pred not in by_wbs or actual_succ not in by_wbs:
+                continue
                 
-                # Skip if either doesn't exist after merge
-                if actual_pred not in by_wbs or actual_succ not in by_wbs:
-                    continue
-                    
-                # Skip hierarchy edges (ancestor -> descendant)
-                if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
-                    continue
-                    
-                # Convert summary tasks to their representative leaves
-                if actual_pred in summary_set:
-                    actual_pred = last_leaf(actual_pred)
-                if actual_succ in summary_set:
-                    actual_succ = first_leaf(actual_succ)
-                    
-                if actual_pred != actual_succ:
-                    normalized_edges.append((actual_pred, actual_succ))
-
-        # GPT-5 SPEC PART 2: Multi-Assignment Component Role Summary (READ-ONLY)
-        # Phase 2: Only compute summary for validation - DO NOT change XML assignments yet
-        component_role_summary = None
-        if ENABLE_MULTI_ASSIGNMENT:
-            print(f"\n[MULTI-ASSIGN] GPT-5 Phase 2: Computing component role summary (READ-ONLY)")
-            component_role_summary = build_component_role_summary(rows)
-            
-            # Log for validation (compare against spreadsheet expectations)
-            if component_role_summary:
-                print(f"[MULTI-ASSIGN] Found {len(component_role_summary)} role aggregations across L5 components")
-                # Sample logging (first 10 entries)
-                for i, ((comp_uid, role), agg) in enumerate(list(component_role_summary.items())[:10]):
-                    # Find component name for debugging
-                    comp_name = next((r.get("Name", "Unknown") for r in rows if r["UID"] == comp_uid), f"UID-{comp_uid}")
-                    print(f"[MULTI-ASSIGN]   Component {comp_uid} ({comp_name[:40]}) - {role}: {agg.total_hours:.1f}h")
-                if len(component_role_summary) > 10:
-                    print(f"[MULTI-ASSIGN]   ... and {len(component_role_summary) - 10} more role assignments")
-                print(f"[MULTI-ASSIGN] ⚠️  NOTE: XML assignments NOT modified (Phase 2 - validation only)")
-            else:
-                print(f"[MULTI-ASSIGN] No role aggregations found (check L6 role data)")
-
-        # GPT-5 SPEC: Apply L5 Aggregation (Mode A or Mode B)
-        # Mode A: Remove L6 rows / Mode B: Keep L6 rows with synced dates
-        if EXPORT_MODE in ("A", "B") and ENABLE_MULTI_ASSIGNMENT:
-            print(f"\n[EXPORT-MODE-{EXPORT_MODE}] Applying aggregation: Processing L6 rows...")
-            rows = aggregate_l5_tasks(rows)
-            
-            # Rebuild indexes after aggregation
-            by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
-            children_by_parent = {}
-            for r in rows:
-                p = r["ParentWBS"]
-                if p:
-                    children_by_parent.setdefault(p, []).append(r["WBS"])
-            summary_set = set(children_by_parent.keys())
-            
-            # Reassign UIDs sequentially after filtering
-            for i, row in enumerate(rows, 1):
-                row["UID"] = i
-            
-            # Rebuild WBS dependencies on the L5-filtered dataset with new UIDs
-            if ENABLE_WBS_DEPENDENCIES:
-                print(f"[L5-EXPORT] Rebuilding WBS dependencies on L5-filtered dataset...")
-                uid_edges = build_wbs_dependencies(rows)
+            # Skip hierarchy edges (ancestor -> descendant)
+            if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
+                continue
                 
-                # Update edges_by_succ and normalized_edges with new L5-only dependencies
-                from collections import defaultdict
-                edges_by_succ: dict[int, list[tuple[int, str, int]]] = defaultdict(list)
-                for pred_uid, succ_uid, dep_type, lag in uid_edges:
-                    edges_by_succ[succ_uid].append((pred_uid, dep_type, lag))
+            # Convert summary tasks to their representative leaves
+            if actual_pred in summary_set:
+                actual_pred = last_leaf(actual_pred)
+            if actual_succ in summary_set:
+                actual_succ = first_leaf(actual_succ)
                 
-                # Convert to normalized_edges format
-                normalized_edges = []
-                uid_to_wbs_map = {r["UID"]: r["WBS"] for r in rows if r.get("WBS")}
-                for pred_uid, succ_uid, dep_type, lag in uid_edges:
-                    pred_wbs = uid_to_wbs_map.get(pred_uid)
-                    succ_wbs = uid_to_wbs_map.get(succ_uid)
-                    if pred_wbs and succ_wbs:
-                        normalized_edges.append((pred_wbs, succ_wbs))
-                
-                print(f"[L5-EXPORT] Rebuilt {len(uid_edges)} L5→L5 dependencies")
-            
-            print(f"[EXPORT-MODE-{EXPORT_MODE}] Aggregation complete. Continuing with {len(rows)} tasks...")
-        elif EXPORT_MODE in ("A", "B"):
-            print(f"[EXPORT-MODE-{EXPORT_MODE}] ⚠️  EXPORT_MODE={EXPORT_MODE} but ENABLE_MULTI_ASSIGNMENT=False")
-            print(f"[EXPORT-MODE-{EXPORT_MODE}] ⚠️  Export modes A/B require multi-assignment. Skipping aggregation.")
+            if actual_pred != actual_succ:
+                normalized_edges.append((actual_pred, actual_succ))
 
         # Calculate project start date (MUST be timezone-naive for MSPDI compatibility)
         if fixed_start_iso:
@@ -10690,14 +10105,11 @@ def convert_excel_to_mspdi(
             print(f"[MULTI-ASSIGN] Summary: {len(rows_input)} rows → {len(merged_rows)} tasks ({len(uid_alias_map)} merged)")
             return merged_rows, uid_alias_map
         
-        # Multi-assignment grouping: Controlled by ENABLE_MULTI_ASSIGNMENT flag
-        if ENABLE_MULTI_ASSIGNMENT:
-            rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
-            print(f"[EXPORT] Multi-assignment merging ENABLED - {len(uid_alias_map)} UIDs aliased")
-        else:
-            # Identity mapping (each UID maps to itself)
-            uid_alias_map = {row["UID"]: row["UID"] for row in rows}
-            print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
+        # DISABLED: Multi-assignment grouping (deferred to Phase 2)
+        # rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
+        # Instead: Use identity mapping (each UID maps to itself for dependency safety)
+        uid_alias_map = {row["UID"]: row["UID"] for row in rows}
+        print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
         
         # ====================================================================================
         # Generate XML
@@ -11199,28 +10611,21 @@ def convert_excel_to_mspdi(
         
         # Remap dependencies through uid_alias_map (for multi-assignment merged tasks)
         # This ensures dependencies pointing to consumed UIDs redirect to the primary UID
-        # NOTE: Only needed in LEGACY mode - WBS mode already has canonical UIDs
-        if ENABLE_WBS_DEPENDENCIES:
-            # WBS mode: Dependencies are already on canonical L5 UIDs, no remapping needed
-            remapped_edges = normalized_edges
-            print(f"[WBS-DEP] Skipping uid_alias_map remapping - WBS dependencies already canonical")
-        else:
-            # Legacy mode: Remap through uid_alias_map for multi-assignment safety
-            remapped_edges = []
-            for pred_wbs, succ_wbs in normalized_edges:
-                pred_uid = wbs_to_uid.get(pred_wbs)
-                succ_uid = wbs_to_uid.get(succ_wbs)
-                
-                # Remap through alias map if these UIDs were merged
-                pred_uid = uid_alias_map.get(pred_uid, pred_uid) if pred_uid else None
-                succ_uid = uid_alias_map.get(succ_uid, succ_uid) if succ_uid else None
-                
-                # Convert back to WBS for filtering logic
-                if pred_uid and succ_uid:
-                    # Find WBS for remapped UIDs
-                    pred_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == pred_uid), pred_wbs)
-                    succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
-                    remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
+        remapped_edges = []
+        for pred_wbs, succ_wbs in normalized_edges:
+            pred_uid = wbs_to_uid.get(pred_wbs)
+            succ_uid = wbs_to_uid.get(succ_wbs)
+            
+            # Remap through alias map if these UIDs were merged
+            pred_uid = uid_alias_map.get(pred_uid, pred_uid) if pred_uid else None
+            succ_uid = uid_alias_map.get(succ_uid, succ_uid) if succ_uid else None
+            
+            # Convert back to WBS for filtering logic
+            if pred_uid and succ_uid:
+                # Find WBS for remapped UIDs
+                pred_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == pred_uid), pred_wbs)
+                succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
+                remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
         
         # Filter remapped edges with parallel role execution support
         filtered_edges = []
