@@ -30,8 +30,9 @@ import pickle
 # ============================================================
 # FEATURE FLAGS
 # ============================================================
-ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
-ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
+ENABLE_WBS_DEPENDENCIES = False  # Use WBS Dependencies column instead of scheduler edges
+ENABLE_MULTI_ASSIGNMENT = False  # Group roles into multi-assignment tasks
+# ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
 # ============================================================
 
 try:
@@ -10664,21 +10665,28 @@ def convert_excel_to_mspdi(
         
         # Remap dependencies through uid_alias_map (for multi-assignment merged tasks)
         # This ensures dependencies pointing to consumed UIDs redirect to the primary UID
-        remapped_edges = []
-        for pred_wbs, succ_wbs in normalized_edges:
-            pred_uid = wbs_to_uid.get(pred_wbs)
-            succ_uid = wbs_to_uid.get(succ_wbs)
-            
-            # Remap through alias map if these UIDs were merged
-            pred_uid = uid_alias_map.get(pred_uid, pred_uid) if pred_uid else None
-            succ_uid = uid_alias_map.get(succ_uid, succ_uid) if succ_uid else None
-            
-            # Convert back to WBS for filtering logic
-            if pred_uid and succ_uid:
-                # Find WBS for remapped UIDs
-                pred_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == pred_uid), pred_wbs)
-                succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
-                remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
+        # NOTE: Only needed in LEGACY mode - WBS mode already has canonical UIDs
+        if ENABLE_WBS_DEPENDENCIES:
+            # WBS mode: Dependencies are already on canonical L5 UIDs, no remapping needed
+            remapped_edges = normalized_edges
+            print(f"[WBS-DEP] Skipping uid_alias_map remapping - WBS dependencies already canonical")
+        else:
+            # Legacy mode: Remap through uid_alias_map for multi-assignment safety
+            remapped_edges = []
+            for pred_wbs, succ_wbs in normalized_edges:
+                pred_uid = wbs_to_uid.get(pred_wbs)
+                succ_uid = wbs_to_uid.get(succ_wbs)
+                
+                # Remap through alias map if these UIDs were merged
+                pred_uid = uid_alias_map.get(pred_uid, pred_uid) if pred_uid else None
+                succ_uid = uid_alias_map.get(succ_uid, succ_uid) if succ_uid else None
+                
+                # Convert back to WBS for filtering logic
+                if pred_uid and succ_uid:
+                    # Find WBS for remapped UIDs
+                    pred_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == pred_uid), pred_wbs)
+                    succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
+                    remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
         
         # Filter remapped edges with parallel role execution support
         filtered_edges = []
