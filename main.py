@@ -9511,30 +9511,56 @@ def convert_excel_to_mspdi(
                 children_by_parent.setdefault(p, []).append(r["WBS"])
         summary_set = set(children_by_parent.keys())
         
-        # Build dependencies: Use WBS Dependencies column if flag enabled, otherwise use scheduler edges
-        # Build L5-to-L5 chain dependencies
+        # WBS-BASED DEPENDENCY SYSTEM
+        # Auto-builds L4→L4 and L5→L5 dependencies from WBS hierarchy
         if ENABLE_WBS_DEPENDENCIES:
-            print("[WBS-DEP] Building L5→L5 dependencies between siblings")
-            wbs_dependencies = []
-            orphaned_refs = []
+            print("[WBS-DEP] Building L4→L4 and L5→L5 dependencies from WBS")
 
-            # Group rows by their L4 parent (everything up to 4 dots)
-            rows_sorted = sorted(rows, key=lambda r: r["WBS"])
-            last_l5_by_parent = {}
+            wbs_dependencies = []
+
+            # Sort in WBS order so siblings are processed in sequence
+            rows_sorted = sorted(rows, key=lambda r: str(r["WBS"]))
+
+            last_l4_by_parent = {}  # key = L3 WBS, value = last L4 child WBS
+            last_l5_by_parent = {}  # key = L4 WBS, value = last L5 child WBS
 
             for r in rows_sorted:
-                wbs = r["WBS"]
-                outline = wbs.count(".") + 1
-                parent_prefix = ".".join(wbs.split(".")[:4]) if outline > 4 else None
+                wbs = str(r["WBS"])
+                parts = wbs.split(".")
+                outline = len(parts)
 
+                # ---------- L4 → L4 chain (within same L3) ----------
+                # e.g. 1.1.1.1 → 1.1.1.2 → 1.1.1.3 ...
+                if outline == 4:
+                    parent_l3 = ".".join(parts[:3])  # e.g. 1.1.1
+
+                    # Optional: skip if this row is a summary container
+                    # if r.get("Summary", 0) == 1:
+                    #     continue
+
+                    if parent_l3 in last_l4_by_parent:
+                        pred_wbs = last_l4_by_parent[parent_l3]
+                        wbs_dependencies.append((pred_wbs, wbs))
+                        print(f"[WBS-DEP] L4→L4: {pred_wbs} → {wbs}")
+
+                    # Remember this as the most recent L4 under this L3
+                    last_l4_by_parent[parent_l3] = wbs
+
+                # ---------- L5 → L5 chain (within same L4) ----------
+                # (what we just got working for Ross)
                 if outline == 5:
-                    if parent_prefix in last_l5_by_parent:
-                        pred = last_l5_by_parent[parent_prefix]
-                        wbs_dependencies.append((pred, wbs))
-                        print(f"[WBS-DEP] L5→L5: {pred} → {wbs}")
-                    last_l5_by_parent[parent_prefix] = wbs
+                    parent_l4 = ".".join(parts[:4])  # e.g. 1.1.1.1
+
+                    if parent_l4 in last_l5_by_parent:
+                        pred_wbs = last_l5_by_parent[parent_l4]
+                        wbs_dependencies.append((pred_wbs, wbs))
+                        print(f"[WBS-DEP] L5→L5: {pred_wbs} → {wbs}")
+
+                    # Remember this as the most recent L5 under this L4
+                    last_l5_by_parent[parent_l4] = wbs
 
             normalized_edges = wbs_dependencies
+            print(f"[WBS-DEP] Built {len(normalized_edges)} dependencies (L4 & L5)")
         else:
             # LEGACY MODE: Normalize dependencies & drop unsafe hierarchy edges
             init_edges = []
