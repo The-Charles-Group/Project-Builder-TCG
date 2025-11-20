@@ -10343,11 +10343,62 @@ def convert_excel_to_mspdi(
                 
                 transformed_rows.append(aggregated_task)
             
-            # Update rows
+            # Transform dependencies: L6→L6 to L5→L5 with deduplication
+            print(f"\n[L5-DEPS] Transforming dependencies from L6→L6 to L5→L5")
+            print(f"[L5-DEPS] Input: {len(normalized_edges)} edges from scheduler")
+            
+            # Build WBS→UID map from original rows (before filtering)
+            wbs_to_uid_original = {r.get("WBS"): r["UID"] for r in rows if r.get("WBS")}
+            
+            l5_edges = set()  # Use set for automatic deduplication
+            skipped_missing_wbs = 0
+            
+            for pred_wbs, succ_wbs in normalized_edges:
+                # Lookup UIDs from WBS
+                pred_uid = wbs_to_uid_original.get(pred_wbs)
+                succ_uid = wbs_to_uid_original.get(succ_wbs)
+                
+                if pred_uid is None or succ_uid is None:
+                    skipped_missing_wbs += 1
+                    continue
+                
+                # Map L6→L5 if needed, otherwise keep as-is
+                pred_l5_uid = l6_to_l5_uid_map.get(pred_uid, pred_uid)
+                succ_l5_uid = l6_to_l5_uid_map.get(succ_uid, succ_uid)
+                
+                # Add L5→L5 edge (set automatically deduplicates)
+                if pred_l5_uid != succ_l5_uid:  # Skip self-loops
+                    l5_edges.add((pred_l5_uid, succ_l5_uid))
+            
+            # Convert back to list for downstream processing
+            normalized_edges_l5_uids = list(l5_edges)
+            
+            # Convert UID-based edges back to WBS-based edges for downstream compatibility
+            # Build UID→WBS map from transformed rows
+            uid_to_wbs_l5 = {r["UID"]: r["WBS"] for r in transformed_rows if "WBS" in r}
+            
+            normalized_edges_l5 = []
+            for pred_uid, succ_uid in normalized_edges_l5_uids:
+                pred_wbs = uid_to_wbs_l5.get(pred_uid)
+                succ_wbs = uid_to_wbs_l5.get(succ_uid)
+                if pred_wbs and succ_wbs:
+                    normalized_edges_l5.append((pred_wbs, succ_wbs))
+            
+            print(f"[L5-DEPS] Original edges: {len(normalized_edges)}")
+            print(f"[L5-DEPS] Skipped {skipped_missing_wbs} edges (WBS not found)")
+            print(f"[L5-DEPS] Transformed to {len(normalized_edges_l5)} L5-level WBS-based edges")
+            print(f"[L5-DEPS] Deduplication eliminated {len(normalized_edges) - skipped_missing_wbs - len(normalized_edges_l5)} redundant L6→L6 edges")
+            
+            # Replace normalized_edges with L5-only edges (WBS-based format)
+            normalized_edges = normalized_edges_l5
+            
+            # Update rows (filter to L1-L5 only, no L6)
             original_count = len(rows)
             rows = transformed_rows
             
             print(f"[L5-ONLY] Transformed: {original_count} rows → {len(rows)} tasks ({len(component_buckets)} L5 components)")
+            print(f"[L5-ONLY] ✅ All L6 tasks removed from export")
+            print(f"[L5-ONLY] ✅ Dependencies transformed to L5-only scope")
             print("[L5-ONLY] ═══════════════════════════════════════════════════════════")
         
         # ====================================================================================
