@@ -27,6 +27,20 @@ import time
 from functools import lru_cache
 import pickle
 
+# ============================================================
+# FEATURE FLAGS: WBS-Based Dependency System
+# ============================================================
+# Enable WBS-based dependency building (uses Dependencies column directly)
+# When False: Uses scheduler-based edge processing with normalization
+# When True: Simple WBS→UID mapping, OutlineLevel ≤5 filter only
+ENABLE_WBS_DEPENDENCIES = False
+
+# Enable multi-assignment grouping (group roles per component into single task)
+# When False: One task per role (current "correct Gantt" behavior)
+# When True: Group roles by component, emit multiple assignments per task
+ENABLE_MULTI_ASSIGNMENT_GROUPING = False
+# ============================================================
+
 try:
     from docx import Document  # pip install python-docx
 except Exception:
