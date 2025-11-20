@@ -31,9 +31,9 @@ import pickle
 # FEATURE FLAGS (GPT-5 SPECIFICATION)
 # ============================================================
 # EXPORT_MODE: Controls XML export architecture
-#   "A" = L5-only export (removes L6 rows completely)
-#   "B" = L5 summaries + L6 children with synced dates (Workfront Mode B spec)
-EXPORT_MODE = "B"                # Mode A (L5-only) or Mode B (L5+L6 with synced dates)
+#   "A" = L5-only export (removes L6 rows completely) - Workfront compatible
+#   "B" = L5 summaries + L6 children with synced dates (causes Workfront import failure)
+EXPORT_MODE = "A"                # Mode A (L5-only) for Workfront compatibility
 ENABLE_MULTI_ASSIGNMENT = True   # Aggregate L6 role hours into L5 multi-assignments
 ENABLE_WBS_DEPENDENCIES = True   # Use WBS Dependencies with L5 normalization
 # ROLLBACK: Set EXPORT_MODE="A" to restore L5-only behavior
