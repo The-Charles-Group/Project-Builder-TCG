@@ -9518,46 +9518,59 @@ def convert_excel_to_mspdi(
 
             wbs_dependencies = []
 
-            # Sort in WBS order so siblings are processed in sequence
+            # Sort all rows in WBS order
             rows_sorted = sorted(rows, key=lambda r: str(r["WBS"]))
 
-            last_l4_by_parent = {}  # key = L3 WBS, value = last L4 child WBS
-            last_l5_by_parent = {}  # key = L4 WBS, value = last L5 child WBS
-
+            # ---------- L4 → L4 chain (within same L3) ----------
+            # Group L4 rows by their L3 parent
+            from collections import defaultdict
+            l4_by_l3 = defaultdict(list)
             for r in rows_sorted:
                 wbs = str(r["WBS"])
                 parts = wbs.split(".")
                 outline = len(parts)
-
-                # ---------- L4 → L4 chain (within same L3) ----------
-                # e.g. 1.1.1.1 → 1.1.1.2 → 1.1.1.3 ...
                 if outline == 4:
                     parent_l3 = ".".join(parts[:3])  # e.g. 1.1.1
+                    l4_by_l3[parent_l3].append(r)
 
-                    # Optional: skip if this row is a summary container
-                    # if r.get("Summary", 0) == 1:
-                    #     continue
+            # For each L3 parent, chain its L4 children sequentially
+            for parent_l3, l4_group in l4_by_l3.items():
+                # Sort L4 rows in WBS order within group
+                l4_group_sorted = sorted(l4_group, key=lambda r: str(r["WBS"]))
+                
+                # Chain sequentially - NO WRAP-AROUND
+                prev_l4 = None
+                for r in l4_group_sorted:
+                    if prev_l4 is not None:
+                        # Add edge: previous L4 → this L4
+                        wbs_dependencies.append((prev_l4["WBS"], r["WBS"]))
+                        print(f"[WBS-DEP] L4→L4: {prev_l4['WBS']} → {r['WBS']}")
+                    prev_l4 = r
 
-                    if parent_l3 in last_l4_by_parent:
-                        pred_wbs = last_l4_by_parent[parent_l3]
-                        wbs_dependencies.append((pred_wbs, wbs))
-                        print(f"[WBS-DEP] L4→L4: {pred_wbs} → {wbs}")
-
-                    # Remember this as the most recent L4 under this L3
-                    last_l4_by_parent[parent_l3] = wbs
-
-                # ---------- L5 → L5 chain (within same L4) ----------
-                # (what we just got working for Ross)
+            # ---------- L5 → L5 chain (within same L4) ----------
+            # Group L5 rows by their L4 parent
+            l5_by_l4 = defaultdict(list)
+            for r in rows_sorted:
+                wbs = str(r["WBS"])
+                parts = wbs.split(".")
+                outline = len(parts)
                 if outline == 5:
                     parent_l4 = ".".join(parts[:4])  # e.g. 1.1.1.1
+                    l5_by_l4[parent_l4].append(r)
 
-                    if parent_l4 in last_l5_by_parent:
-                        pred_wbs = last_l5_by_parent[parent_l4]
-                        wbs_dependencies.append((pred_wbs, wbs))
-                        print(f"[WBS-DEP] L5→L5: {pred_wbs} → {wbs}")
-
-                    # Remember this as the most recent L5 under this L4
-                    last_l5_by_parent[parent_l4] = wbs
+            # For each L4 parent, chain its L5 children sequentially
+            for parent_l4, l5_group in l5_by_l4.items():
+                # Sort L5 rows in WBS order within group
+                l5_group_sorted = sorted(l5_group, key=lambda r: str(r["WBS"]))
+                
+                # Chain sequentially - NO WRAP-AROUND
+                prev_l5 = None
+                for r in l5_group_sorted:
+                    if prev_l5 is not None:
+                        # Add edge: previous L5 → this L5
+                        wbs_dependencies.append((prev_l5["WBS"], r["WBS"]))
+                        print(f"[WBS-DEP] L5→L5: {prev_l5['WBS']} → {r['WBS']}")
+                    prev_l5 = r
 
             normalized_edges = wbs_dependencies
             print(f"[WBS-DEP] Built {len(normalized_edges)} dependencies (L4 & L5)")
