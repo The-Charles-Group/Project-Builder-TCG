@@ -9510,38 +9510,81 @@ def convert_excel_to_mspdi(
                 children_by_parent.setdefault(p, []).append(r["WBS"])
         summary_set = set(children_by_parent.keys())
         
-        # Normalize dependencies & drop unsafe hierarchy edges
-        init_edges = []
-        for r in rows:
-            deps = r.get("Dependencies", "").strip()
-            if deps:
-                for dep in deps.split(","):
-                    dep = dep.strip()
-                    if dep:
-                        init_edges.append((dep, r["WBS"]))
-
-        normalized_edges = []
-        for pred_wbs, succ_wbs in init_edges:
-            # Rewrite removed children to their parents
-            actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
-            actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
+        # Build dependencies: Use WBS Dependencies column if flag enabled, otherwise use scheduler edges
+        if ENABLE_WBS_DEPENDENCIES:
+            # WBS-BASED DEPENDENCIES: Read directly from Dependencies column
+            # This approach is safer because it uses the stable component chains from the scenario builder
+            print(f"[WBS-DEP] Using WBS Dependencies column for dependency generation")
+            init_edges = []
+            for r in rows:
+                deps = r.get("Dependencies", "").strip()
+                if not deps:
+                    continue
+                
+                # OPTIONAL: Only attach dependencies for high-level tasks (OutlineLevel ≤ 5)
+                outline = r["WBS"].count(".") + 1
+                if outline > 5:
+                    continue  # Skip leaf-to-leaf conga lines
+                
+                succ_wbs = r["WBS"]
+                for dep_wbs in deps.split(","):
+                    dep_wbs = dep_wbs.strip()
+                    if dep_wbs:
+                        init_edges.append((dep_wbs, succ_wbs))
             
-            # Skip if either doesn't exist after merge
-            if actual_pred not in by_wbs or actual_succ not in by_wbs:
-                continue
+            normalized_edges = []
+            for pred_wbs, succ_wbs in init_edges:
+                # Rewrite removed children to their parents
+                actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
+                actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
                 
-            # Skip hierarchy edges (ancestor -> descendant)
-            if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
-                continue
+                # Skip if either doesn't exist after merge
+                if actual_pred not in by_wbs or actual_succ not in by_wbs:
+                    print(f"[WBS-DEP] ⚠️ Orphaned WBS reference: {pred_wbs} → {succ_wbs} (skipping)")
+                    continue
+                    
+                # Skip hierarchy edges (ancestor -> descendant)
+                if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
+                    continue
                 
-            # Convert summary tasks to their representative leaves
-            if actual_pred in summary_set:
-                actual_pred = last_leaf(actual_pred)
-            if actual_succ in summary_set:
-                actual_succ = first_leaf(actual_succ)
+                # WBS mode: Do NOT convert summaries to leaves (keep L5 → L5 dependencies)
+                if actual_pred != actual_succ:
+                    normalized_edges.append((actual_pred, actual_succ))
+            
+            print(f"[WBS-DEP] Built {len(normalized_edges)} dependencies from WBS column ({len(init_edges)} initial edges)")
+        else:
+            # LEGACY MODE: Normalize dependencies & drop unsafe hierarchy edges
+            init_edges = []
+            for r in rows:
+                deps = r.get("Dependencies", "").strip()
+                if deps:
+                    for dep in deps.split(","):
+                        dep = dep.strip()
+                        if dep:
+                            init_edges.append((dep, r["WBS"]))
+
+            normalized_edges = []
+            for pred_wbs, succ_wbs in init_edges:
+                # Rewrite removed children to their parents
+                actual_pred = child_to_parent.get(pred_wbs, pred_wbs)
+                actual_succ = child_to_parent.get(succ_wbs, succ_wbs)
                 
-            if actual_pred != actual_succ:
-                normalized_edges.append((actual_pred, actual_succ))
+                # Skip if either doesn't exist after merge
+                if actual_pred not in by_wbs or actual_succ not in by_wbs:
+                    continue
+                    
+                # Skip hierarchy edges (ancestor -> descendant)
+                if is_ancestor(actual_pred, actual_succ) or is_ancestor(actual_succ, actual_pred):
+                    continue
+                    
+                # Convert summary tasks to their representative leaves
+                if actual_pred in summary_set:
+                    actual_pred = last_leaf(actual_pred)
+                if actual_succ in summary_set:
+                    actual_succ = first_leaf(actual_succ)
+                    
+                if actual_pred != actual_succ:
+                    normalized_edges.append((actual_pred, actual_succ))
 
         # Calculate project start date (MUST be timezone-naive for MSPDI compatibility)
         if fixed_start_iso:
@@ -10112,11 +10155,14 @@ def convert_excel_to_mspdi(
             print(f"[MULTI-ASSIGN] Summary: {len(rows_input)} rows → {len(merged_rows)} tasks ({len(uid_alias_map)} merged)")
             return merged_rows, uid_alias_map
         
-        # DISABLED: Multi-assignment grouping (deferred to Phase 2)
-        # rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
-        # Instead: Use identity mapping (each UID maps to itself for dependency safety)
-        uid_alias_map = {row["UID"]: row["UID"] for row in rows}
-        print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
+        # Multi-assignment grouping: Controlled by ENABLE_MULTI_ASSIGNMENT flag
+        if ENABLE_MULTI_ASSIGNMENT:
+            rows, uid_alias_map = group_multi_assignments(rows, uid_to_sched)
+            print(f"[EXPORT] Multi-assignment merging ENABLED - {len(uid_alias_map)} UIDs aliased")
+        else:
+            # Identity mapping (each UID maps to itself)
+            uid_alias_map = {row["UID"]: row["UID"] for row in rows}
+            print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
         
         # ====================================================================================
         # Generate XML
