@@ -1,0 +1,288 @@
+Let’s pin this down cleanly so you can just paste it to the agent/architect.
+
+I’ll split it in two parts:
+
+WBS → L5-only dependencies (fixes the “row 9 depends on row 8 instead of row 5” bug)
+
+Conservative multi-assignment design (phase 2 – safe and decoupled)
+
+1️⃣ WBS → L5 dependency builder (this is the big one)
+Goal
+
+Keep all existing tasks (L1–L6) exactly as they are.
+
+Build <PredecessorLink> only between tasks with OutlineLevel <= 5.
+
+If the Dependencies column points at a leaf role WBS (L6), we walk up to its L5 parent and use that as the predecessor.
+
+Data we already have per row
+
+For each row in the scenario rows / tasks list, we assume we have at least:
+
+row["UID"]               # Workfront task UID (int)
+row["OutlineLevel"]      # 1..6
+row["WBS"]               # e.g. "1.1.1.1.1.3"
+row["Dependencies"]      # e.g. "1.1.1.1.1.3, 1.1.1.1.2"
+
+Helper indexes to build once
+# Build these once after we have all rows
+wbs_to_uid: dict[str, int] = {}
+uid_to_wbs: dict[int, str] = {}
+uid_to_outline: dict[int, int] = {}
+
+for row in rows:
+    uid = row["UID"]
+    wbs = row["WBS"]
+    outline = row["OutlineLevel"]
+    if not wbs:
+        continue
+
+    wbs_to_uid[wbs] = uid
+    uid_to_wbs[uid] = wbs
+    uid_to_outline[uid] = outline
+
+Helper to get “parent” WBS
+def parent_wbs(wbs: str) -> str | None:
+    """
+    If wbs == '1.2.3.4.5.6' -> '1.2.3.4.5'
+    If wbs == '1'          -> None
+    """
+    if not wbs:
+        return None
+    parts = wbs.split(".")
+    if len(parts) <= 1:
+        return None
+    return ".".join(parts[:-1])
+
+Core: normalize predecessor to L5 and emit edges
+def build_wbs_dependencies(rows: list[dict]) -> list[tuple[int, int, str, int]]:
+    """
+    Returns list of (pred_uid, succ_uid, dep_type, lag)
+    dep_type: 'FS' for Finish-to-Start (what you use today)
+    lag: 0 for now
+    """
+    edges: list[tuple[int, int, str, int]] = []
+
+    # --- build indexes as above ---
+    wbs_to_uid, uid_to_wbs, uid_to_outline = build_indexes(rows)
+
+    for row in rows:
+        succ_uid = row["UID"]
+        succ_outline = row["OutlineLevel"]
+
+        # Only put predecessors on L5+ summary rows
+        if succ_outline > 5:
+            continue
+
+        deps_str = (row.get("Dependencies") or "").strip()
+        if not deps_str:
+            continue
+
+        for raw_dep in deps_str.split(","):
+            dep_wbs = raw_dep.strip()
+            if not dep_wbs:
+                continue
+
+            # 1) direct lookup WBS -> UID
+            pred_uid = wbs_to_uid.get(dep_wbs)
+            if pred_uid is None:
+                log_warn(f"[WBS-DEPS] Orphan dependency {dep_wbs} on UID {succ_uid}")
+                continue
+
+            # 2) If that UID is deeper than level 5, walk up until <=5
+            outline = uid_to_outline.get(pred_uid, 99)
+            while outline > 5:
+                pw = parent_wbs(uid_to_wbs[pred_uid])
+                if not pw:
+                    break
+                parent_uid = wbs_to_uid.get(pw)
+                if parent_uid is None:
+                    break
+                pred_uid = parent_uid
+                outline = uid_to_outline.get(pred_uid, 99)
+
+            # If we still don't have a ≤5 task, skip
+            if outline > 5:
+                log_warn(
+                    f"[WBS-DEPS] Could not find ≤L5 parent for {dep_wbs} "
+                    f"(UID {pred_uid}) used by UID {succ_uid}"
+                )
+                continue
+
+            # Avoid self-deps after normalization
+            if pred_uid == succ_uid:
+                continue
+
+            edges.append((pred_uid, succ_uid, "FS", 0))
+
+    return edges
+
+How to use this in XML export
+
+Wherever you currently build edges and generate <PredecessorLink>:
+
+if ENABLE_WBS_DEPENDENCIES:
+    edges = build_wbs_dependencies(rows)
+else:
+    edges = build_scheduler_edges(...)  # existing legacy behaviour
+
+# Emit links grouped by successor UID
+edges_by_succ: dict[int, list[tuple[int, str, int]]] = defaultdict(list)
+for pred_uid, succ_uid, dep_type, lag in edges:
+    edges_by_succ[succ_uid].append((pred_uid, dep_type, lag))
+
+# In the task-writing loop:
+for row in rows:
+    uid = row["UID"]
+    ...
+    for pred_uid, dep_type, lag in edges_by_succ.get(uid, []):
+        write_predecessor_link(pred_uid, uid, dep_type, lag)
+
+
+If you do only this, you should see:
+
+Row 9 depends on row 5, not row 8.
+
+Row 12 depends on the previous component, etc.
+
+Leaf role rows (L6) have no dependencies, so no leaf conga line.
+
+2️⃣ “Phase 2” – conservative multi-assignment design
+
+I’d suggest you get WBS dependencies stable first, then flip this on.
+
+Your requirements (from everything we’ve discussed):
+
+Keep 1 row per role at L6, like now.
+
+Keep scheduler dates as they are (don’t touch them).
+
+Allow later upgrade to “true L5-only multi-assign” if Ross wants it.
+
+So here’s a minimal + safe multi-assignment approach:
+
+Idea
+
+For now: do not change tasks at all.
+
+Multi-assignment = extra view layer on top of existing L6 rows:
+
+For each L5 component, we summarize the roles + hours of its children.
+
+We do not change core assignments yet – that’s the risky bit.
+
+This still gives the agent a very clear hook when you’re ready to go further.
+
+So for the Replit agent, I’d explicitly say:
+
+For now, ENABLE_MULTI_ASSIGNMENT should only compute a component_role_summary structure; don’t change XML assignments yet. We’ll wire that into assignments once WBS dependencies are proven stable.
+
+Pseudocode: summarize roles per L5 component
+from collections import defaultdict
+
+@dataclass
+class RoleSummary:
+    total_hours: float = 0.0   # sum of L6 role hours under the component
+    # You can also store rate, cost, etc., if needed
+
+def build_component_role_summary(rows: list[dict]) -> dict[tuple[int, str], RoleSummary]:
+    """
+    Returns a map:
+      (l5_uid, role_name_or_id) -> RoleSummary
+    Used as the data source for future L5 multi-assignments.
+    """
+    wbs_to_uid, uid_to_wbs, uid_to_outline = build_indexes(rows)
+
+    summary: dict[tuple[int, str], RoleSummary] = defaultdict(RoleSummary)
+
+    for row in rows:
+        uid = row["UID"]
+        outline = row["OutlineLevel"]
+
+        # We only care about true leaf / role rows here (L6)
+        if outline <= 5:
+            continue
+
+        role = row.get("RoleName") or row.get("RoleID")
+        hours = float(row.get("PlanHrs", 0) or 0)
+
+        # Find this task's L5 component ancestor
+        wbs = uid_to_wbs[uid]
+        comp_uid = uid  # fallback, but we want L5
+        comp_outline = outline
+
+        while comp_outline > 5:
+            pw = parent_wbs(wbs)
+            if not pw:
+                break
+            parent_uid = wbs_to_uid.get(pw)
+            if parent_uid is None:
+                break
+            comp_uid = parent_uid
+            wbs = pw
+            comp_outline = uid_to_outline.get(comp_uid, comp_outline)
+
+        # We *only* summarize under real L5 components
+        if comp_outline != 5:
+            continue
+
+        key = (comp_uid, role)
+        summary[key].total_hours += hours
+
+    return summary
+
+
+Later, when you and Ross are happy with WBS dependencies, you can evolve this into actual XML assignments, for example:
+
+def write_component_assignments(component_role_summary, tasks_by_uid):
+    """
+    When you're ready:
+    - Option A: Emit additional L5 assignments (careful of double-counting)
+    - Option B: Swap to L5-only tasks and move all assignments there
+    """
+    for (comp_uid, role), agg in component_role_summary.items():
+        task = tasks_by_uid[comp_uid]
+        start = task["Start"]   # use L5 dates
+        finish = task["Finish"]
+
+        work_minutes = int(round(agg.total_hours * 60))
+
+        write_assignment(
+            task_uid=comp_uid,
+            resource_role=role,
+            work=work_minutes,
+            start=start,
+            finish=finish,
+        )
+
+
+But again, I would not turn this on in XML yet. Use it as a data sanity check first:
+
+Log out the role summaries per component.
+
+Compare “Client Review & Revisions” → AM=2h, CW=1h, Strat=1h, etc.
+
+Once you see it lines up with your spreadsheet expectations, then we decide how to reflect it in assignments without breaking hours / costs.
+
+TL;DR you can paste to Replit
+
+You can literally tell them:
+
+WBS dependencies
+Implement build_wbs_dependencies(rows) exactly as specified, with:
+
+WBS → UID indexes
+
+parent_wbs() helper
+
+Normalize predecessor WBS up to a task with OutlineLevel <= 5
+
+Only successors with OutlineLevel <= 5 get predecessors
+
+Use that instead of scheduler edges when ENABLE_WBS_DEPENDENCIES=True.
+
+Multi-assignment (phase 2)
+
+For now, when ENABLE_MULTI_ASSIGNMENT=True, only compute component_role_summary = build_component_role_summary(rows) as specified.
+
+Do not change XML assignments yet. We’ll wire that in later once WBS dependencies are correct and validated in St. Regis.
