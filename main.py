@@ -28,11 +28,12 @@ from functools import lru_cache
 import pickle
 
 # ============================================================
-# FEATURE FLAGS
+# FEATURE FLAGS (GPT-5 SPECIFICATION)
 # ============================================================
-ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
-ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
-# ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
+ENABLE_L5_ONLY_EXPORT = True     # Remove L6 rows, export only L5 components as tasks
+ENABLE_MULTI_ASSIGNMENT = True   # Aggregate L6 role hours into L5 multi-assignments
+ENABLE_WBS_DEPENDENCIES = True   # Use WBS Dependencies with L5 normalization
+# ROLLBACK: Set all to False to restore legacy behavior (L6 rows, single assignments, scheduler edges)
 # ============================================================
 
 try:
@@ -9601,6 +9602,173 @@ def convert_excel_to_mspdi(
             
             return summary
 
+        # === GPT-5 SPEC: L5 AGGREGATION AND MULTI-ASSIGNMENT EXPORT ===
+        def aggregate_l5_tasks(rows: list[dict]) -> list[dict]:
+            """
+            GPT-5 SPECIFICATION: Aggregate L6 role rows into L5 parent tasks with multi-assignment.
+            
+            Returns filtered rows where OutlineLevel <= 5 with aggregated data and multi-assignment structures.
+            L6 rows are completely removed from the output.
+            
+            Each L5 component gets:
+            - Summed total_hours and total_revenue from all L6 children
+            - Duration = ceil(total_hours / 8) days
+            - Start = min(child starts), Finish = max(child finishes)
+            - Multi-assignment data: list of (role, hours, rate) for each L6 child
+            """
+            import math
+            from collections import defaultdict
+            
+            # Build indexes
+            wbs_to_uid: dict[str, int] = {}
+            uid_to_wbs: dict[int, str] = {}
+            uid_to_outline: dict[int, int] = {}
+            uid_to_row: dict[int, dict] = {}
+            
+            for row in rows:
+                uid = row["UID"]
+                wbs = row.get("WBS", "")
+                
+                # Get OutlineLevel from row data
+                outline = row.get("OutlineLevel")
+                if outline is None and wbs:
+                    outline = wbs.count(".") + 1
+                
+                if wbs:
+                    wbs_to_uid[wbs] = uid
+                    uid_to_wbs[uid] = wbs
+                    if outline is not None:
+                        uid_to_outline[uid] = outline
+                
+                uid_to_row[uid] = row
+            
+            # Group L6 children by their L5 parent
+            l5_children: dict[int, list[dict]] = defaultdict(list)
+            l5_uids: set[int] = set()
+            
+            for row in rows:
+                uid = row["UID"]
+                wbs = row.get("WBS", "")
+                if not wbs:
+                    continue
+                
+                outline = uid_to_outline.get(uid, 99)
+                
+                # Identify L5 tasks (these will be kept and aggregated)
+                if outline == 5:
+                    l5_uids.add(uid)
+                
+                # Identify L6+ tasks (these will be aggregated into L5 and removed)
+                elif outline > 5:
+                    # Find L5 parent by walking up
+                    comp_uid = uid
+                    comp_wbs = wbs
+                    comp_outline = outline
+                    depth_guard = 0
+                    max_depth = 10
+                    
+                    while comp_outline > 5 and depth_guard < max_depth:
+                        pw = parent_wbs(comp_wbs)
+                        if not pw:
+                            break
+                        parent_uid = wbs_to_uid.get(pw)
+                        if parent_uid is None:
+                            break
+                        comp_uid = parent_uid
+                        comp_wbs = pw
+                        comp_outline = uid_to_outline.get(comp_uid, comp_outline)
+                        depth_guard += 1
+                    
+                    # Only aggregate under true L5 components
+                    if comp_outline == 5:
+                        l5_children[comp_uid].append(row)
+            
+            # Aggregate L6 data into L5 parents
+            aggregated_rows = []
+            l6_merged_count = 0
+            l5_component_count = 0
+            total_hours_sum = 0.0
+            total_revenue_sum = 0.0
+            
+            for row in rows:
+                uid = row["UID"]
+                outline = uid_to_outline.get(uid, 99)
+                
+                # Filter 1: Remove all L6+ rows
+                if outline > 5:
+                    l6_merged_count += 1
+                    continue
+                
+                # Filter 2: Keep and aggregate L5 components that have children
+                if outline == 5 and uid in l5_children:
+                    children = l5_children[uid]
+                    
+                    if children:
+                        l5_component_count += 1
+                        
+                        # Aggregate hours and revenue
+                        total_hours = sum(float(c.get("PlannedHours", 0) or 0) for c in children)
+                        total_revenue = sum(float(c.get("Price_USD", 0) or 0) for c in children)
+                        
+                        # Calculate duration (ceil to ensure minimum 1 day)
+                        duration_days = max(1, math.ceil(total_hours / 8.0))
+                        
+                        # Aggregate dates (min start, max finish)
+                        child_starts = [c.get("Start_Date", "") for c in children if c.get("Start_Date")]
+                        child_finishes = [c.get("End_Date", "") for c in children if c.get("End_Date")]
+                        
+                        start_date = min(child_starts) if child_starts else row.get("Start_Date", "")
+                        end_date = max(child_finishes) if child_finishes else row.get("End_Date", "")
+                        
+                        # Build multi-assignment list
+                        assignments = []
+                        for child in children:
+                            role = child.get("RoleStr") or child.get("Role") or "Unassigned"
+                            # Handle RoleList if it exists
+                            if isinstance(child.get("RoleList"), list) and len(child.get("RoleList", [])) == 1:
+                                role = child["RoleList"][0]
+                            
+                            hours = float(child.get("PlannedHours", 0) or 0)
+                            rate = float(child.get("Rate_USD", 0) or 0)
+                            price = float(child.get("Price_USD", 0) or 0)
+                            
+                            assignments.append({
+                                "resource_name": role,
+                                "work_hours": hours,
+                                "rate_usd": rate,
+                                "price_usd": price
+                            })
+                        
+                        # Update row with aggregated data
+                        row["PlannedHours"] = total_hours
+                        row["Price_USD"] = total_revenue
+                        row["Duration"] = duration_days
+                        row["Start_Date"] = start_date
+                        row["End_Date"] = end_date
+                        
+                        # Mark as multi-assignment and attach assignment data
+                        row["multi_assignment"] = True
+                        row["assignments"] = assignments
+                        
+                        # Set RoleList to all unique roles
+                        row["RoleList"] = list(set(a["resource_name"] for a in assignments))
+                        row["RoleStr"] = ",".join(row["RoleList"])
+                        
+                        total_hours_sum += total_hours
+                        total_revenue_sum += total_revenue
+                
+                # Keep all rows with OutlineLevel <= 5
+                aggregated_rows.append(row)
+            
+            # Log aggregation summary
+            print(f"\n[L5-EXPORT] ══════════════════════════════════════════════")
+            print(f"[L5-EXPORT] {l6_merged_count} L6 roles merged into {l5_component_count} L5 components")
+            print(f"[L5-EXPORT] Total hours: {total_hours_sum:.1f}   Total revenue: ${total_revenue_sum:,.2f}")
+            print(f"[L5-EXPORT] Filtered output: {len(aggregated_rows)} tasks (OutlineLevel ≤ 5)")
+            print(f"[L5-EXPORT] ══════════════════════════════════════════════\n")
+            
+            return aggregated_rows
+
         # === WORKFRONT SEQUENCING ENRICHMENT ===
         # Add anchor tasks per deliverable and chain components properly
         def safe_code(name: str, code: str | None, unique_index: int = 0) -> str:
@@ -9827,6 +9995,52 @@ def convert_excel_to_mspdi(
                 print(f"[MULTI-ASSIGN] ⚠️  NOTE: XML assignments NOT modified (Phase 2 - validation only)")
             else:
                 print(f"[MULTI-ASSIGN] No role aggregations found (check L6 role data)")
+
+        # GPT-5 SPEC: Apply L5-Only Export Aggregation
+        # Remove all L6 rows and aggregate their data into L5 parents with multi-assignment
+        if ENABLE_L5_ONLY_EXPORT and ENABLE_MULTI_ASSIGNMENT:
+            print(f"\n[L5-EXPORT] Applying L5-only export: Aggregating L6 rows into L5 components...")
+            rows = aggregate_l5_tasks(rows)
+            
+            # Rebuild indexes after aggregation
+            by_wbs = {r["WBS"]: r for r in rows if r.get("WBS")}
+            children_by_parent = {}
+            for r in rows:
+                p = r["ParentWBS"]
+                if p:
+                    children_by_parent.setdefault(p, []).append(r["WBS"])
+            summary_set = set(children_by_parent.keys())
+            
+            # Reassign UIDs sequentially after filtering
+            for i, row in enumerate(rows, 1):
+                row["UID"] = i
+            
+            # Rebuild WBS dependencies on the L5-filtered dataset with new UIDs
+            if ENABLE_WBS_DEPENDENCIES:
+                print(f"[L5-EXPORT] Rebuilding WBS dependencies on L5-filtered dataset...")
+                uid_edges = build_wbs_dependencies(rows)
+                
+                # Update edges_by_succ and normalized_edges with new L5-only dependencies
+                from collections import defaultdict
+                edges_by_succ: dict[int, list[tuple[int, str, int]]] = defaultdict(list)
+                for pred_uid, succ_uid, dep_type, lag in uid_edges:
+                    edges_by_succ[succ_uid].append((pred_uid, dep_type, lag))
+                
+                # Convert to normalized_edges format
+                normalized_edges = []
+                uid_to_wbs_map = {r["UID"]: r["WBS"] for r in rows if r.get("WBS")}
+                for pred_uid, succ_uid, dep_type, lag in uid_edges:
+                    pred_wbs = uid_to_wbs_map.get(pred_uid)
+                    succ_wbs = uid_to_wbs_map.get(succ_uid)
+                    if pred_wbs and succ_wbs:
+                        normalized_edges.append((pred_wbs, succ_wbs))
+                
+                print(f"[L5-EXPORT] Rebuilt {len(uid_edges)} L5→L5 dependencies")
+            
+            print(f"[L5-EXPORT] Aggregation complete. Continuing with {len(rows)} tasks...")
+        elif ENABLE_L5_ONLY_EXPORT:
+            print(f"[L5-EXPORT] ⚠️  ENABLE_L5_ONLY_EXPORT=True but ENABLE_MULTI_ASSIGNMENT=False")
+            print(f"[L5-EXPORT] ⚠️  L5-only export requires multi-assignment. Skipping aggregation.")
 
         # Calculate project start date (MUST be timezone-naive for MSPDI compatibility)
         if fixed_start_iso:
