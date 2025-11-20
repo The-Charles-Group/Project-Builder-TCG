@@ -10075,10 +10075,10 @@ def convert_excel_to_mspdi(
             else:
                 print(f"[MULTI-ASSIGN] No role aggregations found (check L6 role data)")
 
-        # GPT-5 SPEC: Apply L5-Only Export Aggregation
-        # Remove all L6 rows and aggregate their data into L5 parents with multi-assignment
-        if ENABLE_L5_ONLY_EXPORT and ENABLE_MULTI_ASSIGNMENT:
-            print(f"\n[L5-EXPORT] Applying L5-only export: Aggregating L6 rows into L5 components...")
+        # GPT-5 SPEC: Apply L5 Aggregation (Mode A or Mode B)
+        # Mode A: Remove L6 rows / Mode B: Keep L6 rows with synced dates
+        if EXPORT_MODE in ("A", "B") and ENABLE_MULTI_ASSIGNMENT:
+            print(f"\n[EXPORT-MODE-{EXPORT_MODE}] Applying aggregation: Processing L6 rows...")
             rows = aggregate_l5_tasks(rows)
             
             # Rebuild indexes after aggregation
@@ -10116,10 +10116,10 @@ def convert_excel_to_mspdi(
                 
                 print(f"[L5-EXPORT] Rebuilt {len(uid_edges)} L5→L5 dependencies")
             
-            print(f"[L5-EXPORT] Aggregation complete. Continuing with {len(rows)} tasks...")
-        elif ENABLE_L5_ONLY_EXPORT:
-            print(f"[L5-EXPORT] ⚠️  ENABLE_L5_ONLY_EXPORT=True but ENABLE_MULTI_ASSIGNMENT=False")
-            print(f"[L5-EXPORT] ⚠️  L5-only export requires multi-assignment. Skipping aggregation.")
+            print(f"[EXPORT-MODE-{EXPORT_MODE}] Aggregation complete. Continuing with {len(rows)} tasks...")
+        elif EXPORT_MODE in ("A", "B"):
+            print(f"[EXPORT-MODE-{EXPORT_MODE}] ⚠️  EXPORT_MODE={EXPORT_MODE} but ENABLE_MULTI_ASSIGNMENT=False")
+            print(f"[EXPORT-MODE-{EXPORT_MODE}] ⚠️  Export modes A/B require multi-assignment. Skipping aggregation.")
 
         # Calculate project start date (MUST be timezone-naive for MSPDI compatibility)
         if fixed_start_iso:
