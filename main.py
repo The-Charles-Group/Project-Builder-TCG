@@ -27,6 +27,13 @@ import time
 from functools import lru_cache
 import pickle
 
+# ============================================================
+# FEATURE FLAGS
+# ============================================================
+ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
+ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
+# ============================================================
+
 try:
     from docx import Document  # pip install python-docx
 except Exception:
