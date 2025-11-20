@@ -42,12 +42,6 @@ try:
 except Exception:
     Image = None
 
-# ---------- Feature Flags ----------
-# L5-Only Export: Exports L5 components as tasks with role-based assignments (no L6 tasks)
-# When enabled: L5 components become Workfront tasks, roles become Assignments on those tasks
-# When disabled: Traditional L6 leaf tasks (one task per role) with dependency filtering
-ENABLE_L5_ONLY_EXPORT = True  # L5-only export: L5 components as tasks, L6 roles as assignments
-
 # ---------- Performance Optimization: Cache Excel to Pickle ----------
 # Note: This function will be called after AgencyDB is defined
 def load_database_with_pickle_cache():
@@ -9995,165 +9989,6 @@ def convert_excel_to_mspdi(
             print(f"[MSPDI Export] WARNING: No task schedules found, using fallback project dates")
 
         # ====================================================================================
-        # L5 COMPONENT GROUPING: Group role rows by their L5 component parent
-        # ====================================================================================
-        def group_by_l5_components(rows_input):
-            """
-            Group rows by L5 component level for L5-only export mode.
-            
-            Returns:
-                Dict[str, Dict]: {l5_wbs: {"component_row": {...}, "role_rows": [...]}}
-                
-            Logic:
-                - L5 components have WBS depth of 5 (e.g., "1.2.3.1.1")
-                - L6 leaf tasks are role rows with depth 6 (e.g., "1.2.3.1.1.1")
-                - Group all L6 rows under their L5 parent
-            """
-            from collections import defaultdict
-            
-            components = {}  # L5 components by WBS
-            role_rows_by_l5 = defaultdict(list)  # L6 role rows grouped by parent L5 WBS
-            
-            # First pass: identify L5 components and L6 role rows
-            for row in rows_input:
-                wbs = row.get("WBS", "")
-                parent_wbs = row.get("ParentWBS", "")
-                depth = len(wbs.split(".")) if wbs else 0
-                
-                # L5 component (5 segments): "1.2.3.1.1"
-                if depth == 5:
-                    components[wbs] = row
-                    print(f"[L5-GROUP] Found L5 component: {wbs} - {row.get('Name', 'Unknown')}")
-                
-                # L6 leaf task (6 segments): "1.2.3.1.1.1" - role row under L5
-                elif depth == 6:
-                    # Extract L5 parent (first 5 segments)
-                    l5_parent = ".".join(wbs.split(".")[:5])
-                    role_rows_by_l5[l5_parent].append(row)
-                    print(f"[L5-GROUP] Found L6 role row: {wbs} (Parent L5: {l5_parent}) - Role: {row.get('RoleStr', 'Unknown')}")
-                
-                # Higher levels (L1-L4) or root - keep track but don't group
-                elif depth < 5:
-                    print(f"[L5-GROUP] Skipping higher-level row: {wbs} (depth {depth})")
-            
-            # Build component buckets
-            component_buckets = {}
-            for l5_wbs, comp_row in components.items():
-                roles = role_rows_by_l5.get(l5_wbs, [])
-                component_buckets[l5_wbs] = {
-                    "component_row": comp_row,
-                    "role_rows": roles
-                }
-                print(f"[L5-GROUP] Component {l5_wbs}: {len(roles)} role(s)")
-            
-            print(f"[L5-GROUP] Summary: {len(component_buckets)} L5 components with {sum(len(b['role_rows']) for b in component_buckets.values())} total role rows")
-            return component_buckets
-        
-        # ====================================================================================
-        # L5 AGGREGATION: Aggregate role data into L5 component task
-        # ====================================================================================
-        def aggregate_l5_component(component_row, role_rows, uid_to_sched_map):
-            """
-            Aggregate role-level data into a single L5 component task.
-            Scheduler is single source of truth for dates and duration.
-            
-            Returns:
-                Dict with aggregated task data including:
-                - total_hours: Sum of all role hours (ONLY thing aggregated)
-                - total_revenue: Sum of all role revenue (ONLY thing aggregated)
-                - duration_minutes: From scheduler (NOT recomputed from hours)
-                - start: From scheduler (NOT recomputed)
-                - finish: From scheduler (NOT recomputed)
-            """
-            # Aggregate hours and revenue from all roles (ONLY aggregation - everything else from scheduler)
-            total_hours = sum(float(r.get("PlannedHours", 0)) for r in role_rows)
-            total_revenue = sum(float(r.get("Price_USD", 0)) for r in role_rows)
-            
-            # Get start/finish/duration from scheduler (single source of truth)
-            comp_uid = component_row["UID"]
-            if comp_uid in uid_to_sched_map:
-                sched = uid_to_sched_map[comp_uid]
-                start = sched["Start"]
-                finish = sched["Finish"]
-                duration_minutes = sched.get("Duration", 0)  # Use scheduler's duration, not recomputed
-            else:
-                # Fallback: use earliest/latest from role rows
-                role_uids = [r["UID"] for r in role_rows if r["UID"] in uid_to_sched_map]
-                if role_uids:
-                    start = min(uid_to_sched_map[uid]["Start"] for uid in role_uids)
-                    finish = max(uid_to_sched_map[uid]["Finish"] for uid in role_uids)
-                    duration_minutes = max(uid_to_sched_map[uid].get("Duration", 0) for uid in role_uids)
-                else:
-                    start = "2025-01-01T08:00:00"  # Fallback
-                    finish = "2025-01-01T17:00:00"
-                    duration_minutes = 480  # 1 day fallback
-            
-            aggregated = {
-                "total_hours": total_hours,
-                "total_revenue": total_revenue,
-                "duration_minutes": duration_minutes,  # From scheduler, not recomputed
-                "start": start,  # From scheduler
-                "finish": finish,  # From scheduler
-                "role_count": len(role_rows)
-            }
-            
-            print(f"[L5-AGG] {component_row.get('Name', 'Unknown')}: {len(role_rows)} roles, {total_hours}h, ${total_revenue:,.2f}, sched_duration={duration_minutes}min")
-            return aggregated
-        
-        # ====================================================================================
-        # ASSIGNMENT GENERATION: Create XML Assignment elements for roles
-        # ====================================================================================
-        def generate_assignment_xml(task_uid, role_row, resource_uid_map, uid_to_sched_map, duration_minutes):
-            """
-            Generate XML Assignment element for a role on an L5 task.
-            
-            Args:
-                task_uid: UID of the L5 task this assignment belongs to
-                role_row: The role row dict with hours/revenue/rate
-                resource_uid_map: Dict mapping role name to resource UID
-                uid_to_sched_map: Scheduling data (not used for assignments, but available)
-                duration_minutes: Duration of the parent task in minutes
-                
-            Returns:
-                XML Element for Assignment
-            """
-            from xml.etree.ElementTree import Element, SubElement
-            
-            assignment = Element("Assignment")
-            
-            # Assignment UID (unique across all assignments)
-            # For now, use a combination of task UID and role UID
-            assignment_uid = f"{task_uid}{role_row['UID']}"  # Simple concatenation
-            SubElement(assignment, "UID").text = str(assignment_uid)
-            
-            # Link to task and resource
-            SubElement(assignment, "TaskUID").text = str(task_uid)
-            
-            # Get resource UID for this role
-            role_name = role_row.get("RoleStr", "Unassigned")
-            resource_uid = resource_uid_map.get(role_name, 1)  # Default to UID 1 if not found
-            SubElement(assignment, "ResourceUID").text = str(resource_uid)
-            
-            # Work in minutes
-            work_hours = float(role_row.get("PlannedHours", 0))
-            work_minutes = int(work_hours * 60)
-            SubElement(assignment, "Work").text = f"PT{work_minutes}M"
-            
-            # Units (percentage): work_minutes / duration_minutes (guard against division by zero)
-            if duration_minutes > 0:
-                units = work_minutes / duration_minutes
-            else:
-                units = 1.0  # Default to 100% for milestones
-            SubElement(assignment, "Units").text = f"{units:.2f}"
-            
-            # Cost/Revenue
-            revenue = float(role_row.get("Price_USD", 0))
-            SubElement(assignment, "Cost").text = f"{revenue:.2f}"
-            
-            print(f"[L5-ASSIGN] Task {task_uid} ← {role_name}: {work_hours}h @ {units*100:.1f}% = ${revenue:,.2f}")
-            return assignment
-        
-        # ====================================================================================
         # MULTI-ASSIGNMENT DETECTION: Group rows with identical Name+Start+Finish+WBS_Prefix
         # ====================================================================================
         def group_multi_assignments(rows_input, uid_to_sched_map):
@@ -10275,131 +10110,6 @@ def convert_excel_to_mspdi(
         # Instead: Use identity mapping (each UID maps to itself for dependency safety)
         uid_alias_map = {row["UID"]: row["UID"] for row in rows}
         print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
-        
-        # ====================================================================================
-        # L5-ONLY EXPORT MODE: Transform rows to export only L5 components with assignments
-        # ====================================================================================
-        if ENABLE_L5_ONLY_EXPORT:
-            print("[L5-ONLY] ═══════════════════════════════════════════════════════════")
-            print("[L5-ONLY] L5-ONLY EXPORT MODE ENABLED")
-            print("[L5-ONLY] Transforming rows: L5 components become tasks, roles become assignments")
-            print(f"[L5-ONLY] Input: {len(rows)} total rows")
-            
-            # Group rows by L5 components
-            component_buckets = group_by_l5_components(rows)
-            
-            # Build resource name to UID mapping for assignments
-            res_name_to_uid = {r["Name"]: r["UID"] for r in resources}
-            
-            # Transform rows: keep L1-L4, replace L5+L6 with aggregated L5
-            transformed_rows = []
-            l6_to_l5_uid_map = {}  # Map L6 role UIDs to their L5 parent UID
-            assignment_counter = 1
-            
-            # First pass: collect L1-L4 rows (keep as-is)
-            for row in rows:
-                wbs = row.get("WBS", "")
-                depth = len(wbs.split(".")) if wbs else 0
-                
-                if depth < 5:  # L1-L4: keep as-is
-                    transformed_rows.append(row)
-            
-            # Second pass: process L5 components
-            for l5_wbs, bucket in component_buckets.items():
-                comp_row = bucket["component_row"]
-                role_rows = bucket["role_rows"]
-                
-                # Aggregate component data
-                agg = aggregate_l5_component(comp_row, role_rows, uid_to_sched)
-                
-                # Create aggregated L5 task row
-                aggregated_task = {
-                    **comp_row,  # Copy base L5 component row
-                    "PlannedHours": agg["total_hours"],
-                    "Price_USD": agg["total_revenue"],
-                    "l5_only_mode": True,  # Flag for downstream processing
-                    "l5_aggregated": agg,  # Store aggregated data
-                    "l5_assignments": []  # Will hold assignment XML elements
-                }
-                
-                # Generate assignment data for each role
-                for role_row in role_rows:
-                    assignment_data = {
-                        "uid": assignment_counter,
-                        "task_uid": comp_row["UID"],
-                        "resource_uid": res_name_to_uid.get(role_row.get("RoleStr", "Unassigned"), 1),
-                        "resource_name": role_row.get("RoleStr", "Unassigned"),
-                        "work_hours": float(role_row.get("PlannedHours", 0)),
-                        "work_minutes": int(float(role_row.get("PlannedHours", 0)) * 60),
-                        "rate_usd": float(role_row.get("Rate_USD", 0)),
-                        "price_usd": float(role_row.get("Price_USD", 0)),
-                        "duration_minutes": agg["duration_minutes"]
-                    }
-                    aggregated_task["l5_assignments"].append(assignment_data)
-                    assignment_counter += 1
-                    
-                    # Map L6 role UID to L5 parent UID for dependency remapping
-                    l6_to_l5_uid_map[role_row["UID"]] = comp_row["UID"]
-                
-                transformed_rows.append(aggregated_task)
-            
-            # Transform dependencies: L6→L6 to L5→L5 with deduplication
-            print(f"\n[L5-DEPS] Transforming dependencies from L6→L6 to L5→L5")
-            print(f"[L5-DEPS] Input: {len(normalized_edges)} edges from scheduler")
-            
-            # Build WBS→UID map from original rows (before filtering)
-            wbs_to_uid_original = {r.get("WBS"): r["UID"] for r in rows if r.get("WBS")}
-            
-            l5_edges = set()  # Use set for automatic deduplication
-            skipped_missing_wbs = 0
-            
-            for pred_wbs, succ_wbs in normalized_edges:
-                # Lookup UIDs from WBS
-                pred_uid = wbs_to_uid_original.get(pred_wbs)
-                succ_uid = wbs_to_uid_original.get(succ_wbs)
-                
-                if pred_uid is None or succ_uid is None:
-                    skipped_missing_wbs += 1
-                    continue
-                
-                # Map L6→L5 if needed, otherwise keep as-is
-                pred_l5_uid = l6_to_l5_uid_map.get(pred_uid, pred_uid)
-                succ_l5_uid = l6_to_l5_uid_map.get(succ_uid, succ_uid)
-                
-                # Add L5→L5 edge (set automatically deduplicates)
-                if pred_l5_uid != succ_l5_uid:  # Skip self-loops
-                    l5_edges.add((pred_l5_uid, succ_l5_uid))
-            
-            # Convert back to list for downstream processing
-            normalized_edges_l5_uids = list(l5_edges)
-            
-            # Convert UID-based edges back to WBS-based edges for downstream compatibility
-            # Build UID→WBS map from transformed rows
-            uid_to_wbs_l5 = {r["UID"]: r["WBS"] for r in transformed_rows if "WBS" in r}
-            
-            normalized_edges_l5 = []
-            for pred_uid, succ_uid in normalized_edges_l5_uids:
-                pred_wbs = uid_to_wbs_l5.get(pred_uid)
-                succ_wbs = uid_to_wbs_l5.get(succ_uid)
-                if pred_wbs and succ_wbs:
-                    normalized_edges_l5.append((pred_wbs, succ_wbs))
-            
-            print(f"[L5-DEPS] Original edges: {len(normalized_edges)}")
-            print(f"[L5-DEPS] Skipped {skipped_missing_wbs} edges (WBS not found)")
-            print(f"[L5-DEPS] Transformed to {len(normalized_edges_l5)} L5-level WBS-based edges")
-            print(f"[L5-DEPS] Deduplication eliminated {len(normalized_edges) - skipped_missing_wbs - len(normalized_edges_l5)} redundant L6→L6 edges")
-            
-            # Replace normalized_edges with L5-only edges (WBS-based format)
-            normalized_edges = normalized_edges_l5
-            
-            # Update rows (filter to L1-L5 only, no L6)
-            original_count = len(rows)
-            rows = transformed_rows
-            
-            print(f"[L5-ONLY] Transformed: {original_count} rows → {len(rows)} tasks ({len(component_buckets)} L5 components)")
-            print(f"[L5-ONLY] ✅ All L6 tasks removed from export")
-            print(f"[L5-ONLY] ✅ Dependencies transformed to L5-only scope")
-            print("[L5-ONLY] ═══════════════════════════════════════════════════════════")
         
         # ====================================================================================
         # Generate XML
@@ -10556,91 +10266,75 @@ def convert_excel_to_mspdi(
                 SubElement(task, "ManualWork").text = "1"
             # Only set Duration/Work for non-summary leaf tasks
             else:
-                # L5-ONLY MODE: Handle aggregated L5 tasks with multiple assignments
-                if r.get("l5_only_mode"):
-                    agg = r["l5_aggregated"]
-                    
-                    # Use aggregated hours and duration
-                    work_minutes = int(agg["total_hours"] * 60)
-                    SubElement(task, "Work").text = f"PT{work_minutes}M"
-                    SubElement(task, "Duration").text = f"PT{agg['duration_minutes']}M"
-                    
-                    # Fixed Duration type
-                    SubElement(task, "Type").text = "1"
-                    SubElement(task, "IsEffortDriven").text = "0"
-                    SubElement(task, "ConstraintType").text = "0"  # ASAP
-                    
-                    print(f"[L5-XML] Task {r['UID']}: {r.get('Name', 'Unknown')[:40]} - {agg['total_hours']}h, {agg['duration_minutes']}min, {len(r['l5_assignments'])} assignments")
+                # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
+                # NO 960-minute snapping - use actual timestamp difference
+                # This is critical to prevent Workfront from recalculating dates on import
+                
+                start_val = uid_to_sched[r["UID"]]["Start"]
+                finish_val = uid_to_sched[r["UID"]]["Finish"]
+                
+                # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
+                def to_datetime(val):
+                    if isinstance(val, datetime.datetime):
+                        return val
+                    elif isinstance(val, str):
+                        # Remove timezone suffixes for parsing
+                        val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
+                        # Try parsing with fromisoformat (handles timezones)
+                        try:
+                            return datetime.datetime.fromisoformat(val_clean)
+                        except ValueError:
+                            # Fallback: strip timezone manually and parse
+                            val_clean = val.split('+')[0].split('-')
+                            # Rejoin date portion (first 3 parts: YYYY, MM, DD)
+                            val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
+                            val_clean = val_clean.split('.')[0]  # Remove milliseconds
+                            return datetime.datetime.fromisoformat(val_clean)
+                    else:
+                        return val
+                
+                start_dt = to_datetime(start_val)
+                finish_dt = to_datetime(finish_val)
+                
+                # Work calculation: For multi-assignment tasks, sum all assignee hours
+                if r.get("multi_assignment") and "assignments" in r:
+                    # Multi-assignment: sum all assignee work hours
+                    total_work_hours = sum(a["work_hours"] for a in r["assignments"])
+                    work_minutes = int(total_work_hours * 60)
                 else:
-                    # WORKFRONT FIX: Duration MUST equal (Finish - Start) for ALL tasks
-                    # NO 960-minute snapping - use actual timestamp difference
-                    # This is critical to prevent Workfront from recalculating dates on import
-                    
-                    start_val = uid_to_sched[r["UID"]]["Start"]
-                    finish_val = uid_to_sched[r["UID"]]["Finish"]
-                    
-                    # Robust datetime parser that handles timezone suffixes (Z, +00:00, etc.)
-                    def to_datetime(val):
-                        if isinstance(val, datetime.datetime):
-                            return val
-                        elif isinstance(val, str):
-                            # Remove timezone suffixes for parsing
-                            val_clean = val.replace('Z', '+00:00')  # Convert Z to +00:00
-                            # Try parsing with fromisoformat (handles timezones)
-                            try:
-                                return datetime.datetime.fromisoformat(val_clean)
-                            except ValueError:
-                                # Fallback: strip timezone manually and parse
-                                val_clean = val.split('+')[0].split('-')
-                                # Rejoin date portion (first 3 parts: YYYY, MM, DD)
-                                val_clean = '-'.join(val_clean[:3]) + val_clean[3] if len(val_clean) > 3 else '-'.join(val_clean)
-                                val_clean = val_clean.split('.')[0]  # Remove milliseconds
-                                return datetime.datetime.fromisoformat(val_clean)
-                        else:
-                            return val
-                    
-                    start_dt = to_datetime(start_val)
-                    finish_dt = to_datetime(finish_val)
-                    
-                    # Work calculation: For multi-assignment tasks, sum all assignee hours
-                    if r.get("multi_assignment") and "assignments" in r:
-                        # Multi-assignment: sum all assignee work hours
-                        total_work_hours = sum(a["work_hours"] for a in r["assignments"])
-                        work_minutes = int(total_work_hours * 60)
-                    else:
-                        # Single assignment: use PlannedHours from Gantt (actual effort)
-                        work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
-                        if pd.isna(work_hours):
-                            work_hours = 0
-                        work_minutes = max(0, int(work_hours * 60))
-                    
-                    SubElement(task, "Work").text = f"PT{work_minutes}M"
-                    
-                    # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
-                    # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
-                    work_hours = work_minutes / 60.0
-                    
-                    if work_hours == 0:
-                        # Milestone: zero duration
-                        dur_minutes = 0
-                    else:
-                        # Regular task: required_days = max(1, ceil(hours / 8.0))
-                        # Uses 8-hour workday aligned with MinutesPerDay=480
-                        import math
-                        required_days = max(1, math.ceil(work_hours / 8.0))
-                        dur_minutes = required_days * 480
-                    
-                    SubElement(task, "Duration").text = f"PT{dur_minutes}M"
-                    
-                    # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
-                    # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
-                    SubElement(task, "Type").text = "1"  # Fixed Duration
-                    SubElement(task, "IsEffortDriven").text = "0"
-                    
-                    # WORKFRONT FIX: Explicit ASAP constraint on ALL leaf tasks to prevent constraint inheritance
-                    # Without this, leaf tasks inherit parent deliverable's SNET constraint, causing serial execution
-                    # ConstraintType=0 (As Soon As Possible) allows tasks to start when dependencies are met
-                    SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
+                    # Single assignment: use PlannedHours from Gantt (actual effort)
+                    work_hours = uid_to_sched[r['UID']].get('PlannedHours', 0)
+                    if pd.isna(work_hours):
+                        work_hours = 0
+                    work_minutes = max(0, int(work_hours * 60))
+                
+                SubElement(task, "Work").text = f"PT{work_minutes}M"
+                
+                # DURATION FIX: Ensure Work ≤ Duration using ceil(hours/8) formula
+                # This fixes "11 hours in 0.12 days" issue by guaranteeing sufficient duration
+                work_hours = work_minutes / 60.0
+                
+                if work_hours == 0:
+                    # Milestone: zero duration
+                    dur_minutes = 0
+                else:
+                    # Regular task: required_days = max(1, ceil(hours / 8.0))
+                    # Uses 8-hour workday aligned with MinutesPerDay=480
+                    import math
+                    required_days = max(1, math.ceil(work_hours / 8.0))
+                    dur_minutes = required_days * 480
+                
+                SubElement(task, "Duration").text = f"PT{dur_minutes}M"
+                
+                # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
+                # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
+                SubElement(task, "Type").text = "1"  # Fixed Duration
+                SubElement(task, "IsEffortDriven").text = "0"
+                
+                # WORKFRONT FIX: Explicit ASAP constraint on ALL leaf tasks to prevent constraint inheritance
+                # Without this, leaf tasks inherit parent deliverable's SNET constraint, causing serial execution
+                # ConstraintType=0 (As Soon As Possible) allows tasks to start when dependencies are met
+                SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
             
             # GPT-5 PRO FIX: Add CalendarUID to all tasks to enable calendar-day duration display
             # Without this, Workfront treats durations as raw minutes and displays "0.12 days"
@@ -10837,33 +10531,6 @@ def convert_excel_to_mspdi(
                     SubElement(assignment, "Cost").text = f"{cost:.2f}"
                     
                 print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
-            
-            # L5-ONLY MODE: Handle aggregated L5 tasks with role assignments
-            elif row.get("l5_only_mode") and "l5_assignments" in row:
-                # L5 task with multiple role assignments
-                for assign_data in row["l5_assignments"]:
-                    assignment = SubElement(assignments_elem, "Assignment")
-                    SubElement(assignment, "UID").text = str(assign_uid_counter)
-                    assign_uid_counter += 1
-                    
-                    SubElement(assignment, "TaskUID").text = str(task_uid)
-                    SubElement(assignment, "ResourceUID").text = str(assign_data["resource_uid"])
-                    
-                    # Start/Finish from task schedule
-                    SubElement(assignment, "Start").text = uid_to_sched[task_uid]["Start"]
-                    SubElement(assignment, "Finish").text = uid_to_sched[task_uid]["Finish"]
-                    
-                    # Work and Units
-                    work_min = assign_data["work_minutes"]
-                    dur_min = assign_data["duration_minutes"]
-                    units = 0 if dur_min == 0 else work_min / dur_min
-                    
-                    SubElement(assignment, "Units").text = f"{units:.2f}"
-                    SubElement(assignment, "Work").text = f"PT{work_min}M"
-                    SubElement(assignment, "Cost").text = f"{assign_data['price_usd']:.2f}"
-                    
-                print(f"[L5-XML] ✅ Created {len(row['l5_assignments'])} role assignments for L5 task: {row['Name'][:50]} (UID {task_uid})")
-            
             else:
                 # Single-assignment task - use original logic
                 # Find the assignment for this task from the pre-built assignments list
@@ -10926,53 +10593,124 @@ def convert_excel_to_mspdi(
                 return ".".join(parts[:5])
             return None  # Not deep enough to be in L5 component
         
-        # ====================================================================================
-        # SIMPLIFIED DEPENDENCY HANDLING: Scheduler is single source of truth
-        # - Scheduler's normalized_edges (WBS-based) already contain correct dependencies
-        # - Simply convert WBS to UID and emit (skip if WBS missing after L5 aggregation)
-        # - No alias map, no complex remapping - just use what scheduler gave us
-        # ====================================================================================
+        # Build metadata map for dependency filtering
+        uid_metadata = {}
+        for r in rows:
+            uid = r["UID"]
+            wbs = r["WBS"]
+            outline_level = wbs.count(".") + 1
+            is_leaf = wbs not in summary_set  # Leaf if not in summary_set
+            l5_prefix = get_l5_prefix(wbs)
+            
+            uid_metadata[uid] = {
+                "outline_level": outline_level,
+                "l5_prefix": l5_prefix,
+                "is_leaf": is_leaf,
+                "wbs": wbs
+            }
         
-        # Build WBS→UID map from final rows (after L5 transformation)
-        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
-        
-        # Convert scheduler's WBS-based edges to UIDs
-        dependency_edges = []
-        skipped_missing_wbs = 0
-        
+        # Remap dependencies through uid_alias_map (for multi-assignment merged tasks)
+        # This ensures dependencies pointing to consumed UIDs redirect to the primary UID
+        remapped_edges = []
         for pred_wbs, succ_wbs in normalized_edges:
             pred_uid = wbs_to_uid.get(pred_wbs)
             succ_uid = wbs_to_uid.get(succ_wbs)
             
-            if pred_uid is None or succ_uid is None:
-                # WBS doesn't exist in final rows (was removed during L5 aggregation)
-                skipped_missing_wbs += 1
-                continue
+            # Remap through alias map if these UIDs were merged
+            pred_uid = uid_alias_map.get(pred_uid, pred_uid) if pred_uid else None
+            succ_uid = uid_alias_map.get(succ_uid, succ_uid) if succ_uid else None
             
-            dependency_edges.append((pred_uid, succ_uid))
+            # Convert back to WBS for filtering logic
+            if pred_uid and succ_uid:
+                # Find WBS for remapped UIDs
+                pred_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == pred_uid), pred_wbs)
+                succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
+                remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
         
-        print(f"\n[DEPENDENCIES] Scheduler edges → XML emission")
-        print(f"[DEPENDENCIES] Input: {len(normalized_edges)} WBS-based edges from scheduler")
-        print(f"[DEPENDENCIES] Skipped {skipped_missing_wbs} edges (WBS removed during L5 aggregation)")
-        print(f"[DEPENDENCIES] Output: {len(dependency_edges)} UID-based edges to emit")
+        # Filter remapped edges with parallel role execution support
+        filtered_edges = []
+        skipped_leaf_links = 0
+        kept_cross_component = 0
+        kept_summary_links = 0
+        kept_deliverable_links = 0
         
-        # Emit PredecessorLink elements directly from scheduler edges
-        emitted_count = 0
-        for pred_uid, succ_uid in dependency_edges:
-            # Find the successor task element and add PredecessorLink
-            for task_elem in tasks_elem.findall("Task"):
-                task_uid_elem = task_elem.find("UID")
-                if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
-                    pred_link = SubElement(task_elem, "PredecessorLink")
-                    SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
-                    SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
-                    SubElement(pred_link, "CrossProject").text = "0"
-                    SubElement(pred_link, "LinkLag").text = "0"
-                    SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
-                    emitted_count += 1
-                    break
+        for pred_wbs, succ_wbs in remapped_edges:
+            pred_uid = wbs_to_uid.get(pred_wbs)
+            succ_uid = wbs_to_uid.get(succ_wbs)
+            
+            if pred_uid and succ_uid:
+                pred_meta = uid_metadata.get(pred_uid, {})
+                succ_meta = uid_metadata.get(succ_uid, {})
+                
+                pred_outline = pred_meta.get("outline_level", 99)
+                succ_outline = succ_meta.get("outline_level", 99)
+                
+                # CASE 1: Both tasks at deliverable level (≤L4) - always keep
+                if pred_outline <= 4 and succ_outline <= 4:
+                    filtered_edges.append((pred_wbs, succ_wbs))
+                    kept_deliverable_links += 1
+                # CASE 2: Both tasks at component/task level (≥L5)
+                elif pred_outline >= 5 and succ_outline >= 5:
+                    pred_deliverable = get_deliverable_parent(pred_wbs)
+                    succ_deliverable = get_deliverable_parent(succ_wbs)
+                    
+                    if pred_deliverable != succ_deliverable:
+                        # Cross-deliverable dependency - REMOVE to prevent conga line
+                        print(f"[XML EXPORT] 🚫 Pruned cross-deliverable dependency: {pred_wbs} ({pred_deliverable}) → {succ_wbs} ({succ_deliverable})")
+                        continue
+                    
+                    # Same deliverable - check if leaf-to-leaf within same L5 component
+                    pred_is_leaf = pred_meta.get("is_leaf", False)
+                    succ_is_leaf = succ_meta.get("is_leaf", False)
+                    pred_l5_prefix = pred_meta.get("l5_prefix")
+                    succ_l5_prefix = succ_meta.get("l5_prefix")
+                    
+                    # PARALLEL ROLE EXECUTION: Skip leaf-to-leaf within same L5 component
+                    # This prevents AM → Copywriter → Strategist chains, allowing parallel stacking
+                    if (pred_is_leaf and succ_is_leaf and
+                        pred_l5_prefix and succ_l5_prefix and  # Non-empty check (guardrail)
+                        pred_l5_prefix == succ_l5_prefix):
+                        # Skip this leaf-to-leaf link - roles will run in parallel
+                        skipped_leaf_links += 1
+                        continue
+                    
+                    # Keep component-level or cross-component L5 dependencies
+                    filtered_edges.append((pred_wbs, succ_wbs))
+                    if pred_l5_prefix != succ_l5_prefix:
+                        kept_cross_component += 1
+                    else:
+                        kept_summary_links += 1
+                # CASE 3: Mixed levels (e.g., L3 → L5) - remove to prevent hierarchy issues
+                else:
+                    print(f"[XML EXPORT] 🚫 Pruned cross-level dependency: {pred_wbs} (L{pred_outline}) → {succ_wbs} (L{succ_outline})")
         
-        print(f"[DEPENDENCIES] ✅ Emitted {emitted_count} PredecessorLink elements in XML\n")
+        # Debug logging for dependency filtering
+        print(f"\n[DEP-FILTER] ══════════════════════════════════════════════")
+        print(f"[DEP-FILTER] Total edges processed: {len(normalized_edges)}")
+        print(f"[DEP-FILTER] Skipped {skipped_leaf_links} leaf-to-leaf links within same L5 component")
+        print(f"[DEP-FILTER] Kept {kept_deliverable_links} deliverable-level dependencies (L1-L4)")
+        print(f"[DEP-FILTER] Kept {kept_cross_component} cross-component L5+ dependencies")
+        print(f"[DEP-FILTER] Kept {kept_summary_links} L5 summary/parent dependencies")
+        print(f"[DEP-FILTER] Final edges exported: {len(filtered_edges)}")
+        print(f"[DEP-FILTER] ══════════════════════════════════════════════\n")
+        
+        # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
+        for pred_wbs, succ_wbs in filtered_edges:
+            pred_uid = wbs_to_uid.get(pred_wbs)
+            succ_uid = wbs_to_uid.get(succ_wbs)
+            if pred_uid and succ_uid:
+                # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
+                for task_elem in tasks_elem.findall("Task"):
+                    task_uid_elem = task_elem.find("UID")
+                    if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
+                        pred_link = SubElement(task_elem, "PredecessorLink")
+                        SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
+                        SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
+                        SubElement(pred_link, "CrossProject").text = "0"
+                        # Optional but harmless:
+                        SubElement(pred_link, "LinkLag").text = "0"
+                        SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
+                        break
 
         # Compute project summary start/finish from children (no more hardcoded dates)
         if tasks_elem is not None:
