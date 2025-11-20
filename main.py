@@ -10055,54 +10055,49 @@ def convert_excel_to_mspdi(
         def aggregate_l5_component(component_row, role_rows, uid_to_sched_map):
             """
             Aggregate role-level data into a single L5 component task.
+            Scheduler is single source of truth for dates and duration.
             
             Returns:
                 Dict with aggregated task data including:
-                - total_hours: Sum of all role hours
-                - total_revenue: Sum of all role revenue
-                - duration_minutes: Computed duration (max(1, ceil(hours/8)) * 480)
-                - start: Component start date (from scheduler or first role)
-                - finish: Component finish date (from scheduler or last role)
+                - total_hours: Sum of all role hours (ONLY thing aggregated)
+                - total_revenue: Sum of all role revenue (ONLY thing aggregated)
+                - duration_minutes: From scheduler (NOT recomputed from hours)
+                - start: From scheduler (NOT recomputed)
+                - finish: From scheduler (NOT recomputed)
             """
-            import math
-            
-            # Aggregate hours and revenue from all roles
+            # Aggregate hours and revenue from all roles (ONLY aggregation - everything else from scheduler)
             total_hours = sum(float(r.get("PlannedHours", 0)) for r in role_rows)
             total_revenue = sum(float(r.get("Price_USD", 0)) for r in role_rows)
             
-            # Compute duration using the same formula as leaf tasks:
-            # required_days = max(1, ceil(hours / 8.0)), duration_minutes = required_days * 480
-            if total_hours == 0:
-                duration_minutes = 0  # Milestone
-            else:
-                required_days = max(1, math.ceil(total_hours / 8.0))
-                duration_minutes = required_days * 480
-            
-            # Get start/finish dates from component row's schedule
+            # Get start/finish/duration from scheduler (single source of truth)
             comp_uid = component_row["UID"]
             if comp_uid in uid_to_sched_map:
-                start = uid_to_sched_map[comp_uid]["Start"]
-                finish = uid_to_sched_map[comp_uid]["Finish"]
+                sched = uid_to_sched_map[comp_uid]
+                start = sched["Start"]
+                finish = sched["Finish"]
+                duration_minutes = sched.get("Duration", 0)  # Use scheduler's duration, not recomputed
             else:
                 # Fallback: use earliest/latest from role rows
                 role_uids = [r["UID"] for r in role_rows if r["UID"] in uid_to_sched_map]
                 if role_uids:
                     start = min(uid_to_sched_map[uid]["Start"] for uid in role_uids)
                     finish = max(uid_to_sched_map[uid]["Finish"] for uid in role_uids)
+                    duration_minutes = max(uid_to_sched_map[uid].get("Duration", 0) for uid in role_uids)
                 else:
                     start = "2025-01-01T08:00:00"  # Fallback
                     finish = "2025-01-01T17:00:00"
+                    duration_minutes = 480  # 1 day fallback
             
             aggregated = {
                 "total_hours": total_hours,
                 "total_revenue": total_revenue,
-                "duration_minutes": duration_minutes,
-                "start": start,
-                "finish": finish,
+                "duration_minutes": duration_minutes,  # From scheduler, not recomputed
+                "start": start,  # From scheduler
+                "finish": finish,  # From scheduler
                 "role_count": len(role_rows)
             }
             
-            print(f"[L5-AGG] {component_row.get('Name', 'Unknown')}: {len(role_rows)} roles, {total_hours}h, ${total_revenue:,.2f}, {duration_minutes}min")
+            print(f"[L5-AGG] {component_row.get('Name', 'Unknown')}: {len(role_rows)} roles, {total_hours}h, ${total_revenue:,.2f}, sched_duration={duration_minutes}min")
             return aggregated
         
         # ====================================================================================
