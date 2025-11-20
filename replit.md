@@ -20,6 +20,18 @@ A critical feature is the Gantt Timeline Date Preservation and Workfront Manual 
 
 The system also incorporates WBS-Based Dependencies and Multi-Assignment Export, implementing GPT-5 specifications for dependency normalization to L5 (OutlineLevel ≤ 5) and parallel role execution, enhancing accuracy in project structure and resource allocation.
 
+### L5-Only Export with Multi-Assignment
+The XML export implements a complete L5-only architecture for Workfront compatibility:
+- **L6 Role Aggregation**: All OutlineLevel > 5 (role rows) are aggregated into their L5 parent components before XML generation, completely removing L6 tasks from the export
+- **Multi-Assignment XML**: Each L5 component exports as a single task with multiple `<Assignment>` entries, one per role, with correct hours/rates aggregated from L6 children
+- **WBS Dependency Normalization**: All dependencies are normalized to L5 (OutlineLevel ≤ 5) by walking parent WBS hierarchy, ensuring no L6 predecessor links exist
+- **Feature Flags** (main.py lines 36-38):
+  - `ENABLE_L5_ONLY_EXPORT = True`: Removes all L6 rows, exports only L5 components
+  - `ENABLE_MULTI_ASSIGNMENT = True`: Aggregates L6 role hours into L5 multi-assignments  
+  - `ENABLE_WBS_DEPENDENCIES = True`: Uses WBS-based dependencies with L5 normalization
+  - Rollback: Set all three to `False` to restore legacy behavior (L6 rows, single assignments, scheduler edges)
+- **Implementation**: `aggregate_l5_tasks()` function (lines 9608-9772) performs aggregation, filtering, and multi-assignment data structure creation. Dependencies are rebuilt on the L5-filtered dataset after UID reassignment to ensure all edges reference valid L5 tasks only.
+
 ### User Interface and Data Management
 The frontend is a vanilla JavaScript, HTML, and CSS single-page application with a step-based workflow. It features a 3-column layout (Deliverables | Components | Summary), search functionality, and a unified AI Planner UI with real-time progress. Timeline accuracy is ensured through business day calculations, including holiday calendars.
 
