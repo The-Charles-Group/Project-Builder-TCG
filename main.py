@@ -32,7 +32,8 @@ import pickle
 # ============================================================
 ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
-# ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
+ENABLE_WBS_SCHEDULER = False    # Use WBS-based scheduler (8h/day, FS-only) to align with Workfront
+# ROLLBACK: Set all to False to restore legacy behavior (scheduler edges, one task per role, offset-based dates)
 # ============================================================
 
 try:
@@ -9689,6 +9690,295 @@ def convert_excel_to_mspdi(
             # last day (partial)
             minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
             return minutes
+
+        def add_business_days(start_dt: datetime.datetime, days: float) -> datetime.datetime:
+            """
+            Add business days to a start datetime using business calendar with lunch break.
+            BUS_BLOCKS: [(8:00-12:00), (13:00-17:00)] = 480 minutes/day.
+            
+            Algorithm: Consume requested minutes within current day's blocks while
+            respecting the caller's actual start timestamp. Handles midday starts.
+            
+            Examples:
+            - 0.5 days from Mon 8AM → Mon 12PM (240 minutes)
+            - 0.5 days from Mon 10AM → Mon 3PM (2h before lunch + 2h after)
+            - 1.0 day from Mon 8AM → Mon 5PM (480 minutes, ends at block boundary)
+            - 2.0 days from Mon 8AM → Tue 5PM (960 minutes)
+            - 0 days from Mon 10AM → Mon 10AM (unchanged)
+            """
+            from decimal import Decimal, ROUND_HALF_UP
+            
+            # Zero-duration: return unchanged
+            if days == 0:
+                return start_dt
+            
+            # Convert days to minutes using Decimal for round-half-up precision
+            minutes_to_add = int(Decimal(str(days * 480)).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+            
+            # Start from the provided datetime (honor intraday time)
+            current_dt = start_dt
+            minutes_remaining = minutes_to_add
+            
+            while minutes_remaining > 0:
+                # Skip to next business day if weekend/holiday
+                if not is_business_day(current_dt.date()):
+                    current_dt = datetime.datetime.combine(
+                        current_dt.date() + datetime.timedelta(days=1),
+                        datetime.time(8, 0)
+                    )
+                    continue
+                
+                # Find which block we're in and consume minutes
+                current_time = current_dt.time()
+                consumed_this_iteration = False
+                
+                for block_start, block_end in BUS_BLOCKS:
+                    # Skip blocks before current time
+                    if current_time >= block_end:
+                        continue
+                    
+                    # Calculate minutes available in this block
+                    effective_start = max(current_time, block_start)
+                    minutes_in_block = int((datetime.datetime.combine(current_dt.date(), block_end) - 
+                                           datetime.datetime.combine(current_dt.date(), effective_start)).total_seconds() // 60)
+                    
+                    if minutes_in_block <= 0:
+                        continue
+                    
+                    # Consume as many minutes as possible from this block
+                    minutes_to_consume = min(minutes_remaining, minutes_in_block)
+                    current_dt = datetime.datetime.combine(current_dt.date(), effective_start) + datetime.timedelta(minutes=minutes_to_consume)
+                    minutes_remaining -= minutes_to_consume
+                    consumed_this_iteration = True
+                    
+                    if minutes_remaining == 0:
+                        return current_dt
+                    
+                    # If more minutes remain, continue to next block
+                    if minutes_to_consume < minutes_in_block:
+                        # We're still within this block
+                        return current_dt
+                
+                # If no minutes consumed (end of day), advance to next business day
+                if not consumed_this_iteration:
+                    current_dt = datetime.datetime.combine(
+                        current_dt.date() + datetime.timedelta(days=1),
+                        datetime.time(8, 0)
+                    )
+            
+            return current_dt
+
+        def business_day_diff(start_date: datetime.date, end_date: datetime.date) -> float:
+            """
+            Calculate business days between two dates using business minutes.
+            Returns fractional days (480 minutes = 1.0 day).
+            
+            Examples:
+            - Mon 8AM to Mon 12PM: 240 minutes → 0.5 days
+            - Mon 8AM to Mon 5PM: 480 minutes → 1.0 day
+            - Mon 8AM to Tue 5PM: 960 minutes → 2.0 days
+            """
+            from decimal import Decimal, ROUND_HALF_UP
+            
+            if end_date < start_date:
+                return 0.0
+            
+            # Convert dates to datetimes (8 AM to 5 PM spans)
+            start_dt = datetime.datetime.combine(start_date, datetime.time(8, 0))
+            end_dt = datetime.datetime.combine(end_date, datetime.time(17, 0))
+            
+            if end_dt <= start_dt:
+                return 0.0
+            
+            # Calculate business minutes between dates without double-counting
+            total_minutes = 0
+            current = start_date
+            
+            while current <= end_date:
+                if is_business_day(current):
+                    if current == start_date and current == end_date:
+                        # Same day: count from 8 AM to 5 PM
+                        total_minutes += 480
+                    elif current == start_date:
+                        # First day: count from 8 AM to 5 PM (full day)
+                        total_minutes += 480
+                    elif current == end_date:
+                        # Last day: count from 8 AM to 5 PM (full day)
+                        total_minutes += 480
+                    else:
+                        # Middle day: full business day
+                        total_minutes += 480
+                
+                current += datetime.timedelta(days=1)
+            
+            # Convert minutes to days using Decimal for precision
+            days = float(Decimal(str(total_minutes)) / Decimal('480'))
+            
+            return days
+
+        def compute_wbs_schedule(rows, normalized_edges, project_start_date):
+            """
+            WBS-based scheduler using Workfront semantics (8h/day, FS dependencies, business days).
+            
+            Args:
+                rows: list of dicts, each with at least:
+                    - 'UID'
+                    - 'WBS'
+                    - 'Hours' (planned hours)
+                normalized_edges: list of (pred_wbs, succ_wbs) from WBS dependency builder
+                project_start_date: datetime.date or datetime.datetime
+                
+            Returns:
+                uid_to_sched: {uid: {"start": date, "finish": date, "duration_days": float}}
+            """
+            print("[WBS-SCHEDULER] ========================================")
+            print(f"[WBS-SCHEDULER] Computing schedule for {len(rows)} tasks")
+            print(f"[WBS-SCHEDULER] Project start: {project_start_date}")
+            print(f"[WBS-SCHEDULER] Dependencies: {len(normalized_edges)} edges")
+            
+            # Convert project_start to datetime if date (default to 8 AM)
+            if isinstance(project_start_date, datetime.date) and not isinstance(project_start_date, datetime.datetime):
+                project_start_date = datetime.datetime.combine(project_start_date, datetime.time(8, 0))
+            
+            # Build UID graph from WBS edges
+            wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+            preds = {r["UID"]: [] for r in rows}
+            
+            for pred_wbs, succ_wbs in normalized_edges:
+                pred_uid = wbs_to_uid.get(pred_wbs)
+                succ_uid = wbs_to_uid.get(succ_wbs)
+                if pred_uid and succ_uid:
+                    preds[succ_uid].append(pred_uid)
+            
+            # Convert Hours → DurationDays per task (Workfront: 8h = 1 day)
+            duration_days = {}
+            for r in rows:
+                hours = float(r.get("Hours", 0) or r.get("PlannedHours", 0) or 0)
+                
+                # Handle milestones (hours = 0) as zero-duration
+                if hours <= 0:
+                    duration_days[r["UID"]] = 0.0
+                else:
+                    duration_days[r["UID"]] = hours / 8.0
+            
+            # Topological sort using Kahn's algorithm
+            in_degree = {uid: len(preds[uid]) for uid in preds}
+            queue = [uid for uid in in_degree if in_degree[uid] == 0]
+            topo_order = []
+            
+            while queue:
+                uid = queue.pop(0)
+                topo_order.append(uid)
+                
+                # Reduce in-degree for successors
+                for other_uid in in_degree:
+                    if uid in preds[other_uid]:
+                        in_degree[other_uid] -= 1
+                        if in_degree[other_uid] == 0:
+                            queue.append(other_uid)
+            
+            # Check for cycles
+            if len(topo_order) != len(rows):
+                print(f"[WBS-SCHEDULER] ⚠️ Warning: Detected dependency cycle, {len(rows) - len(topo_order)} tasks unreachable")
+                # Add unreachable tasks to end of order
+                for r in rows:
+                    if r["UID"] not in topo_order:
+                        topo_order.append(r["UID"])
+            
+            # Calculate earliest start/finish times in business days (offset from project_start)
+            est_days = {}
+            eft_days = {}
+            
+            for uid in topo_order:
+                # Earliest start = max of predecessors' earliest finish
+                if preds[uid]:
+                    est_days[uid] = max(eft_days[p] for p in preds[uid])
+                else:
+                    est_days[uid] = 0.0
+                
+                dur_days = duration_days[uid]
+                eft_days[uid] = est_days[uid] + dur_days
+            
+            # Convert day offsets to actual dates using business calendar
+            uid_to_sched = {}
+            for uid in topo_order:
+                start_date = add_business_days(project_start_date, est_days[uid])
+                
+                # For zero-duration milestones, start = finish
+                if duration_days[uid] == 0:
+                    finish_date = start_date
+                else:
+                    finish_date = add_business_days(start_date.date(), duration_days[uid])
+                
+                uid_to_sched[uid] = {
+                    "start": start_date,
+                    "finish": finish_date,
+                    "duration_days": duration_days[uid]
+                }
+            
+            print(f"[WBS-SCHEDULER] ✅ Schedule computed for {len(uid_to_sched)} tasks")
+            print("[WBS-SCHEDULER] ========================================")
+            
+            return uid_to_sched
+
+        def rollup_parent_dates(rows, uid_to_sched):
+            """
+            Roll up parent task dates from their children using WBS hierarchy.
+            Parents get: min(child start), max(child finish), business days between.
+            
+            Args:
+                rows: list of dicts with UID, WBS, Name
+                uid_to_sched: {uid: {"start": date, "finish": date, "duration_days": float}}
+                
+            Returns:
+                Updated uid_to_sched with parent dates rolled up
+            """
+            print("[WBS-ROLLUP] ========================================")
+            print(f"[WBS-ROLLUP] Rolling up parent dates for {len(rows)} tasks")
+            
+            # Attach schedule to rows by UID
+            uid_to_row = {r["UID"]: r for r in rows}
+            for uid, sched in uid_to_sched.items():
+                if uid in uid_to_row:
+                    r = uid_to_row[uid]
+                    r["StartDate"] = sched["start"]
+                    r["FinishDate"] = sched["finish"]
+                    r["DurationDays"] = sched["duration_days"]
+            
+            # Roll up parent tasks from deepest to shallowest
+            rows_sorted_by_outline = sorted(rows, key=lambda r: r["WBS"].count("."), reverse=True)
+            
+            for r in rows_sorted_by_outline:
+                wbs = r["WBS"]
+                outline = wbs.count(".") + 1
+                
+                # Only process parents (L3 and above in your model)
+                if outline <= 3:
+                    # Find all descendants (children with WBS starting with parent WBS + ".")
+                    children = [c for c in rows if c["WBS"].startswith(wbs + ".")]
+                    
+                    if not children:
+                        continue
+                    
+                    # Roll up: min start, max finish
+                    r["StartDate"] = min(c["StartDate"] for c in children if "StartDate" in c)
+                    r["FinishDate"] = max(c["FinishDate"] for c in children if "FinishDate" in c)
+                    
+                    # Calculate business days between start and finish
+                    r["DurationDays"] = business_day_diff(r["StartDate"].date(), r["FinishDate"].date())
+                    
+                    # Update uid_to_sched with rolled-up values
+                    uid_to_sched[r["UID"]] = {
+                        "start": r["StartDate"],
+                        "finish": r["FinishDate"],
+                        "duration_days": r["DurationDays"]
+                    }
+                    
+                    print(f"[WBS-ROLLUP] {r['Name'][:40]} (WBS {wbs}): {r['StartDate'].date()} → {r['FinishDate'].date()} ({r['DurationDays']:.1f} days)")
+            
+            print("[WBS-ROLLUP] ========================================")
+            
+            return uid_to_sched
 
         # Calculate task schedules
         uid_to_sched = {}
