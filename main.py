@@ -9542,20 +9542,6 @@ def convert_excel_to_mspdi(
             if actual_pred != actual_succ:
                 normalized_edges.append((actual_pred, actual_succ))
 
-        # ====================================================================================
-        # DEPENDENCY FIX: Convert edges from WBS to UID representation BEFORE L5 transformation
-        # This ensures dependencies survive when L6 rows are removed during L5-only export
-        # ====================================================================================
-        wbs_to_uid_pre_transform = {r["WBS"]: r["UID"] for r in rows}
-        edge_uids = []
-        for pred_wbs, succ_wbs in normalized_edges:
-            pred_uid = wbs_to_uid_pre_transform.get(pred_wbs)
-            succ_uid = wbs_to_uid_pre_transform.get(succ_wbs)
-            if pred_uid and succ_uid:
-                edge_uids.append((pred_uid, succ_uid))
-        
-        print(f"[EDGE-COLLECT] 📊 Step 1: Collected {len(edge_uids)} UID-based edges from {len(normalized_edges)} WBS-based edges")
-
         # Calculate project start date (MUST be timezone-naive for MSPDI compatibility)
         if fixed_start_iso:
             # Extract date-only portion and add standard work hours to create timezone-naive datetime
@@ -10362,45 +10348,12 @@ def convert_excel_to_mspdi(
                 
                 transformed_rows.append(aggregated_task)
             
-            # Update rows and uid_alias_map
+            # Update rows
             original_count = len(rows)
             rows = transformed_rows
             
-            # Update uid_alias_map to include L6 → L5 mappings
-            for l6_uid, l5_uid in l6_to_l5_uid_map.items():
-                uid_alias_map[l6_uid] = l5_uid
-            
-            # VALIDATION: Check uid_alias_map completeness
-            print(f"[L5-ONLY] UID Alias Map Validation:")
-            print(f"[L5-ONLY]   - Total aliases: {len(uid_alias_map)}")
-            print(f"[L5-ONLY]   - L6→L5 mappings: {len(l6_to_l5_uid_map)}")
-            print(f"[L5-ONLY]   - Sample L6→L5: {list(l6_to_l5_uid_map.items())[:3]}")
-            
             print(f"[L5-ONLY] Transformed: {original_count} rows → {len(rows)} tasks ({len(component_buckets)} L5 components)")
-            print(f"[L5-ONLY] Created {len(l6_to_l5_uid_map)} L6→L5 UID mappings for dependency remapping")
             print("[L5-ONLY] ═══════════════════════════════════════════════════════════")
-        
-        # ====================================================================================
-        # DEPENDENCY FIX: Normalize edges through uid_alias_map (Step 2)
-        # Maps L6 role UIDs → L5 component UIDs, skips self-references (leaf-to-leaf within component)
-        # This step happens AFTER L5 transformation completes and uid_alias_map is finalized
-        # ====================================================================================
-        normalized_edge_uids = set()
-        skipped_self_refs = 0
-        
-        for pred_uid, succ_uid in edge_uids:
-            # Map through alias (L6→L5 for removed roles, L1-L5→self for kept tasks)
-            pred_alias = uid_alias_map.get(pred_uid, pred_uid)
-            succ_alias = uid_alias_map.get(succ_uid, succ_uid)
-            
-            # Skip self-references (e.g., AM → Copywriter within same L5 component)
-            if pred_alias == succ_alias:
-                skipped_self_refs += 1
-                continue
-            
-            normalized_edge_uids.add((pred_alias, succ_alias))
-        
-        print(f"[EDGE-NORMALIZE] 🔄 Step 2: Normalized {len(edge_uids)} edges → {len(normalized_edge_uids)} edges (skipped {skipped_self_refs} self-references)")
         
         # ====================================================================================
         # Generate XML
@@ -10927,81 +10880,40 @@ def convert_excel_to_mspdi(
                 return ".".join(parts[:5])
             return None  # Not deep enough to be in L5 component
         
-        # Build metadata map for dependency filtering
-        uid_metadata = {}
-        for r in rows:
-            uid = r["UID"]
-            wbs = r["WBS"]
-            outline_level = wbs.count(".") + 1
-            is_leaf = wbs not in summary_set  # Leaf if not in summary_set
-            l5_prefix = get_l5_prefix(wbs)
+        # ====================================================================================
+        # SIMPLIFIED DEPENDENCY HANDLING: Scheduler is single source of truth
+        # - Scheduler's normalized_edges (WBS-based) already contain correct dependencies
+        # - Simply convert WBS to UID and emit (skip if WBS missing after L5 aggregation)
+        # - No alias map, no complex remapping - just use what scheduler gave us
+        # ====================================================================================
+        
+        # Build WBS→UID map from final rows (after L5 transformation)
+        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
+        
+        # Convert scheduler's WBS-based edges to UIDs
+        dependency_edges = []
+        skipped_missing_wbs = 0
+        
+        for pred_wbs, succ_wbs in normalized_edges:
+            pred_uid = wbs_to_uid.get(pred_wbs)
+            succ_uid = wbs_to_uid.get(succ_wbs)
             
-            uid_metadata[uid] = {
-                "outline_level": outline_level,
-                "l5_prefix": l5_prefix,
-                "is_leaf": is_leaf,
-                "wbs": wbs
-            }
-        
-        # ====================================================================================
-        # DEPENDENCY FIX: Anti-conga filter on normalized UID edges (Step 3)
-        # Filters cross-deliverable dependencies and mixed-level links
-        # normalized_edge_uids already has self-references removed (leaf-to-leaf within L5)
-        # ====================================================================================
-        filtered_edges = []
-        skipped_cross_deliverable = 0
-        skipped_mixed_level = 0
-        kept_deliverable_links = 0
-        kept_component_links = 0
-        
-        for pred_uid, succ_uid in normalized_edge_uids:
-            pred_meta = uid_metadata.get(pred_uid, {})
-            succ_meta = uid_metadata.get(succ_uid, {})
+            if pred_uid is None or succ_uid is None:
+                # WBS doesn't exist in final rows (was removed during L5 aggregation)
+                skipped_missing_wbs += 1
+                continue
             
-            pred_outline = pred_meta.get("outline_level", 99)
-            succ_outline = succ_meta.get("outline_level", 99)
-            pred_wbs = pred_meta.get("wbs", "")
-            succ_wbs = succ_meta.get("wbs", "")
-            
-            # CASE 1: Both tasks at deliverable level (≤L4) - always keep
-            if pred_outline <= 4 and succ_outline <= 4:
-                filtered_edges.append((pred_uid, succ_uid))
-                kept_deliverable_links += 1
-            # CASE 2: Both tasks at component/task level (≥L5)
-            elif pred_outline >= 5 and succ_outline >= 5:
-                pred_deliverable = get_deliverable_parent(pred_wbs)
-                succ_deliverable = get_deliverable_parent(succ_wbs)
-                
-                if pred_deliverable != succ_deliverable:
-                    # Cross-deliverable dependency - REMOVE to prevent conga line
-                    skipped_cross_deliverable += 1
-                    continue
-                
-                # Same deliverable - keep component-level dependencies
-                # (self-references already filtered in normalization step)
-                filtered_edges.append((pred_uid, succ_uid))
-                kept_component_links += 1
-            # CASE 3: Mixed levels (e.g., L3 → L5) - remove to prevent hierarchy issues
-            else:
-                skipped_mixed_level += 1
+            dependency_edges.append((pred_uid, succ_uid))
         
-        # Debug logging for dependency filtering (Step 3)
-        print(f"\n[EDGE-FILTER] 🔍 Step 3: Anti-conga filter applied")
-        print(f"[EDGE-FILTER] Input: {len(normalized_edge_uids)} normalized edges")
-        print(f"[EDGE-FILTER] Skipped {skipped_cross_deliverable} cross-deliverable dependencies")
-        print(f"[EDGE-FILTER] Skipped {skipped_mixed_level} mixed-level dependencies")
-        print(f"[EDGE-FILTER] Kept {kept_deliverable_links} deliverable-level dependencies (L1-L4)")
-        print(f"[EDGE-FILTER] Kept {kept_component_links} component-level dependencies (L5+)")
-        print(f"[EDGE-FILTER] Output: {len(filtered_edges)} final edges to emit")
-        print(f"[EDGE-FILTER] ══════════════════════════════════════════════\n")
+        print(f"\n[DEPENDENCIES] Scheduler edges → XML emission")
+        print(f"[DEPENDENCIES] Input: {len(normalized_edges)} WBS-based edges from scheduler")
+        print(f"[DEPENDENCIES] Skipped {skipped_missing_wbs} edges (WBS removed during L5 aggregation)")
+        print(f"[DEPENDENCIES] Output: {len(dependency_edges)} UID-based edges to emit")
         
-        # ====================================================================================
-        # DEPENDENCY FIX: Emit PredecessorLink elements (Step 4)
-        # Emit one <PredecessorLink> per filtered edge on the successor task
-        # ====================================================================================
+        # Emit PredecessorLink elements directly from scheduler edges
         emitted_count = 0
-        for pred_uid, succ_uid in filtered_edges:
-            # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
+        for pred_uid, succ_uid in dependency_edges:
+            # Find the successor task element and add PredecessorLink
             for task_elem in tasks_elem.findall("Task"):
                 task_uid_elem = task_elem.find("UID")
                 if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
@@ -11014,8 +10926,7 @@ def convert_excel_to_mspdi(
                     emitted_count += 1
                     break
         
-        print(f"[EDGE-EMIT] ✅ Step 4: Emitted {emitted_count} PredecessorLink elements in XML")
-        print(f"[EDGE-EMIT] ══════════════════════════════════════════════════════════════\n")
+        print(f"[DEPENDENCIES] ✅ Emitted {emitted_count} PredecessorLink elements in XML\n")
 
         # Compute project summary start/finish from children (no more hardcoded dates)
         if tasks_elem is not None:
