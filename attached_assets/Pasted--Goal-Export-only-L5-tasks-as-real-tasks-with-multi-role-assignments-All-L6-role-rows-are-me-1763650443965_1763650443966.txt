@@ -1,0 +1,97 @@
+🧭 Goal
+
+Export only L5 tasks as “real” tasks with multi-role assignments.
+All L6 (role) rows are merged into their L5 parent and removed from the XML.
+Dependencies connect L5 → L5 components only.
+The resulting file opens cleanly in MS Project / Workfront.
+
+🧱 Implementation Plan (send this to Replit)
+1. Enable feature flags
+ENABLE_L5_ONLY_EXPORT = True
+ENABLE_MULTI_ASSIGNMENT = True
+ENABLE_WBS_DEPENDENCIES = True
+
+2. Task aggregation logic
+
+Function: aggregate_l5_component(component_row, child_rows)
+
+For each L5 component:
+
+total_hours   = sum(child.PlannedHours for child in child_rows)
+total_revenue = sum(child.PlannedRevenue for child in child_rows)
+duration_days = ceil(total_hours / 8)
+start_date    = min(child.Start for child in child_rows)
+end_date      = max(child.Finish for child in child_rows)
+assignments   = [(child.Role, child.PlannedHours, child.Rate) for child in child_rows]
+
+
+Emit one <Task>:
+
+<Task>
+  <UID>{component.UID}</UID>
+  <Name>{component.Name}</Name>
+  <OutlineLevel>5</OutlineLevel>
+  <Summary>0</Summary>
+  <Work>PT{total_hours*60}M</Work>
+  <Duration>PT{duration_days*8*60}M</Duration>
+  <Start>{start_date}</Start>
+  <Finish>{end_date}</Finish>
+</Task>
+
+
+No L6 rows are exported.
+
+3. Assignments generation
+
+For each (role, hours, rate) tuple:
+
+<Assignment>
+  <TaskUID>{component.UID}</TaskUID>
+  <ResourceUID>{role_uid}</ResourceUID>
+  <Units>{hours / (duration_days*8)}</Units>
+  <Work>PT{hours*60}M</Work>
+  <Cost>{rate * hours}</Cost>
+</Assignment>
+
+
+All assignments point to the same L5 TaskUID.
+That’s the valid way MSP handles multi-assignees.
+
+4. Dependencies (WBS-based)
+
+Stop using scheduler edges.
+Instead:
+
+for row in rows:
+    if row.OutlineLevel <= 5 and row.Dependencies:
+        for dep_wbs in parse(row.Dependencies):
+            pred = find_row_by_wbs(dep_wbs)
+            if pred and pred.OutlineLevel <= 5 and pred != row:
+                add_edge(pred.UID, row.UID)
+
+
+Output:
+
+<PredecessorLink>
+  <PredecessorUID>{pred.UID}</PredecessorUID>
+  <Type>1</Type>  <!-- Finish-to-Start -->
+</PredecessorLink>
+
+5. Remove L6 rows entirely
+
+After aggregation, filter the DataFrame:
+
+rows = [r for r in rows if r.OutlineLevel <= 5]
+
+6. Preserve scheduler dates
+
+Do not re-compute start / finish / duration.
+Use the existing scheduler output directly.
+
+7. Validation logging
+
+Add one summary block to server logs:
+
+[L5-EXPORT] 132 L6 roles merged into 46 L5 components
+[L5-EXPORT] 58 edges emitted ( all L5 → L5 )
+[L5-EXPORT] Total hours: 640   Total revenue: $127,800
