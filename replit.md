@@ -20,17 +20,33 @@ A critical feature is the Gantt Timeline Date Preservation and Workfront Manual 
 
 The system also incorporates WBS-Based Dependencies and Multi-Assignment Export, implementing GPT-5 specifications for dependency normalization to L5 (OutlineLevel ≤ 5) and parallel role execution, enhancing accuracy in project structure and resource allocation.
 
-### L5-Only Export with Multi-Assignment
-The XML export implements a complete L5-only architecture for Workfront compatibility:
-- **L6 Role Aggregation**: All OutlineLevel > 5 (role rows) are aggregated into their L5 parent components before XML generation, completely removing L6 tasks from the export
-- **Multi-Assignment XML**: Each L5 component exports as a single task with multiple `<Assignment>` entries, one per role, with correct hours/rates aggregated from L6 children
-- **WBS Dependency Normalization**: All dependencies are normalized to L5 (OutlineLevel ≤ 5) by walking parent WBS hierarchy, ensuring no L6 predecessor links exist
-- **Feature Flags** (main.py lines 36-38):
-  - `ENABLE_L5_ONLY_EXPORT = True`: Removes all L6 rows, exports only L5 components
-  - `ENABLE_MULTI_ASSIGNMENT = True`: Aggregates L6 role hours into L5 multi-assignments  
+### XML Export Modes (Mode A vs Mode B)
+The XML export supports two architectures for Workfront compatibility, controlled by `EXPORT_MODE` flag:
+
+#### Mode A - L5-Only Export (Legacy)
+Set `EXPORT_MODE = "A"` for L5-only export:
+- **L6 Role Aggregation**: All OutlineLevel > 5 (role rows) are aggregated into their L5 parent components, completely removing L6 tasks from the export
+- **Output**: Only L5 summary tasks with multi-assignments
+
+#### Mode B - L5 Summaries + L6 Children (Current)
+Set `EXPORT_MODE = "B"` for Mode B specification (ACTIVE):
+- **L6 Tasks Retained**: All OutlineLevel > 5 (role rows) are kept in the task list
+- **L6 Date Synchronization**: L6 child task dates are synchronized to match their L5 parent (Start, Finish, Duration)
+- **L6 No Dependencies**: L6 tasks have NO dependency links (all dependencies normalized to L5→L5)
+- **L5 Summary Tasks**: L5 components receive aggregated metrics (min/max dates, sum hours/revenue) and multiple `<Assignment>` entries
+- **Output**: Complete task list with both L5 summary tasks (with multi-assignments) and L6 role children (with synced dates)
+
+#### Common Features (Both Modes)
+- **Multi-Assignment XML**: Each L5 component exports with multiple `<Assignment>` entries, one per role, with correct hours/rates
+- **WBS Dependency Normalization**: All dependencies are normalized to L5 (OutlineLevel ≤ 5) by walking parent WBS hierarchy
+- **Feature Flags** (main.py lines 36-43):
+  - `EXPORT_MODE = "B"`: Mode A (L5-only) or Mode B (L5+L6 with synced dates)
+  - `ENABLE_MULTI_ASSIGNMENT = True`: Aggregates L6 role hours into L5 multi-assignments
   - `ENABLE_WBS_DEPENDENCIES = True`: Uses WBS-based dependencies with L5 normalization
-  - Rollback: Set all three to `False` to restore legacy behavior (L6 rows, single assignments, scheduler edges)
-- **Implementation**: `aggregate_l5_tasks()` function (lines 9608-9772) performs aggregation, filtering, and multi-assignment data structure creation. Dependencies are rebuilt on the L5-filtered dataset after UID reassignment to ensure all edges reference valid L5 tasks only.
+- **Implementation**: 
+  - `aggregate_l5_tasks()` function (lines 9612-9837) performs aggregation and date synchronization based on export mode
+  - `build_wbs_dependencies()` function (lines 9383-9528) normalizes dependencies to L5, ensuring no L6 dependency links
+  - Validation logging confirms L6 count, date syncing, and L5→L5 dependencies only
 
 ### User Interface and Data Management
 The frontend is a vanilla JavaScript, HTML, and CSS single-page application with a step-based workflow. It features a 3-column layout (Deliverables | Components | Summary), search functionality, and a unified AI Planner UI with real-time progress. Timeline accuracy is ensured through business day calculations, including holiday calendars.

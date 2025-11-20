@@ -9507,6 +9507,21 @@ def convert_excel_to_mspdi(
                     # Future enhancement: parse "1.1.1FS", "1.1.2SS+2d" etc.
                     edges.append((pred_uid, succ_uid, "FS", 0))
             
+            # Validation: Ensure all dependencies are L5→L5 (no L6 successors or predecessors)
+            l6_dep_violations = []
+            for pred_uid, succ_uid, dep_type, lag in edges:
+                pred_outline = uid_to_outline.get(pred_uid, 99)
+                succ_outline = uid_to_outline.get(succ_uid, 99)
+                if pred_outline > 5 or succ_outline > 5:
+                    l6_dep_violations.append((pred_uid, pred_outline, succ_uid, succ_outline))
+            
+            if l6_dep_violations:
+                print(f"\n[WBS-DEP] ❌ CRITICAL: Found {len(l6_dep_violations)} L6 dependency violations!")
+                for pred_uid, pred_ol, succ_uid, succ_ol in l6_dep_violations[:5]:
+                    print(f"[WBS-DEP] ❌  Pred UID {pred_uid} (L{pred_ol}) → Succ UID {succ_uid} (L{succ_ol})")
+            else:
+                print(f"[WBS-DEP] ✅ Validation passed: All {len(edges)} dependencies are L5→L5")
+            
             return edges
 
         # === GPT-5 SPEC PART 2: MULTI-ASSIGNMENT (PHASE 2 - READ-ONLY) ===
