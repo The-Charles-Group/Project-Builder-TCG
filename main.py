@@ -10583,10 +10583,100 @@ def convert_excel_to_mspdi(
                     cost = work_hours * rate
                     SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
+        # ============================================================
+        # DEPENDENCY BUILDING: WBS-Based vs Scheduler-Based
+        # ============================================================
+        
+        # Initialize WBS edges (will be populated if flag is enabled)
+        wbs_filtered_edges = []
+        wbs_stats = {}
+        
+        if ENABLE_WBS_DEPENDENCIES:
+            # --------------------------------------------------------
+            # WBS-BASED DEPENDENCY BUILDER (Simpler, safer approach)
+            # --------------------------------------------------------
+            # Build dependencies directly from WBS Dependencies column
+            # No scheduler edge processing, no normalization complexity
+            # Only emit PredecessorLinks for OutlineLevel ≤ 5
+            
+            print(f"\n[WBS-DEP] ═══════════════════════════════════════════════")
+            print(f"[WBS-DEP] Using WBS-based dependency builder (ENABLE_WBS_DEPENDENCIES=True)")
+            
+            # Build WBS → UID map from final rows
+            wbs_to_uid = {r["WBS"]: r["UID"] for r in rows if r.get("WBS")}
+            uid_to_outline = {r["UID"]: r["WBS"].count(".") + 1 for r in rows}
+            
+            # Parse Dependencies column and build filtered edges
+            filtered_edges = []
+            orphaned_refs = []
+            outline_filtered_count = 0
+            total_deps_parsed = 0
+            
+            for r in rows:
+                wbs = r.get("WBS")
+                deps_str = (r.get("Dependencies") or "").strip()
+                
+                if not deps_str:
+                    continue
+                
+                # FILTER: Only process dependencies for OutlineLevel ≤ 5 tasks
+                outline = uid_to_outline.get(r["UID"], 99)
+                if outline > 5:
+                    outline_filtered_count += 1
+                    continue
+                
+                succ_uid = r["UID"]
+                
+                for dep_wbs in deps_str.split(","):
+                    dep_wbs = dep_wbs.strip()
+                    if not dep_wbs:
+                        continue
+                    
+                    total_deps_parsed += 1
+                    pred_uid = wbs_to_uid.get(dep_wbs)
+                    
+                    # Validation: Check if dependency resolves to a valid UID
+                    if not pred_uid:
+                        orphaned_refs.append((dep_wbs, wbs, r.get("Name", "Unknown")))
+                        continue
+                    
+                    # Skip self-references
+                    if pred_uid == succ_uid:
+                        continue
+                    
+                    # Add edge (WBS pair for consistency with old system)
+                    filtered_edges.append((dep_wbs, wbs))
+            
+            # Log validation results
+            print(f"[WBS-DEP] Total dependencies parsed: {total_deps_parsed}")
+            print(f"[WBS-DEP] Filtered out {outline_filtered_count} dependencies from OutlineLevel >5 tasks")
+            print(f"[WBS-DEP] Valid edges created: {len(filtered_edges)}")
+            
+            if orphaned_refs:
+                print(f"[WBS-DEP] ⚠️  Found {len(orphaned_refs)} orphaned WBS references:")
+                for dep_wbs, task_wbs, task_name in orphaned_refs[:5]:  # Show first 5
+                    print(f"[WBS-DEP]    - {dep_wbs} → {task_wbs} ({task_name})")
+                if len(orphaned_refs) > 5:
+                    print(f"[WBS-DEP]    ... and {len(orphaned_refs) - 5} more")
+            
+            print(f"[WBS-DEP] ═══════════════════════════════════════════════\n")
+            
+            # Store WBS results for later selection
+            wbs_filtered_edges = filtered_edges
+            wbs_stats = {
+                "total_parsed": total_deps_parsed,
+                "outline_filtered": outline_filtered_count,
+                "orphaned": len(orphaned_refs)
+            }
+        
+        # --------------------------------------------------------
+        # SCHEDULER-BASED DEPENDENCY BUILDER (Current/Legacy)
+        # --------------------------------------------------------
         # WORKFRONT FIX: Add PredecessorLinks for:
         # 1. Deliverable-level dependencies (OutlineLevel ≤4 to ≤4)
         # 2. Component-level dependencies (L5 summary to L5 summary)
         # 3. Skip leaf-to-leaf within same L5 component (enables parallel role execution)
+        
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
         uid_to_outline = {r["UID"]: r["WBS"].count(".") + 1 for r in rows}
         wbs_to_wbs = {r["UID"]: r["WBS"] for r in rows}
@@ -10642,7 +10732,7 @@ def convert_excel_to_mspdi(
                 remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
         
         # Filter remapped edges with parallel role execution support
-        filtered_edges = []
+        scheduler_filtered_edges = []
         skipped_leaf_links = 0
         kept_cross_component = 0
         kept_summary_links = 0
@@ -10661,7 +10751,7 @@ def convert_excel_to_mspdi(
                 
                 # CASE 1: Both tasks at deliverable level (≤L4) - always keep
                 if pred_outline <= 4 and succ_outline <= 4:
-                    filtered_edges.append((pred_wbs, succ_wbs))
+                    scheduler_filtered_edges.append((pred_wbs, succ_wbs))
                     kept_deliverable_links += 1
                 # CASE 2: Both tasks at component/task level (≥L5)
                 elif pred_outline >= 5 and succ_outline >= 5:
@@ -10689,7 +10779,7 @@ def convert_excel_to_mspdi(
                         continue
                     
                     # Keep component-level or cross-component L5 dependencies
-                    filtered_edges.append((pred_wbs, succ_wbs))
+                    scheduler_filtered_edges.append((pred_wbs, succ_wbs))
                     if pred_l5_prefix != succ_l5_prefix:
                         kept_cross_component += 1
                     else:
@@ -10698,18 +10788,24 @@ def convert_excel_to_mspdi(
                 else:
                     print(f"[XML EXPORT] 🚫 Pruned cross-level dependency: {pred_wbs} (L{pred_outline}) → {succ_wbs} (L{succ_outline})")
         
-        # Debug logging for dependency filtering
-        print(f"\n[DEP-FILTER] ══════════════════════════════════════════════")
-        print(f"[DEP-FILTER] Total edges processed: {len(normalized_edges)}")
-        print(f"[DEP-FILTER] Skipped {skipped_leaf_links} leaf-to-leaf links within same L5 component")
-        print(f"[DEP-FILTER] Kept {kept_deliverable_links} deliverable-level dependencies (L1-L4)")
-        print(f"[DEP-FILTER] Kept {kept_cross_component} cross-component L5+ dependencies")
-        print(f"[DEP-FILTER] Kept {kept_summary_links} L5 summary/parent dependencies")
-        print(f"[DEP-FILTER] Final edges exported: {len(filtered_edges)}")
-        print(f"[DEP-FILTER] ══════════════════════════════════════════════\n")
+        # Debug logging for scheduler dependency filtering (only when scheduler mode active)
+        if not ENABLE_WBS_DEPENDENCIES:
+            print(f"\n[DEP-FILTER] ══════════════════════════════════════════════")
+            print(f"[DEP-FILTER] Total edges processed: {len(normalized_edges)}")
+            print(f"[DEP-FILTER] Skipped {skipped_leaf_links} leaf-to-leaf links within same L5 component")
+            print(f"[DEP-FILTER] Kept {kept_deliverable_links} deliverable-level dependencies (L1-L4)")
+            print(f"[DEP-FILTER] Kept {kept_cross_component} cross-component L5+ dependencies")
+            print(f"[DEP-FILTER] Kept {kept_summary_links} L5 summary/parent dependencies")
+            print(f"[DEP-FILTER] Final edges exported: {len(scheduler_filtered_edges)}")
+            print(f"[DEP-FILTER] ══════════════════════════════════════════════\n")
         
-        # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
-        for pred_wbs, succ_wbs in filtered_edges:
+        # ============================================================
+        # FINAL EDGE SELECTION: Choose between WBS and Scheduler
+        # ============================================================
+        final_edges = wbs_filtered_edges if ENABLE_WBS_DEPENDENCIES else scheduler_filtered_edges
+        
+        # Add PredecessorLink elements using the selected dependency set
+        for pred_wbs, succ_wbs in final_edges:
             pred_uid = wbs_to_uid.get(pred_wbs)
             succ_uid = wbs_to_uid.get(succ_wbs)
             if pred_uid and succ_uid:
