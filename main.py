@@ -9511,6 +9511,27 @@ def convert_excel_to_mspdi(
                 children_by_parent.setdefault(p, []).append(r["WBS"])
         summary_set = set(children_by_parent.keys())
         
+        # Helper for numeric WBS sorting
+        def wbs_sort_key(wbs):
+            """
+            Convert WBS like '1.1.10.3' into tuple (0,1), (0,1), (0,10), (0,3) for natural numeric ordering.
+            Handles null/empty WBS and mixed numeric/text segments safely.
+            Returns tuple of (type, value) pairs where type=0 for numeric, type=1 for text.
+            """
+            if not wbs:
+                return ()
+            
+            parts = str(wbs).split(".")
+            key = []
+            for p in parts:
+                try:
+                    # Numeric segment: (0, int_value)
+                    key.append((0, int(p)))
+                except ValueError:
+                    # Text segment: (1, str_value)
+                    key.append((1, p))
+            return tuple(key)
+        
         # WBS-BASED DEPENDENCY SYSTEM
         # Auto-builds L4→L4 and L5→L5 dependencies from WBS hierarchy
         if ENABLE_WBS_DEPENDENCIES:
@@ -9518,8 +9539,8 @@ def convert_excel_to_mspdi(
 
             wbs_dependencies = []
 
-            # Sort all rows in WBS order
-            rows_sorted = sorted(rows, key=lambda r: str(r["WBS"]))
+            # Sort all rows in WBS order (numeric sorting for proper multi-digit handling)
+            rows_sorted = sorted(rows, key=lambda r: wbs_sort_key(r["WBS"]))
 
             # ---------- L4 → L4 chain (within same L3) ----------
             # Group L4 rows by their L3 parent
@@ -9535,8 +9556,8 @@ def convert_excel_to_mspdi(
 
             # For each L3 parent, chain its L4 children sequentially
             for parent_l3, l4_group in l4_by_l3.items():
-                # Sort L4 rows in WBS order within group
-                l4_group_sorted = sorted(l4_group, key=lambda r: str(r["WBS"]))
+                # Sort L4 rows in WBS order within group (numeric sorting)
+                l4_group_sorted = sorted(l4_group, key=lambda r: wbs_sort_key(r["WBS"]))
                 
                 # Chain sequentially - NO WRAP-AROUND
                 prev_l4 = None
@@ -9560,8 +9581,8 @@ def convert_excel_to_mspdi(
 
             # For each L4 parent, chain its L5 children sequentially
             for parent_l4, l5_group in l5_by_l4.items():
-                # Sort L5 rows in WBS order within group
-                l5_group_sorted = sorted(l5_group, key=lambda r: str(r["WBS"]))
+                # Sort L5 rows in WBS order within group (numeric sorting)
+                l5_group_sorted = sorted(l5_group, key=lambda r: wbs_sort_key(r["WBS"]))
                 
                 # Chain sequentially - NO WRAP-AROUND
                 prev_l5 = None
