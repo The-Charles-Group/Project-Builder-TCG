@@ -6694,14 +6694,24 @@ def calculate_schedule_diff(
 async def api_optimize_schedule(payload: OptimizeSchedulePayload):
     """
     Trigger AI optimization for a project schedule using GPT-5.1 Pro.
+    FEATURE FLAG CONTROLLED - returns error if SMART_OPTIMIZATION_ENABLED is OFF.
     
     Workflow:
-    1. Extract baseline from SCENARIO_STORE
-    2. Call GPT-5.1 Pro via Responses API
-    3. Validate AI response
-    4. Store optimized schedule in separate field
-    5. Return diff + explanation to frontend
+    1. Check feature flag
+    2. Extract baseline from real WBS hierarchy (same source as XML export)
+    3. Call GPT-5.1 Pro via Responses API
+    4. Validate AI response (strict rules enforcement)
+    5. Store optimized schedule separately (does NOT affect active_schedule)
+    6. Return diff + explanation to frontend
     """
+    # FEATURE FLAG CHECK - SINGLE ENFORCEMENT POINT
+    if not SMART_OPTIMIZATION_ENABLED:
+        print(f"[OPTIMIZER] ⛔ FEATURE DISABLED: Smart Optimization is OFF (SMART_OPTIMIZATION_ENABLED={SMART_OPTIMIZATION_ENABLED})")
+        raise HTTPException(
+            status_code=423,  # 423 Locked - feature is locked/disabled
+            detail="Smart Schedule Optimization is currently disabled. Set SMART_OPTIMIZATION_ENABLED=true to enable."
+        )
+    
     try:
         session_id = payload.session_id
         
@@ -6711,11 +6721,30 @@ async def api_optimize_schedule(payload: OptimizeSchedulePayload):
         
         scenario = SCENARIO_STORE[session_id]
         
-        # Build optimization payload from baseline
-        baseline_payload = build_optimization_payload(scenario)
-        baseline_items = baseline_payload['items']
+        # Initialize active_schedule if not present (default to baseline)
+        if 'active_schedule' not in scenario:
+            scenario['active_schedule'] = 'baseline'
         
-        print(f"[OPTIMIZER] Starting optimization for {len(baseline_items)} items")
+        # Get WBS rows for real baseline (same source as XML export)
+        # NOTE: This requires WBS rows to be stored in scenario after build_wbs_with_pricing()
+        wbs_rows = scenario.get('wbs_rows', [])
+        if not wbs_rows:
+            print(f"[OPTIMIZER] ⚠️  No WBS rows in scenario - AI optimization skipped (must build WBS first)")
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot optimize: scenario not fully built. Build the WBS structure first."
+            )
+        
+        # Build optimization payload from REAL WBS hierarchy
+        baseline_payload = build_optimization_payload(scenario, wbs_rows)
+        if not baseline_payload:
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to extract baseline schedule from WBS hierarchy"
+            )
+        
+        baseline_items = baseline_payload['items']
+        print(f"[OPTIMIZER] 🚀 Starting optimization for {len(baseline_items)} items (feature flag: ENABLED)")
         
         # Call AI optimizer
         result = await optimize_schedule_with_ai(
