@@ -10,15 +10,6 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
 from ai_weighted_matcher import score_rfp
-from scheduler import (
-    add_business_days,
-    compute_wbs_schedule,
-    rollup_parent_dates,
-    is_business_day,
-    business_minutes_in_range,
-    business_day_diff,
-    BUS_BLOCKS,
-)
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,8 +32,7 @@ import pickle
 # ============================================================
 ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
-ENABLE_WBS_SCHEDULER = True     # Use WBS-based scheduler (8h/day, FS-only) to align with Workfront [PHASE 3 ENABLED]
-# ROLLBACK: Set all to False to restore legacy behavior (scheduler edges, one task per role, offset-based dates)
+# ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
 # ============================================================
 
 try:
@@ -7619,8 +7609,7 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=False,  # Workfront compatibility: no alphanumeric WBS
-            scheduler_dates=scenario.get("scheduler_dates", {})  # PHASE 3: Pass scheduler dates
+            add_deliverable_milestones=False  # Workfront compatibility: no alphanumeric WBS
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -7694,8 +7683,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project,
             pricing_mode=scenario_a.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_a.get("rate_band", "Standard_US"),
-            blended_rate=scenario_a.get("blended_rate"),
-            scheduler_dates=scenario_a.get("scheduler_dates", {})
+            blended_rate=scenario_a.get("blended_rate")
         )
         
         # Post-process Scenario A XML
@@ -7725,8 +7713,7 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project,
             pricing_mode=scenario_b.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_b.get("rate_band", "Standard_US"),
-            blended_rate=scenario_b.get("blended_rate"),
-            scheduler_dates=scenario_b.get("scheduler_dates", {})
+            blended_rate=scenario_b.get("blended_rate")
         )
         
         # Post-process Scenario B XML
@@ -7809,8 +7796,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenA.get("pricing_mode", "Flat_Blended"),
             rate_band=scenA.get("rate_band", "Standard_US"),
-            blended_rate=scenA.get("blended_rate"),
-            scheduler_dates=scenA.get("scheduler_dates", {})
+            blended_rate=scenA.get("blended_rate")
         )
         # Post-process Scenario A XML
         final_xml_a = out_xml_a
@@ -7833,8 +7819,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenB.get("pricing_mode", "Flat_Blended"),
             rate_band=scenB.get("rate_band", "Standard_US"),
-            blended_rate=scenB.get("blended_rate"),
-            scheduler_dates=scenB.get("scheduler_dates", {})
+            blended_rate=scenB.get("blended_rate")
         )
         # Post-process Scenario B XML
         final_xml_b = out_xml_b
@@ -7857,8 +7842,7 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenC.get("pricing_mode", "Flat_Blended"),
             rate_band=scenC.get("rate_band", "Standard_US"),
-            blended_rate=scenC.get("blended_rate"),
-            scheduler_dates=scenC.get("scheduler_dates", {})
+            blended_rate=scenC.get("blended_rate")
         )
         # Post-process Scenario C XML
         final_xml_c = out_xml_c
@@ -7887,102 +7871,6 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
                     os.remove(f)
                 except:
                     pass
-
-# ---------- Phase 2: WBS Scheduler Dual-Write Integration ----------
-
-def _apply_wbs_scheduler_to_scenario(scenario: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    PHASE 2: Apply WBS scheduler to compute dates when ENABLE_WBS_SCHEDULER=True.
-    Stores scheduler_dates in scenario alongside legacy dates, logs diffs per deliverable.
-    
-    Design: Scheduler owns all children (L4/L5/L6), manual edits only apply to parents (L3).
-    After computing child dates, rollup to parents.
-    
-    Returns: Updated scenario with scheduler_dates key (or unchanged if flag disabled).
-    """
-    if not ENABLE_WBS_SCHEDULER:
-        print(f"[PHASE2] ENABLE_WBS_SCHEDULER=False, skipping scheduler (legacy dates used)")
-        return scenario
-    
-    print(f"[PHASE2] ✅ ENABLE_WBS_SCHEDULER=True, applying WBS scheduler to compute dates")
-    
-    try:
-        rows = scenario.get("items", [])
-        if not rows:
-            print(f"[PHASE2] ⚠️ No items in scenario, skipping scheduler")
-            return scenario
-        
-        project_start = scenario.get("project_start")
-        if not project_start:
-            print(f"[PHASE2] ⚠️ No project_start date, using current date")
-            project_start = datetime.date.today().isoformat()
-        
-        # Parse project_start (handle both YYYY-MM-DD and ISO format)
-        if isinstance(project_start, str):
-            project_start_date = datetime.date.fromisoformat(project_start[:10])
-            project_start_dt = datetime.datetime.combine(project_start_date, datetime.time(8, 0))
-        else:
-            project_start_dt = project_start
-        
-        # Build normalized edges from Dependencies column (WBS-based)
-        normalized_edges = []
-        wbs_to_uid = {r["WBS"]: r["UID"] for r in rows if "WBS" in r}
-        
-        for r in rows:
-            deps_str = r.get("Dependencies", "")
-            if not deps_str:
-                continue
-            # Dependencies is comma-separated WBS codes
-            for dep_wbs in str(deps_str).split(","):
-                dep_wbs = dep_wbs.strip()
-                if dep_wbs and dep_wbs in wbs_to_uid:
-                    normalized_edges.append((dep_wbs, r["WBS"]))
-        
-        print(f"[PHASE2] Computing schedule for {len(rows)} tasks with {len(normalized_edges)} dependencies")
-        
-        # SCHEDULER PHASE 1: Compute child dates (leaves/L5)
-        uid_to_sched = compute_wbs_schedule(rows, normalized_edges, project_start_dt)
-        
-        # SCHEDULER PHASE 2: Roll up parent dates (L3/L4)
-        uid_to_sched = rollup_parent_dates(rows, uid_to_sched)
-        
-        print(f"[PHASE2] ✅ Schedule computed for {len(uid_to_sched)} tasks")
-        
-        # Store scheduler dates
-        scenario["scheduler_dates"] = uid_to_sched
-        
-        # Log diffs per deliverable (L3)
-        print(f"\n[PHASE2] === DIFF LOG: SCHEDULER vs LEGACY DATES ===")
-        for r in rows:
-            uid = r["UID"]
-            outline_level = r.get("OutlineLevel", 0)
-            
-            # Only log deliverables (L3) for clarity
-            if outline_level != 3:
-                continue
-            
-            if uid not in uid_to_sched:
-                continue
-            
-            sched_start = uid_to_sched[uid]["start"]
-            sched_finish = uid_to_sched[uid]["finish"]
-            legacy_start = r.get("Start_Date", "N/A")
-            legacy_finish = r.get("End_Date", "N/A")
-            
-            print(f"[PHASE2] {r['WBS']} {r.get('Task_Label', 'Unknown')[:40]}")
-            print(f"  SCHEDULER: {sched_start.date()} → {sched_finish.date()}")
-            print(f"  LEGACY:    {legacy_start} → {legacy_finish}")
-        
-        print(f"[PHASE2] === END DIFF LOG ===\n")
-        
-        return scenario
-    
-    except Exception as e:
-        print(f"[PHASE2] ❌ Error in scheduler: {str(e)[:200]}")
-        print(f"[PHASE2] Falling back to legacy dates")
-        import traceback
-        traceback.print_exc()
-        return scenario
 
 # ---------- Individual Scenario Export Endpoints (Task 4.5) ----------
 
@@ -8014,9 +7902,6 @@ def _export_single_scenario_xml(
     scenario = _inflate_components_if_missing(scenario)
     
     print(f"[EXPORT_XML] After inflate, has timeline_tasks: {'timeline_tasks' in scenario}")
-    
-    # PHASE 2: Apply WBS scheduler (stores scheduler_dates, logs diffs, keeps legacy dates)
-    scenario = _apply_wbs_scheduler_to_scenario(scenario)
     
     # Determine project name
     project = (project_name 
@@ -8060,8 +7945,7 @@ def _export_single_scenario_xml(
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=False,  # WORKFRONT COMPAT: Always False (ignore parameter)
-            scheduler_dates=scenario.get("scheduler_dates", {})  # PHASE 3: Pass scheduler dates
+            add_deliverable_milestones=False  # WORKFRONT COMPAT: Always False (ignore parameter)
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -9250,8 +9134,7 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
     rate_band: str = "Standard_US",          # <— NEW: rate band
     blended_rate: Optional[float] = None,    # <— NEW: blended rate
-    add_deliverable_milestones: bool = False,# <— NEW: toggle for START/END anchors
-    scheduler_dates: Optional[Dict] = None   # <— PHASE 3: Scheduler dates from scenario
+    add_deliverable_milestones: bool = False # <— NEW: toggle for START/END anchors
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -9766,10 +9649,29 @@ def convert_excel_to_mspdi(
             project_start = datetime.datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
 
         # Business calendar helpers (using same Mon-Fri, 8-12 & 13-17 schedule)
-        # NOTE: Most calendar functions imported from scheduler.py module
-        # business_minutes_between remains here as it's only used locally
         from datetime import time, date
         
+        BUS_BLOCKS = [(time(8,0), time(12,0)), (time(13,0), time(17,0))]
+
+        def is_business_day(d):
+            return d.weekday() < 5  # Mon–Fri
+
+        def business_minutes_in_range(day: date, start_t: time, end_t: time) -> int:
+            # minutes worked on a single day between start_t and end_t
+            if not is_business_day(day): 
+                return 0
+            start_t = max(start_t, BUS_BLOCKS[0][0])
+            end_t   = min(end_t,   BUS_BLOCKS[-1][1])
+            if end_t <= start_t:
+                return 0
+            total = 0
+            for a,b in BUS_BLOCKS:
+                s = max(start_t, a)
+                e = min(end_t,   b)
+                if e > s:
+                    total += int((datetime.datetime.combine(day,e) - datetime.datetime.combine(day,s)).total_seconds() // 60)
+            return total
+
         def business_minutes_between(start_dt: datetime.datetime, end_dt: datetime.datetime) -> int:
             if end_dt <= start_dt:
                 return 0
@@ -9788,16 +9690,7 @@ def convert_excel_to_mspdi(
             minutes += business_minutes_in_range(end, time(8,0), end_dt.time())
             return minutes
 
-
         # Calculate task schedules
-        # PHASE 3: Check if scheduler dates exist; use them instead of legacy dates
-        if not scheduler_dates:
-            scheduler_dates = {}
-        if scheduler_dates:
-            print(f"[PHASE3] ✅ Using SCHEDULER DATES from XML export ({len(scheduler_dates)} tasks)")
-        else:
-            print(f"[PHASE3] ℹ️ No scheduler_dates found, using legacy date calculation")
-        
         uid_to_sched = {}
         preserved_dates = set()  # Track which UIDs have dates from Gantt that should not be rolled up
         
@@ -9806,34 +9699,7 @@ def convert_excel_to_mspdi(
         uid_to_row = {r["UID"]: r for r in rows}
         
         for r in rows:
-            # PHASE 3: If scheduler dates exist for this UID, use them directly
-            uid = r["UID"]
-            if uid in scheduler_dates:
-                sched = scheduler_dates[uid]
-                start_date = sched["start"]
-                finish_date = sched["finish"]
-                
-                # Convert to datetime if needed
-                if isinstance(start_date, datetime.date) and not isinstance(start_date, datetime.datetime):
-                    start_date = datetime.datetime.combine(start_date, datetime.time(8, 0))
-                if isinstance(finish_date, datetime.date) and not isinstance(finish_date, datetime.datetime):
-                    finish_date = datetime.datetime.combine(finish_date, datetime.time(17, 0))
-                
-                # Duration from scheduler (days)
-                duration_days = sched.get("duration_days", 0)
-                duration_hours = duration_days * 8.0 if duration_days else 0
-                
-                print(f"[PHASE3] 🎯 UID {uid} {r['WBS']} using SCHEDULER: {start_date.date()} → {finish_date.date()} ({duration_days:.1f} days, {duration_hours:.1f}h)")
-                
-                uid_to_sched[uid] = {
-                    "Start": start_date,
-                    "Finish": finish_date,
-                    "PlannedHours": r["PlannedHours"],
-                    "DurationHours": duration_hours
-                }
-                continue  # Skip legacy logic below
-            
-            # LEGACY: Check if Start_Date and End_Date already exist from Gantt timeline edits
+            # CRITICAL FIX: Check if Start_Date and End_Date already exist from Gantt timeline edits
             # If they do, preserve them EXACTLY instead of recalculating from offsets
             # This ensures Workfront imports match the Gantt UI timeline
             start_date_str = r.get("Start_Date", "")
@@ -12066,8 +11932,7 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=payload.add_milestones,
-            scheduler_dates=scenario.get("scheduler_dates", {})
+            add_deliverable_milestones=payload.add_milestones
         )
         
         # Post-process XML if parallelization is enabled
