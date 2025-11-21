@@ -3078,8 +3078,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             if not matched and deliv_name:
                 print(f"[WBS Builder] ✗ No timeline match for deliverable: '{deliv_name}' (code: '{deliv_code}')")
 
-    # Enrich items with Service Department for grouping
-    DEPT_ORDER = ['Strategy', 'Creative', 'Content', 'Production', 'Technology', 'PM', 'Other']
+    # Enrich items with Service Department (kept as field only for reporting - no hierarchy)
     for item in items:
         dcode = str(item.get("deliverable_code", item.get("code", "")))
         tgs = [str(x) for x in item.get("included_task_groups", [])]
@@ -3093,62 +3092,13 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 or DB.service_dept_for_deliverable(dcode, tgs, scen_col)
                 or "Other") if dcode else "Other"
         item["_service_department"] = dept or "Other"
-        item["_dept_order"] = DEPT_ORDER.index(dept) if dept in DEPT_ORDER else 999
-
-    # Sort by department, then timeline/deliverable name
-    if _wbs_order_mode() == "timeline":
-        def deliv_key(d):
-            tgs = [str(x) for x in d.get("included_task_groups", [])]
-            idxs = [order_map.get(tg, 999) for tg in tgs]
-            return (d.get("_dept_order", 999), min(idxs) if idxs else 999, str(d.get("deliverable","")))
-        items_sorted = sorted(items, key=deliv_key)
-    else:
-        items_sorted = sorted(items, key=lambda d: (d.get("_dept_order", 999), str(d.get("deliverable",""))))
-
-    # Group items by department
-    from itertools import groupby
-    items_by_dept = {}
-    for dept, group in groupby(items_sorted, key=lambda x: x["_service_department"]):
-        items_by_dept[dept] = list(group)
 
     day_cursor = 0
     prev_deliv_wbs = ""
-    dept_counter = 0
     deliv_counter_global = 0
 
-    # Process each department
-    for dept in sorted(items_by_dept.keys(), key=lambda d: DEPT_ORDER.index(d) if d in DEPT_ORDER else 999):
-        dept_counter += 1
-        dept_items = items_by_dept[dept]
-        
-        # Add department summary row
-        wbs_dept = f"1.{dept_counter}"
-        rows.append({
-            "Row_ID": "",
-            "Deliverable_Code": "",
-            "Task_Code": "",
-            "Service_Department": dept,
-            "Deliverable": "",
-            "Project_Name": project_name,
-            "WBS_ID": wbs_dept,
-            "Parent_WBS_ID": "1",
-            "Task_Name": dept,
-            "Component": "",
-            "Task": "",
-            "Role": "",
-            "Seniority": "",
-            "Planned_Hours": "",
-            "Start_Offset_Days": 0,
-            "Duration_Days": "",
-            "Dependencies": "",
-            "Assignee_External_ID": "",
-            "Notes": f"{dept} Department",
-            "Rate_USD": "",
-            "Price_USD": ""
-        })
-        
-        # Process deliverables within this department
-        for dept_deliv_idx, d in enumerate(dept_items, start=1):
+    # Process all deliverables (no department grouping)
+    for d in items:
             deliv_counter_global += 1
             dcode = str(d.get("deliverable_code", d.get("code", f"DELIV_{deliv_counter_global}")))
             # Resolve scenario_col from item; if missing/invalid, derive from complexity & tier
@@ -3232,8 +3182,8 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             if months:
                 deliv_price = round(deliv_price * months, 2)
 
-            # Build deliverable node - nest under department
-            wbs_deliv = f"{wbs_dept}.{dept_deliv_idx}"
+            # Build deliverable node - direct child of Project Summary (flattened hierarchy)
+            wbs_deliv = f"1.{deliv_counter_global}"
             svc_deliv = (DB.service_department_for_deliverable(dcode, tg_order)
                          or DB.service_dept_for_deliverable(dcode, tg_order, scen_col))
             # deliv_label already set above with database fallback - don't override it
@@ -3259,7 +3209,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Task_Code": "",
                 "Service_Department": svc_deliv,
                 "Deliverable": deliv_label,
-                "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": wbs_dept,
+                "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": "1",
                 "Task_Name": deliv_label,
                 "Component": "", "Task": "", "Role": "", "Seniority": "",
                 "Planned_Hours": (monthly_hours * months) if months else parent_hours_display,
@@ -10208,6 +10158,178 @@ def convert_excel_to_mspdi(
             print(f"[EXPORT] Multi-assignment merging DISABLED - exporting {len(rows)} tasks (one per role)")
         
         # ====================================================================================
+        # CHRONOLOGICAL WATERFALL SORTING
+        # Sort rows by Start_Date while preserving parent-child adjacency
+        # ====================================================================================
+        def sort_rows_chronologically(rows_input, uid_to_sched_map, summary_set_input):
+            """
+            Sort rows chronologically while preserving parent-child adjacency.
+            
+            Requirements:
+            - Project Summary (WBS="1") stays first
+            - All other rows sorted by Start_Date (ascending)
+            - Parent-child adjacency preserved (parents immediately before children)
+            - Within siblings, sort by Start_Date
+            - Tie-breaker: original WBS numeric order
+            
+            Returns:
+                Sorted list of rows
+            """
+            print("\n[CHRONOLOGICAL SORT] Starting waterfall sort...")
+            
+            # Find project summary (WBS="1")
+            project_summary = None
+            other_rows = []
+            for r in rows_input:
+                if r["WBS"] == "1":
+                    project_summary = r
+                else:
+                    other_rows.append(r)
+            
+            if not project_summary:
+                print("[CHRONOLOGICAL SORT] ⚠️ No project summary found (WBS=1), proceeding without it")
+                other_rows = rows_input
+            
+            # Build parent-child map using WBS (more reliable than ParentWBS)
+            children_by_wbs = {}
+            wbs_to_row = {}
+            
+            for r in other_rows:
+                wbs = r["WBS"]
+                wbs_to_row[wbs] = r
+                
+                # Calculate parent WBS (remove last segment)
+                parts = wbs.split(".")
+                if len(parts) > 1:
+                    parent_wbs = ".".join(parts[:-1])
+                    if parent_wbs not in children_by_wbs:
+                        children_by_wbs[parent_wbs] = []
+                    children_by_wbs[parent_wbs].append(wbs)
+            
+            # Helper to get Start_Date for sorting
+            def get_start_date(row):
+                """Get start date for sorting - return datetime or fallback to WBS numeric order"""
+                uid = row["UID"]
+                if uid in uid_to_sched_map:
+                    start_str = uid_to_sched_map[uid].get("Start", "")
+                    if start_str:
+                        try:
+                            # Parse ISO format date
+                            return datetime.datetime.fromisoformat(start_str.replace("Z", ""))
+                        except (ValueError, AttributeError):
+                            pass
+                # Fallback: use WBS numeric order (convert to sortable tuple)
+                wbs_parts = row["WBS"].split(".")
+                return tuple(int(p) for p in wbs_parts if p.isdigit())
+            
+            # Helper to get WBS numeric tuple for tie-breaking
+            def get_wbs_tuple(wbs_str):
+                """Convert WBS string to sortable tuple of integers"""
+                parts = wbs_str.split(".")
+                return tuple(int(p) for p in parts if p.isdigit())
+            
+            # Recursive function to sort tree and flatten
+            def sort_and_flatten(wbs, sorted_list):
+                """Recursively sort children by Start_Date and flatten tree"""
+                # Add current node
+                if wbs in wbs_to_row:
+                    sorted_list.append(wbs_to_row[wbs])
+                
+                # Get children and sort by Start_Date, then WBS
+                child_wbs_list = children_by_wbs.get(wbs, [])
+                if child_wbs_list:
+                    # Sort children by: 1) Start_Date, 2) WBS numeric order
+                    child_rows = [(child_wbs, wbs_to_row.get(child_wbs)) for child_wbs in child_wbs_list]
+                    child_rows = [(wbs, r) for wbs, r in child_rows if r is not None]
+                    
+                    # Sort by Start_Date, then WBS
+                    child_rows.sort(key=lambda x: (get_start_date(x[1]), get_wbs_tuple(x[0])))
+                    
+                    # Recursively add sorted children
+                    for child_wbs, _ in child_rows:
+                        sort_and_flatten(child_wbs, sorted_list)
+            
+            # Start with project summary (WBS="1") children
+            sorted_rows = []
+            if project_summary:
+                sorted_rows.append(project_summary)
+                sort_and_flatten("1", sorted_rows)
+            else:
+                # No project summary - sort top-level items
+                top_level = [wbs for wbs in wbs_to_row.keys() if wbs.count(".") == 0]
+                top_level.sort(key=lambda wbs: (get_start_date(wbs_to_row[wbs]), get_wbs_tuple(wbs)))
+                for wbs in top_level:
+                    sort_and_flatten(wbs, sorted_rows)
+            
+            # Validation: Check all rows included
+            if len(sorted_rows) != len(rows_input):
+                print(f"[CHRONOLOGICAL SORT] ⚠️ Row count mismatch: {len(rows_input)} input → {len(sorted_rows)} output")
+            
+            # Log sample of sorted order
+            print(f"[CHRONOLOGICAL SORT] ✅ Sorted {len(sorted_rows)} rows chronologically")
+            print("[CHRONOLOGICAL SORT] First 10 rows after sort:")
+            for i, r in enumerate(sorted_rows[:10], 1):
+                uid = r["UID"]
+                start = uid_to_sched_map.get(uid, {}).get("Start", "N/A")[:10] if uid in uid_to_sched_map else "N/A"
+                print(f"  {i:2}. WBS={r['WBS']:15} Name={r['Name'][:40]:40} Start={start}")
+            
+            return sorted_rows
+        
+        # Apply chronological sorting
+        rows = sort_rows_chronologically(rows, uid_to_sched, summary_set)
+        
+        # ====================================================================================
+        # UID REMAPPING
+        # Reassign UIDs sequentially (1, 2, 3, ...) and update all references
+        # ====================================================================================
+        print("\n[UID REMAPPING] Starting UID reassignment...")
+        
+        # Build old_uid -> new_uid mapping
+        old_uid_to_new_uid = {}
+        for new_id, r in enumerate(rows, 1):
+            old_uid = r["UID"]
+            old_uid_to_new_uid[old_uid] = new_id
+            r["UID"] = new_id  # Update row with new UID
+        
+        print(f"[UID REMAPPING] Created mapping for {len(old_uid_to_new_uid)} UIDs")
+        
+        # Update uid_to_sched with new UIDs
+        new_uid_to_sched = {}
+        for old_uid, new_uid in old_uid_to_new_uid.items():
+            if old_uid in uid_to_sched:
+                new_uid_to_sched[new_uid] = uid_to_sched[old_uid]
+        uid_to_sched = new_uid_to_sched
+        
+        print(f"[UID REMAPPING] Updated uid_to_sched: {len(uid_to_sched)} entries")
+        
+        # Update Dependencies in rows (convert WBS references to new UIDs if needed)
+        # NOTE: Dependencies in this codebase use WBS strings, not UIDs
+        # But we need to ensure any UID-based dependencies are updated
+        for r in rows:
+            # Dependencies field uses WBS strings, so no remapping needed
+            # But if there were UID-based predecessors, they would need updating here
+            pass
+        
+        # Update summary_set with new UIDs
+        wbs_to_new_uid = {r["WBS"]: r["UID"] for r in rows}
+        new_summary_set = set()
+        for r in rows:
+            if r["WBS"] in children_by_parent or r["WBS"] in summary_set:
+                new_summary_set.add(r["UID"])
+        summary_set = new_summary_set
+        
+        # Update resources and assignments with new UIDs
+        # Resources are separate and don't need updating
+        # Assignments need TaskUID updated
+        for assign in assignments:
+            old_task_uid = assign["TaskUID"]
+            if old_task_uid in old_uid_to_new_uid:
+                assign["TaskUID"] = old_uid_to_new_uid[old_task_uid]
+        
+        print(f"[UID REMAPPING] Updated {len(assignments)} assignments")
+        print(f"[UID REMAPPING] ✅ UID remapping complete\n")
+        
+        # ====================================================================================
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
@@ -10290,7 +10412,8 @@ def convert_excel_to_mspdi(
             SubElement(task, "OutlineLevel").text = str(outline_level)
             
             # GPT-5 PRO FIX: Make deliverable/summary mutually exclusive to prevent duplicate ConstraintType tags
-            is_deliverable = outline_level == 3 and not is_root
+            # WATERFALL FIX: Deliverables are now OutlineLevel=2 (direct children of Project Summary)
+            is_deliverable = outline_level == 2 and not is_root
             is_summary = (r["WBS"] in summary_set or is_root) and not is_deliverable
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
@@ -10310,8 +10433,8 @@ def convert_excel_to_mspdi(
                 # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
             
             elif is_deliverable:
-                # DELIVERABLE TASKS (OutlineLevel=3): SNET constraint + Manual* tags if has children
-                # Deliverables are summaries with SNET to lock start dates
+                # DELIVERABLE TASKS (OutlineLevel=2): SNET constraint + Manual* tags if has children
+                # Deliverables are direct children of Project Summary with SNET to lock start dates
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT480M"
                 
@@ -10798,9 +10921,10 @@ def convert_excel_to_mspdi(
         print(f"[DEP-FILTER] ══════════════════════════════════════════════\n")
         
         # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
+        # WATERFALL FIX: Use wbs_to_new_uid which has remapped UIDs after chronological sort
         for pred_wbs, succ_wbs in filtered_edges:
-            pred_uid = wbs_to_uid.get(pred_wbs)
-            succ_uid = wbs_to_uid.get(succ_wbs)
+            pred_uid = wbs_to_new_uid.get(pred_wbs)
+            succ_uid = wbs_to_new_uid.get(succ_wbs)
             if pred_uid and succ_uid:
                 # Find the successor task element and add a PredecessorLink (MSPDI: no wrapper)
                 for task_elem in tasks_elem.findall("Task"):
