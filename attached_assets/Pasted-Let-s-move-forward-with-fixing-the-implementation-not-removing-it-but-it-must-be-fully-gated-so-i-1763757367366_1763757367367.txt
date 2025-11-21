@@ -1,0 +1,72 @@
+Let’s move forward with fixing the implementation, not removing it — but it must be fully gated so it can’t affect current exports until it passes QA.
+
+Priority:
+
+Keep the current non-AI schedule + export flow 100% stable.
+
+Smart Optimization is an optional, off-by-default enhancement until it’s correct.
+
+What I want you to do:
+
+Baseline extraction – redesign (must-have)
+
+build_optimization_payload() should not read only flat L5 role rows.
+
+Source from the real timeline structure you already use for export:
+
+Include full L2 (Deliverables), L3 (Components), L4 (Tasks), and L5 (Role tasks).
+
+Include actual Start/Finish, Duration, Work/Hours, and dependencies.
+
+AI must see the same logical schedule the exporter sees, just in a clean JSON format.
+
+Dependency integration – wire into existing pipeline
+
+After the user accepts an AI proposal, you must:
+
+Re-run the existing dependency normalization:
+
+L5+ edge filtering (so role tasks still run in parallel).
+
+Sibling auto-chaining for L2/L3/L4 (so waterfall still looks right).
+
+Ensure the AI-updated schedule flows through the same pipeline as the normal schedule before export.
+
+Validation – make it strict
+At minimum, reject any AI result that:
+
+Breaks the L2–L5 hierarchy (no added/removed nodes, no level changes).
+
+Changes planned hours/work (hours per task must remain the same).
+
+Violates the working calendar (weekends/holidays if you’re enforcing those).
+
+Introduces invalid dependencies (pointing to non-existent IDs/WBS).
+
+If validation fails → discard AI output and keep baseline, with a log reason.
+
+Export pipeline – read from active_schedule
+
+Add an active_schedule pointer:
+
+baseline_schedule = current logic.
+
+optimized_schedule = last accepted AI version.
+
+Exports (XML/Excel) should only read from active_schedule.
+
+Until this is fully tested, active_schedule should just be the baseline.
+
+Safety: feature flag
+
+Put all Smart Optimization behavior behind a feature flag / config switch.
+
+Default: OFF in production.
+
+I only want it turned on after:
+
+Baseline vs optimized diff is correct.
+
+Dependencies still look right in Workfront.
+
+Exports from optimized schedule match expectations.

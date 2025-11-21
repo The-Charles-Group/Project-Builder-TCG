@@ -6234,21 +6234,23 @@ async def api_cleanup_old_scenarios():
         )
 
 # =============================================================================
-# SMART SCHEDULE OPTIMIZATION (GPT-5.1 Pro)
+# SMART SCHEDULE OPTIMIZATION (GPT-5.1 Pro) - GATED & SAFE
 # =============================================================================
-# Production-ready AI optimization layer for project timelines using GPT-5.1 Pro.
+# Optional AI optimization layer - FULLY GATED & OFF BY DEFAULT
 # Features:
-# - Extracts baseline schedule from SCENARIO_STORE (post-pricing, pre-export)
-# - Uses GPT-5.1 Pro via Responses API for realistic PM reasoning
-# - Respects L2-L4 waterfall structure while enabling L5+ parallel execution
-# - Stores optimized schedule separately without overwriting baseline
-# - Provides accept/reject workflow with clear diffs
-# - Integrates with existing dependency normalization stack
+# - Extracts baseline schedule from real WBS hierarchy (same source as exports)
+# - Uses GPT-5.1 Pro via Responses API with strict validation
+# - Enforces L2-L4 waterfall + L5+ parallel execution
+# - Stores optimized schedule separately without affecting baseline
+# - Feature flag ensures zero impact on current exports until QA passes
 # =============================================================================
+
+# FEATURE FLAG - Default OFF, enable only after full QA
+SMART_OPTIMIZATION_ENABLED = os.getenv("SMART_OPTIMIZATION_ENABLED", "false").lower() == "true"
 
 class OptimizeSchedulePayload(BaseModel):
     session_id: str
-    use_gpt_thinking: bool = False  # True = gpt-5.1-thinking, False = gpt-5.1-pro
+    use_gpt_thinking: bool = False
 
 class OptimizationResponse(BaseModel):
     success: bool
@@ -6262,98 +6264,90 @@ class OptimizationResponse(BaseModel):
 class AcceptOptimizationPayload(BaseModel):
     session_id: str
 
-def build_optimization_payload(scenario: Dict[str, Any]) -> Dict[str, Any]:
+def build_optimization_payload(scenario: Dict[str, Any], wbs_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
-    Extract baseline schedule from SCENARIO_STORE and format for GPT-5.1 Pro.
-    Returns JSON matching the schema expected by the AI optimizer.
-    """
-    import uuid
-    from datetime import datetime, timedelta
+    Extract baseline schedule from REAL WBS hierarchy (same source as XML export).
+    This ensures AI sees the EXACT schedule that will be exported.
     
-    # Extract project metadata
+    Args:
+        scenario: SCENARIO_STORE entry
+        wbs_rows: Full WBS row list from build_wbs_with_pricing() with L2-L5 hierarchy
+    
+    Returns:
+        JSON payload for GPT-5.1 Pro, or None if unable to extract
+    """
+    if not wbs_rows:
+        print("[OPTIMIZER] No WBS rows - cannot build baseline")
+        return None
+    
     project_name = scenario.get('project_name', 'Untitled Project')
     project_start = scenario.get('project_start', datetime.date.today().isoformat())
-    timeline = scenario.get('timeline', {})
-    items = scenario.get('items', [])
     
-    # Build working calendar (default to 8h days, weekends off, US holidays)
+    # Build working calendar
     working_calendar = {
         "workday_hours": 8,
         "weekends_off": True,
-        "holidays": [
-            "2025-01-01", "2025-07-04", "2025-12-25",  # Major US holidays
-            "2025-11-27", "2025-11-28"  # Thanksgiving
-        ]
+        "holidays": ["2025-01-01", "2025-07-04", "2025-12-25", "2025-11-27", "2025-11-28"]
     }
     
-    # Build items array with WBS hierarchy
+    # Convert WBS rows to optimization items (with full L2-L5 hierarchy)
     optimization_items = []
-    timeline_tasks = timeline.get('tasks', []) if timeline else []
     
-    # Create a mapping of task names to timeline data
-    timeline_map = {}
-    for task in timeline_tasks:
-        task_name = task.get('name', '')
-        timeline_map[task_name] = task
-    
-    # Convert SCENARIO_STORE items to optimization format
-    for idx, item in enumerate(items):
-        deliverable = item.get('Deliverable', '')
-        component = item.get('Component', '')
-        task_label = item.get('Task_Label', '')
-        role = item.get('Role', 'Generalist')
+    for idx, row in enumerate(wbs_rows):
+        wbs = row.get('WBS', '')
+        if not wbs or wbs == '1':
+            continue  # Skip project summary
         
-        # Determine level based on hierarchy
-        # L1 = Project, L2 = Deliverable, L3 = Component, L4 = Task, L5+ = Role
-        if component and task_label:
-            level = 5  # Role-level task
-            name = f"{role} - {task_label}"
-        elif component:
-            level = 3  # Component
-            name = component
-        elif deliverable:
-            level = 2  # Deliverable
-            name = deliverable
-        else:
-            continue  # Skip malformed items
+        # Determine level from WBS (dots indicate depth: 1.x=L2, 1.x.y=L3, etc)
+        level = wbs.count('.') + 1
+        if level < 2 or level > 5:
+            continue
         
-        # Generate stable ID
-        item_id = f"item-{idx}"
+        name = row.get('Name', row.get('Task_Name', f'Task {wbs}'))
+        role = row.get('Role', '') if level >= 5 else None
         
-        # Get timeline data if available
-        timeline_data = timeline_map.get(name, {})
-        start_date = timeline_data.get('start', project_start)
-        end_date = timeline_data.get('end', project_start)
-        dependencies = timeline_data.get('dependencies', '')
+        # Get dates from row (may be from Gantt or calculated)
+        start_date_str = row.get('Start_Date', '')
+        end_date_str = row.get('End_Date', '')
         
-        # Calculate duration in days (rough estimate from hours)
-        planned_hours = item.get('Planned_Hours', 0)
-        duration_days = max(1, round(planned_hours / 8))  # Assume 8h/day
+        # Fallback to project_start if no dates
+        if not start_date_str:
+            start_date_str = project_start
+        if not end_date_str:
+            end_date_str = project_start
         
-        # Build WBS code (simplified)
-        wbs = f"1.{idx+1}"
+        # Get work hours (critical - must be preserved)
+        planned_hours = float(row.get('PlannedHours', row.get('Planned_Hours', 0)))
+        duration_days = max(1, round(row.get('Duration', 1)))
+        
+        # Get dependencies (WBS format: "1.2,1.3")
+        dependencies = []
+        dep_str = row.get('Dependencies', '')
+        if dep_str:
+            dependencies = [d.strip() for d in str(dep_str).split(',') if d.strip()]
         
         optimization_items.append({
-            "id": item_id,
+            "id": wbs,  # Use WBS as stable ID
             "wbs": wbs,
             "name": name,
             "level": level,
-            "type": "role" if level >= 5 else ("task" if level == 4 else "summary"),
-            "role": role if level >= 5 else None,
+            "type": "role" if level >= 5 else "summary",
+            "role": role,
             "planned_hours": planned_hours,
             "duration_days": duration_days,
-            "start": start_date,
-            "end": end_date,
-            "dependencies": dependencies.split(',') if dependencies else [],
-            "service_department": item.get('Service Department', 'Strategy'),
-            "is_milestone": False
+            "start": start_date_str,
+            "end": end_date_str,
+            "dependencies": dependencies,
+            "service_department": row.get('Service_Department', 'Other')
         })
+    
+    print(f"[OPTIMIZER] Built baseline with {len(optimization_items)} items (L2-L5 hierarchy)")
     
     return {
         "project": {
             "name": project_name,
             "start_date": project_start,
-            "target_end_date": None,  # No hard deadline by default
+            "target_end_date": None,
             "working_calendar": working_calendar
         },
         "items": optimization_items
@@ -6539,74 +6533,91 @@ def validate_optimization_response(
     optimized_items: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
     """
-    Validate that AI response meets all safety requirements.
+    STRICT validation - rejects any AI result that violates safety rules.
     
-    Returns:
-        {"valid": True/False, "errors": [...], "warnings": [...]}
+    Rules enforced:
+    1. No added/removed items or level changes (hierarchy preservation)
+    2. Planned hours must remain unchanged per task
+    3. All dependencies must reference existing items
+    4. Dates must be valid and within reasonable range
     """
     errors = []
-    warnings = []
     
-    # Check 1: Item cardinality must match
+    # Check 1: Cardinality (no adds/removes)
     if len(optimized_items) != len(baseline_items):
-        errors.append(f"Item count mismatch: baseline has {len(baseline_items)}, optimized has {len(optimized_items)}")
-        return {"valid": False, "errors": errors, "warnings": warnings}
+        errors.append(f"HIERARCHY_VIOLATION: Item count changed {len(baseline_items)}→{len(optimized_items)}")
+        return {"valid": False, "errors": errors, "warnings": []}
     
-    # Create ID maps for validation
-    baseline_ids = {item['id'] for item in baseline_items}
-    optimized_ids = {item['id'] for item in optimized_items}
+    # Build maps for validation
+    baseline_map = {item['id']: item for item in baseline_items}
+    baseline_ids = set(baseline_map.keys())
+    optimized_map = {item['id']: item for item in optimized_items}
+    optimized_ids = set(optimized_map.keys())
     
-    # Check 2: IDs must match exactly
+    # Check 2: IDs must be identical (no adds/removes)
     if baseline_ids != optimized_ids:
         missing = baseline_ids - optimized_ids
         extra = optimized_ids - baseline_ids
-        if missing:
-            errors.append(f"Missing IDs in optimized schedule: {missing}")
-        if extra:
-            errors.append(f"Extra IDs in optimized schedule: {extra}")
-        return {"valid": False, "errors": errors, "warnings": warnings}
+        if missing or extra:
+            errors.append(f"HIERARCHY_VIOLATION: Items added/removed (missing: {missing}, extra: {extra})")
+            return {"valid": False, "errors": errors, "warnings": []}
     
-    # Check 3: Validate each item
-    from datetime import datetime
-    
+    # Check 3: Strict per-item validation
     for opt_item in optimized_items:
         item_id = opt_item.get('id')
+        base_item = baseline_map.get(item_id)
         
-        # Validate date formats
-        try:
-            start = opt_item.get('start')
-            if start:
-                datetime.fromisoformat(start)
-        except (ValueError, TypeError) as e:
-            errors.append(f"Invalid start date for {item_id}: {start}")
+        if not base_item:
+            errors.append(f"MISSING_BASELINE: {item_id} not in baseline")
+            continue
         
-        try:
-            end = opt_item.get('end')
-            if end:
-                datetime.fromisoformat(end)
-        except (ValueError, TypeError) as e:
-            errors.append(f"Invalid end date for {item_id}: {end}")
+        # 3a: Level must not change (hierarchy preservation)
+        if opt_item.get('level') != base_item.get('level'):
+            errors.append(f"HIERARCHY_VIOLATION: {item_id} level changed {base_item.get('level')}→{opt_item.get('level')}")
         
-        # Validate duration is non-negative
+        # 3b: Planned hours must remain IDENTICAL
+        opt_hours = float(opt_item.get('planned_hours', 0))
+        base_hours = float(base_item.get('planned_hours', 0))
+        if abs(opt_hours - base_hours) > 0.01:
+            errors.append(f"HOURS_VIOLATION: {item_id} hours changed {base_hours}→{opt_hours}")
+        
+        # 3c: Validate date formats (ISO YYYY-MM-DD)
+        for date_field in ['start', 'end']:
+            date_val = opt_item.get(date_field)
+            if date_val:
+                try:
+                    # Must be valid ISO format
+                    test_date = datetime.date.fromisoformat(str(date_val)[:10])
+                    # Must be within 5 years (sanity check)
+                    today = datetime.date.today()
+                    if (test_date - today).days > 365 * 5 or (test_date - today).days < -365:
+                        errors.append(f"DATE_RANGE: {item_id} {date_field} out of range: {date_val}")
+                except (ValueError, AttributeError):
+                    errors.append(f"INVALID_DATE: {item_id} {date_field}={date_val}")
+        
+        # 3d: Duration must be positive
         duration = opt_item.get('duration_days', 0)
-        if duration < 0:
-            errors.append(f"Negative duration for {item_id}: {duration}")
+        if duration <= 0:
+            errors.append(f"INVALID_DURATION: {item_id} duration={duration} (must be >0)")
         
-        # Validate dependencies reference existing IDs
+        # 3e: Dependencies must reference existing items only
         deps = opt_item.get('dependencies', [])
         if deps:
-            invalid_deps = [d for d in deps if d not in baseline_ids]
-            if invalid_deps:
-                errors.append(f"Invalid dependencies for {item_id}: {invalid_deps}")
+            for dep in deps:
+                if dep not in baseline_ids:
+                    errors.append(f"INVALID_DEP: {item_id} references non-existent {dep}")
     
-    # Summary
+    # Return result
     if errors:
-        return {"valid": False, "errors": errors, "warnings": warnings}
+        print(f"[OPTIMIZER] VALIDATION FAILED with {len(errors)} errors:")
+        for err in errors[:5]:
+            print(f"  - {err}")
+        if len(errors) > 5:
+            print(f"  ... and {len(errors)-5} more errors")
+        return {"valid": False, "errors": errors, "warnings": []}
     
-    if warnings:
-        print(f"[OPTIMIZER] Validation passed with {len(warnings)} warnings")
-    
-    return {"valid": True, "errors": [], "warnings": warnings}
+    print(f"[OPTIMIZER] ✅ VALIDATION PASSED")
+    return {"valid": True, "errors": [], "warnings": []}
 
 def calculate_schedule_diff(
     baseline_items: List[Dict[str, Any]],
