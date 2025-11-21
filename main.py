@@ -6245,8 +6245,38 @@ async def api_cleanup_old_scenarios():
 # - Feature flag ensures zero impact on current exports until QA passes
 # =============================================================================
 
-# FEATURE FLAG - Default OFF, enable only after full QA
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║ FEATURE FLAG: SMART SCHEDULE OPTIMIZATION - FROZEN & DISABLED              ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+# DEFAULT: OFF - Feature is completely disabled until explicitly enabled
+# 
+# When SMART_OPTIMIZATION_ENABLED = False (the default):
+#   - /api/optimize-schedule → returns 423 (Locked)
+#   - /api/accept-optimization → returns 423 (Locked)
+#   - /api/reject-optimization → returns 423 (Locked)
+#   - System behaves EXACTLY like pre-optimization version
+#   - Exports use baseline schedule only
+#
+# To enable (after full QA):
+#   Set environment variable: SMART_OPTIMIZATION_ENABLED=true
+#
+# Data stored (when feature is ON after acceptance):
+#   - SCENARIO_STORE[session_id]['optimized_schedule'] = { items, explanation, model_used }
+#   - SCENARIO_STORE[session_id]['active_schedule'] = 'baseline' | 'optimized'
+#   - SCENARIO_STORE[session_id]['wbs_rows'] = baseline WBS structure
+#
+# Endpoints:
+#   POST /api/optimize-schedule → Trigger AI optimization (feature-gated)
+#   POST /api/accept-optimization → Accept optimized schedule (feature-gated)
+#   POST /api/reject-optimization → Discard optimized schedule (feature-gated)
+#
+# Export Pipeline:
+#   /api/export and /api/export_xml → Use baseline_schedule only (NOT hooked to active_schedule yet)
+#   Exports NEVER affected by optimization status
+#
+# ═════════════════════════════════════════════════════════════════════════════
 SMART_OPTIMIZATION_ENABLED = os.getenv("SMART_OPTIMIZATION_ENABLED", "false").lower() == "true"
+print(f"[STARTUP] Smart Schedule Optimization: {'ENABLED' if SMART_OPTIMIZATION_ENABLED else 'DISABLED (frozen)'}")
 
 class OptimizeSchedulePayload(BaseModel):
     session_id: str
@@ -6815,8 +6845,17 @@ async def api_optimize_schedule(payload: OptimizeSchedulePayload):
 @app.post("/api/accept-optimization")
 async def api_accept_optimization(payload: AcceptOptimizationPayload):
     """
-    Accept the AI-optimized schedule, making it the active schedule for exports.
+    Accept the AI-optimized schedule.
+    FEATURE FLAG CONTROLLED - returns 423 when SMART_OPTIMIZATION_ENABLED is OFF.
     """
+    # FEATURE FLAG CHECK - SINGLE ENFORCEMENT POINT
+    if not SMART_OPTIMIZATION_ENABLED:
+        print(f"[OPTIMIZER] ⛔ FEATURE DISABLED: Smart Optimization is OFF")
+        raise HTTPException(
+            status_code=423,  # 423 Locked
+            detail="Smart Schedule Optimization is currently disabled."
+        )
+    
     try:
         session_id = payload.session_id
         
@@ -6846,8 +6885,17 @@ async def api_accept_optimization(payload: AcceptOptimizationPayload):
 @app.post("/api/reject-optimization")
 async def api_reject_optimization(payload: AcceptOptimizationPayload):
     """
-    Reject the AI-optimized schedule, keeping the baseline as active.
+    Reject the AI-optimized schedule.
+    FEATURE FLAG CONTROLLED - returns 423 when SMART_OPTIMIZATION_ENABLED is OFF.
     """
+    # FEATURE FLAG CHECK - SINGLE ENFORCEMENT POINT
+    if not SMART_OPTIMIZATION_ENABLED:
+        print(f"[OPTIMIZER] ⛔ FEATURE DISABLED: Smart Optimization is OFF")
+        raise HTTPException(
+            status_code=423,  # 423 Locked
+            detail="Smart Schedule Optimization is currently disabled."
+        )
+    
     try:
         session_id = payload.session_id
         
