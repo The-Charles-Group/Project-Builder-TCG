@@ -10355,10 +10355,45 @@ def convert_excel_to_mspdi(
         ]
         
         print(f"[DEP-REMAP] Valid edges retained: {len(valid_normalized_edges)} / {len(normalized_edges)}")
-        
-        # Update normalized_edges to use only valid edges for downstream filtering
-        normalized_edges = valid_normalized_edges
         print(f"[DEP-REMAP] ✅ Dependency remapping complete\n")
+        
+        # ====================================================================================
+        # EDGE FILTERING: Drop L5+ → L5+ edges to enable parallel role execution
+        # ====================================================================================
+        print("[EDGE-FILTER] Filtering edges to drop L5+ → L5+ (role-to-role) dependencies...")
+        
+        def outline_level_from_wbs(wbs: str) -> int:
+            """Calculate outline level from WBS string. '1' -> 1, '1.1' -> 2, '1.1.1.1.1' -> 5"""
+            return wbs.count(".") + 1
+        
+        # Filter out L5+ → L5+ edges to allow parallel role execution (AM, CW, Strategist, etc.)
+        # Keep edges where at least one side is ≤L4 (summary level: deliverable, component, or task)
+        filtered_edges = []
+        dropped_role_edges = []
+        
+        for pred_wbs, succ_wbs in valid_normalized_edges:
+            pred_level = outline_level_from_wbs(pred_wbs)
+            succ_level = outline_level_from_wbs(succ_wbs)
+            
+            # Keep edges where at least one side is L2/L3/L4 (summary level)
+            if pred_level <= 4 or succ_level <= 4:
+                filtered_edges.append((pred_wbs, succ_wbs))
+            else:
+                # Drop L5+ → L5+ (role-to-role) to enable parallel execution
+                dropped_role_edges.append((pred_wbs, succ_wbs))
+                if len(dropped_role_edges) <= 10:  # Log first 10
+                    pred_name = next((r["Name"] for r in rows if r["WBS"] == pred_wbs), pred_wbs)
+                    succ_name = next((r["Name"] for r in rows if r["WBS"] == succ_wbs), succ_wbs)
+                    print(f"[EDGE-FILTER] ⏭️  Dropping L{pred_level}→L{succ_level}: {pred_name} → {succ_name}")
+        
+        if dropped_role_edges:
+            print(f"[EDGE-FILTER] Dropped {len(dropped_role_edges)} role-to-role edges (L5+ → L5+)")
+        
+        print(f"[EDGE-FILTER] Retained {len(filtered_edges)} summary-level edges (L2/L3/L4)")
+        
+        # Update normalized_edges for downstream compatibility
+        normalized_edges = filtered_edges
+        print(f"[EDGE-FILTER] ✅ Edge filtering complete\n")
         
         # ====================================================================================
         # SIBLING AUTO-CHAINING: Create waterfall dependencies between summary-level siblings
@@ -10387,7 +10422,7 @@ def convert_excel_to_mspdi(
         
         # Generate forced edges by chaining siblings within each parent
         forced_edges = set()
-        existing_edges = set(valid_normalized_edges)  # (pred_wbs, succ_wbs)
+        existing_edges = set(filtered_edges)  # Use filtered edges (L5+ → L5+ already removed)
         
         for parent_wbs, children in parent_to_children.items():
             if len(children) < 2:
@@ -10412,14 +10447,12 @@ def convert_excel_to_mspdi(
         
         print(f"[SIBLING-CHAIN] Generated {len(forced_edges)} auto-chain dependencies")
         
-        # Inject sibling chains into valid_normalized_edges
-        for edge in forced_edges:
-            if edge not in valid_normalized_edges:
-                valid_normalized_edges.append(edge)
+        # Merge filtered edges with sibling chains to create final edge set
+        all_edges = list(set(filtered_edges) | forced_edges)
         
-        # Update normalized_edges with the final edge list including sibling chains
-        normalized_edges = valid_normalized_edges
-        print(f"[SIBLING-CHAIN] ✅ Sibling auto-chaining complete ({len(normalized_edges)} total edges)\n")
+        # Update normalized_edges with final edge set for downstream compatibility
+        normalized_edges = all_edges
+        print(f"[SIBLING-CHAIN] ✅ Sibling auto-chaining complete ({len(all_edges)} total edges)\n")
         
         # ====================================================================================
         # BRAND CHAIN VALIDATION: Verify critical deliverable sequence after auto-chaining
@@ -10439,8 +10472,8 @@ def convert_excel_to_mspdi(
             succ_wbs_match = next((r["WBS"] for r in rows if r["Name"] == succ_name), None)
             
             if pred_wbs_match and succ_wbs_match:
-                # Check if this edge exists in normalized_edges (after auto-chaining)
-                edge_found = (pred_wbs_match, succ_wbs_match) in normalized_edges
+                # Check if this edge exists in all_edges (after filtering + auto-chaining)
+                edge_found = (pred_wbs_match, succ_wbs_match) in all_edges
                 brand_chain_validated.append((pred_name, succ_name, edge_found))
                 
                 status = "✅" if edge_found else "❌"
@@ -10956,102 +10989,17 @@ def convert_excel_to_mspdi(
                 "wbs": wbs
             }
         
-        # Remap dependencies through uid_alias_map (for multi-assignment merged tasks)
-        # This ensures dependencies pointing to consumed UIDs redirect to the primary UID
-        # NOTE: Only needed in LEGACY mode - WBS mode already has canonical UIDs
-        if ENABLE_WBS_DEPENDENCIES:
-            # WBS mode: Dependencies are already on canonical L5 UIDs, no remapping needed
-            remapped_edges = normalized_edges
-            print(f"[WBS-DEP] Skipping uid_alias_map remapping - WBS dependencies already canonical")
-        else:
-            # Legacy mode: Remap through uid_alias_map for multi-assignment safety
-            remapped_edges = []
-            for pred_wbs, succ_wbs in normalized_edges:
-                pred_uid = wbs_to_uid.get(pred_wbs)
-                succ_uid = wbs_to_uid.get(succ_wbs)
-                
-                # Remap through alias map if these UIDs were merged
-                pred_uid = uid_alias_map.get(pred_uid, pred_uid) if pred_uid else None
-                succ_uid = uid_alias_map.get(succ_uid, succ_uid) if succ_uid else None
-                
-                # Convert back to WBS for filtering logic
-                if pred_uid and succ_uid:
-                    # Find WBS for remapped UIDs
-                    pred_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == pred_uid), pred_wbs)
-                    succ_wbs_remapped = next((r["WBS"] for r in rows if r["UID"] == succ_uid), succ_wbs)
-                    remapped_edges.append((pred_wbs_remapped, succ_wbs_remapped))
+        # NOTE: Redundant dependency filtering block removed - L5+ → L5+ edges already filtered
+        # earlier at line 10363. The all_edges set contains the final edge list after:
+        # 1. WBS remapping (drops stale references)
+        # 2. L5+ → L5+ filtering (enables parallel role execution)
+        # 3. Sibling auto-chaining (adds waterfall dependencies for L2/L3/L4)
         
-        # Filter remapped edges with parallel role execution support
-        filtered_edges = []
-        skipped_leaf_links = 0
-        kept_cross_component = 0
-        kept_summary_links = 0
-        kept_deliverable_links = 0
-        
-        for pred_wbs, succ_wbs in remapped_edges:
-            pred_uid = wbs_to_uid.get(pred_wbs)
-            succ_uid = wbs_to_uid.get(succ_wbs)
-            
-            if pred_uid and succ_uid:
-                pred_meta = uid_metadata.get(pred_uid, {})
-                succ_meta = uid_metadata.get(succ_uid, {})
-                
-                pred_outline = pred_meta.get("outline_level", 99)
-                succ_outline = succ_meta.get("outline_level", 99)
-                
-                # CASE 1: Both tasks at deliverable level (≤L4) - always keep
-                if pred_outline <= 4 and succ_outline <= 4:
-                    filtered_edges.append((pred_wbs, succ_wbs))
-                    kept_deliverable_links += 1
-                # CASE 2: Both tasks at component/task level (≥L5)
-                elif pred_outline >= 5 and succ_outline >= 5:
-                    pred_deliverable = get_deliverable_parent(pred_wbs)
-                    succ_deliverable = get_deliverable_parent(succ_wbs)
-                    
-                    if pred_deliverable != succ_deliverable:
-                        # Cross-deliverable dependency - REMOVE to prevent conga line
-                        print(f"[XML EXPORT] 🚫 Pruned cross-deliverable dependency: {pred_wbs} ({pred_deliverable}) → {succ_wbs} ({succ_deliverable})")
-                        continue
-                    
-                    # Same deliverable - check if leaf-to-leaf within same L5 component
-                    pred_is_leaf = pred_meta.get("is_leaf", False)
-                    succ_is_leaf = succ_meta.get("is_leaf", False)
-                    pred_l5_prefix = pred_meta.get("l5_prefix")
-                    succ_l5_prefix = succ_meta.get("l5_prefix")
-                    
-                    # PARALLEL ROLE EXECUTION: Skip leaf-to-leaf within same L5 component
-                    # This prevents AM → Copywriter → Strategist chains, allowing parallel stacking
-                    if (pred_is_leaf and succ_is_leaf and
-                        pred_l5_prefix and succ_l5_prefix and  # Non-empty check (guardrail)
-                        pred_l5_prefix == succ_l5_prefix):
-                        # Skip this leaf-to-leaf link - roles will run in parallel
-                        skipped_leaf_links += 1
-                        continue
-                    
-                    # Keep component-level or cross-component L5 dependencies
-                    filtered_edges.append((pred_wbs, succ_wbs))
-                    if pred_l5_prefix != succ_l5_prefix:
-                        kept_cross_component += 1
-                    else:
-                        kept_summary_links += 1
-                # CASE 3: Mixed levels (e.g., L3 → L5) - remove to prevent hierarchy issues
-                else:
-                    print(f"[XML EXPORT] 🚫 Pruned cross-level dependency: {pred_wbs} (L{pred_outline}) → {succ_wbs} (L{succ_outline})")
-        
-        # Debug logging for dependency filtering
-        print(f"\n[DEP-FILTER] ══════════════════════════════════════════════")
-        print(f"[DEP-FILTER] Total edges processed: {len(normalized_edges)}")
-        print(f"[DEP-FILTER] Skipped {skipped_leaf_links} leaf-to-leaf links within same L5 component")
-        print(f"[DEP-FILTER] Kept {kept_deliverable_links} deliverable-level dependencies (L1-L4)")
-        print(f"[DEP-FILTER] Kept {kept_cross_component} cross-component L5+ dependencies")
-        print(f"[DEP-FILTER] Kept {kept_summary_links} L5 summary/parent dependencies")
-        print(f"[DEP-FILTER] Final edges exported: {len(filtered_edges)}")
-        print(f"[DEP-FILTER] ══════════════════════════════════════════════\n")
-        
-        # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
+        # Add PredecessorLink elements for all final edges
         # WATERFALL FIX: Use wbs_to_new_uid which has remapped UIDs after chronological sort
+        print(f"[XML-EXPORT] Writing {len(all_edges)} PredecessorLink elements...")
         skipped_zero_duration = 0
-        for pred_wbs, succ_wbs in filtered_edges:
+        for pred_wbs, succ_wbs in all_edges:
             pred_uid = wbs_to_new_uid.get(pred_wbs)
             succ_uid = wbs_to_new_uid.get(succ_wbs)
             if pred_uid and succ_uid:
