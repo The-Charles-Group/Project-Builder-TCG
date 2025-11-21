@@ -6,60 +6,40 @@ This project is a web-based Agency Project Builder designed to streamline the pr
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
-## Development Principles
-**CRITICAL**: This project follows strict development principles documented in `DEVELOPMENT_PRINCIPLES.md`:
-- **Never destroy functionality to simplify code** - Always debug and fix the root cause
-- **Preserve all user features** - Component selections, L3 tasks, retainers, state management, etc.
-- **Build additional code if needed** - Add more logic/features to solve problems properly
-- **Debug thoroughly before changing** - Identify root causes with comprehensive logging
-- **Test completely** - Verify all features work after fixes
-
 ## System Architecture
 
-### Backend Architecture
-- **Framework**: FastAPI (Python) for the REST API.
+### UI/UX Decisions
+- Single-page application with a step-based workflow focused on a single scenario.
+- Uses CSS custom properties for theming, including a dark mode.
+- 3-column layout (Deliverables | Components | Summary), search functionality, enhanced summary panel.
+- Unified AI Planner UI with real-time progress bar, evidence-backed suggestions, and risk indicators.
+- "Select All/Deselect All" buttons and department grouping for deliverables.
+- UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
+
+### Technical Implementations
+- **Backend Framework**: FastAPI (Python) for the REST API.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data.
-- **File Handling**: Supports parsing of PDF and DOCX documents, and Excel file uploads.
+- **File Handling**: Parses PDF, DOCX, and Excel files.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **SCENARIO_STORE Architecture**: Centralized session-based data store for pricing, timeline, and Gantt synchronization, ensuring all edits operate on the same canonical scenario data. Includes automatic totals recalculation.
-- **AI Planner v3 (GPT-5 + AgencyDB)**: Advanced reasoning-based AI layer for granular task selection, asynchronous processing, real-time progress updates, holistic project flow analysis, and evidence-based matching with calibrated confidence scores. Incorporates smart multipliers and auto-relaxation/rescue logic.
-- **GPT-5 Enforcer System**: Centralized model enforcement that blocks all non-GPT-5 models, auto-converts Chat Completions API calls to Responses API, and enforces allowed GPT-5 models through `sitecustomize.py`.
-- **Timeline Scheduler Kit**: AI-powered timeline optimization with Microsoft Project XML parsing, smart SS+lag overlaps, gatekeeper preservation, cycle breaking, duration rounding, and multi-format export.
-- **3-Level Workfront Hierarchy**: Proper XML export structure with Deliverable → Component → Task hierarchy (OutlineLevels 1/2/3), WBS codes in 1.2.3 format, manual scheduling tags (ManualStart/ManualFinish/ManualDuration) for date locking, and "Uncategorized" component handling for blank Component fields. Eliminates duplicate tasks and unrealistic timelines by enabling parallel task execution within components.
-- **PM-Brain Capacity Scheduling (Nov 2025)**: Production-ready timeline scheduling system that replaces static 2-4 day patterns with defensible, capacity-based durations using hours-to-duration formula: `days = ceil(hours / (hours_per_day × resources × focus_factor))` where hours_per_day=6.5, focus_factor=0.7, and resources auto-detected from role assignments. Includes resource leveling with `max_parallel` constraints, realistic SS/FS dependencies (Strategy→Creative SS+50%, Reviews FS with slack), and summary bar rollups computed from children. Features Gantt sync throttling (150ms) to prevent UI freezes and batch update endpoint for efficient multi-task edits. Role rows export as Assignments (not duplicate Tasks) with seniority-aware resource UID mapping.
-- **Gantt Timeline Date Preservation (Nov 2025)**: Complete XML export system that preserves user-edited deliverable dates from the interactive Gantt timeline, ensuring Workfront imports match the visual timeline exactly. Features parent-relative scheduling where child components/tasks calculate dates relative to their deliverable's Gantt start date (not stale scenario.project_start), automatic descendant clamping to prevent components from extending past deliverable end dates (preventing timeline bloat), and protected rollup that skips recalculation for preserved deliverables during summary bar aggregation. Maintains budget integrity (hours/rates unchanged), preserves all dependencies and role assignments, and handles edge cases including retainer monthly cadence and deeply nested hierarchies. Fixes critical issue where deliverables edited to March in Gantt were exporting as January in XML, causing incorrect timeline order in Workfront.
-- **Workfront Manual Scheduling Lock (Nov 2025)**: Production-ready system that prevents Workfront from recalculating user-edited deliverable dates on XML import. For any task with preserved Gantt timeline dates (tracked in preserved_dates set), automatically adds Microsoft Project manual scheduling tags (ManualStart=1, ManualFinish=1, ManualDuration=1) and sets ConstraintType=4 (Must Start On) with matching ConstraintDate to lock the start date. Handles multi-tier hierarchies (Project → Department → Deliverable → Component → Task) by applying tags to preserved tasks regardless of outline level. Uses smart element updating to prevent duplicate ConstraintType/ConstraintDate elements in the XML. This ensures Workfront honors the exact dates shown in the Gantt UI instead of recalculating them based on dependencies, preventing timeline inflation (e.g., 6-month projects stretching to 2029). Child components and tasks remain auto-scheduled but respect the parent deliverable's locked timeframe. Workfront may show dependency conflict warnings if predecessors finish late, which is expected behavior and provides visibility into scheduling tensions without breaking the preserved timeline.
-- **WBS-Based Dependencies + Multi-Assignment Export (Nov 2025)**: Feature-flagged system for safer, simpler dependency management and parallel role execution. `ENABLE_WBS_DEPENDENCIES` flag (default: False) switches from scheduler edge collection to reading pre-populated `Dependencies` column (comma-separated WBS IDs) from scenario data, avoiding summary-to-leaf conversions and preserving canonical L5→L5 dependencies. Includes OutlineLevel ≤5 filter to prevent leaf conga lines, WBS reference validation with orphaned reference warnings, and conditional uid_alias_map remapping (skipped in WBS mode since dependencies already use canonical UIDs). `ENABLE_MULTI_ASSIGNMENT` flag (default: False) enables grouping of role rows by component (WBS prefix + name + dates) into single tasks with multiple Assignment elements, allowing parallel role execution within L5 components instead of artificial serial dependencies. Multi-assignment export iterates `row['assignments']` array to emit proper Assignment nodes per assignee with hours allocation, resource mapping, individual rates, and costs. Legacy scheduler edge logic preserved for safe rollback by toggling both flags to False. Staged rollout: test flags individually before enabling both together.
-- **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing with job tracking, retry logic, and error handling.
-- **Smart Image Analysis**: Two-tier image processing system using pre-filtering, quick relevance scans (GPT-5), and deep analysis for relevant images to optimize processing time and cost.
-- **Database Architecture**: Primary database (`Replit_App_DB_READABLE_FullRows_v4.xlsx`) loaded into `app.state.db` during server startup, containing 24 configuration sheets and handling backwards compatibility. Automatic discovery checks standard locations first, then scans `attached_assets/` for timestamped v4 files (e.g., `Replit_App_DB_READABLE_FullRows_v4_1761151595161.xlsx`), selecting the most recent file. Includes pickle caching for sub-2ms load times with validation system that ensures cached data has real rows (>10) and normalized columns (Component, Task_Label, etc.). System guarantees valid AgencyDB instance with automatic fallback to mock data if Excel loading fails.
-- **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs, auto-clear mechanisms, session-scoped embedding caches with a 24-hour TTL, and hourly background cleanup.
+- **SCENARIO_STORE Architecture**: Centralized session-based data store for pricing, timeline, and Gantt synchronization with automatic totals recalculation.
+- **AI Planner v3**: Advanced reasoning-based AI layer (GPT-5 + AgencyDB) for granular task selection, asynchronous processing, and holistic project flow analysis.
+- **GPT-5 Enforcer System**: Centralized model enforcement ensuring exclusive use of GPT-5, converting Chat Completions to Responses API, and enforcing allowed models.
+- **Timeline Scheduler Kit**: AI-powered timeline optimization with Microsoft Project XML parsing, smart dependencies, duration rounding, and multi-format export.
+- **3-Level Workfront Hierarchy**: Proper XML export structure (Deliverable → Component → Task) with WBS codes, manual scheduling tags, and "Uncategorized" component handling.
+- **PM-Brain Capacity Scheduling**: Production-ready timeline scheduling using capacity-based durations, resource leveling, realistic dependencies, and Gantt sync throttling.
+- **Gantt Timeline Date Preservation**: XML export system preserving user-edited deliverable dates from the interactive Gantt timeline, ensuring Workfront imports match.
+- **Workfront Manual Scheduling Lock**: Prevents Workfront from recalculating user-edited deliverable dates on XML import by adding Microsoft Project manual scheduling tags.
+- **WBS-Based Dependencies + Multi-Assignment Export**: Feature-flagged system for simpler dependency management and parallel role execution within tasks.
+- **Chronological Waterfall Export (Nov 2025)**: Production-ready XML export system that creates simple, chronological Gantt timelines in Workfront with no Service Department grouping. Solves critical Workfront UX issue where department-based hierarchy (Strategy → Creative → Technology) created confusing multi-tier groupings with three colored summary bars, replaced with single red Project Summary bar and date-based task flow. Implementation in `build_wbs_with_pricing()` (lines 3081-3212) completely removes Service Department summary row creation (deleted lines 3124-3148 that appended Strategy/Creative/Technology dicts) and eliminates department-based sorting/grouping loop (removed lines 3098-3112 items_by_dept groupby). Flattens WBS hierarchy so deliverables are direct children of Project Summary: deliverables now use WBS format "1.{n}" at OutlineLevel=2 (changed from "1.{dept}.{n}" at OutlineLevel=3), components become "1.{deliv}.{comp}" at OutlineLevel=3, and tasks follow as "1.{deliv}.{comp}.{task}" at OutlineLevel=4+. Service_Department preserved as metadata field for reporting only. Chronological sorting in `convert_excel_to_mspdi()` (lines 10167-10279) uses parent-aware tree-building algorithm (`sort_rows_chronologically()`) that reorders all tasks by Start_Date while preserving parent-child adjacency: sorts siblings at each level, then recursively flattens children immediately after parents. UID remapping system (lines 10284-10330) reassigns UIDs sequentially (1, 2, 3...) after reordering, builds old_uid_to_new_uid mapping, updates uid_to_sched dictionary keys, remaps assignment TaskUID references, and rebuilds summary_set with new UIDs. Includes wbs_sort_key() helper for proper WBS numeric sorting (handles multi-digit segments like "1.1.1.10" correctly after "1.1.1.2"). Critical dependency fix (lines 10926-10930): PredecessorLink elements use wbs_to_new_uid mapping instead of stale wbs_to_uid to ensure dependency integrity after chronological reordering—prevents broken predecessor references that would cause Workfront scheduling chaos. Results in clean waterfall Gantt view with deliverables in chronological order (Jan → Feb → ... → Nov), all hours/rates/costs/roles/assignments preserved, and dependencies intact.
+- **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing with job tracking and retry logic.
+- **Smart Image Analysis**: Two-tier image processing system using pre-filtering, quick relevance scans, and deep analysis.
+- **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs, auto-clear mechanisms, and session-scoped embedding caches.
 - **CORS**: Configured to allow cross-origin requests.
 
-### Frontend Architecture
-- **Technology**: Vanilla JavaScript, HTML, and CSS (framework-agnostic).
-- **UI Pattern**: Single-page application with a step-based workflow focused on a single scenario.
-- **Styling**: Uses CSS custom properties for theming, including a dark mode.
-- **State Management**: Centralized `selectionStore` with Proxy-backed compatibility layer.
-- **UI Improvements**: Features a 3-column layout (Deliverables | Components | Summary), search functionality, enhanced summary panel, and new unified AI Planner UI with real-time progress bar, evidence-backed suggestions, and risk indicators. Includes "Select All/Deselect All" buttons and department grouping for deliverables.
-- **Timeline Accuracy**: Incorporates business days calculation with US/MX holiday calendar and excludes weekends.
-- **XML Export Control**: UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
-
-### Data Storage Pattern
-- **Primary Storage**: Excel/CSV files serve as the main source for business rules and configuration data.
-- **Data Models**: In-memory DataFrames are loaded from spreadsheets to define tasks, deliverables, pricing rules, rate cards, timeline parameters, scaling factors, bundle configurations, hour allocations, and scenario templates.
-
-### API Design
-- Provides RESTful endpoints for data loading, options retrieval, and scenario generation.
-- Supports file uploads for RFP documents and Excel configuration files.
-- Uses JSON for configuration data and calculated scenario responses.
-- Serves static files for frontend assets.
-- Includes endpoints for weighted AI suggestions, bulk L3 task retrieval, and scenario refetching.
-
-### Database Configuration
-- **Automatic Switching**: Automatic database switching based on the environment (Replit's built-in PostgreSQL for development, separate production database when published).
-- **Connection Helper**: `database.py` module provides helper functions for managing database connections.
-- **Models**: Database models should be defined in `models.py`.
+### System Design Choices
+- **Data Storage Pattern**: Excel/CSV files as primary source for business rules and configuration, loaded into in-memory DataFrames.
+- **API Design**: RESTful endpoints for data loading, options retrieval, scenario generation, file uploads, and static file serving.
+- **Database Configuration**: Automatic switching based on environment (Replit's PostgreSQL for development, separate production database). `Replit_App_DB_READABLE_FullRows_v4.xlsx` loaded into `app.state.db` at startup, with pickle caching and fallback to mock data.
 
 ## External Dependencies
 
@@ -80,53 +60,3 @@ Preferred communication style: Simple, everyday language.
 - **Excel/CSV**: Core data source.
 - **PDF/DOCX**: For RFP document parsing.
 - **JSON**: For API data exchange.
-
-## Planned Enhancements
-
-### Dual OpenAI API Key Configuration (NOT YET IMPLEMENTED)
-**Status**: Planned - To be implemented later
-
-**Objective**: Configure the application to support two different OpenAI API keys for optimized cost and performance management:
-- **Standard Tier Key**: For routine operations at standard rates and speed
-- **Priority Processing Key**: For critical, time-sensitive operations at premium rates with guaranteed low latency
-
-**Key Findings from Research**:
-- OpenAI enforces rate limits at the **organization level**, not per API key
-- Multiple keys from the same organization share the same rate limit pool
-- Priority Processing requires an **OpenAI Enterprise account**
-- Priority tier is activated using `service_tier="priority"` parameter in API calls
-- Same API key can handle both standard and priority requests
-- Priority Processing offers:
-  - Lower latency and more consistent performance
-  - Enhanced SLA (99.9% uptime for enterprise)
-  - Premium pricing (exact markup negotiated with OpenAI)
-  - Strict ramp rate limits to maintain quality
-
-**Implementation Approach** (when ready):
-1. Store two API keys as Replit secrets:
-   - `OPENAI_API_KEY_STANDARD` - for routine calls
-   - `OPENAI_API_KEY_PRIORITY` - for mission-critical calls (if different org)
-2. Implement smart routing logic to determine which tier to use based on:
-   - Request type (GPT-5 deep analysis vs routine tasks)
-   - User tier (premium customers vs standard)
-   - Time sensitivity (real-time UI updates vs background processing)
-3. Add `service_tier` parameter to API calls
-4. Monitor usage dashboard to track costs per tier
-5. Consider alternative tiers for cost optimization:
-   - **Batch Processing**: 50% cheaper for non-urgent background jobs
-   - **Flex Processing**: ~50% cheaper for internal tools
-
-**Use Cases**:
-- Standard tier: Routine deliverable matching, basic RFP analysis, cached results
-- Priority tier: Real-time GPT-5 deep analysis, live timeline optimization, critical user-facing features
-
-**Requirements**:
-- Verify OpenAI account tier and enterprise status
-- Review Terms of Service for multi-organization usage
-- Implement usage tracking and cost monitoring
-- Add configuration UI for tier selection preferences
-
-**Notes**:
-- DO NOT implement until other priority items are completed
-- Requires coordination with OpenAI account team if pursuing enterprise features
-- Consider cost-benefit analysis before implementation
