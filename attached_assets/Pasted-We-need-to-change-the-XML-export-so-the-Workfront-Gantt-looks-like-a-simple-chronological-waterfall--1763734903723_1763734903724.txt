@@ -1,0 +1,63 @@
+We need to change the XML export so the Workfront Gantt looks like a simple chronological waterfall and not grouped by Service Departments (Strategy / Creative / Technology / Paid Media / Integrated Marketing Management).
+
+Problem today
+
+The export creates summary tasks for each Service Department and nests all deliverables under those.
+
+In Workfront the structure looks like:
+
+Project Summary (L1)
+
+Strategy (L2 summary)
+
+…strategy deliverables…
+
+Creative (L2 summary)
+
+…creative deliverables…
+
+Technology …
+
+etc.
+
+That makes the Gantt jump up and down by department instead of reading top-to-bottom by date.
+
+What we want instead
+
+No Service Department summary rows in the XML at all.
+
+Do not create tasks named “Strategy”, “Creative”, “Technology”, “Paid Media”, “Integrated Marketing Management”, etc. as parents.
+
+Keep the Service Department / Service Category as a field on each task only, for reporting, but don’t use it to build hierarchy.
+
+Hierarchy should only follow the “real” task levels from the GPT output.
+
+Project Summary remains the single top-level summary (OutlineLevel = 1).
+
+Each major deliverable (e.g. “Brand Positioning Strategy”, “Project Kickoff”, etc.) should be a direct child of Project Summary (OutlineLevel = 2).
+
+Sub-tasks under each deliverable keep their existing relative levels (OutlineLevel 3, 4, …) based on the “Level” column we already generate.
+
+In other words: remove the artificial level between Project Summary and the deliverables that is currently created from Service Department.
+
+Chronological ordering (“waterfall”) in the XML.
+
+After building the final task list (with hierarchy set and service-dept rows removed), sort all non-project-summary tasks by Start date ascending before writing <Task> elements and assigning UniqueID / ID.
+
+Keep Project Summary as the very first task.
+
+For each deliverable, its children should appear directly underneath it and also be sorted by Start date.
+
+After sorting, make sure predecessor links are remapped to the new UniqueIDs so dependencies still work.
+
+Acceptance criteria
+
+When we import the generated XML (e.g. the Casa Dragones project) into Workfront:
+
+The left-hand task list + Gantt scrolls downward in pure chronological order (Jan → … → Nov).
+
+There is only one long red summary bar at the very top for Project Summary.
+
+There are no separate long red summary bars for Strategy / Creative / Technology / etc.
+
+Someone with only surface-level understanding can scroll down and see a simple waterfall of tasks, instead of things jumping up and down by department.
