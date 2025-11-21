@@ -10330,6 +10330,68 @@ def convert_excel_to_mspdi(
         print(f"[UID REMAPPING] ✅ UID remapping complete\n")
         
         # ====================================================================================
+        # DEPENDENCY REMAPPING: Rebuild edges after WBS flattening & UID remap
+        # ====================================================================================
+        print("[DEP-REMAP] Rebuilding dependency edges with flattened WBS...")
+        
+        # Filter normalized_edges to only include WBS pairs that exist in wbs_to_new_uid
+        # This removes stale references like "1.Strategy.2" that no longer exist after flattening
+        dependency_remap_count = 0
+        dropped_dependencies = []
+        
+        for pred_wbs, succ_wbs in normalized_edges:
+            if pred_wbs not in wbs_to_new_uid or succ_wbs not in wbs_to_new_uid:
+                dropped_dependencies.append((pred_wbs, succ_wbs))
+                if len(dropped_dependencies) <= 10:  # Log first 10 dropped
+                    print(f"[DEP-REMAP] ⚠️  Dropped: {pred_wbs} → {succ_wbs} (WBS not in flattened set)")
+        
+        if dropped_dependencies:
+            print(f"[DEP-REMAP] Total dropped dependencies: {len(dropped_dependencies)}")
+        
+        # Use FILTERED normalized_edges (only edges with valid WBS references)
+        valid_normalized_edges = [
+            (pred_wbs, succ_wbs) for pred_wbs, succ_wbs in normalized_edges
+            if pred_wbs in wbs_to_new_uid and succ_wbs in wbs_to_new_uid
+        ]
+        
+        print(f"[DEP-REMAP] Valid edges retained: {len(valid_normalized_edges)} / {len(normalized_edges)}")
+        
+        # ===== BRAND CHAIN VALIDATION =====
+        # Verify the critical deliverable sequence: Key Pillars → Brand Narrative → Brand Values → Brand Vision → Purpose
+        brand_chain_map = {
+            "Key Pillars": "Brand Narrative",
+            "Brand Narrative": "Brand Values Statement",
+            "Brand Values Statement": "Brand Vision Statement",
+            "Brand Vision Statement": "Purpose Statement"
+        }
+        
+        brand_chain_validated = []
+        for pred_name, succ_name in brand_chain_map.items():
+            # Find WBS for these deliverables
+            pred_wbs_match = next((r["WBS"] for r in rows if r["Name"] == pred_name), None)
+            succ_wbs_match = next((r["WBS"] for r in rows if r["Name"] == succ_name), None)
+            
+            if pred_wbs_match and succ_wbs_match:
+                # Check if this edge exists in valid_normalized_edges
+                edge_found = (pred_wbs_match, succ_wbs_match) in valid_normalized_edges
+                brand_chain_validated.append((pred_name, succ_name, edge_found))
+                
+                status = "✅" if edge_found else "❌"
+                print(f"[BRAND-CHAIN] {status} {pred_name} → {succ_name} ({pred_wbs_match} → {succ_wbs_match})")
+            else:
+                print(f"[BRAND-CHAIN] ⚠️  Missing deliverable: {pred_name} or {succ_name}")
+        
+        brand_chain_complete = all(found for _, _, found in brand_chain_validated)
+        if brand_chain_complete:
+            print(f"[BRAND-CHAIN] ✅ Brand chain complete: 4/4 links present in dependencies")
+        else:
+            print(f"[BRAND-CHAIN] ❌ Brand chain incomplete: some links missing")
+        
+        # Update normalized_edges to use only valid edges for downstream filtering
+        normalized_edges = valid_normalized_edges
+        print(f"[DEP-REMAP] ✅ Dependency remapping complete\n")
+        
+        # ====================================================================================
         # Generate XML
         project = Element("Project", xmlns="http://schemas.microsoft.com/project")
         
