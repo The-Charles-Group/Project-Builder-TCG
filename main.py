@@ -10356,7 +10356,74 @@ def convert_excel_to_mspdi(
         
         print(f"[DEP-REMAP] Valid edges retained: {len(valid_normalized_edges)} / {len(normalized_edges)}")
         
-        # ===== BRAND CHAIN VALIDATION =====
+        # Update normalized_edges to use only valid edges for downstream filtering
+        normalized_edges = valid_normalized_edges
+        print(f"[DEP-REMAP] ✅ Dependency remapping complete\n")
+        
+        # ====================================================================================
+        # SIBLING AUTO-CHAINING: Create waterfall dependencies between summary-level siblings
+        # ====================================================================================
+        print("[SIBLING-CHAIN] Building parent→children map for auto-chaining...")
+        
+        # Build parent→children map for L2 deliverables and L3 components
+        parent_to_children = {}
+        for r in rows:
+            wbs = r["WBS"]
+            if wbs == "1":
+                continue  # Skip project root
+            
+            # Get parent WBS
+            wbs_parts = wbs.split(".")
+            parent_wbs = ".".join(wbs_parts[:-1]) if len(wbs_parts) > 1 else "1"
+            
+            # Check if this is a summary-like row (L2 deliverable or L3 component)
+            outline_level = wbs.count(".") + 1
+            is_summary_like = outline_level in (2, 3)  # L2 deliverables and L3 components
+            
+            if is_summary_like:
+                parent_to_children.setdefault(parent_wbs, []).append(r)
+        
+        print(f"[SIBLING-CHAIN] Found {len(parent_to_children)} parent groups with summary-level children")
+        
+        # Generate forced edges by chaining siblings within each parent
+        forced_edges = set()
+        existing_edges = set(valid_normalized_edges)  # (pred_wbs, succ_wbs)
+        
+        for parent_wbs, children in parent_to_children.items():
+            if len(children) < 2:
+                continue  # Need at least 2 siblings to chain
+            
+            # Sort siblings by Start date (fall back to datetime.min for deterministic ordering)
+            children_sorted = sorted(
+                children,
+                key=lambda r: (uid_to_sched.get(r["UID"], {}).get("Start", datetime.datetime.min), r["WBS"])
+            )
+            
+            # Chain consecutive siblings
+            for i in range(len(children_sorted) - 1):
+                a = children_sorted[i]
+                b = children_sorted[i + 1]
+                pred_wbs, succ_wbs = a["WBS"], b["WBS"]
+                
+                # Only add if there's no edge already
+                if (pred_wbs, succ_wbs) not in existing_edges:
+                    forced_edges.add((pred_wbs, succ_wbs))
+                    print(f"[SIBLING-CHAIN] ➕ {a['Name']} → {b['Name']} ({pred_wbs} → {succ_wbs})")
+        
+        print(f"[SIBLING-CHAIN] Generated {len(forced_edges)} auto-chain dependencies")
+        
+        # Inject sibling chains into valid_normalized_edges
+        for edge in forced_edges:
+            if edge not in valid_normalized_edges:
+                valid_normalized_edges.append(edge)
+        
+        # Update normalized_edges with the final edge list including sibling chains
+        normalized_edges = valid_normalized_edges
+        print(f"[SIBLING-CHAIN] ✅ Sibling auto-chaining complete ({len(normalized_edges)} total edges)\n")
+        
+        # ====================================================================================
+        # BRAND CHAIN VALIDATION: Verify critical deliverable sequence after auto-chaining
+        # ====================================================================================
         # Verify the critical deliverable sequence: Key Pillars → Brand Narrative → Brand Values → Brand Vision → Purpose
         brand_chain_map = {
             "Key Pillars": "Brand Narrative",
@@ -10372,8 +10439,8 @@ def convert_excel_to_mspdi(
             succ_wbs_match = next((r["WBS"] for r in rows if r["Name"] == succ_name), None)
             
             if pred_wbs_match and succ_wbs_match:
-                # Check if this edge exists in valid_normalized_edges
-                edge_found = (pred_wbs_match, succ_wbs_match) in valid_normalized_edges
+                # Check if this edge exists in normalized_edges (after auto-chaining)
+                edge_found = (pred_wbs_match, succ_wbs_match) in normalized_edges
                 brand_chain_validated.append((pred_name, succ_name, edge_found))
                 
                 status = "✅" if edge_found else "❌"
@@ -10383,13 +10450,10 @@ def convert_excel_to_mspdi(
         
         brand_chain_complete = all(found for _, _, found in brand_chain_validated)
         if brand_chain_complete:
-            print(f"[BRAND-CHAIN] ✅ Brand chain complete: 4/4 links present in dependencies")
+            print(f"[BRAND-CHAIN] ✅ Brand chain complete: 4/4 links present in final dependencies")
         else:
-            print(f"[BRAND-CHAIN] ❌ Brand chain incomplete: some links missing")
-        
-        # Update normalized_edges to use only valid edges for downstream filtering
-        normalized_edges = valid_normalized_edges
-        print(f"[DEP-REMAP] ✅ Dependency remapping complete\n")
+            print(f"[BRAND-CHAIN] ❌ Brand chain incomplete: some links missing from final dependencies")
+        print()
         
         # ====================================================================================
         # Generate XML
