@@ -63,6 +63,9 @@ _ALLOWED_MODELS = {
     # Synonyms your code currently uses (kept for compatibility).
     "gpt-5-thinking",
     "gpt-5-thinking-mini",
+    # GPT-5.1 models for Smart Schedule Optimization
+    "gpt-5.1-pro",
+    "gpt-5.1-thinking",
 }
 
 # Map user “tier” to a model id (you can edit these to taste).
@@ -428,6 +431,14 @@ class _ResponsesProxy:
         model = _normalize_model_id(model)
         if model not in _ALLOWED_MODELS:
             raise RuntimeError(f"[GPT‑5 Guard] Blocked non‑GPT‑5 model: {model}")
+
+        # Log optimizer invocations for GPT-5.1 models
+        if model in ("gpt-5.1-pro", "gpt-5.1-thinking"):
+            input_data = kwargs.get("input", [])
+            input_size = len(str(input_data))
+            print(f"[OPTIMIZER] ✨ Smart Schedule Optimization using {model}")
+            print(f"[OPTIMIZER] 📊 Request payload size: {input_size:,} bytes")
+            print(f"[OPTIMIZER] ✅ Routing through Responses API (not Chat Completions)")
 
         # Map token knobs
         mot = _coerce_max_output_tokens(kwargs)
