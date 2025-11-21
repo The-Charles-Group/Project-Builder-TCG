@@ -6233,6 +6233,611 @@ async def api_cleanup_old_scenarios():
             status_code=500
         )
 
+# =============================================================================
+# SMART SCHEDULE OPTIMIZATION (GPT-5.1 Pro)
+# =============================================================================
+# Production-ready AI optimization layer for project timelines using GPT-5.1 Pro.
+# Features:
+# - Extracts baseline schedule from SCENARIO_STORE (post-pricing, pre-export)
+# - Uses GPT-5.1 Pro via Responses API for realistic PM reasoning
+# - Respects L2-L4 waterfall structure while enabling L5+ parallel execution
+# - Stores optimized schedule separately without overwriting baseline
+# - Provides accept/reject workflow with clear diffs
+# - Integrates with existing dependency normalization stack
+# =============================================================================
+
+class OptimizeSchedulePayload(BaseModel):
+    session_id: str
+    use_gpt_thinking: bool = False  # True = gpt-5.1-thinking, False = gpt-5.1-pro
+
+class OptimizationResponse(BaseModel):
+    success: bool
+    session_id: str
+    model_used: str
+    changes_count: int
+    explanation: Dict[str, Any]
+    diff: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+class AcceptOptimizationPayload(BaseModel):
+    session_id: str
+
+def build_optimization_payload(scenario: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract baseline schedule from SCENARIO_STORE and format for GPT-5.1 Pro.
+    Returns JSON matching the schema expected by the AI optimizer.
+    """
+    import uuid
+    from datetime import datetime, timedelta
+    
+    # Extract project metadata
+    project_name = scenario.get('project_name', 'Untitled Project')
+    project_start = scenario.get('project_start', datetime.date.today().isoformat())
+    timeline = scenario.get('timeline', {})
+    items = scenario.get('items', [])
+    
+    # Build working calendar (default to 8h days, weekends off, US holidays)
+    working_calendar = {
+        "workday_hours": 8,
+        "weekends_off": True,
+        "holidays": [
+            "2025-01-01", "2025-07-04", "2025-12-25",  # Major US holidays
+            "2025-11-27", "2025-11-28"  # Thanksgiving
+        ]
+    }
+    
+    # Build items array with WBS hierarchy
+    optimization_items = []
+    timeline_tasks = timeline.get('tasks', []) if timeline else []
+    
+    # Create a mapping of task names to timeline data
+    timeline_map = {}
+    for task in timeline_tasks:
+        task_name = task.get('name', '')
+        timeline_map[task_name] = task
+    
+    # Convert SCENARIO_STORE items to optimization format
+    for idx, item in enumerate(items):
+        deliverable = item.get('Deliverable', '')
+        component = item.get('Component', '')
+        task_label = item.get('Task_Label', '')
+        role = item.get('Role', 'Generalist')
+        
+        # Determine level based on hierarchy
+        # L1 = Project, L2 = Deliverable, L3 = Component, L4 = Task, L5+ = Role
+        if component and task_label:
+            level = 5  # Role-level task
+            name = f"{role} - {task_label}"
+        elif component:
+            level = 3  # Component
+            name = component
+        elif deliverable:
+            level = 2  # Deliverable
+            name = deliverable
+        else:
+            continue  # Skip malformed items
+        
+        # Generate stable ID
+        item_id = f"item-{idx}"
+        
+        # Get timeline data if available
+        timeline_data = timeline_map.get(name, {})
+        start_date = timeline_data.get('start', project_start)
+        end_date = timeline_data.get('end', project_start)
+        dependencies = timeline_data.get('dependencies', '')
+        
+        # Calculate duration in days (rough estimate from hours)
+        planned_hours = item.get('Planned_Hours', 0)
+        duration_days = max(1, round(planned_hours / 8))  # Assume 8h/day
+        
+        # Build WBS code (simplified)
+        wbs = f"1.{idx+1}"
+        
+        optimization_items.append({
+            "id": item_id,
+            "wbs": wbs,
+            "name": name,
+            "level": level,
+            "type": "role" if level >= 5 else ("task" if level == 4 else "summary"),
+            "role": role if level >= 5 else None,
+            "planned_hours": planned_hours,
+            "duration_days": duration_days,
+            "start": start_date,
+            "end": end_date,
+            "dependencies": dependencies.split(',') if dependencies else [],
+            "service_department": item.get('Service Department', 'Strategy'),
+            "is_milestone": False
+        })
+    
+    return {
+        "project": {
+            "name": project_name,
+            "start_date": project_start,
+            "target_end_date": None,  # No hard deadline by default
+            "working_calendar": working_calendar
+        },
+        "items": optimization_items
+    }
+
+def get_optimizer_system_prompt() -> str:
+    """
+    System prompt for GPT-5.1 Pro with explicit L2-L4 vs L5+ dependency rules.
+    """
+    return """You are a senior digital project manager and scheduling expert.
+You receive a project plan with deliverables, components, tasks, and role-level tasks, including dates, durations, and dependencies.
+Your job is to adjust the schedule realistically, not to invent new work.
+
+**CRITICAL RULES:**
+
+1. **Do NOT add or remove items** - only adjust dates, durations, and dependencies.
+
+2. **Respect the project working calendar** (8h days, no weekends, holidays list).
+
+3. **Hierarchy preservation** - Keep the WBS hierarchy intact:
+   - Level 1 = Project Summary
+   - Level 2 = Deliverables (can be chained in waterfall)
+   - Level 3 = Components (can be chained in waterfall)
+   - Level 4 = Tasks (can be chained in waterfall)
+   - Level 5+ = Role-level tasks (must run in PARALLEL unless truly dependent)
+
+4. **L2-L4 Waterfall Dependencies:**
+   - Deliverables, components, and tasks CAN be chained where appropriate
+   - Use dependencies to express true blocking relationships
+   - Example: "Brand Narrative" depends on "Key Pillars" is valid
+
+5. **L5+ Parallel Execution (CRITICAL):**
+   - Role-level tasks (Account Manager, Copywriter, Strategist, Designer, Developer) must NOT be auto-chained
+   - They should run in PARALLEL unless you explicitly identify a real dependency
+   - If you create a dependency between role tasks, explain WHY in your output
+   - Example: AM, CW, and Strategist can all start on same day working simultaneously
+
+6. **Keep total planned hours per task unchanged** - if you change duration, you're changing how hours are spread, not the total.
+
+7. **Try to keep within the user's timeline if possible** - if not, explain why.
+
+8. **Output only valid JSON** that matches the requested schema (no code fences, no commentary).
+
+Your goal is to create a realistic, executable schedule that maximizes parallel work while respecting true dependencies."""
+
+async def optimize_schedule_with_ai(
+    session_id: str,
+    baseline_payload: Dict[str, Any],
+    use_thinking: bool = False
+) -> Dict[str, Any]:
+    """
+    Call GPT-5.1 Pro via Responses API to optimize the schedule.
+    
+    Args:
+        session_id: Session identifier for logging
+        baseline_payload: Baseline schedule JSON
+        use_thinking: True = gpt-5.1-thinking, False = gpt-5.1-pro
+    
+    Returns:
+        Dict with optimized items + explanation, or error details
+    """
+    import json
+    from openai import OpenAI
+    from gpt5_helpers import retry_with_exponential_backoff
+    
+    # Get OpenAI client
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("Open_AI_Key")
+    if not api_key:
+        raise ValueError("[OPTIMIZER] No OpenAI API key found")
+    
+    client = OpenAI(api_key=api_key)
+    
+    # Select model
+    model = "gpt-5.1-thinking" if use_thinking else "gpt-5.1-pro"
+    
+    # Build messages
+    system_prompt = get_optimizer_system_prompt()
+    user_message = f"""Here is the current baseline project schedule generated by our app.
+Please adjust dates, durations, and dependencies to be realistic, following the rules in the system message.
+Then return the updated schedule and an explanation of key changes.
+
+BASELINE JSON:
+{json.dumps(baseline_payload, indent=2)}
+
+Expected response format:
+{{
+  "items": [
+    {{
+      "id": "item-0",
+      "start": "YYYY-MM-DD",
+      "end": "YYYY-MM-DD",
+      "duration_days": 5,
+      "dependencies": ["item-1", "item-2"]
+    }}
+  ],
+  "explanation": {{
+    "summary": "Overall changes summary",
+    "changes_by_group": [
+      {{
+        "group_name": "Brand Positioning",
+        "notes": "What changed and why"
+      }}
+    ],
+    "risks_or_assumptions": ["List any assumptions made"]
+  }}
+}}"""
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message}
+    ]
+    
+    print(f"[OPTIMIZER] Starting optimization for session {session_id}")
+    print(f"[OPTIMIZER] Using model: {model}")
+    print(f"[OPTIMIZER] Baseline has {len(baseline_payload.get('items', []))} items")
+    
+    # Call GPT-5.1 Pro via Responses API (enforcer will route it correctly)
+    def make_api_call():
+        response = client.responses.create(
+            model=model,
+            input=messages,
+            max_output_tokens=4000,
+            reasoning={"effort": "high" if not use_thinking else "medium"}
+        )
+        return response
+    
+    # Use retry logic
+    try:
+        response = retry_with_exponential_backoff(
+            make_api_call,
+            max_retries=3,
+            log_prefix="OPTIMIZER",
+            raise_on_failure=True
+        )
+        
+        # Extract response text
+        from gpt5_helpers import _extract_output_text
+        response_text = _extract_output_text(response)
+        
+        print(f"[OPTIMIZER] Received response ({len(response_text)} chars)")
+        
+        # Parse JSON response
+        try:
+            # Remove code fences if present
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0]
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0]
+            
+            optimized_data = json.loads(response_text.strip())
+            
+            print(f"[OPTIMIZER] Parsed JSON successfully")
+            print(f"[OPTIMIZER] Optimized schedule has {len(optimized_data.get('items', []))} items")
+            
+            return {
+                "success": True,
+                "model_used": model,
+                "optimized_items": optimized_data.get('items', []),
+                "explanation": optimized_data.get('explanation', {}),
+                "raw_response": response_text[:500]  # First 500 chars for debugging
+            }
+        
+        except json.JSONDecodeError as je:
+            print(f"[OPTIMIZER] JSON parse error: {je}")
+            print(f"[OPTIMIZER] Response text: {response_text[:1000]}")
+            return {
+                "success": False,
+                "error": f"Failed to parse AI response as JSON: {str(je)}",
+                "raw_response": response_text[:500]
+            }
+    
+    except Exception as e:
+        print(f"[OPTIMIZER] API call failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": f"AI optimization failed: {str(e)}"
+        }
+
+def validate_optimization_response(
+    baseline_items: List[Dict[str, Any]],
+    optimized_items: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Validate that AI response meets all safety requirements.
+    
+    Returns:
+        {"valid": True/False, "errors": [...], "warnings": [...]}
+    """
+    errors = []
+    warnings = []
+    
+    # Check 1: Item cardinality must match
+    if len(optimized_items) != len(baseline_items):
+        errors.append(f"Item count mismatch: baseline has {len(baseline_items)}, optimized has {len(optimized_items)}")
+        return {"valid": False, "errors": errors, "warnings": warnings}
+    
+    # Create ID maps for validation
+    baseline_ids = {item['id'] for item in baseline_items}
+    optimized_ids = {item['id'] for item in optimized_items}
+    
+    # Check 2: IDs must match exactly
+    if baseline_ids != optimized_ids:
+        missing = baseline_ids - optimized_ids
+        extra = optimized_ids - baseline_ids
+        if missing:
+            errors.append(f"Missing IDs in optimized schedule: {missing}")
+        if extra:
+            errors.append(f"Extra IDs in optimized schedule: {extra}")
+        return {"valid": False, "errors": errors, "warnings": warnings}
+    
+    # Check 3: Validate each item
+    from datetime import datetime
+    
+    for opt_item in optimized_items:
+        item_id = opt_item.get('id')
+        
+        # Validate date formats
+        try:
+            start = opt_item.get('start')
+            if start:
+                datetime.fromisoformat(start)
+        except (ValueError, TypeError) as e:
+            errors.append(f"Invalid start date for {item_id}: {start}")
+        
+        try:
+            end = opt_item.get('end')
+            if end:
+                datetime.fromisoformat(end)
+        except (ValueError, TypeError) as e:
+            errors.append(f"Invalid end date for {item_id}: {end}")
+        
+        # Validate duration is non-negative
+        duration = opt_item.get('duration_days', 0)
+        if duration < 0:
+            errors.append(f"Negative duration for {item_id}: {duration}")
+        
+        # Validate dependencies reference existing IDs
+        deps = opt_item.get('dependencies', [])
+        if deps:
+            invalid_deps = [d for d in deps if d not in baseline_ids]
+            if invalid_deps:
+                errors.append(f"Invalid dependencies for {item_id}: {invalid_deps}")
+    
+    # Summary
+    if errors:
+        return {"valid": False, "errors": errors, "warnings": warnings}
+    
+    if warnings:
+        print(f"[OPTIMIZER] Validation passed with {len(warnings)} warnings")
+    
+    return {"valid": True, "errors": [], "warnings": warnings}
+
+def calculate_schedule_diff(
+    baseline_items: List[Dict[str, Any]],
+    optimized_items: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """
+    Calculate differences between baseline and optimized schedules.
+    
+    Returns:
+        List of diff objects grouped by deliverable showing what changed.
+    """
+    diffs = []
+    
+    # Create ID map for quick lookup
+    opt_map = {item['id']: item for item in optimized_items}
+    
+    for base_item in baseline_items:
+        item_id = base_item['id']
+        opt_item = opt_map.get(item_id)
+        
+        if not opt_item:
+            continue  # Should not happen if validation passed
+        
+        # Check for changes
+        changes = []
+        
+        # Start date change
+        if base_item.get('start') != opt_item.get('start'):
+            changes.append({
+                "field": "start_date",
+                "old": base_item.get('start'),
+                "new": opt_item.get('start')
+            })
+        
+        # End date change
+        if base_item.get('end') != opt_item.get('end'):
+            changes.append({
+                "field": "end_date",
+                "old": base_item.get('end'),
+                "new": opt_item.get('end')
+            })
+        
+        # Duration change
+        if base_item.get('duration_days') != opt_item.get('duration_days'):
+            changes.append({
+                "field": "duration",
+                "old": base_item.get('duration_days'),
+                "new": opt_item.get('duration_days')
+            })
+        
+        # Dependencies change
+        base_deps = set(base_item.get('dependencies', []))
+        opt_deps = set(opt_item.get('dependencies', []))
+        if base_deps != opt_deps:
+            added = list(opt_deps - base_deps)
+            removed = list(base_deps - opt_deps)
+            changes.append({
+                "field": "dependencies",
+                "added": added,
+                "removed": removed
+            })
+        
+        if changes:
+            diffs.append({
+                "id": item_id,
+                "name": base_item.get('name'),
+                "level": base_item.get('level'),
+                "changes": changes
+            })
+    
+    return diffs
+
+@app.post("/api/optimize-schedule", response_model=OptimizationResponse)
+async def api_optimize_schedule(payload: OptimizeSchedulePayload):
+    """
+    Trigger AI optimization for a project schedule using GPT-5.1 Pro.
+    
+    Workflow:
+    1. Extract baseline from SCENARIO_STORE
+    2. Call GPT-5.1 Pro via Responses API
+    3. Validate AI response
+    4. Store optimized schedule in separate field
+    5. Return diff + explanation to frontend
+    """
+    try:
+        session_id = payload.session_id
+        
+        # Get scenario from store
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        
+        # Build optimization payload from baseline
+        baseline_payload = build_optimization_payload(scenario)
+        baseline_items = baseline_payload['items']
+        
+        print(f"[OPTIMIZER] Starting optimization for {len(baseline_items)} items")
+        
+        # Call AI optimizer
+        result = await optimize_schedule_with_ai(
+            session_id=session_id,
+            baseline_payload=baseline_payload,
+            use_thinking=payload.use_gpt_thinking
+        )
+        
+        if not result.get('success'):
+            return OptimizationResponse(
+                success=False,
+                session_id=session_id,
+                model_used=result.get('model_used', 'unknown'),
+                changes_count=0,
+                explanation={},
+                diff=[],
+                error=result.get('error', 'Unknown error')
+            )
+        
+        # Validate response
+        optimized_items = result.get('optimized_items', [])
+        validation = validate_optimization_response(baseline_items, optimized_items)
+        
+        if not validation['valid']:
+            error_msg = f"AI response validation failed: {'; '.join(validation['errors'])}"
+            print(f"[OPTIMIZER] {error_msg}")
+            return OptimizationResponse(
+                success=False,
+                session_id=session_id,
+                model_used=result.get('model_used'),
+                changes_count=0,
+                explanation={},
+                diff=[],
+                error=error_msg
+            )
+        
+        # Calculate diff
+        diff = calculate_schedule_diff(baseline_items, optimized_items)
+        
+        # Store optimized schedule in SCENARIO_STORE (don't overwrite baseline)
+        scenario['optimized_schedule'] = {
+            'items': optimized_items,
+            'explanation': result.get('explanation', {}),
+            'model_used': result.get('model_used'),
+            'optimized_at': datetime.datetime.now().isoformat()
+        }
+        scenario['active_schedule'] = 'baseline'  # Default to baseline until user accepts
+        
+        SCENARIO_STORE[session_id] = scenario
+        
+        print(f"[OPTIMIZER] ✅ Optimization complete: {len(diff)} changes")
+        
+        return OptimizationResponse(
+            success=True,
+            session_id=session_id,
+            model_used=result.get('model_used'),
+            changes_count=len(diff),
+            explanation=result.get('explanation', {}),
+            diff=diff
+        )
+    
+    except Exception as e:
+        print(f"[OPTIMIZER] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Optimization failed: {str(e)}")
+
+@app.post("/api/accept-optimization")
+async def api_accept_optimization(payload: AcceptOptimizationPayload):
+    """
+    Accept the AI-optimized schedule, making it the active schedule for exports.
+    """
+    try:
+        session_id = payload.session_id
+        
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        
+        if 'optimized_schedule' not in scenario:
+            raise HTTPException(400, "No optimized schedule found. Run optimization first.")
+        
+        # Promote optimized schedule to active
+        scenario['active_schedule'] = 'optimized'
+        SCENARIO_STORE[session_id] = scenario
+        
+        print(f"[OPTIMIZER] ✅ Accepted optimization for session {session_id}")
+        
+        return {
+            "success": True,
+            "message": "Optimized schedule is now active. Exports will use the AI-adjusted dates."
+        }
+    
+    except Exception as e:
+        print(f"[OPTIMIZER] Accept error: {e}")
+        raise HTTPException(500, f"Failed to accept optimization: {str(e)}")
+
+@app.post("/api/reject-optimization")
+async def api_reject_optimization(payload: AcceptOptimizationPayload):
+    """
+    Reject the AI-optimized schedule, keeping the baseline as active.
+    """
+    try:
+        session_id = payload.session_id
+        
+        if session_id not in SCENARIO_STORE:
+            raise HTTPException(404, f"Scenario not found for session {session_id}")
+        
+        scenario = SCENARIO_STORE[session_id]
+        
+        # Discard optimized schedule
+        if 'optimized_schedule' in scenario:
+            del scenario['optimized_schedule']
+        
+        scenario['active_schedule'] = 'baseline'
+        SCENARIO_STORE[session_id] = scenario
+        
+        print(f"[OPTIMIZER] ✅ Rejected optimization for session {session_id}")
+        
+        return {
+            "success": True,
+            "message": "Optimized schedule discarded. Baseline schedule remains active."
+        }
+    
+    except Exception as e:
+        print(f"[OPTIMIZER] Reject error: {e}")
+        raise HTTPException(500, f"Failed to reject optimization: {str(e)}")
+
+# =============================================================================
+# END SMART SCHEDULE OPTIMIZATION
+# =============================================================================
+
 @app.post("/api/pricing/build_scenario")
 async def api_build_scenario(payload: BuildScenarioPayload):
     """
