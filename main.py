@@ -10475,6 +10475,8 @@ def convert_excel_to_mspdi(
         SubElement(project, "MinutesPerWeek").text = "2400"
         SubElement(project, "DaysPerMonth").text = "20"
         SubElement(project, "DurationFormat").text = "7"
+        SubElement(project, "DefaultStartTime").text = "09:00:00"
+        SubElement(project, "DefaultFinishTime").text = "17:00:00"
         
         # Calendars
         calendars = SubElement(project, "Calendars")
@@ -11048,6 +11050,7 @@ def convert_excel_to_mspdi(
         
         # Add PredecessorLink elements only for filtered (deliverable-level) dependencies
         # WATERFALL FIX: Use wbs_to_new_uid which has remapped UIDs after chronological sort
+        skipped_zero_duration = 0
         for pred_wbs, succ_wbs in filtered_edges:
             pred_uid = wbs_to_new_uid.get(pred_wbs)
             succ_uid = wbs_to_new_uid.get(succ_wbs)
@@ -11056,6 +11059,27 @@ def convert_excel_to_mspdi(
                 for task_elem in tasks_elem.findall("Task"):
                     task_uid_elem = task_elem.find("UID")
                     if task_uid_elem is not None and task_uid_elem.text == str(succ_uid):
+                        # VALIDATION: Skip if either task has zero duration (e.g., root task)
+                        succ_duration_elem = task_elem.find("Duration")
+                        if succ_duration_elem is not None and succ_duration_elem.text == "PT0M":
+                            skipped_zero_duration += 1
+                            break
+                        
+                        # Find predecessor task to check its duration
+                        pred_task_elem = None
+                        for t_elem in tasks_elem.findall("Task"):
+                            t_uid_elem = t_elem.find("UID")
+                            if t_uid_elem is not None and t_uid_elem.text == str(pred_uid):
+                                pred_task_elem = t_elem
+                                break
+                        
+                        if pred_task_elem is not None:
+                            pred_duration_elem = pred_task_elem.find("Duration")
+                            if pred_duration_elem is not None and pred_duration_elem.text == "PT0M":
+                                skipped_zero_duration += 1
+                                break
+                        
+                        # Both tasks have valid durations - write PredecessorLink
                         pred_link = SubElement(task_elem, "PredecessorLink")
                         SubElement(pred_link, "PredecessorUID").text = str(pred_uid)
                         SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
@@ -11064,6 +11088,9 @@ def convert_excel_to_mspdi(
                         SubElement(pred_link, "LinkLag").text = "0"
                         SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
                         break
+        
+        if skipped_zero_duration > 0:
+            print(f"[VALIDATION] ⏭️  Skipped {skipped_zero_duration} PredecessorLink(s) with zero-duration tasks")
 
         # Compute project summary start/finish from children (no more hardcoded dates)
         if tasks_elem is not None:
