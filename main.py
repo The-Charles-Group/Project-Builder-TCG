@@ -10365,7 +10365,7 @@ def convert_excel_to_mspdi(
         # ====================================================================================
         print("[SIBLING-CHAIN] Building parent→children map for auto-chaining...")
         
-        # Build parent→children map for L2 deliverables and L3 components
+        # Build parent→children map for L2 deliverables, L3 components, and L4 tasks
         parent_to_children = {}
         for r in rows:
             wbs = r["WBS"]
@@ -10376,9 +10376,9 @@ def convert_excel_to_mspdi(
             wbs_parts = wbs.split(".")
             parent_wbs = ".".join(wbs_parts[:-1]) if len(wbs_parts) > 1 else "1"
             
-            # Check if this is a summary-like row (L2 deliverable or L3 component)
+            # Check if this is a summary-like row (L2/L3/L4 only, NOT L5+ role tasks)
             outline_level = wbs.count(".") + 1
-            is_summary_like = outline_level in (2, 3)  # L2 deliverables and L3 components
+            is_summary_like = outline_level in (2, 3, 4)  # L2 deliverables, L3 components, L4 tasks (NOT L5+ roles)
             
             if is_summary_like:
                 parent_to_children.setdefault(parent_wbs, []).append(r)
