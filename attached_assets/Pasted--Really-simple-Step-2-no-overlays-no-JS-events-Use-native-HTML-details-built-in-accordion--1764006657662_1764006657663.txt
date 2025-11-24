@@ -1,0 +1,71 @@
+“Really simple” Step-2 (no overlays, no JS events)
+
+Use native HTML <details> (built-in accordion). No drawers, no backdrops, no custom JS.
+
+HTML (drop where your summary goes)
+<section class="card">
+  <h3 class="card-title">Overview</h3>
+  <p><strong>Goal:</strong> <span id="ov-goal">Fast analysis</span></p>
+  <p><strong>Channels:</strong> <span id="ov-channels">—</span>
+     &nbsp; • &nbsp; <strong>Markets:</strong> <span id="ov-markets">—</span></p>
+  <ul id="ov-highlights"></ul>
+</section>
+
+<section class="card">
+  <h3 class="card-title">Scope &amp; Plan</h3>
+  <div id="scope-sections"><!-- JS will inject <details> blocks here --></div>
+</section>
+
+Minimal CSS
+.card { background: var(--surface,#111826); border-radius: 12px; padding: 12px; margin: 12px 0; }
+.card-title { font-weight: 600; margin-bottom: 6px; }
+details { border-top: 1px solid rgba(255,255,255,.1); padding: 8px 0; }
+summary { cursor: pointer; font-weight: 500; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "▸"; float: right; transition: transform .2s; }
+details[open] summary::after { transform: rotate(90deg); }
+
+Tiny JS to populate (no event handlers)
+(function () {
+  function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent = v || '—'; }
+  function injectScope(scopeText){
+    const host = document.getElementById('scope-sections'); if(!host) return;
+    const anchors = [
+      'Brand Strategy','Brand Identity','Brand Architecture','Experiential Activation',
+      'Campaign Creative','Content Production','Marketing Collateral','Program Management'
+    ];
+    const rx = new RegExp(`(${anchors.map(a=>a.replace(/[-/\\^$*+?.()|[\]{}]/g,'\\$&')).join('|')})`,'i');
+    const chunks = (scopeText||'').split(rx).map(s=>s&&s.trim()).filter(Boolean);
+    host.innerHTML = '';
+    for(let i=0;i<chunks.length;i+=2){
+      const title = chunks[i]; const body = chunks[i+1] || '';
+      const details = document.createElement('details');
+      const summary = document.createElement('summary'); summary.textContent = title;
+      const content = document.createElement('div'); content.innerHTML = body.replace(/\n/g,'<br>');
+      details.appendChild(summary); details.appendChild(content); host.appendChild(details);
+    }
+  }
+
+  // Call this from your existing updatePricingSummary(scenario)
+  window.renderExecSimple = function (scenario){
+    setText('ov-goal', scenario?.meta?.goal || window.RFP?.goal || 'Fast analysis');
+    setText('ov-channels', (scenario?.meta?.channels||window.RFP?.channels||[]).join(', ') || '—');
+    setText('ov-markets', (scenario?.meta?.markets||window.RFP?.markets||[]).join(', ') || '—');
+
+    const hi = (scenario?.highlights||[]).slice(0,3);
+    const ul = document.getElementById('ov-highlights');
+    if (ul) ul.innerHTML = hi.length ? hi.map(h=>`<li>${h}</li>`).join('') : '<li>Executive-ready summary</li>';
+
+    const scopeText = scenario?.summary?.bulletsText || window.Step2?.summaryText || '';
+    injectScope(scopeText);
+  };
+})();
+
+Where to call it
+
+At the end of your existing updatePricingSummary(scenario):
+
+window.renderExecSimple && window.renderExecSimple(scenario);
+
+
+That’s it: no overlay, no drawer, no custom click handlers—just native <details> elements. You keep the simplified, executive-friendly view and the rest of the UI remains fully clickable.
