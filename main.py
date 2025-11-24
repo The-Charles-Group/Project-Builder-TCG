@@ -6373,6 +6373,7 @@ def build_optimization_payload(scenario: Dict[str, Any], wbs_rows: List[Dict[str
             "level": level,
             "type": "role" if level >= 5 else "summary",
             "role": role,
+            "planned_hours": planned_hours,
             "duration_days": duration_days,
             "start": start_date_str,
             "end": end_date_str,

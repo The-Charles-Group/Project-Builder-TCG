@@ -328,12 +328,6 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Initialize PDF download button event listeners
   initializePDFDownloadButton();
-  
-  // Remove loading class from Step 1 to restore button clicks
-  const step1 = document.getElementById('step1');
-  if (step1) {
-    step1.classList.remove('loading');
-  }
 });
 
 async function handleIndustrySelection() {
@@ -6275,6 +6269,10 @@ function renderAIPlan(aiPlan) {
           <div>
             <strong>Complexity:</strong> <span style="color: #6b7280; text-transform: capitalize;">${summary.complexity || 'medium'}</span>
           </div>
+        </div>
+        
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(0,0,0,0.1);">
+          <strong>Total Planned Hours:</strong> <span style="font-size: 1.2em; color: #2563eb;">${plan.totals?.planned_hours_total || 0}</span>
         </div>
       </div>
     `;
