@@ -48,13 +48,12 @@ args = "python auto_sync_documentation.py"
 name = "React Step2 Dev Server"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd frontend/step2-exec && npm run dev"
-waitForPort = 5173
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [[ports]]
 localPort = 5000
