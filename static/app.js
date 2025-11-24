@@ -5552,6 +5552,20 @@ const onProceedToStep3 = buildFromCurrentSelection;
 const proceedToPricing = buildFromCurrentSelection;  // Alias for HTML onclick handler
 window.proceedToPricing = proceedToPricing;  // Make it globally accessible
 
+// Export function wrappers for onclick handlers
+window.onExportScenario = function(letter) {
+  exportScenario('xlsx', `btn-export-${letter.toLowerCase()}`);
+};
+
+window.onExportXMLScenario = function(letter) {
+  exportXMLScenario(letter);
+};
+
+// Rebuild scenario wrapper for onclick handler
+window.manualRebuildScenario = function() {
+  rebuildScenario();
+};
+
 // Image Progress Tracking
 let currentJobId = null;
 let progressInterval = null;

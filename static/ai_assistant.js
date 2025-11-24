@@ -451,6 +451,7 @@ class AIAssistant {
                                 z-index: 9998;
                                 box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
                                 backdrop-filter: blur(10px);
+                                pointer-events: auto; /* Allow clicks on task monitor */
                             }
                             
                             .task-monitor-header {
@@ -3162,6 +3163,7 @@ class AIAssistant {
                 bottom: 20px;
                 z-index: 10000;
                 font-family: system-ui, -apple-system, sans-serif;
+                pointer-events: none; /* Don't block clicks on the page */
             }
             
             .ai-assistant-sidebar {
@@ -3177,6 +3179,7 @@ class AIAssistant {
                 flex-direction: column;
                 border: 1px solid rgba(139, 92, 246, 0.3);
                 animation: slideUp 0.3s ease-out;
+                pointer-events: auto; /* Allow clicks on sidebar when open */
             }
             
             .ai-assistant-sidebar.open {
@@ -3255,6 +3258,7 @@ class AIAssistant {
                 box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
                 z-index: 10001;
                 animation: slideDown 0.3s ease-out;
+                pointer-events: auto; /* Allow clicks on the progress panel */
             }
             
             @keyframes slideDown {
@@ -4052,6 +4056,7 @@ class AIAssistant {
                 box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
                 transition: all 0.2s;
                 position: relative;
+                pointer-events: auto; /* Allow toggle button to receive clicks */
             }
             
             .ai-assistant-toggle:hover {
