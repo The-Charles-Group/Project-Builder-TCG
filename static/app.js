@@ -6413,7 +6413,9 @@ function renderAIPlan(aiPlan) {
       
       for (const deliv of deliverables) {
         const confidence = Math.round((deliv.calibrated_confidence || 0) * 100);
+        const tfidfSimilarity = Math.round((deliv.tfidf_similarity || 0) * 100);
         const confidenceColor = confidence >= 75 ? '#10b981' : confidence >= 50 ? '#f59e0b' : '#ef4444';
+        const tfidfColor = tfidfSimilarity >= 75 ? '#10b981' : tfidfSimilarity >= 50 ? '#f59e0b' : '#ef4444';
         const delivCode = deliv.deliverable_code || deliv.code;
         
         html += `
@@ -6434,7 +6436,8 @@ function renderAIPlan(aiPlan) {
                 </div>
               </div>
               <div style="display: flex; gap: 8px; align-items: center;">
-                <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;">${confidence}% confidence</span>
+                <span style="font-size: 0.85em; color: ${confidenceColor}; font-weight: 600;" title="AI Confidence Score">${confidence}% AI</span>
+                <span style="font-size: 0.85em; color: ${tfidfColor}; font-weight: 600;" title="TF-IDF Keyword Similarity">${tfidfSimilarity}% TF-IDF</span>
                 <span style="font-size: 0.85em; color: var(--muted);">${deliv.planned_hours || 0}h</span>
                 <button class="btn-small" 
                         onclick="addAIDeliverableToSelection('${delivCode}', this)"
@@ -6551,8 +6554,109 @@ function renderAIPlan(aiPlan) {
     
     // Store AI plan for later use
     window.lastAIPlan = plan;
+    
+    // Initialize Step 2 selection mode controls
+    initializeStep2SelectionMode();
   }
 }
+
+// Initialize Step 2 Selection Mode Controls
+function initializeStep2SelectionMode() {
+  // Add event listeners to radio buttons if they exist
+  const radioButtons = document.querySelectorAll('input[name="step2_selection_mode"]');
+  if (radioButtons.length === 0) return;
+  
+  radioButtons.forEach(radio => {
+    radio.addEventListener('change', function() {
+      applyStep2SelectionMode(this.value);
+    });
+  });
+  
+  // Apply initial selection mode (default is confidence_only)
+  const checkedRadio = document.querySelector('input[name="step2_selection_mode"]:checked');
+  if (checkedRadio) {
+    applyStep2SelectionMode(checkedRadio.value);
+  }
+}
+
+// Apply Step 2 Selection Mode - Recalculate checkboxes based on mode
+function applyStep2SelectionMode(selectionMode) {
+  console.log(`[Step2 SelectionMode] Applying mode: ${selectionMode}`);
+  
+  if (!window.lastAIPlan || !window.lastAIPlan.suggestions_by_department) {
+    console.warn('[Step2 SelectionMode] No AI suggestions available');
+    return;
+  }
+  
+  const CONF_THRESHOLD = 70.0;  // AI confidence threshold (0-100)
+  const TFIDF_THRESHOLD = 0.70;  // TF-IDF similarity threshold (0-1)
+  
+  let totalDelivs = 0;
+  let selectedByConf = 0;
+  let selectedByTfidf = 0;
+  let selectedByBoth = 0;
+  
+  const suggestionsByDept = window.lastAIPlan.suggestions_by_department || {};
+  
+  for (const dept in suggestionsByDept) {
+    const deliverables = suggestionsByDept[dept] || [];
+    
+    for (const deliv of deliverables) {
+      totalDelivs++;
+      
+      // Get scores
+      const confidence = (deliv.calibrated_confidence || deliv.confidence || 0) * 100;  // Convert to 0-100
+      const tfidfSimilarity = deliv.tfidf_similarity || 0;  // Already 0-1 scale
+      const delivCode = deliv.deliverable_code || deliv.code;
+      
+      // Check thresholds
+      const confOk = confidence >= CONF_THRESHOLD;
+      const tfidfOk = tfidfSimilarity >= TFIDF_THRESHOLD;
+      
+      // Apply selection logic based on mode
+      let shouldSelect = false;
+      if (selectionMode === 'confidence_only') {
+        shouldSelect = confOk;
+      } else if (selectionMode === 'tfidf_only') {
+        shouldSelect = tfidfOk;
+      } else if (selectionMode === 'both') {
+        shouldSelect = confOk || tfidfOk;  // Union
+      }
+      
+      // Count selections
+      if (confOk) selectedByConf++;
+      if (tfidfOk) selectedByTfidf++;
+      if (confOk && tfidfOk) selectedByBoth++;
+      
+      // Update checkbox
+      const delivCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
+      if (delivCheckbox) {
+        delivCheckbox.checked = shouldSelect;
+      }
+      
+      console.log(`[Step2 SelectionMode] ${delivCode}: conf=${confidence.toFixed(1)}% (${confOk?'✓':'✗'}), tfidf=${(tfidfSimilarity*100).toFixed(1)}% (${tfidfOk?'✓':'✗'}), selected=${shouldSelect}`);
+    }
+  }
+  
+  // Update stats display
+  const statsEl = document.getElementById('selection-mode-stats');
+  const countsEl = document.getElementById('selection-mode-counts');
+  if (statsEl && countsEl) {
+    statsEl.style.display = 'block';
+    countsEl.innerHTML = `
+      ${totalDelivs} total deliverables • 
+      ${selectedByConf} by confidence (≥70%) • 
+      ${selectedByTfidf} by TF-IDF (≥70%) • 
+      ${selectedByBoth} by both methods
+    `;
+  }
+  
+  console.log(`[Step2 SelectionMode] Applied ${selectionMode} mode: ${totalDelivs} total, ${selectedByConf} by conf, ${selectedByTfidf} by TFIDF, ${selectedByBoth} by both`);
+}
+
+// Expose functions globally
+window.initializeStep2SelectionMode = initializeStep2SelectionMode;
+window.applyStep2SelectionMode = applyStep2SelectionMode;
 
 // Smart Selection Function - Select based on confidence threshold
 function applySmartSelection() {
