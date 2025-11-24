@@ -1,0 +1,155 @@
+Quick answers to your questions
+
+When should the Executive View render?
+
+On every updatePricingSummary() call (that’s already the moment the Step-2 summary refreshes).
+
+Also call it right after proceedToPricing() if that function navigates or triggers the initial summary render.
+TL;DR: Both—but the single source of truth is updatePricingSummary(). Just piggyback there.
+
+Where does the data come from?
+
+price → from the same totals object you already use in updatePricingSummary() (e.g., scenario.totals.price or SCENARIOS.active.totals.price).
+
+durationText → compute from dates or weeks you already have:
+
+If you have startDate + endDate, format as “X weeks” (ceil of days/7).
+
+If you only have a weeks/duration number, format directly (e.g., "24 weeks").
+
+startDate / endDate → from the timeline/gantt you already read for Step-2 pricing (look where you build the date range in updatePricingSummary()).
+
+goal, channels, markets → same source as the current summary header (often an RFP metadata object loaded before Step-2). If not present, default to:
+
+goal: "Fast analysis"
+
+channels: existing tags or ["Digital"]
+
+markets: existing tags or ["US"]
+
+scopeText → the exact long bullet string you currently inject into the Step-2 summary panel—grab that before you render it (or from its data source) and pass it into the new renderer.
+
+components[] (optional) → if your scenario object lists tasks/rollups with hours/owner, pass those for the Drawer’s Components tab. If not, the tab auto-hides.
+
+Scope text splitting
+
+Start by parsing the existing AI summary text (the long bullets). Use anchor headings:
+Brand Strategy | Brand Identity | Brand Architecture | Experiential Activation | Campaign Creative | Content Production | Marketing Collateral | Program Management
+
+Later you can swap to structured deliverables if you prefer, but parsing the blob is fine now.
+
+What to change (surgical)
+1) Add containers + drawer to static/index.html
+
+Place right after the existing “Selection Summary” block:
+
+<!-- EXEC VIEW: KPI + Overview + Accordion -->
+<div id="exec-view">
+  <div id="kpi-strip" class="kpi-strip"></div>
+  <section id="overview-card" class="card"></section>
+  <section class="card">
+    <h3 class="card-title">Scope &amp; Plan</h3>
+    <div id="scope-accordion" class="accordion"></div>
+  </section>
+</div>
+
+<!-- EXEC VIEW: Drawer -->
+<aside id="details-drawer" class="drawer" aria-hidden="true">
+  <button class="drawer-close" aria-label="Close">&times;</button>
+  <div class="tabs">
+    <button data-tab="summary" class="tab active">Summary</button>
+    <button data-tab="components" class="tab" id="tab-components">Components</button>
+    <button data-tab="risks" class="tab">Risks</button>
+  </div>
+  <div class="tab-panels">
+    <div id="panel-summary" class="panel"></div>
+    <div id="panel-components" class="panel" hidden></div>
+    <div id="panel-risks" class="panel" hidden></div>
+  </div>
+</aside>
+<div id="drawer-backdrop" class="backdrop" hidden></div>
+
+2) Add styles to static/css/app.css (or your main stylesheet)
+
+Use the small CSS block I sent previously (cards, kpis, accordion, drawer, tabs, line clamp). No variables or build step needed.
+
+3) Add the vanilla JS renderer static/js/step2-exec.js
+
+Drop in the file I provided earlier (it exposes window.renderStep2Exec(data)).
+
+4) Wire into static/app.js
+
+At the end of updatePricingSummary() (after you compute totals/dates and before/after you inject the legacy summary), build the data object and call the renderer:
+
+function updatePricingSummary(scenario) {
+  // ... existing logic that computes totals, dates, summary bullets, etc.
+
+  // Example: adapt to your actual keys
+  const price = scenario?.totals?.priceFormatted || currencyFormat(scenario?.totals?.price);
+  const startDate = scenario?.timeline?.startDate || scenario?.dates?.start;
+  const endDate   = scenario?.timeline?.endDate   || scenario?.dates?.end;
+  const durationText = (startDate && endDate)
+    ? Math.ceil((new Date(endDate) - new Date(startDate)) / (1000*60*60*24*7)) + ' weeks'
+    : (scenario?.timeline?.weeks ? scenario.timeline.weeks + ' weeks' : '—');
+
+  const goal     = scenario?.meta?.goal || window.RFP?.goal || 'Fast analysis';
+  const channels = scenario?.meta?.channels || window.RFP?.channels || ['Digital'];
+  const markets  = scenario?.meta?.markets  || window.RFP?.markets  || ['US'];
+
+  // Grab the same long-bullets text you currently render:
+  const scopeText = scenario?.summary?.bulletsText || window.Step2?.summaryText || '';
+
+  // Optional: task/components rollup if you have it
+  const sections = []; // leave empty to let the renderer split the scopeText
+
+  const execData = {
+    price,
+    priceFormatted: price,
+    durationText,
+    startDate,
+    endDate,
+    goal,
+    channels,
+    markets,
+    scopeText,
+    sections,         // optional structured override
+    risks: scenario?.risks || [] // optional
+  };
+
+  if (window.renderStep2Exec) {
+    window.renderStep2Exec(execData);
+  }
+}
+
+
+If proceedToPricing() is the place that first builds the scenario, also call renderStep2Exec() there after you have the scenario (or rely on updatePricingSummary() if it’s always called next).
+
+5) Hide “Total Planned Hours” on Step-2 (UI-only)
+
+If that value is injected by the same function, remove the node in Step-2 context:
+
+document.querySelectorAll('.total-hours').forEach(n => n.remove());
+
+
+Or add a scoped CSS rule on the Step-2 root:
+
+.step2 .total-hours { display: none !important; }
+
+
+This won’t affect server calculations.
+
+Data source checklist (so you can map quickly)
+
+Totals (price): the same object used by updatePricingSummary() to show totals (often scenario.totals).
+
+Dates: where you build Gantt/summary dates (often scenario.timeline.*).
+
+Goal/Channels/Markets: wherever you hydrate the RFP labels in Step-1/2 (often a top-level RFP object or scenario.meta).
+
+Scope text: the “long bullet list” string you currently place into the summary panel (grab before you inject it).
+
+Reference content for final copy/sections
+
+Use the doc we uploaded as the reference text/anchors while you parse the blob:
+
+/mnt/data/SB - L2 to L3 corrected, gantt correct.docx
