@@ -1,0 +1,131 @@
+/* Global styles - Using exact colors from main app */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Exact CSS variables from main app - DO NOT MODIFY */
+  --bg: #0f1117;
+  --card: #151a22;
+  --text: #e6eaf2;
+  --muted: #9aa4b2;
+  --accent: #6aa3ff;
+  --accent2: #3ddc97;
+  --border: #232a35;
+  --input-bg: #0b0e13;
+  --selection-bg: #1a2332;
+  --selection-border: #2a3a4a;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    margin: 0;
+    font-weight: 600;
+  }
+
+  button {
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+@layer components {
+  /* Card styles matching main app */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+
+  /* Button styles matching main app */
+  .btn-primary {
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #08121e;
+    font-weight: 600;
+  }
+
+  .btn-ghost {
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+
+  .btn-sm {
+    padding: 6px 12px;
+    font-size: 13px;
+    background: #1a2332;
+    border: 1px solid #2a3a4a;
+    color: var(--text);
+  }
+
+  /* Chip/Badge styles */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: 14px;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    background: var(--selection-bg);
+    border: 1px solid var(--selection-border);
+    color: var(--text);
+  }
+
+  /* Focus styles for accessibility */
+  button:focus-visible,
+  a:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .text-muted {
+    color: var(--muted);
+  }
+
+  .border-primary {
+    border-color: var(--border);
+  }
+}
+
+/* Smooth transitions */
+* {
+  transition-property: color, background-color, border-color, opacity, transform;
+  transition-duration: 150ms;
+  transition-timing-function: ease-in-out;
+}
+
+button, a {
+  transition-property: all;
+}

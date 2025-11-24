@@ -1,0 +1,82 @@
+import { z } from 'zod';
+
+// ============================================================================
+// Data Models - Exact match to project brief specification
+// ============================================================================
+
+export type EffortSize = "S" | "M" | "L";
+
+export const DeliverableSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  acceptanceCriteria: z.array(z.string()).optional(),
+});
+
+export type Deliverable = z.infer<typeof DeliverableSchema>;
+
+export const DependencyRefSchema = z.object({
+  id: z.string(),
+  type: z.enum(["needs", "feeds"]),
+});
+
+export type DependencyRef = z.infer<typeof DependencyRefSchema>;
+
+export const RoleEffortSchema = z.object({
+  role: z.string(),
+  hours: z.number().optional(),
+  seniority: z.enum(["Jr", "Mid", "Sr"]).optional(),
+});
+
+export type RoleEffort = z.infer<typeof RoleEffortSchema>;
+
+export const ModuleSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  valueStatement: z.string(),
+  effort: z.object({
+    size: z.enum(["S", "M", "L"]).optional(),
+    hoursMin: z.number().optional(),
+    hoursMax: z.number().optional(),
+  }).optional(),
+  outputs: z.array(DeliverableSchema),
+  activities: z.array(z.string()),
+  risks: z.array(z.string()).optional(),
+  assumptions: z.array(z.string()).optional(),
+  dependencies: z.array(DependencyRefSchema).optional(),
+  roles: z.array(RoleEffortSchema).optional(),
+  channels: z.array(z.string()).optional(),
+  phase: z.enum(["Discovery", "Concept", "Review", "Production"]).optional(),
+});
+
+export type Module = z.infer<typeof ModuleSchema>;
+
+export const ScopeSummarySchema = z.object({
+  title: z.string(),
+  totalPlannedHours: z.number().optional(),
+  markets: z.array(z.string()).optional(),
+  channels: z.array(z.string()).optional(),
+  complexity: z.enum(["Low", "Medium", "High"]).optional(),
+  modules: z.array(ModuleSchema),
+});
+
+export type ScopeSummary = z.infer<typeof ScopeSummarySchema>;
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+export function inferEffortSize(hoursMin?: number, hoursMax?: number): EffortSize | undefined {
+  if (!hoursMin && !hoursMax) return undefined;
+  const hours = hoursMax || hoursMin || 0;
+  if (hours <= 120) return "S";
+  if (hours <= 400) return "M";
+  return "L";
+}
+
+export function formatHoursRange(hoursMin?: number, hoursMax?: number): string {
+  if (!hoursMin && !hoursMax) return "TBD";
+  if (hoursMin && hoursMax) return `${hoursMin}–${hoursMax}h`;
+  if (hoursMin) return `~${hoursMin}h`;
+  if (hoursMax) return `~${hoursMax}h`;
+  return "TBD";
+}
