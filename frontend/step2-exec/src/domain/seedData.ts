@@ -5,7 +5,6 @@ export const seedData: ScopeSummary = {
   channels: ["Digital"],
   markets: ["US"],
   complexity: "Medium",
-  totalPlannedHours: 4012,
   modules: [
     {
       id: "brand-strategy",

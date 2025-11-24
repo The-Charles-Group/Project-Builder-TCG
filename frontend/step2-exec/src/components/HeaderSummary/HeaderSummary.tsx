@@ -1,6 +1,5 @@
-import { Info, Maximize2, Minimize2, Download, Share2 } from 'lucide-react';
+import { Maximize2, Minimize2, Download, Share2 } from 'lucide-react';
 import { useStore } from '../../state/store';
-import { formatHours } from '../../lib/utils';
 
 export function HeaderSummary() {
   const scope = useStore((state) => state.scope);
@@ -36,22 +35,6 @@ export function HeaderSummary() {
                 </span>
               )}
             </div>
-          </div>
-          
-          {/* Middle: Total hours */}
-          <div className="flex items-center gap-2 px-4 py-2 bg-exec-bg rounded border border-exec-border">
-            <div className="text-right">
-              <div className="text-xs text-exec-muted">Total Planned Hours</div>
-              <div className="text-lg font-semibold text-exec-accent">
-                {formatHours(scope.totalPlannedHours)}
-              </div>
-            </div>
-            <button 
-              className="p-1 hover:bg-exec-border rounded"
-              title="How this is computed"
-            >
-              <Info className="w-4 h-4 text-exec-muted" />
-            </button>
           </div>
           
           {/* Right: Actions */}

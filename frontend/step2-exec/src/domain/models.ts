@@ -49,7 +49,6 @@ export type Module = z.infer<typeof ModuleSchema>;
 
 export const ScopeSummarySchema = z.object({
   title: z.string(),
-  totalPlannedHours: z.number().optional(),
   markets: z.array(z.string()).optional(),
   channels: z.array(z.string()).optional(),
   complexity: z.enum(["Low", "Medium", "High"]).optional(),
