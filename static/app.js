@@ -2346,71 +2346,6 @@ function updatePricingSummary() {
       grandBreakdownEl.textContent = `One-time total: $${Math.round(originalOneTimeCost).toLocaleString()}`;
     }
   }
-  
-  // EXECUTIVE VIEW INTEGRATION: Render Step 2 Executive View
-  if (window.renderStep2Exec) {
-    // Get timeline dates from currentTimelineTasks if available (with defensive parsing)
-    let startDate = null;
-    let endDate = null;
-    let durationText = '—';
-    
-    if (window.currentTimelineTasks && window.currentTimelineTasks.length > 0) {
-      try {
-        // Filter out tasks with missing or invalid dates
-        const validTasks = window.currentTimelineTasks.filter(t => {
-          if (!t.start || !t.end) return false;
-          const startD = new Date(t.start);
-          const endD = new Date(t.end);
-          return !isNaN(startD.getTime()) && !isNaN(endD.getTime());
-        });
-        
-        if (validTasks.length > 0) {
-          const allDates = validTasks.flatMap(t => [new Date(t.start), new Date(t.end)]);
-          const minDate = new Date(Math.min(...allDates));
-          const maxDate = new Date(Math.max(...allDates));
-          
-          // Only set dates if they're valid
-          if (!isNaN(minDate.getTime()) && !isNaN(maxDate.getTime())) {
-            startDate = minDate.toISOString().split('T')[0];
-            endDate = maxDate.toISOString().split('T')[0];
-            
-            const weeks = Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24 * 7));
-            durationText = weeks > 0 ? `${weeks} weeks` : '—';
-          }
-        }
-      } catch (err) {
-        console.warn('[EXEC VIEW] Failed to extract timeline dates:', err);
-        // Gracefully degrade - dates remain null, durationText remains '—'
-      }
-    }
-    
-    // Get RFP metadata
-    const goal = window.APP?.goal || window.RFP?.goal || 'Fast analysis';
-    const channels = window.APP?.channels || window.RFP?.channels || ['Digital'];
-    const markets = window.APP?.markets || window.RFP?.markets || ['US'];
-    
-    // Get AI summary text if available
-    const aiSummary = window.APP?.aiSummary || window.APB?.aiSummary || {};
-    const scopeText = aiSummary.summary_text || '';
-    
-    // Build executive view data object
-    const execData = {
-      price: `$${Math.round(grandTotal).toLocaleString()}`,
-      priceFormatted: `$${Math.round(grandTotal).toLocaleString()}`,
-      durationText: durationText,
-      startDate: startDate,
-      endDate: endDate,
-      goal: goal,
-      channels: Array.isArray(channels) ? channels : [channels],
-      markets: Array.isArray(markets) ? markets : [markets],
-      scopeText: scopeText,
-      summaryText: scopeText,
-      sections: [],
-      risks: []
-    };
-    
-    window.renderStep2Exec(execData);
-  }
 }
 
 // Helper function to extract resource allocation from item
@@ -5549,22 +5484,6 @@ async function buildFromCurrentSelection() {
 
 // Alias for backward compatibility
 const onProceedToStep3 = buildFromCurrentSelection;
-const proceedToPricing = buildFromCurrentSelection;  // Alias for HTML onclick handler
-window.proceedToPricing = proceedToPricing;  // Make it globally accessible
-
-// Export function wrappers for onclick handlers
-window.onExportScenario = function(letter) {
-  exportScenario('xlsx', `btn-export-${letter.toLowerCase()}`);
-};
-
-window.onExportXMLScenario = function(letter) {
-  exportXMLScenario(letter);
-};
-
-// Rebuild scenario wrapper for onclick handler
-window.manualRebuildScenario = function() {
-  rebuildScenario();
-};
 
 // Image Progress Tracking
 let currentJobId = null;
