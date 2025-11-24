@@ -1388,6 +1388,29 @@ body.chatgpt-sidebar-expanded {
   visibility: hidden !important;
 }
 
+/* CRITICAL: Hide exec-view completely when display:none to prevent any blocking */
+#exec-view {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
+/* CRITICAL: Ensure drawer never blocks Step 1 */
+.drawer {
+  pointer-events: none;
+}
+.drawer.open {
+  pointer-events: auto;
+}
+
+/* CRITICAL: Step 1 should always be clickable */
+#step1 {
+  position: relative;
+  z-index: 10 !important;
+}
+
 /* Tabs */
 .tabs { 
   display:flex; 
