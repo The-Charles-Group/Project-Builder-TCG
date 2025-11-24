@@ -1266,3 +1266,201 @@ body.chatgpt-sidebar-expanded {
 [data-theme="light"] .gantt text {
   fill: #1a202c;
 }
+
+/* ========================================================================== */
+/* EXECUTIVE VIEW: KPI Strip, Accordion, Drawer (Step 2)                      */
+/* ========================================================================== */
+
+/* Card styling (extending existing) */
+.card-title { 
+  font-weight: 600; 
+  margin-bottom: 8px; 
+  font-size: 1.1em;
+}
+
+/* KPI Strip */
+.kpi-strip { 
+  display:flex; 
+  gap:12px; 
+  flex-wrap:wrap; 
+  margin-bottom:12px; 
+}
+.kpi { 
+  padding:10px 12px; 
+  border-radius:12px; 
+  background: rgba(255,255,255,.04); 
+  min-width: 150px;
+}
+.kpi .val { 
+  font-weight:700; 
+  font-size:1.25rem; 
+  display:block; 
+  color: var(--accent);
+}
+
+/* Accordion */
+.accordion .item { 
+  border-top: 1px solid rgba(255,255,255,.08); 
+  padding:10px 0; 
+}
+.accordion .head { 
+  display:flex; 
+  justify-content:space-between; 
+  align-items:center; 
+  cursor:pointer; 
+}
+.accordion .head h4 {
+  margin: 0;
+  font-size: 1em;
+}
+.accordion .preview { 
+  margin-top:6px; 
+  display:-webkit-box; 
+  -webkit-line-clamp:3; 
+  -webkit-box-orient:vertical; 
+  overflow:hidden; 
+  opacity:.9; 
+  font-size: 0.9em;
+  color: var(--muted);
+}
+.accordion .actions { 
+  margin-top:6px; 
+}
+.button-link { 
+  background:none; 
+  border:none; 
+  color:#7aa2ff; 
+  cursor:pointer; 
+  padding:4px 8px; 
+  font-size: 0.85em;
+  text-decoration: underline;
+}
+.button-link:hover {
+  color: #a0c4ff;
+}
+
+/* Drawer */
+.drawer { 
+  position: fixed; 
+  top:0; 
+  right:-640px; 
+  width:640px; 
+  max-width:100%; 
+  height:100vh; 
+  background:#0f172a; 
+  box-shadow:-2px 0 16px rgb(0 0 0 / 30%); 
+  transition:right .25s ease; 
+  padding:16px; 
+  z-index:1001;
+  overflow-y: auto;
+}
+.drawer.open { 
+  right:0; 
+}
+.drawer-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+}
+.drawer-close:hover {
+  color: var(--accent);
+}
+
+/* Backdrop */
+.backdrop { 
+  position:fixed; 
+  inset:0; 
+  background:rgb(0 0 0 / 40%); 
+  z-index:1000; 
+}
+
+/* Tabs */
+.tabs { 
+  display:flex; 
+  gap:8px; 
+  border-bottom:1px solid rgba(255,255,255,.1); 
+  margin-bottom:12px; 
+  margin-top: 8px;
+}
+.tab { 
+  background:none; 
+  border:none; 
+  padding:8px 10px; 
+  cursor:pointer; 
+  color:#cbd5e1; 
+  border-bottom:2px solid transparent; 
+  font-size: 0.9em;
+}
+.tab.active { 
+  color:#fff; 
+  border-color:#7aa2ff; 
+  font-weight: 600;
+}
+.tab:hover {
+  color: #fff;
+}
+
+/* Tab Panels */
+.panel { 
+  padding:8px 0; 
+  line-height: 1.6;
+}
+.panel table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+.panel table th {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+  font-weight: 600;
+  font-size: 0.85em;
+}
+.panel table td {
+  padding: 8px;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+  font-size: 0.85em;
+}
+.panel ul {
+  list-style-type: disc;
+  padding-left: 20px;
+}
+.panel li {
+  margin-bottom: 8px;
+}
+
+/* Hidden utility */
+[hidden] { 
+  display:none !important; 
+}
+
+/* Hide Total Planned Hours on Step 2 only */
+#step2 .total-hours {
+  display: none !important;
+}
+
+/* Light mode adjustments */
+[data-theme="light"] .kpi {
+  background: rgba(0,0,0,.04);
+}
+
+[data-theme="light"] .drawer {
+  background: #ffffff;
+  border-left: 1px solid #e2e8f0;
+}
+
+[data-theme="light"] .panel table th {
+  border-bottom: 1px solid #e2e8f0;
+}
+
+[data-theme="light"] .panel table td {
+  border-bottom: 1px solid #f7fafc;
+}
