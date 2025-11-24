@@ -36,15 +36,15 @@
       <div style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); border: 1px solid rgba(139, 92, 246, 0.2); border-radius: 8px;">
         <h3 style="margin: 0 0 12px 0; color: #6366f1; font-size: 1.1em;">⚡ Analysis Mode</h3>
         <div style="display: flex; gap: 12px;">
-          <button id="mode-fast" class="mode-btn mode-active" 
+          <button id="mode-fast" class="mode-btn" 
                   onclick="setAnalysisMode('fast')"
-                  style="flex: 1; padding: 12px; background: #10b981; color: white; border: 2px solid #10b981; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;">
+                  style="flex: 1; padding: 12px; background: white; color: #6366f1; border: 2px solid #6366f1; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;">
             🚀 Fast Mode
             <div style="font-size: 0.8em; font-weight: normal; margin-top: 4px;">Quick analysis (~150 deliverables)<br>Uses GPT-5 Mini • 30-60 seconds</div>
           </button>
-          <button id="mode-deep" class="mode-btn"
+          <button id="mode-deep" class="mode-btn mode-active"
                   onclick="setAnalysisMode('deep')"
-                  style="flex: 1; padding: 12px; background: white; color: #6366f1; border: 2px solid #6366f1; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;">
+                  style="flex: 1; padding: 12px; background: #10b981; color: white; border: 2px solid #10b981; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;">
             🧠 Deep Mode
             <div style="font-size: 0.8em; font-weight: normal; margin-top: 4px;">Comprehensive analysis (500+ deliverables)<br>Uses GPT-5 Thinking • 2-5 minutes</div>
           </button>
