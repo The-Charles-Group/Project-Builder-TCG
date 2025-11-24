@@ -1381,6 +1381,13 @@ body.chatgpt-sidebar-expanded {
   z-index:1000; 
 }
 
+/* Ensure backdrop is truly hidden when [hidden] attribute is set */
+.backdrop[hidden] {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
 /* Tabs */
 .tabs { 
   display:flex; 
