@@ -4888,8 +4888,10 @@ def api_weighted_scores(payload: WeightedScoresRequest):
     Returns deliverables ranked by match % with top components/tasks.
     Now supports configurable selection modes (confidence, TF-IDF, or both).
     """
+    print("[DEBUG] ===== API_WEIGHTED_SCORES FUNCTION CALLED =====")
     rfp_text = payload.rfp_text or RFP_TEXT_CACHE or ""
     selection_mode = payload.selection_mode or "confidence_only"
+    print(f"[DEBUG] selection_mode received: {selection_mode}")
     
     # Validate selection_mode
     valid_modes = {"confidence_only", "tfidf_only", "both"}
