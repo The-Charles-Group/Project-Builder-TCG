@@ -23,7 +23,7 @@ class AIAssistant {
             selectedDeliverables: [],
             currentStep: 'step1',
             formValues: {},
-            analysisMode: 'deep',
+            analysisMode: 'fast',
             jobId: null,
             lastError: null,
             stateHistory: []
@@ -95,7 +95,7 @@ class AIAssistant {
             selectedDeliverables: this.getSelectedDeliverables(),
             currentStep: this.detectCurrentStep(),
             formValues: this.captureFormValues(),
-            analysisMode: document.getElementById('analysis-mode')?.value || 'deep',
+            analysisMode: document.getElementById('analysis-mode')?.value || 'fast',
             jobId: this.agentState.jobId,
             rfpText: document.getElementById('rfpText')?.value || '',
             scenarios: window.SCENARIOS || null
@@ -129,7 +129,7 @@ class AIAssistant {
             selectedDeliverables: [],
             currentStep: 'step1',
             formValues: {},
-            analysisMode: 'deep',
+            analysisMode: 'fast',
             jobId: null,
             lastError: null,
             stateHistory: []
@@ -1577,7 +1577,7 @@ class AIAssistant {
             currentStep: this.detectCurrentStep(),
             selectedDeliverables: this.getSelectedDeliverables(),
             rfpText: document.getElementById('rfpText')?.value || '',
-            analysisMode: document.getElementById('analysis-mode')?.value || 'deep'
+            analysisMode: document.getElementById('analysis-mode')?.value || 'fast'
         };
     }
     
