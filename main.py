@@ -33,7 +33,52 @@ import pickle
 ENABLE_WBS_DEPENDENCIES = True  # Use WBS Dependencies column instead of scheduler edges
 ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
 # ROLLBACK: Set both to False to restore legacy behavior (scheduler edges, one task per role)
+
 # ============================================================
+# SELECTION MODE THRESHOLDS
+# ============================================================
+CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", "70.0"))  # AI confidence threshold (0-100)
+TFIDF_THRESHOLD = float(os.environ.get("TFIDF_THRESHOLD", "0.70"))  # TF-IDF similarity threshold (0-1)
+# ============================================================
+
+def should_select_deliverable(match_percent: float, tfidf_similarity: float, selection_mode: str = "confidence_only") -> Dict[str, Any]:
+    """
+    Determine if a deliverable should be auto-selected based on selection mode.
+    
+    Args:
+        match_percent: AI confidence score (0-100)
+        tfidf_similarity: TF-IDF similarity score (0-1)
+        selection_mode: One of "confidence_only", "tfidf_only", or "both"
+    
+    Returns:
+        Dict with "selected" (bool) and "selection_reason" (dict with by_confidence and by_tfidf flags)
+    """
+    # Convert TF-IDF to 0-100 scale for threshold comparison
+    tfidf_percent = tfidf_similarity * 100.0
+    
+    # Check if each method would select this deliverable
+    conf_ok = match_percent >= CONF_THRESHOLD
+    tfidf_ok = tfidf_percent >= (TFIDF_THRESHOLD * 100.0)
+    
+    # Apply selection logic based on mode
+    if selection_mode == "confidence_only":
+        selected = conf_ok
+    elif selection_mode == "tfidf_only":
+        selected = tfidf_ok
+    elif selection_mode == "both":
+        # Union: selected if either method selects it
+        selected = conf_ok or tfidf_ok
+    else:
+        # Fallback to current behavior (confidence only)
+        selected = conf_ok
+    
+    return {
+        "selected": selected,
+        "selection_reason": {
+            "by_confidence": conf_ok,
+            "by_tfidf": tfidf_ok
+        }
+    }
 
 try:
     from docx import Document  # pip install python-docx
@@ -4635,6 +4680,11 @@ class AISuggestReq(BaseModel):
     exclude_labels: List[str] | None = None
     weighted_context: dict | None = None  # Pre-filter context from weighted rules
 
+class WeightedScoresRequest(BaseModel):
+    """Request model for weighted AI matching with TF-IDF selection mode"""
+    rfp_text: Optional[str] = None
+    selection_mode: str = "confidence_only"  # "confidence_only" | "tfidf_only" | "both"
+
 # ========= AI Timeline Generation =========
 class TimelineGenerationRequest(BaseModel):
     """Request model for AI timeline generation"""
@@ -4832,12 +4882,21 @@ def ai_suggest(req: AISuggestReq):
     return JSONResponse(payload)
 
 @app.post("/api/step2/ai/weights")
-def api_weighted_scores(payload: dict):
+def api_weighted_scores(payload: WeightedScoresRequest):
     """
     NEW: Weighted AI matching using rule-based + lexical (TF-IDF) scoring.
     Returns deliverables ranked by match % with top components/tasks.
+    Now supports configurable selection modes (confidence, TF-IDF, or both).
     """
-    rfp_text = payload.get("rfp_text") or RFP_TEXT_CACHE or ""
+    rfp_text = payload.rfp_text or RFP_TEXT_CACHE or ""
+    selection_mode = payload.selection_mode or "confidence_only"
+    
+    # Validate selection_mode
+    valid_modes = {"confidence_only", "tfidf_only", "both"}
+    if selection_mode not in valid_modes:
+        print(f"[WARNING] Invalid selection_mode '{selection_mode}', defaulting to 'confidence_only'")
+        selection_mode = "confidence_only"
+    
     ai_rules_path = "AI_Matching_Rules_full.xlsx"
     
     if not DB.loaded:
@@ -4845,6 +4904,38 @@ def api_weighted_scores(payload: dict):
     
     try:
         result = score_rfp(rfp_text, ai_rules_path, deliverable_index_df=DB.deliverables)
+        
+        print(f"[TF-IDF SELECT] Processing {len(result.get('deliverables', []))} deliverables with mode={selection_mode}")
+        
+        # Apply selection logic to each deliverable based on selection_mode
+        selected_count = 0
+        for deliv in result.get("deliverables", []):
+            match_percent = deliv.get("match_percent", 0.0)
+            tfidf_similarity = deliv.get("tfidf_similarity", 0.0)
+            
+            # Apply should_select_deliverable function
+            selection_info = should_select_deliverable(
+                match_percent=match_percent,
+                tfidf_similarity=tfidf_similarity,
+                selection_mode=selection_mode
+            )
+            
+            # Add selection fields to deliverable
+            deliv["selected"] = selection_info["selected"]
+            deliv["selection_reason"] = selection_info["selection_reason"]
+            
+            if selection_info["selected"]:
+                selected_count += 1
+        
+        print(f"[TF-IDF SELECT] Selected {selected_count} deliverables")
+        
+        # Add selection_mode to result metadata
+        result["selection_mode"] = selection_mode
+        result["thresholds"] = {
+            "confidence": CONF_THRESHOLD,
+            "tfidf": TFIDF_THRESHOLD
+        }
+        
         return JSONResponse(result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Weighted scoring failed: {str(e)}")

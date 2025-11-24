@@ -1,0 +1,147 @@
+What you want the app to do
+
+As the user, you should be able to choose how the app auto-selects deliverables:
+
+AI Confidence only (current behavior)
+
+TF-IDF only
+
+Both (union of the two: anything selected by either method is selected)
+
+In plain words:
+
+If user chooses “TF-IDF only” → auto-selection is based only on TF-IDF similarity.
+
+If user chooses “Both” → app runs both AI confidence selection and TF-IDF selection and selects the union.
+
+If user doesn’t touch it → default stays “AI Confidence only” (today’s behavior).
+
+UX idea:
+A small control in the evaluation screen labeled “Auto-selection mode” with three options:
+
+◉ AI confidence only
+
+○ TF-IDF similarity only
+
+○ Both (AI + TF-IDF)
+
+(If you prefer checkbox style: a main “Use AI confidence” toggle + a checkbox “Also auto-select by TF-IDF similarity score”. I’ll include both descriptions below so you can pick.)
+
+Exact instructions you can paste to Replit’s Agent / Architect
+
+You can literally copy-paste and tweak this:
+
+Feature request: TF-IDF selection mode
+
+Goal: let the user control how deliverables are auto-selected in the RFP evaluation screen: by AI confidence, by TF-IDF similarity, or both.
+
+1. Frontend changes
+
+Location: RFP evaluation / results view where we show each deliverable with tfidf_score and confidence_score and a “selected” flag.
+
+Add a small control called “Auto-selection mode” above the results table.
+
+Use a radio group with three options:
+
+AI confidence only (default)
+
+TF-IDF similarity only
+
+Both (AI + TF-IDF)
+
+The chosen value should be stored in component state and sent to the backend as a field called selection_mode.
+
+Example TypeScript type:
+
+type SelectionMode = 'confidence_only' | 'tfidf_only' | 'both';
+
+
+When the user changes the mode, re-run the evaluation request with the new selection_mode and refresh the table.
+
+2. Backend API contract
+
+Endpoint: same endpoint we currently use to score an RFP (e.g. POST /api/evaluate or whatever is in the repo).
+
+Extend the request body to include:
+
+{
+  ...
+  "selection_mode": "confidence_only" | "tfidf_only" | "both"
+}
+
+
+If selection_mode is omitted, default to "confidence_only" to preserve current behaviour.
+
+3. Backend selection logic
+
+Wherever we currently compute scores for each deliverable, we already have something like:
+
+tfidf_score: float    # 0–100 or 0–1
+confidence_score: float
+selected: bool
+
+
+Update the selection logic to:
+
+TFIDF_THRESHOLD = 70.0      # tweakable
+CONF_THRESHOLD = 70.0       # tweakable
+
+def should_select(row, selection_mode: str) -> bool:
+    tfidf_ok = row.tfidf_score >= TFIDF_THRESHOLD
+    conf_ok = row.confidence_score >= CONF_THRESHOLD
+
+    if selection_mode == "confidence_only":
+        return conf_ok
+    elif selection_mode == "tfidf_only":
+        return tfidf_ok
+    elif selection_mode == "both":
+        # union of the two
+        return tfidf_ok or conf_ok
+    else:
+        # fallback to current behaviour
+        return conf_ok
+
+
+Also, return why each row was selected so we can show it in the UI:
+
+row.selection_reason = {
+  "by_confidence": conf_ok,
+  "by_tfidf": tfidf_ok
+}
+
+
+Update the API response schema to include:
+
+{
+  "selected": true,
+  "tfidf_score": 84.3,
+  "confidence_score": 69.0,
+  "selection_reason": {
+    "by_confidence": false,
+    "by_tfidf": true
+  }
+}
+
+4. UI display of the reason (optional but helpful)
+
+In the results table, if a row is selected, show a small badge in the “Selection” column:
+
+“Selected (AI confidence)” if by_confidence is true and by_tfidf is false
+
+“Selected (TF-IDF)” if by_tfidf is true and by_confidence is false
+
+“Selected (AI + TF-IDF)” if both are true
+
+This will make it very clear to the user what the new mode is doing.
+
+5. Tests
+
+Add unit tests for the should_select function to cover:
+
+confidence_only with high/low confidence
+
+tfidf_only with high/low TF-IDF
+
+both where only one of them is high and where both are high.
+
+This ensures the new mode doesn’t break existing behaviour.
