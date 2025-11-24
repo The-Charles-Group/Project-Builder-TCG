@@ -5891,12 +5891,45 @@ async function onRunReconcile() {
       }
       const summary = await res.json();
       
+      // Store summary globally for unified card rendering
+      window.currentRfpSummary = summary;
+      
+      // Render summary card immediately with default planner label
+      renderRfpSummaryCard(summary, {
+        plannerLabel: analysisMode === 'deep' ? 'GPT-5 Pro AI Planner' : 'Fast AI Planner'
+      });
+      console.log('[RFP Summary] Card rendered from /api/summarize_by_file');
+      
       // Update rfpText from file extraction
       rfpText = summary.summary_text || '';
       
       // Start progress polling if image processing jobs were started
       if (summary.job_ids && summary.job_ids.length > 0 && summary.processing_images) {
         startProgressPolling(summary.job_ids[0]);
+      }
+    }
+    
+    // If using textarea-only (no file), call /api/summarize to get summary object
+    if (rfpText && !fileEl?.files?.length) {
+      try {
+        updateAIProgress({ progress: 8, current_stage: 'Generating RFP summary...', elapsed_seconds: 0, eta_seconds: null });
+        const summaryRes = await fetchWithRetry('/api/summarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rfp_text: rfpText })
+        });
+        
+        if (summaryRes.ok) {
+          const summary = await summaryRes.json();
+          window.currentRfpSummary = summary;
+          renderRfpSummaryCard(summary, {
+            plannerLabel: analysisMode === 'deep' ? 'GPT-5 Pro AI Planner' : 'Fast AI Planner'
+          });
+          console.log('[RFP Summary] Card rendered from /api/summarize');
+        }
+      } catch (err) {
+        console.warn('[RFP Summary] Failed to generate summary from textarea:', err);
+        // Continue with analysis even if summary fails
       }
     }
     
@@ -6232,22 +6265,33 @@ async function pollAIAnalysis(jobId) {
 }
 
 // Centralized RFP Summary Card Renderer (for both Fast and Deep modes)
+// Data source: /api/summarize or /api/summarize_by_file only (stored in window.currentRfpSummary)
 function renderRfpSummaryCard(summary, options = {}) {
   const {
-    plannerLabel = "GPT-5 Pro AI Planner",   // Default for Deep mode
-    complexity = "Medium"                    // Default complexity
+    plannerLabel = "Fast AI Planner",   // Default label before mode selection
+    complexity = "Medium"               // Default complexity
   } = options;
 
   const summaryPanel = document.getElementById('ai-summary-panel');
-  if (!summaryPanel || !summary) {
-    console.warn('[RFP Summary] No summary panel or summary data');
+  if (!summaryPanel) {
+    console.warn('[RFP Summary] No summary panel element found');
+    return;
+  }
+  
+  if (!summary) {
+    console.warn('[RFP Summary] No summary data provided');
+    summaryPanel.innerHTML = '<p style="color: #6b7280; padding: 16px;">No RFP summary available</p>';
     return;
   }
 
-  // Store in global for mode switching
-  window.currentRfpSummary = summary;
+  // Defensive null guards for all fields
+  const summaryText = summary.summary_text || summary.summary || 'No summary available';
   
-  const goals = (summary.goals || []).map(g => `<li>${g}</li>`).join('');
+  // Extract goals from deliverables array (RfpSummary format)
+  const deliverables = summary.deliverables || [];
+  const goals = deliverables.map(d => d.label || d.title).filter(Boolean);
+  const goalsHtml = goals.length > 0 ? goals.map(g => `<li>${g}</li>`).join('') : '';
+  
   const channels = (summary.channels || []).join(', ') || 'Not specified';
   const markets = (summary.markets || []).join(', ') || 'Not specified';
   const displayComplexity = summary.complexity || complexity;
@@ -6264,12 +6308,12 @@ function renderRfpSummaryCard(summary, options = {}) {
       </div>
       
       <h3 style="margin: 0 0 12px 0; color: #6366f1;">📋 RFP Summary</h3>
-      <p style="margin: 0 0 12px 0; line-height: 1.6; color: var(--text);">${summary.summary || 'No summary available'}</p>
+      <p style="margin: 0 0 12px 0; line-height: 1.6; color: var(--text);">${summaryText}</p>
       
-      ${goals ? `
+      ${goalsHtml ? `
         <div style="margin-bottom: 12px;">
-          <strong style="color: var(--text);">Goals:</strong>
-          <ul style="margin: 4px 0 0 20px; line-height: 1.6; color: var(--text);">${goals}</ul>
+          <strong style="color: var(--text);">Key Deliverables:</strong>
+          <ul style="margin: 4px 0 0 20px; line-height: 1.6; color: var(--text);">${goalsHtml}</ul>
         </div>
       ` : ''}
       
@@ -6291,6 +6335,69 @@ function renderRfpSummaryCard(summary, options = {}) {
   `;
   
   console.log(`[RFP Summary] Rendered with planner: ${plannerLabel}`);
+}
+
+// Update summary card badge when analysis mode changes (Fast ↔ Deep)
+function updateSummaryCardMode() {
+  if (!window.currentRfpSummary) {
+    console.log('[RFP Summary] No summary available to update');
+    return;
+  }
+  
+  const analysisMode = document.getElementById('analysis-mode')?.value || 'fast';
+  const plannerLabel = analysisMode === 'deep' ? 'GPT-5 Pro AI Planner' : 'Fast AI Planner';
+  
+  // Re-render card with new badge
+  renderRfpSummaryCard(window.currentRfpSummary, {
+    plannerLabel: plannerLabel
+  });
+  console.log(`[RFP Summary] Updated badge to: ${plannerLabel}`);
+}
+
+// Set analysis mode (called from HTML buttons) and update summary card badge
+function setAnalysisMode(mode) {
+  // Update hidden input
+  const modeInput = document.getElementById('analysis-mode');
+  if (modeInput) {
+    modeInput.value = mode;
+  }
+  
+  // Update button styles
+  const fastBtn = document.getElementById('mode-fast');
+  const deepBtn = document.getElementById('mode-deep');
+  
+  if (mode === 'fast') {
+    if (fastBtn) {
+      fastBtn.classList.add('mode-active');
+      fastBtn.style.background = '#10b981';
+      fastBtn.style.color = 'white';
+      fastBtn.style.borderColor = '#10b981';
+    }
+    if (deepBtn) {
+      deepBtn.classList.remove('mode-active');
+      deepBtn.style.background = 'white';
+      deepBtn.style.color = '#6366f1';
+      deepBtn.style.borderColor = '#6366f1';
+    }
+  } else {
+    if (deepBtn) {
+      deepBtn.classList.add('mode-active');
+      deepBtn.style.background = '#6366f1';
+      deepBtn.style.color = 'white';
+      deepBtn.style.borderColor = '#6366f1';
+    }
+    if (fastBtn) {
+      fastBtn.classList.remove('mode-active');
+      fastBtn.style.background = 'white';
+      fastBtn.style.color = '#10b981';
+      fastBtn.style.borderColor = '#10b981';
+    }
+  }
+  
+  // Update summary card badge if summary already exists
+  updateSummaryCardMode();
+  
+  console.log(`[Analysis Mode] Set to: ${mode}`);
 }
 
 // Render NEW AI Plan (GPT-5 Pro: Summary + Evidence-backed Suggestions)
@@ -6350,15 +6457,8 @@ function renderAIPlan(aiPlan) {
     }
   }
   
-  // Render summary panel using centralized renderer
-  // Determine planner label based on current analysis mode
-  const analysisMode = document.getElementById('analysis-mode')?.value || 'deep';
-  const plannerLabel = analysisMode === 'fast' ? 'Fast AI Planner' : 'GPT-5 Pro AI Planner';
-  
-  renderRfpSummaryCard(summary, {
-    plannerLabel: plannerLabel,
-    complexity: summary.complexity || 'Medium'
-  });
+  // Summary card is now rendered from window.currentRfpSummary only (not planner response)
+  // The card is populated by /api/summarize before analysis runs
   
   // Render suggestions by department
   const suggestionsPanel = document.getElementById('ai-suggestions-panel');
