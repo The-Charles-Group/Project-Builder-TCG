@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
   <!-- AI Assistant -->
   <script src="/static/ai_assistant.js"></script>
+  <!-- Step 2 Executive View -->
+  <script src="/static/js/step2-exec.js"></script>
 </head>
 <body>
   <header>
@@ -268,6 +270,32 @@
         </div>
         
       </div>
+
+      <!-- EXECUTIVE VIEW: KPI + Overview + Accordion -->
+      <div id="exec-view" style="margin-top: 24px; display: none;">
+        <div id="kpi-strip" class="kpi-strip"></div>
+        <section id="overview-card" class="card"></section>
+        <section class="card">
+          <h3 class="card-title">Scope &amp; Plan</h3>
+          <div id="scope-accordion" class="accordion"></div>
+        </section>
+      </div>
+
+      <!-- EXECUTIVE VIEW: Drawer -->
+      <aside id="details-drawer" class="drawer" aria-hidden="true">
+        <button class="drawer-close" aria-label="Close">&times;</button>
+        <div class="tabs">
+          <button data-tab="summary" class="tab active">Summary</button>
+          <button data-tab="components" class="tab" id="tab-components">Components</button>
+          <button data-tab="risks" class="tab">Risks</button>
+        </div>
+        <div class="tab-panels">
+          <div id="panel-summary" class="panel"></div>
+          <div id="panel-components" class="panel" hidden></div>
+          <div id="panel-risks" class="panel" hidden></div>
+        </div>
+      </aside>
+      <div id="drawer-backdrop" class="backdrop" hidden></div>
 
       <div class="actions" style="margin-top: 20px;">
         <button id="btnProceedToStep3" class="btn-primary" onclick="proceedToPricing()">Proceed to Pricing</button>
