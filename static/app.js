@@ -6231,6 +6231,68 @@ async function pollAIAnalysis(jobId) {
   }
 }
 
+// Centralized RFP Summary Card Renderer (for both Fast and Deep modes)
+function renderRfpSummaryCard(summary, options = {}) {
+  const {
+    plannerLabel = "GPT-5 Pro AI Planner",   // Default for Deep mode
+    complexity = "Medium"                    // Default complexity
+  } = options;
+
+  const summaryPanel = document.getElementById('ai-summary-panel');
+  if (!summaryPanel || !summary) {
+    console.warn('[RFP Summary] No summary panel or summary data');
+    return;
+  }
+
+  // Store in global for mode switching
+  window.currentRfpSummary = summary;
+  
+  const goals = (summary.goals || []).map(g => `<li>${g}</li>`).join('');
+  const channels = (summary.channels || []).join(', ') || 'Not specified';
+  const markets = (summary.markets || []).join(', ') || 'Not specified';
+  const displayComplexity = summary.complexity || complexity;
+
+  summaryPanel.innerHTML = `
+    <div style="background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), rgba(59, 130, 246, 0.1)); padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid rgba(139, 92, 246, 0.2);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <span style="background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 6px 12px; border-radius: 6px; font-size: 0.85em; font-weight: 600;">
+          🧠 ${plannerLabel}
+        </span>
+        <span style="color: #6b7280; font-size: 0.85em; font-style: italic;">
+          Evidence-backed • Reasoning-powered
+        </span>
+      </div>
+      
+      <h3 style="margin: 0 0 12px 0; color: #6366f1;">📋 RFP Summary</h3>
+      <p style="margin: 0 0 12px 0; line-height: 1.6; color: var(--text);">${summary.summary || 'No summary available'}</p>
+      
+      ${goals ? `
+        <div style="margin-bottom: 12px;">
+          <strong style="color: var(--text);">Goals:</strong>
+          <ul style="margin: 4px 0 0 20px; line-height: 1.6; color: var(--text);">${goals}</ul>
+        </div>
+      ` : ''}
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px;">
+        <div>
+          <strong style="color: var(--text);">Channels:</strong> 
+          <span id="rfp-channels" style="color: #6b7280;">${channels}</span>
+        </div>
+        <div>
+          <strong style="color: var(--text);">Markets:</strong> 
+          <span id="rfp-markets" style="color: #6b7280;">${markets}</span>
+        </div>
+        <div>
+          <strong style="color: var(--text);">Complexity:</strong> 
+          <span style="color: #6b7280; text-transform: capitalize;">${displayComplexity}</span>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  console.log(`[RFP Summary] Rendered with planner: ${plannerLabel}`);
+}
+
 // Render NEW AI Plan (GPT-5 Pro: Summary + Evidence-backed Suggestions)
 function renderAIPlan(aiPlan) {
   if (!aiPlan || !aiPlan.plan) {
@@ -6288,39 +6350,15 @@ function renderAIPlan(aiPlan) {
     }
   }
   
-  // Render summary panel
-  const summaryPanel = document.getElementById('ai-summary-panel');
-  if (summaryPanel) {
-    const goals = (summary.goals || []).map(g => `<li>${g}</li>`).join('');
-    const channels = (summary.channels || []).join(', ') || 'Not specified';
-    const markets = (summary.markets || []).join(', ') || 'Not specified';
-    
-    summaryPanel.innerHTML = `
-      <div style="background: rgba(59, 130, 246, 0.1); padding: 16px; border-radius: 8px; margin-bottom: 16px;">
-        <h3 style="margin: 0 0 12px 0; color: #2563eb;">📋 RFP Summary</h3>
-        <p style="margin: 0 0 12px 0; line-height: 1.6;">${summary.summary || 'No summary available'}</p>
-        
-        ${goals ? `
-          <div style="margin-bottom: 12px;">
-            <strong>Goals:</strong>
-            <ul style="margin: 4px 0 0 20px; line-height: 1.6;">${goals}</ul>
-          </div>
-        ` : ''}
-        
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 12px;">
-          <div>
-            <strong>Channels:</strong> <span style="color: #6b7280;">${channels}</span>
-          </div>
-          <div>
-            <strong>Markets:</strong> <span style="color: #6b7280;">${markets}</span>
-          </div>
-          <div>
-            <strong>Complexity:</strong> <span style="color: #6b7280; text-transform: capitalize;">${summary.complexity || 'medium'}</span>
-          </div>
-        </div>
-      </div>
-    `;
-  }
+  // Render summary panel using centralized renderer
+  // Determine planner label based on current analysis mode
+  const analysisMode = document.getElementById('analysis-mode')?.value || 'deep';
+  const plannerLabel = analysisMode === 'fast' ? 'Fast AI Planner' : 'GPT-5 Pro AI Planner';
+  
+  renderRfpSummaryCard(summary, {
+    plannerLabel: plannerLabel,
+    complexity: summary.complexity || 'Medium'
+  });
   
   // Render suggestions by department
   const suggestionsPanel = document.getElementById('ai-suggestions-panel');

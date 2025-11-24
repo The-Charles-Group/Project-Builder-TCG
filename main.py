@@ -716,6 +716,7 @@ LAST_UPLOAD_FILENAME: str | None = None
 RFP_TEXT_CACHE_TEXTAREA: str | None = None  # Text from textarea input
 RFP_TEXT_CACHE_FILE: str | None = None       # Text from uploaded file
 RFP_TEXT_CACHE: str | None = None            # Merged text (backward compatibility)
+RFP_SUMMARY_CACHE: Any = None  # Cached RFP summary for both Fast/Deep modes (RfpSummary type)
 
 # SCENARIO_STORE: Unified storage for session_id -> scenario data
 # Syncs Gantt ↔ Pricing ↔ XML data through a single source of truth
@@ -3906,6 +3907,7 @@ def ai_summarize_rfp_text(text: str) -> RfpSummary:
     and a prose summary <= 500 words.
     This function intentionally avoids any DB lookups.
     """
+    global RFP_SUMMARY_CACHE
     try:
         # Create structured prompt for GPT-5
         system_prompt = """
@@ -4011,7 +4013,12 @@ Guidelines:
         prose = "\n".join(bullets)
         words = _count_words(prose)
 
-    return RfpSummary(summary_text=prose, deliverables=[RfpSummaryItem(**d) for d in deliverables], word_count=words)
+    summary = RfpSummary(summary_text=prose, deliverables=[RfpSummaryItem(**d) for d in deliverables], word_count=words)
+    
+    # Cache the summary for Fast/Deep mode reuse
+    RFP_SUMMARY_CACHE = summary
+    
+    return summary
 
 # --- Name matching for reconciliation (deterministic; DB only used here) ---
 
@@ -4182,6 +4189,7 @@ async def clear_session(payload: ClearSessionPayload):
     RFP_TEXT_CACHE_TEXTAREA = None
     RFP_TEXT_CACHE_FILE = None
     RFP_TEXT_CACHE = None
+    RFP_SUMMARY_CACHE = None
     LAST_UPLOAD_FILENAME = None
     
     # Clear OPTIONS_CACHE if it exists
@@ -9129,6 +9137,14 @@ def api_summarize(p: SummarizePayload):
     RFP_TEXT_CACHE = merged_text
     
     return ai_summarize_rfp_text(merged_text)
+
+@app.get("/api/rfp/summary_cache")
+def get_cached_rfp_summary():
+    """Retrieve the cached RFP summary (for Fast/Deep mode reuse)."""
+    global RFP_SUMMARY_CACHE
+    if RFP_SUMMARY_CACHE is None:
+        return {"cached": False, "summary": None}
+    return {"cached": True, "summary": RFP_SUMMARY_CACHE}
 
 @app.post("/api/summarize_by_file")
 async def api_summarize_by_file(
