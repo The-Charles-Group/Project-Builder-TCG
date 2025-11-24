@@ -30,6 +30,10 @@ AI_MIN_TASKS_PER_COMPONENT = int(os.environ.get("AI_MIN_TASKS_PER_COMPONENT", "3
 FAST_TOP_K = int(os.getenv("FAST_TOP_K", "120"))     # Lexical prefilter for Fast mode - increased for comprehensive RFPs
 DEEP_TOP_K = int(os.getenv("DEEP_TOP_K", "100"))     # LLM rescoring set for Deep mode - increased to 100 for luxury fashion
 
+# TF-IDF Selection Mode Thresholds
+CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", "70.0"))  # AI confidence threshold (0-100)
+TFIDF_THRESHOLD = float(os.environ.get("TFIDF_THRESHOLD", "0.70"))  # TF-IDF similarity threshold (0-1)
+
 DEPARTMENTS = [
     "Creative",
     "Strategy",
@@ -38,6 +42,45 @@ DEPARTMENTS = [
     "Technology",
     "Integrated Marketing Management",
 ]
+
+def should_select_deliverable(match_percent: float, tfidf_similarity: float, selection_mode: str = "confidence_only") -> Dict[str, Any]:
+    """
+    Determine if a deliverable should be auto-selected based on selection mode.
+    
+    Args:
+        match_percent: AI confidence score (0-100)
+        tfidf_similarity: TF-IDF similarity score (0-1)
+        selection_mode: One of "confidence_only", "tfidf_only", or "both"
+    
+    Returns:
+        Dict with "selected" (bool) and "selection_reason" (dict with by_confidence and by_tfidf flags)
+    """
+    # Convert TF-IDF to 0-100 scale for threshold comparison
+    tfidf_percent = tfidf_similarity * 100.0
+    
+    # Check if each method would select this deliverable
+    conf_ok = match_percent >= CONF_THRESHOLD
+    tfidf_ok = tfidf_percent >= (TFIDF_THRESHOLD * 100.0)
+    
+    # Apply selection logic based on mode
+    if selection_mode == "confidence_only":
+        selected = conf_ok
+    elif selection_mode == "tfidf_only":
+        selected = tfidf_ok
+    elif selection_mode == "both":
+        # Union: selected if either method selects it
+        selected = conf_ok or tfidf_ok
+    else:
+        # Fallback to current behavior (confidence only)
+        selected = conf_ok
+    
+    return {
+        "selected": selected,
+        "selection_reason": {
+            "by_confidence": conf_ok,
+            "by_tfidf": tfidf_ok
+        }
+    }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Service Mapping for Explicit Match Detection
@@ -2167,8 +2210,8 @@ def expand_deliverables_for_comprehensive_rfp(deliverables: List[Dict[str, Any]]
 
     return expanded
 
-def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, Any], catalog: List[Dict[str, Any]], db, all_recall: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Compose plan using real AgencyDB deliverable codes and structure"""
+def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, Any], catalog: List[Dict[str, Any]], db, all_recall: List[Dict[str, Any]], selection_mode: str = "confidence_only") -> Dict[str, Any]:
+    """Compose plan using real AgencyDB deliverable codes and structure with TF-IDF selection logic"""
     passing = [x for x in fused if x["pass"]]
     dels = [x for x in passing if x["level"] == "deliverable"]
     comps_pass = {x["id"]: x for x in passing if x["level"] == "component"}
@@ -2272,6 +2315,11 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         # FIXED: Ensure title exists with fallback
         deliv_title = deliv_info.get("title", f"Deliverable {deliv_code}")
 
+        # Apply TF-IDF selection logic
+        match_percent = d_item.get("calibrated_confidence", 0.60) * 100.0  # Convert to 0-100 scale
+        tfidf_similarity = d_item.get("lexScore", 0.0)  # Already 0-1 scale
+        selection_result = should_select_deliverable(match_percent, tfidf_similarity, selection_mode)
+        
         # Add deliverable to department
         deliverable_entry = {
             "code": deliv_code,  # Real database code (renamed from deliverable_code)
@@ -2281,6 +2329,9 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
             "deliverable_code": deliv_code,  # Keep old field for backward compatibility
             "deliverable_title": deliv_title,  # Keep old field for backward compatibility
             "calibrated_confidence": d_item.get("calibrated_confidence", 0.60),  # Keep old field for backward compatibility
+            "tfidf_similarity": d_item.get("lexScore", 0.0),  # TF-IDF lexical similarity score (0-1)
+            "selected": selection_result["selected"],  # Auto-selected based on selection_mode
+            "selection_reason": selection_result["selection_reason"],  # Which method(s) selected it
             "why": (d_item.get("llm") or {}).get("why", ""),
             "risks": (d_item.get("llm") or {}).get("risks", ""),
             "planned_hours": d_hours_planned,
@@ -2303,7 +2354,12 @@ def compose_plan_from_agencydb(fused: List[Dict[str, Any]], summary: Dict[str, A
         "summary": summary,
         "strictness": AI_STRICTNESS_DEFAULT,
         "totals": {"planned_hours_total": round(total, 1)},
-        "suggestions_by_department": by_dept
+        "suggestions_by_department": by_dept,
+        "selection_metadata": {
+            "selection_mode": selection_mode,
+            "conf_threshold": CONF_THRESHOLD,
+            "tfidf_threshold": TFIDF_THRESHOLD
+        }
     }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -2330,7 +2386,7 @@ def _update_job(job_id: str, stage: str, progress_pct: int = None, total_chunks:
         else:
             print(f"[JOB {job_id}] {stage} (progress: {progress_pct}%)")
 
-def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None) -> Dict[str, Any]:
+def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id: Optional[str] = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None, selection_mode: str = "confidence_only") -> Dict[str, Any]:
     """Main analysis function using AgencyDB with Fast/Deep mode support and session isolation
 
     Args:
@@ -2342,6 +2398,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
         mode: 'fast' for lexical-only (no LLM), 'deep' for full LLM re-ranking
         client: HTTP client for API calls (uses app.state.http if available)
         session_id: Optional session ID for cache isolation
+        selection_mode: 'confidence_only', 'tfidf_only', or 'both' for auto-selection logic
     """
     strictness = strictness or AI_STRICTNESS_DEFAULT
     # PERFORMANCE FIX: Fast mode always uses "mini" tier for speed
@@ -2618,7 +2675,7 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
 
     # FIXED: Ensure plan composition always succeeds
     try:
-        plan = compose_plan_from_agencydb(fused, summary, catalog, db, all_recall)
+        plan = compose_plan_from_agencydb(fused, summary, catalog, db, all_recall, selection_mode)
         print(f"[ANALYZE] Plan composed successfully")
     except Exception as e:
         print(f"[ANALYZE ERROR] Plan composition failed: {e}, using emergency plan")
@@ -2680,10 +2737,10 @@ def analyze_with_agencydb(request_text: str, db, strictness: str = None, job_id:
     print(f"[ANALYZE COMPLETE] Mode: {mode}, Deliverables: {delivs_in_plan}, Time: {datetime.datetime.now().timestamp() - (AI_JOB_STORE[job_id].start_time if job_id and job_id in AI_JOB_STORE else datetime.datetime.now().timestamp()):.1f}s")
     return result
 
-def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None):
+def _run_analysis_background(job_id: str, request_text: str, db, strictness: str = None, tier: str = None, mode: str = "deep", client=None, session_id: Optional[str] = None, selection_mode: str = "confidence_only"):
     """Background task to run AI analysis with Fast/Deep mode support and session isolation"""
     try:
-        result = analyze_with_agencydb(request_text, db, strictness, job_id, tier, mode, client, session_id)
+        result = analyze_with_agencydb(request_text, db, strictness, job_id, tier, mode, client, session_id, selection_mode)
 
         if job_id in AI_JOB_STORE:
             # FIXED: Save result BEFORE marking as completed
@@ -2720,6 +2777,7 @@ class AnalyzeRequest(BaseModel):
     tier: Optional[str] = None  # 'mini', 'thinking', 'pro'
     mode: Optional[str] = "deep"  # 'fast' or 'deep'
     session_id: Optional[str] = None  # Session ID for cache isolation
+    selection_mode: Optional[str] = "confidence_only"  # 'confidence_only', 'tfidf_only', or 'both'
 
 def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
     router = APIRouter()
@@ -2754,7 +2812,8 @@ def mount_routes_agencydb(app: FastAPI, base: str = "/api/ai"):
                 payload.tier,
                 payload.mode or "deep",
                 None,  # Pass None - embed_many will create its own OpenAI client
-                payload.session_id  # Pass session_id for cache isolation
+                payload.session_id,  # Pass session_id for cache isolation
+                payload.selection_mode or "confidence_only"  # TF-IDF selection mode
             )
 
             return {
