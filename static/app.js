@@ -5924,6 +5924,10 @@ async function onRunReconcile() {
     // Get selected mode (Fast or Deep) - use analysisMode variable
     const selectedMode = analysisMode || 'deep';
     
+    // Get TF-IDF selection mode from UI
+    const selectionModeEl = document.querySelector('input[name="selection_mode"]:checked');
+    const selectionMode = selectionModeEl ? selectionModeEl.value : 'confidence_only';
+    
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5932,7 +5936,8 @@ async function onRunReconcile() {
         strictness: 'balanced',
         tier: tier,
         mode: selectedMode,  // Add mode parameter
-        session_id: sessionId  // Add session_id for cache isolation
+        session_id: sessionId,  // Add session_id for cache isolation
+        selection_mode: selectionMode  // TF-IDF selection mode
       })
     }, 3, 2000);
     
