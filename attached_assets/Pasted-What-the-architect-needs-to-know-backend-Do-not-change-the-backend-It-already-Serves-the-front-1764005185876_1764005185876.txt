@@ -1,0 +1,136 @@
+What the architect needs to know (backend)
+
+Do not change the backend. It already:
+
+Serves the frontend at /static via app.mount("/static", StaticFiles(directory="static"), name="static"). 
+
+SB - L2 to L3 corrected, gantt …
+
+Exposes Scenario API under /api/scenario that returns scenarios["A"] with totals.hours and totals.price, and saves to SCENARIO_STORE (so Gantt stays in sync). 
+
+SB - L2 to L3 corrected, gantt …
+
+Recomputes totals server-side (so hiding “Total Planned Hours” in the UI won’t break anything). 
+
+SB - L2 to L3 corrected, gantt …
+
+Action for architect: none. Confirm these routes are reachable; no schema changes, no new endpoints.
+
+What the agent needs to fix (frontend)
+1) The “can’t click anything” blocker
+
+Root cause: the drawer backdrop is covering the whole page.
+
+Permanent fixes (do all three):
+
+Add this global CSS rule (if missing):
+
+[hidden] { display: none !important; }
+
+
+Make sure the backdrop starts hidden and the drawer is not open by default:
+
+<aside id="details-drawer" class="drawer" aria-hidden="true"></aside>
+<div id="drawer-backdrop" class="backdrop" hidden></div>
+
+
+Ensure the close logic actually hides the backdrop and closes the drawer:
+
+function closeDrawer() {
+  const drawer = document.getElementById('details-drawer');
+  const backdrop = document.getElementById('drawer-backdrop');
+  drawer.classList.remove('open');
+  backdrop.hidden = true;                // <- critical
+  drawer.setAttribute('aria-hidden','true');
+}
+
+
+Quick unfreeze (DevTools console), if needed:
+
+document.getElementById('details-drawer')?.classList.remove('open');
+document.getElementById('drawer-backdrop')?.setAttribute('hidden','');
+
+2) Script order & DOM timing
+
+Load the new renderer after the HTML containers exist and after the legacy summary has data, otherwise handlers won’t bind.
+
+<!-- bottom of body -->
+<script src="/static/js/step2-exec.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    if (window.renderStep2Exec && window.step2Data) {
+      renderStep2Exec(window.step2Data);
+    }
+  });
+</script>
+
+3) Wire into existing flow
+
+At the end of updatePricingSummary(scenario), build the exec-view payload from the same objects already used for the legacy panel, then call renderStep2Exec(execData).
+
+function updatePricingSummary(scenario) {
+  // ... existing totals/date computation
+
+  const price = scenario?.totals?.price;         // server computes totals
+  const startDate = scenario?.timeline?.start_date || scenario?.timeline?.startDate || scenario?.dates?.start;
+  const endDate   = scenario?.timeline?.end_date   || scenario?.timeline?.endDate   || scenario?.dates?.end;
+  const durationText = (startDate && endDate)
+    ? Math.ceil((new Date(endDate)-new Date(startDate)) / (1000*60*60*24*7)) + ' weeks'
+    : (scenario?.timeline?.weeks ? scenario.timeline.weeks + ' weeks' : '—');
+
+  const goal     = scenario?.meta?.goal || window.RFP?.goal || 'Fast analysis';
+  const channels = scenario?.meta?.channels || window.RFP?.channels || ['Digital'];
+  const markets  = scenario?.meta?.markets  || window.RFP?.markets  || ['US'];
+
+  const scopeText = scenario?.summary?.bulletsText || window.Step2?.summaryText || '';
+
+  const execData = {
+    priceFormatted: price?.toLocaleString?.() ? `$${price.toLocaleString()}` : price,
+    price, durationText, startDate, endDate, goal, channels, markets, scopeText,
+    risks: scenario?.risks || []
+  };
+
+  window.step2Data = execData;          // optional: reuse on re-renders
+  window.renderStep2Exec?.(execData);
+}
+
+4) Remove “Total Planned Hours” only on Step-2
+
+Do not touch backend totals. Just hide the UI element in Step-2:
+
+.step2 .total-hours { display: none !important; }
+
+
+or:
+
+document.querySelectorAll('.step2 .total-hours').forEach(n => n.remove());
+
+Why we aren’t changing main.py
+
+Static is already mounted and serving your assets at /static. Keep using it for the new JS/CSS. 
+
+SB - L2 to L3 corrected, gantt …
+
+Scenario endpoints already return everything you need for price/dates (and store scenarios for the Gantt). 
+
+SB - L2 to L3 corrected, gantt …
+
+ 
+
+SB - L2 to L3 corrected, gantt …
+
+Totals are computed server-side; hiding hours in the UI is safe. 
+
+SB - L2 to L3 corrected, gantt …
+
+If they want the exact doc you shared for reference, point them at this file path:
+/mnt/data/SB - L2 to L3 corrected, gantt correct.docx (contains the main.py excerpts and scenario logic). 
+
+SB - L2 to L3 corrected, gantt …
+
+If anything still blocks clicks after the three fixes in Frontend §1, have the agent run:
+
+document.elementsFromPoint(window.innerWidth/2, window.innerHeight/2).slice(0,5)
+
+
+and report the top element + its z-index—that’ll reveal any leftover overlay.
