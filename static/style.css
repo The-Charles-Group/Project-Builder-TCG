@@ -1266,3 +1266,77 @@ body.chatgpt-sidebar-expanded {
 [data-theme="light"] .gantt text {
   fill: #1a202c;
 }
+
+/* ============================================================================
+   EXECUTIVE SUMMARY (Simple View - No Overlays)
+   ============================================================================ */
+.exec-card {
+  background: var(--surface, #111826);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 12px 0;
+  border: 1px solid var(--border, rgba(255,255,255,0.1));
+}
+
+.exec-card-title {
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--accent, #8b5cf6);
+  font-size: 1.1em;
+}
+
+.exec-card details {
+  border-top: 1px solid rgba(255,255,255,.1);
+  padding: 10px 0;
+}
+
+.exec-card summary {
+  cursor: pointer;
+  font-weight: 500;
+  padding: 4px 0;
+  color: var(--text);
+  user-select: none;
+}
+
+.exec-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.exec-card summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 0.2s;
+  color: var(--accent);
+}
+
+.exec-card details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.exec-card summary:hover {
+  color: var(--accent);
+}
+
+/* Hide Total Planned Hours in Step 2 */
+#step2 .total-hours,
+#step2 [id*="total-hours"],
+#step2 .total-planned-hours {
+  display: none !important;
+}
+
+/* Neutralize overlays/drawers in Step 2 - prevent click blocking */
+#step2 .drawer,
+#step2 .backdrop,
+#step2 .overlay,
+#step2 [role="dialog"]:not(#charles-container *) {
+  display: none !important;
+  pointer-events: none !important;
+}
+
+/* Safety net: kill any stray overlays on page load */
+#drawer-backdrop[hidden],
+.backdrop.hidden,
+.drawer:not(.open) {
+  display: none !important;
+}

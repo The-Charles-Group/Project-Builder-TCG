@@ -2346,6 +2346,48 @@ function updatePricingSummary() {
       grandBreakdownEl.textContent = `One-time total: $${Math.round(originalOneTimeCost).toLocaleString()}`;
     }
   }
+  
+  // Render executive summary view
+  if (typeof renderExecSimple === 'function') {
+    renderExecSimple(scenario);
+  }
+}
+
+// Render Executive Summary (Simple View - No Overlays)
+function renderExecSimple(scenario) {
+  function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent = v || '—'; }
+  function injectScope(scopeText){
+    const host = document.getElementById('scope-sections'); if(!host) return;
+    const anchors = [
+      'Brand Strategy','Brand Identity','Brand Architecture','Experiential Activation',
+      'Campaign Creative','Content Production','Marketing Collateral','Program Management'
+    ];
+    const rx = new RegExp(`(${anchors.map(a=>a.replace(/[-/\\^$*+?.()|[\]{}]/g,'\\$&')).join('|')})`,'i');
+    const chunks = (scopeText||'').split(rx).map(s=>s&&s.trim()).filter(Boolean);
+    host.innerHTML = '';
+    for(let i=0;i<chunks.length;i+=2){
+      const title = chunks[i]; const body = chunks[i+1] || '';
+      const details = document.createElement('details');
+      const summary = document.createElement('summary'); summary.textContent = title;
+      const content = document.createElement('div'); content.innerHTML = body.replace(/\n/g,'<br>');
+      details.appendChild(summary); details.appendChild(content); host.appendChild(details);
+    }
+  }
+
+  setText('ov-goal', scenario?.meta?.goal || window.RFP?.goal || 'Fast analysis');
+  setText('ov-channels', (scenario?.meta?.channels||window.RFP?.channels||[]).join(', ') || '—');
+  setText('ov-markets', (scenario?.meta?.markets||window.RFP?.markets||[]).join(', ') || '—');
+
+  const hi = (scenario?.highlights||[]).slice(0,3);
+  const ul = document.getElementById('ov-highlights');
+  if (ul) ul.innerHTML = hi.length ? hi.map(h=>`<li>${h}</li>`).join('') : '<li>Executive-ready summary</li>';
+
+  const scopeText = scenario?.summary?.bulletsText || window.Step2?.summaryText || '';
+  injectScope(scopeText);
+  
+  // Show executive summary panel
+  const execSummary = document.getElementById('executive-summary');
+  if (execSummary) execSummary.style.display = 'block';
 }
 
 // Helper function to extract resource allocation from item
@@ -10419,4 +10461,18 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
   });
+
+  // Safety net: Kill any overlay/backdrop elements that might block clicks
+  const killOverlays = () => {
+    document.querySelectorAll('#drawer-backdrop,.backdrop,.drawer.open').forEach(n=>{
+      if (n.id === 'drawer-backdrop') n.setAttribute('hidden','');
+      if (n.classList.contains('open')) n.classList.remove('open');
+    });
+  };
+  // Run once on load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', killOverlays);
+  } else {
+    killOverlays();
+  }
 })();

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Agency Project Builder</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=exec-1" />
   <link rel="stylesheet" href="/static/static_weights.css" />
   <!-- Frappe Gantt Library -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.css">
@@ -327,6 +327,22 @@
     <!-- Step 3: Pricing -->
     <section class="card" id="step3" style="display:none;">
       <h2>Step 3 — Pricing Configuration</h2>
+      
+      <!-- Executive Summary View (Simple, No Overlays) -->
+      <div id="executive-summary" style="margin-bottom: 24px; display: none;">
+        <section class="exec-card">
+          <h3 class="exec-card-title">Overview</h3>
+          <p><strong>Goal:</strong> <span id="ov-goal">—</span></p>
+          <p><strong>Channels:</strong> <span id="ov-channels">—</span>
+             &nbsp; • &nbsp; <strong>Markets:</strong> <span id="ov-markets">—</span></p>
+          <ul id="ov-highlights"></ul>
+        </section>
+
+        <section class="exec-card">
+          <h3 class="exec-card-title">Scope & Plan</h3>
+          <div id="scope-sections"><!-- JS will inject <details> blocks here --></div>
+        </section>
+      </div>
       
       <!-- Build Scenario Panel - MOVED TO TOP -->
       <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
@@ -3198,7 +3214,7 @@
   <!-- Frappe Gantt Library -->
   <script src="https://cdn.jsdelivr.net/npm/frappe-gantt@0.6.1/dist/frappe-gantt.min.js"></script>
   <script src="/static/static_weights.js"></script>
-  <script src="/static/app.js?v=6.1" defer></script>
+  <script src="/static/app.js?v=exec-1" defer></script>
   <script>
     // Weighted AI Suggestions Handler
     document.addEventListener('DOMContentLoaded', () => {
