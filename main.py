@@ -716,7 +716,7 @@ LAST_UPLOAD_FILENAME: str | None = None
 RFP_TEXT_CACHE_TEXTAREA: str | None = None  # Text from textarea input
 RFP_TEXT_CACHE_FILE: str | None = None       # Text from uploaded file
 RFP_TEXT_CACHE: str | None = None            # Merged text (backward compatibility)
-RFP_SUMMARY_CACHE: Any = None  # Cached RFP summary for both Fast/Deep modes (RfpSummary type)
+# RFP_SUMMARY_CACHE removed - frontend holds window.currentRfpSummary instead
 
 # SCENARIO_STORE: Unified storage for session_id -> scenario data
 # Syncs Gantt ↔ Pricing ↔ XML data through a single source of truth
@@ -4014,10 +4014,7 @@ Guidelines:
         words = _count_words(prose)
 
     summary = RfpSummary(summary_text=prose, deliverables=[RfpSummaryItem(**d) for d in deliverables], word_count=words)
-    
-    # Cache the summary for Fast/Deep mode reuse
-    RFP_SUMMARY_CACHE = summary
-    
+    # No global cache mutation - frontend holds window.currentRfpSummary instead
     return summary
 
 # --- Name matching for reconciliation (deterministic; DB only used here) ---
@@ -4189,7 +4186,7 @@ async def clear_session(payload: ClearSessionPayload):
     RFP_TEXT_CACHE_TEXTAREA = None
     RFP_TEXT_CACHE_FILE = None
     RFP_TEXT_CACHE = None
-    RFP_SUMMARY_CACHE = None
+    # RFP_SUMMARY_CACHE removed - no longer needed
     LAST_UPLOAD_FILENAME = None
     
     # Clear OPTIONS_CACHE if it exists
@@ -9138,13 +9135,7 @@ def api_summarize(p: SummarizePayload):
     
     return ai_summarize_rfp_text(merged_text)
 
-@app.get("/api/rfp/summary_cache")
-def get_cached_rfp_summary():
-    """Retrieve the cached RFP summary (for Fast/Deep mode reuse)."""
-    global RFP_SUMMARY_CACHE
-    if RFP_SUMMARY_CACHE is None:
-        return {"cached": False, "summary": None}
-    return {"cached": True, "summary": RFP_SUMMARY_CACHE}
+# Removed /api/rfp/summary_cache endpoint - frontend holds window.currentRfpSummary instead
 
 @app.post("/api/summarize_by_file")
 async def api_summarize_by_file(

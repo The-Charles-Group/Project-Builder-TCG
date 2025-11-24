@@ -1,0 +1,148 @@
+0. Product decision (so everyone’s aligned)
+
+The RFP Summary card should always come from the GPT summarizer (/api/summarize / ai_summarize_rfp_text), for both Fast and Deep.
+Fast vs Deep only affects the planner/scenario step, not the summary card data.
+
+That lets us ignore “Fast skips summary” and avoids trying to normalize two different summary shapes.
+
+1) Instructions for the Architect (backend)
+a) Stop relying on a global cache
+
+Remove (or comment out) RFP_SUMMARY_CACHE and the GET /api/rfp/summary_cache endpoint.
+
+We don’t need server-side cache right now; the frontend will hold window.currentRfpSummary per browser session.
+
+This removes the cross-user contamination risk completely.
+
+So:
+
+# REMOVE / COMMENT OUT:
+RFP_SUMMARY_CACHE = None
+
+def ai_summarize_rfp_text(...):
+    # just return the summary, no global mutation
+
+@app.get("/api/rfp/summary_cache")
+def get_cached_rfp_summary():
+    ...
+
+b) Do not change the Fast planner
+
+Leave ai_planner_agencydb.py as-is, including its
+
+“skip for Fast mode to save time”
+
+We are not going to use that planner’s summary object for the card at all, so we don’t care that it’s empty in Fast mode.
+
+c) Contract to guarantee
+
+Just confirm to the agent:
+
+POST /api/summarize → always returns a full RfpSummary object.
+
+POST /api/summarize_by_file → same, plus file metadata.
+
+No more cache / extra summary endpoints.
+
+That’s it on backend.
+
+2) Instructions for the Replit Agent (frontend)
+a) Where the summary card data comes from
+
+The only source of truth for the RFP Summary card is the response from:
+
+POST /api/summarize or
+
+POST /api/summarize_by_file
+
+Do not pull summary fields out of the AI planner (Fast or Deep) anymore.
+
+b) Flow: call summarizer once, reuse for both modes
+
+After the user uploads/pastes the RFP and hits “Analyze” (before choosing Fast/Deep), call the summarizer:
+
+const res = await fetch("/api/summarize", {
+  method: "POST",
+  headers: {"Content-Type": "application/json"},
+  body: JSON.stringify({ rfp_text })
+});
+const summary = await res.json();
+window.currentRfpSummary = summary;
+
+
+(Or the summarize_by_file path if that’s what you already use.)
+
+Immediately render the card:
+
+renderRfpSummaryCard(window.currentRfpSummary, {
+  plannerLabel: "Fast AI Planner"  // default badge before they choose
+});
+
+
+When the user toggles Fast / Deep, only update the badge text:
+
+function onModeChange(mode) {
+  const summary = window.currentRfpSummary;
+  if (!summary) return;  // summarizer hasn’t finished
+
+  renderRfpSummaryCard(summary, {
+    plannerLabel: mode === "deep" ? "GPT-5 Pro AI Planner" : "Fast AI Planner"
+  });
+
+  // Then run the correct planner flow for that mode (unchanged).
+}
+
+c) Unhook renderRfpSummaryCard from planner responses
+
+In renderAIPlan() (or whatever renders Fast/Deep planner results), remove any calls that pass planner response objects into renderRfpSummaryCard.
+
+renderAIPlan() should now only handle:
+
+deliverables list,
+
+hours, pricing,
+
+timeline/Gantt,
+
+etc.
+
+The summary card is driven exclusively by window.currentRfpSummary.
+
+So if you currently have something like:
+
+function renderAIPlan(planResponse) {
+  renderRfpSummaryCard(planResponse.summary, {...}); // <-- REMOVE
+  // ...other rendering...
+}
+
+
+Delete that first line.
+
+d) Handle missing fields defensively (normalization-lite)
+
+Even though everything comes from RfpSummary, be defensive so nothing breaks:
+
+function renderRfpSummaryCard(summary, options = {}) {
+  if (!summary) return;
+
+  const {
+    plannerLabel = "Fast AI Planner",
+    complexity = summary.complexity || "Medium"
+  } = options;
+
+  const goals = (summary.deliverables || []).map(d => d.label).filter(Boolean);
+  const channels = (summary.channels || []).join(", ");
+  const markets = (summary.markets || []).join(", ");
+
+  // ... existing HTML build, but always guard nulls ...
+}
+
+
+This is enough “normalization”; no special Fast vs Deep branching.
+
+3) What to tell them in one sentence
+
+If you want something ultra-short to paste:
+
+Architect: please remove the global RFP_SUMMARY_CACHE + /api/rfp/summary_cache endpoint; keep /api/summarize and /api/summarize_by_file as the only summary sources.
+Agent: please make the RFP Summary card only use the /api/summarize response (stored in window.currentRfpSummary), render it once after upload, and then just swap the badge text for Fast vs Deep; stop feeding planner responses into the card.
