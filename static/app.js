@@ -328,6 +328,12 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Initialize PDF download button event listeners
   initializePDFDownloadButton();
+  
+  // Remove loading class from Step 1 to restore button clicks
+  const step1 = document.getElementById('step1');
+  if (step1) {
+    step1.classList.remove('loading');
+  }
 });
 
 async function handleIndustrySelection() {
