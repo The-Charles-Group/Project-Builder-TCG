@@ -1626,9 +1626,13 @@ class AIAssistant {
         `;
         
         overlay.style.display = 'flex';
+        overlay.style.pointerEvents = 'auto'; // Enable clicks when shown
+        overlay.style.visibility = 'visible';
         
         return () => {
             overlay.style.display = 'none';
+            overlay.style.pointerEvents = 'none'; // Disable clicks when hidden
+            overlay.style.visibility = 'hidden';
         };
     }
     
@@ -3179,11 +3183,14 @@ class AIAssistant {
                 flex-direction: column;
                 border: 1px solid rgba(139, 92, 246, 0.3);
                 animation: slideUp 0.3s ease-out;
-                pointer-events: auto; /* Allow clicks on sidebar when open */
+                pointer-events: none; /* CRITICAL: Don't block clicks when closed */
+                visibility: hidden;
             }
             
             .ai-assistant-sidebar.open {
                 display: flex;
+                pointer-events: auto; /* Allow clicks only when open */
+                visibility: visible;
             }
             
             .ai-assistant-sidebar.minimized {
@@ -3419,6 +3426,8 @@ class AIAssistant {
                 align-items: center;
                 justify-content: center;
                 z-index: 9999;
+                pointer-events: none; /* CRITICAL: Don't block clicks when hidden */
+                visibility: hidden;
             }
             
             .charles-working-content {
