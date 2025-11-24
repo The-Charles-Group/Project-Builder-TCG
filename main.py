@@ -4942,6 +4942,68 @@ def api_weighted_scores(payload: WeightedScoresRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Weighted scoring failed: {str(e)}")
 
+@app.post("/api/step2/ai/weights_v2")
+def api_weighted_scores_v2(payload: WeightedScoresRequest):
+    """
+    V2: Weighted AI matching using rule-based + lexical (TF-IDF) scoring.
+    Returns deliverables ranked by match % with top components/tasks.
+    Supports configurable selection modes (confidence, TF-IDF, or both).
+    CACHE BYPASS VERSION - identical logic to v1 but fresh route.
+    """
+    print("[DEBUG] ===== API_WEIGHTED_SCORES_V2 FUNCTION CALLED =====")
+    rfp_text = payload.rfp_text or RFP_TEXT_CACHE or ""
+    selection_mode = payload.selection_mode or "confidence_only"
+    print(f"[DEBUG] selection_mode received: {selection_mode}")
+    
+    # Validate selection_mode
+    valid_modes = {"confidence_only", "tfidf_only", "both"}
+    if selection_mode not in valid_modes:
+        print(f"[WARNING] Invalid selection_mode '{selection_mode}', defaulting to 'confidence_only'")
+        selection_mode = "confidence_only"
+    
+    ai_rules_path = "AI_Matching_Rules_full.xlsx"
+    
+    if not DB.loaded:
+        DB.load()
+    
+    try:
+        result = score_rfp(rfp_text, ai_rules_path, deliverable_index_df=DB.deliverables)
+        
+        print(f"[TF-IDF SELECT] Processing {len(result.get('deliverables', []))} deliverables with mode={selection_mode}")
+        
+        # Apply selection logic to each deliverable based on selection_mode
+        selected_count = 0
+        for deliv in result.get("deliverables", []):
+            match_percent = deliv.get("match_percent", 0.0)
+            tfidf_similarity = deliv.get("tfidf_similarity", 0.0)
+            
+            # Apply should_select_deliverable function
+            selection_info = should_select_deliverable(
+                match_percent=match_percent,
+                tfidf_similarity=tfidf_similarity,
+                selection_mode=selection_mode
+            )
+            
+            # Add selection fields to deliverable
+            deliv["selected"] = selection_info["selected"]
+            deliv["selection_reason"] = selection_info["selection_reason"]
+            
+            if selection_info["selected"]:
+                selected_count += 1
+        
+        print(f"[TF-IDF SELECT] Selected {selected_count} deliverables")
+        
+        # Add selection_mode to result metadata
+        result["selection_mode"] = selection_mode
+        result["thresholds"] = {
+            "confidence": CONF_THRESHOLD,
+            "tfidf": TFIDF_THRESHOLD
+        }
+        
+        return JSONResponse(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Weighted scoring failed: {str(e)}")
+
 @app.post("/api/ai/generate_timeline")
 async def generate_timeline(request: TimelineGenerationRequest):
     """
