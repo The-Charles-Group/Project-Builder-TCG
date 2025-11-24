@@ -746,6 +746,10 @@ if not os.path.exists("static"):
     os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Serve Step 2 Executive UI static assets
+if os.path.exists("static/step2-exec"):
+    app.mount("/step2-exec", StaticFiles(directory="static/step2-exec", html=True), name="step2-exec-static")
+
 # Include AI weights router
 from routes_weights_fastapi import router as weights_router
 app.include_router(weights_router)
@@ -4071,6 +4075,12 @@ def _sort_deliverables(per_deliv: list[dict], letter: str) -> list[dict]:
 @app.get("/", response_class=HTMLResponse)
 def root():
     with open("static/index.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/step2-exec", response_class=HTMLResponse)
+def step2_exec():
+    """Serve the executive-friendly Step 2 scope summary UI"""
+    with open("static/step2-exec/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
 @app.get("/api/load")

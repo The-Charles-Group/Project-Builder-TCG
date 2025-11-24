@@ -15,6 +15,7 @@ Preferred communication style: Simple, everyday language.
 - Unified AI Planner UI with real-time progress bar, evidence-backed suggestions, and risk indicators.
 - "Select All/Deselect All" buttons and department grouping for deliverables.
 - UI toggle for optional inclusion of Start/End anchor milestones in XML exports.
+- **Step-2 Executive Screen (Nov 2025)**: React/TypeScript micro-frontend served at `/step2-exec` displaying RFP scope as scannable module cards with dark navy theme (#1a1f2e), expandable details drawer, Phase/Effort/Risk/Department filters, and sticky summary bar. Bundle size: 67KB gzipped (well under 250KB target). Legacy Step 2 remains untouched for safe rollback.
 
 ### Technical Implementations
 - **Backend Framework**: FastAPI (Python) for the REST API.
@@ -36,6 +37,7 @@ Preferred communication style: Simple, everyday language.
 - **Parallel Processing**: Utilizes OpenAI Vision API for parallel PDF image processing with job tracking and retry logic.
 - **Smart Image Analysis**: Two-tier image processing system using pre-filtering, quick relevance scans, and deep analysis.
 - **Session Isolation System**: Complete data isolation between different RFPs using unique session IDs, auto-clear mechanisms, and session-scoped embedding caches.
+- **Step-2 Executive Micro-Frontend (Nov 2025)**: Standalone Vite/React/TypeScript app in `frontend/step2-exec/` with Tailwind, shadcn/ui, and Zustand state management. Served at `/step2-exec` via FastAPI StaticFiles mount. Build command: `cd frontend/step2-exec && npm install && npm run build`. Components: ModuleCard, ModuleGrid, DetailsDrawer, FilterBar, HeaderSummary, StickySummaryBar, MiniTimeline. Uses seed data (`src/domain/seedData.ts`) with 8 modules matching visual reference. Phase 2 will wire live backend data via python-mammoth DOCX parser.
 - **CORS**: Configured to allow cross-origin requests.
 
 ### System Design Choices
