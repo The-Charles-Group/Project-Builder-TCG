@@ -255,7 +255,7 @@ const SessionManager = {
         selectedDeliverables: [],
         currentStep: 'step1',
         formValues: {},
-        analysisMode: 'fast',
+        analysisMode: document.getElementById('analysis-mode')?.value || 'deep',
         jobId: null,
         lastError: null,
         stateHistory: []
@@ -5796,7 +5796,7 @@ async function onRunReconcile() {
   const textEl = document.querySelector('#rfpText');
   let rfpText = (textEl?.value || '').trim();
   const btnAnalyze = document.querySelector('#btnAnalyze');
-  const analysisMode = document.getElementById('analysis-mode')?.value || 'fast';
+  const analysisMode: document.getElementById('analysis-mode')?.value || 'deep';
 
   // ============================================================================
   // SESSION ISOLATION: Start fresh session for each new analysis
