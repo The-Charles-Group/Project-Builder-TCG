@@ -1436,6 +1436,11 @@ class AgencyDB:
         self.timeline_weighting= read("Timeline_Weighting")
         self.slack_settings    = read("Slack_Settings")
         self.pricing_settings  = read("Pricing_Settings")
+        # Override Default_Blended_Rate to ensure it uses the global constant
+        if self.pricing_settings is not None and not self.pricing_settings.empty:
+            mask = self.pricing_settings["Key"] == "Default_Blended_Rate"
+            if mask.any():
+                self.pricing_settings.loc[mask, "Default"] = DEFAULT_BILLABLE_RATE_USD
         self.scenario_templates= read("Scenario_Templates")
         self.ui_options        = read("UI_Options")
         self.rfp_rules         = read("RFP_Matching_Rules")
@@ -1772,7 +1777,7 @@ class AgencyDB:
         
         # Basic settings
         self.pricing_settings = pd.DataFrame([
-            {"Key": "Default_Blended_Rate", "Default": 185}
+            {"Key": "Default_Blended_Rate", "Default": DEFAULT_BILLABLE_RATE_USD}
         ])
         
         self.slack_settings = pd.DataFrame([
@@ -7751,7 +7756,7 @@ async def api_build_scenario(payload: BuildScenarioPayload):
                             continue
                         
                         hours = float(row.get('Hours', 0) or 0)
-                        rate = float(row.get('Rate_USD', 150) or 150)
+                        rate = float(row.get('Rate_USD') or DEFAULT_BILLABLE_RATE_USD)
                         
                         items.append({
                             "Deliverable": deliverable_name,
@@ -7773,10 +7778,10 @@ async def api_build_scenario(payload: BuildScenarioPayload):
                         if not task_rows.empty:
                             row = task_rows.iloc[0]
                             hours = float(row.get('Hours', 0) or 0)
-                            rate = float(row.get('Rate_USD', 150) or 150)
+                            rate = float(row.get('Rate_USD') or DEFAULT_BILLABLE_RATE_USD)
                         else:
                             hours = 0.0
-                            rate = 150.0
+                            rate = DEFAULT_BILLABLE_RATE_USD
                         
                         items.append({
                             "Deliverable": deliverable_name,
@@ -8244,7 +8249,7 @@ def calculate_industry_pricing(request: dict):
     """Calculate industry-specific pricing with luxury adjustments"""
     industry = request.get('industry', '')
     deliverable_codes = request.get('deliverable_codes', [])
-    base_rate = request.get('base_rate', 150)
+    base_rate = request.get('base_rate', DEFAULT_BILLABLE_RATE_USD)
     
     if not industry:
         return {"error": "No industry selected"}
