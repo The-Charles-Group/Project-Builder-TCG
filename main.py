@@ -3628,15 +3628,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 hrs_df = DB.hours_by_role_for_deliverable(dcode, included, scen_col_resolved)
                 d["hours_by_role"] = hrs_df.to_dict("records")
             
-            # IMPORTANT: Use hours from scenario item (Step 3 edits) first, then fall back to calculated
-            # Priority: Planned_Hours (sync) > planned_hours > hours > total_hours > calculated
-            parent_hours_exact = 0.0
-            for hours_key in ["Planned_Hours", "planned_hours", "hours", "total_hours"]:
-                if d.get(hours_key) and float(d.get(hours_key, 0)) > 0:
-                    parent_hours_exact = float(d.get(hours_key))
-                    break
+            # CRITICAL: Use get_hours_from_item() to honor Step 3 edits (Planned_Hours)
+            # Only fall back to calculated hours if Step 3 didn't set any
+            parent_hours_exact = get_hours_from_item(d)
             
-            if parent_hours_exact == 0.0:
+            if parent_hours_exact <= 0:
+                # No Step 3 hours - calculate from hrs_df ONLY (not total_hours which may be stale)
                 calculated_total = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
                 parent_hours_exact = calculated_total
             
@@ -4135,19 +4132,58 @@ def _current_scenarios():
 def _get_scenarios(session_id: Optional[str] = None) -> dict:
     """
     Get scenarios for export.
-    If session_id is provided, checks SCENARIO_STORE first (contains Gantt updates).
+    If session_id is provided, checks SCENARIO_STORE first (contains Step 3/4 edits).
     Falls back to _CURRENT_SCENARIOS if session_id not found or not provided.
     
-    This ensures XML exports reflect Step 4 Gantt edits when session_id is passed.
+    This ensures XML exports reflect Step 3 pricing edits and Step 4 Gantt edits.
     """
     print(f"[GET_SCENARIOS] Called with session_id={session_id}")
     
     if session_id and session_id in SCENARIO_STORE:
-        # Return session-based scenario with Gantt updates
-        # IMPORTANT: SCENARIO_STORE has structure {"scenario": {...}, "updated_at": ...}
-        # We need to extract just the scenario data
+        # Return session-based scenario with Step 3/4 edits
         store_entry = SCENARIO_STORE[session_id]
-        scenario = store_entry.get("scenario", store_entry) if isinstance(store_entry, dict) else store_entry
+        print(f"[GET_SCENARIOS] store_entry keys: {list(store_entry.keys()) if isinstance(store_entry, dict) else 'NOT_DICT'}")
+        
+        # SCENARIO_STORE can have two formats:
+        # 1. Wrapper format from merge_scenario_from_sync: {"scenario": {...items...}, "updated_at": ...}
+        # 2. Direct format from other endpoints: {"items": [...], "totals": {...}, ...}
+        # 
+        # We must extract ONLY the scenario dict with "items" - never return wrapper metadata
+        scenario = None
+        if isinstance(store_entry, dict):
+            if "scenario" in store_entry and isinstance(store_entry["scenario"], dict):
+                # Wrapper format - extract nested scenario (strip updated_at, timeline, etc)
+                scenario = store_entry["scenario"].copy()  # Copy to avoid mutating store
+                print(f"[GET_SCENARIOS] Extracted nested scenario from wrapper (has 'scenario' key)")
+            elif "items" in store_entry:
+                # Direct format - but strip any metadata keys that aren't part of scenario
+                scenario = {k: v for k, v in store_entry.items() 
+                           if k not in ("updated_at", "updated")}
+                print(f"[GET_SCENARIOS] Using store_entry directly (has 'items' key), stripped metadata")
+            else:
+                # Unknown format - try to extract scenario
+                nested = store_entry.get("scenario")
+                if nested and isinstance(nested, dict):
+                    scenario = nested.copy()
+                else:
+                    scenario = store_entry.copy()
+                print(f"[GET_SCENARIOS] Unknown format, using fallback extraction")
+        else:
+            scenario = store_entry
+            print(f"[GET_SCENARIOS] store_entry is not dict, using as-is")
+        
+        if scenario is None:
+            print(f"[GET_SCENARIOS] WARNING: Could not extract scenario, falling back to _CURRENT_SCENARIOS")
+            return _CURRENT_SCENARIOS
+        
+        # Debug: Show what we extracted
+        if isinstance(scenario, dict):
+            print(f"[GET_SCENARIOS] Extracted scenario keys: {list(scenario.keys())}")
+            items = scenario.get("items", [])
+            print(f"[GET_SCENARIOS] Scenario has {len(items)} items")
+            if items:
+                first_item = items[0]
+                print(f"[GET_SCENARIOS] First item: {first_item.get('deliverable', 'N/A')}, hours={first_item.get('Planned_Hours', first_item.get('planned_hours', 'N/A'))}, price={first_item.get('price_usd', first_item.get('Price_USD', 'N/A'))}")
         
         # Call _recompute_totals to ensure all pricing fields are in sync before export
         scenario = _recompute_totals(scenario)
