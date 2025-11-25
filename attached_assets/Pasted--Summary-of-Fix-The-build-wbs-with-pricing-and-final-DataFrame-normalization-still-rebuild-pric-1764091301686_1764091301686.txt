@@ -1,0 +1,121 @@
+🔧 Summary of Fix
+
+The build_wbs_with_pricing() and final DataFrame normalization still rebuild prices from hours_by_role (row_price = hours × rate).
+That’s why your exports ignore Step 3 overrides (Planned_Hours + Price_USD).
+
+The fix has three parts:
+
+Scale hours_by_role to match Step 3’s Planned_Hours.
+
+Preserve Step 3’s Price_USD (and use it as FixedCost) instead of recomputing.
+
+Skip double-counting by zeroing assignment cost when FixedCost is set.
+
+✅ Code Changes
+1. Patch inside build_wbs_with_pricing()
+
+Right before each deliverable’s role rows are appended (look for this section):
+
+rows.append({
+    "Row_ID": row_id,
+    "Deliverable_Code": dcode,
+    ...
+    "Planned_Hours": row_hours,
+    ...
+    "Rate_USD": round(role_rate, 2),
+    "Price_USD": row_price
+})
+
+
+Replace with this scaled-hour + preserved-price logic:
+
+# --- SCALE ROLE HOURS TO MATCH STEP 3 EDITS ---
+target_hours = float(item.get("Planned_Hours") or item.get("planned_hours") or 0)
+role_hours_by_role = hours_by_role or {}
+role_total = sum(role_hours_by_role.values()) or 0.0
+
+if role_total > 0 and target_hours > 0:
+    scale = target_hours / role_total
+else:
+    scale = 1.0
+
+# Preserve Step 3's price
+fixed_price = float(item.get("Price_USD") or item.get("price_usd") or 0.0)
+
+for role, raw_hours in role_hours_by_role.items():
+    scaled_hours = raw_hours * scale
+    role_rate = float(role_rate_map.get(role, blended_rate))
+    # Only recompute role_price if we don't have a fixed deliverable price
+    role_price = scaled_hours * role_rate if fixed_price == 0 else 0
+
+    rows.append({
+        "Row_ID": row_id,
+        "Deliverable_Code": dcode,
+        "Task_Code": task_code,
+        "Service_Department": (svc_task or svc_comp),
+        "Deliverable": deliv_label,
+        "Project_Name": project_name,
+        "WBS_ID": wbs_role,
+        "Parent_WBS_ID": wbs_task,
+        "Task_Name": label,
+        "Role": role or "",
+        "Planned_Hours": round(scaled_hours, 2),
+        "Rate_USD": round(role_rate, 2),
+        "Price_USD": round(role_price, 0)
+    })
+
+# --- APPLY FIXED PRICE AT DELIVERABLE LEVEL ---
+if fixed_price > 0:
+    rows[-1]["FixedCost"] = round(fixed_price, 2)
+
+2. Patch DataFrame normalization block
+
+(near line 17 → 42 of your current doc
+
+SB - Step 3 fixes
+
+)
+
+Replace the # Always compute Price from Hours × Rate logic with this:
+
+# --- ENFORCE NUMERIC TYPES & PRICE FORMULA ---
+if "Planned_Hours" in df.columns:
+    df["Planned_Hours"] = pd.to_numeric(df["Planned_Hours"], errors="coerce").fillna(0).round(2)
+
+if "Rate_USD" in df.columns:
+    df["Rate_USD"] = pd.to_numeric(df["Rate_USD"], errors="coerce").fillna(0).round(2)
+
+# Preserve Price_USD from Step 3
+if "Price_USD" in df.columns:
+    df["Price_USD"] = pd.to_numeric(df["Price_USD"], errors="coerce").fillna(0)
+    mask = (df["Price_USD"] == 0) & df["Planned_Hours"].gt(0)
+    df.loc[mask, "Price_USD"] = (df.loc[mask, "Planned_Hours"] * df.loc[mask, "Rate_USD"]).round(0)
+else:
+    df["Price_USD"] = (df["Planned_Hours"] * df["Rate_USD"]).round(0)
+
+# --- FIXED COST EXPORT ---
+if "FixedCost" not in df.columns:
+    df["FixedCost"] = 0.0
+df["FixedCost"] = pd.to_numeric(df["FixedCost"], errors="coerce").fillna(0)
+
+
+This ensures Step 3’s prices are preserved and exported as FixedCost.
+
+3. In the XML export builder
+
+(where assignments are created from df rows):
+
+Add:
+
+# If FixedCost > 0, zero out assignment cost to prevent double counting
+if r.get("FixedCost", 0) > 0:
+    cost_value = 0
+else:
+    cost_value = r.get("Price_USD", 0)
+assignment_elem.find("Cost").text = f"{cost_value:.2f}"
+
+
+And at the task level, ensure deliverable tasks (OutlineLevel 2) write:
+
+if float(r.get("FixedCost", 0)) > 0:
+    task_elem.find("FixedCost").text = f"{r['FixedCost']:.2f}"
