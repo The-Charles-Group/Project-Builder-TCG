@@ -1274,7 +1274,7 @@ WF_COLUMNS = [
     "Planned_Hours", "Start_Offset_Days", "Duration_Days",
     "Start_Date", "End_Date",
     "Dependencies", "Assignee_External_ID", "Notes",
-    "Rate_USD", "Price_USD"
+    "Rate_USD", "Price_USD", "FixedCost"  # FixedCost for Step 3 price export
 ]
 
 
@@ -3355,10 +3355,11 @@ def _apply_number_formats(ws, df):
                 cell.number_format = "0.00"
 
 def _finalize_wf_df(df: pd.DataFrame) -> pd.DataFrame:
-    # Ensure all expected columns exist
+    # Ensure all expected columns exist (FixedCost added for Step 3 price export)
+    NUMERIC_COLS = {"Planned_Hours", "Start_Offset_Days", "Duration_Days", "Rate_USD", "Price_USD", "FixedCost"}
     for col in WF_COLUMNS:
         if col not in df.columns:
-            df[col] = "" if col not in {"Planned_Hours","Start_Offset_Days","Duration_Days","Rate_USD","Price_USD"} else 0
+            df[col] = "" if col not in NUMERIC_COLS else 0
 
     # Reindex to canonical order
     df = df[WF_COLUMNS].copy()
@@ -3368,7 +3369,15 @@ def _finalize_wf_df(df: pd.DataFrame) -> pd.DataFrame:
     df["Start_Offset_Days"] = pd.to_numeric(df["Start_Offset_Days"], errors="coerce").fillna(0).round(0).astype(int)
     df["Duration_Days"]     = pd.to_numeric(df["Duration_Days"], errors="coerce").fillna(0).round(0).astype(int)
     df["Rate_USD"]          = pd.to_numeric(df["Rate_USD"], errors="coerce").fillna(0).round(2)
-    df["Price_USD"]         = (df["Planned_Hours"] * df["Rate_USD"]).round(0).astype(int)  # Hours × Rate (whole USD)
+    
+    # STEP 3 PRICE PRESERVATION: Only recompute Price_USD when it's 0 AND hours > 0
+    df["Price_USD"] = pd.to_numeric(df["Price_USD"], errors="coerce").fillna(0)
+    mask = df["Price_USD"].eq(0) & df["Planned_Hours"].gt(0)
+    df.loc[mask, "Price_USD"] = (df.loc[mask, "Planned_Hours"] * df.loc[mask, "Rate_USD"]).round(0)
+    df["Price_USD"] = df["Price_USD"].round(0).astype(int)
+    
+    # STEP 3 FIXED COST: Ensure FixedCost is numeric for XML export
+    df["FixedCost"] = pd.to_numeric(df["FixedCost"], errors="coerce").fillna(0).round(2)
 
     return df
 
@@ -3932,13 +3941,11 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     if "Rate_USD" in df.columns:
         df["Rate_USD"] = pd.to_numeric(df["Rate_USD"], errors="coerce").fillna(0).round(2)
 
-    # IMPORTANT: Preserve existing Price_USD from cadence pricing (Step 3 edits)
-    # Only compute Price from Hours × Rate for rows where Price_USD is not already set
+    # STEP 3 PRICE PRESERVATION: Only compute Price from Hours × Rate when Price_USD is 0 AND hours > 0
     if "Price_USD" in df.columns:
         df["Price_USD"] = pd.to_numeric(df["Price_USD"], errors="coerce").fillna(0)
-        # For rows with Price_USD = 0, compute from Hours × Rate as fallback
         if "Planned_Hours" in df.columns and "Rate_USD" in df.columns:
-            mask = df["Price_USD"] == 0
+            mask = df["Price_USD"].eq(0) & df["Planned_Hours"].gt(0)
             df.loc[mask, "Price_USD"] = (df.loc[mask, "Planned_Hours"] * df.loc[mask, "Rate_USD"]).round(0)
         df["Price_USD"] = df["Price_USD"].round(0).astype(int)
     elif "Planned_Hours" in df.columns and "Rate_USD" in df.columns:
@@ -10667,6 +10674,15 @@ def convert_excel_to_mspdi(
                 parent["RoleStr"]  = ",".join(parent["RoleList"])
                 if (parent.get("PlannedHours") or 0) <= 0:
                     parent["PlannedHours"] = sum(agg.values())
+                
+                # STEP 3 FIXED COST PRESERVATION: Carry forward FixedCost during merge
+                # Prefer sum if children are month splits, else max for duplicates
+                fixed_cost_values = [float(kr.get("FixedCost", 0) or 0) for kr in kid_rows]
+                fixed_cost_sum = sum(fixed_cost_values)
+                fixed_cost_max = max(fixed_cost_values) if fixed_cost_values else 0
+                parent_fixed = float(parent.get("FixedCost", 0) or 0)
+                if fixed_cost_sum > parent_fixed:
+                    parent["FixedCost"] = fixed_cost_sum if fixed_cost_sum > 0 else fixed_cost_max
 
                 # Remove the children
                 removed_child_wbs.update(kid_wbs_list)
