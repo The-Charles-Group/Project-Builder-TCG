@@ -1,0 +1,111 @@
+Things I would fix / verify
+
+Retainer “preserve months” logic is effectively dead
+
+In apply_cadence_to_item():
+
+if not cadence_was_modified(item):
+    return
+...
+existing_months = existing_retainer.get("months") or 0
+if existing_months and not cadence_was_modified(item):
+    total_months = int(existing_months)
+
+
+cadence_was_modified(item) currently just checks if any cadence fields exist at all.
+
+If your Step 3 payload always includes billing_cadence / cadence_units / cadence_price for each row, then cadence_was_modified(item) is always True, so:
+
+the early if not cadence_was_modified(...) never triggers (we always recalc), and
+
+the “preserve existing_months” branch can never run (it re-checks the same condition).
+
+That means the system does NOT currently “preserve existing retainers when cadence wasn’t modified” as the agent claims; it will recompute months every sync.
+
+Suggested quick fix (minimal change):
+
+Delete the early return and make the “preserve” logic key off a separate flag, or change cadence_was_modified() to look for an explicit “dirty” flag that the UI sets only when cadence fields changed.
+
+Easiest: remove this block entirely:
+
+if existing_months and not cadence_was_modified(item):
+    total_months = int(existing_months)
+
+
+…and rely on the fact that if the UI doesn’t send different cadence_units / billing_cadence, total_months will stay the same.
+
+Rates in _recompute_totals
+
+_recompute_totals() uses only Rate_USD when it has to compute a price from rate × hours.
+
+If any items are coming in with only rate_usd (lower-case), they’ll be treated as rate 0 for that calculation.
+
+Suggested tweak:
+
+Replace:
+
+rate = float(item.get("Rate_USD", 0) or 0)
+
+
+with something like:
+
+rate = get_rate_from_item(item)
+
+
+so it uses the same backward-compatible logic as everywhere else.
+
+Make sure Gantt actually uses the monthly expansion helper
+
+You have expand_retainer_into_months() that clones a parent deliverable into monthly children with:
+
+Task_Name = "<Label> - <Month>"
+
+WBS children X.1, X.2, …
+
+Start/End dates restricted to the month. 
+
+SB - Step 3 fixes
+
+That matches Brad’s requirement (“Feb assets, March assets…”, no deliverable spanning multiple months).
+
+Just double-check that your timeline export / Gantt builder actually calls this helper when is_retainer and retainer_months > 0; in the big file I see the helper defined, but you’ll want to confirm it’s wired into the row-building loop.
+
+Manual monthly_price overrides
+
+Right now monthly_price is always recomputed from total_price / total_months.
+
+If you ever intend to let PMs directly enter a monthly price and derive totals from that, this implementation will overwrite their monthly values. (That’s fine for now if the UI only edits the cadence price / total.)
+
+Quick manual tests to run
+
+If you want to confirm behavior in Replit without digging into more code, I’d run:
+
+Sync / export sanity
+
+Edit a deliverable in Step 3 (change price, cadence, units).
+
+Click Save.
+
+Export XML / Gantt.
+
+Confirm the new price and cadence fields appear in the export and top “Totals — Hours / Price” line.
+
+Cadence math
+
+Set a deliverable to Annual, units = 1, price = 12,480.
+
+Verify:
+
+UI shows 12mo ($1,040/mo).
+
+Export shows 12 months’ worth of hours/price if you’re expanding retainers, or the correct total if not yet splitting.
+
+“Retainer months” preservation
+
+Create a scenario where a retainer already has a custom months value (e.g., 18).
+
+Change only the price in Step 3, keep cadence the same.
+
+Save + export.
+
+See if months stay 18 or snap back to cadence_units * cadence_months. If they snap back, that’s the cadence_was_modified issue above.
