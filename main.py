@@ -3630,14 +3630,39 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             
             # CRITICAL: Use get_hours_from_item() to honor Step 3 edits (Planned_Hours)
             # Only fall back to calculated hours if Step 3 didn't set any
-            parent_hours_exact = get_hours_from_item(d)
+            target_hours = get_hours_from_item(d)
             
-            if parent_hours_exact <= 0:
+            if target_hours <= 0:
                 # No Step 3 hours - calculate from hrs_df ONLY (not total_hours which may be stale)
                 calculated_total = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
-                parent_hours_exact = calculated_total
+                target_hours = calculated_total
             
+            parent_hours_exact = target_hours
             parent_hours_display = int(round(parent_hours_exact))
+            
+            # SCALING: Calculate scale factor to normalize role hours to Step 3 target
+            # This ensures XML Work sums to Step 3 Planned_Hours, not database hours
+            source_hours = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
+            if source_hours > 0 and target_hours > 0:
+                hours_scale = target_hours / source_hours
+            else:
+                hours_scale = 1.0
+            
+            # Cache scaled hours_by_role on deliverable for component/task loops
+            if not hrs_df.empty and hours_scale != 1.0:
+                scaled_hrs_df = hrs_df.copy()
+                scaled_hrs_df["Hours"] = (scaled_hrs_df["Hours"] * hours_scale).round(2)
+                d["_scaled_hours_by_role"] = scaled_hrs_df.to_dict("records")
+            else:
+                d["_scaled_hours_by_role"] = d.get("hours_by_role", [])
+            
+            # FIXED COST: Use Step 3 price directly as canonical cost (no recalculation)
+            target_price = get_price_from_item(d)
+            if target_price <= 0:
+                # Fall back to calculated price if Step 3 didn't set any
+                target_price = float(d.get("total_price") or 0)
+            
+            print(f"[WBS_SCALE] {dcode}: target_hours={target_hours}, source_hours={source_hours}, scale={hours_scale:.3f}, target_price={target_price}")
 
             # Check if this is a retainer deliverable (support both old and new cadence fields)
             months = int((d.get("retainer") or {}).get("months", 0) or d.get("retainer_months", 0))
@@ -3655,25 +3680,20 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             is_retainer = months > 0 or d.get("is_retainer", False)
             deliverable_type = "Retainer" if is_retainer else "One-Time"
 
-            # price/rate at deliverable - check for cadence-based pricing first
-            cadence_price_value = float(d.get("cadence_price") or 0)
-            total_price_value = float(d.get("price_usd") or d.get("Price_USD") or d.get("total_price") or 0)
+            # FIXED COST EXPORT: Use Step 3 price (target_price) as the authoritative cost
+            # This replaces all hourly cost calculation with a single FixedCost value
+            deliv_price = round(target_price, 2) if target_price > 0 else 0.0
+            deliv_fixed_cost = deliv_price  # FixedCost for XML export
             
-            if total_price_value > 0:
-                # Use cadence-based pricing from sync
-                deliv_price = round(total_price_value, 2)
-                deliv_rate = round(deliv_price / max(1, (monthly_hours * months) if months else parent_hours_display), 2)
-            elif pricing_mode == "Flat_Blended":
-                deliv_rate = blended_rate
-                deliv_price = round((monthly_hours if months else parent_hours_display) * deliv_rate, 2)
-                if months:
-                    deliv_price = round(deliv_price * months, 2)
+            # DEBUG: Log FixedCost assignment at WBS building stage
+            if deliv_fixed_cost > 0:
+                print(f"[WBS BUILD] 💰 Setting FixedCost={deliv_fixed_cost} for {dcode}: {deliv_label[:40]}")
+            
+            # Calculate effective rate for display only (not used for costing)
+            if parent_hours_display > 0:
+                deliv_rate = round(deliv_price / parent_hours_display, 2)
             else:
-                hrs_by_role_deliv = DB.hours_by_role_for_deliverable(dcode, tg_order, scen_col)
-                deliv_price, _ = DB.price_for_hours_by_role(hrs_by_role_deliv, rate_band)
-                deliv_price = round(deliv_price, 2)
-                if months:
-                    deliv_price = round(deliv_price * months, 2)
+                deliv_rate = 0.0
 
             # Build deliverable node - direct child of Project Summary (flattened hierarchy)
             wbs_deliv = f"1.{deliv_counter_global}"
@@ -3705,15 +3725,16 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Project_Name": project_name, "WBS_ID": wbs_deliv, "Parent_WBS_ID": "1",
                 "Task_Name": deliv_label,
                 "Component": "", "Task": "", "Role": "", "Seniority": "",
-                "Planned_Hours": (monthly_hours * months) if months else parent_hours_display,
+                "Planned_Hours": parent_hours_display,  # Use scaled Step 3 hours (not monthly × months)
                 "Start_Offset_Days": dstart,
                 "Duration_Days": "",  # Task 8: Leave empty for summary bar - computed from children
                 "Start_Date": d.get("Start_Date", ""),
                 "End_Date": d.get("End_Date", ""),
                 "Dependencies": prev_deliv_wbs, "Assignee_External_ID": "", "Notes": deliv_notes,
-                "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
+                "Rate_USD": round(deliv_rate, 2),
                 "Price_USD": round(deliv_price, 2),
-                "Type": deliverable_type  # NEW: Add Type column
+                "FixedCost": round(deliv_fixed_cost, 2),  # CRITICAL: Step 3 price as FixedCost for XML
+                "Type": deliverable_type
             }
             rows.append(deliv_row)
             
@@ -3721,12 +3742,21 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             if is_retainer and months > 0 and billing_cadence == "monthly":
                 project_start = scenario.get("project_start")
                 if project_start:
-                    stored_monthly_price = float(d.get("monthly_price") or 0)
-                    if stored_monthly_price > 0:
-                        deliv_row["Price_USD"] = round(stored_monthly_price * months, 2)
-                        deliv_row["price_usd"] = deliv_row["Price_USD"]
+                    # Parent summary row: 0 hours, full FixedCost
                     deliv_row["Planned_Hours"] = 0
+                    deliv_row["FixedCost"] = round(target_price, 2)  # Full price on parent
+                    
+                    # Each child gets equal share of hours and price
+                    monthly_child_hours = round(target_hours / months, 2) if months > 0 else target_hours
+                    monthly_child_price = round(target_price / months, 2) if months > 0 else target_price
+                    
+                    # Create monthly rows with scaled hours and FixedCost
                     monthly_rows = expand_retainer_into_months(deliv_row, months, project_start)
+                    for mrow in monthly_rows:
+                        mrow["Planned_Hours"] = int(round(monthly_child_hours))
+                        mrow["FixedCost"] = round(monthly_child_price, 2)
+                        mrow["Price_USD"] = round(monthly_child_price, 2)
+                        mrow["Rate_USD"] = 0  # Cost comes from FixedCost only
                     rows.extend(monthly_rows)
 
             comps = DB.components_for_deliverable(dcode, tg_order)
@@ -3737,15 +3767,20 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     comps = sorted({str(x) for x in sub["Component"].dropna().astype(str) if str(x).strip() and str(x).strip() != "nan"})
                 if not comps:
                     comps = ["Work Package"]
-            # Per-month hours by component (exact) and rounded for display
-            comp_hours_map_month = DB.hours_by_component(dcode, tg_order, scen_col)
-            # If not a retainer, treat "month" as the whole
-            base_comp_hours_display = _largest_remainder((monthly_hours if months else parent_hours_display), comp_hours_map_month if months else comp_hours_map_month)
+            
+            # SCALING: Apply hours_scale to component hours so they sum to target_hours
+            comp_hours_map_month_raw = DB.hours_by_component(dcode, tg_order, scen_col)
+            comp_hours_map_scaled = {k: v * hours_scale for k, v in comp_hours_map_month_raw.items()}
+            
+            # If not a retainer, treat "month" as the whole - use SCALED hours
+            base_comp_hours_display = _largest_remainder(parent_hours_display, comp_hours_map_scaled)
 
             prev_comp_wbs = ""
 
             for j, comp in enumerate(comps, start=1):
-                tg_hours_in_comp = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)  # per 'month' basis
+                # SCALING: Apply hours_scale to task group hours within component
+                tg_hours_in_comp_raw = DB.hours_by_taskgroup_for_component(dcode, comp, tg_order, scen_col)
+                tg_hours_in_comp = {tg: hrs * hours_scale for tg, hrs in tg_hours_in_comp_raw.items()}
                 tg_in_comp = sorted({tg for tg in tg_order if tg in tg_hours_in_comp})
                 if not tg_in_comp:
                     continue
@@ -3753,23 +3788,15 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 comp_offset = min(offset_by_tg[tg] for tg in tg_in_comp)
                 comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
 
+                # Use SCALED hours for component
                 comp_hours_month_display = int(base_comp_hours_display.get(comp, 0))
                 comp_hours_total_display = comp_hours_month_display * months if months else comp_hours_month_display
-
-                # Compute component-level price in Per_Resource mode (band-aware), monthly then scale
-                if pricing_mode == "Flat_Blended":
-                    comp_rate = blended_rate
-                    comp_price = round((comp_hours_month_display if months else comp_hours_total_display) * comp_rate, 2)
-                    if months:
-                        comp_price = round(comp_price * months, 2)
-                else:
-                    hrs_by_role_comp = DB.hours_by_role_for_component(dcode, comp, tg_in_comp, scen_col)
-                    comp_price_month, _ = DB.price_for_hours_by_role(hrs_by_role_comp, rate_band)
-                    comp_price = round(comp_price_month * (months if months else 1), 2)
 
                 wbs_comp = f"{wbs_deliv}.{j}"
                 svc_comp = (DB.service_department_for_component(dcode, comp, tg_in_comp)
                             or DB.service_dept_for_component(dcode, comp, tg_in_comp, scen_col))
+                
+                # ZERO COST: All cost comes from deliverable FixedCost, not component/task costs
                 rows.append({
                     "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                     "Deliverable": deliv_label,
@@ -3780,8 +3807,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     "Duration_Days": "",  # Task 8: Leave empty for summary bar - computed from children
                     "Dependencies": (wbs_deliv if j == 1 else prev_comp_wbs),
                     "Assignee_External_ID": "", "Notes": "",
-                    "Rate_USD": round(comp_rate if pricing_mode=="Flat_Blended" else _eff_rate(comp_price, comp_hours_total_display or 0), 2),
-                    "Price_USD": round(comp_price, 2)
+                    "Rate_USD": 0,  # Cost comes from FixedCost only
+                    "Price_USD": 0,  # Cost comes from FixedCost only
+                    "FixedCost": 0   # No FixedCost on components - only on deliverable
                 })
 
                 # --- Tasks under the component ---
@@ -3807,6 +3835,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
                         base_offset = dstart + offset_by_tg[tg] + ((month_idx-1) * total_deliv_duration)
 
+                        # ZERO COST: All cost comes from deliverable FixedCost
                         rows.append({
                             "Row_ID": "", "Deliverable_Code": dcode, "Task_Code": "", "Service_Department": svc_comp,
                             "Deliverable": deliv_label,
@@ -3817,7 +3846,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             "Start_Offset_Days": base_offset,
                             "Duration_Days": dur,
                             "Dependencies": (wbs_comp if (k==1 and month_idx==1) else (prev_task_last_wbs if k>1 else prev_month_last_wbs)),
-                            "Assignee_External_ID": "", "Notes": ""
+                            "Assignee_External_ID": "", "Notes": "",
+                            "Rate_USD": 0,  # Cost comes from FixedCost only
+                            "Price_USD": 0,  # Cost comes from FixedCost only
+                            "FixedCost": 0   # No FixedCost on tasks - only on deliverable
                         })
 
                         # Role rows for this task in this month
@@ -3847,26 +3879,10 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                             svc_task = DB.service_department_for_task(dcode, comp, tg) or svc_task_v2
                             wbs_role = f"{wbs_task}.{r_index}"
 
-                            # Compute role rate
-                            if pricing_mode == "Flat_Blended":
-                                role_rate = float(blended_rate)
-                            else:
-                                rr = DB.role_rates_table(rate_band)
-                                match = rr[(rr["Resource_Title"] == str(role)) & (rr["Seniority"] == str(sen))]
-                                if not match.empty:
-                                    role_rate = float(match["Rate_USD"].iloc[0])
-                                else:
-                                    match2 = rr[rr["Resource_Title"] == str(role)]
-                                    if not match2.empty:
-                                        role_rate = float(match2["Rate_USD"].iloc[0])
-                                    else:
-                                        ps = DB.pricing_settings[DB.pricing_settings["Key"] == "Default_Blended_Rate"]
-                                        base_default = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
-                                        role_rate = base_default * _band_multiplier(rate_band)
-
                             row_hours = int(h)
-                            row_price = int(round(role_rate * row_hours))
-
+                            
+                            # ZERO COST: All cost comes from deliverable FixedCost
+                            # Role rows only carry hours for XML Work, not cost
                             rows.append({
                                 "Row_ID": row_id,
                                 "Deliverable_Code": dcode,
@@ -3880,8 +3896,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                                 "Start_Offset_Days": "", "Duration_Days": "",
                                 "Dependencies": wbs_task if r_index == 1 else prev_role_wbs,
                                 "Assignee_External_ID": "", "Notes": "",
-                                "Rate_USD": round(role_rate, 2),
-                                "Price_USD": row_price
+                                "Rate_USD": 0,  # Cost comes from FixedCost only
+                                "Price_USD": 0,  # Cost comes from FixedCost only
+                                "FixedCost": 0   # No FixedCost on role rows - only on deliverable
                             })
                             prev_role_wbs = wbs_role
 
@@ -3928,6 +3945,18 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
         df["Price_USD"] = (df["Planned_Hours"] * df["Rate_USD"]).round(0).astype(int)
     else:
         df["Price_USD"] = 0
+
+    # FIXED COST EXPORT: Ensure FixedCost is numeric for XML export
+    if "FixedCost" in df.columns:
+        df["FixedCost"] = pd.to_numeric(df["FixedCost"], errors="coerce").fillna(0).round(2)
+        # Log summary of FixedCost values for deliverables
+        deliverable_mask = df["WBS_ID"].astype(str).str.count(r'\.') == 1  # OutlineLevel 2
+        deliverables_with_cost = df.loc[deliverable_mask & (df["FixedCost"] > 0)]
+        if not deliverables_with_cost.empty:
+            total_fixed_cost = deliverables_with_cost["FixedCost"].sum()
+            print(f"[WBS BUILD] 💰 Total FixedCost for {len(deliverables_with_cost)} deliverables: ${total_fixed_cost:,.2f}")
+    else:
+        df["FixedCost"] = 0.0
 
     return df
 
@@ -10464,6 +10493,16 @@ def convert_excel_to_mspdi(
         # Load Excel data
         df = pd.read_excel(input_xlsx, sheet_name=sheet_name)
         
+        # DEBUG: Log DataFrame columns and FixedCost values
+        if "FixedCost" in df.columns:
+            deliverable_mask = df["WBS_ID"].astype(str).str.count(r'\.') == 1 if "WBS_ID" in df.columns else pd.Series([False]*len(df))
+            deliverables_with_cost = df.loc[deliverable_mask & (df["FixedCost"] > 0)]
+            print(f"[MSPDI] 📊 Excel contains FixedCost column with {len(deliverables_with_cost)} non-zero deliverable values")
+            for _, row in deliverables_with_cost.iterrows():
+                print(f"[MSPDI]    FixedCost={row['FixedCost']} for WBS {row.get('WBS_ID', 'N/A')}: {str(row.get('Task_Name', ''))[:40]}")
+        else:
+            print(f"[MSPDI] ⚠️ FixedCost column NOT found in Excel. Columns: {list(df.columns)}")
+        
         # --- Derive a proper project title for the MSPDI <Project><Name> ---
         project_title = None
         try:
@@ -10538,6 +10577,15 @@ def convert_excel_to_mspdi(
             start_date_str = safe_str(row.get("Start_Date"), "")
             end_date_str = safe_str(row.get("End_Date"), "")
             
+            # TASK 16: Extract FixedCost from WBS for XML export (Step 3 price)
+            fixed_cost = safe_float(row.get("FixedCost"), 0.0)
+            
+            # DEBUG: Log deliverable FixedCost values
+            wbs_id = str(row.get("WBS_ID", ""))
+            outline_level = wbs_id.count(".") + 1 if wbs_id else 0
+            if outline_level == 2 and fixed_cost > 0:
+                print(f"[XML EXPORT] 📊 Extracted FixedCost={fixed_cost} for WBS {wbs_id} (Task: {str(row.get('Task_Name', ''))[:50]})")
+            
             task_row = {
                 "WBS": str(row.get("WBS_ID", "")),
                 "ParentWBS": str(row.get("Parent_WBS_ID", "")),
@@ -10553,6 +10601,7 @@ def convert_excel_to_mspdi(
                 "Component": str(row.get("Component", "")),
                 "Rate_USD": rate_usd,   # From scenario pricing
                 "Price_USD": price_usd,  # From scenario pricing
+                "FixedCost": fixed_cost, # Step 3 price as FixedCost (replaces hourly cost calc)
                 "Start_Date": start_date_str,  # Preserve from Gantt if available
                 "End_Date": end_date_str  # Preserve from Gantt if available
             }
@@ -11968,6 +12017,14 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT480M"
                 
+                # STEP 3 PRICING: Use FixedCost from WBS (price_usd) instead of hourly cost calculation
+                # This ensures the XML matches Step 3 pricing exactly
+                fixed_cost = float(r.get("FixedCost", 0))
+                if fixed_cost > 0:
+                    SubElement(task, "FixedCost").text = f"{fixed_cost:.2f}"
+                    SubElement(task, "FixedCostAccrual").text = "3"  # 3 = End (accrue at task completion)
+                    print(f"[XML EXPORT] 💰 Set FixedCost={fixed_cost:.2f} for deliverable: {name_txt}")
+                
                 # Manual Scheduling tags to lock parent timelines
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
@@ -12231,6 +12288,22 @@ def convert_excel_to_mspdi(
         
         assignments_elem = SubElement(project, "Assignments")
         
+        # BACKWARD COMPATIBILITY: Build deliverable FixedCost lookup
+        # Only zero assignment costs when parent deliverable has FixedCost > 0
+        deliverable_fixed_costs = {}
+        for r in rows:
+            outline_level = r["WBS"].count(".") + 1
+            if outline_level == 2:  # Deliverable level
+                fixed_cost = float(r.get("FixedCost", 0))
+                deliverable_fixed_costs[r["WBS"]] = fixed_cost
+        
+        def get_deliverable_wbs(wbs):
+            """Get the L2 deliverable WBS for any task WBS."""
+            parts = wbs.split(".")
+            if len(parts) >= 2:
+                return ".".join(parts[:2])  # L2 = "1.2"
+            return wbs
+        
         # Build assignments for all tasks (including multi-assignment merged tasks)
         assign_uid_counter = 1
         for row in rows:
@@ -12270,14 +12343,17 @@ def convert_excel_to_mspdi(
                     SubElement(assignment, "Units").text = str(units)
                     SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
                     
-                    # Use individual rate and cost from merged assignment data
-                    rate = assign_data.get("rate_usd", 0)
-                    cost = assign_data.get("price_usd", 0)
-                    # Fallback to calculation if not available
-                    if rate == 0:
+                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
+                    # Otherwise, use hourly rate calculation (legacy behavior)
+                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
+                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
+                    if parent_fixed_cost > 0:
+                        SubElement(assignment, "Cost").text = "0.00"
+                    else:
+                        # Fallback to hourly calculation
                         rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate or 0, DB)
                         cost = work_hours * rate
-                    SubElement(assignment, "Cost").text = f"{cost:.2f}"
+                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
                     
                 print(f"[XML EXPORT] 👥 Created {len(row['assignments'])} assignments for multi-assignment task: {row['Name'][:50]} (UID {task_uid})")
             else:
@@ -12307,16 +12383,18 @@ def convert_excel_to_mspdi(
                     SubElement(assignment, "Units").text = str(units)
                     SubElement(assignment, "Work").text = f"PT{int(work_min)}M"
                     
-                    # Use stored Rate_USD from scenario pricing
-                    stored_rate = uid_to_rate.get(task_uid)
-                    if stored_rate is not None and stored_rate > 0:
-                        rate = stored_rate
+                    # BACKWARD COMPATIBILITY: Zero cost only if parent deliverable has FixedCost
+                    # Otherwise, use hourly rate calculation (legacy behavior)
+                    deliv_wbs = get_deliverable_wbs(row.get("WBS", ""))
+                    parent_fixed_cost = deliverable_fixed_costs.get(deliv_wbs, 0)
+                    if parent_fixed_cost > 0:
+                        SubElement(assignment, "Cost").text = "0.00"
                     else:
+                        # Fallback to hourly calculation
                         res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
                         rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate or 0, DB)
-                    
-                    cost = work_hours * rate
-                    SubElement(assignment, "Cost").text = f"{cost:.2f}"
+                        cost = work_hours * rate
+                        SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
         # WORKFRONT FIX: Add PredecessorLinks for:
         # 1. Deliverable-level dependencies (OutlineLevel ≤4 to ≤4)
