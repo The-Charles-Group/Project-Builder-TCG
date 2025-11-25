@@ -39,6 +39,9 @@ ENABLE_MULTI_ASSIGNMENT = True  # Group roles into multi-assignment tasks
 # ============================================================
 CONF_THRESHOLD = float(os.environ.get("CONF_THRESHOLD", "70.0"))  # AI confidence threshold (0-100)
 TFIDF_THRESHOLD = float(os.environ.get("TFIDF_THRESHOLD", "0.70"))  # TF-IDF similarity threshold (0-1)
+
+# Default billable rate for Step 3 pricing and XML exports
+DEFAULT_BILLABLE_RATE_USD = 210.0
 # ============================================================
 
 def should_select_deliverable(match_percent: float, tfidf_similarity: float, selection_mode: str = "confidence_only") -> Dict[str, Any]:
@@ -2665,9 +2668,9 @@ class AgencyDB:
                 # Apply band-aware default rate as last resort
                 if self.pricing_settings is not None and isinstance(self.pricing_settings, pd.DataFrame):
                     ps = self.pricing_settings[self.pricing_settings["Key"]=="Default_Blended_Rate"]
-                    base_default = float(ps["Default"].iloc[0]) if isinstance(ps, pd.DataFrame) and not ps.empty else 195.0
+                    base_default = float(ps["Default"].iloc[0]) if isinstance(ps, pd.DataFrame) and not ps.empty else DEFAULT_BILLABLE_RATE_USD
                 else:
-                    base_default = 195.0
+                    base_default = DEFAULT_BILLABLE_RATE_USD
                 
                 if self.rate_bands is not None and isinstance(self.rate_bands, pd.DataFrame):
                     band = self.rate_bands[self.rate_bands["Band_Name"] == rate_band]
@@ -3477,7 +3480,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     if blended_rate is None:
         # fallback to default from Pricing_Settings already loaded in v2
         ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
-        blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
+        blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else DEFAULT_BILLABLE_RATE_USD
     blended_rate = float(blended_rate)
 
     # project parent - set to 0 for proper Project Summary task
@@ -4098,7 +4101,7 @@ class BuildScenarioCPayload(BaseModel):
     base: str  # "A" or "B"
     add_on_codes: List[str] = []
     pricing_mode: str = "Flat_Blended"   # or "Per_Resource"
-    blended_rate: Optional[float] = 195.0
+    blended_rate: Optional[float] = DEFAULT_BILLABLE_RATE_USD
     rate_band: str = "Standard_US"
     complexity: Optional[str] = None        # default to base scenario's
     tier: Optional[str] = None
@@ -4324,7 +4327,7 @@ def create_retainer_summary(scenario: dict) -> pd.DataFrame:
         # Calculate costs
         pricing_mode = scenario.get("pricing_mode", "Flat_Blended")
         if pricing_mode == "Flat_Blended":
-            blended_rate = scenario.get("blended_rate", 195.0)
+            blended_rate = scenario.get("blended_rate", DEFAULT_BILLABLE_RATE_USD)
             monthly_cost = monthly_hours * blended_rate
         else:
             # Use average rate from hours_by_role
@@ -4332,7 +4335,7 @@ def create_retainer_summary(scenario: dict) -> pd.DataFrame:
             if not hrs_df.empty and "Rate" in hrs_df.columns:
                 avg_rate = hrs_df["Rate"].mean()
             else:
-                avg_rate = 195.0
+                avg_rate = DEFAULT_BILLABLE_RATE_USD
             monthly_cost = monthly_hours * avg_rate
         
         total_hours = monthly_hours * months
@@ -6726,7 +6729,7 @@ class BuildScenarioPayload(BaseModel):
     project_name: Optional[str] = None
     project_start: Optional[str] = None
     pricing_mode: Optional[str] = "Flat_Blended"
-    blended_rate: Optional[float] = 195.0
+    blended_rate: Optional[float] = DEFAULT_BILLABLE_RATE_USD
     rate_band: Optional[str] = "Standard_US"
     client_budget_usd: Optional[float] = None
     retainers: Optional[List[Dict[str, Any]]] = None
@@ -7697,7 +7700,7 @@ async def api_build_scenario(payload: BuildScenarioPayload):
             "selected_components": components_map,
             "selected_l3": l3_map,
             "pricing_mode": payload.pricing_mode or "Flat_Blended",
-            "blended_rate": payload.blended_rate or 195,
+            "blended_rate": payload.blended_rate or DEFAULT_BILLABLE_RATE_USD,
             "rate_band": payload.rate_band or "Standard_US",
             "project_start": payload.project_start or datetime.date.today().isoformat(),
             "client_budget_usd": payload.client_budget_usd or None,
@@ -9547,7 +9550,7 @@ def api_audit_pricing(p: AuditPricingPayload):
             # default blended rate if omitted
             if p.blended_rate is None:
                 ps = DB.pricing_settings[DB.pricing_settings["Key"]=="Default_Blended_Rate"]
-                p.blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else 195.0
+                p.blended_rate = float(ps["Default"].iloc[0]) if not ps.empty else DEFAULT_BILLABLE_RATE_USD
             expected = billable_total * float(p.blended_rate)
             missing_roles = []
         else:
@@ -10526,7 +10529,7 @@ def _std_rate_for(role: str, mode: str, band: str, blended: float, db: AgencyDB)
                 return float(row[band].iloc[0])  # columns like Standard_US, Premium_US
     except Exception:
         pass
-    return float(blended or 0)
+    return float(blended or DEFAULT_BILLABLE_RATE_USD)
 
 def convert_excel_to_mspdi(
     input_xlsx: str,
@@ -12038,7 +12041,7 @@ def convert_excel_to_mspdi(
             SubElement(resource, "Type").text = "1"  # Work resource
             # Add StandardRate for pricing
             role = res.get("Name", "Unassigned")
-            rate = _std_rate_for(role, pricing_mode, rate_band, blended_rate or 0, DB)
+            rate = _std_rate_for(role, pricing_mode, rate_band, blended_rate, DB)
             SubElement(resource, "StandardRate").text = f"{rate:.2f}"
 
         # HYBRID COSTTYPE HELPER: Apply CostType based on FixedCost for ALL task types
@@ -12234,9 +12237,6 @@ def convert_excel_to_mspdi(
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
-            
-            # DEBUG: Show what price fields each row has
-            print(f"DEBUG-COST: {name_txt[:50]} | FixedCost={r.get('FixedCost')} | Price_USD={r.get('Price_USD')} | price_usd={r.get('price_usd')} | Cadence={r.get('Cadence')}")
             
             # UNIVERSAL COSTTYPE: Apply hybrid CostType logic to ALL tasks (deliverables, summaries, leaves, monthly children)
             # This ensures any task with FixedCost > 0 gets CostType=2, all others get CostType=0 (Role Hourly)
@@ -12443,7 +12443,7 @@ def convert_excel_to_mspdi(
                         SubElement(assignment, "Cost").text = "0.00"
                     else:
                         # Fallback to hourly calculation
-                        rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate or 0, DB)
+                        rate = _std_rate_for(resource_name, pricing_mode, rate_band, blended_rate, DB)
                         cost = work_hours * rate
                         SubElement(assignment, "Cost").text = f"{cost:.2f}"
                     
@@ -12484,7 +12484,7 @@ def convert_excel_to_mspdi(
                     else:
                         # Fallback to hourly calculation
                         res_name = next((r["Name"] for r in resources if r["UID"] == res_uid), "Unassigned")
-                        rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate or 0, DB)
+                        rate = _std_rate_for(res_name, pricing_mode, rate_band, blended_rate, DB)
                         cost = work_hours * rate
                         SubElement(assignment, "Cost").text = f"{cost:.2f}"
 
@@ -13616,7 +13616,7 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             "items": items,
             "pricing_mode": payload.pricing_mode,
             "rate_band": payload.rate_band,
-            "blended_rate": payload.blended_rate or 195.0,
+            "blended_rate": payload.blended_rate or DEFAULT_BILLABLE_RATE_USD,
             "project_start": payload.fixed_start_iso
         }
         
@@ -13650,7 +13650,7 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             "items": items,
             "pricing_mode": payload.pricing_mode,
             "rate_band": payload.rate_band,
-            "blended_rate": payload.blended_rate or 195.0,
+            "blended_rate": payload.blended_rate or DEFAULT_BILLABLE_RATE_USD,
             "project_start": payload.fixed_start_iso,
             "project_name": project_name
         }
@@ -13663,7 +13663,7 @@ def api_xml_export_flexible(payload: XMLExportPayload):
     if payload.blended_rate:
         scenario["blended_rate"] = payload.blended_rate
     elif not scenario.get("blended_rate"):
-        scenario["blended_rate"] = 195.0
+        scenario["blended_rate"] = DEFAULT_BILLABLE_RATE_USD
     
     # Build WBS DataFrame
     df = build_wbs_dataframe_from_scenario(scenario, project_name)
@@ -14016,7 +14016,7 @@ async def analyze_retainer_suggestions(payload: RetainerSuggestionsPayload):
         retainer_plan = {
             "total_retainers": total_converted,
             "monthly_hours": round(total_monthly_hours, 1),
-            "monthly_budget": round(total_monthly_hours * (scenario.get("blended_rate", 195)), 2),
+            "monthly_budget": round(total_monthly_hours * (scenario.get("blended_rate", DEFAULT_BILLABLE_RATE_USD)), 2),
             "suggested_duration": 12,
             "deliverables": suggestions
         }
