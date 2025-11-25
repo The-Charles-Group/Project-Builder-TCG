@@ -8857,36 +8857,57 @@ def api_get_scenarios():
 @app.post("/api/scenarios")
 def api_post_scenarios(payload: dict):
     """
-    Build scenarios from deliverable codes.
-    This endpoint accepts multiple field name formats for maximum compatibility.
-    It's a compatibility wrapper for the existing build logic.
-    
-    GUARD: If reset=False (default) and scenario already exists in SCENARIO_STORE,
-    return the cached scenario to preserve Step 3 edits.
+    Builds or refreshes a pricing scenario.
+    - If reset=true (query param) -> rebuilds from Step 2 baseline.
+    - Otherwise -> uses the working copy stored in SCENARIO_STORE to preserve Step 3 edits.
     """
     try:
-        # Check for reset flag (defaults to False to preserve Step 3 edits)
-        reset = payload.get("reset", False)
+        # Extract session_id from payload (for compatibility)
         session_id = payload.get("sessionId") or payload.get("session_id")
         
-        # GUARD: Preserve Step 3 edits unless explicit reset requested
-        if not reset and session_id and session_id in SCENARIO_STORE:
-            cached_scenario = SCENARIO_STORE[session_id]
-            if cached_scenario.get("items") and len(cached_scenario.get("items", [])) > 0:
-                print(f"[/api/scenarios] ✅ Returning cached scenario for {session_id} (preserving Step 3 edits)")
-                cached_scenario = _recompute_totals(cached_scenario)
-                SCENARIO_STORE[session_id] = cached_scenario
+        # Read reset flag from query args (takes precedence) or payload fallback
+        reset_flag = request.args.get("reset", "false").lower() == "true"
+        if not reset_flag and "reset" in payload:
+            reset_flag = payload.get("reset", False) and True
+        
+        # Get current state from dual-entry store
+        state = get_session_state(session_id)
+        baseline = state.get("baseline", {})
+        scenario = state.get("scenario", {})
+        
+        # --- CASE 1: RESET (explicit rebuild from baseline) -------------------
+        if reset_flag:
+            if baseline:
+                print(f"[/api/scenarios] 🔄 Reset requested - restoring from baseline for {session_id}")
+                new_scenario = deepcopy(baseline)
+                new_scenario = _recompute_totals(new_scenario)
+                SCENARIO_STORE[session_id] = new_scenario
                 return {
                     "ok": True,
-                    "scenarios": {"A": cached_scenario},
-                    "totals": cached_scenario.get("totals", {}),
-                    "total_hours": cached_scenario.get("totals", {}).get("hours", 0),
-                    "total_price": cached_scenario.get("totals", {}).get("price", 0),
-                    "cached": True
+                    "scenarios": {"A": new_scenario},
+                    "totals": new_scenario.get("totals", {}),
+                    "total_hours": new_scenario.get("totals", {}).get("hours", 0),
+                    "total_price": new_scenario.get("totals", {}).get("price", 0),
+                    "reset": True
                 }
         
-        if reset:
-            print(f"[/api/scenarios] 🔄 Reset requested - rebuilding from Step 2 for {session_id}")
+        # --- CASE 2: NORMAL BUILD (preserve Step 3 edits) ---------------------
+        # If a working copy exists, reuse it — don't rebuild from Step 2
+        if scenario and scenario.get("items"):
+            print(f"[/api/scenarios] ✅ Returning working scenario for {session_id} (preserving Step 3 edits)")
+            scenario = _recompute_totals(scenario)
+            SCENARIO_STORE[session_id] = scenario
+            return {
+                "ok": True,
+                "scenarios": {"A": scenario},
+                "totals": scenario.get("totals", {}),
+                "total_hours": scenario.get("totals", {}).get("hours", 0),
+                "total_price": scenario.get("totals", {}).get("price", 0),
+                "cached": True
+            }
+        
+        if reset_flag:
+            print(f"[/api/scenarios] Reset requested but no baseline - falling back to Step 2")
         
         # Extract codes from the payload - check all possible field names
         codes = None
