@@ -1,0 +1,424 @@
+1. Add helpers to keep data correct (merge instead of overwrite)
+
+Goal: Fix the dual-source-of-truth bug by merging Step 3 edits into the stored scenario without nuking timeline/WBS/metadata.
+
+1.1 Implement _merge_items(old_item, new_item, editable_fields)
+
+Create a helper that:
+
+Copies old_item
+
+For each key in new_item:
+
+If key is in editable_fields → overwrite in merged
+
+If key is not in old_item → add it (new field)
+
+Otherwise keep the old value
+
+editable_fields should include:
+
+billing_cadence, cadence_units, cadence_price
+
+price_usd, Price_USD
+
+Planned_Hours, planned_hours
+
+retainer, retainer_months, monthly_hours, monthly_price
+
+(plus any other Step-3-editable fields you know about)
+
+Acceptance criteria:
+
+Existing keys like WBS IDs, dependencies, timeline metadata, and PM overrides are left untouched.
+
+Only pricing/cadence fields actually change when you sync.
+
+1.2 Implement merge_scenario_from_sync(session_id)
+
+Read from SCENARIO_SYNC_STATE[session_id]["scenario"] and SCENARIO_STORE[session_id]["scenario"].
+
+Merge:
+
+Top-level scenario keys: shallow merge, but don’t delete store-only keys (e.g. timeline, wbs, etc.).
+
+Items: build a map of old_items_by_id using id or Row_ID.
+
+For each new_item from sync:
+
+If it has a matching id → run _merge_items(old, new, editable_fields)
+
+If not → append as a new item.
+
+Write result back to SCENARIO_STORE[session_id]["scenario"] and update updated_at.
+
+Acceptance criteria:
+
+After a Step 3 save, the scenario in SCENARIO_STORE:
+
+Contains any new/edited items from Step 3.
+
+Still contains timeline/WBS/PM state that wasn’t touched by Step 3.
+
+1.3 Wire merge_scenario_from_sync into the sync endpoint
+
+In /api/scenario/sync/{session_id} (or equivalent):
+
+Update SCENARIO_SYNC_STATE with the incoming scenario.
+
+Run any per-item helpers (eventually apply_cadence_to_item) on the sync scenario.
+
+Call merge_scenario_from_sync(session_id).
+
+Call _recompute_totals(SCENARIO_STORE[session_id]["scenario"]).
+
+Acceptance criteria:
+
+Editing a price in Step 3 and hitting Save:
+
+Immediately updates the stored scenario used by exports/timeline.
+
+No loss of timeline/WBS structure.
+
+2. Connect syncing to cadence-aware item updates
+
+Goal: Step 3 saves should run through cadence logic, not just store raw fields.
+
+2.1 Add a cadence_was_modified(item) helper
+
+Returns True if the item from the client includes:
+
+billing_cadence
+
+or cadence_units
+
+or cadence_price
+
+Acceptance criteria:
+
+If an item just changes a label or hours and doesn’t touch cadence fields, we don’t force cadence recalcs or retainer changes.
+
+2.2 Call apply_cadence_to_item(item) before merging
+
+In the sync handler, loop through payload.scenario.items:
+
+For each item, call apply_cadence_to_item(item).
+
+Then pass this modified scenario into SCENARIO_SYNC_STATE and merge_scenario_from_sync.
+
+Acceptance criteria:
+
+Changing cadence or units in Step 3:
+
+Updates price_usd / Price_USD / retainer months / monthly hours on the stored item.
+
+Items with no cadence changes keep their existing retainer months and hours.
+
+3. Add helpers for rates and hours (backward compatible)
+
+Goal: Handle legacy field naming and avoid divide-by-zero / data loss.
+
+3.1 Implement get_rate_from_item(item)
+
+Check (in order): Rate_USD, rate_usd, rate, Blended_Rate_USD, blended_rate_usd.
+
+Return first numeric value you can parse, or 0.0.
+
+3.2 Implement get_hours_from_item(item)
+
+Check: Planned_Hours, planned_hours, hours.
+
+Return first numeric value you can parse, or 0.0.
+
+3.3 Implement set_hours_on_item(item, hours)
+
+If item already has Planned_Hours → keep using that.
+
+Else if it has planned_hours → use that.
+
+Else default to Planned_Hours.
+
+Acceptance criteria:
+
+Legacy data with Rate_USD/Planned_Hours continues to work.
+
+New data with rate_usd/planned_hours also works.
+
+No crashes when rate is missing, zero, or invalid.
+
+4. Make applying cadence work reliably
+
+Goal: Robust cadence math with sane defaults, backward compatibility, and retainer preservation.
+
+4.1 Implement/finish apply_cadence_to_item(item)
+
+Key behaviors:
+
+Normalize cadence:
+
+Map variations: "one time", "one-time" → one_time, "semi-annual"/"semiannual" → semi_annual, "yearly" → annual, etc.
+
+Defaults for cadence_units:
+
+Missing, 0, or invalid → 1.
+
+Derive cadence_price if missing:
+
+If cadence_price is empty/zero:
+
+Look up existing total via price_usd/Price_USD/total_price.
+
+Infer cadence_price = existing_total / units (if units > 0).
+
+Set price fields consistently:
+
+price_usd (canonical) = cadence_price * units.
+
+Price_USD mirrors price_usd.
+
+Optional total_price alias mirrors price_usd for convenience.
+
+Retainer logic:
+
+months_per_cadence:
+
+one_time: 0, monthly: 1, quarterly: 3, semi_annual: 6, annual: 12.
+
+total_months = months_per_cadence * units.
+
+If existing retainer.months > 0 and cadence wasn’t modified → preserve existing months.
+
+Otherwise set:
+
+is_retainer = cadence != "one_time" and total_months > 0
+
+retainer.months = total_months
+
+retainer_months = total_months
+
+Hours calculation:
+
+If rate > 0 → total_hours = total_price / rate.
+
+Else → keep existing hours from get_hours_from_item.
+
+Use set_hours_on_item to write.
+
+If retainer & months > 0:
+
+monthly_hours = total_hours / months
+
+monthly_price = total_price / months
+
+Else:
+
+monthly_hours = 0, monthly_price = 0.
+
+Acceptance criteria:
+
+Changing cadence from one-time → monthly:
+
+Automatically turns the item into a retainer with proper retainer.months and per-month figures.
+
+Existing retainers that don’t touch cadence fields retain their months and hours.
+
+No divide-by-zero, no loss of hours when rate is missing.
+
+5. Use one price field for totals (field naming consistency)
+
+Goal: Have a single “source of truth” for total price, with backward-compatible aliases.
+
+5.1 Standardize reads
+
+Wherever you calculate totals or exports, read price as:
+
+total_price = float(
+    item.get("price_usd")
+    or item.get("Price_USD")
+    or item.get("total_price")
+    or 0
+)
+
+5.2 Standardize writes
+
+When recomputing pricing:
+
+Always set price_usd.
+
+Mirror to Price_USD.
+
+Optionally set total_price as alias.
+
+5.3 Update exports and summaries
+
+CSV/export code:
+
+“Cadence Price” → cadence_price
+
+“Units” → cadence_units
+
+“Total Price” → price_usd
+
+Scenario summaries:
+
+Sum price_usd across items for total scenario price.
+
+Acceptance criteria:
+
+All totals (Step 3, summaries, exports) show the same dollar amount for a scenario.
+
+No place still uses a random price field that can drift.
+
+6. Split retainers into monthly views (Gantt / WBS expansion)
+
+Goal: For monthly retainers, automatically create monthly child tasks that stay within calendar months and match PM naming patterns.
+
+6.1 Add month_bounds(start_date, offset) helper
+
+Input:
+
+start_date: date (project start)
+
+offset: int (0 for first month, 1 for next month, etc.)
+
+Output:
+
+(first_day_of_month, last_day_of_month)
+
+6.2 Extend Gantt/WBS builder with retainer expansion
+
+In build_wbs_with_pricing (or relevant function):
+
+Detect retainers:
+
+is_retainer = item.get("is_retainer")
+
+months = item.get("retainer_months") or item.get("retainer", {}).get("months")
+
+cadence = billing_cadence
+
+For non-retainers or months <= 0 → keep existing behavior.
+
+For retainers + monthly cadence:
+
+Build the parent deliverable row as now, but:
+
+Optionally set its Planned_Hours to 0 and treat it as a summary row.
+
+Compute total hours and hours_per_month = total_hours / months.
+
+For i in [0..months-1]:
+
+Get monthly bounds with month_bounds(project_start_date, i).
+
+Compute Start_Offset_Days, Duration_Days.
+
+Clone from parent row into a child row:
+
+WBS_ID = f"{parent_WBS_ID}.{i+1}"
+
+Parent_WBS_ID = parent_WBS_ID
+
+Task_Name = f"{Deliverable_Name} - {MonthName}"
+
+Planned_Hours = hours_per_month
+
+Set start/end dates, offsets, duration.
+
+Dependencies:
+
+First month: same dependencies as parent.
+
+Later months: depend on previous month child WBS (parent_WBS_ID.{i}).
+
+Acceptance criteria:
+
+A monthly retainer with N months:
+
+Has a parent deliverable row.
+
+Has N child rows, each confined to its calendar month.
+
+Child names follow “<Deliverable> – <Month>” pattern.
+
+Other tasks that depend on the original deliverable still work because the parent WBS row remains.
+
+7. Test pricing changes sync and export
+
+Goal: Verify end-to-end that Brad’s complaints are resolved.
+
+7.1 Regression tests / scripts
+
+Create test cases for:
+
+Simple price edit
+
+Start with a one-time deliverable.
+
+Change price in Step 3 and save.
+
+Export scenario:
+
+Exported price matches Step 3 price.
+
+Multiple saves
+
+Edit price → save.
+
+Edit again → save.
+
+Export:
+
+Export reflects latest change, not the first one or a stale value.
+
+Cadence change → monthly retainer
+
+Take an existing one-time deliverable.
+
+In Step 3:
+
+Set cadence = monthly, units = 6, cadence_price = 10,000.
+
+Save → export:
+
+Total price shown as 60,000.
+
+Retainer months = 6.
+
+Gantt shows six monthly child rows.
+
+Existing retainer untouched
+
+Scenario with a retainer configured pre-migration.
+
+Open Step 3, change a non-cadence field (e.g. label).
+
+Save:
+
+Retainer months and hours are unchanged.
+
+Missing rate
+
+Deliverable with price but no rate.
+
+Adjust cadence.
+
+Save:
+
+Existing hours preserved (no crash, no zeros where they shouldn’t be).
+
+Gantt naming and month boundaries
+
+Monthly retainer starting mid-year (e.g. May).
+
+After export:
+
+Child tasks named “<Deliverable> – May”, “– June”, etc.
+
+Each child starts at the first of the month and ends at the last.
+
+Acceptance criteria:
+
+All above flows behave as expected without manual hacks.
+
+Brad’s original issues (edits not showing in export, confusing total vs monthly) are no longer reproducible.

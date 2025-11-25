@@ -1,0 +1,443 @@
+0. Assumptions
+
+I’ll assume:
+
+You have:
+
+SCENARIO_SYNC_STATE[session_id]["scenario"] → what Step 3 editor is editing
+
+SCENARIO_STORE[session_id]["scenario"] → what export/timeline uses
+
+Each scenario item has some stable key like id, deliverable_id, or Row_ID that you can use to match items.
+
+If it doesn’t, make Task 0.0: “Add a persistent id to each line item and keep it stable across sync/timeline.”
+
+1. Safe sync → store: merge instead of overwrite
+1.1. Implement a merge helper
+
+Replace the naive “deepcopy sync → store” idea with a merging helper:
+
+def _merge_items(old_item: dict, new_item: dict, editable_fields: set[str]) -> dict:
+    merged = old_item.copy()
+    for k, v in new_item.items():
+        # Always keep structural keys from new (id, labels, etc.)
+        if k in editable_fields or k not in merged:
+            merged[k] = v
+        # else: preserve old value (e.g. timeline metadata, manual overrides)
+    return merged
+
+
+Then:
+
+def merge_scenario_from_sync(session_id: str):
+    sync_entry = SCENARIO_SYNC_STATE.get(session_id)
+    store_entry = SCENARIO_STORE.get(session_id, {})
+    if not sync_entry or "scenario" not in sync_entry:
+        return
+
+    new_scen = sync_entry["scenario"] or {}
+    old_scen = (store_entry.get("scenario") or {}).copy()
+
+    # fields users can edit in Step 3
+    editable_fields = {
+        "billing_cadence", "cadence_units", "cadence_price",
+        "price_usd", "Price_USD",
+        "planned_hours", "Planned_Hours",
+        "retainer", "retainer_months", "monthly_hours", "monthly_price",
+        # any other Step-3-editable fields
+    }
+
+    # Merge top-level scenario keys (keep things like `timeline`, `wbs`, etc.)
+    merged_scen = old_scen.copy()
+    for k, v in new_scen.items():
+        if k == "items":
+            continue
+        merged_scen[k] = v if not isinstance(v, dict) else {**old_scen.get(k, {}), **v}
+
+    # Merge items by id
+    old_items_by_id = {
+        (item.get("id") or item.get("Row_ID")): item
+        for item in old_scen.get("items", [])
+        if (item.get("id") or item.get("Row_ID"))
+    }
+
+    merged_items: list[dict] = []
+    for new_item in new_scen.get("items", []):
+        item_id = new_item.get("id") or new_item.get("Row_ID")
+        if not item_id:
+            merged_items.append(new_item)
+            continue
+
+        old_item = old_items_by_id.get(item_id, {})
+        merged_items.append(_merge_items(old_item, new_item, editable_fields))
+
+    merged_scen["items"] = merged_items
+
+    store_entry["scenario"] = merged_scen
+    store_entry["updated_at"] = time.time()
+    SCENARIO_STORE[session_id] = store_entry
+
+1.2. Wire it into sync endpoint
+
+In your /scenario/sync/{session_id} handler, after you:
+
+Accept the updated scenario from the client
+
+Update SCENARIO_SYNC_STATE[session_id]["scenario"]
+
+call:
+
+merge_scenario_from_sync(session_id)
+_recompute_totals(SCENARIO_STORE[session_id]["scenario"])
+
+
+This:
+
+Keeps timeline/WBS/UID/other metadata living in the store
+
+Only updates the fields Step 3 is allowed to change
+
+2. Backward-compatible apply_cadence_to_item
+2.1. Rate & hours helpers
+
+Add a few small utilities:
+
+def get_rate_from_item(item: dict) -> float:
+    for key in ["Rate_USD", "rate_usd", "rate", "Blended_Rate_USD", "blended_rate_usd"]:
+        if key in item and item[key] not in (None, ""):
+            try:
+                return float(item[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+def get_hours_from_item(item: dict) -> float:
+    for key in ["Planned_Hours", "planned_hours", "hours"]:
+        if key in item and item[key] not in (None, ""):
+            try:
+                return float(item[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+def set_hours_on_item(item: dict, hours: float):
+    # prefer existing convention
+    if "Planned_Hours" in item or "planned_hours" not in item:
+        item["Planned_Hours"] = round(hours, 2)
+    else:
+        item["planned_hours"] = round(hours, 2)
+
+2.2. Retainer preservation rules
+
+You don’t want to blow away existing custom retainer.months if the user hasn’t actually changed cadence fields.
+
+Define a small detector:
+
+def cadence_was_modified(item: dict) -> bool:
+    # depending on what your frontend actually sends:
+    return any(k in item for k in ("billing_cadence", "cadence_units", "cadence_price"))
+
+2.3. Robust cadence helper
+def apply_cadence_to_item(item: dict):
+    # Only touch items where cadence is present/changed
+    if not cadence_was_modified(item):
+        return
+
+    cadence_raw = (item.get("billing_cadence") or item.get("cadence") or "one_time").lower()
+    # normalize
+    mapping = {
+        "one time": "one_time",
+        "one-time": "one_time",
+        "one_time": "one_time",
+        "monthly": "monthly",
+        "month": "monthly",
+        "quarterly": "quarterly",
+        "q": "quarterly",
+        "semi-annual": "semi_annual",
+        "semiannual": "semi_annual",
+        "annual": "annual",
+        "yearly": "annual",
+    }
+    cadence = mapping.get(cadence_raw, "one_time")
+    item["billing_cadence"] = cadence
+
+    # cadence_units: default to 1; clamp <=0 to 1
+    try:
+        units = int(item.get("cadence_units") or 1)
+    except (TypeError, ValueError):
+        units = 1
+    if units <= 0:
+        units = 1
+    item["cadence_units"] = units
+
+    # cadence_price: if missing, fall back to existing total price or price_usd
+    def _get_total_price_existing() -> float:
+        for key in ["price_usd", "Price_USD", "total_price", "Total_Price"]:
+            if key in item and item[key] not in (None, ""):
+                try:
+                    return float(item[key])
+                except (TypeError, ValueError):
+                    continue
+        return 0.0
+
+    try:
+        cadence_price = float(item.get("cadence_price") or 0.0)
+    except (TypeError, ValueError):
+        cadence_price = 0.0
+
+    if cadence_price <= 0:
+        # If we had an old total price and new units, infer cadence price
+        existing_total = _get_total_price_existing()
+        cadence_price = existing_total / units if units > 0 else existing_total
+
+    item["cadence_price"] = round(cadence_price, 2)
+
+    # months per cadence (for retainers)
+    months_per_cadence = {
+        "one_time": 0,
+        "monthly": 1,
+        "quarterly": 3,
+        "semi_annual": 6,
+        "annual": 12,
+    }.get(cadence, 0)
+
+    total_price = cadence_price * units
+    item["price_usd"] = round(total_price, 2)   # canonical
+    item["Price_USD"] = item["price_usd"]       # keep legacy field in sync
+    item["total_price"] = item["price_usd"]     # optional alias if you want it
+
+    total_months = months_per_cadence * units
+
+    # Respect existing retainer if it was manually configured AND cadence is still compatible
+    existing_retainer = item.get("retainer") or {}
+    existing_months = existing_retainer.get("months") or 0
+    if existing_months and not cadence_was_modified(item):
+        total_months = int(existing_months)
+
+    is_retainer = (cadence != "one_time") and total_months > 0
+    item["is_retainer"] = is_retainer
+    if is_retainer:
+        item["retainer"] = {**existing_retainer, "months": total_months}
+        item["retainer_months"] = total_months
+
+    rate = get_rate_from_item(item)
+    if rate > 0:
+        total_hours = total_price / rate
+    else:
+        # No rate → keep existing hours, don’t blow them away
+        total_hours = get_hours_from_item(item)
+
+    set_hours_on_item(item, total_hours)
+
+    if is_retainer and total_months > 0:
+        monthly_hours = total_hours / total_months
+        monthly_price = total_price / total_months
+        item["monthly_hours"] = round(monthly_hours, 2)
+        item["monthly_price"] = round(monthly_price, 2)
+    else:
+        # non-retainer
+        item["monthly_hours"] = 0
+        item["monthly_price"] = 0
+
+2.4. Where to call it
+
+When you process Step 3 payload inside sync:
+
+for item in payload.scenario.get("items", []):
+    apply_cadence_to_item(item)
+
+
+Then call merge_scenario_from_sync and _recompute_totals.
+
+3. Field naming strategy
+
+To avoid confusion:
+
+Canonical total price field: price_usd (snake) + keep Price_USD in sync for legacy.
+
+Cadence fields: billing_cadence, cadence_units, cadence_price.
+
+Optional: total_price as a pure convenience alias for the UI / exports that want a “Total” column.
+
+Action items:
+
+Anywhere in code that reads “price” for billing/export should standardize to:
+
+total_price = float(
+    item.get("price_usd")
+    or item.get("Price_USD")
+    or item.get("total_price")
+    or 0
+)
+
+
+CSV/export mappers should emit:
+
+“Cadence Price” → cadence_price
+
+“Units” → cadence_units
+
+“Total Price” → price_usd (or total_price if you’d rather).
+
+Summary stats (e.g. scenario totals) should always sum price_usd so they’re in sync with exports.
+
+4. Edge-case handling
+4.1. Missing cadence_units
+
+Handled above: missing / 0 / invalid → 1.
+
+Add tests for:
+
+cadence_units missing
+
+cadence_units = "0" or 0 → ends up as 1
+
+4.2. Existing retainers with custom months
+
+Preserve if cadence wasn’t explicitly modified:
+
+In apply_cadence_to_item, keep retainer["months"] if:
+
+existing_months > 0 and
+
+the UI didn’t send new cadence info.
+
+You may want a stronger rule: only override retainer months if the user changed cadence_units or explicitly toggled cadence.
+
+4.3. Divide-by-zero / missing rate
+
+Handled via:
+
+get_rate_from_item with multiple field names
+
+Fall back to previous Planned_Hours instead of recalculating if rate <= 0.
+
+Add tests for:
+
+No rate fields at all
+
+Non-numeric rate
+
+Zero rate
+
+5. Gantt monthly expansion (with hierarchy and dependencies)
+
+This is the trickiest bit and should probably be its own PR.
+
+5.1. Don’t replace WBS logic – extend it
+
+In your existing build_wbs_with_pricing (or equivalent):
+
+Keep your current logic to build deliverable rows and WBS IDs.
+
+When you reach a deliverable item, check:
+
+is_retainer = item.get("is_retainer")
+months = int(item.get("retainer_months") or (item.get("retainer") or {}).get("months") or 0)
+cadence = item.get("billing_cadence")
+
+
+If not is_retainer or months <= 0, behave exactly like today.
+
+If it is a retainer:
+
+Create the parent deliverable row as you do now (total hours / total price).
+
+Then generate child monthly rows under that parent.
+
+5.2. Monthly child rows & WBS IDs
+
+Assuming you have WBS IDs like 1.2, generate children like 1.2.1, 1.2.2, etc.
+
+Pseudo:
+
+def expand_retainer_into_months(deliv_row: dict, months: int, project_start_date: date) -> list[dict]:
+    base_wbs = deliv_row["WBS_ID"]
+    label = deliv_row["Deliverable"]
+    rows = []
+
+    total_hours = get_hours_from_item(deliv_row)
+    hours_per_month = total_hours / months if months > 0 else 0
+
+    for i in range(months):
+        first, last = month_bounds(project_start_date, i)
+        start_offset_days = (first - project_start_date).days
+        duration_days = (last - first).days + 1
+
+        child = deliv_row.copy()
+        child["WBS_ID"] = f"{base_wbs}.{i+1}"
+        child["Parent_WBS_ID"] = base_wbs
+        child["Task_Name"] = f"{label} - {first.strftime('%B')}"
+        set_hours_on_item(child, hours_per_month)
+
+        child["Start_Offset_Days"] = start_offset_days
+        child["Duration_Days"] = duration_days
+        child["Start_Date"] = first.isoformat()
+        child["End_Date"] = last.isoformat()
+
+        # Dependencies: first month depends on whatever the parent depended on;
+        # later months depend on previous month.
+        if i == 0:
+            child["Dependencies"] = deliv_row.get("Dependencies", "")
+        else:
+            child["Dependencies"] = f"{base_wbs}.{i}"
+
+        rows.append(child)
+
+    return rows
+
+
+Then, in your main builder:
+
+rows.append(parent_deliv_row)
+
+if is_retainer and months > 0 and cadence == "monthly":
+    rows.extend(expand_retainer_into_months(parent_deliv_row, months, project_start_date))
+
+5.3. Preserving dependencies from other tasks
+
+You also need to handle tasks that depend on the original deliverable:
+
+If you have tasks with Dependencies containing base_wbs (e.g. "1.2"), decide on a convention:
+
+Either leave dependencies pointing to parent 1.2 and treat it as a “summary row”
+
+Or redirect them to the last monthly child 1.2.{months}
+
+The safest minimal change:
+
+Keep the parent deliverable row as a real row but zero hours.
+
+Keep its WBS ID the same; child rows are the actual execution.
+
+Do not rewrite any existing Dependencies; they’ll still point to the parent row, which stays in place.
+
+That preserves:
+
+Existing dependency graph
+
+Chronological sort (as long as child WBS IDs are prefixed and come after the parent)
+
+6. Small front-end checklist (for Step 3 UI)
+
+Once backend is ready:
+
+Cadence dropdown
+
+Send billing_cadence values: one_time, monthly, quarterly, semi_annual, annual.
+
+Cadence Price input
+
+Send numeric cadence_price.
+
+Units input
+
+Send integer cadence_units. Default to 1; never send 0.
+
+Total column (read-only)
+
+Compute cadence_price * cadence_units in the UI just for display.
+
+No need to send total_price; backend will compute price_usd.
+
+On save, send the full scenario items with their IDs plus these new fields so the backend can call apply_cadence_to_item and merge_scenario_from_sync.
