@@ -449,13 +449,29 @@
     // reset=false (default) preserves Step 3 edits if scenario exists
     // reset=true forces rebuild from Step 2 baseline
     async buildScenario(reset = false) {
-      const payload = this.buildScenarioPayload();
-      payload.reset = reset;  // Add reset flag to control Step 3 edit preservation
+      const legacyPayload = this.buildScenarioPayload();
       
-      console.log('[ScenarioManager] Building scenario with payload:', payload, 'reset:', reset);
+      // Build payload for /api/pricing/build_scenario endpoint
+      const payload = {
+        session_id: this.state.sessionId,
+        reset: reset,
+        selection: {
+          deliverable_codes: legacyPayload.selectedDeliverableCodes || [],
+          components_map: legacyPayload.selectedComponentsMap || {},
+          l3_map: legacyPayload.selectedL2Map || {}
+        },
+        pricing_mode: legacyPayload.pricingMode || 'Flat_Blended',
+        blended_rate: legacyPayload.blendedRate || 210,
+        rate_band: legacyPayload.rateBand || 'Standard_US',
+        project_start: legacyPayload.projectStart || null,
+        client_budget_usd: legacyPayload.clientBudgetUsd || null,
+        retainers: legacyPayload.retainers || []
+      };
+      
+      console.log('[ScenarioManager] Building scenario with /api/pricing/build_scenario:', payload, 'reset:', reset);
       
       try {
-        const res = await fetch('/api/scenarios', {
+        const res = await fetch('/api/pricing/build_scenario', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -474,11 +490,29 @@
           console.log('[ScenarioManager] ✅ Using cached scenario (Step 3 edits preserved)');
         }
         
-        // Update deliverables from API response
-        this.updateDeliverablesFromAPI(json);
+        // Check if this was a reset operation
+        if (json.reset) {
+          console.log('[ScenarioManager] 🔄 Scenario reset from Step 2 baseline');
+        }
+        
+        // Normalize response to legacy format that updateDeliverablesFromAPI expects
+        // The method expects { scenarios: { A: { items: [...], totals: {...} } } }
+        const scenarioData = json.scenario || json.scenarios?.A || json;
+        const normalizedResponse = {
+          scenarios: {
+            A: scenarioData
+          },
+          totals: json.totals || scenarioData?.totals || {},
+          ok: json.ok !== false,
+          cached: json.cached,
+          reset: json.reset
+        };
+        
+        // Update deliverables from normalized API response
+        this.updateDeliverablesFromAPI(normalizedResponse);
         
         // Update global state for compatibility
-        window.SCENARIOS = json.scenarios || { A: this.getCurrentScenario() };
+        window.SCENARIOS = normalizedResponse.scenarios;
         window.APP_STATE = window.APP_STATE || {};
         window.APP_STATE.scenarios = window.SCENARIOS;
         window.APP_STATE.activeScenario = 'A';

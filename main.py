@@ -8360,9 +8360,9 @@ async def api_optimize_scenario(payload: OptimizeScenarioPayload):
                             ratio = comp_alloc.suggested_hours / old_comp_hours
                             i["Planned_Hours"] = round(i.get("Planned_Hours", 0) * ratio, 2)
         
-        # Recompute totals
+        # Recompute totals and update working scenario (preserves dual-entry store)
         scenario = _recompute_totals(scenario)
-        SCENARIO_STORE[session_id] = scenario
+        update_working_scenario(session_id, scenario)
         
         return {
             "success": True,
@@ -8463,7 +8463,8 @@ async def api_retainer_suggestions(payload: RetainerSuggestionsPayload):
             "distribution": distribution
         }
         
-        SCENARIO_STORE[session_id] = scenario
+        # Update working scenario (preserves dual-entry store)
+        update_working_scenario(session_id, scenario)
         
         return {
             "success": True,
@@ -8519,9 +8520,9 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
             target_item["End_Date"] = payload.end_date
             print(f"[GANTT EDIT] Saved End_Date={payload.end_date} for WBS_ID={payload.wbs_id}")
         
-        # Recompute totals
+        # Recompute totals and update working scenario (preserves dual-entry store)
         scenario = _recompute_totals(scenario)
-        SCENARIO_STORE[session_id] = scenario
+        update_working_scenario(session_id, scenario)
         
         # Update timeline if it exists
         if "timeline" in scenario:
@@ -8584,8 +8585,9 @@ async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
                     touched_deliv_codes.add(item.get("Deliverable_Code", ""))
                     break
         
+        # Recompute totals and update working scenario (preserves dual-entry store)
         scenario = _recompute_totals(scenario)
-        SCENARIO_STORE[session_id] = scenario
+        update_working_scenario(session_id, scenario)
         
         return {
             "success": True,
