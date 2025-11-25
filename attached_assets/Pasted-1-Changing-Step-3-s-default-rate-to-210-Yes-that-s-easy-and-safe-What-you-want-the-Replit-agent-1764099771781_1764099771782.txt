@@ -1,0 +1,93 @@
+1. Changing Step 3’s default rate to 210
+
+Yes, that’s easy and safe.
+
+What you want the Replit agent / architect to do:
+
+Introduce a single default rate constant
+
+# near the top of main.py
+DEFAULT_BILLABLE_RATE_USD = 210.0
+
+
+Use that constant wherever Step 3 builds pricing rows
+
+Anywhere you see something like:
+
+rate_usd = row.get("Rate_USD") or 195
+# or
+rate_usd = deliverable.get("Rate_USD") or 195
+
+
+change it to:
+
+rate_usd = row.get("Rate_USD") or DEFAULT_BILLABLE_RATE_USD
+
+
+That will make new scenarios in Step 3 default the Rate (USD) column to 210, while still letting you override rate/price manually per deliverable.
+
+Align the export’s resource rate with that default
+
+In the MSPDI export function (the part that builds <Resources>), every <StandardRate> is currently hard-coded as 195.00. 
+
+RFP_Brief_First_on_SoundCloud_2…
+
+Ask them to change that block to use the same constant:
+
+standard_rate = DEFAULT_BILLABLE_RATE_USD
+SubElement(resource, "StandardRate").text = f"{standard_rate:.2f}"
+
+
+Or, if there’s already a rate_usd per role, use that – but never hard-code 195 again.
+
+This gets you:
+
+Step 3 defaults Rate to 210
+
+The XML tells Workfront a 210 hourly rate as well
+
+If the hours match, Workfront’s “Planned Revenue” will match the app’s price (hours × 210), without needing FixedCost magic.
+
+2. Why the latest export “still looks the same” in Workfront
+
+From the XML you just uploaded:
+
+All tasks have <CostType>0</CostType> (Role/Resource hourly).
+
+I don’t see any <FixedCost> tags on Brand Positioning Strategy or its children. 
+
+RFP_Brief_First_on_SoundCloud_2…
+
+That means your current export still isn’t sending the fixed-price data we discussed earlier. Workfront is just doing:
+
+Planned Revenue = sum(assignment hours) × hourly rate
+
+…based on the task/assignment hours in the XML, which is why it keeps looking the same.
+
+So for the architect / agent, I’d give them these two concrete instructions:
+
+Short-term, simple win (recommended right now)
+
+Implement the DEFAULT_BILLABLE_RATE_USD = 210 change above.
+
+Don’t rely on FixedCost yet; let Workfront keep doing hours × 210.
+
+Make sure the hours that the XML exports for each deliverable match what Step 3 shows (this is the remaining mismatch: Brand Positioning Strategy shows 100h in the app, but the XML still has the original 64h worth of leaf tasks).
+
+Later, if you really want true fixed pricing:
+
+Ensure the helper that sets <CostType>2</CostType> and <FixedCost> actually runs for the deliverable rows and those rows have a non-zero price field in the dataframe that feeds the exporter.
+
+But for right now, if you want something that won’t explode other stuff:
+
+Tell them to:
+
+Add DEFAULT_BILLABLE_RATE_USD = 210.0
+
+Use it for Step 3 default rate
+
+Use it for MSPDI <StandardRate> in <Resources>
+
+That keeps the mental model super simple:
+
+App price = hours × 210, Workfront price = hours × 210 → they match.
