@@ -12093,11 +12093,15 @@ def convert_excel_to_mspdi(
                 
                 # STEP 3 PRICING: Use FixedCost from WBS (price_usd) instead of hourly cost calculation
                 # This ensures the XML matches Step 3 pricing exactly
-                fixed_cost = float(r.get("FixedCost", 0))
+                fixed_cost = float(r.get("FixedCost", 0) or 0)
                 if fixed_cost > 0:
+                    SubElement(task, "CostType").text = "2"  # Fixed Cost
                     SubElement(task, "FixedCost").text = f"{fixed_cost:.2f}"
                     SubElement(task, "FixedCostAccrual").text = "3"  # 3 = End (accrue at task completion)
-                    print(f"[XML EXPORT] 💰 Set FixedCost={fixed_cost:.2f} for deliverable: {name_txt}")
+                    print(f"[XML EXPORT] 💰 Set CostType=2 (Fixed Cost) with FixedCost=${fixed_cost:.2f} for deliverable: {name_txt}")
+                else:
+                    SubElement(task, "CostType").text = "0"  # Role Hourly (default)
+                    print(f"[XML EXPORT] 📊 Set CostType=0 (Role Hourly) for deliverable: {name_txt}")
                 
                 # Manual Scheduling tags to lock parent timelines
                 SubElement(task, "Type").text = "1"  # Fixed Duration
@@ -12134,6 +12138,10 @@ def convert_excel_to_mspdi(
                 else:
                     # For L2-L4, use standard 480M
                     SubElement(task, "Duration").text = "PT480M"
+                
+                # HYBRID COSTTYPE: Summary tasks default to Role Hourly (CostType=0)
+                # This ensures component/task level cost = hours × rate
+                SubElement(task, "CostType").text = "0"  # Role Hourly (default for summaries)
                 
                 # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-5) need Type, IsEffortDriven, and Manual Scheduling tags
                 # These lock parent timelines and prevent Workfront from recalculating rolled-up dates
@@ -12205,6 +12213,10 @@ def convert_excel_to_mspdi(
                     dur_minutes = required_days * 480
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
+                
+                # HYBRID COSTTYPE: Leaf tasks (AM, CW, Strategist, Developer, etc.) use Role Hourly (CostType=0)
+                # Cost = hours × rate, not a fixed price. This is the standard behavior for detailed task rows.
+                SubElement(task, "CostType").text = "0"  # Role Hourly (default for leaf tasks)
                 
                 # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
                 # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
