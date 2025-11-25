@@ -723,7 +723,180 @@ RFP_TEXT_CACHE: str | None = None            # Merged text (backward compatibili
 
 # SCENARIO_STORE: Unified storage for session_id -> scenario data
 # Syncs Gantt ↔ Pricing ↔ XML data through a single source of truth
+# 
+# Structure per session_id:
+# {
+#   "baseline": {...},      # Snapshot from Step 2 (immutable until explicit reset)
+#   "scenario": {...},      # Working copy for Step 3 edits
+#   "totals": {...},        # Computed totals (hours, price)
+#   "metadata": {
+#     "created_at": float,
+#     "updated_at": float,
+#     "last_sync": float,
+#   }
+# }
 SCENARIO_STORE: Dict[str, Dict[str, Any]] = {}
+
+import copy
+import asyncio
+
+# Per-session locks to prevent race conditions during concurrent updates
+_SESSION_LOCKS: Dict[str, asyncio.Lock] = {}
+
+def _get_session_lock(session_id: str) -> asyncio.Lock:
+    """Get or create a lock for a session to prevent concurrent mutations."""
+    if session_id not in _SESSION_LOCKS:
+        _SESSION_LOCKS[session_id] = asyncio.Lock()
+    return _SESSION_LOCKS[session_id]
+
+def get_session_state(session_id: str) -> Dict[str, Any]:
+    """
+    Get or initialize the SCENARIO_STORE entry for a session.
+    
+    Returns a dict with structure:
+    {
+        "baseline": {...} or None,
+        "scenario": {...} or None,
+        "totals": {...},
+        "metadata": {...}
+    }
+    """
+    if session_id not in SCENARIO_STORE:
+        SCENARIO_STORE[session_id] = {
+            "baseline": None,
+            "scenario": None,
+            "totals": {"hours": 0.0, "price": 0.0},
+            "metadata": {
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "last_sync": None
+            }
+        }
+    
+    # Auto-migrate old format entries
+    entry = SCENARIO_STORE[session_id]
+    if "baseline" not in entry:
+        # Old format: the entry IS the scenario itself (has "items" key directly)
+        # New format: entry has "baseline", "scenario", "totals", "metadata" keys
+        if "items" in entry:
+            # This is an old-format scenario - migrate it
+            # CRITICAL: baseline and scenario MUST be separate deep copies
+            baseline_copy = copy.deepcopy(entry)
+            working_copy = copy.deepcopy(entry)
+            SCENARIO_STORE[session_id] = {
+                "baseline": baseline_copy,
+                "scenario": working_copy,
+                "totals": working_copy.get("totals", {"hours": 0.0, "price": 0.0}),
+                "metadata": {
+                    "created_at": entry.get("updated_at", time.time()),
+                    "updated_at": time.time(),
+                    "last_sync": entry.get("updated_at")
+                }
+            }
+        elif "scenario" in entry:
+            # Intermediate format with nested "scenario" key but no "baseline"
+            old_scenario = entry.get("scenario")
+            baseline_copy = copy.deepcopy(old_scenario) if old_scenario else None
+            working_copy = copy.deepcopy(old_scenario) if old_scenario else None
+            SCENARIO_STORE[session_id] = {
+                "baseline": baseline_copy,
+                "scenario": working_copy,
+                "totals": working_copy.get("totals", {"hours": 0.0, "price": 0.0}) if working_copy else {"hours": 0.0, "price": 0.0},
+                "metadata": {
+                    "created_at": entry.get("updated_at", time.time()),
+                    "updated_at": time.time(),
+                    "last_sync": entry.get("updated_at")
+                }
+            }
+        # else: entry already has proper structure (shouldn't reach here)
+    
+    return SCENARIO_STORE[session_id]
+
+def set_baseline_and_scenario(session_id: str, scenario: dict):
+    """
+    Set both baseline and working scenario from Step 2 build.
+    Called when building a new scenario or resetting.
+    """
+    now = time.time()
+    
+    # Ensure scenario has proper structure
+    if "items" not in scenario:
+        scenario["items"] = []
+    if "totals" not in scenario:
+        scenario["totals"] = {"hours": 0.0, "price": 0.0}
+    
+    # Recompute totals to ensure consistency
+    scenario = _recompute_totals(scenario)
+    
+    SCENARIO_STORE[session_id] = {
+        "baseline": copy.deepcopy(scenario),
+        "scenario": scenario,
+        "totals": scenario.get("totals", {"hours": 0.0, "price": 0.0}),
+        "metadata": {
+            "created_at": now,
+            "updated_at": now,
+            "last_sync": now
+        }
+    }
+
+def update_working_scenario(session_id: str, scenario: dict) -> dict:
+    """
+    Update only the working scenario (not baseline).
+    Called during Step 3 edits.
+    Returns the updated scenario with recomputed totals.
+    """
+    state = get_session_state(session_id)
+    
+    # Recompute totals
+    scenario = _recompute_totals(scenario)
+    
+    state["scenario"] = scenario
+    state["totals"] = scenario.get("totals", {"hours": 0.0, "price": 0.0})
+    state["metadata"]["updated_at"] = time.time()
+    
+    SCENARIO_STORE[session_id] = state
+    return scenario
+
+def reset_scenario_from_baseline(session_id: str) -> dict:
+    """
+    Reset working scenario to baseline (deepcopy).
+    Called by "Reset from Step 2" button.
+    Returns the reset scenario.
+    """
+    state = get_session_state(session_id)
+    
+    if state["baseline"] is None:
+        # No baseline exists - return empty scenario
+        return {"items": [], "totals": {"hours": 0.0, "price": 0.0}}
+    
+    # Deep copy baseline to working scenario
+    reset_scenario = copy.deepcopy(state["baseline"])
+    reset_scenario = _recompute_totals(reset_scenario)
+    
+    state["scenario"] = reset_scenario
+    state["totals"] = reset_scenario.get("totals", {"hours": 0.0, "price": 0.0})
+    state["metadata"]["updated_at"] = time.time()
+    
+    SCENARIO_STORE[session_id] = state
+    return reset_scenario
+
+def get_working_scenario(session_id: str) -> dict:
+    """
+    Get the current working scenario for a session.
+    This is what exports and Step 4 should use.
+    """
+    state = get_session_state(session_id)
+    scenario = state.get("scenario")
+    
+    if scenario is None:
+        return {"items": [], "totals": {"hours": 0.0, "price": 0.0}}
+    
+    return scenario
+
+def has_baseline(session_id: str) -> bool:
+    """Check if a baseline exists for this session."""
+    state = get_session_state(session_id)
+    return state.get("baseline") is not None and bool(state["baseline"].get("items"))
 
 def _recompute_totals(scn: dict) -> dict:
     """
@@ -7654,9 +7827,10 @@ async def api_build_scenario(payload: BuildScenarioPayload):
     Build scenario from Step 2 selection and store in SCENARIO_STORE.
     Creates rows with Deliverable/Component/Task_Label structure.
     
-    GUARD: If reset=False (default) and scenario already exists in SCENARIO_STORE,
-    return the cached scenario to preserve Step 3 edits. Only rebuild from Step 2
-    when reset=True is explicitly passed (e.g., "Rebuild from Step 2" button).
+    NEW DUAL-ENTRY ARCHITECTURE:
+    - If reset=False and baseline exists → return working scenario (preserve Step 3 edits)
+    - If reset=True → restore working scenario from baseline (deepcopy)
+    - If no baseline exists → build from Step 2, set both baseline and scenario
     """
     if not DB.loaded:
         DB.load()
@@ -7664,21 +7838,32 @@ async def api_build_scenario(payload: BuildScenarioPayload):
     try:
         session_id = payload.session_id
         
-        # GUARD: Preserve Step 3 edits unless explicit reset requested
-        if not payload.reset and session_id in SCENARIO_STORE:
-            cached_scenario = SCENARIO_STORE[session_id]
-            # Verify it has items (not an empty placeholder)
-            if cached_scenario.get("items") and len(cached_scenario.get("items", [])) > 0:
-                print(f"[SCENARIO_STORE] ✅ Returning cached scenario for {session_id} (preserving Step 3 edits)")
-                # Recompute totals to ensure consistency
-                cached_scenario = _recompute_totals(cached_scenario)
-                SCENARIO_STORE[session_id] = cached_scenario
+        # Check if baseline exists
+        if has_baseline(session_id):
+            if payload.reset:
+                # Reset from Step 2: restore working scenario from baseline
+                print(f"[SCENARIO_STORE] 🔄 Reset requested - restoring from baseline for {session_id}")
+                scenario = reset_scenario_from_baseline(session_id)
                 return {
                     "success": True,
                     "session_id": session_id,
-                    "scenario": cached_scenario,
-                    "total_items": len(cached_scenario.get("items", [])),
-                    "totals": cached_scenario.get("totals", {}),
+                    "scenario": scenario,
+                    "total_items": len(scenario.get("items", [])),
+                    "totals": scenario.get("totals", {}),
+                    "reset": True
+                }
+            else:
+                # Return current working scenario (preserve Step 3 edits)
+                print(f"[SCENARIO_STORE] ✅ Returning working scenario for {session_id} (preserving Step 3 edits)")
+                scenario = get_working_scenario(session_id)
+                scenario = _recompute_totals(scenario)
+                update_working_scenario(session_id, scenario)
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "scenario": scenario,
+                    "total_items": len(scenario.get("items", [])),
+                    "totals": scenario.get("totals", {}),
                     "cached": True  # Flag to indicate this was from cache
                 }
         
@@ -7810,19 +7995,303 @@ async def api_build_scenario(payload: BuildScenarioPayload):
         # Recompute totals
         scenario = _recompute_totals(scenario)
         
-        # Store in SCENARIO_STORE
-        SCENARIO_STORE[session_id] = scenario
+        # Store in SCENARIO_STORE using new dual-entry architecture
+        # Sets both baseline and working scenario
+        set_baseline_and_scenario(session_id, scenario)
+        
+        print(f"[SCENARIO_STORE] 🆕 Built new scenario from Step 2 for {session_id} with {len(items)} items")
         
         return {
             "success": True,
             "session_id": session_id,
             "scenario": scenario,  # Return full scenario for frontend
             "total_items": len(items),
-            "totals": scenario["totals"]
+            "totals": scenario["totals"],
+            "new_baseline": True  # Flag to indicate this is a fresh build
         }
         
     except Exception as e:
         print(f"[SCENARIO_STORE] Error building scenario: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+# =============================================================================
+# NEW PRICING ENDPOINTS (Dual-Entry Architecture)
+# =============================================================================
+
+class ScenarioItemPatch(BaseModel):
+    """Payload for patching a single scenario item."""
+    session_id: str
+    deliverable_id: str  # Deliverable_Code or Row_ID
+    component_id: Optional[str] = None  # Optional component ID for component-level updates
+    hours: Optional[float] = None
+    rate_usd: Optional[float] = None
+    price_usd: Optional[float] = None
+    cadence: Optional[str] = None
+    months: Optional[int] = None
+
+def _apply_item_updates(item: dict, payload: ScenarioItemPatch):
+    """Apply updates to an item (deliverable or component)."""
+    if payload.hours is not None:
+        item["Planned_Hours"] = payload.hours
+        item["planned_hours"] = payload.hours
+        item["hours"] = payload.hours
+    
+    if payload.rate_usd is not None:
+        item["Rate_USD"] = payload.rate_usd
+        item["rate_usd"] = payload.rate_usd
+        item["blended_rate"] = payload.rate_usd
+    
+    if payload.price_usd is not None:
+        item["Price_USD"] = payload.price_usd
+        item["price_usd"] = payload.price_usd
+        item["total_price"] = payload.price_usd
+    
+    if payload.cadence is not None:
+        item["billing_cadence"] = payload.cadence
+        item["cadence"] = payload.cadence
+    
+    if payload.months is not None:
+        item["retainer_months"] = payload.months
+        item["months"] = payload.months
+
+@app.patch("/api/pricing/scenario/item")
+async def api_patch_scenario_item(payload: ScenarioItemPatch):
+    """
+    Update a single item (deliverable or component) in the working scenario.
+    Called by Step 3 grid edits.
+    
+    If component_id is provided, updates the component within the deliverable.
+    Otherwise updates the deliverable directly.
+    
+    Returns updated scenario with recomputed totals.
+    """
+    try:
+        session_id = payload.session_id
+        
+        # Get current working scenario
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
+            raise HTTPException(404, f"No scenario found for session {session_id}")
+        
+        items = scenario.get("items", [])
+        updated = False
+        
+        for item in items:
+            item_id = item.get("deliverable_code") or item.get("Deliverable_Code") or item.get("id") or item.get("Row_ID")
+            if str(item_id) == str(payload.deliverable_id):
+                if payload.component_id:
+                    # Update component within this deliverable
+                    components = item.get("components", [])
+                    for comp in components:
+                        comp_id = comp.get("id") or comp.get("component_id") or comp.get("Component_Code")
+                        if str(comp_id) == str(payload.component_id):
+                            _apply_item_updates(comp, payload)
+                            updated = True
+                            break
+                else:
+                    # Update deliverable directly
+                    _apply_item_updates(item, payload)
+                    updated = True
+                break
+        
+        if not updated:
+            target = f"component {payload.component_id}" if payload.component_id else f"item {payload.deliverable_id}"
+            raise HTTPException(404, f"{target} not found in scenario")
+        
+        # Update working scenario and recompute totals
+        scenario = update_working_scenario(session_id, scenario)
+        
+        target = f"component {payload.component_id}" if payload.component_id else f"item {payload.deliverable_id}"
+        print(f"[SCENARIO_STORE] ✏️ Updated {target} in session {session_id}")
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "scenario": scenario,
+            "totals": scenario.get("totals", {})
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error patching item: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+class RebuildBreakdownPayload(BaseModel):
+    """Payload for rebuilding pricing breakdown from working scenario."""
+    session_id: str
+
+@app.post("/api/pricing/rebuild_breakdown")
+async def api_rebuild_breakdown(payload: RebuildBreakdownPayload):
+    """
+    Rebuild Deliverable Pricing Details table + summary cards from working scenario.
+    Does NOT change hours/rates/prices in the scenario itself.
+    
+    Called by "Re-build Scenario" (blue) button.
+    """
+    try:
+        session_id = payload.session_id
+        
+        # Get current working scenario
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
+            raise HTTPException(404, f"No scenario found for session {session_id}")
+        
+        # Recompute totals
+        scenario = _recompute_totals(scenario)
+        
+        # Update working scenario with recomputed totals
+        update_working_scenario(session_id, scenario)
+        
+        # Build breakdown by deliverable for Pricing Details table
+        items = scenario.get("items", [])
+        deliverable_summary = {}
+        
+        for item in items:
+            deliv_code = item.get("Deliverable_Code") or item.get("deliverable_code", "Unknown")
+            deliv_name = item.get("Deliverable") or item.get("deliverable", deliv_code)
+            
+            if deliv_code not in deliverable_summary:
+                deliverable_summary[deliv_code] = {
+                    "deliverable_code": deliv_code,
+                    "deliverable": deliv_name,
+                    "hours": 0.0,
+                    "rate": 0.0,
+                    "price": 0.0,
+                    "cadence": item.get("billing_cadence", "One-Time"),
+                    "months": item.get("retainer_months", 0),
+                    "components": []
+                }
+            
+            hours = float(item.get("Planned_Hours") or item.get("hours") or 0)
+            price = float(item.get("Price_USD") or item.get("price_usd") or 0)
+            rate = float(item.get("Rate_USD") or item.get("rate_usd") or DEFAULT_BILLABLE_RATE_USD)
+            
+            deliverable_summary[deliv_code]["hours"] += hours
+            deliverable_summary[deliv_code]["price"] += price
+            deliverable_summary[deliv_code]["rate"] = rate  # Use last seen rate
+            
+            # Track components
+            comp_name = item.get("Component") or item.get("component", "")
+            if comp_name:
+                deliverable_summary[deliv_code]["components"].append({
+                    "name": comp_name,
+                    "hours": hours,
+                    "price": price,
+                    "rate": rate
+                })
+        
+        breakdown = list(deliverable_summary.values())
+        
+        # Compute summary cards
+        one_time_hours = 0.0
+        one_time_price = 0.0
+        retainer_hours = 0.0
+        retainer_price = 0.0
+        
+        for d in breakdown:
+            cadence = (d.get("cadence") or "One-Time").lower()
+            if "month" in cadence or "retainer" in cadence:
+                retainer_hours += d["hours"]
+                retainer_price += d["price"]
+            else:
+                one_time_hours += d["hours"]
+                one_time_price += d["price"]
+        
+        summary = {
+            "one_time": {
+                "hours": round(one_time_hours, 2),
+                "price": round(one_time_price, 2)
+            },
+            "retainer": {
+                "hours": round(retainer_hours, 2),
+                "price": round(retainer_price, 2)
+            },
+            "grand_total": {
+                "hours": round(one_time_hours + retainer_hours, 2),
+                "price": round(one_time_price + retainer_price, 2)
+            }
+        }
+        
+        print(f"[SCENARIO_STORE] 🔄 Rebuilt breakdown for session {session_id}")
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "breakdown": breakdown,
+            "summary": summary,
+            "totals": scenario.get("totals", {})
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error rebuilding breakdown: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            {"success": False, "error": str(e)},
+            status_code=500
+        )
+
+class ResetFromStep2Payload(BaseModel):
+    """Payload for resetting scenario from Step 2 baseline."""
+    session_id: str
+    rebuild_from_step2: bool = False  # If True and no baseline exists, rebuild from Step 2
+
+@app.post("/api/pricing/reset_from_step2")
+async def api_reset_from_step2(payload: ResetFromStep2Payload):
+    """
+    Reset working scenario to baseline (deepcopy).
+    Called by "Reset from Step 2" (orange) button.
+    
+    Only calls Step 2 if baseline is missing and rebuild_from_step2=True.
+    """
+    try:
+        session_id = payload.session_id
+        
+        if not has_baseline(session_id):
+            if payload.rebuild_from_step2:
+                # No baseline - need to build from Step 2
+                # This shouldn't normally happen if user followed proper flow
+                print(f"[SCENARIO_STORE] ⚠️ No baseline for {session_id}, cannot reset")
+                return {
+                    "success": False,
+                    "error": "No baseline exists. Please build scenario first.",
+                    "session_id": session_id
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": "No baseline exists to reset to.",
+                    "session_id": session_id
+                }
+        
+        # Reset working scenario from baseline
+        scenario = reset_scenario_from_baseline(session_id)
+        
+        print(f"[SCENARIO_STORE] 🔙 Reset scenario from baseline for {session_id}")
+        
+        return {
+            "success": True,
+            "session_id": session_id,
+            "scenario": scenario,
+            "totals": scenario.get("totals", {}),
+            "reset": True
+        }
+        
+    except Exception as e:
+        print(f"[SCENARIO_STORE] Error resetting from Step 2: {e}")
         import traceback
         traceback.print_exc()
         return JSONResponse(
@@ -8930,13 +9399,16 @@ def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
     # NEW: Check if session_id is provided to read from SCENARIO_STORE
     if isinstance(payload, dict) and "session_id" in payload and "scenario" not in payload:
         session_id = payload.get("session_id")
-        if session_id not in SCENARIO_STORE:
+        
+        # Use get_working_scenario to respect dual-entry architecture
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
             raise HTTPException(404, f"Scenario not found for session {session_id}")
         
-        # Get scenario from SCENARIO_STORE and ensure totals are current
-        scenario = SCENARIO_STORE[session_id]
-        scenario = _recompute_totals(scenario)  # Ensure Step 3 edits have correct totals
-        print(f"[XML EXPORT] 📦 Using SCENARIO_STORE data for session {session_id} (preserves Step 3 edits)")
+        # Recompute totals to ensure Step 3 edits have correct totals
+        scenario = _recompute_totals(scenario)
+        update_working_scenario(session_id, scenario)
+        print(f"[XML EXPORT] 📦 Using working scenario for session {session_id} (preserves Step 3 edits)")
         
         # Create new payload with scenario from store
         payload_dict = {

@@ -11,6 +11,15 @@
 .apb-sel { min-width: 120px; }
 .apb-txt { min-width: 180px; }
 .apb-exp { background: none; color: #a9b6d8; border: none; font-size: 14px; cursor: pointer; }
-.apb-btn { cursor: pointer; padding: 6px 10px; border-radius: 6px; border: 1px solid #3a4154; background: #2b3241; color: #e6eefc; }
+.apb-btn { cursor: pointer; padding: 6px 10px; border-radius: 6px; border: 1px solid #3a4154; background: #2b3241; color: #e6eefc; transition: all 0.2s; }
+.apb-btn:hover { background: #3a4154; }
+.apb-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .apb-btn.apb-sm { padding: 4px 8px; font-size: 12px; }
+.apb-btn.apb-blue { background: #2563eb; border-color: #3b82f6; }
+.apb-btn.apb-blue:hover { background: #1d4ed8; }
+.apb-btn.apb-orange { background: #ea580c; border-color: #f97316; }
+.apb-btn.apb-orange:hover { background: #c2410c; }
+.apb-btn.apb-green { background: #16a34a; border-color: #22c55e; }
+.apb-btn.apb-green:hover { background: #15803d; }
+.apb-btn-group { display: flex; gap: 8px; justify-content: flex-end; }
 .apb-spacer { color: #7684a5; margin-right: 4px; }

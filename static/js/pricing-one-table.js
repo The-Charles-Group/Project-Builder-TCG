@@ -84,8 +84,29 @@
     tr.appendChild(h("td", {}, ""));
     tr.appendChild(h("td", { class:"apb-right" }, money((tot.oneTimeCost||0) + (tot.monthlyCost||0))));
     tr.appendChild(h("td", {}, ""));
-    const rebuild = h("button", { class:"apb-btn", onclick: ()=> ScenarioStore.save() }, "Re-build Scenario (Save)");
-    tr.appendChild(h("td", { class:"apb-right" }, rebuild));
+    
+    const btnGroup = h("div", { class:"apb-btn-group" });
+    
+    const rebuildBtn = h("button", { class:"apb-btn apb-blue", onclick: async ()=> { 
+      rebuildBtn.disabled = true;
+      rebuildBtn.textContent = "Rebuilding...";
+      await ScenarioStore.rebuildBreakdown();
+      rebuildBtn.disabled = false;
+      rebuildBtn.textContent = "Re-build Scenario";
+    }}, "Re-build Scenario");
+    
+    const resetBtn = h("button", { class:"apb-btn apb-orange", onclick: async ()=> {
+      if (!confirm("Reset all Step 3 changes to the original Step 2 baseline?")) return;
+      resetBtn.disabled = true;
+      resetBtn.textContent = "Resetting...";
+      await ScenarioStore.resetFromStep2();
+      resetBtn.disabled = false;
+      resetBtn.textContent = "Reset from Step 2";
+    }}, "Reset from Step 2");
+    
+    btnGroup.appendChild(rebuildBtn);
+    btnGroup.appendChild(resetBtn);
+    tr.appendChild(h("td", { class:"apb-right" }, btnGroup));
     return tr;
   }
 

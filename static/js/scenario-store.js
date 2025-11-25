@@ -53,7 +53,6 @@
       const oldMonths = d.months;
       Object.assign(d, patch || {});
       if (patch && patch.cadence) {
-        // propagate unless component has an explicit override
         for (const c of d.components || []) if (!c._customCadence) {
           c.cadence = d.cadence; c.months = d.months;
         }
@@ -61,10 +60,18 @@
       this.recompute(); 
       this.emit();
       
-      // Emit pricing:changed event when hours or months change
       if ((patch.hours !== undefined && patch.hours !== oldHours) || 
           (patch.months !== undefined && patch.months !== oldMonths)) {
         this.emitPricingChange(did, d);
+      }
+      
+      if (patch && (patch.hours !== undefined || patch.rate !== undefined || patch.cadence !== undefined || patch.months !== undefined)) {
+        this.patchScenarioItem(did, {
+          hours: d.hours,
+          rate: d.rate,
+          cadence: d.cadence,
+          months: d.months
+        });
       }
     },
     updateComponent(did, cid, patch) {
@@ -78,9 +85,19 @@
       this.recompute(); 
       this.emit();
       
-      // Emit pricing:changed event when component hours change
       if (patch.hours !== undefined && patch.hours !== oldHours) {
         this.emitPricingChange(did, d);
+      }
+      
+      if (patch && (patch.hours !== undefined || patch.rate !== undefined || patch.cadence !== undefined || patch.months !== undefined)) {
+        this.patchScenarioItem(`${did}::${cid}`, {
+          hours: c.hours,
+          rate: c.rate,
+          cadence: c.cadence,
+          months: c.months,
+          _isComponent: true,
+          _deliverableId: did
+        });
       }
     },
     emitPricingChange(deliverableId, deliverable) {
@@ -154,6 +171,143 @@
         if (!r.ok) throw new Error(await r.text());
       } catch (e) { console.warn("Scenario save failed (local copy saved):", e.message); }
       this.emit();
+    },
+    
+    _patchDebounce: null,
+    _pendingPatches: {},
+    
+    async patchScenarioItem(deliverableId, updates) {
+      const sessionId = this.sessionId;
+      if (!sessionId) {
+        console.warn("[ScenarioStore] No session_id, cannot PATCH to backend");
+        return;
+      }
+      
+      this._pendingPatches[deliverableId] = Object.assign(
+        this._pendingPatches[deliverableId] || {},
+        updates
+      );
+      
+      if (this._patchDebounce) clearTimeout(this._patchDebounce);
+      this._patchDebounce = setTimeout(() => this._flushPatches(), 300);
+    },
+    
+    async _flushPatches() {
+      const sessionId = this.sessionId;
+      if (!sessionId) return;
+      
+      const patches = Object.entries(this._pendingPatches);
+      this._pendingPatches = {};
+      
+      for (const [patchId, updates] of patches) {
+        try {
+          let delivId = patchId;
+          let componentId = null;
+          
+          if (patchId.includes("::")) {
+            const parts = patchId.split("::");
+            delivId = parts[0];
+            componentId = parts[1];
+          }
+          
+          const r = await fetch("/api/pricing/scenario/item", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: sessionId,
+              deliverable_id: delivId,
+              component_id: componentId,
+              hours: updates.hours,
+              rate_usd: updates.rate,
+              cadence: updates.cadence,
+              months: updates.months
+            })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          
+          console.log(`[ScenarioStore] PATCHED item ${patchId}:`, data.totals);
+          
+          this._updateTotalsFromBackend(data.totals);
+          this.emit();
+        } catch (e) {
+          console.warn(`[ScenarioStore] PATCH failed for ${patchId}:`, e.message);
+        }
+      }
+    },
+    
+    _updateTotalsFromBackend(totals) {
+      if (!totals) return;
+      this.state.totals.hours = totals.hours || totals.total_hours || 0;
+      this.state.totals.oneTimeCost = totals.one_time_cost || totals.one_time?.price || totals.price || 0;
+      this.state.totals.monthlyCost = totals.retainer_cost || totals.retainer?.price || 0;
+      this.state.totals.monthlyHours = totals.retainer_hours || totals.retainer?.hours || 0;
+      const grandTotal = (this.state.totals.oneTimeCost || 0) + ((this.state.totals.monthlyCost || 0) * 12);
+      this.state.totals.grandTotal12 = grandTotal;
+    },
+    
+    async rebuildBreakdown() {
+      const sessionId = this.sessionId;
+      if (!sessionId) {
+        console.warn("[ScenarioStore] No session_id, cannot rebuild breakdown");
+        return null;
+      }
+      
+      try {
+        const r = await fetch("/api/pricing/rebuild_breakdown", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        
+        console.log("[ScenarioStore] Rebuilt breakdown:", data);
+        
+        this._updateTotalsFromBackend(data.totals);
+        if (data.summary) {
+          this.state.totals.oneTimeCost = data.summary.one_time?.price || 0;
+          this.state.totals.monthlyCost = data.summary.retainer?.price || 0;
+          this.state.totals.hours = data.summary.grand_total?.hours || 0;
+        }
+        this.emit();
+        
+        document.dispatchEvent(new CustomEvent("pricing:breakdown-rebuilt", { detail: data }));
+        
+        return data;
+      } catch (e) {
+        console.warn("[ScenarioStore] Rebuild breakdown failed:", e.message);
+        return null;
+      }
+    },
+    
+    async resetFromStep2() {
+      const sessionId = this.sessionId;
+      if (!sessionId) {
+        console.warn("[ScenarioStore] No session_id, cannot reset from Step 2");
+        return null;
+      }
+      
+      try {
+        const r = await fetch("/api/pricing/reset_from_step2", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const data = await r.json();
+        
+        console.log("[ScenarioStore] Reset from Step 2:", data);
+        
+        if (data.scenario) {
+          this.load(data.scenario);
+        }
+        
+        return data;
+      } catch (e) {
+        console.warn("[ScenarioStore] Reset from Step 2 failed:", e.message);
+        return null;
+      }
     },
     updateFromGantt(payload) {
       const { deliverableId, durationDays, resources } = payload || {};
