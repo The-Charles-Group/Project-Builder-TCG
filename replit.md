@@ -21,7 +21,7 @@ Preferred communication style: Simple, everyday language.
 - **Data Processing**: Pandas DataFrames for handling Excel/CSV data.
 - **File Handling**: Parses PDF, DOCX, and Excel files.
 - **Core Logic**: Implements RFP analysis, scenario building, pricing engine, timeline calculation, and Workfront-compatible export.
-- **SCENARIO_STORE Architecture**: Centralized session-based data store for pricing, timeline, and Gantt synchronization with automatic totals recalculation.
+- **SCENARIO_STORE Architecture (Nov 2025)**: Dual-entry session-based data store with immutable `baseline` (from Step 2) and mutable `working` scenario (for Step 3 edits). Session structure: `{baseline, scenario, totals, metadata}`. Key endpoints: PATCH `/api/pricing/scenario/item` (supports both deliverable and component-level edits via optional `component_id`), POST `/api/pricing/rebuild_breakdown` (recalculates totals from working scenario only), POST `/api/pricing/reset_from_step2` (deep-copies baseline to working). All exports read from `get_working_scenario()` to preserve Step 3 pricing edits. Migration layer in `get_session_state()` auto-converts legacy single-entry format to dual-entry with independent deep copies.
 - **AI Planner v3**: Advanced reasoning-based AI layer (GPT-5 + AgencyDB) for granular task selection, asynchronous processing, and holistic project flow analysis.
 - **GPT-5 Enforcer System**: Centralized model enforcement ensuring exclusive use of GPT-5, converting Chat Completions to Responses API, and enforcing allowed models.
 - **Timeline Scheduler Kit**: AI-powered timeline optimization with Microsoft Project XML parsing, smart dependencies, duration rounding, and multi-format export.
