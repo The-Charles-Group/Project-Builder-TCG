@@ -12041,6 +12041,18 @@ def convert_excel_to_mspdi(
             rate = _std_rate_for(role, pricing_mode, rate_band, blended_rate or 0, DB)
             SubElement(resource, "StandardRate").text = f"{rate:.2f}"
 
+        # HYBRID COSTTYPE HELPER: Apply CostType based on FixedCost for ALL task types
+        # This ensures monthly retainer children, deliverables, and all tasks get proper cost handling
+        def apply_costtype_and_fixedcost(task_elem, row_dict, task_name=""):
+            fixed_cost = float(row_dict.get("FixedCost", 0) or 0)
+            if fixed_cost > 0:
+                SubElement(task_elem, "CostType").text = "2"  # Fixed Cost
+                SubElement(task_elem, "FixedCost").text = f"{fixed_cost:.2f}"
+                SubElement(task_elem, "FixedCostAccrual").text = "3"  # End of task
+                print(f"[XML EXPORT] 💰 CostType=2 (Fixed Cost) FixedCost=${fixed_cost:.2f} for: {task_name}")
+            else:
+                SubElement(task_elem, "CostType").text = "0"  # Role Hourly (default)
+
         # Tasks
         tasks_elem = SubElement(project, "Tasks")
         for task_id, r in enumerate(rows, 1):
@@ -12091,18 +12103,6 @@ def convert_excel_to_mspdi(
                 SubElement(task, "Work").text = "PT0M"
                 SubElement(task, "Duration").text = "PT480M"
                 
-                # STEP 3 PRICING: Use FixedCost from WBS (price_usd) instead of hourly cost calculation
-                # This ensures the XML matches Step 3 pricing exactly
-                fixed_cost = float(r.get("FixedCost", 0) or 0)
-                if fixed_cost > 0:
-                    SubElement(task, "CostType").text = "2"  # Fixed Cost
-                    SubElement(task, "FixedCost").text = f"{fixed_cost:.2f}"
-                    SubElement(task, "FixedCostAccrual").text = "3"  # 3 = End (accrue at task completion)
-                    print(f"[XML EXPORT] 💰 Set CostType=2 (Fixed Cost) with FixedCost=${fixed_cost:.2f} for deliverable: {name_txt}")
-                else:
-                    SubElement(task, "CostType").text = "0"  # Role Hourly (default)
-                    print(f"[XML EXPORT] 📊 Set CostType=0 (Role Hourly) for deliverable: {name_txt}")
-                
                 # Manual Scheduling tags to lock parent timelines
                 SubElement(task, "Type").text = "1"  # Fixed Duration
                 SubElement(task, "IsEffortDriven").text = "0"
@@ -12138,10 +12138,6 @@ def convert_excel_to_mspdi(
                 else:
                     # For L2-L4, use standard 480M
                     SubElement(task, "Duration").text = "PT480M"
-                
-                # HYBRID COSTTYPE: Summary tasks default to Role Hourly (CostType=0)
-                # This ensures component/task level cost = hours × rate
-                SubElement(task, "CostType").text = "0"  # Role Hourly (default for summaries)
                 
                 # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-5) need Type, IsEffortDriven, and Manual Scheduling tags
                 # These lock parent timelines and prevent Workfront from recalculating rolled-up dates
@@ -12214,10 +12210,6 @@ def convert_excel_to_mspdi(
                 
                 SubElement(task, "Duration").text = f"PT{dur_minutes}M"
                 
-                # HYBRID COSTTYPE: Leaf tasks (AM, CW, Strategist, Developer, etc.) use Role Hourly (CostType=0)
-                # Cost = hours × rate, not a fixed price. This is the standard behavior for detailed task rows.
-                SubElement(task, "CostType").text = "0"  # Role Hourly (default for leaf tasks)
-                
                 # WORKFRONT FIX: Set ALL leaf tasks as Fixed Duration to prevent effort-driven recalculation
                 # Type=1 (Fixed Duration) + IsEffortDriven=0 ensures Workfront doesn't adjust durations based on effort
                 SubElement(task, "Type").text = "1"  # Fixed Duration
@@ -12235,6 +12227,10 @@ def convert_excel_to_mspdi(
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
+            
+            # UNIVERSAL COSTTYPE: Apply hybrid CostType logic to ALL tasks (deliverables, summaries, leaves, monthly children)
+            # This ensures any task with FixedCost > 0 gets CostType=2, all others get CostType=0 (Role Hourly)
+            apply_costtype_and_fixedcost(task, r, name_txt)
 
         # WORKFRONT FIX: Add finish anchor milestones for preserved DELIVERABLES
         # This locks the deliverable's finish date by creating a zero-duration milestone
