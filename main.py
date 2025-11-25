@@ -12044,7 +12044,14 @@ def convert_excel_to_mspdi(
         # HYBRID COSTTYPE HELPER: Apply CostType based on FixedCost for ALL task types
         # This ensures monthly retainer children, deliverables, and all tasks get proper cost handling
         def apply_costtype_and_fixedcost(task_elem, row_dict, task_name=""):
-            fixed_cost = float(row_dict.get("FixedCost", 0) or 0)
+            # Check multiple field names for price (Step 3 uses price_usd, export prep may use FixedCost)
+            fixed_cost = float(
+                row_dict.get("FixedCost") or
+                row_dict.get("Price_USD") or
+                row_dict.get("price_usd") or
+                row_dict.get("total_price") or
+                0
+            )
             if fixed_cost > 0:
                 SubElement(task_elem, "CostType").text = "2"  # Fixed Cost
                 SubElement(task_elem, "FixedCost").text = f"{fixed_cost:.2f}"
@@ -12227,6 +12234,9 @@ def convert_excel_to_mspdi(
             # Mark anchor rows (WBS starts with ANCHOR_) as milestones
             is_anchor = str(r.get("WBS", "")).startswith("ANCHOR_")
             SubElement(task, "Milestone").text = "1" if is_anchor else "0"
+            
+            # DEBUG: Show what price fields each row has
+            print(f"DEBUG-COST: {name_txt[:50]} | FixedCost={r.get('FixedCost')} | Price_USD={r.get('Price_USD')} | price_usd={r.get('price_usd')} | Cadence={r.get('Cadence')}")
             
             # UNIVERSAL COSTTYPE: Apply hybrid CostType logic to ALL tasks (deliverables, summaries, leaves, monthly children)
             # This ensures any task with FixedCost > 0 gets CostType=2, all others get CostType=0 (Role Hourly)
