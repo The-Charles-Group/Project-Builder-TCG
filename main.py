@@ -765,11 +765,9 @@ def _recompute_totals(scn: dict) -> dict:
                     continue
         
         if cadence_price is not None and cadence_price > 0:
-            # Use cadence-based price as canonical
             item_price = cadence_price
         else:
-            # Calculate from Rate_USD * Planned_Hours
-            rate = float(item.get("Rate_USD", 0) or 0)
+            rate = get_rate_from_item(item)
             item_price = round(rate * hours, 2)
         
         # Keep all price fields in sync
@@ -833,22 +831,89 @@ def get_price_from_item(item: dict) -> float:
                 continue
     return 0.0
 
-def cadence_was_modified(item: dict) -> bool:
-    """Check if cadence fields were explicitly provided in the item."""
-    return any(k in item for k in ("billing_cadence", "cadence_units", "cadence_price"))
+def cadence_changed(old_item: dict | None, new_item: dict) -> bool:
+    """
+    Check if cadence fields actually changed between old and new item.
+    Returns False for first sync (no old_item) to preserve existing retainer months.
+    Only returns True when comparing items with explicit field differences.
+    """
+    if not old_item:
+        return False
+    
+    fields = ["billing_cadence", "cadence_units"]
+    for f in fields:
+        old = old_item.get(f)
+        new = new_item.get(f)
+        if (old is None or old == "") and (new is None or new == ""):
+            continue
+        if str(old) != str(new):
+            return True
+    return False
+
+def cadence_price_changed(old_item: dict | None, new_item: dict) -> bool:
+    """
+    Check if cadence_price changed (separate from cadence structure changes).
+    Returns False on first sync (no old_item) to preserve existing pricing.
+    """
+    if not old_item:
+        return False
+    
+    old_cp = old_item.get("cadence_price")
+    new_cp = new_item.get("cadence_price")
+    
+    if old_cp is None and new_cp is None:
+        return False
+    
+    try:
+        return abs(float(old_cp or 0) - float(new_cp or 0)) > 0.01
+    except (TypeError, ValueError):
+        return str(old_cp) != str(new_cp)
+
+def monthly_price_changed(old_item: dict | None, new_item: dict) -> bool:
+    """
+    Check if monthly_price was explicitly changed by PM.
+    Returns False on first sync (no old_item) to preserve existing pricing.
+    Only returns True when there's a meaningful difference with an old value.
+    """
+    if not old_item:
+        return False
+    
+    if "monthly_price" not in new_item:
+        return False
+    
+    new_mp = new_item.get("monthly_price")
+    if new_mp is None or new_mp == "" or new_mp == 0:
+        return False
+    
+    try:
+        old = float(old_item.get("monthly_price") or 0)
+        new = float(new_mp or 0)
+    except (TypeError, ValueError):
+        return True
+    
+    return abs(old - new) > 0.01
 
 # ---------- Cadence-Aware Pricing Helper ----------
 
-def apply_cadence_to_item(item: dict):
+def apply_cadence_to_item(new_item: dict, old_item: dict | None = None):
     """
     Apply cadence pricing logic to a scenario item.
     Computes total_price, hours, and retainer fields from cadence settings.
-    Only modifies items where cadence fields are present/changed.
+    
+    Priority rules:
+    1. If monthly_price was explicitly changed by PM, derive total from monthly_price
+    2. If cadence_price changed, recompute total from cadence_price
+    3. If cadence structure changed (billing_cadence/cadence_units), recompute months
+    4. If nothing changed, preserve existing totals
     """
-    if not cadence_was_modified(item):
+    changed_cadence = cadence_changed(old_item, new_item)
+    changed_cadence_price = cadence_price_changed(old_item, new_item)
+    changed_monthly = monthly_price_changed(old_item, new_item)
+    
+    if not changed_cadence and not changed_cadence_price and not changed_monthly:
         return
     
-    cadence_raw = (item.get("billing_cadence") or item.get("cadence") or "one_time").lower()
+    cadence_raw = (new_item.get("billing_cadence") or new_item.get("cadence") or "one_time").lower()
     
     mapping = {
         "one time": "one_time",
@@ -864,26 +929,15 @@ def apply_cadence_to_item(item: dict):
         "yearly": "annual",
     }
     cadence = mapping.get(cadence_raw, "one_time")
-    item["billing_cadence"] = cadence
+    new_item["billing_cadence"] = cadence
     
     try:
-        units = int(item.get("cadence_units") or 1)
+        units = int(new_item.get("cadence_units") or 1)
     except (TypeError, ValueError):
         units = 1
     if units <= 0:
         units = 1
-    item["cadence_units"] = units
-    
-    try:
-        cadence_price = float(item.get("cadence_price") or 0.0)
-    except (TypeError, ValueError):
-        cadence_price = 0.0
-    
-    if cadence_price <= 0:
-        existing_total = get_price_from_item(item)
-        cadence_price = existing_total / units if units > 0 else existing_total
-    
-    item["cadence_price"] = round(cadence_price, 2)
+    new_item["cadence_units"] = units
     
     months_per_cadence = {
         "one_time": 0,
@@ -893,40 +947,74 @@ def apply_cadence_to_item(item: dict):
         "annual": 12,
     }.get(cadence, 0)
     
-    total_price = cadence_price * units
-    item["price_usd"] = round(total_price, 2)
-    item["Price_USD"] = item["price_usd"]
-    item["total_price"] = item["price_usd"]
-    
     total_months = months_per_cadence * units
     
-    existing_retainer = item.get("retainer") or {}
+    existing_retainer = new_item.get("retainer") or {}
     existing_months = existing_retainer.get("months") or 0
-    if existing_months and not cadence_was_modified(item):
+    if existing_months and not changed_cadence:
         total_months = int(existing_months)
     
     is_retainer = (cadence != "one_time") and total_months > 0
-    item["is_retainer"] = is_retainer
-    if is_retainer:
-        item["retainer"] = {**existing_retainer, "months": total_months}
-        item["retainer_months"] = total_months
+    new_item["is_retainer"] = is_retainer
     
-    rate = get_rate_from_item(item)
+    if is_retainer and total_months > 0 and changed_monthly:
+        try:
+            monthly_price = float(new_item.get("monthly_price") or 0)
+        except (TypeError, ValueError):
+            monthly_price = 0
+        
+        if monthly_price > 0:
+            total_price = monthly_price * total_months
+            cadence_price = total_price / units if units > 0 else total_price
+            new_item["monthly_price"] = round(monthly_price, 2)
+            new_item["cadence_price"] = round(cadence_price, 2)
+            new_item["price_usd"] = round(total_price, 2)
+            new_item["Price_USD"] = new_item["price_usd"]
+            new_item["total_price"] = new_item["price_usd"]
+        else:
+            changed_monthly = False
+    
+    if not changed_monthly:
+        try:
+            cadence_price = float(new_item.get("cadence_price") or 0.0)
+        except (TypeError, ValueError):
+            cadence_price = 0.0
+        
+        if cadence_price <= 0:
+            existing_total = get_price_from_item(new_item)
+            cadence_price = existing_total / units if units > 0 else existing_total
+        
+        new_item["cadence_price"] = round(cadence_price, 2)
+        
+        total_price = cadence_price * units
+        new_item["price_usd"] = round(total_price, 2)
+        new_item["Price_USD"] = new_item["price_usd"]
+        new_item["total_price"] = new_item["price_usd"]
+        
+        if is_retainer and total_months > 0:
+            monthly_price = total_price / total_months
+            new_item["monthly_price"] = round(monthly_price, 2)
+        else:
+            new_item["monthly_price"] = 0
+    
+    if is_retainer:
+        new_item["retainer"] = {**existing_retainer, "months": total_months}
+        new_item["retainer_months"] = total_months
+    
+    rate = get_rate_from_item(new_item)
+    total_price = get_price_from_item(new_item)
     if rate > 0:
         total_hours = total_price / rate
     else:
-        total_hours = get_hours_from_item(item)
+        total_hours = get_hours_from_item(new_item)
     
-    set_hours_on_item(item, total_hours)
+    set_hours_on_item(new_item, total_hours)
     
     if is_retainer and total_months > 0:
         monthly_hours = total_hours / total_months
-        monthly_price = total_price / total_months
-        item["monthly_hours"] = round(monthly_hours, 2)
-        item["monthly_price"] = round(monthly_price, 2)
+        new_item["monthly_hours"] = round(monthly_hours, 2)
     else:
-        item["monthly_hours"] = 0
-        item["monthly_price"] = 0
+        new_item["monthly_hours"] = 0
 
 # ---------- Scenario Sync Merge Helpers ----------
 
@@ -3606,7 +3694,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             except Exception:
                 pass  # fall back to sequential start on any parse issue
             
-            rows.append({
+            deliv_row = {
                 "Row_ID": "",
                 "Deliverable_Code": dcode,
                 "Task_Code": "",
@@ -3624,7 +3712,20 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 "Rate_USD": round(deliv_rate if pricing_mode=="Flat_Blended" else _eff_rate(deliv_price, (monthly_hours*months) if months else parent_hours_display), 2),
                 "Price_USD": round(deliv_price, 2),
                 "Type": deliverable_type  # NEW: Add Type column
-            })
+            }
+            rows.append(deliv_row)
+            
+            # Expand monthly retainers into child rows (Brad's requirement: "Feb assets, March assets...")
+            if is_retainer and months > 0 and billing_cadence == "monthly":
+                project_start = scenario.get("project_start")
+                if project_start:
+                    stored_monthly_price = float(d.get("monthly_price") or 0)
+                    if stored_monthly_price > 0:
+                        deliv_row["Price_USD"] = round(stored_monthly_price * months, 2)
+                        deliv_row["price_usd"] = deliv_row["Price_USD"]
+                    deliv_row["Planned_Hours"] = 0
+                    monthly_rows = expand_retainer_into_months(deliv_row, months, project_start)
+                    rows.extend(monthly_rows)
 
             comps = DB.components_for_deliverable(dcode, tg_order)
             # Robust fallback if DB returns no components
@@ -13470,11 +13571,22 @@ async def sync_scenario(payload: ScenarioSyncPayload):
     # Apply client changes if newer
     changes_applied = False
     if payload.scenario and (not has_conflicts or payload.client_version > server_version):
-        # Apply cadence pricing logic to each item before storing
+        # Build map of old items from SCENARIO_STORE for comparison
+        store_entry = SCENARIO_STORE.get(session_id, {})
+        old_scen = store_entry.get("scenario") or {}
+        old_items_by_id = {}
+        for old_item in old_scen.get("items", []):
+            item_id = old_item.get("id") or old_item.get("Row_ID") or old_item.get("deliverable_code")
+            if item_id:
+                old_items_by_id[item_id] = old_item
+        
+        # Apply cadence pricing logic to each item (comparing against stored values)
         scenario_data = payload.scenario
         if scenario_data and scenario_data.get("items"):
             for item in scenario_data["items"]:
-                apply_cadence_to_item(item)
+                item_id = item.get("id") or item.get("Row_ID") or item.get("deliverable_code")
+                old_item = old_items_by_id.get(item_id) if item_id else None
+                apply_cadence_to_item(item, old_item)
         
         # Update server state with client data
         server_state["scenario"] = scenario_data
