@@ -1,0 +1,363 @@
+1. Fix the “I saved pricing but it didn’t export” bug
+
+Right now you have two sources of truth:
+
+SCENARIO_SYNC_STATE – used by the live editor / Step 3
+
+SCENARIO_STORE – used by scenario endpoints, build/export, etc.
+
+Step 2 fixed TF-IDF vs AI
+
+Your sync endpoint only updates SCENARIO_SYNC_STATE (and _CURRENT_SCENARIOS), not SCENARIO_STORE.
+
+Step 2 fixed TF-IDF vs AI
+
+
+That’s why Brad sees one thing in the Step 3 editor and a different thing in the exported Gantt.
+
+What to do
+
+A. Add a helper to push the synced scenario into SCENARIO_STORE
+
+In main.py, near where SCENARIO_STORE and _recompute_totals are defined, add something like:
+
+def save_synced_scenario_to_store(session_id: str):
+    """Copy scenario from SCENARIO_SYNC_STATE into SCENARIO_STORE and recompute totals."""
+    from copy import deepcopy
+    sync_state = SCENARIO_SYNC_STATE.get(session_id)
+    if not sync_state or not sync_state.get("scenario"):
+        return
+
+    scen = deepcopy(sync_state["scenario"])
+    scen = _recompute_totals(scen)
+
+    existing = SCENARIO_STORE.get(session_id, {})
+    existing["scenario"] = scen
+    existing["updated_at"] = time.time()
+
+    SCENARIO_STORE[session_id] = existing
+
+
+B. Call this from the sync endpoint whenever client changes are applied
+
+In the /api/scenario/sync/{session_id} handler (the one that updates server_state["scenario"] inside SCENARIO_SYNC_STATE), after this block:
+
+server_state["scenario"] = payload.scenario
+...
+changes_applied = True
+
+
+add:
+
+if changes_applied:
+    save_synced_scenario_to_store(session_id)
+
+
+Now, every time Brad hits Save in Step 3:
+
+The edited scenario in the sync state is written into SCENARIO_STORE.
+
+All downstream things that read from SCENARIO_STORE (export, timeline) will see the updated prices.
+
+2. Add “Units of cadence” and “Total price” to the data model
+
+Brad’s model:
+
+“Cadence price” = the per-cadence price (per month, per quarter, per year, etc.).
+
+“Units of cadence” = how many times that cadence happens (e.g. 6 months, 3 years, 2 quarters).
+
+“Total price” = cadence price × units.
+
+Also, cadence options are: one time, monthly, quarterly, semi-annual, annual.
+
+2.1. Extend each scenario item
+
+Each deliverable item in your scenario already carries stuff like price, total_hours, retainer, etc. (see Scenario C builder & retainer bits).
+
+Step 2 fixed TF-IDF vs AI
+
+Add these fields to each item (in _scenario_for_deliverable or wherever you finalize items):
+
+item["billing_cadence"] = item.get("billing_cadence", "one_time")
+item["cadence_units"] = item.get("cadence_units", 1)
+item["cadence_price"] = float(item.get("cadence_price", item.get("price", 0)))  # per cadence
+item["total_price"] = float(item.get("total_price", item.get("price", 0)))
+
+
+Then, when Step 3 saves, you treat cadence_price and cadence_units as inputs and recompute total_price + hours.
+
+2.2. Map cadence + units → retainer months & hours
+
+You already have retainer support in build_wbs_with_pricing:
+
+It reads months = int((d.get('retainer') or {}).get('months', 0))
+
+Uses monthly_hours, monthly_price, is_retainer and multiplies prices/hours by months.
+
+Step 2 fixed TF-IDF vs AI
+
+So, make cadence/units feed those fields.
+
+Create a helper like:
+
+def apply_cadence_to_item(item: dict, blended_rate: float | None = None, rate_band: str | None = None):
+    cadence = (item.get("billing_cadence") or "one_time").lower()
+    units = int(item.get("cadence_units") or 1)
+    cadence_price = float(item.get("cadence_price") or 0.0)
+
+    # How many months does one cadence period represent?
+    months_per_cadence = {
+        "one time": 0,
+        "one_time": 0,
+        "monthly": 1,
+        "quarterly": 3,
+        "semi-annual": 6,
+        "semiannual": 6,
+        "annual": 12,
+    }.get(cadence, 0)
+
+    total_months = units * months_per_cadence
+
+    total_price = cadence_price * max(units, 1)
+    item["total_price"] = round(total_price, 2)
+
+    # Decide if this is a retainer
+    is_retainer = cadence != "one_time" and total_months > 0
+    item["is_retainer"] = is_retainer
+    item["retainer"] = {"months": total_months}
+    item["retainer_months"] = total_months
+
+    # Use existing rate to convert price -> hours
+    rate = float(item.get("Rate_USD") or blended_rate or 0)  # fallback to blended rate if needed
+    if rate > 0:
+        total_hours = total_price / rate
+    else:
+        total_hours = float(item.get("Planned_Hours") or 0)
+
+    item["Planned_Hours"] = round(total_hours, 2)
+
+    if is_retainer and total_months > 0:
+        item["monthly_hours"] = round(total_hours / total_months, 2)
+        item["monthly_price"] = round(total_price / total_months, 2)
+    else:
+        item["monthly_hours"] = 0
+        item["monthly_price"] = 0
+
+
+Then in your Step 3 save logic (on the backend):
+
+Loop over scenario items.
+
+For each item that has updated billing_cadence, cadence_units or cadence_price, call apply_cadence_to_item.
+
+After that, call _recompute_totals(scenario) before storing in SCENARIO_STORE.
+
+Step 2 fixed TF-IDF vs AI
+
+This ensures:
+
+The Total column Brad wants is stored as item["total_price"].
+
+Retainer months + monthly hours/price are kept consistent for Gantt/export.
+
+3. Step 3 UI changes (what it needs to send to the backend)
+
+Front-end wise, for each row in the pricing table:
+
+Cadence dropdown (existing)
+
+Values: one_time, monthly, quarterly, semi_annual, annual (or similar).
+
+Cadence Price column (rename current “Price” label)
+
+Editable <input> bound to item.cadence_price.
+
+Units column – NEW
+
+Numeric <input> bound to item.cadence_units.
+
+Default 1 for one-time, N months for monthly if you already know retainer length.
+
+Total Price column – NEW
+
+Display only, computed client-side as cadence_price * units for quick feedback.
+
+Optional: also send total_price in the payload; backend will recompute anyway.
+
+On Save:
+
+Send the whole scenario object (with updated billing_cadence, cadence_units, cadence_price) through /api/scenario/sync/{session_id}.
+
+Backend then:
+
+Applies apply_cadence_to_item per row.
+
+Calls _recompute_totals.
+
+Uses save_synced_scenario_to_store to update SCENARIO_STORE.
+
+This fixes the “I changed the pricing but export ignored it” and implements the cadence/units/total model Brad described.
+
+4. Make the breakdown & retainer summary show the changes
+
+You already generate retainer-aware WBS and summaries using retainer, months, monthly_hours, monthly_price.
+
+Step 2 fixed TF-IDF vs AI
+
+Step 2 fixed TF-IDF vs AI
+
+Once you have apply_cadence_to_item wired up:
+
+The item-level values that summary functions read (retainer.months, monthly_hours, monthly_price, Price_USD / total_price) will all be updated.
+
+Therefore, the breakdown API (retainer analysis, retainer summary, etc.) will show the new totals automatically as long as you:
+
+Recompute totals via _recompute_totals.
+
+Use the updated scenario from SCENARIO_STORE when you call those functions.
+
+So the main work is just: don’t keep a stale copy of the scenario when generating summaries.
+
+5. Hook cadence/units into the Gantt (monthly splitting & naming)
+
+This is the “PM world” part Brad cares about:
+
+If a deliverable is monthly with N units, make N deliverables in the Gantt, named by month (“February assets”, “March assets”…), each constrained to its month boundaries.
+
+You already have retainer logic in build_wbs_with_pricing:
+
+Reads months, monthly_hours, monthly_price.
+
+Multiplies prices by months.
+
+Step 2 fixed TF-IDF vs AI
+
+5.1. Expand each retainer deliverable into per-month rows
+
+In build_wbs_with_pricing:
+
+After you create the deliverable summary row (the one with "Planned_Hours": (monthly_hours * months) if months else parent_hours_display), keep that, but also:
+
+When months > 0 (retainer):
+
+Get project_start (you already have it from the scenario).
+
+Define a helper to get month boundaries:
+
+from datetime import date, timedelta
+
+def month_bounds(start_date: date, offset: int):
+    # offset = 0 for first month, 1 for month+1, etc.
+    year = start_date.year + (start_date.month - 1 + offset) // 12
+    month = (start_date.month - 1 + offset) % 12 + 1
+    first = date(year, month, 1)
+    if month == 12:
+        last = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        last = date(year, month + 1, 1) - timedelta(days=1)
+    return first, last
+
+
+Compute monthly_hours for this item (we already did in apply_cadence_to_item).
+
+For i in range(months):
+
+start_date_i, end_date_i = month_bounds(project_start_date, i)
+
+Compute start_offset_days = (start_date_i - project_start_date).days.
+
+duration_days = (end_date_i - start_date_i).days + 1.
+
+Append one WBS row per month:
+
+rows.append({
+    "Row_ID": "",
+    "Deliverable_Code": dcode,
+    "Task_Code": "",
+    "Service_Department": svc_deliv,
+    "Deliverable": deliv_label,
+    "Project_Name": project_name,
+    "WBS_ID": f"{wbs_deliv}.{i+1}",
+    "Parent_WBS_ID": wbs_deliv,
+    "Task_Name": f"{deliv_label} - {start_date_i.strftime('%B')}",
+    "Component": "",
+    "Task": "",
+    "Role": "",
+    "Seniority": "",
+    "Planned_Hours": monthly_hours,
+    "Start_Offset_Days": start_offset_days,
+    "Duration_Days": duration_days,
+    "Start_Date": start_date_i.isoformat(),
+    "End_Date": end_date_i.isoformat(),
+    "Dependencies": prev_deliv_wbs if i == 0 else f"{wbs_deliv}.{i}",
+    "Assignee_External_ID": "",
+    "Notes": deliv_notes + f" | Month {i+1}/{months}"
+})
+
+
+Now you have:
+
+A parent row that has total retainer price/hours.
+
+Child rows, one per month, capped to that month’s boundaries, each with that month’s hours. This matches Brad’s “starts and stops within the month, no in-between, ignore holidays” requirement.
+
+5.2. Respect existing PM changes while adding hours
+
+Brad also said:
+
+If a PM already tweaked the Gantt, adding more hours in Step 3 should add extra time onto the end of that deliverable instead of nuking their changes.
+
+How to approximate that with your current pipeline:
+
+When you save the Gantt (via /api/timeline/save or similar), keep per-deliverable IDs and their start/end dates in SCENARIO_STORE[session_id]["scenario"]["items"] or a separate timeline key.
+
+When Step 3 changes price/cadence:
+
+Compute new total hours for each deliverable (from apply_cadence_to_item).
+
+Compare to old total (that was stored pre-save).
+
+If delta_hours > 0:
+
+For one-time deliverables:
+
+Increase Planned_Hours on the last set of child tasks or append an “Extra hours” task whose Start_Offset_Days = last child’s end date, so it stacks at the end.
+
+For monthly retainers:
+
+If months increased: append more monthly child tasks using the per-month logic above.
+
+If monthly_hours increased: bump Planned_Hours on each monthly task proportionally or add a small “extra hours” task at the end of each month.
+
+Write the updated WBS back to SCENARIO_STORE so export uses the merged, PM-respecting schedule.
+
+That’s the “ideal” behaviour Brad described; you can start simpler (rebuild the retainer’s monthly tasks from scratch but preserve deliverable start date) and then refine if PMs complain.
+
+Suggested implementation order
+
+To keep this sane, I’d implement in this order:
+
+Persist Step 3 edits into SCENARIO_STORE
+
+save_synced_scenario_to_store() + call from scenario sync endpoint.
+
+Add cadence fields and server-side math
+
+billing_cadence, cadence_units, cadence_price, total_price on items.
+
+apply_cadence_to_item() and hook it into Step 3 save flow.
+
+Make sure _recompute_totals runs afterwards.
+
+Update Step 3 UI to show Cadence Price / Units / Total
+
+Wire the UI to send those fields to the sync endpoint.
+
+Wire cadence → retainer months, monthly_hours, monthly_price
+
+Confirm retainer summary & breakdown APIs reflect changes.
+
+Extend Gantt builder to split retainers by month and name them by month
+
+Implement monthly row expansion in build_wbs_with_pricing.
