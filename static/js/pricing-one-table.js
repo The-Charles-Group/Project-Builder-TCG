@@ -43,7 +43,7 @@
     tr.appendChild(h("td", {}, cadenceSelect(d.cadence || "One-Time", (val)=> ScenarioStore.updateDeliverable(d.id, { cadence: val })) ));
     tr.appendChild(h("td", {}, numberInput(d.months || (d.cadence==="Monthly"?12:(d.cadence==="Quarterly"?4:0)), (val)=> ScenarioStore.updateDeliverable(d.id, { months: val }), { min:"0" })));
     tr.appendChild(h("td", {}, numberInput(d.hours   || 0, (val)=> ScenarioStore.updateDeliverable(d.id, { hours: val }),    { min:"0", step:"0.1" })));
-    tr.appendChild(h("td", {}, numberInput(d.rate    || ScenarioStore.state.blendedRate || 195, (val)=> ScenarioStore.updateDeliverable(d.id, { rate: val }), { min:"0", step:"1" })));
+    tr.appendChild(h("td", {}, numberInput(d.rate    || ScenarioStore.state.blendedRate || 210, (val)=> ScenarioStore.updateDeliverable(d.id, { rate: val }), { min:"0", step:"1" })));
     tr.appendChild(h("td", { class:"apb-right" }, money(d.price)));
     const resInput = h("input", { type:"text", class:"apb-input apb-txt", value:(d.resources||[]).join(", ") });
     resInput.addEventListener("change", (e)=> {
@@ -63,7 +63,7 @@
     tr.appendChild(h("td", {}, cadenceSelect(c.cadence || d.cadence || "One-Time", (val)=> ScenarioStore.updateComponent(d.id, c.id, { cadence: val })) ));
     tr.appendChild(h("td", {}, numberInput(c.months || d.months || 0, (val)=> ScenarioStore.updateComponent(d.id, c.id, { months: val }), { min:"0" })));
     tr.appendChild(h("td", {}, numberInput(c.hours   || 0, (val)=> ScenarioStore.updateComponent(d.id, c.id, { hours: val      }), { min:"0", step:"0.1" })));
-    tr.appendChild(h("td", {}, numberInput(c.rate    || d.rate || ScenarioStore.state.blendedRate || 195, (val)=> ScenarioStore.updateComponent(d.id, c.id, { rate: val }), { min:"0", step:"1" })));
+    tr.appendChild(h("td", {}, numberInput(c.rate    || d.rate || ScenarioStore.state.blendedRate || 210, (val)=> ScenarioStore.updateComponent(d.id, c.id, { rate: val }), { min:"0", step:"1" })));
     tr.appendChild(h("td", { class:"apb-right" }, money(c.price)));
 
     const tasksInput = h("input", { type:"text", class:"apb-input apb-txt", value:(c.tasks||[]).join(", ") });

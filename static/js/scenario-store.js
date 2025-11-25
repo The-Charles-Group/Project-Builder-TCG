@@ -4,7 +4,7 @@
 
 (function () {
   const _listeners = new Set();
-  const DEFAULTS = { hoursPerDay: 6, currency: "USD", blendedRate: 195 };
+  const DEFAULTS = { hoursPerDay: 6, currency: "USD", blendedRate: 210 };
 
   const ScenarioStore = {
     // Use SessionManager's canonical session_id (matches backend SCENARIO_STORE keys)

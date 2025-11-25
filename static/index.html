@@ -426,7 +426,7 @@
         </div>
         <div>
           <label for="blendedRate">Blended rate (optional)</label>
-          <input id="blendedRate" type="number" step="1" value="195" placeholder="195" />
+          <input id="blendedRate" type="number" step="1" value="210" placeholder="210" />
         </div>
         <div>
           <label for="rateBand">Rate band</label>
@@ -1150,7 +1150,7 @@
           body: JSON.stringify({
             selected_deliverable_codes: selectedCodes,
             pricing_mode: 'Flat_Blended',
-            blended_rate: 195,
+            blended_rate: 210,
             rate_band: 'Standard_US',
             scenario_a: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
             scenario_b: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'}
@@ -1273,7 +1273,7 @@
           body: JSON.stringify({
             rfp_text: appState.currentRfpText,
             pricing_mode: 'Flat_Blended',
-            blended_rate: 195,
+            blended_rate: 210,
             rate_band: 'Standard_US',
             use_slack: true,
             slack_after_internal: 1,
@@ -1513,7 +1513,7 @@
           selected_deliverable_codes: appState.selectedCodes,
           selected_components_map: selectedComponentsPayload,
           pricing_mode: 'Flat_Blended',
-          blended_rate: 195,
+          blended_rate: 210,
           rate_band: 'Standard_US',
           scenario_a: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' },
           scenario_b: { mode: 'template', complexity: 'Advanced', tier: 'T2_MediumVolume' }
@@ -1582,7 +1582,7 @@
     
     function getBlendedRateFromUI() {
       const value = document.getElementById('blendedRate')?.value;
-      return value ? parseFloat(value) : 195;
+      return value ? parseFloat(value) : 210;
     }
     
     function getRateBandFromUI() {

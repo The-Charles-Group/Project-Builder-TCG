@@ -1963,7 +1963,7 @@ function updatePricingTable() {
     
     // Get custom values or defaults
     const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
-    const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
+    const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 210;
     const pricePerPeriod = customHours * customRate;
     const totalPrice = pricePerPeriod * periods;
     
@@ -2245,7 +2245,7 @@ function updatePricingSummary() {
     
     // Get custom values or defaults
     const hours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
-    const rate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 195;
+    const rate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 210;
     const cost = hours * rate;
     
     if (isRetainer) {
@@ -2558,7 +2558,7 @@ function updateCustomHours(deliverableCode, hours) {
 
 // Update custom rate - immediate recalculation
 function updateCustomRate(deliverableCode, rate) {
-  const numRate = parseFloat(rate) || 195;
+  const numRate = parseFloat(rate) || 210;
   pricingData.customRates.set(deliverableCode, numRate);
   
   // Immediate update without full re-render
@@ -2736,7 +2736,7 @@ async function updatePricing() {
       
       if (customHours !== undefined) item.hours = customHours;
       if (customRate !== undefined) item.blended_rate = customRate;
-      item.price = (item.hours || 0) * (item.blended_rate || 195);
+      item.price = (item.hours || 0) * (item.blended_rate || 210);
       item.is_retainer = (delivType === 'RETAINER');
       
       // Update components
@@ -2748,7 +2748,7 @@ async function updatePricing() {
           
           if (compHours !== undefined) comp.hours = compHours;
           if (compRate !== undefined) comp.rate = compRate;
-          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
+          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 210);
         });
       }
     });
@@ -2849,7 +2849,7 @@ async function rebuildScenario() {
       if (customRate !== undefined) item.blended_rate = customRate;
       
       // Update price calculation (price per period)
-      item.price = (item.hours || 0) * (item.blended_rate || 195);
+      item.price = (item.hours || 0) * (item.blended_rate || 210);
       
       // Mark as retainer if not one-time
       item.is_retainer = (cadenceType !== 'ONE_TIME');
@@ -2869,7 +2869,7 @@ async function rebuildScenario() {
           if (compHours !== undefined) comp.hours = compHours;
           if (compRate !== undefined) comp.rate = compRate;
           
-          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
+          comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 210);
           comp.is_retainer = (compCadence !== 'ONE_TIME');
           if (comp.is_retainer) {
             comp.retainer_months = compPeriods;
@@ -2922,7 +2922,7 @@ function showScenarioComparison(original, rebuilt) {
                        (pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER' ? 'MONTHLY' : 'ONE_TIME');
     const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
                    (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
-    const price = item.price || (item.hours * (item.blended_rate || 195));
+    const price = item.price || (item.hours * (item.blended_rate || 210));
     const totalPrice = price * periods;
     
     originalGrandTotal += totalPrice;
@@ -2938,7 +2938,7 @@ function showScenarioComparison(original, rebuilt) {
         const compKey = `${item.deliverable_code}::${comp.name}`;
         const compCadence = pricingDataEnhanced.cadenceTypes.get(compKey) || cadenceType;
         const compPeriods = pricingDataEnhanced.periodsCount.get(compKey) || periods;
-        const compPrice = comp.price || (comp.hours * (comp.rate || item.blended_rate || 195));
+        const compPrice = comp.price || (comp.hours * (comp.rate || item.blended_rate || 210));
         const compTotalPrice = compPrice * compPeriods;
         
         originalGrandTotal += compTotalPrice;
@@ -3119,7 +3119,7 @@ function saveRowEdit(code) {
   }
   
   if (rateInput) {
-    const rate = parseFloat(rateInput.value) || 195;
+    const rate = parseFloat(rateInput.value) || 210;
     pricingData.customRates.set(code, rate);
   }
   
@@ -3153,7 +3153,7 @@ function saveRowEdit(code) {
         const rate = pricingData.customRates.get(code);
         if (hours !== undefined) item.hours = hours;
         if (rate !== undefined) item.blended_rate = rate;
-        item.price = (item.hours || 0) * (item.blended_rate || 195);
+        item.price = (item.hours || 0) * (item.blended_rate || 210);
         
         // Update retainer status
         const cadence = pricingDataEnhanced.cadenceTypes.get(code);
@@ -3172,7 +3172,7 @@ function saveRowEdit(code) {
             const compRate = pricingData.customRates.get(compKey);
             if (compHours !== undefined) comp.hours = compHours;
             if (compRate !== undefined) comp.rate = compRate;
-            comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 195);
+            comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 210);
           }
         });
       }
@@ -3247,7 +3247,7 @@ function updatePeriods(code, periods) {
 // New helper: Update row totals without full table re-render
 function updateRowTotals(code) {
   const hours = parseFloat(document.getElementById(`hours-${code}`)?.value) || 0;
-  const rate = parseFloat(document.getElementById(`rate-${code}`)?.value) || 195;
+  const rate = parseFloat(document.getElementById(`rate-${code}`)?.value) || 210;
   const periods = pricingDataEnhanced.periodsCount.get(code) || 1;
   
   const pricePerPeriod = hours * rate;
@@ -3527,7 +3527,7 @@ async function optimizeAllPricing() {
             if (scenario.items[idx]) {
               scenario.items[idx].total_hours = opt.hours;
               scenario.items[idx].price = opt.price;
-              scenario.items[idx].effective_rate = opt.hours > 0 ? opt.price / opt.hours : 195;
+              scenario.items[idx].effective_rate = opt.hours > 0 ? opt.price / opt.hours : 210;
             }
           });
           
@@ -5434,7 +5434,7 @@ async function buildFromCurrentSelection() {
     selectedL3Map: l3Payload,
     // Pricing and configuration
     pricing_mode: window.getPricingModeFromUI?.() || 'Flat_Blended',
-    blended_rate: window.getBlendedRateFromUI?.() || 195,
+    blended_rate: window.getBlendedRateFromUI?.() || 210,
     rate_band: window.getRateBandFromUI?.() || 'Standard_US',
     use_slack: window.getUseSlackFromUI?.() || false,
     slack_after_internal: window.getSlackInternalFromUI?.() || 1,
@@ -9294,7 +9294,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!window.__lastBuildPayload) {
       window.__lastBuildPayload = {
         pricing_mode: 'Flat_Blended',
-        blended_rate: 195,
+        blended_rate: 210,
         rate_band: 'Standard_US',
         scenario_a: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
         scenario_b: {mode:'template', complexity:'Advanced', tier:'T2_MediumVolume'},
@@ -10082,7 +10082,7 @@ async function s2ApplyAndBuild() {
 
   // gather knobs (fallbacks keep it working even if Step 1 controls are untouched)
   const pricingMode  = document.querySelector('#pricingMode')?.value || 'Flat_Blended';
-  const blendedRate  = Number(document.querySelector('#blendedRate')?.value || 195);
+  const blendedRate  = Number(document.querySelector('#blendedRate')?.value || 210);
   const rateBand     = document.querySelector('#rateBand')?.value || 'Standard_US';
   const useSlack     = (document.querySelector('#useSlack')?.checked ?? true);
   const slackI       = Number(document.querySelector('#slackAfterInternal')?.value || 1);
