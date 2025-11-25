@@ -3628,13 +3628,18 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 hrs_df = DB.hours_by_role_for_deliverable(dcode, included, scen_col_resolved)
                 d["hours_by_role"] = hrs_df.to_dict("records")
             
-            # Ensure total_hours is calculated correctly
-            calculated_total = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
-            if not d.get("total_hours") or float(d.get("total_hours", 0.0)) == 0.0:
-                d["total_hours"] = calculated_total
+            # IMPORTANT: Use hours from scenario item (Step 3 edits) first, then fall back to calculated
+            # Priority: Planned_Hours (sync) > planned_hours > hours > total_hours > calculated
+            parent_hours_exact = 0.0
+            for hours_key in ["Planned_Hours", "planned_hours", "hours", "total_hours"]:
+                if d.get(hours_key) and float(d.get(hours_key, 0)) > 0:
+                    parent_hours_exact = float(d.get(hours_key))
+                    break
             
-            # hours (use exact for pricing, round for display)
-            parent_hours_exact = float(d.get("total_hours", calculated_total))
+            if parent_hours_exact == 0.0:
+                calculated_total = float(hrs_df["Hours"].sum()) if not hrs_df.empty else 0.0
+                parent_hours_exact = calculated_total
+            
             parent_hours_display = int(round(parent_hours_exact))
 
             # Check if this is a retainer deliverable (support both old and new cadence fields)
@@ -3904,7 +3909,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     rest = [c for c in df.columns if c not in order_ae]
     df = df.reindex(columns=order_ae + rest, fill_value="")
     
-    # --- ENFORCE NUMERIC TYPES & PRICE FORMULA ---
+    # --- ENFORCE NUMERIC TYPES & PRESERVE CADENCE PRICING ---
     # Coerce to numeric and fill blanks
     if "Planned_Hours" in df.columns:
         df["Planned_Hours"] = pd.to_numeric(df["Planned_Hours"], errors="coerce").fillna(0).round(0).astype(int)
@@ -3913,8 +3918,16 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     if "Rate_USD" in df.columns:
         df["Rate_USD"] = pd.to_numeric(df["Rate_USD"], errors="coerce").fillna(0).round(2)
 
-    # Always compute Price from Hours × Rate, then round to whole dollars (no cents)
-    if "Planned_Hours" in df.columns and "Rate_USD" in df.columns:
+    # IMPORTANT: Preserve existing Price_USD from cadence pricing (Step 3 edits)
+    # Only compute Price from Hours × Rate for rows where Price_USD is not already set
+    if "Price_USD" in df.columns:
+        df["Price_USD"] = pd.to_numeric(df["Price_USD"], errors="coerce").fillna(0)
+        # For rows with Price_USD = 0, compute from Hours × Rate as fallback
+        if "Planned_Hours" in df.columns and "Rate_USD" in df.columns:
+            mask = df["Price_USD"] == 0
+            df.loc[mask, "Price_USD"] = (df.loc[mask, "Planned_Hours"] * df.loc[mask, "Rate_USD"]).round(0)
+        df["Price_USD"] = df["Price_USD"].round(0).astype(int)
+    elif "Planned_Hours" in df.columns and "Rate_USD" in df.columns:
         df["Price_USD"] = (df["Planned_Hours"] * df["Rate_USD"]).round(0).astype(int)
     else:
         df["Price_USD"] = 0
@@ -4131,7 +4144,14 @@ def _get_scenarios(session_id: Optional[str] = None) -> dict:
     
     if session_id and session_id in SCENARIO_STORE:
         # Return session-based scenario with Gantt updates
-        scenario = SCENARIO_STORE[session_id]
+        # IMPORTANT: SCENARIO_STORE has structure {"scenario": {...}, "updated_at": ...}
+        # We need to extract just the scenario data
+        store_entry = SCENARIO_STORE[session_id]
+        scenario = store_entry.get("scenario", store_entry) if isinstance(store_entry, dict) else store_entry
+        
+        # Call _recompute_totals to ensure all pricing fields are in sync before export
+        scenario = _recompute_totals(scenario)
+        
         print(f"[GET_SCENARIOS] Found scenario in SCENARIO_STORE")
         print(f"[GET_SCENARIOS] Scenario keys: {list(scenario.keys())}")
         print(f"[GET_SCENARIOS] Has timeline_tasks: {'timeline_tasks' in scenario}")
