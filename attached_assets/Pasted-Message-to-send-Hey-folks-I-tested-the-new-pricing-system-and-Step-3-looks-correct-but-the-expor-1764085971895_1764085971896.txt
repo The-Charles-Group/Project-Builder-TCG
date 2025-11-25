@@ -1,0 +1,118 @@
+Message to send
+
+Hey folks – I tested the new pricing system and Step 3 looks correct, but the export is still using stale pricing.
+
+Concrete example from this scenario:
+
+In Step 3 (screenshot):
+
+Brand Positioning Strategy
+
+Hours = 100
+
+Rate = $210
+
+Price (USD) = $21,000
+
+Retainer card shows Retainers: $111,870 and Project Scenario total $212,880.
+
+In the exported XML (/mnt/data/St.Regis_Nashville_Branding_Agency_RFP_10.22.2024_Workfront_Export_Scenario_A_2025-11-25_10-40AM_EST_75ffb82d.xml):
+
+The same deliverable’s assignment still has:
+
+Work="PT2880M" → 48 hours
+
+Cost="9360.00" → $9,360
+
+Retainers sum to $100,230, and the grand total is $201,240 – the old numbers.
+
+So:
+
+Step 3 + the green “Breakdown” card are reading the new, updated scenario.
+
+The export + top “Grand Total” are still using an older copy of the scenario (pre-Step-3 changes).
+
+What needs to change
+
+Single source of truth for export
+
+Any export / Gantt / MS Project builder should use:
+
+scenario = SCENARIO_STORE[session_id]["scenario"]
+
+
+after merge_scenario_from_sync() and _recompute_totals() have run.
+
+Please confirm you are not reading from:
+
+an original snapshot (e.g. scenario_original, scenario_v0, etc.), or
+
+a separate WBS/timeline object that was built before the Step 3 merge.
+
+Make sure the merged scenario is up to date before export
+
+When Step 3 saves:
+
+We already run apply_cadence_to_item() and merge_scenario_from_sync(session_id).
+
+When exporting:
+
+Re-read the scenario from SCENARIO_STORE[session_id]["scenario"].
+
+Call _recompute_totals(scenario) right before building the XML so price_usd, Rate_USD/rate_usd, Planned_Hours/planned_hours, retainer_months, etc. are all consistent.
+
+Use scenario item fields when building tasks/assignments
+
+In the export builder (build_wbs_with_pricing / build_ms_project_file):
+
+For each deliverable, use the item from scenario["items"] as the source of truth:
+
+Hours → Planned_Hours / planned_hours
+
+Rate → via get_rate_from_item() (Rate_USD or rate_usd)
+
+Total price → price_usd (canonical)
+
+When creating <Assignment>:
+
+Work in minutes = hours × 60
+
+Cost = price_usd for that deliverable (or the appropriate monthly slice if you’re splitting retainers).
+
+For my test case above, after the fix, the XML for Brand Positioning Strategy should show:
+
+Work="PT6000M" (100 hours)
+
+Cost="21000.00" ($21,000)
+
+Wire monthly WBS expansion (for cadence = monthly)
+
+For items where billing_cadence == "monthly" and retainer_months > 0:
+
+Call expand_retainer_into_months(...) (or equivalent) when building the WBS.
+
+Keep the parent deliverable row as a 0-hour “summary”.
+
+Generate one child per month with names like "Brand Positioning Strategy – February", etc.
+
+Right now, even after the pricing work, the XML shows only a single row for retainers—no per-month children—so that helper isn’t being used yet.
+
+Acceptance criteria / how we’ll verify
+
+In Step 3, change Hours and/or Cadence for Brand Positioning Strategy, click Save, then export:
+
+The assignment for that task in the XML must show:
+
+Work and Cost that match the Step 3 values.
+
+The “Grand Total” at the top of the page should match the Project Scenario total and the sum of exported costs.
+
+For a monthly retainer:
+
+Step 3: set cadence = Monthly, units = 12, and save.
+
+Export:
+
+See the parent deliverable row plus 12 monthly child tasks.
+
+Child names are month-labelled and their hours / cost per month match the pricing math.
