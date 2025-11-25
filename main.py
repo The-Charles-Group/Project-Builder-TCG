@@ -725,7 +725,12 @@ SCENARIO_STORE: Dict[str, Dict[str, Any]] = {}
 def _recompute_totals(scn: dict) -> dict:
     """
     Recompute Price_USD and totals for a scenario.
-    Ensures all rows have Price_USD = Rate_USD * Planned_Hours.
+    
+    Pricing logic:
+    - If item has cadence pricing (price_usd/total_price set), use that as canonical price
+    - Otherwise, calculate Price_USD = Rate_USD * Planned_Hours
+    
+    Also keeps price_usd and Price_USD in sync for backward compatibility.
     Updates totals.hours and totals.price.
     
     Args:
@@ -739,10 +744,42 @@ def _recompute_totals(scn: dict) -> dict:
     total_price = 0.0
     
     for item in items:
-        # Calculate Price_USD from Rate_USD * Planned_Hours
-        rate = float(item.get("Rate_USD", 0) or 0)
-        hours = float(item.get("Planned_Hours", 0) or 0)
-        item["Price_USD"] = round(rate * hours, 2)
+        # Get hours from item (using backward-compatible lookup)
+        hours = 0.0
+        for key in ["Planned_Hours", "planned_hours", "hours"]:
+            if key in item and item[key] not in (None, ""):
+                try:
+                    hours = float(item[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+        
+        # Check if item has cadence-based pricing (price_usd or total_price already set)
+        cadence_price = None
+        for key in ["price_usd", "total_price"]:
+            if key in item and item[key] not in (None, ""):
+                try:
+                    cadence_price = float(item[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+        
+        if cadence_price is not None and cadence_price > 0:
+            # Use cadence-based price as canonical
+            item_price = cadence_price
+        else:
+            # Calculate from Rate_USD * Planned_Hours
+            rate = float(item.get("Rate_USD", 0) or 0)
+            item_price = round(rate * hours, 2)
+        
+        # Keep all price fields in sync
+        item["Price_USD"] = round(item_price, 2)
+        item["price_usd"] = item["Price_USD"]
+        item["total_price"] = item["Price_USD"]
+        
+        # Ensure Planned_Hours is set
+        if "Planned_Hours" not in item:
+            item["Planned_Hours"] = round(hours, 2)
         
         # Accumulate totals
         total_hours += hours
@@ -756,6 +793,308 @@ def _recompute_totals(scn: dict) -> dict:
     scn["totals"]["price"] = round(total_price, 2)
     
     return scn
+
+# ---------- Rate/Hours Utility Helpers (Backward Compatible) ----------
+
+def get_rate_from_item(item: dict) -> float:
+    """Get rate from item, checking multiple field name conventions."""
+    for key in ["Rate_USD", "rate_usd", "rate", "Blended_Rate_USD", "blended_rate_usd"]:
+        if key in item and item[key] not in (None, ""):
+            try:
+                return float(item[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+def get_hours_from_item(item: dict) -> float:
+    """Get hours from item, checking multiple field name conventions."""
+    for key in ["Planned_Hours", "planned_hours", "hours"]:
+        if key in item and item[key] not in (None, ""):
+            try:
+                return float(item[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+def set_hours_on_item(item: dict, hours: float):
+    """Set hours on item using existing convention."""
+    if "Planned_Hours" in item or "planned_hours" not in item:
+        item["Planned_Hours"] = round(hours, 2)
+    else:
+        item["planned_hours"] = round(hours, 2)
+
+def get_price_from_item(item: dict) -> float:
+    """Get total price from item, checking multiple field name conventions."""
+    for key in ["price_usd", "Price_USD", "total_price", "Total_Price"]:
+        if key in item and item[key] not in (None, ""):
+            try:
+                return float(item[key])
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+def cadence_was_modified(item: dict) -> bool:
+    """Check if cadence fields were explicitly provided in the item."""
+    return any(k in item for k in ("billing_cadence", "cadence_units", "cadence_price"))
+
+# ---------- Cadence-Aware Pricing Helper ----------
+
+def apply_cadence_to_item(item: dict):
+    """
+    Apply cadence pricing logic to a scenario item.
+    Computes total_price, hours, and retainer fields from cadence settings.
+    Only modifies items where cadence fields are present/changed.
+    """
+    if not cadence_was_modified(item):
+        return
+    
+    cadence_raw = (item.get("billing_cadence") or item.get("cadence") or "one_time").lower()
+    
+    mapping = {
+        "one time": "one_time",
+        "one-time": "one_time",
+        "one_time": "one_time",
+        "monthly": "monthly",
+        "month": "monthly",
+        "quarterly": "quarterly",
+        "q": "quarterly",
+        "semi-annual": "semi_annual",
+        "semiannual": "semi_annual",
+        "annual": "annual",
+        "yearly": "annual",
+    }
+    cadence = mapping.get(cadence_raw, "one_time")
+    item["billing_cadence"] = cadence
+    
+    try:
+        units = int(item.get("cadence_units") or 1)
+    except (TypeError, ValueError):
+        units = 1
+    if units <= 0:
+        units = 1
+    item["cadence_units"] = units
+    
+    try:
+        cadence_price = float(item.get("cadence_price") or 0.0)
+    except (TypeError, ValueError):
+        cadence_price = 0.0
+    
+    if cadence_price <= 0:
+        existing_total = get_price_from_item(item)
+        cadence_price = existing_total / units if units > 0 else existing_total
+    
+    item["cadence_price"] = round(cadence_price, 2)
+    
+    months_per_cadence = {
+        "one_time": 0,
+        "monthly": 1,
+        "quarterly": 3,
+        "semi_annual": 6,
+        "annual": 12,
+    }.get(cadence, 0)
+    
+    total_price = cadence_price * units
+    item["price_usd"] = round(total_price, 2)
+    item["Price_USD"] = item["price_usd"]
+    item["total_price"] = item["price_usd"]
+    
+    total_months = months_per_cadence * units
+    
+    existing_retainer = item.get("retainer") or {}
+    existing_months = existing_retainer.get("months") or 0
+    if existing_months and not cadence_was_modified(item):
+        total_months = int(existing_months)
+    
+    is_retainer = (cadence != "one_time") and total_months > 0
+    item["is_retainer"] = is_retainer
+    if is_retainer:
+        item["retainer"] = {**existing_retainer, "months": total_months}
+        item["retainer_months"] = total_months
+    
+    rate = get_rate_from_item(item)
+    if rate > 0:
+        total_hours = total_price / rate
+    else:
+        total_hours = get_hours_from_item(item)
+    
+    set_hours_on_item(item, total_hours)
+    
+    if is_retainer and total_months > 0:
+        monthly_hours = total_hours / total_months
+        monthly_price = total_price / total_months
+        item["monthly_hours"] = round(monthly_hours, 2)
+        item["monthly_price"] = round(monthly_price, 2)
+    else:
+        item["monthly_hours"] = 0
+        item["monthly_price"] = 0
+
+# ---------- Scenario Sync Merge Helpers ----------
+
+def _merge_items(old_item: dict, new_item: dict, editable_fields: set) -> dict:
+    """
+    Merge new item data into old item, only updating editable fields.
+    Preserves timeline/WBS metadata, PM overrides, etc.
+    """
+    merged = old_item.copy()
+    for k, v in new_item.items():
+        if k in editable_fields or k not in merged:
+            merged[k] = v
+    return merged
+
+def merge_scenario_from_sync(session_id: str):
+    """
+    Safely merge Step 3 edits from SCENARIO_SYNC_STATE into SCENARIO_STORE.
+    Preserves timeline/WBS/PM metadata while updating only editable pricing/cadence fields.
+    """
+    sync_entry = SCENARIO_SYNC_STATE.get(session_id)
+    if not sync_entry or "scenario" not in sync_entry:
+        return
+    
+    new_scen = sync_entry.get("scenario") or {}
+    if not new_scen:
+        return
+    
+    # Initialize SCENARIO_STORE entry if it doesn't exist
+    if session_id not in SCENARIO_STORE:
+        SCENARIO_STORE[session_id] = {"scenario": {}, "updated_at": time.time()}
+    
+    store_entry = SCENARIO_STORE[session_id]
+    old_scen = (store_entry.get("scenario") or {}).copy()
+    
+    editable_fields = {
+        "billing_cadence", "cadence_units", "cadence_price",
+        "price_usd", "Price_USD", "total_price",
+        "planned_hours", "Planned_Hours", "hours",
+        "retainer", "retainer_months", "monthly_hours", "monthly_price",
+        "is_retainer", "Rate_USD", "rate_usd",
+    }
+    
+    # If no old scenario exists, just use the new one directly
+    if not old_scen or not old_scen.get("items"):
+        store_entry["scenario"] = new_scen
+        store_entry["updated_at"] = time.time()
+        SCENARIO_STORE[session_id] = store_entry
+        return
+    
+    merged_scen = old_scen.copy()
+    for k, v in new_scen.items():
+        if k == "items":
+            continue
+        if isinstance(v, dict) and isinstance(old_scen.get(k), dict):
+            merged_scen[k] = {**old_scen.get(k, {}), **v}
+        else:
+            merged_scen[k] = v
+    
+    old_items_by_id = {}
+    for item in old_scen.get("items", []):
+        item_id = item.get("id") or item.get("Row_ID") or item.get("deliverable_code")
+        if item_id:
+            old_items_by_id[item_id] = item
+    
+    merged_items = []
+    for new_item in new_scen.get("items", []):
+        item_id = new_item.get("id") or new_item.get("Row_ID") or new_item.get("deliverable_code")
+        if not item_id:
+            merged_items.append(new_item)
+            continue
+        
+        old_item = old_items_by_id.get(item_id, {})
+        merged_items.append(_merge_items(old_item, new_item, editable_fields))
+    
+    merged_scen["items"] = merged_items
+    
+    store_entry["scenario"] = merged_scen
+    store_entry["updated_at"] = time.time()
+    SCENARIO_STORE[session_id] = store_entry
+
+# ---------- Gantt Monthly Expansion Helpers ----------
+
+def month_bounds(start_date, offset: int):
+    """
+    Get the first and last day of a month relative to start_date.
+    
+    Args:
+        start_date: date object (project start)
+        offset: int (0 for first month, 1 for next month, etc.)
+    
+    Returns:
+        Tuple of (first_day_of_month, last_day_of_month) as date objects
+    """
+    from datetime import date, timedelta
+    
+    if isinstance(start_date, str):
+        start_date = datetime.datetime.fromisoformat(start_date.replace('Z', '')).date()
+    elif isinstance(start_date, datetime.datetime):
+        start_date = start_date.date()
+    
+    year = start_date.year + (start_date.month - 1 + offset) // 12
+    month = (start_date.month - 1 + offset) % 12 + 1
+    first = date(year, month, 1)
+    
+    if month == 12:
+        last = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        last = date(year, month + 1, 1) - timedelta(days=1)
+    
+    return first, last
+
+def expand_retainer_into_months(deliv_row: dict, months: int, project_start_date) -> list:
+    """
+    Expand a retainer deliverable into monthly child rows for Gantt display.
+    
+    Args:
+        deliv_row: The parent deliverable row dict
+        months: Number of months to expand
+        project_start_date: Project start date
+        
+    Returns:
+        List of monthly child row dicts
+    """
+    from datetime import date
+    
+    if isinstance(project_start_date, str):
+        project_start_date = datetime.datetime.fromisoformat(project_start_date.replace('Z', '')).date()
+    elif isinstance(project_start_date, datetime.datetime):
+        project_start_date = project_start_date.date()
+    
+    base_wbs = deliv_row.get("WBS_ID", "")
+    label = deliv_row.get("Deliverable") or deliv_row.get("Task_Name") or ""
+    
+    total_hours = get_hours_from_item(deliv_row)
+    hours_per_month = total_hours / months if months > 0 else 0
+    
+    total_price = get_price_from_item(deliv_row)
+    price_per_month = total_price / months if months > 0 else 0
+    
+    rows = []
+    for i in range(months):
+        first, last = month_bounds(project_start_date, i)
+        start_offset_days = (first - project_start_date).days
+        duration_days = (last - first).days + 1
+        
+        child = deliv_row.copy()
+        child["WBS_ID"] = f"{base_wbs}.{i+1}"
+        child["Parent_WBS_ID"] = base_wbs
+        child["Task_Name"] = f"{label} - {first.strftime('%B')}"
+        child["Planned_Hours"] = round(hours_per_month, 2)
+        child["Price_USD"] = round(price_per_month, 2)
+        child["price_usd"] = child["Price_USD"]
+        
+        child["Start_Offset_Days"] = start_offset_days
+        child["Duration_Days"] = duration_days
+        child["Start_Date"] = first.isoformat()
+        child["End_Date"] = last.isoformat()
+        
+        if i == 0:
+            child["Dependencies"] = deliv_row.get("Dependencies", "")
+        else:
+            child["Dependencies"] = f"{base_wbs}.{i}"
+        
+        child["Notes"] = (deliv_row.get("Notes", "") + f" | Month {i+1}/{months}").strip(" |")
+        
+        rows.append(child)
+    
+    return rows
 
 # Configure file upload limits - allow up to 20MB files
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -3210,23 +3549,41 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             parent_hours_exact = float(d.get("total_hours", calculated_total))
             parent_hours_display = int(round(parent_hours_exact))
 
-            # Check if this is a retainer deliverable
-            months = int((d.get("retainer") or {}).get("months", 0))
-            monthly_hours = int(d.get("monthly_hours") or 0)
-            monthly_price = int(d.get("monthly_price") or 0)
+            # Check if this is a retainer deliverable (support both old and new cadence fields)
+            months = int((d.get("retainer") or {}).get("months", 0) or d.get("retainer_months", 0))
+            
+            # Also check billing_cadence for new cadence-based retainers
+            billing_cadence = (d.get("billing_cadence") or "one_time").lower()
+            cadence_units = int(d.get("cadence_units") or 1)
+            if billing_cadence in ("monthly", "quarterly", "semi_annual", "annual") and months == 0:
+                # Calculate months from cadence
+                months_per_cadence = {"monthly": 1, "quarterly": 3, "semi_annual": 6, "annual": 12}.get(billing_cadence, 0)
+                months = months_per_cadence * cadence_units
+            
+            monthly_hours = float(d.get("monthly_hours") or 0)
+            monthly_price = float(d.get("monthly_price") or 0)
             is_retainer = months > 0 or d.get("is_retainer", False)
             deliverable_type = "Retainer" if is_retainer else "One-Time"
 
-            # price/rate at deliverable
-            if pricing_mode == "Flat_Blended":
+            # price/rate at deliverable - check for cadence-based pricing first
+            cadence_price_value = float(d.get("cadence_price") or 0)
+            total_price_value = float(d.get("price_usd") or d.get("Price_USD") or d.get("total_price") or 0)
+            
+            if total_price_value > 0:
+                # Use cadence-based pricing from sync
+                deliv_price = round(total_price_value, 2)
+                deliv_rate = round(deliv_price / max(1, (monthly_hours * months) if months else parent_hours_display), 2)
+            elif pricing_mode == "Flat_Blended":
                 deliv_rate = blended_rate
                 deliv_price = round((monthly_hours if months else parent_hours_display) * deliv_rate, 2)
+                if months:
+                    deliv_price = round(deliv_price * months, 2)
             else:
                 hrs_by_role_deliv = DB.hours_by_role_for_deliverable(dcode, tg_order, scen_col)
                 deliv_price, _ = DB.price_for_hours_by_role(hrs_by_role_deliv, rate_band)
                 deliv_price = round(deliv_price, 2)
-            if months:
-                deliv_price = round(deliv_price * months, 2)
+                if months:
+                    deliv_price = round(deliv_price * months, 2)
 
             # Build deliverable node - direct child of Project Summary (flattened hierarchy)
             wbs_deliv = f"1.{deliv_counter_global}"
@@ -13113,8 +13470,14 @@ async def sync_scenario(payload: ScenarioSyncPayload):
     # Apply client changes if newer
     changes_applied = False
     if payload.scenario and (not has_conflicts or payload.client_version > server_version):
+        # Apply cadence pricing logic to each item before storing
+        scenario_data = payload.scenario
+        if scenario_data and scenario_data.get("items"):
+            for item in scenario_data["items"]:
+                apply_cadence_to_item(item)
+        
         # Update server state with client data
-        server_state["scenario"] = payload.scenario
+        server_state["scenario"] = scenario_data
         server_state["selections"] = payload.selections or {}
         server_state["version"] = max(server_version + 1, payload.client_version)
         server_state["last_modified"] = payload.timestamp
@@ -13131,9 +13494,16 @@ async def sync_scenario(payload: ScenarioSyncPayload):
         
         changes_applied = True
         
+        # Merge Step 3 edits into SCENARIO_STORE (preserves timeline/WBS metadata)
+        merge_scenario_from_sync(session_id)
+        
+        # Recompute totals in SCENARIO_STORE for consistent pricing
+        if session_id in SCENARIO_STORE and SCENARIO_STORE[session_id].get("scenario"):
+            SCENARIO_STORE[session_id]["scenario"] = _recompute_totals(SCENARIO_STORE[session_id]["scenario"])
+        
         # Also update global _CURRENT_SCENARIOS if exists
-        if payload.scenario and payload.scenario.get("items"):
-            _CURRENT_SCENARIOS[f"{session_id}_sync"] = payload.scenario
+        if scenario_data and scenario_data.get("items"):
+            _CURRENT_SCENARIOS[f"{session_id}_sync"] = scenario_data
     
     # Determine what to send back to client
     response_data = {
