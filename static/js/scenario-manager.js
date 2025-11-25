@@ -446,10 +446,13 @@
     },
     
     // Call API to build scenario
-    async buildScenario() {
+    // reset=false (default) preserves Step 3 edits if scenario exists
+    // reset=true forces rebuild from Step 2 baseline
+    async buildScenario(reset = false) {
       const payload = this.buildScenarioPayload();
+      payload.reset = reset;  // Add reset flag to control Step 3 edit preservation
       
-      console.log('[ScenarioManager] Building scenario with payload:', payload);
+      console.log('[ScenarioManager] Building scenario with payload:', payload, 'reset:', reset);
       
       try {
         const res = await fetch('/api/scenarios', {
@@ -466,6 +469,11 @@
         const json = await res.json();
         console.log('[ScenarioManager] Received scenario response:', json);
         
+        // Check if response came from cache (Step 3 edits preserved)
+        if (json.cached) {
+          console.log('[ScenarioManager] ✅ Using cached scenario (Step 3 edits preserved)');
+        }
+        
         // Update deliverables from API response
         this.updateDeliverablesFromAPI(json);
         
@@ -481,6 +489,23 @@
         console.error('[ScenarioManager] Build scenario failed:', error);
         throw error;
       }
+    },
+    
+    // Rebuild scenario from Step 2 baseline (discards Step 3 edits)
+    async rebuildFromStep2() {
+      const confirmed = confirm(
+        '⚠️ Rebuild from Step 2?\n\n' +
+        'This will discard all pricing edits made in Step 3 and rebuild the scenario from the Step 2 baseline.\n\n' +
+        'Click OK to rebuild, or Cancel to keep your current edits.'
+      );
+      
+      if (!confirmed) {
+        console.log('[ScenarioManager] Rebuild from Step 2 cancelled by user');
+        return null;
+      }
+      
+      console.log('[ScenarioManager] 🔄 Rebuilding from Step 2 (reset=true)');
+      return this.buildScenario(true);  // Force reset
     },
     
     // Update pricing from Step 3 changes (extends base method)
@@ -622,6 +647,9 @@
   
   // Expose globally
   window.ScenarioManager = ScenarioManager;
+  
+  // Expose rebuildFromStep2 as global function for HTML buttons
+  window.rebuildFromStep2 = () => ScenarioManager.rebuildFromStep2();
   
   // Auto-subscribe to update window.currentScenario for compatibility
   ScenarioManager.subscribe(() => {

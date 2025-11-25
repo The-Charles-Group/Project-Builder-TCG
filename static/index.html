@@ -471,11 +471,16 @@
           </table>
         </div>
         
-        <!-- Re-build Scenario Button -->
-        <div style="margin-top: 16px; display: flex; justify-content: flex-end;">
+        <!-- Scenario Control Buttons -->
+        <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 12px;">
           <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
                   style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
             🔄 Re-build Scenario
+          </button>
+          <button id="btn-reset-from-step2" onclick="rebuildFromStep2()" 
+                  style="background: rgba(255, 165, 0, 0.2); color: #FFA500; padding: 8px 16px; border: 1px solid #FFA500; border-radius: 6px; cursor: pointer; font-weight: 600;"
+                  title="⚠️ Rebuilds scenario from Step 2 defaults — use only if you want to discard current pricing edits.">
+            ⚠️ Reset from Step 2
           </button>
         </div>
       </div>

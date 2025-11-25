@@ -3467,6 +3467,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     # PATCH A: Ensure components are inflated for AI picks (handle "__ALL__" sentinel)
     scenario = _inflate_components_if_missing(scenario)
     
+    # PATCH B: Recompute totals to ensure Step 3 edits are consistent before WBS build
+    scenario = _recompute_totals(scenario)
+    
     rows = []
     pricing_mode = (scenario.get("pricing_mode") or "Flat_Blended").strip()
     rate_band    = (scenario.get("rate_band") or "Standard_US").strip()
@@ -6727,6 +6730,7 @@ class BuildScenarioPayload(BaseModel):
     rate_band: Optional[str] = "Standard_US"
     client_budget_usd: Optional[float] = None
     retainers: Optional[List[Dict[str, Any]]] = None
+    reset: Optional[bool] = False  # If True, rebuild from Step 2 even if scenario exists
 
 class OptimizeScenarioPayload(BaseModel):
     """Optimize pricing for a scenario"""
@@ -7641,12 +7645,38 @@ async def api_build_scenario(payload: BuildScenarioPayload):
     """
     Build scenario from Step 2 selection and store in SCENARIO_STORE.
     Creates rows with Deliverable/Component/Task_Label structure.
+    
+    GUARD: If reset=False (default) and scenario already exists in SCENARIO_STORE,
+    return the cached scenario to preserve Step 3 edits. Only rebuild from Step 2
+    when reset=True is explicitly passed (e.g., "Rebuild from Step 2" button).
     """
     if not DB.loaded:
         DB.load()
     
     try:
         session_id = payload.session_id
+        
+        # GUARD: Preserve Step 3 edits unless explicit reset requested
+        if not payload.reset and session_id in SCENARIO_STORE:
+            cached_scenario = SCENARIO_STORE[session_id]
+            # Verify it has items (not an empty placeholder)
+            if cached_scenario.get("items") and len(cached_scenario.get("items", [])) > 0:
+                print(f"[SCENARIO_STORE] ✅ Returning cached scenario for {session_id} (preserving Step 3 edits)")
+                # Recompute totals to ensure consistency
+                cached_scenario = _recompute_totals(cached_scenario)
+                SCENARIO_STORE[session_id] = cached_scenario
+                return {
+                    "success": True,
+                    "session_id": session_id,
+                    "scenario": cached_scenario,
+                    "total_items": len(cached_scenario.get("items", [])),
+                    "totals": cached_scenario.get("totals", {}),
+                    "cached": True  # Flag to indicate this was from cache
+                }
+        
+        if payload.reset:
+            print(f"[SCENARIO_STORE] 🔄 Reset requested - rebuilding scenario from Step 2 for {session_id}")
+        
         selection = payload.selection
         
         # Build scenario items from selection
@@ -8353,8 +8383,34 @@ def api_post_scenarios(payload: dict):
     Build scenarios from deliverable codes.
     This endpoint accepts multiple field name formats for maximum compatibility.
     It's a compatibility wrapper for the existing build logic.
+    
+    GUARD: If reset=False (default) and scenario already exists in SCENARIO_STORE,
+    return the cached scenario to preserve Step 3 edits.
     """
     try:
+        # Check for reset flag (defaults to False to preserve Step 3 edits)
+        reset = payload.get("reset", False)
+        session_id = payload.get("sessionId") or payload.get("session_id")
+        
+        # GUARD: Preserve Step 3 edits unless explicit reset requested
+        if not reset and session_id and session_id in SCENARIO_STORE:
+            cached_scenario = SCENARIO_STORE[session_id]
+            if cached_scenario.get("items") and len(cached_scenario.get("items", [])) > 0:
+                print(f"[/api/scenarios] ✅ Returning cached scenario for {session_id} (preserving Step 3 edits)")
+                cached_scenario = _recompute_totals(cached_scenario)
+                SCENARIO_STORE[session_id] = cached_scenario
+                return {
+                    "ok": True,
+                    "scenarios": {"A": cached_scenario},
+                    "totals": cached_scenario.get("totals", {}),
+                    "total_hours": cached_scenario.get("totals", {}).get("hours", 0),
+                    "total_price": cached_scenario.get("totals", {}).get("price", 0),
+                    "cached": True
+                }
+        
+        if reset:
+            print(f"[/api/scenarios] 🔄 Reset requested - rebuilding from Step 2 for {session_id}")
+        
         # Extract codes from the payload - check all possible field names
         codes = None
         
@@ -8869,8 +8925,10 @@ def api_export_xml_post(payload: Union[ExportXMLPayload, dict]):
         if session_id not in SCENARIO_STORE:
             raise HTTPException(404, f"Scenario not found for session {session_id}")
         
-        # Get scenario from SCENARIO_STORE
+        # Get scenario from SCENARIO_STORE and ensure totals are current
         scenario = SCENARIO_STORE[session_id]
+        scenario = _recompute_totals(scenario)  # Ensure Step 3 edits have correct totals
+        print(f"[XML EXPORT] 📦 Using SCENARIO_STORE data for session {session_id} (preserves Step 3 edits)")
         
         # Create new payload with scenario from store
         payload_dict = {
