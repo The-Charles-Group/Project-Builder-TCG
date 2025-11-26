@@ -1676,6 +1676,12 @@
         Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
       );
       
+      // Get session_id from ScenarioManager (preferred) or SessionManager or localStorage
+      const sessionId = window.ScenarioManager?.state?.sessionId || 
+                        window.SessionManager?.getCurrentSessionId?.() ||
+                        localStorage.getItem('apb.currentSession') ||
+                        localStorage.getItem('current_session_id');
+      
       const payload = {
         selected_deliverable_codes: appState.selectedCodes,          // <- required
         selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
@@ -1689,10 +1695,11 @@
         project_start: getProjectStartFromUI() || null,
         client_budget_usd: getClientBudgetFromUI() || null,
         scenario_a: getScenarioSpecAFromUI(),                        // {mode, complexity, tier...}
-        retainers: retainers  // Include retainer data from new toggle system
+        retainers: retainers,  // Include retainer data from new toggle system
+        session_id: sessionId  // NEW: For SCENARIO_STORE (preserves Step 3 edits)
       };
 
-      console.log('[BUILD] Sending payload to /api/build:', payload);
+      console.log('[BUILD] Sending payload to /api/build with session_id:', sessionId);
 
       try {
         const resp = await fetch('/api/build', {

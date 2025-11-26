@@ -10,7 +10,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
 from post_export import post_process_xml
 from ai_weighted_matcher import score_rfp
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -761,6 +761,19 @@ def get_session_state(session_id: str) -> Dict[str, Any]:
         "metadata": {...}
     }
     """
+    # Guard against None or empty session_id to prevent SCENARIO_STORE[None] entries
+    if not session_id:
+        return {
+            "baseline": None,
+            "scenario": None,
+            "totals": {"hours": 0.0, "price": 0.0},
+            "metadata": {
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "last_sync": None
+            }
+        }
+    
     if session_id not in SCENARIO_STORE:
         SCENARIO_STORE[session_id] = {
             "baseline": None,
@@ -6656,10 +6669,38 @@ async def suggest_timeline(request: dict):
 
 @app.post("/api/build")
 def api_build(payload: BuildPayload):
+    global _CURRENT_SCENARIOS  # Declare at function start to avoid syntax error
+    
     try:
         print(f"DEBUG: api_build called with {len(payload.selected_deliverable_codes)} deliverables")
         if not DB.loaded:
             DB.load()
+        
+        # --- CASE 0: PRESERVE STEP 3 EDITS (GPT 5 Pro spec) ---
+        # If session_id is provided and SCENARIO_STORE has a working scenario,
+        # return it instead of rebuilding (unless reset=true in future)
+        # This prevents the 137→98 hours regression when clicking "Build Scenario" again
+        if payload.session_id and payload.session_id in SCENARIO_STORE:
+            working_scenario = get_working_scenario(payload.session_id)
+            if working_scenario and working_scenario.get("items"):
+                totals = working_scenario.get("totals", {})
+                total_hours = totals.get("hours", 0)
+                total_price = totals.get("price", 0)
+                
+                print(f"[/api/build] ✅ Using SCENARIO_STORE[{payload.session_id}] "
+                      f"hours={total_hours} price={total_price} (preserving Step 3 edits)")
+                
+                # Update _CURRENT_SCENARIOS for Step 4 compatibility
+                _CURRENT_SCENARIOS["A"] = working_scenario
+                
+                return {
+                    "scenarios": {"A": working_scenario},
+                    "totals": {"A": totals},
+                    "total_hours": total_hours,
+                    "total_price": total_price,
+                    "cached": True,
+                    "message": "Using working scenario from SCENARIO_STORE (Step 3 edits preserved)"
+                }
 
         # Prepare UI intent
         pricing_mode = payload.pricing_mode
@@ -6838,8 +6879,7 @@ def api_build(payload: BuildPayload):
         
         scenarios[letter] = scenario_out
 
-    # Store scenarios globally for reordering
-    global _CURRENT_SCENARIOS
+    # Store scenarios globally for reordering (global declared at function start)
     _CURRENT_SCENARIOS.update(scenarios)
     
     # Add budget metrics if client_budget_usd was provided
@@ -8863,20 +8903,24 @@ def api_get_scenarios():
     }
 
 @app.post("/api/scenarios")
-def api_post_scenarios(payload: dict):
+def api_post_scenarios(payload: dict, request: Request):
     """
     Builds or refreshes a pricing scenario.
     - If reset=true (query param) -> rebuilds from Step 2 baseline.
     - Otherwise -> uses the working copy stored in SCENARIO_STORE to preserve Step 3 edits.
     """
     try:
-        # Extract session_id from payload (for compatibility)
+        # 1) Extract session_id from payload (supports both camelCase and snake_case)
         session_id = payload.get("sessionId") or payload.get("session_id")
         
-        # Read reset flag from query args (takes precedence) or payload fallback
-        reset_flag = request.args.get("reset", "false").lower() == "true"
-        if not reset_flag and "reset" in payload:
-            reset_flag = payload.get("reset", False) and True
+        # 2) Reset flag - query param wins, then payload fallback
+        reset_param = request.query_params.get("reset")
+        if reset_param is not None:
+            reset_flag = str(reset_param).lower() in ("1", "true", "yes", "y")
+        else:
+            reset_flag = str(payload.get("reset", "")).lower() in ("1", "true", "yes", "y")
+        
+        print(f"[/api/scenarios] session_id={session_id} reset={reset_flag}")
         
         # Get current state from dual-entry store
         state = get_session_state(session_id)
@@ -8900,19 +8944,49 @@ def api_post_scenarios(payload: dict):
                     "reset": True
                 }
         
-        # --- CASE 2: NORMAL BUILD (preserve Step 3 edits) ---------------------
-        # If a working copy exists, reuse it — don't rebuild from Step 2
+        # --- CASE 0: USE WORKING SCENARIO FROM SCENARIO_STORE (preserve Step 3 edits) ---
+        # If session_id exists, reset is false, and SCENARIO_STORE has a scenario, return it directly
+        if session_id and not reset_flag and session_id in SCENARIO_STORE:
+            scenario = get_working_scenario(session_id)
+            if scenario and scenario.get("items"):
+                totals = scenario.get("totals") or state.get("totals") or {}
+                total_hours = totals.get("hours", scenario.get("total_hours", 0))
+                total_price = totals.get("price", scenario.get("total_price", 0))
+                
+                # Keep Step 4 compatibility
+                window_scenarios = {"A": scenario}
+                _CURRENT_SCENARIOS.update(window_scenarios)
+                
+                print(f"[/api/scenarios] ✅ Using SCENARIO_STORE[{session_id}] "
+                      f"hours={total_hours} price={total_price}")
+                
+                return {
+                    "ok": True,
+                    "scenarios": window_scenarios,
+                    "totals": {"A": totals},
+                    "metadata": state.get("metadata", {}),
+                    "total_hours": total_hours,
+                    "total_price": total_price,
+                }
+        
+        # --- CASE 2: FALLBACK - working scenario from get_session_state ---------------------
+        # If a working copy exists (but wasn't in SCENARIO_STORE path above), reuse it
         if scenario and scenario.get("items"):
             print(f"[/api/scenarios] ✅ Returning working scenario for {session_id} (preserving Step 3 edits)")
             scenario = _recompute_totals(scenario)
-            update_working_scenario(session_id, scenario)
-            print(f"[DEBUG] SCENARIO_STORE[{session_id}] keys after update:", list(SCENARIO_STORE[session_id].keys()))
+            if session_id:
+                update_working_scenario(session_id, scenario)
+            totals = scenario.get("totals", {})
+            total_hours = totals.get("hours", 0)
+            total_price = totals.get("price", 0)
+            print(f"[/api/scenarios] hours={total_hours} price={total_price}")
             return {
                 "ok": True,
                 "scenarios": {"A": scenario},
-                "totals": scenario.get("totals", {}),
-                "total_hours": scenario.get("totals", {}).get("hours", 0),
-                "total_price": scenario.get("totals", {}).get("price", 0),
+                "totals": {"A": totals},  # Normalized to match CASE 0
+                "metadata": state.get("metadata", {}),
+                "total_hours": total_hours,
+                "total_price": total_price,
                 "cached": True
             }
         
