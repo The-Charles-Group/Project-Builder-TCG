@@ -2145,7 +2145,14 @@
       const scen = window.getScenario(letter);
       if (!scen) { alert('Build scenarios first.'); return; }
 
+      // Get session_id from ScenarioManager (preferred) or SessionManager or localStorage
+      const sessionId = window.ScenarioManager?.state?.sessionId || 
+                        window.SessionManager?.getCurrentSessionId?.() ||
+                        localStorage.getItem('apb.currentSession');
+      console.log('[Export] Using session_id:', sessionId);
+
       const payload = {
+        session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario (preserves Step 3 edits)
         scenario: scen,
         project_name: getProjectName(),
         file_format: getFileFormat(),

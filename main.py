@@ -9232,17 +9232,34 @@ def api_export(payload: Union[ExportPayload, dict]):
     The 'Project_Name' column is set to payload.project_name if provided.
     The download filename is derived from project/scenario.
     
-    Accepts both formats:
+    Accepts formats:
     - {"scenario": {...}, "file_format": "xlsx", "project_name": "Project"}
     - {"scenarios": {"A": {...}}, "file_format": "xlsx", "project_name": "Project"}
+    - {"session_id": "...", "file_format": "xlsx"}  # NEW: Read from SCENARIO_STORE
     """
     if not DB.loaded:
         DB.load()
 
     # Handle both dict and model formats
     if isinstance(payload, dict):
-        # Extract scenario from either 'scenario' or 'scenarios.A'
-        scenario = payload.get("scenario")
+        # NEW: Check session_id FIRST to use working scenario (preserves Step 3 edits)
+        session_id = payload.get("session_id")
+        scenario = None
+        
+        if session_id:
+            try:
+                _ = get_session_state(session_id)  # Trigger migration if needed
+                scenario = get_working_scenario(session_id)
+                if scenario and scenario.get("items"):
+                    print(f"[/api/export] Using working scenario from SCENARIO_STORE for session {session_id}")
+                    scenario = _inflate_components_if_missing(scenario)
+            except Exception as e:
+                print(f"[/api/export] Error loading from SCENARIO_STORE: {e}")
+                scenario = None
+        
+        # Fallback: Extract scenario from either 'scenario' or 'scenarios.A'
+        if not scenario:
+            scenario = payload.get("scenario")
         if not scenario and "scenarios" in payload:
             # Get the first scenario (usually 'A')
             scenarios_dict = payload.get("scenarios", {})
@@ -14002,6 +14019,7 @@ def list_shipped_projects():
 # ---------- NEW Flexible XML Export Endpoint ----------
 class XMLExportPayload(BaseModel):
     """Flexible XML export payload that accepts scenario data in various formats"""
+    session_id: Optional[str] = None  # NEW: Use working scenario from SCENARIO_STORE
     scenario: Optional[Dict[str, Any]] = None
     selected_deliverables: Optional[List[str]] = None  # For building scenario from deliverable codes
     project_name: Optional[str] = None
@@ -14016,80 +14034,95 @@ class XMLExportPayload(BaseModel):
     add_milestones: bool = True
     add_custom_fields: bool = True
 
-@app.post("/api/xml")
-def api_xml_export_flexible(payload: XMLExportPayload):
+
+def load_export_scenario(session_id: Optional[str], payload: XMLExportPayload) -> Dict[str, Any]:
     """
-    Flexible XML export endpoint that can:
-    1. Accept a pre-built scenario with items
-    2. Accept a scenario without items and build them
-    3. Accept just deliverable codes and build the entire scenario
+    Central helper for all export endpoints to load the correct scenario.
+    Priority order:
+    0) Working scenario in SCENARIO_STORE (session_id) - PREFERRED (returns immediately!)
+    1) payload.scenario with items
+    2) payload.scenario without items + selected_deliverables (build items)
+    3) selected_deliverables only (build full scenario)
+    
+    This ensures Step 3 edits are always used when session_id is provided.
+    CRITICAL: Case 0 returns immediately to prevent payload.scenario from overwriting.
     """
-    if not DB.loaded:
-        DB.load()
+    # Case 0: Preferred - use working scenario from SCENARIO_STORE
+    # CRITICAL: Return immediately to prevent stale payload from overwriting Step 3 edits
+    if session_id:
+        try:
+            _ = get_session_state(session_id)  # Trigger migration if needed
+            scenario = get_working_scenario(session_id)
+            if scenario and scenario.get("items"):
+                print(f"[EXPORT HELPER] ✅ Using working scenario from SCENARIO_STORE for session {session_id}")
+                print(f"[EXPORT HELPER] Scenario has {len(scenario.get('items', []))} items")
+                
+                # Debug: verify Step 3 hours
+                items = scenario.get("items", [])
+                if items:
+                    first = items[0]
+                    print("[EXPORT CHECK] First item:",
+                          first.get("deliverable_code"),
+                          "Planned_Hours=", first.get("Planned_Hours"),
+                          "hours=", first.get("hours"),
+                          "total_hours=", first.get("total_hours"))
+                
+                # Ensure components are inflated and RETURN IMMEDIATELY
+                return _inflate_components_if_missing(scenario)
+        except Exception as e:
+            print(f"[EXPORT HELPER] Error loading from SCENARIO_STORE: {e}")
+            # Fall through to other cases only on error
     
-    # Determine project name
-    project_name = (payload.project_name 
-                   or _upload_title_default() 
-                   or f"Project {datetime.date.today().isoformat()}")
-    
-    # Build or prepare scenario
+    scenario = None
+
+    # Case 1: payload.scenario already has items (only if Case 0 failed/skipped)
     if payload.scenario and payload.scenario.get("items"):
-        # Case 1: Pre-built scenario with items - use as is
         scenario = _inflate_components_if_missing(payload.scenario)
-    elif payload.scenario:
-        # Case 2: Scenario without items - build items from selected deliverables
+        print("[EXPORT HELPER] Using scenario from payload.scenario (with items)")
+
+    # Case 2: payload.scenario without items, but we have selected_deliverables
+    if scenario is None and payload.scenario and payload.selected_deliverables:
         scenario = payload.scenario.copy()
-        if payload.selected_deliverables:
-            # Build items from deliverable codes
-            items = []
-            for dcode in payload.selected_deliverables:
-                # Get deliverable info from database
-                if DB.deliverables is not None:
-                    deliv_matches = DB.deliverables[
-                        DB.deliverables["Deliverable_Code"].astype(str) == str(dcode)
-                    ]
-                    if not deliv_matches.empty:
-                        deliv_row = deliv_matches.iloc[0]
-                        # Get all task groups for this deliverable
-                        task_groups = DB.task_groups_for_deliverable(str(dcode))
-                        
-                        # Create item
-                        item = {
-                            "deliverable_code": str(dcode),
-                            "deliverable": str(deliv_row.get("Deliverable", "")),
-                            "included_task_groups": task_groups,
-                            "hours": 100,  # Default hours
-                            "price": 15000,  # Default price
-                            "complexity": "Advanced",
-                            "tier": "T2_MediumVolume"
-                        }
-                        items.append(item)
-            
-            scenario["items"] = items
-        
-        # Inflate components for all items
-        scenario = _inflate_components_if_missing(scenario)
-    elif payload.selected_deliverables:
-        # Case 3: Just deliverable codes - build entire scenario
         items = []
         for dcode in payload.selected_deliverables:
-            # Get deliverable info from database
             if DB.deliverables is not None:
                 deliv_matches = DB.deliverables[
                     DB.deliverables["Deliverable_Code"].astype(str) == str(dcode)
                 ]
                 if not deliv_matches.empty:
                     deliv_row = deliv_matches.iloc[0]
-                    # Get all task groups for this deliverable
                     task_groups = DB.task_groups_for_deliverable(str(dcode))
-                    
-                    # Create item with reasonable defaults
                     item = {
                         "deliverable_code": str(dcode),
                         "deliverable": str(deliv_row.get("Deliverable", "")),
                         "included_task_groups": task_groups,
-                        "hours": 100,  # Default hours
-                        "price": 15000,  # Default price
+                        "hours": 100,
+                        "price": 15000,
+                        "complexity": "Advanced",
+                        "tier": "T2_MediumVolume"
+                    }
+                    items.append(item)
+        scenario["items"] = items
+        scenario = _inflate_components_if_missing(scenario)
+        print("[EXPORT HELPER] Built scenario from payload.scenario + selected_deliverables")
+
+    # Case 3: Only selected_deliverables
+    if scenario is None and payload.selected_deliverables:
+        items = []
+        for dcode in payload.selected_deliverables:
+            if DB.deliverables is not None:
+                deliv_matches = DB.deliverables[
+                    DB.deliverables["Deliverable_Code"].astype(str) == str(dcode)
+                ]
+                if not deliv_matches.empty:
+                    deliv_row = deliv_matches.iloc[0]
+                    task_groups = DB.task_groups_for_deliverable(str(dcode))
+                    item = {
+                        "deliverable_code": str(dcode),
+                        "deliverable": str(deliv_row.get("Deliverable", "")),
+                        "included_task_groups": task_groups,
+                        "hours": 100,
+                        "price": 15000,
                         "complexity": "Advanced",
                         "tier": "T2_MediumVolume"
                     }
@@ -14102,43 +14135,43 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             "blended_rate": payload.blended_rate or DEFAULT_BILLABLE_RATE_USD,
             "project_start": payload.fixed_start_iso
         }
-        
-        # Inflate components
         scenario = _inflate_components_if_missing(scenario)
-    else:
-        # No valid input provided - create a sample scenario
-        sample_deliverables = ["web_launch", "deck_strategy", "email_campaign"]
-        items = []
-        
-        for dcode in sample_deliverables:
-            if DB.deliverables is not None:
-                deliv_matches = DB.deliverables[
-                    DB.deliverables["Deliverable_Code"].astype(str) == str(dcode)
-                ]
-                if not deliv_matches.empty:
-                    deliv_row = deliv_matches.iloc[0]
-                    task_groups = DB.task_groups_for_deliverable(str(dcode))
-                    item = {
-                        "deliverable_code": str(dcode),
-                        "deliverable": str(deliv_row.get("Deliverable", "")),
-                        "included_task_groups": task_groups,
-                        "hours": 120,
-                        "price": 18000,
-                        "complexity": "Advanced",
-                        "tier": "T2_MediumVolume"
-                    }
-                    items.append(item)
-        
-        scenario = {
-            "items": items,
-            "pricing_mode": payload.pricing_mode,
-            "rate_band": payload.rate_band,
-            "blended_rate": payload.blended_rate or DEFAULT_BILLABLE_RATE_USD,
-            "project_start": payload.fixed_start_iso,
-            "project_name": project_name
-        }
-        
-        scenario = _inflate_components_if_missing(scenario)
+        print("[EXPORT HELPER] Built scenario purely from selected_deliverables")
+
+    if scenario is None:
+        raise HTTPException(400, "No scenario or deliverables provided for export")
+
+    # Debug: verify Step 3 hours before WBS build
+    items = scenario.get("items", [])
+    if items:
+        first = items[0]
+        print("[EXPORT CHECK] First item:",
+              first.get("deliverable_code"),
+              "Planned_Hours=", first.get("Planned_Hours"),
+              "hours=", first.get("hours"),
+              "total_hours=", first.get("total_hours"))
+
+    return scenario
+
+@app.post("/api/xml")
+def api_xml_export_flexible(payload: XMLExportPayload):
+    """
+    Flexible XML export endpoint using load_export_scenario() helper.
+    Priority: session_id (SCENARIO_STORE) > payload.scenario > selected_deliverables
+    
+    This ensures Step 3 edits are preserved in XML exports.
+    """
+    if not DB.loaded:
+        DB.load()
+    
+    # Determine project name
+    project_name = (payload.project_name 
+                   or _upload_title_default() 
+                   or f"Project {datetime.date.today().isoformat()}")
+    
+    # Use centralized helper to load scenario with proper priority
+    print(f"[/api/xml] session_id={payload.session_id}, has_scenario={payload.scenario is not None}")
+    scenario = load_export_scenario(payload.session_id, payload)
     
     # Update scenario with payload settings
     scenario["pricing_mode"] = payload.pricing_mode

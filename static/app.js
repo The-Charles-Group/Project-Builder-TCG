@@ -3323,10 +3323,17 @@ async function exportPricingDetails() {
     
     console.log('[EXPORT] Calling /api/export with format:', fileFormat);
     
+    // Get session_id from ScenarioManager (preferred) or SessionManager
+    const sessionId = window.ScenarioManager?.state?.sessionId || 
+                      window.SessionManager?.currentSessionId ||
+                      localStorage.getItem('apb.currentSession');
+    console.log('[EXPORT] Using session_id:', sessionId);
+    
     const response = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario
         scenario: scenario,
         file_format: fileFormat
       })
@@ -3408,10 +3415,17 @@ async function exportScenario(fileFormat, buttonId) {
     
     console.log('[EXPORT] Calling /api/export with format:', fileFormat);
     
+    // Get session_id from ScenarioManager (preferred) or SessionManager
+    const sessionId = window.ScenarioManager?.state?.sessionId || 
+                      window.SessionManager?.currentSessionId ||
+                      localStorage.getItem('apb.currentSession');
+    console.log('[EXPORT] Using session_id:', sessionId);
+    
     const response = await fetch('/api/export', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario
         scenario: scenario,
         file_format: fileFormat
       })
@@ -9486,10 +9500,20 @@ function renderScenarios(data){
 
 async function onExport(which){
   if(!SCENARIOS){ alert("Build scenarios first."); return; }
+  
+  // Get session_id from ScenarioManager (preferred) or SessionManager
+  const sessionId = window.ScenarioManager?.state?.sessionId || 
+                    window.SessionManager?.currentSessionId ||
+                    localStorage.getItem('apb.currentSession');
+  console.log('[EXPORT] onExport using session_id:', sessionId);
+  
   const res = await fetch("/api/export", {
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({scenario: SCENARIOS[which]})
+    body: JSON.stringify({
+      session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario
+      scenario: SCENARIOS[which]
+    })
   });
   if(!res.ok){ alert("Export failed"); return; }
   const blob = await res.blob();
