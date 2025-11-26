@@ -536,9 +536,10 @@
 
       <!-- Scenario Control Buttons -->
       <div style="margin-bottom: 20px; display: flex; justify-content: flex-end; gap: 12px;">
-        <button id="btn-rebuild-scenario" onclick="rebuildScenario()" 
-                style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
-          🔄 Re-build Scenario
+        <button id="btn-rebuild-scenario" onclick="refreshFromWorkingScenario()" 
+                style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;"
+                title="Refresh pricing display - your Step 3 edits will be preserved">
+          🔄 Refresh Pricing
         </button>
         <button id="btn-reset-from-step2" onclick="rebuildFromStep2()" 
                 style="background: rgba(255, 165, 0, 0.2); color: #FFA500; padding: 8px 16px; border: 1px solid #FFA500; border-radius: 6px; cursor: pointer; font-weight: 600;"
@@ -1856,6 +1857,73 @@
     
     // Make it globally accessible
     window.rebuildScenario = rebuildScenario;
+    
+    // Function to refresh scenario from working copy (preserves Step 3 edits)
+    async function refreshFromWorkingScenario() {
+      console.log('[REFRESH] Refreshing from working scenario (preserving Step 3 edits)...');
+      
+      const sessionId = window.SESSION_ID || sessionStorage.getItem('apb.session_id') || `session_${Date.now()}`;
+      
+      // Get current pricing parameters from UI
+      const payload = {
+        session_id: sessionId,
+        complexity: getComplexityFromUI(),
+        tier: getVolumeTierFromUI(),
+        rate_band: getRateBandFromUI(),
+        pricing_mode: getPricingModeFromUI(),
+        blended_rate: getBlendedRateFromUI()
+      };
+      
+      console.log('[REFRESH] Calling /api/pricing/build_scenario with:', payload);
+      
+      try {
+        const resp = await fetch('/api/pricing/build_scenario', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        
+        if (!resp.ok) {
+          const errorText = await resp.text().catch(() => resp.statusText);
+          console.error('[REFRESH] API Error:', resp.status, errorText);
+          throw new Error(`Failed to refresh scenario: ${errorText}`);
+        }
+        
+        const json = await resp.json();
+        console.log('[REFRESH] Got working scenario:', json);
+        
+        // Update window.SCENARIOS with the response
+        if (json.scenario) {
+          if (!window.SCENARIOS) window.SCENARIOS = {};
+          window.SCENARIOS.A = json.scenario;
+          
+          // Update the pricing table
+          if (typeof updatePricingTable === 'function') {
+            updatePricingTable();
+          }
+          
+          // Update the pricing summary
+          if (typeof updatePricingSummary === 'function') {
+            updatePricingSummary();
+          }
+          
+          // Update scenario table if available
+          if (typeof window.renderOneScenarioTable === 'function') {
+            window.renderOneScenarioTable(json.scenario, 'A');
+          }
+        }
+        
+        console.log('[REFRESH] Working scenario refreshed successfully (Step 3 edits preserved)');
+        return json;
+        
+      } catch (error) {
+        console.error('[REFRESH] Error:', error);
+        throw error;
+      }
+    }
+    
+    // Make it globally accessible
+    window.refreshFromWorkingScenario = refreshFromWorkingScenario;
     
     // Manual rebuild function for the Update Scenario button
     async function manualRebuildScenario() {
