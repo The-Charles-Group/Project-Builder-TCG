@@ -1251,12 +1251,9 @@ def merge_scenario_from_sync(session_id: str):
     if not new_scen:
         return
     
-    # Initialize SCENARIO_STORE entry if it doesn't exist
-    if session_id not in SCENARIO_STORE:
-        SCENARIO_STORE[session_id] = {"scenario": {}, "updated_at": time.time()}
-    
-    store_entry = SCENARIO_STORE[session_id]
-    old_scen = (store_entry.get("scenario") or {}).copy()
+    # Use get_session_state to ensure proper dual-entry format
+    state = get_session_state(session_id)
+    old_scen = (state.get("scenario") or {}).copy()
     
     editable_fields = {
         "billing_cadence", "cadence_units", "cadence_price",
@@ -1268,9 +1265,8 @@ def merge_scenario_from_sync(session_id: str):
     
     # If no old scenario exists, just use the new one directly
     if not old_scen or not old_scen.get("items"):
-        store_entry["scenario"] = new_scen
-        store_entry["updated_at"] = time.time()
-        SCENARIO_STORE[session_id] = store_entry
+        update_working_scenario(session_id, new_scen)
+        print(f"[DEBUG] merge_scenario_from_sync: SCENARIO_STORE[{session_id}] keys:", list(SCENARIO_STORE[session_id].keys()))
         return
     
     merged_scen = old_scen.copy()
@@ -1300,9 +1296,8 @@ def merge_scenario_from_sync(session_id: str):
     
     merged_scen["items"] = merged_items
     
-    store_entry["scenario"] = merged_scen
-    store_entry["updated_at"] = time.time()
-    SCENARIO_STORE[session_id] = store_entry
+    update_working_scenario(session_id, merged_scen)
+    print(f"[DEBUG] merge_scenario_from_sync merged: SCENARIO_STORE[{session_id}] keys:", list(SCENARIO_STORE[session_id].keys()))
 
 # ---------- Gantt Monthly Expansion Helpers ----------
 
@@ -6098,21 +6093,17 @@ async def generate_timeline(request: TimelineGenerationRequest):
                 result['message'] = f"Generated timeline with {task_count} tasks using {scheduler_type} scheduler"
             
             # CRITICAL: Store result in SCENARIO_STORE if session_id is provided
+            # Use proper dual-entry format helpers
             if hasattr(request, 'session_id') and request.session_id:
                 session_id = request.session_id
-                if session_id in SCENARIO_STORE:
-                    # Update existing scenario with timeline
-                    SCENARIO_STORE[session_id]['timeline'] = result
-                    print(f"[Timeline] Stored timeline result in SCENARIO_STORE for session {session_id}")
-                else:
-                    # Create new scenario with timeline
-                    SCENARIO_STORE[session_id] = {
-                        'timeline': result,
-                        'project_start': request.project_start,
-                        'items': [],
-                        'totals': {'hours': 0.0, 'price': 0.0}
-                    }
-                    print(f"[Timeline] Created new scenario in SCENARIO_STORE for session {session_id}")
+                # Get or create proper state with dual-entry format
+                state = get_session_state(session_id)
+                scenario = state.get("scenario") or {"items": [], "totals": {"hours": 0.0, "price": 0.0}}
+                scenario['timeline'] = result
+                scenario['project_start'] = request.project_start
+                update_working_scenario(session_id, scenario)
+                print(f"[Timeline] Stored timeline in SCENARIO_STORE for session {session_id}")
+                print(f"[DEBUG] Timeline storage: SCENARIO_STORE[{session_id}] keys:", list(SCENARIO_STORE[session_id].keys()))
             
             # CRITICAL FIX: Strip all dependencies from tasks to enable free movement
             if 'tasks' in result and isinstance(result['tasks'], list):
@@ -7043,7 +7034,7 @@ async def api_get_scenario(session_id: str):
 
 @app.post("/api/scenario/save")
 async def api_save_scenario(payload: Dict[str, Any]):
-    """Explicitly save scenario to SCENARIO_STORE"""
+    """Explicitly save scenario to SCENARIO_STORE using proper dual-entry format"""
     try:
         session_id = payload.get("session_id")
         if not session_id:
@@ -7057,7 +7048,9 @@ async def api_save_scenario(payload: Dict[str, Any]):
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
         scenario_data['session_id'] = session_id
         
-        SCENARIO_STORE[session_id] = scenario_data
+        # Use update_working_scenario to maintain dual-entry format
+        update_working_scenario(session_id, scenario_data)
+        print(f"[DEBUG] /api/scenario/save: SCENARIO_STORE[{session_id}] keys:", list(SCENARIO_STORE[session_id].keys()))
         
         print(f"[SCENARIO_STORE] Saved scenario for session {session_id}")
         return {
@@ -8896,7 +8889,8 @@ def api_post_scenarios(payload: dict):
                 print(f"[/api/scenarios] 🔄 Reset requested - restoring from baseline for {session_id}")
                 new_scenario = deepcopy(baseline)
                 new_scenario = _recompute_totals(new_scenario)
-                SCENARIO_STORE[session_id] = new_scenario
+                update_working_scenario(session_id, new_scenario)
+                print(f"[DEBUG] SCENARIO_STORE[{session_id}] keys after reset:", list(SCENARIO_STORE[session_id].keys()))
                 return {
                     "ok": True,
                     "scenarios": {"A": new_scenario},
@@ -8911,7 +8905,8 @@ def api_post_scenarios(payload: dict):
         if scenario and scenario.get("items"):
             print(f"[/api/scenarios] ✅ Returning working scenario for {session_id} (preserving Step 3 edits)")
             scenario = _recompute_totals(scenario)
-            SCENARIO_STORE[session_id] = scenario
+            update_working_scenario(session_id, scenario)
+            print(f"[DEBUG] SCENARIO_STORE[{session_id}] keys after update:", list(SCENARIO_STORE[session_id].keys()))
             return {
                 "ok": True,
                 "scenarios": {"A": scenario},
@@ -13627,6 +13622,7 @@ async def save_timeline(request: dict):
     """
     Save timeline data (tasks, durations, dependencies) to backend storage.
     This endpoint integrates timeline changes with scenario data and persists everything.
+    Uses proper dual-entry SCENARIO_STORE format.
     """
     try:
         tasks = request.get("tasks", [])
@@ -13635,31 +13631,18 @@ async def save_timeline(request: dict):
         scenario_letter = request.get("scenario", "A")
         session_id = request.get("session_id")  # Get session_id for SCENARIO_STORE lookup
         
-        # Get the current scenario - prioritize SCENARIO_STORE if session_id is available
+        # Get the current scenario using proper dual-entry helpers
         scen = None
-        session_bundle = None
         
-        if session_id and session_id in SCENARIO_STORE:
-            # SCENARIO_STORE stores a bundle: { "A": {...}, "B": {...}, ... }
-            session_bundle = SCENARIO_STORE[session_id]
-            
-            # Check if bundle has scenario letter key or if it's a direct scenario
-            if isinstance(session_bundle, dict) and "items" in session_bundle:
-                # Direct scenario format (legacy)
-                scen = session_bundle
-                print(f"[TIMELINE SAVE] Using direct scenario from SCENARIO_STORE[{session_id}]")
-            elif isinstance(session_bundle, dict) and scenario_letter in session_bundle:
-                # Bundle format: get specific scenario
-                scen = session_bundle[scenario_letter]
-                print(f"[TIMELINE SAVE] Using SCENARIO_STORE[{session_id}][{scenario_letter}]")
-            else:
-                # Bundle exists but scenario doesn't - create it
-                scen = None
+        if session_id:
+            # Use get_working_scenario which handles dual-entry format properly
+            scen = get_working_scenario(session_id)
+            print(f"[TIMELINE SAVE] Using working scenario for session {session_id}")
         else:
-            # No session_id or not in SCENARIO_STORE
+            # Fallback to legacy _CURRENT_SCENARIOS for backwards compatibility
             scen = _CURRENT_SCENARIOS.get(scenario_letter)
         
-        if not scen:
+        if not scen or not scen.get("items"):
             # Initialize scenario if it doesn't exist
             scen = {
                 "items": [],
@@ -13668,13 +13651,7 @@ async def save_timeline(request: dict):
                 "metadata": {}
             }
             
-            if session_id:
-                # Add to session bundle
-                if session_bundle is None:
-                    session_bundle = {}
-                    SCENARIO_STORE[session_id] = session_bundle
-                session_bundle[scenario_letter] = scen
-            else:
+            if not session_id:
                 _CURRENT_SCENARIOS[scenario_letter] = scen
         
         # Ensure timeline dict exists (defensive fix for KeyError)
@@ -13740,18 +13717,11 @@ async def save_timeline(request: dict):
                     item["timeline_dependencies"] = task.get("dependencies", [])
                     break
         
-        # Store the complete scenario with timeline data
-        if session_id and session_bundle is not None:
-            # Update the specific scenario in the bundle
-            if isinstance(session_bundle, dict) and "items" in session_bundle:
-                # Direct scenario format - overwrite entire session
-                SCENARIO_STORE[session_id] = scen
-                print(f"[TIMELINE SAVE] Saved direct scenario to SCENARIO_STORE[{session_id}]")
-            else:
-                # Bundle format - update specific scenario letter
-                session_bundle[scenario_letter] = scen
-                SCENARIO_STORE[session_id] = session_bundle
-                print(f"[TIMELINE SAVE] Saved to SCENARIO_STORE[{session_id}][{scenario_letter}]")
+        # Store the complete scenario with timeline data using proper dual-entry format
+        if session_id:
+            update_working_scenario(session_id, scen)
+            print(f"[TIMELINE SAVE] Saved to SCENARIO_STORE[{session_id}] via update_working_scenario")
+            print(f"[DEBUG] TIMELINE SAVE: SCENARIO_STORE[{session_id}] keys:", list(SCENARIO_STORE[session_id].keys()))
         else:
             _CURRENT_SCENARIOS[scenario_letter] = scen
             # Also save to ScenarioStore if it exists
