@@ -1,0 +1,103 @@
+What you should tell the agent (you can mostly paste this)
+
+Please stop changing /api/build and XML for now – those are fine. The remaining bug is purely in the Step 3 “Edit pricing row” save flow.
+
+Goal: when I click Edit, change 98 → 137 hours and Semi-Annual, and hit Save, that edit must be persisted into SCENARIO_STORE[session_id]["scenario"] (via the existing scenario API helpers), before I ever click Build Scenario.
+
+1. Wire savePricingRow → ScenarioStore.patchScenarioItem
+
+In static/index.html, find the savePricingRow (or similarly named) function that runs when I hit Save on the pricing edit modal.
+
+Right now it:
+
+mutates the local scenario.items[rowIndex]
+
+calls /api/pricing/redistribute-hours
+
+updates on-screen totals
+
+does NOT call any scenario API to persist the change
+
+Update it so that, after building the updatedItem object (with the new hours, cadence, cadence_units, monthly_price, etc.), it calls the ScenarioStore helper that already exists in static/js/scenario-store.js:
+
+// inside savePricingRow(...)
+
+const sessionId = ScenarioManager.state.sessionId;
+
+// build `updatedItem` from the modal fields (this is already happening today)
+
+await ScenarioStore.patchScenarioItem({
+  session_id: sessionId,
+  item: updatedItem,
+});
+
+// then keep the existing UI update / redistribute-hours logic if needed
+
+
+Don’t invent a new fetch; reuse ScenarioStore.patchScenarioItem so we stay consistent with the new unified scenario API.
+
+2. Make sure the backend patch endpoint actually writes to SCENARIO_STORE
+
+In the scenario API router (mounted at /api/scenario), find the endpoint that ScenarioStore.patchScenarioItem hits (something like PATCH /api/scenario/item or /api/pricing/scenario/item).
+
+Confirm it:
+
+accepts session_id and the item payload
+
+locates the correct item in the working scenario (using the same keying logic as make_item_key / apply_cadence_to_item) 
+
+SB - Step 3 fixes
+
+updates that item
+
+calls apply_cadence_to_item() so cadence + months + monthly_price → total hours are recomputed correctly 
+
+SB - Step 3 fixes
+
+finally calls update_working_scenario(session_id, scenario) so the change lands in SCENARIO_STORE[session_id]["scenario"] and totals 
+
+SB - Step 3 fixes
+
+Add a debug log there:
+
+print(
+  f"[SCENARIO PATCH] session={session_id} "
+  f"item_key={item_key} "
+  f"hours={get_hours_from_item(updated_item)} "
+  f"cadence={updated_item.get('billing_cadence')} "
+  f"months={updated_item.get('retainer_months')}"
+)
+print("[SCENARIO PATCH] totals:",
+      SCENARIO_STORE[session_id]["totals"])
+
+
+This will let us see 137 hours + semi_annual + 6 months being stored.
+
+3. Minimal sanity test
+
+Load RFP → Step 2 → Build Scenario (baseline goes into SCENARIO_STORE).
+
+In Step 3, Edit Brand Positioning:
+
+set cadence = Semi-Annual
+
+set units/months so it’s a 6-month retainer
+
+verify total hours show 137 in the UI.
+
+Click Save (do not click Build yet).
+
+Expect to see one log line from the patch endpoint with hours=137, cadence semi_annual, some retainer_months value, and totals.hours=137.
+
+Click Build Scenario.
+
+/api/build should now log something like:
+[BUILD] Using SCENARIO_STORE[...] totals.hours=137 price=28770
+
+UI should still show 137 hours, not revert to 98.
+
+Export XML and confirm the same hours/price appear there.
+
+If at step 3 the log still shows hours=0 or the patch endpoint is never hit, the bug is still in the frontend wiring (Save button not calling ScenarioStore, or not passing the right session_id / item).
+
+In short: the “preserve edits when building/exporting” work is done; what’s missing is actually writing Step-3 edits into SCENARIO_STORE via ScenarioStore.patchScenarioItem when you hit Save. Please wire savePricingRow to that helper and ensure the patch endpoint updates SCENARIO_STORE using update_working_scenario() and cadence helpers.
