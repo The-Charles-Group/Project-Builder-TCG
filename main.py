@@ -3901,6 +3901,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             # Check if this is a retainer deliverable (support both old and new cadence fields)
             months = int((d.get("retainer") or {}).get("months", 0) or d.get("retainer_months", 0))
             
+            # DEBUG: Log exact values going into export for retainer debugging
+            print(f"[DEBUG] EXPORT ITEM: {d.get('deliverable', dcode)[:40]} hours={target_hours} months={months} cadence={d.get('billing_cadence', 'one_time')}")
+            
             # Also check billing_cadence for new cadence-based retainers
             billing_cadence = (d.get("billing_cadence") or "one_time").lower()
             cadence_units = int(d.get("cadence_units") or 1)
@@ -4023,8 +4026,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 comp_duration = sum(int(duration_by_tg.get(tg, 1)) for tg in tg_in_comp)
 
                 # Use SCALED hours for component
-                comp_hours_month_display = int(base_comp_hours_display.get(comp, 0))
-                comp_hours_total_display = comp_hours_month_display * months if months else comp_hours_month_display
+                # FIX: parent_hours_display (137) is already the TOTAL for the entire retainer
+                # base_comp_hours_display distributes this TOTAL across components
+                # DO NOT multiply by months again - that would give 137*6=822 (wrong!)
+                comp_hours_total_display = int(base_comp_hours_display.get(comp, 0))
+                # For per-month task distribution, divide total by months
+                comp_hours_per_month = comp_hours_total_display / months if months > 0 else comp_hours_total_display
 
                 wbs_comp = f"{wbs_deliv}.{j}"
                 svc_comp = (DB.service_department_for_component(dcode, comp, tg_in_comp)
@@ -4048,8 +4055,9 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
 
                 # --- Tasks under the component ---
                 # Per-month target hours for each task group, then repeat Month 01..N
+                # FIX: Use per-month hours (total / months), not total hours
                 tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
-                tg_target_month = _largest_remainder(comp_hours_month_display, tg_hours_month)
+                tg_target_month = _largest_remainder(int(round(comp_hours_per_month)), tg_hours_month)
 
                 # Build month-by-month repetition
                 total_tasks_per_month = len(tg_in_comp)
