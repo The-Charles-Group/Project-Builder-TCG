@@ -812,10 +812,15 @@ def get_session_state(session_id: str) -> Dict[str, Any]:
     
     return SCENARIO_STORE[session_id]
 
-def set_baseline_and_scenario(session_id: str, scenario: dict):
+def set_baseline_and_scenario(session_id: str, scenario: dict, preserve_overrides: bool = False):
     """
     Set both baseline and working scenario from Step 2 build.
     Called when building a new scenario or resetting.
+    
+    Args:
+        session_id: Session identifier
+        scenario: New scenario data from Step 2 build
+        preserve_overrides: If True, preserve existing Step 3 overrides and apply to new scenario
     """
     now = time.time()
     
@@ -825,6 +830,18 @@ def set_baseline_and_scenario(session_id: str, scenario: dict):
     if "totals" not in scenario:
         scenario["totals"] = {"hours": 0.0, "price": 0.0}
     
+    # Get existing overrides if preserving
+    existing_overrides = {}
+    if preserve_overrides and session_id in SCENARIO_STORE:
+        existing_state = SCENARIO_STORE.get(session_id, {})
+        existing_overrides = existing_state.get("overrides", {})
+        print(f"[SCENARIO_STORE] Preserving {len(existing_overrides)} Step 3 overrides")
+    
+    # Apply existing overrides to new scenario
+    if existing_overrides:
+        scenario = _apply_overrides_to_scenario(scenario, existing_overrides)
+        print(f"[SCENARIO_STORE] Applied overrides to new scenario")
+    
     # Recompute totals to ensure consistency
     scenario = _recompute_totals(scenario)
     
@@ -832,12 +849,74 @@ def set_baseline_and_scenario(session_id: str, scenario: dict):
         "baseline": copy.deepcopy(scenario),
         "scenario": scenario,
         "totals": scenario.get("totals", {"hours": 0.0, "price": 0.0}),
+        "overrides": existing_overrides,  # Store overrides separately
         "metadata": {
             "created_at": now,
             "updated_at": now,
             "last_sync": now
         }
     }
+
+def _get_item_key(item: dict) -> str:
+    """Generate a unique key for a scenario item for override tracking."""
+    deliv = item.get("deliverable_code") or item.get("Deliverable_Code") or ""
+    comp = item.get("component") or item.get("Component") or ""
+    task = item.get("task_label") or item.get("Task_Label") or ""
+    return f"{deliv}|{comp}|{task}"
+
+def _apply_overrides_to_scenario(scenario: dict, overrides: dict) -> dict:
+    """Apply stored overrides to a scenario."""
+    items = scenario.get("items", [])
+    for item in items:
+        item_key = _get_item_key(item)
+        if item_key in overrides:
+            override = overrides[item_key]
+            # Apply each override field
+            for field, value in override.items():
+                if value is not None:
+                    item[field] = value
+                    # Keep both field name variants in sync
+                    if field == "total_hours":
+                        item["Planned_Hours"] = value
+                    elif field == "Planned_Hours":
+                        item["total_hours"] = value
+                    elif field == "rate":
+                        item["Rate_USD"] = value
+                    elif field == "Rate_USD":
+                        item["rate"] = value
+                    elif field == "price":
+                        item["Price_USD"] = value
+                    elif field == "Price_USD":
+                        item["price"] = value
+            print(f"[SCENARIO_STORE] Applied override to {item_key}: {override}")
+    return scenario
+
+def store_override(session_id: str, item: dict, fields: dict):
+    """
+    Store an override for a specific item.
+    Called when user edits a field in Step 3.
+    
+    Args:
+        session_id: Session identifier
+        item: The item being edited (to extract key)
+        fields: Dict of field names to new values
+    """
+    state = get_session_state(session_id)
+    
+    if "overrides" not in state:
+        state["overrides"] = {}
+    
+    item_key = _get_item_key(item)
+    
+    if item_key not in state["overrides"]:
+        state["overrides"][item_key] = {}
+    
+    # Merge new fields into existing override
+    for field, value in fields.items():
+        state["overrides"][item_key][field] = value
+    
+    SCENARIO_STORE[session_id] = state
+    print(f"[SCENARIO_STORE] Stored override for {item_key}: {fields}")
 
 def update_working_scenario(session_id: str, scenario: dict) -> dict:
     """
@@ -6862,14 +6941,24 @@ def api_build(payload: BuildPayload):
         }
     
     # Save to SCENARIO_STORE if session_id provided (enables Gantt sync)
-    # CRITICAL: Use set_baseline_and_scenario() to create proper dual-entry format
-    # This ensures Step 3 edits persist when /api/pricing/build_scenario is called later
+    # CRITICAL: Rebuild from Step 2 while preserving Step 3 edits via overrides system
     if payload.session_id:
         scenario_data = scenarios["A"].copy()
         scenario_data['session_id'] = payload.session_id
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
-        set_baseline_and_scenario(payload.session_id, scenario_data)
-        print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} with dual-entry format (enables Step 3 persistence)")
+        
+        # Check if user has existing Step 3 edits to preserve
+        has_existing = has_baseline(payload.session_id)
+        
+        # Use preserve_overrides=True to keep Step 3 edits when rebuilding
+        set_baseline_and_scenario(payload.session_id, scenario_data, preserve_overrides=has_existing)
+        
+        # Get the updated scenario with overrides applied
+        if has_existing:
+            scenarios["A"] = get_working_scenario(payload.session_id)
+            print(f"[SCENARIO_STORE] Rebuilt scenario for {payload.session_id} with Step 3 overrides preserved")
+        else:
+            print(f"[SCENARIO_STORE] Created new scenario for {payload.session_id} with dual-entry format")
     
     # Return scenarios (A only)
     return {"scenarios": scenarios}
@@ -8098,11 +8187,41 @@ async def api_patch_scenario_item(payload: ScenarioItemPatch):
                         comp_id = comp.get("id") or comp.get("component_id") or comp.get("Component_Code")
                         if str(comp_id) == str(payload.component_id):
                             _apply_item_updates(comp, payload)
+                            # Store override for persistence across rebuilds
+                            override_fields = {}
+                            if payload.hours is not None:
+                                override_fields["Planned_Hours"] = payload.hours
+                                override_fields["total_hours"] = payload.hours
+                            if payload.rate_usd is not None:
+                                override_fields["Rate_USD"] = payload.rate_usd
+                                override_fields["rate"] = payload.rate_usd
+                            if payload.price_usd is not None:
+                                override_fields["Price_USD"] = payload.price_usd
+                                override_fields["price"] = payload.price_usd
+                            if payload.cadence is not None:
+                                override_fields["cadence"] = payload.cadence
+                            if override_fields:
+                                store_override(session_id, comp, override_fields)
                             updated = True
                             break
                 else:
                     # Update deliverable directly
                     _apply_item_updates(item, payload)
+                    # Store override for persistence across rebuilds
+                    override_fields = {}
+                    if payload.hours is not None:
+                        override_fields["Planned_Hours"] = payload.hours
+                        override_fields["total_hours"] = payload.hours
+                    if payload.rate_usd is not None:
+                        override_fields["Rate_USD"] = payload.rate_usd
+                        override_fields["rate"] = payload.rate_usd
+                    if payload.price_usd is not None:
+                        override_fields["Price_USD"] = payload.price_usd
+                        override_fields["price"] = payload.price_usd
+                    if payload.cadence is not None:
+                        override_fields["cadence"] = payload.cadence
+                    if override_fields:
+                        store_override(session_id, item, override_fields)
                     updated = True
                 break
         
