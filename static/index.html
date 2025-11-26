@@ -1677,7 +1677,18 @@
         Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
       );
       
+      // Generate consistent session ID for SCENARIO_STORE persistence
+      const sessionId = window.APB?.sessionId || 
+                       localStorage.getItem('current_session_id') || 
+                       `session_${Date.now()}_${Math.random().toString(36).substr(2,9)}`;
+      // Store session ID for consistency across all API calls
+      localStorage.setItem('current_session_id', sessionId);
+      if (!window.APB) window.APB = {};
+      window.APB.sessionId = sessionId;
+      console.log('[BUILD] Using session ID:', sessionId);
+      
       const payload = {
+        session_id: sessionId,                                       // CRITICAL: Required for SCENARIO_STORE persistence
         selected_deliverable_codes: appState.selectedCodes,          // <- required
         selected_components_map: selectedComponentsPayload,          // NEW: component-level selection
         pricing_mode: getPricingModeFromUI(),                        // 'Flat_Blended' | 'Per_Resource'
@@ -1862,16 +1873,24 @@
     async function refreshFromWorkingScenario() {
       console.log('[REFRESH] Refreshing from working scenario (preserving Step 3 edits)...');
       
-      const sessionId = window.SESSION_ID || sessionStorage.getItem('apb.session_id') || `session_${Date.now()}`;
+      // Use the SAME session ID source as buildScenariosAB()
+      const sessionId = window.APB?.sessionId || localStorage.getItem('current_session_id');
       
-      // Get current pricing parameters from UI
+      if (!sessionId) {
+        console.error('[REFRESH] No session ID found - cannot refresh from working scenario');
+        alert('No active session found. Please build a scenario first in Step 2.');
+        return;
+      }
+      
+      console.log('[REFRESH] Using session ID:', sessionId);
+      
+      // Minimal payload - just session_id and reset=false to retrieve cached scenario
+      // The selection field is required by the endpoint but we provide an empty one
+      // since we're just retrieving the cached scenario, not building a new one
       const payload = {
         session_id: sessionId,
-        complexity: getComplexityFromUI(),
-        tier: getVolumeTierFromUI(),
-        rate_band: getRateBandFromUI(),
-        pricing_mode: getPricingModeFromUI(),
-        blended_rate: getBlendedRateFromUI()
+        selection: {},  // Empty - we're not rebuilding, just retrieving cached working scenario
+        reset: false    // Explicitly false to get working scenario (not baseline)
       };
       
       console.log('[REFRESH] Calling /api/pricing/build_scenario with:', payload);
