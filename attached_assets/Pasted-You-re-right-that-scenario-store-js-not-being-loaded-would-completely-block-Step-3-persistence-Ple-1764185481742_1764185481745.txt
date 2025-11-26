@@ -1,0 +1,76 @@
+You’re right that scenario-store.js not being loaded would completely block Step 3 persistence.
+
+Please go into Build mode and do the following:
+
+1. Actually include scenario-store.js in the HTML, before app.js
+
+In static/index.html (or whatever main template is serving Step 3), we currently have something like:
+
+<script src="/static/ai_assistant.js"></script>
+<script src="/static/static_weights.js"></script>
+<script src="/static/app.js"></script>
+
+
+But the file on disk is static/js/scenario-store.js, and it’s never referenced.
+
+Please update the script block to:
+
+<script src="/static/ai_assistant.js"></script>
+<script src="/static/static_weights.js"></script>
+
+<!-- NEW: scenario store, must load before app.js -->
+<script src="/static/js/scenario-store.js"></script>
+
+<script src="/static/app.js"></script>
+
+
+Key points:
+
+Use the correct path you found: static/js/scenario-store.js → /static/js/scenario-store.js
+
+Make sure it’s included before /static/app.js, because app.js calls ScenarioStore in savePricingRow().
+
+2. Confirm ScenarioStore is defined and being used
+
+After adding the script tag:
+
+Load the app in the browser.
+
+Open DevTools → Console and type:
+
+typeof ScenarioStore
+
+
+Expected: "object" (not "undefined").
+
+Trigger an edit in Step 3 (change 98 → 137):
+
+Check the Network tab for a call to /api/pricing/scenario/item (or whatever endpoint ScenarioStore.patchScenarioItem hits).
+
+Check the backend logs for your debug line from the patch endpoint showing hours=137.
+
+If ScenarioStore is still undefined, the path is wrong: adjust /static/js/scenario-store.js to the correct URL based on how static files are mounted.
+
+3. Don’t touch /api/build or XML again unless this is fixed
+
+Right now:
+
+/api/build and the export logic have already been wired to read from SCENARIO_STORE.
+
+The only remaining bug is that Step 3 edits never make it into SCENARIO_STORE because scenario-store.js was never loaded.
+
+So the fix must be:
+
+Load scenario-store.js in HTML (correct URL + order).
+
+Ensure savePricingRow() calls ScenarioStore.patchScenarioItem() (you already identified this path).
+
+Confirm the backend patch endpoint calls update_working_scenario(session_id, scenario) so SCENARIO_STORE and totals are updated.
+
+Once that’s done, the flow should finally be:
+
+Edit to 137 → Save → ScenarioStore.patchScenarioItem → /api/pricing/scenario/item → update_working_scenario → SCENARIO_STORE has 137.
+
+Build Scenario → /api/build reuses working scenario → still 137.
+
+Export → helper reads SCENARIO_STORE → XML shows 137.
