@@ -812,15 +812,10 @@ def get_session_state(session_id: str) -> Dict[str, Any]:
     
     return SCENARIO_STORE[session_id]
 
-def set_baseline_and_scenario(session_id: str, scenario: dict, preserve_overrides: bool = False):
+def set_baseline_and_scenario(session_id: str, scenario: dict):
     """
     Set both baseline and working scenario from Step 2 build.
     Called when building a new scenario or resetting.
-    
-    Args:
-        session_id: Session identifier
-        scenario: New scenario data from Step 2 build
-        preserve_overrides: If True, preserve existing Step 3 overrides and apply to new scenario
     """
     now = time.time()
     
@@ -830,184 +825,19 @@ def set_baseline_and_scenario(session_id: str, scenario: dict, preserve_override
     if "totals" not in scenario:
         scenario["totals"] = {"hours": 0.0, "price": 0.0}
     
-    # Get existing overrides if preserving
-    existing_overrides = {}
-    if preserve_overrides and session_id in SCENARIO_STORE:
-        existing_state = SCENARIO_STORE.get(session_id, {})
-        existing_overrides = existing_state.get("overrides", {})
-        print(f"[SCENARIO_STORE] Preserving {len(existing_overrides)} Step 3 overrides")
-        for key, override in existing_overrides.items():
-            print(f"[SCENARIO_STORE] Override key='{key}', values={override}")
-    
-    # Apply existing overrides to new scenario BEFORE recomputing totals
-    if existing_overrides:
-        scenario = _apply_overrides_to_scenario(scenario, existing_overrides)
-    
-    # Recompute totals AFTER overrides are applied
+    # Recompute totals to ensure consistency
     scenario = _recompute_totals(scenario)
-    print(f"[SCENARIO_STORE] Totals after override application: {scenario.get('totals', {})}")
     
     SCENARIO_STORE[session_id] = {
         "baseline": copy.deepcopy(scenario),
         "scenario": scenario,
         "totals": scenario.get("totals", {"hours": 0.0, "price": 0.0}),
-        "overrides": existing_overrides,  # Store overrides separately
         "metadata": {
             "created_at": now,
             "updated_at": now,
             "last_sync": now
         }
     }
-
-def _get_item_key(item: dict, is_component: bool = False) -> str:
-    """
-    Generate a unique key for a scenario item for override tracking.
-    
-    For deliverables: uses deliverable_code
-    For components: uses deliverable_code + component identifier to prevent collisions
-    
-    Args:
-        item: The item dict (deliverable or component)
-        is_component: If True, this is a component and should include component identifier
-    """
-    # Get deliverable code (check all field name variants)
-    deliv = item.get("deliverable_code") or item.get("Deliverable_Code") or ""
-    deliv = str(deliv).strip()
-    
-    if is_component:
-        # For components, use stable identifier prioritizing component_name over generic id
-        # This prevents collisions when multiple components share a generic "id"
-        comp_id = (
-            item.get("component_id") or 
-            item.get("Component_Code") or 
-            item.get("component_name") or 
-            item.get("Component") or  # Sometimes capitalized
-            item.get("name") or 
-            item.get("id") or 
-            ""
-        )
-        comp_id = str(comp_id).strip()
-        if comp_id:
-            return f"{deliv}|component|{comp_id}"
-    
-    return deliv
-
-def _apply_override_to_item(item: dict, override: dict):
-    """Apply override fields to a single item, syncing all field name variants."""
-    for field, value in override.items():
-        if value is not None:
-            item[field] = value
-            
-            # Sync hours across all field name variants
-            if field in ("total_hours", "Planned_Hours", "hours"):
-                item["total_hours"] = value
-                item["Planned_Hours"] = value
-                item["hours"] = value
-            
-            # Sync rate across all field name variants
-            elif field in ("rate", "Rate_USD", "rate_usd", "blended_rate"):
-                item["rate"] = value
-                item["Rate_USD"] = value
-                item["rate_usd"] = value
-                item["blended_rate"] = value
-            
-            # Sync price across all field name variants
-            elif field in ("price", "Price_USD", "price_usd", "total_price"):
-                item["price"] = value
-                item["Price_USD"] = value
-                item["price_usd"] = value
-                item["total_price"] = value
-
-def _apply_overrides_to_scenario(scenario: dict, overrides: dict) -> dict:
-    """
-    Apply stored overrides to a scenario.
-    Traverses both deliverables AND nested components/tasks.
-    Normalizes field lookups to handle variant field names.
-    """
-    items = scenario.get("items", [])
-    applied_count = 0
-    
-    for item in items:
-        # Get deliverable code for this item (needed for component key generation)
-        deliv_code = item.get("deliverable_code") or item.get("Deliverable_Code") or item.get("id") or ""
-        
-        # Check for deliverable-level override
-        item_key = _get_item_key(item, is_component=False)
-        if item_key and item_key in overrides:
-            override = overrides[item_key]
-            _apply_override_to_item(item, override)
-            applied_count += 1
-            print(f"[SCENARIO_STORE] Applied deliverable override to '{item_key}': hours={override.get('total_hours') or override.get('Planned_Hours')}")
-        
-        # Traverse nested components
-        components = item.get("components", [])
-        for comp in components:
-            # Ensure component has deliverable_code for key generation
-            if not comp.get("deliverable_code") and not comp.get("Deliverable_Code"):
-                comp["deliverable_code"] = deliv_code
-            
-            comp_key = _get_item_key(comp, is_component=True)
-            if comp_key and comp_key in overrides:
-                override = overrides[comp_key]
-                _apply_override_to_item(comp, override)
-                applied_count += 1
-                print(f"[SCENARIO_STORE] Applied component override to '{comp_key}': hours={override.get('total_hours') or override.get('Planned_Hours')}")
-            
-            # Traverse nested tasks within components
-            tasks = comp.get("tasks", [])
-            for task in tasks:
-                if not task.get("deliverable_code") and not task.get("Deliverable_Code"):
-                    task["deliverable_code"] = deliv_code
-                
-                task_key = _get_item_key(task, is_component=True)  # Tasks use component-style keys
-                if task_key and task_key in overrides:
-                    override = overrides[task_key]
-                    _apply_override_to_item(task, override)
-                    applied_count += 1
-                    print(f"[SCENARIO_STORE] Applied task override to '{task_key}': hours={override.get('total_hours') or override.get('Planned_Hours')}")
-    
-    if applied_count > 0:
-        print(f"[SCENARIO_STORE] ✅ Applied {applied_count} overrides to scenario")
-    else:
-        print(f"[SCENARIO_STORE] No overrides matched scenario items. Override keys: {list(overrides.keys())}")
-        # Debug: show item keys for comparison
-        item_keys = [_get_item_key(it, is_component=False) for it in items[:5]]
-        print(f"[SCENARIO_STORE] Scenario item keys (first 5): {item_keys}")
-    
-    return scenario
-
-def store_override(session_id: str, item: dict, fields: dict, is_component: bool = False):
-    """
-    Store an override for a specific item.
-    Called when user edits a field in Step 3.
-    
-    Args:
-        session_id: Session identifier
-        item: The item being edited (to extract key)
-        fields: Dict of field names to new values
-        is_component: True if this is a component-level edit (vs deliverable-level)
-    """
-    state = get_session_state(session_id)
-    
-    if "overrides" not in state:
-        state["overrides"] = {}
-    
-    item_key = _get_item_key(item, is_component=is_component)
-    
-    if not item_key:
-        print(f"[SCENARIO_STORE] WARNING: Could not generate key for item: {item}")
-        return
-    
-    if item_key not in state["overrides"]:
-        state["overrides"][item_key] = {}
-    
-    # Merge new fields into existing override
-    for field, value in fields.items():
-        state["overrides"][item_key][field] = value
-    
-    SCENARIO_STORE[session_id] = state
-    print(f"[SCENARIO_STORE] ✅ Stored override for key='{item_key}': {fields}")
-    print(f"[SCENARIO_STORE] Total overrides for session {session_id}: {len(state['overrides'])}")
 
 def update_working_scenario(session_id: str, scenario: dict) -> dict:
     """
@@ -7032,24 +6862,14 @@ def api_build(payload: BuildPayload):
         }
     
     # Save to SCENARIO_STORE if session_id provided (enables Gantt sync)
-    # CRITICAL: Rebuild from Step 2 while preserving Step 3 edits via overrides system
+    # CRITICAL: Use set_baseline_and_scenario() to create proper dual-entry format
+    # This ensures Step 3 edits persist when /api/pricing/build_scenario is called later
     if payload.session_id:
         scenario_data = scenarios["A"].copy()
         scenario_data['session_id'] = payload.session_id
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
-        
-        # Check if user has existing Step 3 edits to preserve
-        has_existing = has_baseline(payload.session_id)
-        
-        # Use preserve_overrides=True to keep Step 3 edits when rebuilding
-        set_baseline_and_scenario(payload.session_id, scenario_data, preserve_overrides=has_existing)
-        
-        # Get the updated scenario with overrides applied
-        if has_existing:
-            scenarios["A"] = get_working_scenario(payload.session_id)
-            print(f"[SCENARIO_STORE] Rebuilt scenario for {payload.session_id} with Step 3 overrides preserved")
-        else:
-            print(f"[SCENARIO_STORE] Created new scenario for {payload.session_id} with dual-entry format")
+        set_baseline_and_scenario(payload.session_id, scenario_data)
+        print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} with dual-entry format (enables Step 3 persistence)")
     
     # Return scenarios (A only)
     return {"scenarios": scenarios}
@@ -8278,44 +8098,11 @@ async def api_patch_scenario_item(payload: ScenarioItemPatch):
                         comp_id = comp.get("id") or comp.get("component_id") or comp.get("Component_Code")
                         if str(comp_id) == str(payload.component_id):
                             _apply_item_updates(comp, payload)
-                            # Store override for persistence across rebuilds
-                            # Ensure component has deliverable_code for key generation
-                            if not comp.get("deliverable_code") and not comp.get("Deliverable_Code"):
-                                comp["deliverable_code"] = item.get("deliverable_code") or item.get("Deliverable_Code") or item.get("id")
-                            override_fields = {}
-                            if payload.hours is not None:
-                                override_fields["Planned_Hours"] = payload.hours
-                                override_fields["total_hours"] = payload.hours
-                            if payload.rate_usd is not None:
-                                override_fields["Rate_USD"] = payload.rate_usd
-                                override_fields["rate"] = payload.rate_usd
-                            if payload.price_usd is not None:
-                                override_fields["Price_USD"] = payload.price_usd
-                                override_fields["price"] = payload.price_usd
-                            if payload.cadence is not None:
-                                override_fields["cadence"] = payload.cadence
-                            if override_fields:
-                                store_override(session_id, comp, override_fields, is_component=True)
                             updated = True
                             break
                 else:
                     # Update deliverable directly
                     _apply_item_updates(item, payload)
-                    # Store override for persistence across rebuilds
-                    override_fields = {}
-                    if payload.hours is not None:
-                        override_fields["Planned_Hours"] = payload.hours
-                        override_fields["total_hours"] = payload.hours
-                    if payload.rate_usd is not None:
-                        override_fields["Rate_USD"] = payload.rate_usd
-                        override_fields["rate"] = payload.rate_usd
-                    if payload.price_usd is not None:
-                        override_fields["Price_USD"] = payload.price_usd
-                        override_fields["price"] = payload.price_usd
-                    if payload.cadence is not None:
-                        override_fields["cadence"] = payload.cadence
-                    if override_fields:
-                        store_override(session_id, item, override_fields, is_component=False)
                     updated = True
                 break
         
