@@ -1637,6 +1637,35 @@
       };
     }
     
+    // CENTRALIZED SESSION MANAGEMENT - ensures consistent session ID across all API calls
+    function getOrCreateSessionId() {
+      // Check existing sources in order of priority
+      let sessionId = window.APB?.sessionId || localStorage.getItem('current_session_id');
+      
+      // Only generate a new ID if none exists
+      if (!sessionId) {
+        sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2,9)}`;
+        console.log('[SESSION] Generated new session ID:', sessionId);
+      }
+      
+      // Ensure the ID is stored in both locations for consistency
+      if (!window.APB) window.APB = {};
+      window.APB.sessionId = sessionId;
+      localStorage.setItem('current_session_id', sessionId);
+      
+      return sessionId;
+    }
+    
+    // Make it globally accessible
+    window.getOrCreateSessionId = getOrCreateSessionId;
+    
+    // CRITICAL: Initialize session ID IMMEDIATELY after helper is defined
+    // This ensures the ID exists before ANY build calls can happen (including inline onclick handlers)
+    (function initializeSession() {
+      const sessionId = getOrCreateSessionId();
+      console.log('[SESSION] Immediate initialization on script load:', sessionId);
+    })();
+    
     // Step 3 — make the Build button work (as specified)
     async function buildScenariosAB() {
       // Make this function globally accessible
@@ -1677,14 +1706,8 @@
         Object.entries(window.selectedComponentsMap || {}).map(([k,v]) => [k, Array.from(v || [])])
       );
       
-      // Generate consistent session ID for SCENARIO_STORE persistence
-      const sessionId = window.APB?.sessionId || 
-                       localStorage.getItem('current_session_id') || 
-                       `session_${Date.now()}_${Math.random().toString(36).substr(2,9)}`;
-      // Store session ID for consistency across all API calls
-      localStorage.setItem('current_session_id', sessionId);
-      if (!window.APB) window.APB = {};
-      window.APB.sessionId = sessionId;
+      // Use centralized session ID manager for consistent SCENARIO_STORE persistence
+      const sessionId = getOrCreateSessionId();
       console.log('[BUILD] Using session ID:', sessionId);
       
       const payload = {
@@ -1774,13 +1797,8 @@
         
         // FIX #2: Save scenarios to localStorage for persistence between steps
         try {
-          // Ensure session ID is preserved
-          const sessionId = window.APB?.sessionId || 
-                          localStorage.getItem('current_session_id') || 
-                          'default_session';
-          
-          // Save session ID for consistency
-          localStorage.setItem('current_session_id', sessionId);
+          // Use centralized session ID manager (no 'default_session' fallback!)
+          const sessionId = getOrCreateSessionId();
           
           const storageKey = `scenarios_${sessionId}`;
           localStorage.setItem(storageKey, JSON.stringify(scenarios));
@@ -1873,15 +1891,8 @@
     async function refreshFromWorkingScenario() {
       console.log('[REFRESH] Refreshing from working scenario (preserving Step 3 edits)...');
       
-      // Use the SAME session ID source as buildScenariosAB()
-      const sessionId = window.APB?.sessionId || localStorage.getItem('current_session_id');
-      
-      if (!sessionId) {
-        console.error('[REFRESH] No session ID found - cannot refresh from working scenario');
-        alert('No active session found. Please build a scenario first in Step 2.');
-        return;
-      }
-      
+      // Use centralized session ID manager
+      const sessionId = getOrCreateSessionId();
       console.log('[REFRESH] Using session ID:', sessionId);
       
       // Minimal payload - just session_id and reset=false to retrieve cached scenario
@@ -2248,7 +2259,10 @@
       if (!scen) { alert(`Build Scenario ${letter} first.`); return; }
 
       // Get session_id to access Gantt-edited timeline data from SCENARIO_STORE
-      const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+      // Use centralized session ID manager for consistency with build/refresh flows
+      const sessionId = typeof getOrCreateSessionId === 'function' ? getOrCreateSessionId() : 
+                       (window.APB?.sessionId || localStorage.getItem('current_session_id'));
+      console.log('[Export XML] Using session ID:', sessionId);
       
       // Always include Start/End anchors (checkbox removed - now always enabled)
       const addAnchors = true;
@@ -3026,6 +3040,11 @@
 
     // Event listeners - ensure DOM is loaded first
     document.addEventListener('DOMContentLoaded', function() {
+      // CRITICAL: Initialize session ID on page load BEFORE any build calls
+      // This ensures consistent session ID across all Step 2/3 operations
+      const initialSessionId = getOrCreateSessionId();
+      console.log('[INIT] Session ID initialized on page load:', initialSessionId);
+      
       // Note: btnAnalyze is wired in app.js boot() function
       
       // Initialize project start date to next Monday 09:00 local
