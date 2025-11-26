@@ -1,0 +1,185 @@
+What’s going wrong (high level)
+
+From your main.py in the doc:
+
+Step 3 + WBS builder already honor Step 3 edits via get_hours_from_item(d) and the [WBS_SCALE] log. 
+
+SB - Step 3 fixes
+
+There is a new flexible XML export endpoint:
+
+class XMLExportPayload(BaseModel):
+    scenario: Optional[Dict[str, Any]] = None
+    selected_deliverables: Optional[List[str]] = None
+    project_name: Optional[str] = None
+    ...
+    
+@app.post("/api/xml")
+def api_xml_export_flexible(payload: XMLExportPayload):
+    ...
+    if payload.scenario and payload.scenario.get("items"):
+        # Case 1
+        scenario = _inflate_components_if_missing(payload.scenario)
+    elif payload.scenario:
+        # Case 2 – build items
+        ...
+    elif payload.selected_deliverables:
+        # Case 3 – build entire scenario from codes
+        ...
+``` :contentReference[oaicite:1]{index=1}  
+
+This endpoint **does not use `SCENARIO_STORE` or `get_working_scenario()` at all**.
+
+So if the frontend is sending:
+
+- an **old copy** of Scenario A in `payload.scenario`, or  
+- just `selected_deliverables` and letting the backend rebuild from DB defaults
+
+…then `/api/xml` will happily rebuild a scenario based on DB hours (98) instead of your Step 3-edited hours (137). That matches what you’re seeing: UI shows 137, XML shows 98.
+
+---
+
+### What to tell the Architect / Agent
+
+You can paste this:
+
+> We’ve fixed all `SCENARIO_STORE` dual-entry issues and Step 3 is persisting correctly. The remaining bug is in the XML export path.
+> 
+> Right now, `/api/xml` (the flexible XML export endpoint) builds its scenario from `payload.scenario` or `selected_deliverables` and **never touches the working scenario stored in `SCENARIO_STORE`**. That’s why XML exports still show the original DB hours (e.g. 98) instead of the edited Step 3 hours (e.g. 137).
+> 
+> **Goal:** XML export must use the same *working* scenario that Step 3 and Step 4 use (via `get_working_scenario()` / `update_working_scenario()`), so that `Planned_Hours` in the XML matches the Step 3 grid.
+
+#### Concrete backend changes
+
+1. **Extend `XMLExportPayload` to accept `session_id`:**
+
+```python
+class XMLExportPayload(BaseModel):
+    session_id: Optional[str] = None   # NEW
+
+    scenario: Optional[Dict[str, Any]] = None
+    selected_deliverables: Optional[List[str]] = None
+    project_name: Optional[str] = None
+    pricing_mode: str = "Flat_Blended"
+    rate_band: str = "Standard_US"
+    blended_rate: Optional[float] = None
+    start_date_mode: str = "next_monday"
+    fixed_start_iso: Optional[str] = None
+    hours_per_day: float = 8.0
+    sheet_name: str = "Scenario"
+    add_dependencies: bool = True
+    add_milestones: bool = True
+    add_custom_fields: bool = True
+
+
+In /api/xml, prefer the working scenario when session_id is present:
+
+Inside api_xml_export_flexible, replace the current “Case 1 / Case 2 / Case 3” logic with this priority:
+
+@app.post("/api/xml")
+def api_xml_export_flexible(payload: XMLExportPayload):
+    if not DB.loaded:
+        DB.load()
+
+    project_name = (payload.project_name
+                    or _upload_title_default()
+                    or f"Project {datetime.date.today().isoformat()}")
+
+    scenario = None
+
+    # 1) Preferred: use working scenario from SCENARIO_STORE
+    if payload.session_id:
+        state = get_session_state(payload.session_id)
+        scenario = get_working_scenario(payload.session_id)
+        print(f"[XML EXPORT] Using working scenario from SCENARIO_STORE for session {payload.session_id}")
+        print(f"[XML EXPORT] Scenario totals: {scenario.get('totals')}")
+    
+    # 2) Fallback: use payload.scenario if provided with items
+    if scenario is None and payload.scenario and payload.scenario.get("items"):
+        scenario = _inflate_components_if_missing(payload.scenario)
+        print("[XML EXPORT] Using scenario from payload.scenario (with items)")
+    
+    # 3) Fallback: scenario w/o items + selected_deliverables (build items)
+    if scenario is None and payload.scenario:
+        ...
+        # keep your existing Case 2 logic
+
+    # 4) Fallback: only selected_deliverables (build whole scenario)
+    if scenario is None and payload.selected_deliverables:
+        ...
+        # keep your existing Case 3 logic
+
+    if scenario is None:
+        raise HTTPException(400, "No scenario or deliverables provided for XML export")
+
+    # IMPORTANT: ensure components are inflated
+    scenario = _inflate_components_if_missing(scenario)
+
+    # DEBUG: verify Step 3 hours before WBS build
+    items = scenario.get("items", [])
+    for item in items[:5]:
+        print("[XML EXPORT] Item debug:",
+              item.get("deliverable_code"),
+              "Planned_Hours=", item.get("Planned_Hours"),
+              "hours=", item.get("hours"),
+              "total_hours=", item.get("total_hours"))
+
+    df = build_wbs_dataframe_from_scenario(scenario, project_name=project_name)
+    ...
+    # rest of existing XLSX + convert_excel_to_mspdi pipeline
+
+
+Make sure the frontend passes session_id to /api/xml:
+
+Wherever the XML export button calls the backend (probably something like fetch('/api/xml', { body: JSON.stringify({...}) })), include the current session_id:
+
+const payload = {
+  session_id: window.SESSION_ID,   // whatever you already use elsewhere
+  project_name,
+  start_date_mode: "next_monday",
+  hours_per_day: 8,
+  // You can omit scenario/selected_deliverables if we always use SCENARIO_STORE
+};
+
+
+Ideally, once session_id wiring is solid, you can stop sending scenario from the frontend entirely to avoid stale copies.
+
+Confirm there are no other XML endpoints still in use
+
+You also have the old multi-scenario XML export code that writes Scenario_A.xml, Scenario_B.xml, Scenario_C.xml and zips them. 
+
+SB - Step 3 fixes
+
+Ask the Agent to:
+
+Search the JS for calls to /api/export, /api/export/xml, /api/export_project, etc.
+
+Either:
+
+route all of them through /api/xml with session_id, or
+
+ensure they, too, load the working scenario via get_working_scenario(session_id) and not via a stale payload.
+
+Quick sanity test for them to run
+
+Ask them to add this debug log right before building the WBS DataFrame in /api/xml:
+
+first = scenario.get("items", [])[0]
+print("[XML CHECK] First item:",
+      first.get("deliverable_code"),
+      "Planned_Hours=", first.get("Planned_Hours"),
+      "hours=", first.get("hours"),
+      "total_hours=", first.get("total_hours"))
+
+
+Then:
+
+Step 2 → Build Scenario A.
+
+Step 3 → Change one deliverable from 98 → 137 hours → Save.
+
+Step 3 → Build Scenario (no reset).
+
+Export XML via /api/xml.
+
+The log should show Planned_Hours (or at least one of the hour fields) as 137. If that’s correct, convert_excel_to_mspdi will output <Work> / <PlannedHours> based on 137 instead of 98.
