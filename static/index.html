@@ -2382,7 +2382,26 @@
       // Update totals display if needed
       updateScenarioTotals(targetId);
       
-      console.log(`Updated ${deliverableCode} cadence to ${newCadence} (${months} months)`);
+      console.log(`[updateCadence] Updated ${deliverableCode} cadence to ${newCadence} (${months} months)`);
+      
+      // *** PERSIST TO SCENARIO_STORE via ScenarioStore.patchScenarioItem ***
+      // Get current hours and rate from the item for the patch
+      const hours = item.total_hours || item.hours || item.Planned_Hours || 0;
+      const rate = item.effective_rate || item.rate_usd || item.Rate_USD || 210;
+      
+      console.log(`[updateCadence] Persisting to SCENARIO_STORE: deliverable=${deliverableCode} hours=${hours} rate=${rate} cadence=${newCadence} months=${months}`);
+      
+      if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
+        ScenarioStore.patchScenarioItem(deliverableCode, {
+          hours: hours,
+          rate: rate,
+          cadence: newCadence,
+          months: months
+        });
+        console.log(`[updateCadence] ScenarioStore.patchScenarioItem called`);
+      } else {
+        console.warn('[updateCadence] ScenarioStore not available, cadence change not persisted to backend');
+      }
     }
     
     // Helper function to update scenario totals display
@@ -2561,6 +2580,43 @@
         // Update global state
         if (window.APP_STATE?.scenarios?.A && targetId === 'scenarioA') {
           window.APP_STATE.scenarios.A = scenario;
+        }
+        
+        // *** PERSIST TO SCENARIO_STORE via ScenarioStore.patchScenarioItem ***
+        // This is the critical step that saves Step 3 edits to the backend
+        const deliverableId = item.deliverable_code || item.deliverable;
+        
+        // Get current cadence from dropdown
+        const cadenceSelect = row.querySelector('.cadence-select');
+        const cadence = cadenceSelect ? cadenceSelect.value : (item.billing_cadence || 'One-Time');
+        
+        // Calculate months from cadence
+        let months = 0;
+        if (cadence === 'Monthly') months = 1;
+        else if (cadence === 'Quarterly') months = 3;
+        else if (cadence === 'Semi-Annual') months = 6;
+        else if (cadence === 'Annual') months = 12;
+        
+        // Also update item's retainer_months for consistency
+        item.retainer_months = months;
+        item.billing_cadence = cadence;
+        
+        console.log(`[savePricingRow] Persisting to SCENARIO_STORE: deliverable=${deliverableId} hours=${newHours} rate=${newRate} cadence=${cadence} months=${months}`);
+        
+        // Call ScenarioStore to persist to backend SCENARIO_STORE
+        // Use immediate flush (not debounced) to ensure PATCH completes before user can click Build Scenario
+        if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
+          ScenarioStore.patchScenarioItem(deliverableId, {
+            hours: newHours,
+            rate: newRate,
+            cadence: cadence,
+            months: months
+          });
+          // Force immediate flush to guarantee persistence before UI allows further actions
+          await ScenarioStore.flushPatchesNow();
+          console.log(`[savePricingRow] ScenarioStore PATCH completed and flushed successfully`);
+        } else {
+          console.warn('[savePricingRow] ScenarioStore not available, edit not persisted to backend');
         }
         
       } catch (error) {

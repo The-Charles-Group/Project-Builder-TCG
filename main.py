@@ -8085,11 +8085,13 @@ def _apply_item_updates(item: dict, payload: ScenarioItemPatch):
         item["Planned_Hours"] = payload.hours
         item["planned_hours"] = payload.hours
         item["hours"] = payload.hours
+        item["total_hours"] = payload.hours  # Also set total_hours for UI consistency
     
     if payload.rate_usd is not None:
         item["Rate_USD"] = payload.rate_usd
         item["rate_usd"] = payload.rate_usd
         item["blended_rate"] = payload.rate_usd
+        item["effective_rate"] = payload.rate_usd  # Also set effective_rate for UI
     
     if payload.price_usd is not None:
         item["Price_USD"] = payload.price_usd
@@ -8103,6 +8105,14 @@ def _apply_item_updates(item: dict, payload: ScenarioItemPatch):
     if payload.months is not None:
         item["retainer_months"] = payload.months
         item["months"] = payload.months
+    
+    # Recalculate price if hours and rate are available
+    hours = payload.hours if payload.hours is not None else item.get("hours") or item.get("Planned_Hours") or 0
+    rate = payload.rate_usd if payload.rate_usd is not None else item.get("rate_usd") or item.get("Rate_USD") or 210
+    new_price = int(hours * rate)
+    item["price"] = new_price
+    item["Price_USD"] = new_price
+    item["price_usd"] = new_price
 
 @app.patch("/api/pricing/scenario/item")
 async def api_patch_scenario_item(payload: ScenarioItemPatch):
@@ -8152,6 +8162,31 @@ async def api_patch_scenario_item(payload: ScenarioItemPatch):
         scenario = update_working_scenario(session_id, scenario)
         
         target = f"component {payload.component_id}" if payload.component_id else f"item {payload.deliverable_id}"
+        
+        # Debug logging as specified in GPT-5 Pro instructions
+        print(f"[SCENARIO PATCH] session={session_id} "
+              f"item_key={payload.deliverable_id} "
+              f"hours={payload.hours} "
+              f"rate={payload.rate_usd} "
+              f"cadence={payload.cadence} "
+              f"months={payload.months}")
+        
+        # Log the updated totals
+        totals = scenario.get("totals", {})
+        print(f"[SCENARIO PATCH] totals after update: hours={totals.get('hours')} price={totals.get('price')}")
+        
+        # Also log the specific item's new values
+        for item in scenario.get("items", []):
+            item_id = item.get("deliverable_code") or item.get("Deliverable_Code")
+            if str(item_id) == str(payload.deliverable_id):
+                print(f"[SCENARIO PATCH] item {item_id}: "
+                      f"total_hours={item.get('total_hours')} "
+                      f"hours={item.get('hours')} "
+                      f"cadence={item.get('billing_cadence')} "
+                      f"retainer_months={item.get('retainer_months')} "
+                      f"price={item.get('price')}")
+                break
+        
         print(f"[SCENARIO_STORE] ✏️ Updated {target} in session {session_id}")
         
         return {

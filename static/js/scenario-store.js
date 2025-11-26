@@ -192,6 +192,14 @@
       this._patchDebounce = setTimeout(() => this._flushPatches(), 300);
     },
     
+    async flushPatchesNow() {
+      if (this._patchDebounce) {
+        clearTimeout(this._patchDebounce);
+        this._patchDebounce = null;
+      }
+      await this._flushPatches();
+    },
+    
     async _flushPatches() {
       const sessionId = this.sessionId;
       if (!sessionId) return;
