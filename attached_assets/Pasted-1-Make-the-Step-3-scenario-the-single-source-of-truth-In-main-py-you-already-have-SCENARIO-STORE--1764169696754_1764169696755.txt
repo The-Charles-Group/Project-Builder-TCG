@@ -1,0 +1,228 @@
+1. Make the Step 3 scenario the single source of truth
+
+In main.py, you already have SCENARIO_STORE.
+Change it so each session looks like this:
+
+SCENARIO_STORE[session_id] = {
+    "baseline": {...},   # original scenario from Step 2
+    "scenario": {...},   # mutable working copy (Step 3 edits)
+    "totals": {...},
+    "metadata": {...},
+}
+
+
+If that structure already exists from previous work, just double-check it’s still true after your rollback.
+
+Add two helpers somewhere near the top of the scenario-related code:
+
+def get_working_scenario(session_id: str) -> dict:
+    entry = SCENARIO_STORE.get(session_id) or {}
+    scen = entry.get("scenario") or entry.get("baseline") or {}
+    # Ensure we always return a copy so we don't mutate shared refs unexpectedly
+    return json.loads(json.dumps(scen))
+
+def save_working_scenario(session_id: str, scenario: dict) -> None:
+    entry = SCENARIO_STORE.get(session_id) or {}
+    entry.setdefault("baseline", json.loads(json.dumps(scenario))) if "baseline" not in entry else None
+    entry["scenario"] = json.loads(json.dumps(scenario))
+    SCENARIO_STORE[session_id] = entry
+
+2. Make the Save endpoint update scenario directly (no override maps)
+
+Wherever the Step 3 grid “Save / autosave” hits (usually a PATCH like /api/pricing/scenario or /api/pricing/sync):
+
+Load the working scenario from SCENARIO_STORE[session_id]["scenario"] using get_working_scenario.
+
+For each edited row from the frontend, find the matching item inside scenario["items"] and update its fields in-place (hours, rate, price, cadence, etc.).
+
+Recompute totals.
+
+Call save_working_scenario(session_id, scenario).
+
+Key thing: no more separate overrides dict. The canonical truth is the scenario["items"] list.
+
+Add a canonical key helper so Save and any future rebuild logic use the same key:
+
+def make_item_key(item: dict) -> str:
+    dcode = str(
+        item.get("deliverable_code")
+        or item.get("Deliverable_Code")
+        or ""
+    ).strip().lower()
+
+    comp = str(
+        item.get("component")
+        or item.get("Component")
+        or item.get("component_name")
+        or ""
+    ).strip().lower()
+
+    label = str(
+        item.get("task_label")
+        or item.get("Task_Label")
+        or item.get("Task")
+        or ""
+    ).strip().lower()
+
+    return f"{dcode}::{comp}::{label}"
+
+
+Then in the Save endpoint, something like:
+
+@app.patch("/api/pricing/scenario")
+def api_patch_scenario(payload: dict):
+    session_id = payload.get("session_id")
+    edits = payload.get("items") or []
+
+    if not session_id:
+        raise HTTPException(400, "session_id required")
+
+    scenario = get_working_scenario(session_id)
+    items = scenario.get("items") or []
+
+    # Build map for fast lookup
+    item_map = {make_item_key(i): i for i in items}
+
+    for edited in edits:
+        key = make_item_key(edited)
+        existing = item_map.get(key)
+        if not existing:
+            # optional: log and skip
+            print(f"[STEP3 PATCH] No match for key {key}, skipping")
+            continue
+
+        # Update only the Step 3-editable fields
+        for field in ["Planned_Hours", "planned_hours", "hours",
+                      "Rate_USD", "rate_usd",
+                      "Price_USD", "price_usd", "total_price",
+                      "billing_cadence", "cadence_units",
+                      "monthly_price", "cadence_price"]:
+            if field in edited and edited[field] is not None:
+                existing[field] = edited[field]
+
+    # Recompute total_hours / total_price from the edited items
+    scenario["totals"] = _recompute_scenario_totals(items)
+
+    save_working_scenario(session_id, scenario)
+    return {"ok": True, "scenario": scenario, "totals": scenario["totals"]}
+
+
+The important part: when you click Save, the real scenario object is updated. There is no separate “override” to re-apply later.
+
+3. Make Build Scenario use the working copy, not Step 2
+
+Right now, the ScenarioManager.buildScenario() in the frontend is hitting /api/scenarios (the old Step 2 builder). That’s what’s nuking your edits.
+
+You want this behavior:
+
+Build Scenario (blue) → just re-hydrate the saved scenario from SCENARIO_STORE[session_id]["scenario"] and recompute totals. No rebuild from DB.
+
+Reset from Step 2 (orange) → rebuild from Step 2 inputs, overwrite baseline + working copy.
+
+Backend endpoint (example):
+
+class BuildScenarioPayload(BaseModel):
+    session_id: str
+    reset: bool = False  # only True when clicking "Reset from Step 2"
+
+@app.post("/api/pricing/build_scenario")
+def api_pricing_build_scenario(payload: BuildScenarioPayload):
+    session_id = payload.session_id
+    reset = payload.reset
+
+    if not DB.loaded:
+        DB.load()
+
+    if reset or session_id not in SCENARIO_STORE:
+        # Rebuild baseline from Step 2 selection (call your existing api_build / /api/scenarios logic)
+        base = build_scenario_from_step2(session_id)  # wrap your existing builder here
+        _totals = _recompute_scenario_totals(base.get("items") or [])
+        SCENARIO_STORE[session_id] = {
+            "baseline": base,
+            "scenario": json.loads(json.dumps(base)),
+            "totals": _totals,
+            "metadata": base.get("metadata", {})
+        }
+
+    entry = SCENARIO_STORE[session_id]
+    scenario = get_working_scenario(session_id)
+    items = scenario.get("items") or []
+    entry["totals"] = _recompute_scenario_totals(items)
+    entry["scenario"] = scenario
+    SCENARIO_STORE[session_id] = entry
+
+    return {
+        "ok": True,
+        "scenario": scenario,
+        "totals": entry["totals"],
+        "metadata": entry.get("metadata", {})
+    }
+
+
+Then ask the front-end dev / Replit agent to:
+
+// Pseudocode – whatever your JS actually looks like
+buildScenario() {
+  const payload = {
+    session_id: this.sessionId,
+    reset: false,
+  };
+  return fetch("/api/pricing/build_scenario", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then(res => res.json()).then(data => {
+    // Use data.scenario to populate:
+    // - Deliverable Pricing Details
+    // - Project Scenario grid
+    // - Totals
+  });
+}
+
+rebuildFromStep2() {
+  const payload = {
+    session_id: this.sessionId,
+    reset: true,
+  };
+  return fetch("/api/pricing/build_scenario", { ...same as above... });
+}
+
+
+Crucial: remove any remaining code in Step 3 that still calls /api/scenarios directly when you’re already in Step 3.
+
+4. Make export & timeline read the same working scenario
+
+Wherever you export XML or generate the timeline, make sure they now do:
+
+scenario = get_working_scenario(session_id)
+items = scenario.get("items") or []
+# build WBS, XML, etc from these items
+
+
+i.e. never regenerate from Step 2 once you’re in Step 3.
+
+If you already have a merge_scenario_from_sync() or _get_scenarios() helper, simplify it so everything funnels through get_working_scenario() and SCENARIO_STORE[session_id]["scenario"].
+
+5. How you’ll know it’s finally fixed
+
+Once they implement this:
+
+Go to Step 3.
+
+Change Brand Positioning Strategy to say 137 hours.
+
+Click Save.
+
+Click Build Scenario.
+
+Check the Deliverable Pricing Details table:
+
+It should still show 137 hours, not 98.
+
+Export XML, import to Workfront:
+
+Work should be 137h × 210 rate (or whatever your rate is).
+
+If cost type is still hourly, it should line up with hours × rate.
+
+If Step 3 and the export both show 137h, you’re finally out of override hell.

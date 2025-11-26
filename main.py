@@ -883,12 +883,22 @@ def reset_scenario_from_baseline(session_id: str) -> dict:
 def get_working_scenario(session_id: str) -> dict:
     """
     Get the current working scenario for a session.
-    This is what exports and Step 4 should use.
+    This is what exports, Step 3, and Step 4 should use.
+    
+    IMPORTANT: Returns the LIVE object (not a copy) so edits persist.
+    If scenario is missing/empty, clones from baseline per GPT-5 Pro spec.
     """
     state = get_session_state(session_id)
     scenario = state.get("scenario")
     
-    if scenario is None:
+    if scenario is None or not scenario:
+        # Clone from baseline if scenario is missing
+        baseline = state.get("baseline") or {}
+        if baseline:
+            print(f"[SCENARIO_STORE] Cloning scenario from baseline for {session_id}")
+            state["scenario"] = copy.deepcopy(baseline)
+            SCENARIO_STORE[session_id] = state
+            return state["scenario"]
         return {"items": [], "totals": {"hours": 0.0, "price": 0.0}}
     
     return scenario
@@ -897,6 +907,29 @@ def has_baseline(session_id: str) -> bool:
     """Check if a baseline exists for this session."""
     state = get_session_state(session_id)
     return state.get("baseline") is not None and bool(state["baseline"].get("items"))
+
+def _norm_str(s: Any) -> str:
+    """Normalize a string for key matching: strip, lowercase."""
+    return str(s or "").strip().lower()
+
+def make_item_key(item: dict) -> str:
+    """
+    Create a canonical key for matching scenario items.
+    Format: deliverable_code|component|task_label
+    
+    Uses normalized (lowercased, stripped) values.
+    This key is used by:
+    - PATCH/save endpoints to find and update items
+    - Merge logic for scenario sync
+    - Export verification
+    
+    Per GPT-5 Pro spec: use consistent keying everywhere.
+    """
+    d = _norm_str(item.get("Deliverable_Code") or item.get("deliverable_code"))
+    c = _norm_str(item.get("Component") or item.get("component_name") or item.get("component"))
+    t = _norm_str(item.get("Task_Label") or item.get("task_label") or item.get("Task"))
+    parts = [p for p in [d, c, t] if p]
+    return "|".join(parts)
 
 def _recompute_totals(scn: dict) -> dict:
     """
@@ -4352,70 +4385,42 @@ def _current_scenarios():
 def _get_scenarios(session_id: Optional[str] = None) -> dict:
     """
     Get scenarios for export.
-    If session_id is provided, checks SCENARIO_STORE first (contains Step 3/4 edits).
+    If session_id is provided, uses get_working_scenario() to get Step 3/4 edits.
     Falls back to _CURRENT_SCENARIOS if session_id not found or not provided.
     
     This ensures XML exports reflect Step 3 pricing edits and Step 4 Gantt edits.
+    
+    UPDATED (GPT-5 Pro spec): Now uses get_working_scenario() for consistent access.
+    Calls get_session_state() unconditionally to ensure migration runs.
     """
     print(f"[GET_SCENARIOS] Called with session_id={session_id}")
     
-    if session_id and session_id in SCENARIO_STORE:
-        # Return session-based scenario with Step 3/4 edits
-        store_entry = SCENARIO_STORE[session_id]
-        print(f"[GET_SCENARIOS] store_entry keys: {list(store_entry.keys()) if isinstance(store_entry, dict) else 'NOT_DICT'}")
+    if session_id:
+        # Always call get_session_state to ensure migration runs (GPT-5 Pro spec)
+        _ = get_session_state(session_id)
+        # Use get_working_scenario() to ensure consistent access with migration/cloning
+        scenario = get_working_scenario(session_id)
+        print(f"[GET_SCENARIOS] Got working scenario via get_working_scenario()")
         
-        # SCENARIO_STORE can have two formats:
-        # 1. Wrapper format from merge_scenario_from_sync: {"scenario": {...items...}, "updated_at": ...}
-        # 2. Direct format from other endpoints: {"items": [...], "totals": {...}, ...}
-        # 
-        # We must extract ONLY the scenario dict with "items" - never return wrapper metadata
-        scenario = None
-        if isinstance(store_entry, dict):
-            if "scenario" in store_entry and isinstance(store_entry["scenario"], dict):
-                # Wrapper format - extract nested scenario (strip updated_at, timeline, etc)
-                scenario = store_entry["scenario"].copy()  # Copy to avoid mutating store
-                print(f"[GET_SCENARIOS] Extracted nested scenario from wrapper (has 'scenario' key)")
-            elif "items" in store_entry:
-                # Direct format - but strip any metadata keys that aren't part of scenario
-                scenario = {k: v for k, v in store_entry.items() 
-                           if k not in ("updated_at", "updated")}
-                print(f"[GET_SCENARIOS] Using store_entry directly (has 'items' key), stripped metadata")
-            else:
-                # Unknown format - try to extract scenario
-                nested = store_entry.get("scenario")
-                if nested and isinstance(nested, dict):
-                    scenario = nested.copy()
-                else:
-                    scenario = store_entry.copy()
-                print(f"[GET_SCENARIOS] Unknown format, using fallback extraction")
-        else:
-            scenario = store_entry
-            print(f"[GET_SCENARIOS] store_entry is not dict, using as-is")
-        
-        if scenario is None:
-            print(f"[GET_SCENARIOS] WARNING: Could not extract scenario, falling back to _CURRENT_SCENARIOS")
+        if not scenario or not scenario.get("items"):
+            print(f"[GET_SCENARIOS] Working scenario is empty, falling back to _CURRENT_SCENARIOS")
             return _CURRENT_SCENARIOS
         
-        # Debug: Show what we extracted
-        if isinstance(scenario, dict):
-            print(f"[GET_SCENARIOS] Extracted scenario keys: {list(scenario.keys())}")
-            items = scenario.get("items", [])
-            print(f"[GET_SCENARIOS] Scenario has {len(items)} items")
-            if items:
-                first_item = items[0]
-                print(f"[GET_SCENARIOS] First item: {first_item.get('deliverable', 'N/A')}, hours={first_item.get('Planned_Hours', first_item.get('planned_hours', 'N/A'))}, price={first_item.get('price_usd', first_item.get('Price_USD', 'N/A'))}")
+        # Debug: Show what we got
+        items = scenario.get("items", [])
+        print(f"[GET_SCENARIOS] Scenario has {len(items)} items")
+        if items:
+            first_item = items[0]
+            print(f"[GET_SCENARIOS] First item: {first_item.get('Deliverable', first_item.get('deliverable', 'N/A'))}, hours={first_item.get('Planned_Hours', first_item.get('planned_hours', 'N/A'))}, price={first_item.get('price_usd', first_item.get('Price_USD', 'N/A'))}")
         
         # Call _recompute_totals to ensure all pricing fields are in sync before export
         scenario = _recompute_totals(scenario)
         
-        print(f"[GET_SCENARIOS] Found scenario in SCENARIO_STORE")
         print(f"[GET_SCENARIOS] Scenario keys: {list(scenario.keys())}")
         print(f"[GET_SCENARIOS] Has timeline_tasks: {'timeline_tasks' in scenario}")
-        print(f"[GET_SCENARIOS] Has timeline: {'timeline' in scenario}")
         
         if "timeline_tasks" in scenario:
             print(f"[GET_SCENARIOS] timeline_tasks count: {len(scenario['timeline_tasks'])}")
-            print(f"[GET_SCENARIOS] First timeline task: {scenario['timeline_tasks'][0] if scenario['timeline_tasks'] else 'EMPTY'}")
         
         # DEFENSIVE: Strip any anchor-related settings AND tasks from cached scenarios
         # This prevents old cached settings from overriding our Workfront compatibility fixes
@@ -8315,11 +8320,11 @@ async def api_optimize_scenario(payload: OptimizeScenarioPayload):
     try:
         session_id = payload.session_id
         
-        # Get scenario from store
-        if session_id not in SCENARIO_STORE:
+        # Use get_working_scenario() for consistent access (GPT-5 Pro spec)
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
             raise HTTPException(404, f"Scenario not found for session {session_id}")
         
-        scenario = SCENARIO_STORE[session_id]
         items = scenario.get("items", [])
         
         if payload.deliverable_index >= len(items):
@@ -8395,11 +8400,11 @@ async def api_cadence_suggestion(payload: CadenceSuggestionPayload):
     try:
         session_id = payload.session_id
         
-        # Get scenario from store
-        if session_id not in SCENARIO_STORE:
+        # Use get_working_scenario() for consistent access (GPT-5 Pro spec)
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
             raise HTTPException(404, f"Scenario not found for session {session_id}")
         
-        scenario = SCENARIO_STORE[session_id]
         items = scenario.get("items", [])
         
         if payload.deliverable_index >= len(items):
@@ -8440,11 +8445,11 @@ async def api_retainer_suggestions(payload: RetainerSuggestionsPayload):
     try:
         session_id = payload.session_id
         
-        # Get scenario from store
-        if session_id not in SCENARIO_STORE:
+        # Use get_working_scenario() for consistent access (GPT-5 Pro spec)
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
             raise HTTPException(404, f"Scenario not found for session {session_id}")
         
-        scenario = SCENARIO_STORE[session_id]
         items = scenario.get("items", [])
         
         if payload.deliverable_index >= len(items):
@@ -8495,11 +8500,11 @@ async def api_update_timeline_task(payload: UpdateTaskPayload):
     try:
         session_id = payload.session_id
         
-        # Get scenario from store
-        if session_id not in SCENARIO_STORE:
+        # Use get_working_scenario() for consistent access (GPT-5 Pro spec)
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
             raise HTTPException(404, f"Scenario not found for session {session_id}")
         
-        scenario = SCENARIO_STORE[session_id]
         items = scenario.get("items", [])
         
         # Find item by WBS_ID
@@ -8570,10 +8575,11 @@ async def api_update_timeline_tasks_batch(payload: UpdateTasksBatchPayload):
     try:
         session_id = payload.session_id
         
-        if session_id not in SCENARIO_STORE:
+        # Use get_working_scenario() for consistent access (GPT-5 Pro spec)
+        scenario = get_working_scenario(session_id)
+        if not scenario or not scenario.get("items"):
             raise HTTPException(404, f"Scenario not found for session {session_id}")
         
-        scenario = SCENARIO_STORE[session_id]
         items = scenario.get("items", [])
         
         touched_deliv_codes = set()

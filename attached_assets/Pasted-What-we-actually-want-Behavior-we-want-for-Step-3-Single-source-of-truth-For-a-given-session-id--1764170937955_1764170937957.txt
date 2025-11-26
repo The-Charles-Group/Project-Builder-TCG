@@ -1,0 +1,249 @@
+What we actually want
+
+Behavior we want for Step 3:
+
+Single source of truth
+
+For a given session_id, keep this structure:
+
+SCENARIO_STORE[session_id] = {
+    "baseline": {...},   # built once from Step 2
+    "scenario": {...},   # mutable working copy used by Step 3 / Step 4
+    "totals":  {...},
+    "metadata": {...},
+}
+
+
+Step 2 “Build Scenarios”
+
+When Step 2 builds scenario A:
+
+Build the scenario as it does today.
+
+Do NOT write SCENARIO_STORE[session_id] = scenario_data.
+
+Instead, call:
+
+set_baseline_and_scenario(session_id, scenario_data)
+
+
+where:
+
+def set_baseline_and_scenario(session_id: str, scenario: dict) -> None:
+    baseline_copy = json.loads(json.dumps(scenario))
+    working_copy  = json.loads(json.dumps(scenario))
+    SCENARIO_STORE[session_id] = {
+        "baseline": baseline_copy,
+        "scenario": working_copy,
+        "totals": baseline_copy.get("totals", {}),
+        "metadata": {
+            "created_at": datetime.datetime.utcnow().isoformat(),
+            "updated_at": datetime.datetime.utcnow().isoformat(),
+        },
+    }
+}
+
+
+Helpers that MUST be used everywhere
+
+def get_session_state(session_id: str) -> dict:
+    state = SCENARIO_STORE.get(session_id)
+    if not state:
+        state = {
+            "baseline": {},
+            "scenario": {},
+            "totals": {},
+            "metadata": {
+                "created_at": datetime.datetime.utcnow().isoformat(),
+                "updated_at": datetime.datetime.utcnow().isoformat(),
+            },
+        }
+        SCENARIO_STORE[session_id] = state
+    return state
+
+def get_working_scenario(session_id: str) -> dict:
+    state = get_session_state(session_id)
+    if "scenario" not in state or not state["scenario"]:
+        # if missing, clone baseline
+        baseline = state.get("baseline") or {}
+        state["scenario"] = json.loads(json.dumps(baseline))
+    return state["scenario"]
+
+def update_working_scenario(session_id: str, scenario: dict) -> None:
+    state = get_session_state(session_id)
+    state["scenario"] = scenario
+    state["totals"] = scenario.get("totals", state.get("totals", {}))
+    meta = state.setdefault("metadata", {})
+    meta["updated_at"] = datetime.datetime.utcnow().isoformat()
+
+
+Instruction: Replace every direct SCENARIO_STORE[session_id] = ... and SCENARIO_STORE[session_id].get(...) with calls to these helpers.
+
+1. Fix Step 3 “Build Scenario” vs “Reset from Step 2”
+Backend: /api/pricing/build_scenario
+
+Desired behavior:
+
+If reset == False → use Step-3 working copy (don’t touch baseline).
+
+If reset == True → restore from baseline and overwrite working copy.
+
+Replace the body of /api/pricing/build_scenario with something like:
+
+@app.post("/api/pricing/build_scenario")
+def api_pricing_build_scenario(payload: BuildScenarioPayload):
+    session_id = payload.session_id
+    if not session_id:
+        raise HTTPException(400, "session_id is required")
+
+    state = get_session_state(session_id)
+
+    if payload.reset:
+        # Hard reset from baseline
+        baseline = state.get("baseline")
+        if not baseline:
+            raise HTTPException(400, "No baseline scenario available for this session")
+
+        # fresh working copy from baseline
+        working = json.loads(json.dumps(baseline))
+        working = _recompute_totals(working)
+        update_working_scenario(session_id, working)
+        return {"scenario": working, "reset": True}
+
+    # Normal build: just reuse working copy, recompute, and return
+    working = get_working_scenario(session_id)
+    working = _recompute_totals(working)
+    update_working_scenario(session_id, working)
+    return {"scenario": working, "reset": False}
+
+Frontend wiring
+
+Build Scenario button must POST to /api/pricing/build_scenario with:
+
+{ "session_id": "<session>", "reset": false }
+
+
+Reset from Step 2 button must POST to the same endpoint with:
+
+{ "session_id": "<session>", "reset": true }
+
+
+Remove any calls to /api/scenarios from Step 3. That endpoint is for Step 2 only.
+
+2. Make “Save” and “Build Scenario” operate on the same data
+
+Right now you’re seeing:
+
+Save + Generate Timeline → correct (using working copy).
+
+Save + Build Scenario + Generate Timeline → hours snap back (because Build Scenario rebuilds from somewhere else).
+
+To fix this:
+
+a) Step 3 Save / PATCH endpoint
+
+Whatever endpoint the Save button uses (pricing grid PATCH), make sure it:
+
+@app.patch("/api/scenario/items")
+def patch_scenario_items(payload: PatchItemsPayload):
+    session_id = payload.session_id
+    patches = payload.patches  # list of { item_id or key, fields: {...} }
+
+    working = get_working_scenario(session_id)
+
+    # 1) index items by stable key
+    items = working.get("items", [])
+    index = { make_item_key(it): it for it in items }
+
+    for patch in patches:
+        key = patch.get("key")
+        fields = patch.get("fields", {})
+        if not key or key not in index:
+            continue
+        row = index[key]
+        # apply field updates
+        for k, v in fields.items():
+            row[k] = v
+
+    # 2) recompute totals
+    working = _recompute_totals(working)
+    update_working_scenario(session_id, working)
+    return {"scenario": working}
+
+
+Implement make_item_key once and reuse it everywhere:
+
+def norm(s: Any) -> str:
+    return (str(s or "").strip().lower())
+
+def make_item_key(item: dict) -> str:
+    d = norm(item.get("Deliverable_Code") or item.get("deliverable_code"))
+    c = norm(item.get("Component") or item.get("component_name"))
+    t = norm(item.get("Task_Label") or item.get("task_label") or item.get("Task"))
+    parts = [p for p in [d, c, t] if p]
+    return "|".join(parts)
+
+
+Important: Use this same make_item_key everywhere: in save logic, in any override/merge logic, in any scenario sync logic. No more mixing Component vs component_name, Task_Label vs task_label, etc.
+
+b) Build Scenario must not rebuild from Step 2
+
+With the /api/pricing/build_scenario body replaced as above, Build Scenario will:
+
+Use whatever Save wrote into the working scenario.
+
+Simply recompute totals and feed back the same items.
+
+That means:
+
+If you change Brand Positioning Strategy to 137 hours and save,
+
+Then click Build Scenario, the item in the response must still show 137 hours.
+
+3. Make Export & Timeline use the working copy only
+
+Anywhere you’re exporting XML or generating a timeline from a session_id, enforce:
+
+def get_scenario_for_session(session_id: str) -> dict:
+    # single helper
+    return get_working_scenario(session_id)
+
+
+Then in export:
+
+@app.get("/api/export/xml")
+def api_export_xml(session_id: str = Query(...)):
+    scenario = get_scenario_for_session(session_id)
+    scenario = _recompute_totals(scenario)
+    df = scenario_to_dataframe(scenario)
+    xml_bytes = convert_excel_to_mspdi(df, project_name=scenario.get("project_name", "Project"))
+    ...
+
+
+Do not:
+
+Re-query the DB for Step 2 selections.
+
+Rebuild scenario from complexity/tier again inside export.
+
+Read SCENARIO_STORE[session_id] directly as if it’s a flat scenario.
+
+Everything should run through get_working_scenario.
+
+4. Quick sanity test (developer checklist)
+
+After the changes, ask them to run this simple test on a console / Postman:
+
+Build from Step 2 (normal flow) → populates baseline + scenario.
+
+Call PATCH to change first deliverable’s Planned_Hours from 98 to 137.
+
+Call /api/pricing/build_scenario with reset: false.
+
+Confirm the response’s items still show Planned_Hours = 137.
+
+Call timeline generation / export with the same session_id and check the XML:
+
+The corresponding task in XML should show 137 hours, not 98.
+
+If step 3 or 5 still shows 98, there is still a legacy code path rebuilding from Step 2 or bypassing get_working_scenario.
