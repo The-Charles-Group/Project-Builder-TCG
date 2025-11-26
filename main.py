@@ -6862,12 +6862,14 @@ def api_build(payload: BuildPayload):
         }
     
     # Save to SCENARIO_STORE if session_id provided (enables Gantt sync)
+    # CRITICAL: Use set_baseline_and_scenario() to create proper dual-entry format
+    # This ensures Step 3 edits persist when /api/pricing/build_scenario is called later
     if payload.session_id:
         scenario_data = scenarios["A"].copy()
         scenario_data['session_id'] = payload.session_id
         scenario_data['last_saved'] = datetime.datetime.now().isoformat()
-        SCENARIO_STORE[payload.session_id] = scenario_data
-        print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} (enables Gantt updates)")
+        set_baseline_and_scenario(payload.session_id, scenario_data)
+        print(f"[SCENARIO_STORE] Saved scenario to session {payload.session_id} with dual-entry format (enables Step 3 persistence)")
     
     # Return scenarios (A only)
     return {"scenarios": scenarios}
@@ -7838,7 +7840,12 @@ async def api_build_scenario(payload: BuildScenarioPayload):
     try:
         session_id = payload.session_id
         
-        # Check if baseline exists
+        # CRITICAL: Call get_session_state FIRST to trigger migration from legacy format
+        # This converts old flat SCENARIO_STORE entries to dual-entry (baseline/scenario) format
+        # Without this, has_baseline() fails on migrated data and Step 3 edits are lost
+        _ = get_session_state(session_id)
+        
+        # Check if baseline exists (now works correctly after migration)
         if has_baseline(session_id):
             if payload.reset:
                 # Reset from Step 2: restore working scenario from baseline
