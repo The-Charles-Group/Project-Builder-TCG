@@ -6460,9 +6460,8 @@ function renderAIPlan(aiPlan) {
     const weightsContainer = document.getElementById('step2-ai-weights-container');
     if (weightsContainer && weightedData && weightedData.deliverables && weightedData.deliverables.length > 0) {
       weightsContainer.style.display = 'block';
-      const selectionMode = weightedData.selection_mode || 'confidence_only';
-      window.TCGWeights.render('#step2-ai-weights', weightedData, selectionMode);
-      console.log(`[AI Analysis] Rendered ${weightedData.deliverables.length} weighted deliverables with mode: ${selectionMode}`);
+      window.TCGWeights.render('#step2-ai-weights', weightedData, 'confidence_only');
+      console.log(`[AI Analysis] Rendered ${weightedData.deliverables.length} weighted deliverables`);
     }
   }
   
