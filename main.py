@@ -4154,6 +4154,82 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             day_cursor = max(day_cursor, dstart) + total_deliv_duration
             prev_deliv_wbs = wbs_deliv
 
+    # ========================================================================
+    # HOURS HARMONIZATION PASS: Ensure leaf role rows sum exactly to target
+    # ========================================================================
+    # After building all rows, harmonize leaf hours per deliverable to match Step 3 target
+    # This fixes rounding drift where e.g. 200 hours target becomes 210 in leaf sum
+    
+    # Group rows by deliverable and find leaf role rows (highest outline level under each deliverable)
+    deliverable_target_hours = {}  # dcode -> target hours from Step 3
+    deliverable_leaf_rows = {}     # dcode -> list of row indices that are leaf role rows
+    
+    for d in delivs:
+        dcode = d.get("deliverable_code") or d.get("code") or ""
+        # Get Step 3 target hours using the canonical accessor
+        target_hours = get_hours_from_item(d)
+        if target_hours > 0:
+            deliverable_target_hours[dcode] = target_hours
+            deliverable_leaf_rows[dcode] = []
+    
+    # Find leaf role rows for each deliverable (rows with Role set and Planned_Hours > 0)
+    for i, row in enumerate(rows):
+        dcode = row.get("Deliverable_Code", "")
+        if dcode in deliverable_target_hours:
+            # Leaf role rows have a Role assigned and positive hours
+            if row.get("Role") and row.get("Planned_Hours") and int(row.get("Planned_Hours", 0)) > 0:
+                deliverable_leaf_rows[dcode].append(i)
+    
+    # Harmonize each deliverable's leaf hours to match target
+    for dcode, target_hours in deliverable_target_hours.items():
+        leaf_indices = deliverable_leaf_rows.get(dcode, [])
+        if not leaf_indices:
+            continue
+        
+        # Calculate current leaf sum
+        leaf_hours = [(i, int(rows[i].get("Planned_Hours", 0))) for i in leaf_indices]
+        leaf_total = sum(h for _, h in leaf_hours)
+        
+        if leaf_total == 0 or abs(leaf_total - target_hours) < 1:
+            continue  # Already harmonized or no hours to scale
+        
+        # Scale factor to match target
+        scale = target_hours / leaf_total
+        
+        # Apply scale with largest-remainder rounding to preserve integer hours
+        scaled_hours = []
+        for i, h in leaf_hours:
+            exact = h * scale
+            floor_h = int(exact)
+            remainder = exact - floor_h
+            scaled_hours.append((i, floor_h, remainder))
+        
+        # Distribute remainder using largest-remainder method
+        current_sum = sum(h for _, h, _ in scaled_hours)
+        deficit = int(round(target_hours)) - current_sum
+        
+        if deficit > 0:
+            # Sort by remainder descending and add 1 to top deficit rows
+            scaled_hours.sort(key=lambda x: x[2], reverse=True)
+            for j in range(min(deficit, len(scaled_hours))):
+                idx, h, _ = scaled_hours[j]
+                scaled_hours[j] = (idx, h + 1, 0)
+        elif deficit < 0:
+            # Need to subtract - sort by remainder ascending (smallest first)
+            scaled_hours.sort(key=lambda x: x[2])
+            for j in range(min(-deficit, len(scaled_hours))):
+                idx, h, _ = scaled_hours[j]
+                if h > 0:  # Don't go negative
+                    scaled_hours[j] = (idx, h - 1, 0)
+        
+        # Apply harmonized hours back to rows
+        for idx, harmonized_h, _ in scaled_hours:
+            rows[idx]["Planned_Hours"] = harmonized_h
+        
+        # Log the harmonization
+        new_sum = sum(rows[idx]["Planned_Hours"] for idx in leaf_indices)
+        print(f"[HOURS HARMONIZE] {dcode}: target={int(target_hours)}, was={leaf_total}, now={new_sum}, delta={new_sum - leaf_total}")
+
     df = pd.DataFrame(rows)
     
     # --- ENFORCE A-E COLUMN ORDER FOR v3 COMPATIBILITY ---
@@ -11875,47 +11951,81 @@ def convert_excel_to_mspdi(
                 children_by_parent[parent_uid] = [wbs_to_uid.get(child_wbs) for child_wbs in child_wbs_list if wbs_to_uid.get(child_wbs)]
         summary_set = set(children_by_parent.keys())
 
-        # Helper function to recursively clamp all descendants to fit within bounds
-        def clamp_descendants(uid, bound_start, bound_finish):
-            """Recursively clamp all descendants of uid to fit within specified bounds."""
+        # Helper function to STRETCH and clamp all descendants to fit within parent's date range
+        def stretch_and_clamp_descendants(uid, bound_start, bound_finish):
+            """
+            Stretch and clamp all descendants of uid to proportionally fill parent's date range.
+            This ensures child tasks span the full 121-day parent window instead of clustering in ~6 days.
+            """
             kids = children_by_parent.get(uid, [])
+            if not kids:
+                return
+            
+            # Calculate the original span of all children (before stretching)
+            child_starts = [uid_to_sched[k]["Start"] for k in kids]
+            child_finishes = [uid_to_sched[k]["Finish"] for k in kids]
+            original_min = min(child_starts)
+            original_max = max(child_finishes)
+            original_span = (original_max - original_min).total_seconds()
+            
+            # Calculate the target span (parent's range)
+            target_span = (bound_finish - bound_start).total_seconds()
+            
+            # Skip stretching if original span is 0 or target span is very small
+            if original_span <= 0 or target_span <= 0:
+                return
+            
+            # Calculate stretch ratio
+            stretch_ratio = target_span / original_span if original_span > 0 else 1.0
+            
             for k in kids:
                 child_start = uid_to_sched[k]["Start"]
                 child_finish = uid_to_sched[k]["Finish"]
                 
-                # Clamp child start/finish to bounds
-                clamped_start = max(child_start, bound_start)
-                clamped_finish = min(child_finish, bound_finish)
+                # Calculate proportional position within stretched range
+                # offset_ratio = how far into the original span this child starts
+                offset_seconds = (child_start - original_min).total_seconds()
+                duration_seconds = (child_finish - child_start).total_seconds()
                 
-                # Ensure finish is still after start (minimum 1 hour duration)
-                if clamped_finish <= clamped_start:
-                    clamped_finish = clamped_start + datetime.timedelta(hours=1)
-                    # But don't exceed bound finish
-                    if clamped_finish > bound_finish:
-                        clamped_finish = bound_finish
-                        clamped_start = max(bound_start, clamped_finish - datetime.timedelta(hours=1))
+                # Scale offset and duration proportionally
+                new_offset_seconds = offset_seconds * stretch_ratio
+                new_duration_seconds = max(3600, duration_seconds * stretch_ratio)  # min 1 hour
                 
-                # Update child schedule with clamped dates
-                uid_to_sched[k]["Start"] = clamped_start
-                uid_to_sched[k]["Finish"] = clamped_finish
+                # Calculate new start/finish based on bound_start
+                new_start = bound_start + datetime.timedelta(seconds=new_offset_seconds)
+                new_finish = new_start + datetime.timedelta(seconds=new_duration_seconds)
                 
-                # Recalculate duration for clamped child
-                duration_hours = max(1.0, (clamped_finish - clamped_start).total_seconds() / 3600)
+                # Clamp to bounds (just in case of floating point issues)
+                new_start = max(new_start, bound_start)
+                new_finish = min(new_finish, bound_finish)
+                
+                # Ensure finish is still after start
+                if new_finish <= new_start:
+                    new_finish = new_start + datetime.timedelta(hours=1)
+                
+                # Update child schedule with stretched dates
+                uid_to_sched[k]["Start"] = new_start
+                uid_to_sched[k]["Finish"] = new_finish
+                
+                # Recalculate duration for stretched child
+                duration_hours = max(1.0, (new_finish - new_start).total_seconds() / 3600)
                 uid_to_sched[k]["DurationHours"] = duration_hours
                 
-                # Recursively clamp this child's descendants
+                # Recursively stretch this child's descendants
                 if k in summary_set:
-                    clamp_descendants(k, bound_start, bound_finish)
+                    stretch_and_clamp_descendants(k, new_start, new_finish)
+            
+            print(f"[XML EXPORT] 📐 Stretched {len(kids)} children: original {original_span/86400:.1f} days → target {target_span/86400:.1f} days (ratio={stretch_ratio:.2f})")
         
-        # CRITICAL FIX Part 2: Immediately clamp descendants for all preserved deliverables
-        # This ensures child components/tasks fit within the deliverable window set in Gantt
+        # CRITICAL FIX Part 2: Stretch and clamp descendants for all preserved deliverables
+        # This ensures child components/tasks FILL the deliverable window set in Gantt (not just clamp)
         # Must happen BEFORE rollup_summary runs to prevent wrong date calculations
         for preserved_uid in preserved_dates:
             if preserved_uid in uid_to_sched and preserved_uid in children_by_parent:
                 preserved_start = uid_to_sched[preserved_uid]["Start"]
                 preserved_finish = uid_to_sched[preserved_uid]["Finish"]
-                clamp_descendants(preserved_uid, preserved_start, preserved_finish)
-                print(f"[XML EXPORT] 🔒 Clamped descendants of preserved UID {preserved_uid} to fit within {preserved_start.date()} to {preserved_finish.date()}")
+                stretch_and_clamp_descendants(preserved_uid, preserved_start, preserved_finish)
+                print(f"[XML EXPORT] 🔒 Stretched descendants of preserved UID {preserved_uid} to fill {preserved_start.date()} to {preserved_finish.date()}")
         
         # 1) roll up start/finish for every summary from its direct/indirect leaves
         def rollup_summary(uid):
@@ -12753,7 +12863,22 @@ def convert_excel_to_mspdi(
                 # DELIVERABLE TASKS (OutlineLevel=2): SNET constraint + Manual* tags if has children
                 # Deliverables are direct children of Project Summary with SNET to lock start dates
                 SubElement(task, "Work").text = "PT0M"
-                SubElement(task, "Duration").text = "PT480M"
+                
+                # FIX: Calculate actual Duration from Start/Finish dates (not hardcoded PT480M)
+                # This fixes the mismatch where Step 4 shows 121 days but Workfront shows 1 day
+                try:
+                    start_str = uid_to_sched[r["UID"]]["Start"]
+                    finish_str = uid_to_sched[r["UID"]]["Finish"]
+                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
+                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
+                    duration_days = max(1, (finish_dt - start_dt).days)
+                    duration_minutes = duration_days * 480  # 8-hour workday
+                    SubElement(task, "Duration").text = f"PT{duration_minutes}M"
+                    print(f"[XML EXPORT] 📏 Deliverable Duration: {name_txt[:40]} = {duration_days} days (PT{duration_minutes}M)")
+                except Exception as e:
+                    # Fallback to 1 day
+                    SubElement(task, "Duration").text = "PT480M"
+                    print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
                 
                 # Manual Scheduling tags to lock parent timelines
                 SubElement(task, "Type").text = "1"  # Fixed Duration
@@ -12778,17 +12903,21 @@ def convert_excel_to_mspdi(
                 print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
             
             elif is_summary and not is_root:
-                # NON-ROOT SUMMARY TASKS (OutlineLevel 2-5): Minimum PT480M duration + Manual* tags
+                # NON-ROOT SUMMARY TASKS (OutlineLevel 2-5): Calculate actual duration from Start/Finish
                 SubElement(task, "Work").text = "PT0M"
                 
-                # L5 ENFORCEMENT: Task Groups (OutlineLevel=5) MUST have minimum 1-day duration
-                # Even if children total less time, enforce PT480M minimum to meet Workfront requirements
-                if outline_level == 5:
-                    # For L5, enforce minimum 1 day (480 minutes)
-                    SubElement(task, "Duration").text = "PT480M"
-                    print(f"[XML EXPORT] 📏 Enforced L5 minimum duration: {name_txt[:40]} (WBS {r['WBS']}, Duration=PT480M)")
-                else:
-                    # For L2-L4, use standard 480M
+                # FIX: Calculate actual Duration from Start/Finish dates (not hardcoded PT480M)
+                # This ensures summary task durations match their date spans
+                try:
+                    start_str = uid_to_sched[r["UID"]]["Start"]
+                    finish_str = uid_to_sched[r["UID"]]["Finish"]
+                    start_dt = datetime.datetime.fromisoformat(start_str.replace('Z', ''))
+                    finish_dt = datetime.datetime.fromisoformat(finish_str.replace('Z', ''))
+                    duration_days = max(1, (finish_dt - start_dt).days)
+                    duration_minutes = duration_days * 480  # 8-hour workday
+                    SubElement(task, "Duration").text = f"PT{duration_minutes}M"
+                except Exception:
+                    # Fallback to 1 day
                     SubElement(task, "Duration").text = "PT480M"
                 
                 # GPT-5 PRO SPEC: Summary tasks (OutlineLevel 2-5) need Type, IsEffortDriven, and Manual Scheduling tags
