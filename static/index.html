@@ -155,48 +155,6 @@
     <section class="card" id="step2" style="display:none;">
       <h2>Step 2 — Select & Configure Deliverables</h2>
       
-      <!-- TF-IDF Selection Mode Selector (Step 2) -->
-      <div id="step2-selection-mode" style="margin-bottom: 20px; padding: 16px; background: linear-gradient(135deg, rgba(34, 197, 94, 0.1), rgba(16, 185, 129, 0.1)); border: 1px solid rgba(34, 197, 94, 0.2); border-radius: 8px;">
-        <h3 style="margin: 0 0 12px 0; color: #22c55e; font-size: 1.1em;">🎯 Auto-Selection Method</h3>
-        <div style="margin-bottom: 8px; font-size: 0.85em; color: var(--muted);">
-          Choose how deliverables are automatically selected based on AI analysis results. Changes apply instantly.
-        </div>
-        <div style="margin-bottom: 12px; padding: 8px; background: rgba(245, 158, 11, 0.1); border-left: 3px solid #f59e0b; border-radius: 4px; font-size: 0.8em; color: var(--muted);">
-          ⚠️ <strong>Note:</strong> Changing selection mode will reapply auto-selection and overwrite manual checkbox changes.
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 8px;">
-          <label style="display: flex; align-items: center; padding: 10px; background: rgba(34, 197, 94, 0.05); border: 2px solid rgba(34, 197, 94, 0.3); border-radius: 6px; cursor: pointer;">
-            <input type="radio" name="step2_selection_mode" value="confidence_only" checked style="margin-right: 10px;">
-            <div>
-              <strong>AI Confidence Only</strong>
-              <div style="font-size: 0.8em; color: var(--muted); margin-top: 2px;">
-                Select deliverables with ≥70% AI confidence (default)
-              </div>
-            </div>
-          </label>
-          <label style="display: flex; align-items: center; padding: 10px; background: rgba(34, 197, 94, 0.05); border: 2px solid rgba(34, 197, 94, 0.1); border-radius: 6px; cursor: pointer;">
-            <input type="radio" name="step2_selection_mode" value="tfidf_only" style="margin-right: 10px;">
-            <div>
-              <strong>TF-IDF Similarity Only</strong>
-              <div style="font-size: 0.8em; color: var(--muted); margin-top: 2px;">
-                Select deliverables with ≥70% keyword similarity
-              </div>
-            </div>
-          </label>
-          <label style="display: flex; align-items: center; padding: 10px; background: rgba(34, 197, 94, 0.05); border: 2px solid rgba(34, 197, 94, 0.1); border-radius: 6px; cursor: pointer;">
-            <input type="radio" name="step2_selection_mode" value="both" style="margin-right: 10px;">
-            <div>
-              <strong>Both Methods (Union)</strong>
-              <div style="font-size: 0.8em; color: var(--muted); margin-top: 2px;">
-                Select if either AI confidence ≥70% OR keyword similarity ≥70%
-              </div>
-            </div>
-          </label>
-        </div>
-        <div id="selection-mode-stats" style="margin-top: 12px; padding: 10px; background: rgba(34, 197, 94, 0.05); border-radius: 6px; font-size: 0.85em; color: var(--muted); display: none;">
-          <strong style="color: var(--accent);">Selection Stats:</strong> <span id="selection-mode-counts"></span>
-        </div>
-      </div>
       
       <!-- DEPRECATED: Old weighted AI button (hidden - now using GPT-5 Pro planner) -->
       <div style="margin-bottom: 16px; display: none; gap: 12px; align-items: center;">
