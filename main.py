@@ -4164,7 +4164,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
     deliverable_target_hours = {}  # dcode -> target hours from Step 3
     deliverable_leaf_rows = {}     # dcode -> list of row indices that are leaf role rows
     
-    for d in delivs:
+    for d in items:
         dcode = d.get("deliverable_code") or d.get("code") or ""
         # Get Step 3 target hours using the canonical accessor
         target_hours = get_hours_from_item(d)
