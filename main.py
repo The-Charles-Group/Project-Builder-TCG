@@ -3987,19 +3987,20 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                     monthly_child_hours = round(target_hours / months, 2) if months > 0 else target_hours
                     monthly_child_price = round(target_price / months, 2) if months > 0 else target_price
                     
-                    # Create monthly rows with scaled hours and FixedCost
+                    # Create monthly rows - STRUCTURAL ONLY (0 hours)
+                    # Role rows under component/tasks carry the hours; monthly children provide date structure
+                    # This prevents double-counting while maintaining calendar month timeline visibility
                     monthly_rows = expand_retainer_into_months(deliv_row, months, project_start)
                     for mrow in monthly_rows:
-                        mrow["Planned_Hours"] = int(round(monthly_child_hours))
-                        mrow["FixedCost"] = round(monthly_child_price, 2)
+                        mrow["Planned_Hours"] = 0  # Structural only - hours are on role rows
+                        mrow["FixedCost"] = round(monthly_child_price, 2)  # Per-month cost
                         mrow["Price_USD"] = round(monthly_child_price, 2)
                         mrow["Rate_USD"] = 0  # Cost comes from FixedCost only
                     rows.extend(monthly_rows)
                     
                     # DEBUG: Log retainer export structure for verification
-                    sum_child_hours = sum(int(mrow.get("Planned_Hours", 0)) for mrow in monthly_rows)
                     print(f"[RET_EXPORT] {dcode}: months={months} target_hours={target_hours} "
-                          f"child_hours_sum={sum_child_hours} monthly_child_hours={monthly_child_hours} "
+                          f"monthly_children=structural_only (0 hours) "
                           f"total_price={target_price} cadence={billing_cadence}")
 
             comps = DB.components_for_deliverable(dcode, tg_order)
@@ -4060,21 +4061,26 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 })
 
                 # --- Tasks under the component ---
-                # Per-month target hours for each task group, then repeat Month 01..N
-                # FIX: Use per-month hours (total / months), not total hours
-                tg_hours_month = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
-                tg_target_month = _largest_remainder(int(round(comp_hours_per_month)), tg_hours_month)
+                # RETAINER FIX: For monthly retainers (billing_cadence == "monthly"), 
+                # we run the task loop ONCE with FULL hours (not per-month hours).
+                # For other cadences, we repeat tasks per month with per-month hours.
+                is_monthly_retainer = (billing_cadence == "monthly") and months > 0
+                month_loop_count = 1 if is_monthly_retainer else (months if months else 1)
+                
+                # Hours target for task groups:
+                # - Monthly retainers: use FULL hours (single iteration carries all hours)
+                # - Other cadences: use per-month hours (multiple iterations add up)
+                tg_hours_base = {tg: float(tg_hours_in_comp.get(tg, 0.0)) for tg in tg_in_comp}
+                if is_monthly_retainer:
+                    # Use full component hours since we only iterate once
+                    tg_target = _largest_remainder(comp_hours_total_display, tg_hours_base)
+                else:
+                    # Use per-month hours since we iterate month_loop_count times
+                    tg_target = _largest_remainder(int(round(comp_hours_per_month)), tg_hours_base)
 
                 # Build month-by-month repetition
                 total_tasks_per_month = len(tg_in_comp)
                 prev_month_last_wbs = ""  # chain months sequentially per component
-
-                # RETAINER FIX: For monthly retainers (billing_cadence == "monthly"), 
-                # monthly child rows are created by expand_retainer_into_months above.
-                # Here we only build component/task rows ONCE as a "template cycle" without month prefixes.
-                # This prevents the 12× task cloning issue.
-                is_monthly_retainer = (billing_cadence == "monthly") and months > 0
-                month_loop_count = 1 if is_monthly_retainer else (months if months else 1)
                 
                 for month_idx in range(1, month_loop_count + 1):
                     # enumerates tasks within this month
@@ -4112,7 +4118,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         # Role rows for this task in this month
                         hrs_role_df = DB.hours_by_role_for_component_task(dcode, comp, tg, scen_col)
                         role_rows = hrs_role_df.to_dict(orient="records")
-                        target_task_hours = int(tg_target_month.get(tg, 0)) if months else int(tg_target_month.get(tg, 0))
+                        target_task_hours = int(tg_target.get(tg, 0))
 
                         raw_map = {(r["Resource_Title"], r["Seniority"]): float(r["Hours"]) for r in role_rows}
                         if not raw_map:
