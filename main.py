@@ -3995,6 +3995,12 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         mrow["Price_USD"] = round(monthly_child_price, 2)
                         mrow["Rate_USD"] = 0  # Cost comes from FixedCost only
                     rows.extend(monthly_rows)
+                    
+                    # DEBUG: Log retainer export structure for verification
+                    sum_child_hours = sum(int(mrow.get("Planned_Hours", 0)) for mrow in monthly_rows)
+                    print(f"[RET_EXPORT] {dcode}: months={months} target_hours={target_hours} "
+                          f"child_hours_sum={sum_child_hours} monthly_child_hours={monthly_child_hours} "
+                          f"total_price={target_price} cadence={billing_cadence}")
 
             comps = DB.components_for_deliverable(dcode, tg_order)
             # Robust fallback if DB returns no components
@@ -4063,13 +4069,22 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 total_tasks_per_month = len(tg_in_comp)
                 prev_month_last_wbs = ""  # chain months sequentially per component
 
-                for month_idx in range(1, (months if months else 1) + 1):
+                # RETAINER FIX: For monthly retainers (billing_cadence == "monthly"), 
+                # monthly child rows are created by expand_retainer_into_months above.
+                # Here we only build component/task rows ONCE as a "template cycle" without month prefixes.
+                # This prevents the 12× task cloning issue.
+                is_monthly_retainer = (billing_cadence == "monthly") and months > 0
+                month_loop_count = 1 if is_monthly_retainer else (months if months else 1)
+                
+                for month_idx in range(1, month_loop_count + 1):
                     # enumerates tasks within this month
                     prev_task_last_wbs = ""
                     for k, tg in enumerate(tg_in_comp, start=1):
                         dur = int(duration_by_tg.get(tg, 1))
                         label_core = DB.task_label_for_component_tg(dcode, comp, tg) if hasattr(DB, "task_label_for_component_tg") else tg
-                        label = (f"Month {month_idx:02d} – {label_core}") if months else label_core
+                        # For monthly retainers: use plain label (no Month prefix) - template cycle only
+                        # For other cadences with months: keep Month XX prefix for task repetition
+                        label = label_core if is_monthly_retainer else ((f"Month {month_idx:02d} – {label_core}") if months else label_core)
 
                         # Unique task index within the component across months
                         task_ordinal = (month_idx-1)*total_tasks_per_month + k
