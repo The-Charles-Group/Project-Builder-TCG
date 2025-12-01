@@ -1,0 +1,163 @@
+1. Prompt for Replit Architect
+
+Context
+
+We’re working on main.py in a FastAPI app called “Agency Project Builder”. It builds a WBS and exports to MSPDI XML for Workfront/MS Project.
+
+Retainer logic and exports live in:
+
+apply_cadence_to_item (cadence + retainer_months, monthly_hours, monthly_price)
+
+The big WBS builder where each deliverable is turned into rows; it detects retainers, computes months, and loops for month_idx in range(1, (months if months else 1) + 1) to create “Month 01 – …” tasks for each component/tg.
+
+expand_retainer_into_months(deliv_row, months, project_start_date) which already knows how to create one row per calendar month with correct Start_Date/End_Date from the project start. 
+
+step 3 fixing cadence_12-01-25
+
+The MSPDI/XML exporter that preserves Start_Date/End_Date if they’re present on rows and converts Planned_Hours into Work.
+
+Current behaviour / bug
+
+In Step 3 I set a retainer deliverable (e.g. “Reporting”) to 12 months / 100 hours / Annual. Step 3 stores the right retainer_months and monthly_hours, and the total price is correct.
+
+In Step 4 I drag the Reporting bar so the Gantt shows Start ≈ 2026‑03‑23, End ≈ 2026‑04‑25, Hours = 100 (this is preserved on the deliverable row via Start_Date/End_Date).
+
+In the export, Workfront shows dozens of “Month 01 / Month 02 / …” tasks per component (e.g. “Month 01 – Data Deep Dive” through “Month 12 – Data Deep Dive”). These are created by the for month_idx loop in the WBS builder. All those months are squeezed into a small window instead of being spaced over the retainer period.
+
+The total hours for the deliverable are correct (100h) but the structure and dates of these retainer tasks do not match what we expect from Step 3/4.
+
+Goal
+
+Make the retainer export sane and predictable:
+
+Hours correctness
+
+For each retainer deliverable, the sum of Work on all leaf role rows in the XML should equal the Step‑3 retainer hours (e.g. Reporting = 100h), with no double counting between “Month” rows and task/role rows.
+
+Structure
+
+We want monthly child rows at the deliverable level, using the existing expand_retainer_into_months helper, not 12× cloned component tasks.
+
+For a monthly retainer:
+
+Parent deliverable = summary bar with preserved Gantt dates, 0h, FixedCost = total retainer price.
+
+Child rows: one row per calendar month, e.g. Reporting – January, Reporting – February, etc., with equal Planned_Hours and FixedCost slices (hours/price per month) as expand_retainer_into_months already does.
+
+No component‑level Month 01 – <Task> repetition. Component/task rows should exist only once per deliverable, representing a “typical” cycle.
+
+Dates
+
+Deliverable summary row keeps the Step‑4 Gantt dates (this is already working).
+
+Monthly child rows’ start/end dates should be real calendar months, using the project_start plus months (exactly what expand_retainer_into_months already does).
+
+Component/task rows under a retainer should:
+
+Either sit inside the first month’s window as a “template cycle”
+
+Or be left as schedule‑only rows with 0 hours so they don’t double count work (we’re fine with either; pick the simpler one as long as hours stay correct).
+
+Cadence support
+
+Retainers are defined via billing_cadence (monthly, quarterly, semi_annual, annual) + cadence_units and/or retainer_months.
+
+For now, implement the monthly expansion only when billing_cadence == "monthly" and months > 0. For other cadences we can keep current behaviour.
+
+What I want from you (Architect)
+
+Read the existing cadence + WBS + XML export code in main.py (and any helpers it imports) and design a small, safe refactor that:
+
+Removes or gates the for month_idx in range(...) cloning of component tasks for retainers, so we don’t get 12× copies of “Month NN – …” tasks.
+
+Uses expand_retainer_into_months to generate monthly deliverable children and ensures they carry per‑month hours and fixed cost, without double counting with existing role rows.
+
+Keeps the current Gantt → WBS date preservation behaviour for the parent deliverable, and ensures monthly children’s dates are based on project_start using month_bounds.
+
+Verifies that the sum of Work hours for the “Reporting” example still equals 100h in the resulting XML.
+
+Output:
+
+A step‑by‑step plan
+
+A list of functions/sections to edit
+
+Any caveats about backwards compatibility with non‑retainer deliverables.
+
+2. Prompt for Replit Agent (after Architect gives you a plan)
+
+Please implement the retainer export changes that Architect just described. Concretely, do the following edits in main.py:
+
+Guard the component “Month XX” task loop
+
+In the WBS builder section marked # --- Tasks under the component --- there is a for month_idx in range(1, (months if months else 1) + 1): loop that creates “Month 01 – …” tasks and role rows.
+
+Change this so that:
+
+If is_retainer is true and billing_cadence == "monthly" and months > 0, do not repeat tasks per month.
+
+Instead, only build one set of tasks (no Month prefix in Task_Name; just use label_core) representing a typical cycle, or make these schedule‑only rows with 0 hours (whichever is simpler while keeping total Work correct).
+
+For non‑retainer deliverables, keep the current behaviour (no regression).
+
+Use expand_retainer_into_months for monthly child rows
+
+In the deliverable‑level part of the WBS builder we already have a block:
+
+if is_retainer and months > 0 and billing_cadence == "monthly":
+    project_start = scenario.get("project_start")
+    ...
+    monthly_rows = expand_retainer_into_months(deliv_row, months, project_start)
+    ...
+    rows.extend(monthly_rows)
+
+
+Make sure this is the only place where calendar‑month expansion happens for retainers.
+
+Ensure each mrow:
+
+Gets Planned_Hours set to the per‑month share (total_hours / months).
+
+Gets FixedCost and Price_USD set to the per‑month price share (total_price / months).
+
+Has Rate_USD = 0 so cost comes only from FixedCost.
+
+Keeps the Start_Date/End_Date/Start_Offset_Days computed by expand_retainer_into_months.
+
+Prevent double counting of hours
+
+After your changes, check that:
+
+The parent deliverable row for a monthly retainer has Planned_Hours = 0 and FixedCost = total retainer price.
+
+The monthly child rows carry all of the retainer’s hours (sum of their Planned_Hours = target_hours from Step 3).
+
+Role rows under the component/tasks do not add extra hours beyond the retainer total (either they are removed for monthly retainers, or their hours are adjusted so the grand total stays equal to the Step‑3 hours).
+
+Add a small debug print in the WBS builder for retainers like:
+
+print(f"[RET_EXPORT] {dcode} months={months} total_hours={target_hours} "
+      f"child_hours={sum_child_hours}")
+
+
+so we can see in the logs that totals line up.
+
+Keep Gantt overrides intact
+
+Do not change the logic that derives dstart from Start_Offset_Days or Start_Date + project_start. That’s already correct and ensures the parent deliverable matches the Step‑4 Gantt.
+
+Make sure your changes don’t overwrite Start_Date/End_Date on deliverable rows; the XML builder relies on those to preserve dates.
+
+Quick smoke test
+
+Run the app, build a scenario where “Reporting” is a 12‑month retainer with 100 hours.
+
+Export to XML and check:
+
+Reporting summary task: Start and Finish match the Gantt bar; Work = 0h; FixedCost = total price.
+
+There are 12 monthly child tasks under Reporting with calendar‑month dates and their Work hours sum to 100h.
+
+There is no swarm of “Month 01 – …, Month 02 – …, …” component tasks duplicated 12 times.
+
+Please make minimal, well‑commented changes and keep behaviour for non‑retainer deliverables identical.
