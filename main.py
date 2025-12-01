@@ -4074,6 +4074,7 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 if is_monthly_retainer:
                     # Use full component hours since we only iterate once
                     tg_target = _largest_remainder(comp_hours_total_display, tg_hours_base)
+                    print(f"[RETAINER DEBUG] {dcode}/{comp}: is_monthly_retainer=True, comp_hours_total={comp_hours_total_display}, tg_target={tg_target}")
                 else:
                     # Use per-month hours since we iterate month_loop_count times
                     tg_target = _largest_remainder(int(round(comp_hours_per_month)), tg_hours_base)
@@ -4130,6 +4131,11 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                         order = sorted(raw_map.keys(), key=lambda kk: (raw_scaled[kk]-flo[kk]), reverse=True)
                         for kk in order[:max(0, rem)]:
                             flo[kk] += 1
+                        
+                        # Debug logging for retainer role allocation
+                        if is_monthly_retainer:
+                            role_sum = sum(flo.values())
+                            print(f"[RETAINER DEBUG] {dcode}/{comp}/{tg}: target_task_hours={target_task_hours}, role_sum={role_sum}, raw_map={raw_map}")
 
                         prev_role_wbs = ""
                         r_index = 0
