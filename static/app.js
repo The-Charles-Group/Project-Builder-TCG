@@ -5971,10 +5971,6 @@ async function onRunReconcile() {
     // Get selected mode (Fast or Deep) - use analysisMode variable
     const selectedMode = analysisMode || 'deep';
     
-    // Get TF-IDF selection mode from UI
-    const selectionModeEl = document.querySelector('input[name="selection_mode"]:checked');
-    const selectionMode = selectionModeEl ? selectionModeEl.value : 'confidence_only';
-    
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -5982,9 +5978,8 @@ async function onRunReconcile() {
         request_text: rfpText,
         strictness: 'balanced',
         tier: tier,
-        mode: selectedMode,  // Add mode parameter
-        session_id: sessionId,  // Add session_id for cache isolation
-        selection_mode: selectionMode  // TF-IDF selection mode
+        mode: selectedMode,
+        session_id: sessionId
       })
     }, 3, 2000);
     
@@ -6498,30 +6493,62 @@ function renderAIPlan(aiPlan) {
         </div>
       </div>
       
-      <!-- Smart Select by Relevancy -->
-      <div id="smart-select-container" style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; gap: 16px;">
-          <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
-            <label style="margin: 0; font-weight: 600; color: var(--accent);">🎯 Smart Select by Relevancy:</label>
+      <!-- Smart Select Cards (AI + TF-IDF) -->
+      <div id="smart-select-container" style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+        
+        <!-- Row 1: AI Smart Select -->
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px;">
+          <div>
+            <h4 style="margin: 0 0 4px 0; font-size: 0.95em; font-weight: 600; color: var(--text);">🎯 AI Smart Select by Relevancy</h4>
+            <p style="margin: 0; font-size: 0.8em; color: var(--muted);">
+              Automatically select deliverables, components, and tasks with <span style="font-weight: 500;">AI confidence ≥ threshold.</span>
+            </p>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
             <input type="number" 
-                   id="smart-select-threshold" 
+                   id="ai-smart-threshold" 
                    min="0" 
                    max="100" 
-                   value="60"
-                   placeholder="Min relevancy %" 
-                   style="width: 100px; padding: 6px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; color: var(--text);">
+                   value="70"
+                   style="width: 60px; padding: 6px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; color: var(--text); text-align: right;">
             <span style="color: var(--muted); font-size: 0.9em;">%</span>
+            <button onclick="applySmartSelection('ai')" 
+                    id="btn-ai-smart-select"
+                    style="padding: 8px 16px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9em; transition: all 0.2s;"
+                    onmouseover="this.style.opacity='0.9'" 
+                    onmouseout="this.style.opacity='1'">
+              Apply AI Smart Selection
+            </button>
           </div>
-          <button onclick="applySmartSelection()" 
-                  id="btn-smart-select"
-                  style="padding: 8px 20px; background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;"
-                  onmouseover="this.style.opacity='0.9'" 
-                  onmouseout="this.style.opacity='1'">
-            🎯 Apply Smart Selection
-          </button>
         </div>
-        <div style="margin-top: 8px; font-size: 0.85em; color: var(--muted);">
-          Automatically select deliverables, components, and tasks with confidence ≥ threshold
+
+        <!-- Divider -->
+        <div style="margin: 16px 0; border-top: 1px solid rgba(139, 92, 246, 0.2);"></div>
+
+        <!-- Row 2: TF-IDF Smart Select -->
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px;">
+          <div>
+            <h4 style="margin: 0 0 4px 0; font-size: 0.95em; font-weight: 600; color: var(--text);">📊 TF-IDF Smart Select by Relevancy</h4>
+            <p style="margin: 0; font-size: 0.8em; color: var(--muted);">
+              Automatically select deliverables, components, and tasks with <span style="font-weight: 500;">TF-IDF similarity ≥ threshold.</span>
+            </p>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <input type="number" 
+                   id="tfidf-smart-threshold" 
+                   min="0" 
+                   max="100" 
+                   value="70"
+                   style="width: 60px; padding: 6px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; color: var(--text); text-align: right;">
+            <span style="color: var(--muted); font-size: 0.9em;">%</span>
+            <button onclick="applySmartSelection('tfidf')" 
+                    id="btn-tfidf-smart-select"
+                    style="padding: 8px 16px; background: #4b5563; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9em; transition: all 0.2s;"
+                    onmouseover="this.style.background='#6b7280'" 
+                    onmouseout="this.style.background='#4b5563'">
+              Apply TF-IDF Smart Selection
+            </button>
+          </div>
         </div>
       </div>
       
@@ -6712,114 +6739,34 @@ function renderAIPlan(aiPlan) {
   }
 }
 
-// Initialize Step 2 Selection Mode Controls
+// Initialize Step 2 Selection Mode Controls (no-op - radio buttons removed)
 function initializeStep2SelectionMode() {
-  // Add event listeners to radio buttons if they exist
-  const radioButtons = document.querySelectorAll('input[name="step2_selection_mode"]');
-  if (radioButtons.length === 0) return;
-  
-  radioButtons.forEach(radio => {
-    radio.addEventListener('change', function() {
-      applyStep2SelectionMode(this.value);
-    });
-  });
-  
-  // Apply initial selection mode (default is confidence_only)
-  const checkedRadio = document.querySelector('input[name="step2_selection_mode"]:checked');
-  if (checkedRadio) {
-    applyStep2SelectionMode(checkedRadio.value);
-  }
+  // Radio buttons removed from UI - now using Smart Select cards with AI/TF-IDF thresholds
+  console.log('[Step2 SelectionMode] Initialization skipped - using Smart Select cards');
 }
 
-// Apply Step 2 Selection Mode - Recalculate checkboxes based on mode
+// Apply Step 2 Selection Mode (deprecated - kept for backward compatibility)
 function applyStep2SelectionMode(selectionMode) {
-  console.log(`[Step2 SelectionMode] Applying mode: ${selectionMode}`);
-  
-  if (!window.lastAIPlan || !window.lastAIPlan.suggestions_by_department) {
-    console.warn('[Step2 SelectionMode] No AI suggestions available');
-    return;
-  }
-  
-  const CONF_THRESHOLD = 70.0;  // AI confidence threshold (0-100)
-  const TFIDF_THRESHOLD = 0.70;  // TF-IDF similarity threshold (0-1)
-  
-  let totalDelivs = 0;
-  let selectedByConf = 0;
-  let selectedByTfidf = 0;
-  let selectedByBoth = 0;
-  
-  const suggestionsByDept = window.lastAIPlan.suggestions_by_department || {};
-  
-  for (const dept in suggestionsByDept) {
-    const deliverables = suggestionsByDept[dept] || [];
-    
-    for (const deliv of deliverables) {
-      totalDelivs++;
-      
-      // Get scores
-      const confidence = (deliv.calibrated_confidence || deliv.confidence || 0) * 100;  // Convert to 0-100
-      const tfidfSimilarity = deliv.tfidf_similarity || 0;  // Already 0-1 scale
-      const delivCode = deliv.deliverable_code || deliv.code;
-      
-      // Check thresholds
-      const confOk = confidence >= CONF_THRESHOLD;
-      const tfidfOk = tfidfSimilarity >= TFIDF_THRESHOLD;
-      
-      // Apply selection logic based on mode
-      let shouldSelect = false;
-      if (selectionMode === 'confidence_only') {
-        shouldSelect = confOk;
-      } else if (selectionMode === 'tfidf_only') {
-        shouldSelect = tfidfOk;
-      } else if (selectionMode === 'both') {
-        shouldSelect = confOk || tfidfOk;  // Union
-      }
-      
-      // Count selections
-      if (confOk) selectedByConf++;
-      if (tfidfOk) selectedByTfidf++;
-      if (confOk && tfidfOk) selectedByBoth++;
-      
-      // Update checkbox
-      const delivCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
-      if (delivCheckbox) {
-        delivCheckbox.checked = shouldSelect;
-      }
-      
-      console.log(`[Step2 SelectionMode] ${delivCode}: conf=${confidence.toFixed(1)}% (${confOk?'✓':'✗'}), tfidf=${(tfidfSimilarity*100).toFixed(1)}% (${tfidfOk?'✓':'✗'}), selected=${shouldSelect}`);
-    }
-  }
-  
-  // Update stats display
-  const statsEl = document.getElementById('selection-mode-stats');
-  const countsEl = document.getElementById('selection-mode-counts');
-  if (statsEl && countsEl) {
-    statsEl.style.display = 'block';
-    countsEl.innerHTML = `
-      ${totalDelivs} total deliverables • 
-      ${selectedByConf} by confidence (≥70%) • 
-      ${selectedByTfidf} by TF-IDF (≥70%) • 
-      ${selectedByBoth} by both methods
-    `;
-  }
-  
-  console.log(`[Step2 SelectionMode] Applied ${selectionMode} mode: ${totalDelivs} total, ${selectedByConf} by conf, ${selectedByTfidf} by TFIDF, ${selectedByBoth} by both`);
+  console.log(`[Step2 SelectionMode] Deprecated - use applySmartSelection('ai') or applySmartSelection('tfidf') instead`);
 }
 
-// Expose functions globally
+// Expose functions globally (for backward compatibility)
 window.initializeStep2SelectionMode = initializeStep2SelectionMode;
 window.applyStep2SelectionMode = applyStep2SelectionMode;
 
-// Smart Selection Function - Select based on confidence threshold
-function applySmartSelection() {
-  const thresholdInput = document.getElementById('smart-select-threshold');
+// Smart Selection Function - Select based on AI confidence or TF-IDF similarity threshold
+function applySmartSelection(mode = 'ai') {
+  // Get the appropriate threshold based on mode
+  const thresholdInputId = mode === 'ai' ? 'ai-smart-threshold' : 'tfidf-smart-threshold';
+  const thresholdInput = document.getElementById(thresholdInputId);
   if (!thresholdInput) {
-    console.warn('Smart select threshold input not found');
+    console.warn(`Smart select threshold input not found: ${thresholdInputId}`);
     return;
   }
   
-  const threshold = parseFloat(thresholdInput.value) || 60;
-  console.log(`Applying smart selection with threshold: ${threshold}%`);
+  const threshold = Math.max(0, Math.min(100, parseFloat(thresholdInput.value) || 70));
+  const modeLabel = mode === 'ai' ? 'AI Confidence' : 'TF-IDF Similarity';
+  console.log(`Applying ${modeLabel} smart selection with threshold: ${threshold}%`);
   
   // Check if AI data is available
   if (!window.lastAIPlan || !window.lastAIPlan.suggestions_by_department) {
@@ -6842,11 +6789,18 @@ function applySmartSelection() {
     const deliverables = suggestionsByDept[dept] || [];
     
     for (const deliv of deliverables) {
-      // Get confidence score from the AI data (0-1 scale, convert to percentage)
-      const confidence = Math.round((deliv.calibrated_confidence || deliv.confidence || 0) * 100);
+      // Get the metric based on mode
+      let metricValue;
+      if (mode === 'ai') {
+        // AI confidence: 0-1 scale, convert to percentage
+        metricValue = Math.round((deliv.calibrated_confidence || deliv.confidence || 0) * 100);
+      } else {
+        // TF-IDF similarity: 0-1 scale, convert to percentage
+        metricValue = Math.round((deliv.tfidf_similarity || 0) * 100);
+      }
       const delivCode = deliv.deliverable_code || deliv.code;
       
-      console.log(`Deliverable ${delivCode}: ${confidence}% confidence vs threshold ${threshold}%`);
+      console.log(`Deliverable ${delivCode}: ${modeLabel}=${metricValue}% vs threshold ${threshold}%`);
       
       // Get the checkbox for this deliverable
       const delivCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
@@ -6856,14 +6810,14 @@ function applySmartSelection() {
       }
       
       // Check if deliverable meets threshold
-      if (confidence >= threshold) {
+      if (metricValue >= threshold) {
         delivCheckbox.checked = true;
         selectedDelivCount++;
         
         // For components within this deliverable
         const components = deliv.components || [];
         for (const comp of components) {
-          // Components inherit deliverable confidence (since they don't have their own)
+          // Components inherit deliverable metric (since they don't have their own)
           const compCheckbox = document.querySelector(`.ai-comp-checkbox[data-deliv="${delivCode}"][data-comp="${comp.title}"]`);
           if (compCheckbox) {
             compCheckbox.checked = true;
@@ -6906,7 +6860,7 @@ function applySmartSelection() {
   }
   
   // Show feedback
-  const feedbackMessage = `Smart Selection Applied: ${selectedDelivCount} deliverables, ${selectedCompCount} components, ${selectedTaskCount} tasks selected (threshold: ${threshold}%)`;
+  const feedbackMessage = `${modeLabel} Selection Applied: ${selectedDelivCount} deliverables, ${selectedCompCount} components, ${selectedTaskCount} tasks selected (threshold: ${threshold}%)`;
   console.log(feedbackMessage);
   
   // Show visual feedback (optional - add a temporary notification)
@@ -6919,7 +6873,7 @@ function applySmartSelection() {
     
     const feedbackDiv = document.createElement('div');
     feedbackDiv.className = 'smart-select-feedback';
-    feedbackDiv.style = 'margin-top: 8px; padding: 8px; background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; border-radius: 4px; color: #10b981; font-size: 0.9em;';
+    feedbackDiv.style = 'margin-top: 12px; padding: 10px; background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; border-radius: 4px; color: #10b981; font-size: 0.9em;';
     feedbackDiv.textContent = feedbackMessage;
     smartSelectContainer.appendChild(feedbackDiv);
     
