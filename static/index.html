@@ -2267,17 +2267,17 @@
           <td>${deliverableName}</td>
           <td class="editable-hours" data-field="hours" data-original="${it.total_hours}">
             <span class="display-value">${window.fmtInt(it.total_hours)}</span>
-            <input type="number" class="edit-input" style="display:none;width:80px;padding:4px;" min="0" max="9999" value="${it.total_hours}">
+            <input type="number" class="edit-input" style="display:none;width:80px;padding:4px;background:var(--card);color:var(--text);border:1px solid var(--accent);border-radius:4px;" min="0" max="9999" value="${it.total_hours}">
           </td>
           <td class="editable-rate" data-field="rate" data-original="${rate}">
             <span class="display-value">${window.fmtUSD2(rate)}</span>
-            <input type="number" class="edit-input" style="display:none;width:100px;padding:4px;" min="0" max="999999" step="0.01" value="${rate}">
+            <input type="number" class="edit-input" style="display:none;width:100px;padding:4px;background:var(--card);color:var(--text);border:1px solid var(--accent);border-radius:4px;" min="0" max="999999" step="0.01" value="${rate}">
           </td>
-          <td class="editable-cadence">
-            <select class="cadence-select" data-deliverable="${it.deliverable_code || it.deliverable}" 
-                    style="background: var(--card); color: var(--text); border: 1px solid var(--border); 
-                           border-radius: 4px; padding: 4px 8px; font-size: 0.9em; cursor: pointer;"
-                    onchange="updateCadence('${targetId}', ${idx}, this.value)">
+          <td class="editable-cadence" data-field="cadence" data-original="${cadenceValue}">
+            <span class="display-value">${cadenceValue}</span>
+            <select class="edit-input cadence-select" data-deliverable="${it.deliverable_code || it.deliverable}" 
+                    style="display:none;background: var(--card); color: var(--text); border: 1px solid var(--accent); 
+                           border-radius: 4px; padding: 4px 8px; font-size: 0.9em; cursor: pointer; width: 100%;">
               <option value="One-Time" ${cadenceValue === 'One-Time' ? 'selected' : ''}>One-Time</option>
               <option value="Monthly" ${cadenceValue === 'Monthly' ? 'selected' : ''}>Monthly</option>
               <option value="Quarterly" ${cadenceValue === 'Quarterly' ? 'selected' : ''}>Quarterly</option>
@@ -2285,14 +2285,12 @@
               <option value="Annual" ${cadenceValue === 'Annual' ? 'selected' : ''}>Annual</option>
             </select>
           </td>
-          <td class="editable-periods" data-field="periods" style="text-align: center;">
-            ${isRetainer ? 
-              `<input type="number" class="periods-input" data-deliverable="${it.deliverable_code || it.deliverable}"
-                      style="width: 60px; padding: 4px; background: var(--card); color: var(--text); 
-                             border: 1px solid var(--border); border-radius: 4px; text-align: center;"
-                      min="1" max="36" value="${periods}"
-                      onchange="updatePeriods_renderScenario('${targetId}', ${idx}, this.value)">` :
-              '<span style="color: var(--muted);">—</span>'}
+          <td class="editable-periods" data-field="periods" data-original="${periods}" style="text-align: center;">
+            <span class="display-value">${isRetainer ? periods : '—'}</span>
+            <input type="number" class="edit-input periods-input" data-deliverable="${it.deliverable_code || it.deliverable}"
+                   style="display:none;width: 60px; padding: 4px; background: var(--card); color: var(--text); 
+                          border: 1px solid var(--accent); border-radius: 4px; text-align: center;"
+                   min="1" max="36" value="${periods}">
           </td>
           <td class="price-per-period" style="text-align: right; ${isRetainer ? 'color: var(--accent2);' : ''}">
             ${isRetainer ? window.fmtUSD0(pricePerPeriod) + '/period' : '—'}
@@ -2537,10 +2535,13 @@
       const row = table.querySelector(`tr[data-row="${rowIndex}"]`);
       const scenario = window[`currentScenario_${targetId}`];
       const item = scenario.items[rowIndex];
+      const deliverableCode = item.deliverable_code || item.deliverable;
       
       // Get new values
       const newHours = parseFloat(row.querySelector('.editable-hours .edit-input').value) || 0;
       const newRate = parseFloat(row.querySelector('.editable-rate .edit-input').value) || 0;
+      const newCadence = row.querySelector('.editable-cadence .edit-input').value;
+      const newPeriods = parseInt(row.querySelector('.editable-periods .edit-input').value) || 1;
       
       // Validate
       if (newHours < 0 || newHours > 9999) {
@@ -2557,13 +2558,25 @@
       row.querySelector('.save-btn').disabled = true;
       
       try {
-        // Calculate new price
-        const newPrice = Math.round(newHours * newRate);
+        // Calculate months based on cadence and periods
+        let months = 0;
+        const isRetainer = newCadence !== 'One-Time';
+        if (isRetainer) {
+          if (newCadence === 'Monthly') months = newPeriods;
+          else if (newCadence === 'Quarterly') months = newPeriods * 3;
+          else if (newCadence === 'Semi-Annual') months = newPeriods * 6;
+          else if (newCadence === 'Annual') months = newPeriods * 12;
+        }
+        
+        // Calculate new price (price per period * periods for retainers)
+        const pricePerPeriod = Math.round(newHours * newRate);
+        const newPrice = isRetainer ? pricePerPeriod * newPeriods : pricePerPeriod;
         
         // Update the scenario item
         item.total_hours = newHours;
         item.effective_rate = newRate;
         item.price = newPrice;
+        item.retainer_months = months;
         
         // For complex deliverables with components, redistribute hours
         if (item.components && item.components.length > 0) {
@@ -2596,92 +2609,54 @@
           }
         }
         
-        // Update display values
-        row.querySelector('.editable-hours .display-value').textContent = window.fmtInt(newHours);
-        row.querySelector('.editable-rate .display-value').textContent = window.fmtUSD2(newRate);
-        row.querySelector('.calculated-price').textContent = window.fmtUSD0(newPrice);
-        
-        // Update data attributes
-        row.querySelector('.editable-hours').dataset.original = newHours;
-        row.querySelector('.editable-rate').dataset.original = newRate;
-        
-        // Recalculate scenario totals
-        scenario.totals.hours = scenario.items.reduce((sum, it) => sum + it.total_hours, 0);
-        scenario.totals.price = scenario.items.reduce((sum, it) => sum + it.price, 0);
-        
-        // Update totals display
-        const totalsDiv = document.getElementById(`${targetId}-totals`);
-        if (totalsDiv) {
-          const retainerItems = scenario.items.filter(item => item.retainer_months && item.retainer_months > 1);
-          const hasRetainers = retainerItems.length > 0;
-          
-          let totalsHtml = `Totals — Hours: ${window.fmtInt(scenario.totals.hours)}, Price: ${window.fmtUSD0(scenario.totals.price)}`;
-          
-          if (hasRetainers) {
-            const retainerTotal = retainerItems.reduce((sum, item) => sum + item.price, 0);
-            const oneTimeTotal = scenario.totals.price - retainerTotal;
-            totalsHtml += `
-              <div style="margin-top: 8px; padding: 8px; background: var(--card); border-radius: 4px; border-left: 3px solid var(--accent2); font-size: 12px;">
-                <strong style="color: var(--accent2);">💼 Breakdown:</strong>
-                ${oneTimeTotal > 0 ? ` One-time: ${window.fmtUSD0(oneTimeTotal)} •` : ''}
-                Retainers: ${window.fmtUSD0(retainerTotal)} (${retainerItems.length} deliverable${retainerItems.length > 1 ? 's' : ''})
-              </div>
-            `;
+        // Update pricingData if available
+        if (window.pricingData) {
+          if (isRetainer) {
+            window.pricingData.deliverableTypes.set(deliverableCode, 'RETAINER');
+            window.pricingData.retainers.set(deliverableCode, months);
+          } else {
+            window.pricingData.deliverableTypes.set(deliverableCode, 'PROJECT');
+            window.pricingData.retainers.delete(deliverableCode);
           }
-          
-          totalsDiv.innerHTML = totalsHtml;
         }
         
-        // Exit edit mode
-        row.querySelectorAll('.display-value').forEach(el => el.style.display = 'block');
-        row.querySelectorAll('.edit-input').forEach(el => el.style.display = 'none');
+        // Map cadence to billing_cadence for backend
+        const billingCadenceMap = {
+          'One-Time': 'one_time',
+          'Monthly': 'monthly',
+          'Quarterly': 'quarterly',
+          'Semi-Annual': 'semi_annual',
+          'Annual': 'annual'
+        };
+        const billingCadence = billingCadenceMap[newCadence] || 'one_time';
+        item.billing_cadence = newCadence;
         
-        // Toggle buttons
-        row.querySelector('.edit-btn').style.display = 'inline-block';
-        row.querySelector('.save-btn').style.display = 'none';
-        row.querySelector('.cancel-btn').style.display = 'none';
-        
-        // Update global state
-        if (window.APP_STATE?.scenarios?.A && targetId === 'scenarioA') {
-          window.APP_STATE.scenarios.A = scenario;
-        }
-        
-        // *** PERSIST TO SCENARIO_STORE via ScenarioStore.patchScenarioItem ***
-        // This is the critical step that saves Step 3 edits to the backend
-        const deliverableId = item.deliverable_code || item.deliverable;
-        
-        // Get current cadence from dropdown
-        const cadenceSelect = row.querySelector('.cadence-select');
-        const cadence = cadenceSelect ? cadenceSelect.value : (item.billing_cadence || 'One-Time');
-        
-        // Calculate months from cadence
-        let months = 0;
-        if (cadence === 'Monthly') months = 1;
-        else if (cadence === 'Quarterly') months = 3;
-        else if (cadence === 'Semi-Annual') months = 6;
-        else if (cadence === 'Annual') months = 12;
-        
-        // Also update item's retainer_months for consistency
-        item.retainer_months = months;
-        item.billing_cadence = cadence;
-        
-        console.log(`[savePricingRow] Persisting to SCENARIO_STORE: deliverable=${deliverableId} hours=${newHours} rate=${newRate} cadence=${cadence} months=${months}`);
+        console.log(`[savePricingRow] Persisting to SCENARIO_STORE: deliverable=${deliverableCode} hours=${newHours} rate=${newRate} cadence=${newCadence} billing_cadence=${billingCadence} periods=${newPeriods} months=${months} price=${newPrice}`);
         
         // Call ScenarioStore to persist to backend SCENARIO_STORE
         // Use immediate flush (not debounced) to ensure PATCH completes before user can click Build Scenario
         if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
-          ScenarioStore.patchScenarioItem(deliverableId, {
+          ScenarioStore.patchScenarioItem(deliverableCode, {
             hours: newHours,
-            rate: newRate,
-            cadence: cadence,
+            rate_usd: newRate,
+            cadence: newCadence,
+            billing_cadence: billingCadence,
+            cadence_units: newPeriods,
+            cadence_price: pricePerPeriod,
             months: months
           });
           // Force immediate flush to guarantee persistence before UI allows further actions
-          await ScenarioStore.flushPatchesNow();
+          if (ScenarioStore.flushPatchesNow) {
+            await ScenarioStore.flushPatchesNow();
+          }
           console.log(`[savePricingRow] ScenarioStore PATCH completed and flushed successfully`);
         } else {
           console.warn('[savePricingRow] ScenarioStore not available, edit not persisted to backend');
         }
+        
+        // Re-render to update all display values properly
+        renderScenario(targetId, scenario);
+        updateScenarioTotals(targetId);
         
       } catch (error) {
         console.error('Failed to save pricing changes:', error);
