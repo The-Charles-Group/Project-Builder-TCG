@@ -1921,28 +1921,31 @@ function updatePricingTable() {
             <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2);">
               Deliverable/Component
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 140px;">
-              Type/Cadence
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 130px;">
+              Billing Cadence
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
-              # Periods
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 70px;">
+              Units
+            </th>
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 80px;">
+              Total Mo.
             </th>
             <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 90px;">
               Hours
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 90px;">
               Rate (USD)
             </th>
-            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 120px;">
-              Price/Period
+            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
+              $/Month
             </th>
-            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 130px;">
+            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 110px;">
               Total Price
             </th>
-            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 150px;">
-              Resources/Roles
+            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 120px;">
+              Resources
             </th>
-            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 150px;">
+            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 120px;">
               Tasks
             </th>
           </tr>
@@ -1954,18 +1957,34 @@ function updatePricingTable() {
   let rowIndex = 0;
   
   scenario.items.forEach((item, itemIndex) => {
-    // Get cadence and periods
+    // GPT 5.1 Pro spec: Map backend billing_cadence to UI cadence format
+    const backendCadence = item.billing_cadence || 'one_time';
+    const cadenceMapping = {
+      'one_time': 'ONE_TIME', 'monthly': 'MONTHLY', 'quarterly': 'QUARTERLY',
+      'semi_annual': 'SEMI_ANNUAL', 'annual': 'ANNUAL'
+    };
     const cadenceType = pricingDataEnhanced.cadenceTypes.get(item.deliverable_code) || 
+                       cadenceMapping[backendCadence] ||
                        (pricingData.deliverableTypes.get(item.deliverable_code) === 'RETAINER' ? 'MONTHLY' : 'ONE_TIME');
-    const periods = pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
-                   (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
-    const isEditing = pricingDataEnhanced.editMode.get(item.deliverable_code) || false;
     
-    // Get custom values or defaults
-    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
-    const customRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 210;
-    const pricePerPeriod = customHours * customRate;
-    const totalPrice = pricePerPeriod * periods;
+    // GPT 5.1 Pro spec: cadence_units from backend, with fallback to periods calculation
+    const cadenceUnits = item.cadence_units || pricingDataEnhanced.periodsCount.get(item.deliverable_code) || 
+                   (cadenceType === 'MONTHLY' ? 12 : cadenceType === 'QUARTERLY' ? 4 : cadenceType === 'SEMI_ANNUAL' ? 2 : 1);
+    
+    // GPT 5.1 Pro spec: retainer_months from backend (read-only)
+    const monthsPerCadence = { 'ONE_TIME': 0, 'MONTHLY': 1, 'QUARTERLY': 3, 'SEMI_ANNUAL': 6, 'ANNUAL': 12 };
+    const totalMonths = item.retainer_months || (monthsPerCadence[cadenceType] || 0) * cadenceUnits;
+    const isRetainer = item.is_retainer || (cadenceType !== 'ONE_TIME' && totalMonths > 0);
+    
+    // Get custom values or defaults (prefer backend values)
+    const customHours = pricingData.customHours.get(item.deliverable_code) || item.hours || item.Planned_Hours || 0;
+    const customRate = pricingData.customRates.get(item.deliverable_code) || item.Rate_USD || item.blended_rate || 210;
+    
+    // GPT 5.1 Pro spec: Use backend-computed prices when available
+    const backendPrice = item.price_usd || item.Price_USD || item.total_price;
+    const backendMonthlyPrice = item.monthly_price || 0;
+    const monthlyPrice = backendMonthlyPrice || (totalMonths > 0 ? (backendPrice || customHours * customRate * cadenceUnits) / totalMonths : 0);
+    const totalPrice = backendPrice || customHours * customRate * cadenceUnits;
     
     // Get resource breakdown
     const resources = pricingData.resourceBreakdown.get(item.deliverable_code) || 
@@ -1978,10 +1997,16 @@ function updatePricingTable() {
     grandTotal += totalPrice;
     
     // Determine row background (alternating + highlight for recurring)
-    const isRecurring = cadenceType !== 'ONE_TIME';
-    const rowBg = isRecurring ? 
+    const rowBg = isRetainer ? 
       'background: linear-gradient(90deg, rgba(139,92,246,0.05), rgba(139,92,246,0.02));' : 
       (rowIndex % 2 === 0 ? 'background: rgba(255,255,255,0.01);' : 'background: transparent;');
+    
+    // GPT 5.1 Pro spec: Retainer badge for is_retainer items
+    const retainerBadge = isRetainer ? 
+      `<span style="display: inline-block; margin-left: 8px; padding: 2px 8px; background: rgba(139,92,246,0.2); 
+                    color: var(--accent2); border-radius: 10px; font-size: 0.7em; font-weight: 500;">
+        Retainer – ${totalMonths} mo
+      </span>` : '';
     
     // Main deliverable row - ALWAYS EDITABLE, no edit mode
     tableHTML += `
@@ -1993,62 +2018,79 @@ function updatePricingTable() {
                   title="Expand/collapse components">
             <span id="expand-${item.deliverable_code}" style="display: inline-block; transition: transform 0.2s;">▶</span>
           </button>
-          <span style="color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
+          <span style="color: ${isRetainer ? 'var(--accent2)' : 'var(--accent)'};">
             ${item.deliverable}
           </span>
+          ${retainerBadge}
         </td>
         <td style="padding: 8px; text-align: center;">
           <select id="cadence-${item.deliverable_code}" 
                   onchange="updateCadenceType('${item.deliverable_code}', this.value)"
-                  style="padding: 6px 10px; border: 1px solid rgba(139,92,246,0.5); border-radius: 6px; 
+                  style="padding: 6px 8px; border: 1px solid rgba(139,92,246,0.5); border-radius: 6px; 
                          background: rgba(139,92,246,0.1); color: var(--text); cursor: pointer; 
-                         font-size: 0.85em; width: 100%;">
+                         font-size: 0.8em; width: 100%;">
             <option value="ONE_TIME" ${cadenceType === 'ONE_TIME' ? 'selected' : ''}>One-Time</option>
             <option value="MONTHLY" ${cadenceType === 'MONTHLY' ? 'selected' : ''}>Monthly</option>
             <option value="QUARTERLY" ${cadenceType === 'QUARTERLY' ? 'selected' : ''}>Quarterly</option>
             <option value="SEMI_ANNUAL" ${cadenceType === 'SEMI_ANNUAL' ? 'selected' : ''}>Semi-Annual</option>
+            <option value="ANNUAL" ${cadenceType === 'ANNUAL' ? 'selected' : ''}>Annual</option>
           </select>
         </td>
         <td style="padding: 8px; text-align: center;">
           ${cadenceType !== 'ONE_TIME' ? 
-            `<input type="number" id="periods-${item.deliverable_code}" value="${periods}" 
+            `<input type="number" id="periods-${item.deliverable_code}" value="${cadenceUnits}" 
                     min="1" max="36" step="1"
                     onchange="updatePeriods('${item.deliverable_code}', this.value)"
-                    style="width: 70px; padding: 6px; border: 1px solid rgba(139,92,246,0.3); 
+                    style="width: 55px; padding: 5px; border: 1px solid rgba(139,92,246,0.3); 
                            border-radius: 4px; background: rgba(139,92,246,0.05); 
-                           color: var(--text); text-align: center; font-weight: 500;" />` :
+                           color: var(--text); text-align: center; font-weight: 500; font-size: 0.9em;" />` :
+            '<span style="color: var(--muted);">-</span>'}
+        </td>
+        <td style="padding: 8px; text-align: center;">
+          ${isRetainer ? 
+            `<span id="total-months-${item.deliverable_code}" style="font-weight: 600; color: var(--accent2);">${totalMonths}</span>` :
             '<span style="color: var(--muted);">-</span>'}
         </td>
         <td style="padding: 8px; text-align: center;">
           <input type="number" id="hours-${item.deliverable_code}" value="${customHours}" 
                   min="0" step="0.5"
                   onchange="updateCustomHours('${item.deliverable_code}', this.value)"
-                  style="width: 80px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
+                  style="width: 70px; padding: 5px; border: 1px solid rgba(106,163,255,0.3); 
                          border-radius: 4px; background: rgba(106,163,255,0.05); 
-                         color: var(--text); text-align: center; font-weight: 500;" />
+                         color: var(--text); text-align: center; font-weight: 500; font-size: 0.9em;" />
         </td>
         <td style="padding: 8px; text-align: center;">
           <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
-            <span style="color: var(--muted);">$</span>
+            <span style="color: var(--muted); font-size: 0.85em;">$</span>
             <input type="number" id="rate-${item.deliverable_code}" value="${customRate}" 
                    min="0" step="5"
                    onchange="updateCustomRate('${item.deliverable_code}', this.value)"
-                   style="width: 70px; padding: 6px; border: 1px solid rgba(106,163,255,0.3); 
+                   style="width: 60px; padding: 5px; border: 1px solid rgba(106,163,255,0.3); 
                           border-radius: 4px; background: rgba(106,163,255,0.05); 
-                          color: var(--text); text-align: center; font-weight: 500;" />
+                          color: var(--text); text-align: center; font-weight: 500; font-size: 0.9em;" />
           </div>
         </td>
-        <td id="price-period-${item.deliverable_code}" style="padding: 8px; text-align: right; font-weight: 600; color: var(--accent);">
-          $${pricePerPeriod.toLocaleString()}
+        <td style="padding: 8px; text-align: right;">
+          ${isRetainer ?
+            `<div style="display: flex; align-items: center; gap: 2px; justify-content: flex-end;">
+              <span style="color: var(--muted); font-size: 0.85em;">$</span>
+              <input type="number" id="monthly-price-${item.deliverable_code}" value="${Math.round(monthlyPrice)}" 
+                     min="0" step="100"
+                     onchange="updateMonthlyPrice('${item.deliverable_code}', this.value)"
+                     style="width: 70px; padding: 5px; border: 1px solid rgba(139,92,246,0.3); 
+                            border-radius: 4px; background: rgba(139,92,246,0.05); 
+                            color: var(--accent2); text-align: right; font-weight: 500; font-size: 0.9em;" />
+            </div>` :
+            `<span style="color: var(--muted);">-</span>`}
         </td>
-        <td id="total-price-${item.deliverable_code}" style="padding: 8px; text-align: right; font-weight: 700; font-size: 1.05em; 
-                   color: ${isRecurring ? 'var(--accent2)' : 'var(--accent)'};">
-          $${totalPrice.toLocaleString()}
+        <td id="total-price-${item.deliverable_code}" style="padding: 8px; text-align: right; font-weight: 700; font-size: 1em; 
+                   color: ${isRetainer ? 'var(--accent2)' : 'var(--accent)'};">
+          $${Math.round(totalPrice).toLocaleString()}
         </td>
-        <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
+        <td style="padding: 8px; font-size: 0.8em; color: var(--muted);">
           ${formatResourceDisplay(resources)}
         </td>
-        <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
+        <td style="padding: 8px; font-size: 0.8em; color: var(--muted);">
           ${formatTasksList(tasks)}
         </td>
       </tr>
@@ -2551,9 +2593,26 @@ function updateCustomHours(deliverableCode, hours) {
   const numHours = parseFloat(hours) || 0;
   pricingData.customHours.set(deliverableCode, numHours);
   
+  // GPT 5.1 Pro spec: Update SCENARIOS.A.items with hours
+  if (window.SCENARIOS && window.SCENARIOS.A && window.SCENARIOS.A.items) {
+    const item = window.SCENARIOS.A.items.find(i => i.deliverable_code === deliverableCode);
+    if (item) {
+      item.hours = numHours;
+      item.Planned_Hours = numHours;
+    }
+  }
+  
   // Immediate update without full re-render
   updateRowTotals(deliverableCode);
   updatePricingSummary();
+  
+  // GPT 5.1 Pro spec: Sync to backend via ScenarioStore
+  if (window.ScenarioStore) {
+    window.ScenarioStore.patchScenarioItem(deliverableCode, {
+      hours: numHours,
+      Planned_Hours: numHours
+    });
+  }
 }
 
 // Update custom rate - immediate recalculation
@@ -2561,9 +2620,56 @@ function updateCustomRate(deliverableCode, rate) {
   const numRate = parseFloat(rate) || 210;
   pricingData.customRates.set(deliverableCode, numRate);
   
+  // GPT 5.1 Pro spec: Update SCENARIOS.A.items with rate
+  if (window.SCENARIOS && window.SCENARIOS.A && window.SCENARIOS.A.items) {
+    const item = window.SCENARIOS.A.items.find(i => i.deliverable_code === deliverableCode);
+    if (item) {
+      item.Rate_USD = numRate;
+      item.blended_rate = numRate;
+    }
+  }
+  
   // Immediate update without full re-render
   updateRowTotals(deliverableCode);
   updatePricingSummary();
+  
+  // GPT 5.1 Pro spec: Sync to backend via ScenarioStore
+  if (window.ScenarioStore) {
+    window.ScenarioStore.patchScenarioItem(deliverableCode, {
+      Rate_USD: numRate,
+      rate: numRate
+    });
+  }
+}
+
+// GPT 5.1 Pro spec: Update monthly price - triggers backend priority rule #1
+function updateMonthlyPrice(deliverableCode, monthlyPrice) {
+  const numMonthlyPrice = parseFloat(monthlyPrice) || 0;
+  
+  // GPT 5.1 Pro spec: Update SCENARIOS.A.items with monthly_price
+  if (window.SCENARIOS && window.SCENARIOS.A && window.SCENARIOS.A.items) {
+    const item = window.SCENARIOS.A.items.find(i => i.deliverable_code === deliverableCode);
+    if (item) {
+      item.monthly_price = numMonthlyPrice;
+      // Compute total price from monthly_price × retainer_months
+      const retainerMonths = item.retainer_months || 12;
+      item.price_usd = numMonthlyPrice * retainerMonths;
+      item.Price_USD = item.price_usd;
+      console.log(`[Cadence] Updated ${deliverableCode}: monthly_price=${numMonthlyPrice}, total_price=${item.price_usd}`);
+    }
+  }
+  
+  // Update local display immediately
+  updateRowTotals(deliverableCode);
+  updatePricingSummary();
+  
+  // GPT 5.1 Pro spec: Sync to backend via ScenarioStore
+  // Backend apply_cadence_to_item will recalculate total from monthly_price × total_months
+  if (window.ScenarioStore) {
+    window.ScenarioStore.patchScenarioItem(deliverableCode, {
+      monthly_price: numMonthlyPrice
+    });
+  }
 }
 
 // Analyze PROJECT vs RETAINER with AI - ENHANCED VERSION
@@ -3211,37 +3317,121 @@ function toggleDeliverableExpand(deliverableCode) {
 }
 
 function updateCadenceType(code, cadence) {
+  // GPT 5.1 Pro spec: Map UI cadence to backend billing_cadence format
+  const cadenceMapping = {
+    'ONE_TIME': 'one_time',
+    'MONTHLY': 'monthly',
+    'QUARTERLY': 'quarterly',
+    'SEMI_ANNUAL': 'semi_annual',
+    'ANNUAL': 'annual'
+  };
+  const billingCadence = cadenceMapping[cadence] || 'one_time';
+  
   pricingDataEnhanced.cadenceTypes.set(code, cadence);
   
-  // Set default periods based on cadence
+  // Set default cadence_units based on cadence type
+  const monthsPerCadence = { 'ONE_TIME': 0, 'MONTHLY': 1, 'QUARTERLY': 3, 'SEMI_ANNUAL': 6, 'ANNUAL': 12 };
+  let defaultUnits = 1;
   if (cadence === 'MONTHLY') {
-    pricingDataEnhanced.periodsCount.set(code, 12);
+    defaultUnits = 12;  // 12 months default
   } else if (cadence === 'QUARTERLY') {
-    pricingDataEnhanced.periodsCount.set(code, 4);
+    defaultUnits = 4;   // 4 quarters = 12 months
   } else if (cadence === 'SEMI_ANNUAL') {
-    pricingDataEnhanced.periodsCount.set(code, 2);
-  } else {
-    pricingDataEnhanced.periodsCount.set(code, 1);
+    defaultUnits = 2;   // 2 half-years = 12 months
+  } else if (cadence === 'ANNUAL') {
+    defaultUnits = 1;   // 1 year = 12 months
   }
+  pricingDataEnhanced.periodsCount.set(code, defaultUnits);
+  
+  // GPT 5.1 Pro spec: Compute retainer_months = months_per_cadence × cadence_units
+  const retainerMonths = (monthsPerCadence[cadence] || 0) * defaultUnits;
+  const isRetainer = cadence !== 'ONE_TIME' && retainerMonths > 0;
   
   // Update periods input immediately
   const periodsInput = document.getElementById(`periods-${code}`);
   if (periodsInput) {
-    periodsInput.value = pricingDataEnhanced.periodsCount.get(code);
+    periodsInput.value = defaultUnits;
   }
   
-  // Recalculate totals immediately
+  // GPT 5.1 Pro spec: Update SCENARIOS.A.items with cadence fields
+  if (window.SCENARIOS && window.SCENARIOS.A && window.SCENARIOS.A.items) {
+    const item = window.SCENARIOS.A.items.find(i => i.deliverable_code === code);
+    if (item) {
+      item.billing_cadence = billingCadence;
+      item.cadence_units = defaultUnits;
+      item.retainer_months = retainerMonths;
+      item.is_retainer = isRetainer;
+      console.log(`[Cadence] Updated ${code}: billing_cadence=${billingCadence}, cadence_units=${defaultUnits}, retainer_months=${retainerMonths}`);
+    }
+  }
+  
+  // Update local display immediately
   updateRowTotals(code);
   updatePricingSummary();
+  
+  // GPT 5.1 Pro spec: Sync to backend via ScenarioStore
+  if (window.ScenarioStore) {
+    window.ScenarioStore.patchScenarioItem(code, {
+      billing_cadence: billingCadence,
+      cadence_units: defaultUnits,
+      retainer_months: retainerMonths,
+      is_retainer: isRetainer
+    });
+  }
 }
 
 function updatePeriods(code, periods) {
-  const periodsNum = parseInt(periods) || 1;
-  pricingDataEnhanced.periodsCount.set(code, Math.max(1, Math.min(36, periodsNum)));
+  // GPT 5.1 Pro spec: periods = cadence_units
+  const cadenceUnits = Math.max(1, Math.min(36, parseInt(periods) || 1));
+  pricingDataEnhanced.periodsCount.set(code, cadenceUnits);
   
-  // Recalculate totals immediately
+  // Get current cadence to compute retainer_months
+  const cadence = pricingDataEnhanced.cadenceTypes.get(code) || 'ONE_TIME';
+  const monthsPerCadence = { 'ONE_TIME': 0, 'MONTHLY': 1, 'QUARTERLY': 3, 'SEMI_ANNUAL': 6, 'ANNUAL': 12 };
+  const retainerMonths = (monthsPerCadence[cadence] || 0) * cadenceUnits;
+  
+  // GPT 5.1 Pro spec: Get existing monthly_price or compute cadence_price as fallback
+  let monthlyPrice = null;
+  let cadencePrice = null;
+  if (window.SCENARIOS && window.SCENARIOS.A && window.SCENARIOS.A.items) {
+    const item = window.SCENARIOS.A.items.find(i => i.deliverable_code === code);
+    if (item) {
+      // Preserve existing monthly_price if set
+      if (item.monthly_price && item.monthly_price > 0) {
+        monthlyPrice = item.monthly_price;
+      } else {
+        // Fallback: compute cadence_price from hours × rate
+        const hours = item.hours || item.Planned_Hours || pricingData.customHours.get(code) || 0;
+        const rate = item.blended_rate || item.Rate_USD || pricingData.customRates.get(code) || 210;
+        cadencePrice = hours * rate;
+      }
+      
+      // Update item fields
+      item.cadence_units = cadenceUnits;
+      item.retainer_months = retainerMonths;
+      console.log(`[Cadence] Updated ${code}: cadence_units=${cadenceUnits}, retainer_months=${retainerMonths}, monthly_price=${monthlyPrice}, cadence_price=${cadencePrice}`);
+    }
+  }
+  
+  // Update local display immediately
   updateRowTotals(code);
   updatePricingSummary();
+  
+  // GPT 5.1 Pro spec: Sync to backend via ScenarioStore
+  // Must include authoritative price field (monthly_price or cadence_price) for backend priority rules
+  if (window.ScenarioStore) {
+    const patchData = {
+      cadence_units: cadenceUnits,
+      retainer_months: retainerMonths
+    };
+    // Include authoritative price field so backend can recompute totals
+    if (monthlyPrice !== null) {
+      patchData.monthly_price = monthlyPrice;
+    } else if (cadencePrice !== null) {
+      patchData.cadence_price = cadencePrice;
+    }
+    window.ScenarioStore.patchScenarioItem(code, patchData);
+  }
 }
 
 // New helper: Update row totals without full table re-render
