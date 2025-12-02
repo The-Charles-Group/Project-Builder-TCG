@@ -2223,8 +2223,10 @@
             <th>Deliverable</th>
             <th>Hours</th>
             <th>Rate (USD)</th>
-            <th>Price (USD)</th>
             <th>Cadence</th>
+            <th style="width: 80px;"># Periods</th>
+            <th>Price/Period</th>
+            <th>Total Price</th>
             <th>Tasks</th>
             <th style="width: 80px;">Actions</th>
           </tr></thead>
@@ -2250,7 +2252,18 @@
           else cadenceValue = `Monthly (${it.retainer_months}mo)`;
         }
         
-        html += `<tr data-row="${idx}" data-deliverable="${it.deliverable_code || it.deliverable}">
+        // Calculate periods based on cadence
+        let periods = 1;
+        if (it.retainer_months) {
+          if (cadenceValue === 'Monthly') periods = it.retainer_months;
+          else if (cadenceValue === 'Quarterly') periods = Math.ceil(it.retainer_months / 3);
+          else if (cadenceValue === 'Semi-Annual') periods = Math.ceil(it.retainer_months / 6);
+          else if (cadenceValue === 'Annual') periods = Math.ceil(it.retainer_months / 12);
+        }
+        const pricePerPeriod = periods > 0 ? Math.round(it.price / periods) : it.price;
+        const isRetainer = cadenceValue !== 'One-Time';
+        
+        html += `<tr data-row="${idx}" data-deliverable="${it.deliverable_code || it.deliverable}" ${isRetainer ? 'style="background: linear-gradient(90deg, rgba(139,92,246,0.05), rgba(139,92,246,0.02));"' : ''}>
           <td>${deliverableName}</td>
           <td class="editable-hours" data-field="hours" data-original="${it.total_hours}">
             <span class="display-value">${window.fmtInt(it.total_hours)}</span>
@@ -2260,7 +2273,6 @@
             <span class="display-value">${window.fmtUSD2(rate)}</span>
             <input type="number" class="edit-input" style="display:none;width:100px;padding:4px;" min="0" max="999999" step="0.01" value="${rate}">
           </td>
-          <td class="calculated-price">${window.fmtUSD0(it.price)}</td>
           <td class="editable-cadence">
             <select class="cadence-select" data-deliverable="${it.deliverable_code || it.deliverable}" 
                     style="background: var(--card); color: var(--text); border: 1px solid var(--border); 
@@ -2273,6 +2285,19 @@
               <option value="Annual" ${cadenceValue === 'Annual' ? 'selected' : ''}>Annual</option>
             </select>
           </td>
+          <td class="editable-periods" data-field="periods" style="text-align: center;">
+            ${isRetainer ? 
+              `<input type="number" class="periods-input" data-deliverable="${it.deliverable_code || it.deliverable}"
+                      style="width: 60px; padding: 4px; background: var(--card); color: var(--text); 
+                             border: 1px solid var(--border); border-radius: 4px; text-align: center;"
+                      min="1" max="36" value="${periods}"
+                      onchange="updatePeriods_renderScenario('${targetId}', ${idx}, this.value)">` :
+              '<span style="color: var(--muted);">—</span>'}
+          </td>
+          <td class="price-per-period" style="text-align: right; ${isRetainer ? 'color: var(--accent2);' : ''}">
+            ${isRetainer ? window.fmtUSD0(pricePerPeriod) + '/period' : '—'}
+          </td>
+          <td class="calculated-price" style="text-align: right; font-weight: 600;">${window.fmtUSD0(it.price)}</td>
           <td style="font-size:0.85em;color:var(--muted);">${tasks}</td>
           <td class="actions">
             <button onclick="editPricingRow('${targetId}', ${idx})" class="edit-btn" style="background:#3b82f6;color:white;border:none;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:0.85em;">
@@ -2347,19 +2372,100 @@
       const hours = item.total_hours || item.hours || item.Planned_Hours || 0;
       const rate = item.effective_rate || item.rate_usd || item.Rate_USD || 210;
       
-      console.log(`[updateCadence] Persisting to SCENARIO_STORE: deliverable=${deliverableCode} hours=${hours} rate=${rate} cadence=${newCadence} months=${months}`);
+      // Calculate billing cadence for backend
+      const billingCadenceMap = {
+        'One-Time': 'one_time',
+        'Monthly': 'monthly',
+        'Quarterly': 'quarterly',
+        'Semi-Annual': 'semi_annual',
+        'Annual': 'annual'
+      };
+      const billingCadence = billingCadenceMap[newCadence] || 'one_time';
+      
+      console.log(`[updateCadence] Persisting to SCENARIO_STORE: deliverable=${deliverableCode} hours=${hours} rate=${rate} cadence=${newCadence} billing_cadence=${billingCadence} months=${months}`);
       
       if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
         ScenarioStore.patchScenarioItem(deliverableCode, {
           hours: hours,
-          rate: rate,
+          rate_usd: rate,
           cadence: newCadence,
+          billing_cadence: billingCadence,
+          cadence_units: months > 0 ? (newCadence === 'Monthly' ? months : Math.ceil(months / (newCadence === 'Quarterly' ? 3 : newCadence === 'Semi-Annual' ? 6 : 12))) : 1,
           months: months
         });
         console.log(`[updateCadence] ScenarioStore.patchScenarioItem called`);
       } else {
         console.warn('[updateCadence] ScenarioStore not available, cadence change not persisted to backend');
       }
+      
+      // Re-render to update # Periods column
+      renderScenario(targetId, scenario);
+    }
+    
+    // Function to handle periods changes from the Project Scenario table
+    function updatePeriods_renderScenario(targetId, rowIndex, newPeriods) {
+      const scenario = window[`currentScenario_${targetId}`];
+      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
+      
+      const item = scenario.items[rowIndex];
+      const deliverableCode = item.deliverable_code || item.deliverable;
+      const periods = parseInt(newPeriods) || 1;
+      
+      // Get current cadence
+      const cadenceSelect = document.querySelector(`#${targetId}-table tr[data-row="${rowIndex}"] .cadence-select`);
+      const currentCadence = cadenceSelect ? cadenceSelect.value : 'Monthly';
+      
+      // Calculate total months based on cadence and periods
+      let months = periods;
+      if (currentCadence === 'Quarterly') months = periods * 3;
+      else if (currentCadence === 'Semi-Annual') months = periods * 6;
+      else if (currentCadence === 'Annual') months = periods * 12;
+      
+      // Update item
+      item.retainer_months = months;
+      
+      // Calculate new price per period (hours * rate / periods for recurring pricing model)
+      const hours = item.total_hours || item.hours || 0;
+      const rate = item.effective_rate || item.rate_usd || 210;
+      const pricePerPeriod = Math.round(hours * rate);
+      const totalPrice = pricePerPeriod * periods;
+      
+      // Update item price
+      item.price = totalPrice;
+      
+      // Update pricingData if available
+      if (window.pricingData) {
+        window.pricingData.retainers.set(deliverableCode, months);
+      }
+      
+      // Map cadence to billing_cadence for backend
+      const billingCadenceMap = {
+        'One-Time': 'one_time',
+        'Monthly': 'monthly',
+        'Quarterly': 'quarterly',
+        'Semi-Annual': 'semi_annual',
+        'Annual': 'annual'
+      };
+      const billingCadence = billingCadenceMap[currentCadence] || 'monthly';
+      
+      console.log(`[updatePeriods_renderScenario] ${deliverableCode}: ${periods} periods, ${months} months, $${pricePerPeriod}/period, $${totalPrice} total`);
+      
+      // Persist to backend via ScenarioStore
+      if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
+        ScenarioStore.patchScenarioItem(deliverableCode, {
+          hours: hours,
+          rate_usd: rate,
+          billing_cadence: billingCadence,
+          cadence_units: periods,
+          months: months,
+          cadence_price: pricePerPeriod
+        });
+        console.log(`[updatePeriods_renderScenario] ScenarioStore.patchScenarioItem called`);
+      }
+      
+      // Re-render to update totals
+      renderScenario(targetId, scenario);
+      updateScenarioTotals(targetId);
     }
     
     // Helper function to update scenario totals display
