@@ -6389,6 +6389,7 @@ async function pollAIAnalysis(jobId) {
 
 // Centralized RFP Summary Card Renderer (for both Fast and Deep modes)
 // Data source: /api/summarize or /api/summarize_by_file only (stored in window.currentRfpSummary)
+// Bradley Spec: Summary bullets MUST render as discrete <li> elements, NOT as paragraph with inline bullets
 function renderRfpSummaryCard(summary, options = {}) {
   const {
     plannerLabel = "Fast AI Planner",   // Default label before mode selection
@@ -6407,13 +6408,102 @@ function renderRfpSummaryCard(summary, options = {}) {
     return;
   }
 
-  // Defensive null guards for all fields
-  const summaryText = summary.summary_text || summary.summary || 'No summary available';
+  // =========================================================================
+  // BUILD SUMMARY BULLETS HTML (Bradley Spec: 3-6 discrete bullets with bold labels)
+  // MUST always render as <ul><li> bullets, NEVER as paragraph
+  // =========================================================================
+  
+  // Helper to build a single bullet <li> element with inline styles
+  function buildBulletLi(label, desc) {
+    const safeLabel = label || 'Item';
+    const safeDesc = desc || '';
+    return `<li style="display: list-item !important; list-style: disc outside !important; margin-left: 20px !important; margin-bottom: 8px !important; padding-left: 4px !important;"><strong>${safeLabel}</strong> — ${safeDesc}</li>`;
+  }
+  
+  // Helper to wrap bullets in <ul> with inline styles
+  function wrapInUl(bulletItems) {
+    return `<ul style="list-style-type: disc !important; padding-left: 20px !important; margin: 0 0 12px 0 !important;">${bulletItems}</ul>`;
+  }
+  
+  // Default fallback bullets (Bradley spec: minimum 3 bullets required)
+  const fallbackBullets = [
+    { label: 'Strategy', short_desc: 'Project strategy and planning requirements' },
+    { label: 'Creative', short_desc: 'Creative and design deliverables' },
+    { label: 'Execution', short_desc: 'Implementation and delivery scope' }
+  ];
+  
+  let summaryBulletsHtml = '';
+  let bullets = summary.summary_bullets || [];
+  
+  console.log('[RFP Summary] Building bullets from summary_bullets array:', bullets.length, 'items');
+  
+  // If no structured bullets, try to parse from summary_text
+  if (bullets.length === 0) {
+    const summaryText = summary.summary_text || summary.summary || '';
+    console.log('[RFP Summary] No summary_bullets, attempting text parsing. Text length:', summaryText.length);
+    
+    if (summaryText && summaryText.length > 0) {
+      // AGGRESSIVE BULLET PARSING: Split on • character anywhere in text
+      // This handles "• Label: desc • Label2: desc2" format
+      const bulletPattern = /•\s*/;
+      const rawBullets = summaryText.split(bulletPattern).filter(s => s.trim().length > 0);
+      
+      console.log('[RFP Summary] Text split produced', rawBullets.length, 'segments');
+      
+      if (rawBullets.length >= 2) {
+        // Parse each segment into {label, short_desc}
+        bullets = rawBullets.map(segment => {
+          const trimmed = segment.trim();
+          // Try to extract "Label: description" pattern
+          const colonMatch = trimmed.match(/^([^:]+):\s*(.+)$/s);
+          if (colonMatch) {
+            return { label: colonMatch[1].trim(), short_desc: colonMatch[2].trim() };
+          }
+          // Try to extract first sentence as label
+          const periodMatch = trimmed.match(/^([^.]+)\.\s*(.*)$/s);
+          if (periodMatch && periodMatch[1].length < 50) {
+            return { label: periodMatch[1].trim(), short_desc: periodMatch[2].trim() };
+          }
+          // Use first 40 chars as label, rest as desc
+          if (trimmed.length > 40) {
+            return { label: trimmed.substring(0, 40).trim() + '...', short_desc: trimmed.substring(40).trim() };
+          }
+          return { label: trimmed, short_desc: '' };
+        });
+        console.log('[RFP Summary] Parsed', bullets.length, 'bullets from text');
+      }
+    }
+  }
+  
+  // GUARANTEE: Always have at least 3 bullets (Bradley spec)
+  if (bullets.length < 3) {
+    console.log('[RFP Summary] Only', bullets.length, 'bullets found, padding with fallbacks');
+    const needed = 3 - bullets.length;
+    for (let i = 0; i < needed && i < fallbackBullets.length; i++) {
+      bullets.push(fallbackBullets[i]);
+    }
+  }
+  
+  // Cap at 6 bullets max (Bradley spec: 3-6 bullets)
+  if (bullets.length > 6) {
+    bullets = bullets.slice(0, 6);
+    console.log('[RFP Summary] Capped bullets at 6');
+  }
+  
+  // Build the HTML
+  const bulletItems = bullets.map(b => buildBulletLi(b.label, b.short_desc)).join('');
+  summaryBulletsHtml = wrapInUl(bulletItems);
+  
+  // ASSERTION: Verify we always produce 3-6 bullets
+  const bulletCount = bullets.length;
+  console.assert(bulletCount >= 3 && bulletCount <= 6, 
+    `[RFP Summary] VIOLATION: Expected 3-6 bullets, got ${bulletCount}`);
+  console.log('[RFP Summary] Final bullet count:', bulletCount, '(min: 3, max: 6)');
   
   // Extract goals from deliverables array (RfpSummary format)
   const deliverables = summary.deliverables || [];
   const goals = deliverables.map(d => d.label || d.title).filter(Boolean);
-  const goalsHtml = goals.length > 0 ? goals.map(g => `<li>${g}</li>`).join('') : '';
+  const goalsHtml = goals.length > 0 ? goals.map(g => `<li style="display: list-item !important; list-style: disc outside !important;">${g}</li>`).join('') : '';
   
   const channels = (summary.channels || []).join(', ') || 'Not specified';
   const markets = (summary.markets || []).join(', ') || 'Not specified';
@@ -6431,12 +6521,12 @@ function renderRfpSummaryCard(summary, options = {}) {
       </div>
       
       <h3 style="margin: 0 0 12px 0; color: #6366f1;">📋 RFP Summary</h3>
-      <p style="margin: 0 0 12px 0; line-height: 1.6; color: var(--text);">${summaryText}</p>
+      ${summaryBulletsHtml}
       
       ${goalsHtml ? `
         <div style="margin-bottom: 12px;">
           <strong style="color: var(--text);">Key Deliverables:</strong>
-          <ul style="margin: 4px 0 0 20px; line-height: 1.6; color: var(--text);">${goalsHtml}</ul>
+          <ul style="margin: 4px 0 0 20px; line-height: 1.6; color: var(--text); list-style-type: disc !important; padding-left: 20px !important;">${goalsHtml}</ul>
         </div>
       ` : ''}
       
