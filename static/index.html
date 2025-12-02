@@ -922,6 +922,18 @@
           color: var(--text);
           font-size: 0.9em;
         }
+        
+        /* GPT 5.1 Pro spec: structured rfp-summary-list for summary_bullets */
+        .rfp-summary-list {
+          margin: 0;
+          padding-left: 1.25rem;
+          display: flex;
+          flex-direction: column;
+          gap: 0.35rem;
+        }
+        .rfp-summary-list li {
+          line-height: 1.4;
+        }
       </style>
       
       <!-- Resource Risk Management Table -->
@@ -1359,6 +1371,48 @@
       }
     }
 
+    // GPT 5.1 Pro spec: renderRfpSummary - uses summary_bullets when available, falls back to summary_text
+    function renderRfpSummary(summary) {
+      const bodyEl = document.getElementById("summary-bullets");
+      if (!bodyEl) return;
+
+      // Use summary_bullets when available, fall back to parsing summary_text
+      const bullets =
+        (summary.summary_bullets && summary.summary_bullets.length)
+          ? summary.summary_bullets.map(b => ({
+              label: b.label || "",
+              short_desc: b.short_desc || ""
+            }))
+          : (summary.summary_text || "")
+              .split(/\n+/)
+              .map(line => line.trim())
+              .filter(Boolean)
+              .map(line => {
+                // Strip leading bullet marker "• "
+                line = line.replace(/^•\s*/, "");
+                // _build_summary_text uses "Label: description" format
+                // Split on first colon as per spec
+                const [label, ...rest] = line.split(":");
+                return {
+                  label: (label || "").trim(),
+                  short_desc: rest.join(":").trim()
+                };
+              });
+
+      if (!bullets.length) {
+        bodyEl.innerHTML = '<p class="text-muted">No RFP summary available.</p>';
+        return;
+      }
+
+      const itemsHtml = bullets.map(b => {
+        const labelHtml = b.label ? `<strong>${b.label}</strong>` : "";
+        const descHtml  = b.short_desc ? ` — ${b.short_desc}` : "";
+        return `<li>${labelHtml}${descHtml}</li>`;
+      }).join("");
+
+      bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
+    }
+
     // GPT 5.1 Pro spec: renderSummaryCard - single source of truth for Step 2 AI Summary
     function renderSummaryCard(summary) {
       const errorEl = document.getElementById('summary-error');
@@ -1396,27 +1450,8 @@
         }
       }
       
-      // GPT 5.1 Pro spec 2.1: Render summary as <ul>/<li> (split on newlines)
-      const bulletsEl = document.getElementById('summary-bullets');
-      if (bulletsEl && summary.summary_text) {
-        const lines = summary.summary_text.split('\n')
-          .map(l => l.trim())
-          .filter(Boolean);
-        
-        // Create proper <ul>/<li> structure
-        const ul = document.createElement('ul');
-        ul.className = 'rfp-summary-bullets';
-        
-        lines.forEach(line => {
-          const li = document.createElement('li');
-          // Strip the leading "• " if present
-          li.textContent = line.replace(/^•\s*/, '');
-          ul.appendChild(li);
-        });
-        
-        bulletsEl.innerHTML = '';
-        bulletsEl.appendChild(ul);
-      }
+      // GPT 5.1 Pro spec: Render summary using renderRfpSummary helper
+      renderRfpSummary(summary);
       
       // Render Key Deliverables list
       const deliverablesList = document.getElementById('deliverables-list');

@@ -4460,6 +4460,8 @@ class RfpSummary(BaseModel):
     channels: List[str] = []         # marketing channels (Paid Social, OOH, etc.)
     markets: List[str] = []          # geographic markets (Nashville, US, etc.)
     complexity: Optional[str] = None # Low | Medium | High
+    # GPT 5.1 Pro spec: structured bullets for the UI
+    summary_bullets: List[Dict[str, str]] = []
 
 class SummarizePayload(BaseModel):
     rfp_text: str | None = None      # optional if using file route
@@ -4934,20 +4936,29 @@ Guidelines:
     words = _count_words(prose)
     if words > 500:
         # trim from the end
-        bullets = prose.split("\n")
-        while bullets and _count_words("\n".join(bullets)) > 500:
-            bullets.pop()
-        prose = "\n".join(bullets)
+        prose_bullets = prose.split("\n")
+        while prose_bullets and _count_words("\n".join(prose_bullets)) > 500:
+            prose_bullets.pop()
+        prose = "\n".join(prose_bullets)
         words = _count_words(prose)
 
-    # GPT 5.1 Pro spec: Include channels, markets, complexity in response
+    # GPT 5.1 Pro spec: Build summary_bullets for structured UI rendering
+    summary_bullets = []
+    for d in deliverables[:6]:
+        summary_bullets.append({
+            "label": d.get("label", "").strip(),
+            "short_desc": d.get("short_desc", "").strip(),
+        })
+
+    # GPT 5.1 Pro spec: Include channels, markets, complexity, summary_bullets in response
     summary = RfpSummary(
         summary_text=prose, 
         deliverables=[RfpSummaryItem(**d) for d in deliverables], 
         word_count=words,
         channels=channels,
         markets=markets,
-        complexity=complexity
+        complexity=complexity,
+        summary_bullets=summary_bullets
     )
     
     # GPT 5.1 Pro spec: Cache summary for GET /api/rfp/summary endpoint
