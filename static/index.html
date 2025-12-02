@@ -1761,16 +1761,17 @@
           console.warn('[BUILD] updateAIButtonStates function not found');
         }
         
-        // GPT 5.1 Pro spec: Use updatePricingTable for unified cadence editing
+        // Render scenario A - use renderScenario which receives data directly as parameter
+        if (typeof renderScenario === 'function') {
+          renderScenario('scenarioA', scenarios.A);
+          console.log('[BUILD] Rendered scenario A');
+        } else {
+          console.warn('[BUILD] renderScenario function not found');
+        }
+        
+        // Also update the unified pricing table for cadence editing (uses global SCENARIOS)
         if (typeof updatePricingTable === 'function') {
           updatePricingTable();
-          console.log('[BUILD] Rendered scenario A with unified pricing table');
-        } else if (typeof renderScenario === 'function') {
-          // Fallback to legacy renderer
-          renderScenario('scenarioA', scenarios.A);
-          console.log('[BUILD] Rendered scenario A with legacy renderer');
-        } else {
-          console.warn('[BUILD] No scenario renderer function found');
         }
         
         // Display budget information if provided

@@ -1897,8 +1897,8 @@ const pricingDataEnhanced = {
 
 // UNIFIED PRICING TABLE - Fully editable inline version
 function updatePricingTable() {
-  // GPT 5.1 Pro spec: Render to scenarioA div to replace old renderScenario table
-  const container = document.getElementById('scenarioA') || document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
+  // Render to pricing-container (the Deliverable Pricing Details table)
+  const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
   if (!container || !SCENARIOS) return;
   
   const scenario = SCENARIOS.A || SCENARIOS[0];
@@ -2770,11 +2770,13 @@ async function analyzeProjectRetainer() {
         }
       });
       
-      // GPT 5.1 Pro spec: Re-render the scenario table with unified pricing table
+      // Re-render the scenario table to show updated types and cadence
+      if (window.renderScenario) {
+        window.renderScenario('scenarioA', SCENARIOS.A);
+      }
+      // Also refresh unified pricing table
       if (typeof updatePricingTable === 'function') {
         updatePricingTable();
-      } else if (window.renderScenario) {
-        window.renderScenario('scenarioA', SCENARIOS.A);
       }
       
       // Update pricing calculations if the function exists
@@ -3745,11 +3747,13 @@ async function optimizeAllPricing() {
           scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
           scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
           
-          // GPT 5.1 Pro spec: Re-render scenario with unified pricing table
+          // Re-render scenario
+          if (window.renderScenario) {
+            window.renderScenario('scenarioA', scenario);
+          }
+          // Also refresh unified pricing table
           if (typeof updatePricingTable === 'function') {
             updatePricingTable();
-          } else if (window.renderScenario) {
-            window.renderScenario('scenarioA', scenario);
           }
           
           // Show success message
@@ -3824,11 +3828,13 @@ function performSmartOptimization(scenario, clientBudget) {
   scenario.totals.hours = scenario.items.reduce((sum, item) => sum + item.total_hours, 0);
   scenario.totals.price = scenario.items.reduce((sum, item) => sum + item.price, 0);
   
-  // GPT 5.1 Pro spec: Re-render scenario with unified pricing table
+  // Re-render scenario
+  if (window.renderScenario) {
+    window.renderScenario('scenarioA', scenario);
+  }
+  // Also refresh unified pricing table
   if (typeof updatePricingTable === 'function') {
     updatePricingTable();
-  } else if (window.renderScenario) {
-    window.renderScenario('scenarioA', scenario);
   }
   
   // Show results
@@ -5718,11 +5724,14 @@ async function buildFromCurrentSelection() {
     step3.scrollIntoView({ behavior: "smooth" });
   }
 
-  // GPT 5.1 Pro spec: Render Scenario A with unified pricing table
+  // Render Scenario A - use renderScenario which receives data directly
+  if (window.renderScenario) {
+    window.renderScenario('scenarioA', scenarios.A);
+  }
+  
+  // Also update unified pricing table for cadence editing
   if (typeof updatePricingTable === 'function') {
     updatePricingTable();
-  } else if (window.renderScenario) {
-    window.renderScenario('scenarioA', scenarios.A);
   }
 
   // FIX: Show Step 4 and Step 5 WITHOUT scrolling to them
