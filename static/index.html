@@ -923,16 +923,31 @@
           font-size: 0.9em;
         }
         
-        /* GPT 5.1 Pro spec: structured rfp-summary-list for summary_bullets */
+        /* GPT 5.1 Pro spec: structured rfp-summary-list with waterfall animation */
         .rfp-summary-list {
           margin: 0;
           padding-left: 1.25rem;
-          display: flex;
-          flex-direction: column;
-          gap: 0.35rem;
+          list-style: disc;
         }
         .rfp-summary-list li {
-          line-height: 1.4;
+          line-height: 1.5;
+          margin-bottom: 0.35rem;
+          opacity: 0;
+          transform: translateY(8px);
+          animation: rfpBulletFadeIn 0.35s ease forwards;
+        }
+        .rfp-summary-list li::marker {
+          color: var(--accent);
+        }
+        @keyframes rfpBulletFadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(8px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
         }
       </style>
       
@@ -1371,7 +1386,7 @@
       }
     }
 
-    // Spec: renderRfpSummary - parses summary_text into bullet list
+    // Spec: renderRfpSummary - parses summary_text into bullet list with waterfall animation
     function renderRfpSummary(summary) {
       const bodyEl = document.getElementById("rfp-summary-body");
       if (!bodyEl) {
@@ -1396,14 +1411,17 @@
 
       console.log("[RFP_SUMMARY] Parsed lines:", lines.length, lines);
 
+      // Build list items with staggered animation delays for waterfall effect
       const itemsHtml = lines
-        .map(line => {
+        .map((line, index) => {
           // Bold the label before the colon, like "Brand Strategy"
           const [label, ...rest] = line.split(":");
           const labelHtml = label ? `<strong>${label.trim()}</strong>` : "";
           const desc = rest.join(":").trim();
           const descHtml = desc ? ` — ${desc}` : "";
-          return `<li>${labelHtml}${descHtml}</li>`;
+          // Stagger each bullet by 50ms for waterfall effect
+          const delay = index * 0.05;
+          return `<li style="animation-delay: ${delay}s">${labelHtml}${descHtml}</li>`;
         })
         .join("");
 
