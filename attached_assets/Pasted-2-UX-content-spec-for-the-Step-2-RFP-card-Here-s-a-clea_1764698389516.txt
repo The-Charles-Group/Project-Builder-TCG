@@ -1,0 +1,256 @@
+2. UX / content spec for the Step 2 RFP card
+
+Here’s a clean structure that satisfies all that and matches the screenshot you shared.
+
+2.1. Data shape (one canonical object)
+
+Have the backend return something like this for Step 2:
+
+{
+  "summary_text": "string",          // formatted for display (bullets/newlines)
+  "deliverables": [                  // key deliverables for the RFP
+    {
+      "label": "Brand Strategy",
+      "short_desc": "1–2 sentence description",
+      "deliverable_code": "D001"    // optional
+    }
+  ],
+  "channels": ["Paid Social", "OOH", "Search"],
+  "markets": ["Nashville", "US"],
+  "complexity": "Medium",           // Low | Medium | High
+  "word_count": 123
+}
+
+
+You already have summary_text, deliverables, word_count in RfpSummary; we’re basically adding channels, markets, complexity and committing to this as the single source of truth for the UI. 
+
+step 3 fixing cadence_12-01-25
+
+2.2. Visual layout in the UI
+
+Inside the Step 2 “RFP Summary” card:
+
+Header bar
+
+Left: 🧠 GPT‑5 Pro AI Planner (or “Fast AI Planner” / “Deep AI Planner” tag based on mode)
+
+Right: small pill showing complexity: Complexity: Medium
+
+Summary block (top section)
+Use summary_text as 3–6 bullets, not a wall of prose. For example:
+
+• Define positioning for St. Regis Hotel & Residences Nashville across hotel + branded residences.
+• Develop a distinct but connected visual identity system and naming architecture.
+• Create an omnichannel launch campaign (film, CGI, social, OOH, experiential, sales tools).
+
+Key Deliverables block (keep this)
+
+Title: Key Deliverables
+
+Bulleted list from deliverables[i].label (optionally show short_desc on hover or as smaller second line).
+
+Meta row (bottom of the card)
+
+Channels: Paid Social, Digital Video, OOH (or Not specified)
+
+Markets: Nashville, US (or Not specified)
+
+Complexity: Medium
+
+Same layout for both fast & deep modes. The only thing that changes between modes is the quality of the content, not the structure.
+
+3. Backend changes in main.py
+
+Give this chunk to the Replit agent / architect.
+
+3.1. Extend RfpSummary model
+
+Right now RfpSummary only has summary_text, deliverables, word_count. Extend it like this:
+
+class RfpSummaryItem(BaseModel):
+    label: str
+    short_desc: str
+    deliverable_code: Optional[str] = None
+
+class RfpSummary(BaseModel):
+    summary_text: str                    # already there
+    deliverables: List[RfpSummaryItem]   # already there (may currently be Dicts)
+    word_count: int = 0                  # already there
+
+    # NEW fields for Step 2 card
+    channels: List[str] = []
+    markets: List[str] = []
+    complexity: Optional[str] = None     # "Low" | "Medium" | "High"
+
+
+Important: keep defaults so nothing explodes if the frontend doesn’t use the new fields immediately.
+
+3.2. Make ai_summarize_rfp_text return the full shape
+
+Inside ai_summarize_rfp_text, we want one GPT call that returns:
+
+{
+  "channels": [...],
+  "markets": [...],
+  "complexity": "Low|Medium|High",
+  "deliverables": [
+    { "label": "...", "short_desc": "...", "deliverable_code": "" }
+  ]
+}
+
+
+In English: update its JSON schema + parsing so that:
+
+The system / user prompt tells GPT:
+
+Extract 5–10 key deliverables with short 1–2 sentence descriptions.
+
+Infer likely marketing channels as a short list (max ~8; canonical names like “Paid Social”, “Search”, “OOH”, “PR”, “Experiential”, etc.).
+
+Infer markets (cities/regions/countries) from the RFP.
+
+Estimate project complexity (Low, Medium, High) based on scope / channels / markets.
+
+Return exactly the JSON schema above (no extra fields).
+
+When parsing the GPT response, do something like:
+
+channels = [c.strip() for c in data.get("channels") or [] if c.strip()]
+markets = [m.strip() for m in data.get("markets") or [] if m.strip()]
+complexity = (data.get("complexity") or "").strip().title() or None
+deliverables_raw = data.get("deliverables") or []
+
+
+Build a bullet‑friendly summary_text from the deliverables instead of just dumping raw RFP text. For example:
+
+def _build_summary_text(deliverables: List[RfpSummaryItem]) -> str:
+    if not deliverables:
+        return "No clear deliverables were detected in the RFP. Please review the uploaded document."
+
+    bullets = []
+    for d in deliverables[:6]:
+        label = d.label.strip()
+        desc = (d.short_desc or "").strip()
+        if desc:
+            bullets.append(f"• {label}: {desc}")
+        else:
+            bullets.append(f"• {label}")
+    return "\n".join(bullets)
+
+
+Then in ai_summarize_rfp_text:
+
+items = [RfpSummaryItem(**item) for item in deliverables_raw]
+summary_text = _build_summary_text(items)
+word_count = len((summary_text or "").split())
+
+return RfpSummary(
+    summary_text=summary_text,
+    deliverables=items,
+    word_count=word_count,
+    channels=channels,
+    markets=markets,
+    complexity=complexity or "Medium"  # sensible default
+)
+
+
+Fast vs deep mode support:
+If your Step 2 UI already has a fast/deep toggle, have /api/summarize accept a mode or tier field:
+
+class SummarizePayload(BaseModel):
+    rfp_text: Optional[str] = None
+    mode: str = "fast"   # "fast" | "deep"
+
+
+Then inside ai_summarize_rfp_text choose the model:
+
+model = OPENAI_MINI if mode == "fast" else OPENAI_MODEL
+# use that in openai_client.responses.create(...)
+
+
+The JSON shape stays identical. Deep mode just uses the bigger model.
+
+3.3. Make sure cached RFP text and summary stay in sync
+
+You already cache RFP text via RFP_TEXT_CACHE in /api/summarize and /api/suggest_by_file.
+
+Double‑check that:
+
+Whenever the RFP text changes (upload OR textarea), you:
+
+Update RFP_TEXT_CACHE
+
+Recompute and overwrite the RfpSummary in some cache (e.g. RFP_SUMMARY_CACHE).
+
+Step 2 frontend always reads the latest summary object (not an old one left from a previous upload).
+
+If there isn’t a RFP_SUMMARY_CACHE yet, add a simple global:
+
+RFP_SUMMARY_CACHE: Optional[RfpSummary] = None
+
+
+Set it inside api_summarize and expose via a small GET (/api/rfp/summary) the frontend can hit on page load.
+
+4. Frontend changes (what to tell the Replit agent / architect)
+
+Here’s a “task list” you can pretty much paste into Replit Chat.
+
+✅ Frontend tasks for Step 2 “RFP Summary” panel
+
+Use the new RfpSummary shape as the single source of truth
+
+On Step 2 load (or after an RFP upload), call:
+
+POST /api/summarize with { rfp_text, mode: "fast" | "deep" }
+or, if you add a getter, GET /api/rfp/summary.
+
+Store the result as something like window.currentRfpSummary.
+
+Render the top summary using summary_text as bullet lines
+
+Split on \n and render each line as a bullet:
+
+If the line already starts with •, keep it; otherwise add a bullet icon.
+
+No more giant single paragraph of unbroken text.
+
+Keep and clean up the Key Deliverables list
+
+For each summary.deliverables:
+
+Show label as the main line.
+
+Optionally show short_desc in smaller text or tooltip.
+
+Ensure this list is the same regardless of fast vs deep – the difference is only in quality/coverage.
+
+Wire Channels / Markets / Complexity to the new fields
+
+Bottom row of the RFP Summary card should read:
+
+Channels: {summary.channels.join(", ") || "Not specified"}
+Markets: {summary.markets.join(", ") || "Not specified"}
+Complexity: {summary.complexity || "Not specified"}
+
+
+Remove any old logic that tried to steal these values from other endpoints (weighted scores, etc.). The summary object is now the canonical source.
+
+Fast vs Deep toggle behaviour
+
+When the user switches Fast/Deep:
+
+Re‑call /api/summarize with mode: "fast" or "deep".
+
+Update the RFP Summary panel with the new result.
+
+Keep the visual layout identical; only data changes.
+
+Error / fallback UI
+
+If the API call fails:
+
+Show a short note: “We couldn’t generate an AI summary. You can still use the Key Deliverables and AI‑Suggested Deliverables below.”
+
+If channels or markets arrays come back empty:
+
+Show Not specified instead of leaving blank.

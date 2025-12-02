@@ -1,0 +1,169 @@
+✅ Here is the improved, production-grade tasklist you should give Replit Agent
+
+This list guarantees Bradley gets what he wants — and it plugs all the holes identified in Review #1–3.
+
+Copy/paste THIS into Replit Agent:
+
+🔧 BACKEND — MUST IMPLEMENT (RfpSummary + AI pipeline)
+1. Extend RfpSummary model (missing)
+
+Add missing fields:
+
+class RfpSummaryItem(BaseModel):
+    label: str
+    short_desc: str
+    deliverable_code: Optional[str] = None
+
+class RfpSummary(BaseModel):
+    summary_text: str
+    deliverables: List[RfpSummaryItem]
+    word_count: int = 0
+    channels: List[str] = []
+    markets: List[str] = []
+    complexity: Optional[str] = None
+
+2. Update ai_summarize_rfp_text to extract ALL required elements
+
+Right now the function does not extract channels / markets / complexity.
+It must be updated to produce this exact JSON shape:
+
+{
+  "summary_bullets": ["..."],
+  "deliverables": [
+    {"label": "...", "short_desc": "..."}
+  ],
+  "channels": ["Paid Social", "OOH", "CRM"],
+  "markets": ["Nashville", "US"],
+  "complexity": "Medium"
+}
+
+
+Then convert bullets → summary_text with \n line breaks.
+
+3. Add _build_summary_text() helper
+
+This is missing and part of Agent’s FAIL list.
+
+Function should:
+
+Take deliverables’ short_desc
+
+Build 3–6 bullets
+
+Return newline‑separated bullet lines:
+
+• Define positioning…
+• Develop brand identity…
+• Create omni-channel launch campaign…
+
+
+This is exactly the digestible format Bradley demanded.
+
+“we don’t want a paragraph like this… make it digestible.”
+
+
+step 3 fixing cadence_12-01-25
+
+4. Add mode: fast | deep support to /api/summarize
+
+Accept mode in POST body
+
+Choose GPT tier:
+
+fast → GPT‑5 mini
+
+deep → GPT‑5 Pro
+
+Keep identical JSON shape so UI doesn’t need branching.
+
+Your current backend does not accept mode.
+
+5. Add RFP summary caching + retrieval endpoint
+
+Your current code confirms that the summary cache was removed:
+
+“RFP_SUMMARY_CACHE removed – frontend holds window.currentRfpSummary instead”
+
+
+Bradley _ Joseph - replit tb Tr…
+
+You need:
+
+Bring back RFP_SUMMARY_CACHE
+
+Add new endpoint:
+
+GET /api/rfp/summary → returns cached RfpSummary
+
+
+Fast mode should NOT require fully re‑processing the RFP every page refresh.
+
+🎨 FRONTEND — MUST IMPLEMENT (Step 2 RFP card)
+6. Create one function: renderSummaryCard(summary)
+
+This replaces the messy ad‑hoc rendering.
+
+The card should always show:
+
+Header
+
+GPT‑5 Pro AI Planner
+
+Small pill: Complexity: Medium
+
+Summary bullets
+
+Render summary.summary_text.split("\n")
+
+Key Deliverables section
+
+Use summary.deliverables[].label
+
+Meta-row
+Channels: Paid Social, OOH, CRM
+Markets: Nashville, US
+Complexity: Medium
+
+
+Fallback:
+
+Channels: Not specified
+Markets: Not specified
+Complexity: Not specified
+
+
+Bradley explicitly said these MUST appear even in fast mode.
+
+“on fast mode, we might just need to make sure… channels and markets.”
+
+
+step 3 fixing cadence_12-01-25
+
+7. Render summary as bullets (not walls of text)
+
+Currently, your UI is just dumping raw text (hence Bradley’s complaint).
+
+Must convert each bullet:
+
+line.startsWith("•") ? line : "• " + line;
+
+8. Add error fallback UI
+
+If summary fails to load:
+
+We couldn’t generate an AI summary.
+You can still proceed using deliverables below.
+
+9. Connect Fast / Deep toggle
+
+When user switches mode:
+
+Call:
+
+POST /api/summarize { mode: "fast" | "deep", rfp_text }
+
+
+Save response to:
+window.currentRfpSummary
+
+Re-render the card.
