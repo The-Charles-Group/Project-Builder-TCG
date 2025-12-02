@@ -52,9 +52,11 @@
       const oldHours = d.hours;
       const oldMonths = d.months;
       Object.assign(d, patch || {});
-      if (patch && patch.cadence) {
+      if (patch && (patch.billing_cadence || patch.cadence)) {
         for (const c of d.components || []) if (!c._customCadence) {
-          c.cadence = d.cadence; c.months = d.months;
+          c.billing_cadence = d.billing_cadence || d.cadence;
+          c.cadence_units = d.cadence_units;
+          c.months = d.months || d.retainer_months;
         }
       }
       this.recompute(); 
@@ -65,12 +67,19 @@
         this.emitPricingChange(did, d);
       }
       
-      if (patch && (patch.hours !== undefined || patch.rate !== undefined || patch.cadence !== undefined || patch.months !== undefined)) {
+      const cadenceFields = ['hours', 'rate', 'rate_usd', 'cadence', 'months', 'billing_cadence', 'cadence_units', 'cadence_price', 'monthly_price'];
+      if (patch && cadenceFields.some(f => patch[f] !== undefined)) {
+        // Ensure rate_usd has a fallback: from patch, from deliverable, or default 210
+        const effectiveRate = patch.rate_usd || patch.rate || d.rate_usd || d.rate || DEFAULTS.blendedRate;
+        const effectiveHours = d.hours ?? 0;
         this.patchScenarioItem(did, {
-          hours: d.hours,
-          rate: d.rate,
-          cadence: d.cadence,
-          months: d.months
+          hours: effectiveHours,
+          rate_usd: effectiveRate,
+          billing_cadence: d.billing_cadence || d.cadence,
+          cadence_units: d.cadence_units,
+          cadence_price: d.cadence_price,
+          monthly_price: d.monthly_price,
+          months: d.months || d.retainer_months
         });
       }
     },
@@ -81,7 +90,7 @@
       if (!c) return;
       const oldHours = c.hours;
       Object.assign(c, patch || {});
-      if (patch && (patch.cadence || patch.months != null)) c._customCadence = true;
+      if (patch && (patch.billing_cadence || patch.cadence || patch.cadence_units || patch.months != null)) c._customCadence = true;
       this.recompute(); 
       this.emit();
       
@@ -89,11 +98,18 @@
         this.emitPricingChange(did, d);
       }
       
-      if (patch && (patch.hours !== undefined || patch.rate !== undefined || patch.cadence !== undefined || patch.months !== undefined)) {
+      const cadenceFields = ['hours', 'rate', 'rate_usd', 'cadence', 'months', 'billing_cadence', 'cadence_units', 'cadence_price', 'monthly_price'];
+      if (patch && cadenceFields.some(f => patch[f] !== undefined)) {
+        // Ensure rate_usd has a fallback: from patch, from component, from deliverable, or default 210
+        const effectiveRate = patch.rate_usd || patch.rate || c.rate_usd || c.rate || d.rate_usd || d.rate || DEFAULTS.blendedRate;
+        const effectiveHours = c.hours ?? 0;
         this.patchScenarioItem(`${did}::${cid}`, {
-          hours: c.hours,
-          rate: c.rate,
-          cadence: c.cadence,
+          hours: effectiveHours,
+          rate_usd: effectiveRate,
+          billing_cadence: c.billing_cadence || c.cadence,
+          cadence_units: c.cadence_units,
+          cadence_price: c.cadence_price,
+          monthly_price: c.monthly_price,
           months: c.months,
           _isComponent: true,
           _deliverableId: did
@@ -226,8 +242,11 @@
               deliverable_id: delivId,
               component_id: componentId,
               hours: updates.hours,
-              rate_usd: updates.rate,
-              cadence: updates.cadence,
+              rate_usd: updates.rate_usd || updates.rate,
+              billing_cadence: updates.billing_cadence || updates.cadence,
+              cadence_units: updates.cadence_units,
+              cadence_price: updates.cadence_price,
+              monthly_price: updates.monthly_price,
               months: updates.months
             })
           });

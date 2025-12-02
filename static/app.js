@@ -2551,6 +2551,19 @@ function updateCustomHours(deliverableCode, hours) {
   const numHours = parseFloat(hours) || 0;
   pricingData.customHours.set(deliverableCode, numHours);
   
+  // Get current rate for complete patch
+  const currentRate = parseFloat(document.getElementById(`rate-${deliverableCode}`)?.value) || 
+                      pricingData.customRates.get(deliverableCode) || 210;
+  
+  // Sync to ScenarioStore for backend persistence
+  if (window.ScenarioStore) {
+    window.ScenarioStore.updateDeliverable(deliverableCode, {
+      hours: numHours,
+      rate: currentRate,
+      rate_usd: currentRate
+    });
+  }
+  
   // Immediate update without full re-render
   updateRowTotals(deliverableCode);
   updatePricingSummary();
@@ -2560,6 +2573,19 @@ function updateCustomHours(deliverableCode, hours) {
 function updateCustomRate(deliverableCode, rate) {
   const numRate = parseFloat(rate) || 210;
   pricingData.customRates.set(deliverableCode, numRate);
+  
+  // Get current hours for complete patch
+  const currentHours = parseFloat(document.getElementById(`hours-${deliverableCode}`)?.value) || 
+                       pricingData.customHours.get(deliverableCode) || 0;
+  
+  // Sync to ScenarioStore for backend persistence - use rate_usd canonical key
+  if (window.ScenarioStore) {
+    window.ScenarioStore.updateDeliverable(deliverableCode, {
+      rate: numRate,
+      rate_usd: numRate,
+      hours: currentHours
+    });
+  }
   
   // Immediate update without full re-render
   updateRowTotals(deliverableCode);
@@ -3213,21 +3239,50 @@ function toggleDeliverableExpand(deliverableCode) {
 function updateCadenceType(code, cadence) {
   pricingDataEnhanced.cadenceTypes.set(code, cadence);
   
-  // Set default periods based on cadence
-  if (cadence === 'MONTHLY') {
-    pricingDataEnhanced.periodsCount.set(code, 12);
-  } else if (cadence === 'QUARTERLY') {
-    pricingDataEnhanced.periodsCount.set(code, 4);
-  } else if (cadence === 'SEMI_ANNUAL') {
-    pricingDataEnhanced.periodsCount.set(code, 2);
-  } else {
-    pricingDataEnhanced.periodsCount.set(code, 1);
-  }
+  // Map UI cadence values to backend billing_cadence format
+  const cadenceMap = {
+    'ONE_TIME': 'one_time',
+    'MONTHLY': 'monthly',
+    'QUARTERLY': 'quarterly',
+    'SEMI_ANNUAL': 'semi_annual',
+    'ANNUAL': 'annual'
+  };
+  const billingCadence = cadenceMap[cadence] || 'one_time';
+  
+  // Set default cadence_units based on cadence type
+  let defaultUnits = 1;
+  if (cadence === 'MONTHLY') defaultUnits = 12;
+  else if (cadence === 'QUARTERLY') defaultUnits = 4;
+  else if (cadence === 'SEMI_ANNUAL') defaultUnits = 2;
+  else if (cadence === 'ANNUAL') defaultUnits = 1;
+  
+  pricingDataEnhanced.periodsCount.set(code, defaultUnits);
   
   // Update periods input immediately
   const periodsInput = document.getElementById(`periods-${code}`);
   if (periodsInput) {
-    periodsInput.value = pricingDataEnhanced.periodsCount.get(code);
+    periodsInput.value = defaultUnits;
+  }
+  
+  // Get current hours and rate for ScenarioStore update
+  const hours = parseFloat(document.getElementById(`hours-${code}`)?.value) || 0;
+  const rate = parseFloat(document.getElementById(`rate-${code}`)?.value) || 210;
+  
+  // Calculate retainer_months from cadence structure (null for one_time to avoid stale values)
+  const monthsPerPeriod = { 'one_time': null, 'monthly': 1, 'quarterly': 3, 'semi_annual': 6, 'annual': 12 };
+  const monthMultiplier = monthsPerPeriod[billingCadence];
+  const retainerMonths = monthMultiplier !== null ? monthMultiplier * defaultUnits : null;
+  
+  // Sync to ScenarioStore (which PATCHes to backend) - use rate_usd for canonical key
+  if (window.ScenarioStore) {
+    window.ScenarioStore.updateDeliverable(code, {
+      billing_cadence: billingCadence,
+      cadence_units: defaultUnits,
+      hours: hours,
+      rate: rate,
+      rate_usd: rate,
+      months: retainerMonths
+    });
   }
   
   // Recalculate totals immediately
@@ -3237,9 +3292,64 @@ function updateCadenceType(code, cadence) {
 
 function updatePeriods(code, periods) {
   const periodsNum = parseInt(periods) || 1;
-  pricingDataEnhanced.periodsCount.set(code, Math.max(1, Math.min(36, periodsNum)));
+  const clampedPeriods = Math.max(1, Math.min(36, periodsNum));
+  pricingDataEnhanced.periodsCount.set(code, clampedPeriods);
+  
+  // Get current cadence for retainer_months calculation
+  const cadence = pricingDataEnhanced.cadenceTypes.get(code) || 'ONE_TIME';
+  const cadenceMap = {
+    'ONE_TIME': 'one_time',
+    'MONTHLY': 'monthly',
+    'QUARTERLY': 'quarterly',
+    'SEMI_ANNUAL': 'semi_annual',
+    'ANNUAL': 'annual'
+  };
+  const billingCadence = cadenceMap[cadence] || 'one_time';
+  const monthsPerPeriod = { 'one_time': null, 'monthly': 1, 'quarterly': 3, 'semi_annual': 6, 'annual': 12 };
+  const monthMultiplier = monthsPerPeriod[billingCadence];
+  const retainerMonths = monthMultiplier !== null ? monthMultiplier * clampedPeriods : null;
+  
+  // Sync to ScenarioStore
+  if (window.ScenarioStore) {
+    window.ScenarioStore.updateDeliverable(code, {
+      cadence_units: clampedPeriods,
+      months: retainerMonths
+    });
+  }
   
   // Recalculate totals immediately
+  updateRowTotals(code);
+  updatePricingSummary();
+}
+
+// Update monthly price (for retainers - derives total from monthly price)
+function updateMonthlyPrice(code, monthlyPrice) {
+  const monthlyPriceNum = parseFloat(monthlyPrice) || 0;
+  
+  // Sync to ScenarioStore - backend will apply priority rules
+  if (window.ScenarioStore) {
+    window.ScenarioStore.updateDeliverable(code, {
+      monthly_price: monthlyPriceNum
+    });
+  }
+  
+  // Recalculate totals
+  updateRowTotals(code);
+  updatePricingSummary();
+}
+
+// Update cadence price (price per period)
+function updateCadencePrice(code, cadencePrice) {
+  const cadencePriceNum = parseFloat(cadencePrice) || 0;
+  
+  // Sync to ScenarioStore - backend will apply priority rules
+  if (window.ScenarioStore) {
+    window.ScenarioStore.updateDeliverable(code, {
+      cadence_price: cadencePriceNum
+    });
+  }
+  
+  // Recalculate totals
   updateRowTotals(code);
   updatePricingSummary();
 }
@@ -3272,9 +3382,11 @@ function updateRowTotals(code) {
       item.total_hours = hours;
       item.effective_rate = rate;
       item.price = pricePerPeriod;
+      item.cadence_price = pricePerPeriod;
       
       if (periods > 1) {
         item.retainer_months = periods;
+        item.cadence_units = periods;
       }
     }
   }
@@ -3788,6 +3900,8 @@ window.cancelRowEdit = cancelRowEdit;
 window.saveRowEdit = saveRowEdit;
 window.updateCadenceType = updateCadenceType;
 window.updatePeriods = updatePeriods;
+window.updateMonthlyPrice = updateMonthlyPrice;
+window.updateCadencePrice = updateCadencePrice;
 window.extractDeliverableTasks = extractDeliverableTasks;
 window.formatTasksList = formatTasksList;
 

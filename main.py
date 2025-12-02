@@ -8187,43 +8187,77 @@ class ScenarioItemPatch(BaseModel):
     hours: Optional[float] = None
     rate_usd: Optional[float] = None
     price_usd: Optional[float] = None
-    cadence: Optional[str] = None
-    months: Optional[int] = None
+    cadence: Optional[str] = None  # Legacy field, mapped to billing_cadence
+    billing_cadence: Optional[str] = None  # one_time, monthly, quarterly, semi_annual, annual
+    cadence_units: Optional[int] = None  # Number of periods (e.g., 2 × semi_annual = 12 months)
+    cadence_price: Optional[float] = None  # Price per cadence period
+    monthly_price: Optional[float] = None  # Optional monthly price
+    months: Optional[int] = None  # Legacy field, mapped to retainer_months
 
 def _apply_item_updates(item: dict, payload: ScenarioItemPatch):
-    """Apply updates to an item (deliverable or component)."""
+    """Apply updates to an item (deliverable or component), then call apply_cadence_to_item."""
+    old_item = item.copy()  # Snapshot for change detection
+    
     if payload.hours is not None:
         item["Planned_Hours"] = payload.hours
         item["planned_hours"] = payload.hours
         item["hours"] = payload.hours
-        item["total_hours"] = payload.hours  # Also set total_hours for UI consistency
+        item["total_hours"] = payload.hours
     
     if payload.rate_usd is not None:
         item["Rate_USD"] = payload.rate_usd
         item["rate_usd"] = payload.rate_usd
         item["blended_rate"] = payload.rate_usd
-        item["effective_rate"] = payload.rate_usd  # Also set effective_rate for UI
+        item["effective_rate"] = payload.rate_usd
     
     if payload.price_usd is not None:
         item["Price_USD"] = payload.price_usd
         item["price_usd"] = payload.price_usd
         item["total_price"] = payload.price_usd
     
-    if payload.cadence is not None:
-        item["billing_cadence"] = payload.cadence
-        item["cadence"] = payload.cadence
+    # Handle billing_cadence (new) and cadence (legacy)
+    cadence_value = payload.billing_cadence or payload.cadence
+    if cadence_value is not None:
+        item["billing_cadence"] = cadence_value
+        item["cadence"] = cadence_value
     
+    # Handle cadence_units
+    if payload.cadence_units is not None:
+        item["cadence_units"] = payload.cadence_units
+    
+    # Handle cadence_price
+    if payload.cadence_price is not None:
+        item["cadence_price"] = payload.cadence_price
+    
+    # Handle monthly_price
+    if payload.monthly_price is not None:
+        item["monthly_price"] = payload.monthly_price
+    
+    # Handle months (legacy) mapping to retainer_months
     if payload.months is not None:
         item["retainer_months"] = payload.months
         item["months"] = payload.months
     
-    # Recalculate price if hours and rate are available
-    hours = payload.hours if payload.hours is not None else item.get("hours") or item.get("Planned_Hours") or 0
-    rate = payload.rate_usd if payload.rate_usd is not None else item.get("rate_usd") or item.get("Rate_USD") or 210
-    new_price = int(hours * rate)
-    item["price"] = new_price
-    item["Price_USD"] = new_price
-    item["price_usd"] = new_price
+    # Apply cadence logic if any cadence-related field was explicitly set (use is not None checks)
+    cadence_fields_changed = any([
+        payload.billing_cadence is not None,
+        payload.cadence is not None,
+        payload.cadence_units is not None,
+        payload.cadence_price is not None,
+        payload.monthly_price is not None,
+        payload.months is not None
+    ])
+    
+    if cadence_fields_changed:
+        apply_cadence_to_item(item, old_item)
+    else:
+        # Simple price recalculation for non-cadence updates
+        hours = payload.hours if payload.hours is not None else item.get("hours") or item.get("Planned_Hours") or 0
+        rate = payload.rate_usd if payload.rate_usd is not None else item.get("rate_usd") or item.get("Rate_USD") or 210
+        new_price = int(hours * rate)
+        item["price"] = new_price
+        item["Price_USD"] = new_price
+        item["price_usd"] = new_price
 
 @app.patch("/api/pricing/scenario/item")
 async def api_patch_scenario_item(payload: ScenarioItemPatch):

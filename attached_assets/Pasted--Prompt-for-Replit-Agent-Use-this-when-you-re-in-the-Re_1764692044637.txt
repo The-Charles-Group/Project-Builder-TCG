@@ -1,0 +1,351 @@
+✅ Prompt for Replit Agent
+
+Use this when you’re in the Replit editor and you open the Agent sidebar.
+
+You can paste this as‑is:
+
+PROMPT FOR REPLIT AGENT (Step 3 cadence + retainers)
+
+I’m working on a FastAPI app in main.py called Agency Project Builder. It has a 4‑step flow:
+
+Upload RFP
+
+Select deliverables
+
+Pricing / retainers (Step 3)
+
+Export to Workfront (XML/Excel)
+
+The backend main.py I’m using is the version from a doc called “step 3 fixing cadence_12-01-25.docx”. It already includes:
+
+should_select_deliverable with AI confidence and TF‑IDF logic
+
+A SCENARIO_STORE and helpers for Step 3
+
+Cadence helpers: cadence_changed, cadence_price_changed, monthly_price_changed, and apply_cadence_to_item
+
+Gantt helpers: expand_retainer_into_months, etc. 
+
+step 3 fixing cadence_12-01-25
+
+Do NOT delete or simplify any of that cadence logic. Instead, I want you to wire the Step 3 front‑end so the PMs can properly control retainers and cadence.
+
+Step 3 – what behavior I need
+
+From a client call, the retainer rules are:
+
+A deliverable can be:
+
+One‑time
+
+Monthly
+
+Quarterly
+
+Semi‑annual
+
+Annual 
+
+Bradley _ Joseph - replit tb Tr…
+
+There must be a “Units” concept:
+
+e.g. Semi‑annual (6 months) × 2 units = 12 months total
+
+For retainers we need:
+
+Billing cadence (Monthly / Quarterly / Semi‑Annual / Annual / One‑Time)
+
+Units (integer)
+
+Total months (derived from cadence × units)
+
+Price per cadence period (e.g. per quarter or per 6‑month period)
+
+Total retainer price
+
+Optional monthly price for people who think “per month” 
+
+Bradley _ Joseph - replit tb Tr…
+
+apply_cadence_to_item in main.py already understands:
+
+billing_cadence
+
+cadence_units
+
+cadence_price
+
+monthly_price
+
+retainer_months
+
+monthly_hours
+
+price_usd / Price_USD 
+
+step 3 fixing cadence_12-01-25
+
+and it enforces these priority rules:
+
+If monthly_price changed, derive total from monthly price.
+
+Else if cadence_price changed, derive total from cadence price.
+
+Else if cadence structure changed (billing_cadence / cadence_units), recompute months and prices.
+
+You should build the UI and API wiring around those fields.
+
+Your tasks (Replit Agent):
+
+Find the Step 3 front‑end code
+
+Locate the JavaScript / front‑end that renders the Step 3 pricing / retainer table.
+
+This is probably in static/app.js, static/step3.js, or similar, and talks to /api/scenario/... endpoints.
+
+Add cadence/retainer columns to the Step 3 table
+
+For each deliverable row in Step 3, extend the grid to include:
+
+Billing cadence – dropdown backed by row.billing_cadence with values:
+
+"one_time", "monthly", "quarterly", "semi_annual", "annual"
+
+Units – number input backed by row.cadence_units (default 1).
+
+Total months – read‑only:
+
+Show row.retainer_months if present, otherwise compute cadence_units × (1, 3, 6, 12) depending on cadence.
+
+Price per period – editable or display only, backed by row.cadence_price.
+
+Monthly price (optional) – editable, backed by row.monthly_price.
+
+Total price – read‑only, backed by row.Price_USD / row.price_usd.
+
+Hook edits to the backend via /api/scenario/sync
+
+When the user edits any of:
+
+billing_cadence
+
+cadence_units
+
+cadence_price
+
+monthly_price
+
+Update the corresponding fields on the row in the local scenario.items array.
+
+Then call POST /api/scenario/sync with the current scenario object (and existing version fields) so the backend can run apply_cadence_to_item on each item and recompute totals.
+
+After the response:
+
+Replace the local scenario with the returned server copy,
+
+Refresh the table cells from that,
+
+Update any total summary cards from scenario.totals.
+
+The key is: don’t recalc prices or months on the front‑end; let the Python cadence logic do it and just display the returned values.
+
+Respect these field names in the JSON sent to /api/scenario/sync
+
+Make sure each item in scenario["items"] uses these exact keys so the backend helpers in main.py can work:
+
+billing_cadence
+
+cadence_units
+
+cadence_price
+
+monthly_price
+
+retainer_months
+
+price_usd / Price_USD
+
+Planned_Hours / planned_hours / hours (existing fields) 
+
+step 3 fixing cadence_12-01-25
+
+UI niceties
+
+If billing_cadence == "one_time", hide or disable the Units / months / retainer‑related fields.
+
+For retainer rows (where is_retainer or retainer_months > 0), show a small badge like “Retainer – 12 months” using retainer_months from the backend.
+
+Do not break existing XML / Workfront exports
+
+The Gantt/export logic in main.py already uses:
+
+billing_cadence
+
+cadence_units
+
+retainer_months
+
+and expand_retainer_into_months for monthly retainers. 
+
+step 3 fixing cadence_12-01-25
+
+Don’t change that logic. Just ensure the items coming from Step 3 are populated consistently so exports show:
+
+Correct duration for retainers,
+
+Correct total fixed cost,
+
+Monthly breakdown where applicable.
+
+Make all these changes in the repo so Step 3 behaves as described, then show me the list of files you touched and a quick summary of what you changed.
+
+(End of Agent prompt.)
+
+✅ Prompt for Replit Architect
+
+Use this when you open the “Architect” view or whatever Replit UI you have for higher‑level refactors.
+
+Paste this:
+
+PROMPT FOR REPLIT ARCHITECT (overall structure + cadence behavior)
+
+This Replit project is a FastAPI app called Agency Project Builder. It has a 4‑step flow:
+
+Step 1 – Upload RFP
+
+Step 2 – Analyze + select deliverables (AI + TF‑IDF)
+
+Step 3 – Pricing / retainers (this is where billing cadence lives)
+
+Step 4 – Export to Workfront (XML/Excel timeline)
+
+Backend details:
+
+Main server is main.py (already updated from the document “step 3 fixing cadence_12-01-25.docx”). It defines:
+
+SCENARIO_STORE and helpers (get_session_state, update_working_scenario, etc.).
+
+Cadence helpers: cadence_changed, cadence_price_changed, monthly_price_changed, apply_cadence_to_item, and retainer expansion helpers like expand_retainer_into_months. 
+
+step 3 fixing cadence_12-01-25
+
+TF‑IDF and AI confidence selection via should_select_deliverable with CONF_THRESHOLD and TFIDF_THRESHOLD env vars.
+
+Scenario routes are mounted via from backend.scenario_api import router as scenario_router; app.include_router(scenario_router, prefix="/api/scenario", tags=["scenario"]). 
+
+step 3 fixing cadence_12-01-25
+
+Static front‑end is served from /static.
+
+From a transcript with the client (Bradley), the key product requirements are:
+
+Step 3 retainers / cadence
+
+PMs must be able to choose billing cadence (Monthly, Quarterly, Semi‑Annual, Annual, One‑Time) and a number of units (e.g. 2 × semi‑annual = 12 months).
+
+The system must show per‑period amount and total, and must not treat “Monthly” as “one‑time”. 
+
+Bradley _ Joseph - replit tb Tr…
+
+Workfront exports must reflect correct durations, total cost, and (for monthly retainers) a clean monthly breakdown without double‑counting hours.
+
+Step 2 auto‑select UX (for later – not urgent but important)
+
+Current “auto select / both methods” UI is confusing and partially redundant with the original “Smart select by relevancy” block. 
+
+Bradley _ Joseph - replit tb Tr…
+
+Desired future behavior:
+
+Single smart selection area where the user can input:
+
+“AI confidence ≥ X%”
+
+“TF‑IDF similarity ≥ Y%”
+
+Clicking “Apply selection” should select deliverables where:
+
+AI confidence ≥ X and TF‑IDF ≥ Y (unless user sets one of them to 0 to effectively ignore it).
+
+Remove the extra duplicate module so there is just one clean selection section.
+
+What I’d like you (Architect) to do
+
+Check the overall architecture for Step 3:
+
+Confirm that Step 3’s front‑end (pricing/retainer grid) is reading from and writing to one canonical object: the Step 3 scenario stored in SCENARIO_STORE, via /api/scenario/... routes.
+
+Make sure there isn’t more than one competing “retainer table”. If there is a second, older retainer table or summary component that duplicates editing, remove it or convert it to a read‑only summary so the edit surface is only in one place. 
+
+Bradley _ Joseph - replit tb Tr…
+
+Align all cadence/retainer behavior with the backend helpers
+
+Wherever cadence / retainers are edited in the front‑end, ensure it uses the fields expected by apply_cadence_to_item:
+
+billing_cadence
+
+cadence_units
+
+cadence_price
+
+monthly_price
+
+retainer / retainer_months
+
+price_usd / Price_USD
+
+Ensure that Step 3 always sends updates via a scenario‑level endpoint (e.g. /api/scenario/sync) that calls apply_cadence_to_item before recomputing totals.
+
+Verify Step 4 exports use the same single source of truth
+
+Confirm the export / Gantt logic in main.py and any related module is reading retainer info only from the scenario in SCENARIO_STORE and the cadence fields listed above.
+
+Confirm monthly retainers are expanded into months using expand_retainer_into_months or equivalent logic, with:
+
+One parent deliverable row holding the full retainer hours and price,
+
+Monthly children that show correct month names and dates but do not inflate hours.
+
+Plan / prepare for the Step 2 selection refactor
+
+Without necessarily implementing it yet, sketch or implement a small, clean abstraction for:
+
+Passing AI confidence and TF‑IDF thresholds from the front‑end to the backend, instead of hard‑coding them as env vars only.
+
+Using a single consistent selection function (could be should_select_deliverable extended with parameters) instead of multiple overlapping mechanisms.
+
+The goal is to make it easy to later swap in the new UI:
+
+two numeric inputs (AI % and TF‑IDF %),
+
+and one “Apply selection” action, with no duplicate modules. 
+
+Bradley _ Joseph - replit tb Tr…
+
+Keep the run configuration and dependencies clean
+
+Verify requirements.txt matches what main.py imports (FastAPI, uvicorn, pandas, python‑multipart, python‑docx, pypdf, pillow, httpx, etc.). 
+
+step 3 fixing cadence_12-01-25
+
+Ensure the Replit “Run” configuration starts the FastAPI app correctly with uvicorn and serves the static front‑end.
+
+Please review the codebase, then apply minimal, coherent structural changes so:
+
+Step 3 editing → SCENARIO_STORE → cadence helpers → exports form a single clean pipeline.
+
+There aren’t duplicate or conflicting UI components for retainers or auto‑selection.
+
+The project structure sets us up to easily improve Step 2 selection thresholds later.
+
+When you’re done, summarize:
+
+What files you reorganized or touched,
+
+How scenario/cadence data now flows through the system,
+
+Any TODOs you recommend for the next iteration.
+
+(End of Architect prompt.)
