@@ -4725,6 +4725,16 @@ def _truncate_to_2_sentences(s: str) -> str:
     parts = _SENT_SPLIT.split((s or "").strip())
     return " ".join(parts[:2]).strip()
 
+def _truncate_words(s: str, max_words: int = 30) -> str:
+    """
+    GPT 5.1 Pro spec 1.1: Trim text to at most max_words words.
+    Produces short, structured bullet text.
+    """
+    words = re.findall(r"\b\w+\b", s or "")
+    if len(words) <= max_words:
+        return (s or "").strip()
+    return " ".join(words[:max_words]).strip() + "…"
+
 def validate_ai_response(rfp_text: str, ai_deliverables: List[dict]) -> bool:
     """
     Validate that AI-generated deliverables are relevant to the RFP content.
@@ -4913,9 +4923,11 @@ Guidelines:
             {"label": "Analytics & Reporting", "short_desc": "Define KPIs and measurement framework.", "tasks": []}
         ]
     
-    # enforce constraints
+    # GPT 5.1 Pro spec 1.2: enforce constraints - chain both truncations
     for d in deliverables:
-        d["short_desc"] = _truncate_to_2_sentences(d.get("short_desc",""))
+        # First clamp to max 2 sentences, then clamp to ~30 words
+        desc = _truncate_to_2_sentences(d.get("short_desc", ""))
+        d["short_desc"] = _truncate_words(desc, 30)
 
     # GPT 5.1 Pro spec: Use _build_summary_text helper for digestible bullets
     prose = _build_summary_text(deliverables)

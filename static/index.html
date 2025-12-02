@@ -907,6 +907,21 @@
             max-width: 100% !important;
           }
         }
+        
+        /* GPT 5.1 Pro spec 2.2: RFP Summary bullet styling */
+        .rfp-summary-bullets {
+          list-style: disc;
+          padding-left: 1.25rem;
+          margin: 0;
+        }
+        .rfp-summary-bullets li + li {
+          margin-top: 0.25rem;
+        }
+        .rfp-summary-bullets li {
+          line-height: 1.4;
+          color: var(--text);
+          font-size: 0.9em;
+        }
       </style>
       
       <!-- Resource Risk Management Table -->
@@ -1381,15 +1396,26 @@
         }
       }
       
-      // Render summary as bullets (split on newlines)
+      // GPT 5.1 Pro spec 2.1: Render summary as <ul>/<li> (split on newlines)
       const bulletsEl = document.getElementById('summary-bullets');
       if (bulletsEl && summary.summary_text) {
-        const lines = summary.summary_text.split('\n').filter(l => l.trim());
-        const bulletHtml = lines.map(line => {
-          const text = line.startsWith('•') ? line : '• ' + line;
-          return `<div style="margin-bottom: 6px;">${text}</div>`;
-        }).join('');
-        bulletsEl.innerHTML = bulletHtml;
+        const lines = summary.summary_text.split('\n')
+          .map(l => l.trim())
+          .filter(Boolean);
+        
+        // Create proper <ul>/<li> structure
+        const ul = document.createElement('ul');
+        ul.className = 'rfp-summary-bullets';
+        
+        lines.forEach(line => {
+          const li = document.createElement('li');
+          // Strip the leading "• " if present
+          li.textContent = line.replace(/^•\s*/, '');
+          ul.appendChild(li);
+        });
+        
+        bulletsEl.innerHTML = '';
+        bulletsEl.appendChild(ul);
       }
       
       // Render Key Deliverables list
