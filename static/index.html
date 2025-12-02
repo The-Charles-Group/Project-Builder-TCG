@@ -325,11 +325,11 @@
               <ul id="deliverables-list" style="list-style: disc; padding-left: 20px; font-size: 13px;"></ul>
             </div>
             
-            <!-- Meta row: Channels, Markets, Complexity -->
+            <!-- Meta row: Channels, Markets, Complexity (per Bradley spec) -->
             <div id="summary-meta" style="font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 12px;">
               <div style="margin-bottom: 4px;"><strong>Channels:</strong> <span id="meta-channels">Not specified</span></div>
               <div style="margin-bottom: 4px;"><strong>Markets:</strong> <span id="meta-markets">Not specified</span></div>
-              <div><strong>Word Count:</strong> <span id="wordcount">0</span>/500</div>
+              <div><strong>Complexity:</strong> <span id="meta-complexity">Not specified</span></div>
             </div>
             
             <!-- Error fallback -->
@@ -1386,7 +1386,8 @@
       }
     }
 
-    // Spec: renderRfpSummary - parses summary_text into bullet list with waterfall animation
+    // Spec: renderRfpSummary - renders structured summary_bullets with waterfall animation
+    // Uses structured JSON data from backend (guaranteed 3-6 bullets with label/description)
     function renderRfpSummary(summary) {
       const bodyEl = document.getElementById("rfp-summary-body");
       if (!bodyEl) {
@@ -1394,38 +1395,51 @@
         return;
       }
 
+      // Primary: use structured summary_bullets array from backend (reliable, pre-validated)
+      const bullets = summary.summary_bullets || [];
+      console.log("[RFP_SUMMARY] Using structured bullets:", bullets.length, bullets);
+
+      if (bullets.length > 0) {
+        // Build list items from structured data with staggered animation
+        const itemsHtml = bullets.slice(0, 6).map((bullet, index) => {
+          const label = (bullet.label || "").trim();
+          const desc = (bullet.short_desc || "").trim();
+          const labelHtml = label ? `<strong>${label}</strong>` : "";
+          const descHtml = desc ? ` — ${desc}` : "";
+          const delay = index * 0.05;
+          return `<li style="animation-delay: ${delay}s">${labelHtml}${descHtml}</li>`;
+        }).join("");
+
+        bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
+        return;
+      }
+
+      // Fallback: parse summary_text if structured bullets unavailable (legacy compatibility)
       const raw = (summary.summary_text || "").trim();
-      console.log("[RFP_SUMMARY] raw summary_text:", JSON.stringify(raw.substring(0, 200)));
+      console.log("[RFP_SUMMARY] Fallback to text parsing:", JSON.stringify(raw.substring(0, 200)));
       
       if (!raw) {
         bodyEl.innerHTML = '<p class="text-muted">No RFP summary available.</p>';
         return;
       }
 
-      // Preprocess: insert newlines before bullet markers, then split on newlines
-      // This handles both cases: proper newlines from backend OR inline • separators
+      // Preprocess: insert newlines before bullet markers, then split
       const normalized = raw.replace(/\s*•\s+/g, '\n• ');
       const lines = normalized
         .split('\n')
         .map(line => line.trim())
         .filter(Boolean)
-        .map(line => line.replace(/^•\s*/, ""));
+        .map(line => line.replace(/^•\s*/, ""))
+        .slice(0, 6);
 
-      console.log("[RFP_SUMMARY] Parsed lines:", lines.length, lines);
-
-      // Build list items with staggered animation delays for waterfall effect
-      const itemsHtml = lines
-        .map((line, index) => {
-          // Bold the label before the colon, like "Brand Strategy"
-          const [label, ...rest] = line.split(":");
-          const labelHtml = label ? `<strong>${label.trim()}</strong>` : "";
-          const desc = rest.join(":").trim();
-          const descHtml = desc ? ` — ${desc}` : "";
-          // Stagger each bullet by 50ms for waterfall effect
-          const delay = index * 0.05;
-          return `<li style="animation-delay: ${delay}s">${labelHtml}${descHtml}</li>`;
-        })
-        .join("");
+      const itemsHtml = lines.map((line, index) => {
+        const [label, ...rest] = line.split(":");
+        const labelHtml = label ? `<strong>${label.trim()}</strong>` : "";
+        const desc = rest.join(":").trim();
+        const descHtml = desc ? ` — ${desc}` : "";
+        const delay = index * 0.05;
+        return `<li style="animation-delay: ${delay}s">${labelHtml}${descHtml}</li>`;
+      }).join("");
 
       bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
     }
@@ -1496,10 +1510,10 @@
           : 'Not specified';
       }
       
-      // Word count
-      const wordcountEl = document.getElementById('wordcount');
-      if (wordcountEl) {
-        wordcountEl.textContent = summary.word_count || 0;
+      // Complexity in meta footer (per Bradley spec)
+      const metaComplexityEl = document.getElementById('meta-complexity');
+      if (metaComplexityEl) {
+        metaComplexityEl.textContent = summary.complexity || 'Not specified';
       }
     }
     
