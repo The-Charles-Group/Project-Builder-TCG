@@ -1,0 +1,164 @@
+2️⃣ What to tell Replit Agent now
+Message #1 – “Yes, create the task list, but here’s the spec”
+
+In your Replit Agent chat, reply with something like this:
+
+Yes, please create the task list – but base it on this exact spec:
+
+Backend – Cadence helpers
+
+Implement and/or fix these helper functions so they match the spec:
+
+cadence_changed(old_item, new_item)
+
+cadence_price_changed(old_item, new_item)
+
+monthly_price_changed(old_item, new_item)
+
+They should:
+
+Compare billing_cadence + cadence_units to detect cadence structure changes.
+
+Compare cadence_price to detect cadence-price changes.
+
+Compare monthly_price to detect explicit PM changes to the monthly amount.
+
+Return False on first sync (old_item is None) so existing retainer months and prices aren’t nuked.
+
+Backend – apply_cadence_to_item priority rules
+
+Rewrite apply_cadence_to_item(new_item, old_item=None) so it:
+
+Maps cadence to one of: one_time, monthly, quarterly, semi_annual, annual.
+
+Normalizes cadence_units (int ≥ 1).
+
+Computes total_months = months_per_cadence * cadence_units, and sets:
+
+new_item["is_retainer"]
+
+new_item["retainer"] = {"months": total_months}
+
+new_item["retainer_months"] = total_months
+
+Applies pricing with this priority:
+
+If monthly_price_changed(...) is True, derive total price from monthly_price × total_months.
+
+Else if cadence_price_changed(...) is True, derive total from cadence_price × cadence_units.
+
+Else if only cadence structure changed, recompute months and adjust cadence_price/monthly_price accordingly.
+
+Keeps these fields in sync:
+
+price_usd, Price_USD, total_price.
+
+Recomputes hours from price and rate:
+
+Uses get_rate_from_item + set_hours_on_item.
+
+If it’s a retainer, also compute monthly_hours.
+
+Backend – Fix /api/scenario/sync
+
+Update /api/scenario/sync so it:
+
+Loads the existing scenario from SCENARIO_STORE for session_id.
+
+Builds a mapping of old items by ID (id or Row_ID or deliverable_code).
+
+For each item in the incoming payload.scenario["items"]:
+
+Finds the corresponding old_item.
+
+Calls apply_cadence_to_item(new_item, old_item) before recomputing totals.
+
+Stores the updated scenario back into SCENARIO_STORE via update_working_scenario.
+
+Do not just overwrite the whole store without running cadence logic.
+
+Frontend – Stop client-side recompute, use /api/scenario/sync
+
+In the Step 3 UI, remove/disable any ScenarioStore.recompute() or similar client-side price/hour recalculation.
+
+Make cadence edits (cadence dropdown, units, monthly price) call POST /api/scenario/sync instead of /api/pricing/scenario/item.
+
+After the sync response, refresh:
+
+Each row’s Price_USD, monthly_price, cadence_price, retainer_months, etc.
+
+The grand total shown in Step 3 (using scenario.totals from the server).
+
+Frontend – Add the missing Step 3 UI bits
+
+Add to each Step 3 row:
+
+Cadence select → billing_cadence.
+
+Units number input → cadence_units.
+
+Total months read-only → retainer_months or derived (cadence × units).
+
+Monthly price input → monthly_price.
+
+Optional Per-period price read-only → cadence_price.
+
+A small “Retainer – X months” badge when is_retainer is true.
+
+Export – Wire cadence into existing logic
+
+The expand_retainer_into_months and related export helpers already exist.
+
+Make sure the scenario items passed into export have:
+
+billing_cadence
+
+cadence_units
+
+retainer_months
+
+Price_USD matching the Step 3 total.
+
+Don’t change the core export logic; just ensure these fields get populated via the cadence helpers so exports come out correct.
+
+After you’ve created the task list, please also start applying the tasks file by file (backend first, then frontend), and show me:
+
+The list of files you changed.
+
+A short summary of each change.
+
+That tells Agent exactly what you want fixed, without letting it drift.
+
+3️⃣ (Optional but recommended) Sync your main.py with the “fixing cadence” version
+
+Because we know the step 3 fixing cadence main.py already includes the correct cadence helpers + scenario store functions, it’s very possible that your current Replit main.py doesn’t match that file yet. 
+
+step 3 fixing cadence_12-01-25
+
+If you haven’t already:
+
+Open the step 3 fixing cadence main.py doc on your side.
+
+Open main.py in Replit.
+
+Either:
+
+Replace main.py entirely with the doc version, or
+
+At least copy over the whole block that defines:
+
+cadence_changed
+
+cadence_price_changed
+
+monthly_price_changed
+
+apply_cadence_to_item
+
+merge_scenario_from_sync
+
+/api/scenario/sync
+
+Then let Replit Agent run its plan again (with the prompt above) to align everything else.
+
+That should eliminate the “missing helper” complaints and put you on the same baseline as the code I’ve been referencing.
