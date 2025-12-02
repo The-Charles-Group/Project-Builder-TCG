@@ -1402,9 +1402,11 @@
         return;
       }
 
-      // Split on newlines OR bullet markers (• followed by space) for robustness
-      const lines = raw
-        .split(/\n+|(?=•\s)/)
+      // Preprocess: insert newlines before bullet markers, then split on newlines
+      // This handles both cases: proper newlines from backend OR inline • separators
+      const normalized = raw.replace(/\s*•\s+/g, '\n• ');
+      const lines = normalized
+        .split('\n')
         .map(line => line.trim())
         .filter(Boolean)
         .map(line => line.replace(/^•\s*/, ""));
