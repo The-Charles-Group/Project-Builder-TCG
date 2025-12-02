@@ -1910,43 +1910,37 @@ function updatePricingTable() {
   }
   
   // Create comprehensive table HTML structure with ALWAYS EDITABLE inputs
+  // Full-width expanded layout per user request
   let tableHTML = `
-    <div class="unified-pricing-table" style="margin: 20px 0;">
-      <h3 style="color: var(--accent); margin-bottom: 16px; font-size: 1.3em;">
-        📊 Unified Pricing Details (Direct Edit)
-      </h3>
-      
-      <table id="pricing-details-table" style="width: 100%; border-collapse: separate; border-spacing: 0; background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-        <thead style="background: linear-gradient(135deg, rgba(106,163,255,0.1), rgba(139,92,246,0.1));">
+    <div class="unified-pricing-table" style="margin: 0; width: 100%; max-width: 100%;">
+      <table id="pricing-details-table" style="width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; background: var(--card); border-radius: 8px; overflow: hidden;">
+        <thead style="background: linear-gradient(135deg, rgba(106,163,255,0.08), rgba(139,92,246,0.08));">
           <tr>
-            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2);">
-              Deliverable/Component
+            <th style="padding: 12px 10px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 18%;">
+              Deliverable
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 130px;">
-              Billing Cadence
+            <th style="padding: 12px 8px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 9%;">
+              Cadence
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 70px;">
+            <th style="padding: 12px 6px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 6%;">
               Units
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 80px;">
+            <th style="padding: 12px 6px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 7%;">
               Total Mo.
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 90px;">
+            <th style="padding: 12px 6px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 8%;">
               Hours
             </th>
-            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 90px;">
+            <th style="padding: 12px 6px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 8%;">
               Rate (USD)
             </th>
-            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 100px;">
+            <th style="padding: 12px 6px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 9%;">
               $/Month
             </th>
-            <th style="padding: 14px 12px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 110px;">
+            <th style="padding: 12px 8px; text-align: right; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 10%;">
               Total Price
             </th>
-            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 120px;">
-              Resources
-            </th>
-            <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 120px;">
+            <th style="padding: 12px 8px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 25%;">
               Tasks
             </th>
           </tr>
@@ -2088,10 +2082,7 @@ function updatePricingTable() {
                    color: ${isRetainer ? 'var(--accent2)' : 'var(--accent)'};">
           $${Math.round(totalPrice).toLocaleString()}
         </td>
-        <td style="padding: 8px; font-size: 0.8em; color: var(--muted);">
-          ${formatResourceDisplay(resources)}
-        </td>
-        <td style="padding: 8px; font-size: 0.8em; color: var(--muted);">
+        <td style="padding: 8px; font-size: 0.75em; color: var(--muted); line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word;">
           ${formatTasksList(tasks)}
         </td>
       </tr>
@@ -2147,16 +2138,19 @@ function updatePricingTable() {
                 (compIsEditing ?
                   `<input type="number" value="${compPeriods}" min="1" max="36"
                           onchange="updatePeriods('${compKey}', this.value)"
-                          style="width: 60px; padding: 4px; border: 1px solid rgba(139,92,246,0.3); 
+                          style="width: 50px; padding: 4px; border: 1px solid rgba(139,92,246,0.3); 
                                  border-radius: 4px; font-size: 0.85em;" />` :
                   `<span style="font-size: 0.85em;">${compPeriods}</span>`) :
                 '<span style="color: var(--muted); font-size: 0.85em;">-</span>'}
             </td>
             <td style="padding: 8px; text-align: center;">
+              <span style="font-size: 0.85em; color: var(--muted);">-</span>
+            </td>
+            <td style="padding: 8px; text-align: center;">
               ${compIsEditing ?
                 `<input type="number" value="${compHours}" min="0" step="0.5"
                         onchange="updateCustomHours('${compKey}', this.value)"
-                        style="width: 70px; padding: 4px; border: 1px solid rgba(106,163,255,0.3); 
+                        style="width: 60px; padding: 4px; border: 1px solid rgba(106,163,255,0.3); 
                                border-radius: 4px; font-size: 0.85em;" />` :
                 `<span style="font-size: 0.85em;">${compHours}</span>`}
             </td>
@@ -2171,40 +2165,15 @@ function updatePricingTable() {
                 </div>` :
                 `<span style="font-size: 0.85em;">$${compRate}</span>`}
             </td>
-            <td style="padding: 8px; text-align: right; font-size: 0.9em; color: var(--accent);">
-              $${compPricePerPeriod.toLocaleString()}
+            <td style="padding: 8px; text-align: right; font-size: 0.85em; color: var(--muted);">
+              ${compCadence !== 'ONE_TIME' ? `$${compPricePerPeriod.toLocaleString()}/mo` : '-'}
             </td>
-            <td style="padding: 8px; text-align: right; font-weight: 600; font-size: 0.95em;
+            <td style="padding: 8px; text-align: right; font-weight: 600; font-size: 0.9em;
                        color: ${compCadence !== 'ONE_TIME' ? 'var(--accent2)' : 'var(--accent)'};">
               $${compTotalPrice.toLocaleString()}
             </td>
-            <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
-              ${formatResourceDisplay(compResources)}
-            </td>
-            <td style="padding: 8px; font-size: 0.75em; color: var(--muted);">
+            <td style="padding: 8px; font-size: 0.7em; color: var(--muted); line-height: 1.3;">
               ${formatTasksList(compTasks)}
-            </td>
-            <td style="padding: 8px; text-align: center;">
-              ${compIsEditing ?
-                `<div style="display: flex; gap: 2px; justify-content: center;">
-                  <button onclick="saveRowEdit('${compKey}')"
-                          style="padding: 2px 8px; background: var(--accent2); border: none; 
-                                 border-radius: 3px; color: #08121e; font-size: 0.75em;">
-                    ✓
-                  </button>
-                  <button onclick="cancelRowEdit('${compKey}')"
-                          style="padding: 2px 8px; background: transparent; 
-                                 border: 1px solid var(--border); border-radius: 3px; 
-                                 color: var(--text); font-size: 0.75em;">
-                    ✗
-                  </button>
-                </div>` :
-                `<button onclick="enableRowEdit('${compKey}')"
-                        style="padding: 4px 12px; background: transparent; 
-                               border: 1px solid rgba(106,163,255,0.5); border-radius: 4px; 
-                               color: var(--accent); font-size: 0.8em;">
-                  Edit
-                </button>`}
             </td>
           </tr>
         `;
