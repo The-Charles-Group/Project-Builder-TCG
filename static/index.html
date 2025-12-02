@@ -407,10 +407,33 @@
       </div>
 
       <!-- Project Scenario - Full Width Expanded Table -->
-      <div class="scenarios" style="margin-bottom: 20px; width: 100%;">
-        <div class="scenario" style="width: 100%;">
+      <div class="scenarios" style="margin-bottom: 20px; width: 100%; display: block !important; grid-template-columns: 1fr !important;">
+        <div class="scenario" style="width: 100%; max-width: 100%;">
           <h3 style="margin-bottom: 12px;">Project Scenario</h3>
           <div id="scenarioA" style="width: 100%; overflow-x: auto;">(No data)</div>
+        </div>
+      </div>
+
+      <!-- Pricing Details Table -->
+      <div class="pricing-table-container" style="margin-bottom: 20px;">
+        <h3 style="font-size: 1.1em; margin-bottom: 12px; color: var(--text);">📊 Deliverable Pricing Details</h3>
+        <div id="pricing-table-wrapper" style="background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto;">
+          <table id="pricing-details-table-legacy" style="width: 100%; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid var(--border);">
+                <th style="padding: 8px; text-align: left; color: var(--muted);">Deliverable / Component</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Type</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Months</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Hours</th>
+                <th style="padding: 8px; text-align: center; color: var(--muted);">Rate</th>
+                <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
+                <th style="padding: 8px; text-align: left; color: var(--muted);">Resources</th>
+              </tr>
+            </thead>
+            <tbody id="pricing-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
         </div>
       </div>
 
