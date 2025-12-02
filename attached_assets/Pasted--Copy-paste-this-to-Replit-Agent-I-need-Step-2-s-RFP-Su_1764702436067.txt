@@ -1,0 +1,145 @@
+📌 Copy‑paste this to Replit Agent
+
+I need Step 2’s “RFP Summary” card to be actually digestible. Right now the summary is a huge paragraph with bullet dots in it in both Fast and Deep modes. Please make these changes:
+
+1) Backend – make the summary output structured for UI
+
+In main.py, where ai_summarize_rfp_text is defined and _build_summary_text is used:
+
+Add a summary_bullets field to RfpSummary so the frontend doesn’t have to parse raw text:
+
+class RfpSummaryItem(BaseModel):
+    label: str
+    short_desc: str
+    deliverable_code: Optional[str] = None
+
+class RfpSummary(BaseModel):
+    summary_text: str
+    deliverables: List[RfpSummaryItem]
+    word_count: int = 0
+    channels: List[str] = []
+    markets: List[str] = []
+    complexity: Optional[str] = None
+    # NEW: structured bullets for the UI
+    summary_bullets: List[Dict[str, str]] = []
+
+
+In ai_summarize_rfp_text(...), after we enforce constraints and before returning the model:
+
+We already have a deliverables list and _build_summary_text(deliverables) that returns newline‑separated bullets. Reuse that and also build summary_bullets:
+
+# existing:
+prose = _build_summary_text(deliverables)
+words = _count_words(prose)
+
+bullets = []
+for d in deliverables[:6]:
+    bullets.append({
+        "label": d.get("label", "").strip(),
+        "short_desc": d.get("short_desc", "").strip(),
+    })
+
+summary = RfpSummary(
+    summary_text=prose,
+    deliverables=[RfpSummaryItem(**d) for d in deliverables],
+    word_count=words,
+    channels=channels,
+    markets=markets,
+    complexity=complexity,
+    summary_bullets=bullets,
+)
+
+
+This must run for both mode="fast" and mode="deep" – the only difference between modes is which GPT‑5 tier we call, not the shape of the JSON.
+
+Double‑check both summarize endpoints call this same function:
+
+POST /api/summarize already accepts a mode – keep that and pass it into ai_summarize_rfp_text(..., mode=mode).
+
+Update POST /api/summarize_by_file so it also takes a mode: Form("fast" | "deep") and passes that into ai_summarize_rfp_text.
+That way, no matter how the RFP comes in (textarea or file), Fast and Deep share the same bulletized summary structure.
+
+2) Frontend – render the summary as a real bullet list
+
+In the Step 2 UI code (where the “RFP Summary” card is rendered):
+
+Introduce a helper that uses summary.summary_bullets when available, and falls back to summary.summary_text split on \n if not.
+
+If we’re using plain JS:
+
+function renderRfpSummary(summary) {
+  const bodyEl = document.getElementById("rfp-summary-body");
+  if (!bodyEl) return;
+
+  const bullets =
+    (summary.summary_bullets && summary.summary_bullets.length)
+      ? summary.summary_bullets.map(b => ({
+          label: b.label || "",
+          short_desc: b.short_desc || ""
+        }))
+      : (summary.summary_text || "")
+          .split(/\n+/)
+          .map(line => line.trim())
+          .filter(Boolean)
+          .map(line => {
+            line = line.replace(/^•\s*/, "");
+            const [label, ...rest] = line.split(":");
+            return {
+              label: (label || "").trim(),
+              short_desc: rest.join(":").trim()
+            };
+          });
+
+  if (!bullets.length) {
+    bodyEl.innerHTML = '<p class="text-muted">No RFP summary available.</p>';
+    return;
+  }
+
+  const itemsHtml = bullets.map(b => {
+    const labelHtml = b.label ? `<strong>${b.label}</strong>` : "";
+    const descHtml  = b.short_desc ? ` — ${b.short_desc}` : "";
+    return `<li>${labelHtml}${descHtml}</li>`;
+  }).join("");
+
+  bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
+}
+
+
+Add light CSS so it reads cleanly:
+
+.rfp-summary-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.rfp-summary-list li {
+  line-height: 1.4;
+}
+
+
+Call renderRfpSummary(summary) after we receive the summary from the backend, both in Fast and Deep mode:
+
+When the user switches Fast ↔ Deep, we already send mode to /api/summarize – keep that.
+
+After the response, store it (e.g. window.currentRfpSummary = summary) and call renderRfpSummary(summary) so the bullets update.
+
+Leave Channels / Markets / Complexity & Key Deliverables exactly as they are, but make sure they read from the same summary object:
+
+summary.channels.join(", ") || "Not specified"
+
+summary.markets.join(", ") || "Not specified"
+
+summary.complexity || "Not specified"
+
+When you’re done, the RFP Summary card should show:
+
+A short unordered list of 4–6 bullets with bold labels (Brand Strategy, Brand Identity, etc.) and concise descriptions.
+
+Key Deliverables below that (as we already have).
+
+A single Channels/Markets/Complexity row at the bottom.
+
+And this must look the same structurally in both Fast and Deep modes – only the wording/nuance changes with the model.
