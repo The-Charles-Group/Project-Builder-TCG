@@ -938,25 +938,26 @@
         
         /* GPT 5.1 Pro spec: structured rfp-summary-list with waterfall animation */
         .rfp-summary-list {
-          margin: 0;
-          padding-left: 1.5rem;
-          list-style: disc;
+          margin: 0 !important;
+          padding-left: 1.5rem !important;
+          list-style: disc !important;
+          list-style-type: disc !important;
+          display: block !important;
         }
         .rfp-summary-list li {
-          line-height: 1.7;
-          margin-bottom: 0.6rem;
-          padding-bottom: 0.4rem;
-          opacity: 0;
-          transform: translateY(8px);
-          animation: rfpBulletFadeIn 0.35s ease forwards;
-          display: list-item;
+          line-height: 1.7 !important;
+          margin-bottom: 0.6rem !important;
+          padding-bottom: 0.4rem !important;
+          opacity: 1 !important;
+          display: list-item !important;
+          list-style: disc outside !important;
         }
         .rfp-summary-list li::marker {
-          color: var(--accent2);
-          font-size: 1.1em;
+          color: var(--accent2) !important;
+          font-size: 1.1em !important;
         }
         .rfp-summary-list li strong {
-          color: var(--text);
+          color: var(--text) !important;
         }
         @keyframes rfpBulletFadeIn {
           from {
@@ -1408,16 +1409,32 @@
     // Spec: renderRfpSummary - renders structured summary_bullets with waterfall animation
     // Bradley spec: 3-6 discrete bullets, bold label + short description, <10s scannability
     function renderRfpSummary(summary) {
+      try {
+      console.log("[RFP_SUMMARY] ENTERING renderRfpSummary with:", summary);
+      console.log("[RFP_SUMMARY] summary_bullets raw:", JSON.stringify(summary?.summary_bullets));
+      
       const bodyEl = document.getElementById("rfp-summary-body");
       if (!bodyEl) {
         console.error("[RFP_SUMMARY] Could not find element rfp-summary-body");
         return;
       }
+      console.log("[RFP_SUMMARY] Found bodyEl:", bodyEl);
+
+      // Helper to build bullet HTML with inline styles for guaranteed rendering
+      const buildBulletHtml = (items) => {
+        const listItems = items.map((item, index) => {
+          const label = (item.label || "").trim();
+          const desc = (item.short_desc || "").trim();
+          const labelHtml = label ? `<strong style="color: var(--text); font-weight: 600;">${label}</strong>` : "";
+          const descHtml = desc ? ` — ${desc}` : "";
+          return `<li style="display: list-item !important; list-style: disc outside !important; margin-bottom: 0.6rem; line-height: 1.7;">${labelHtml}${descHtml}</li>`;
+        }).join("");
+        return `<ul class="rfp-summary-list" style="list-style: disc !important; padding-left: 1.5rem !important; margin: 0 !important;">${listItems}</ul>`;
+      };
 
       // Primary: use structured summary_bullets array from backend (reliable, pre-validated)
-      // Backend guarantees 3-6 bullets with {label, short_desc} structure
       const bullets = summary.summary_bullets || [];
-      console.log("[RFP_SUMMARY] Structured bullets count:", bullets.length);
+      console.log("[RFP_SUMMARY] Structured bullets count:", bullets.length, "First:", bullets[0]);
 
       if (bullets.length > 0) {
         // Clamp to 3-6 bullets per Bradley spec
@@ -1436,22 +1453,15 @@
           }
         }
         
-        const itemsHtml = clamped.map((bullet, index) => {
-          const label = (bullet.label || "").trim();
-          const desc = (bullet.short_desc || "").trim();
-          const labelHtml = label ? `<strong>${label}</strong>` : "";
-          const descHtml = desc ? ` — ${desc}` : "";
-          const delay = index * 0.05;
-          return `<li style="animation-delay: ${delay}s">${labelHtml}${descHtml}</li>`;
-        }).join("");
-
-        bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
+        const html = buildBulletHtml(clamped);
+        console.log("[RFP_SUMMARY] Setting innerHTML to:", html.substring(0, 200));
+        bodyEl.innerHTML = html;
         return;
       }
 
       // Fallback: parse summary_text if structured bullets unavailable (legacy compatibility)
       const raw = (summary.summary_text || "").trim();
-      console.log("[RFP_SUMMARY] Fallback to text parsing");
+      console.log("[RFP_SUMMARY] Fallback to text parsing, raw length:", raw.length);
       
       if (!raw) {
         bodyEl.innerHTML = '<p class="text-muted">Upload an RFP to see the AI summary.</p>';
@@ -1478,26 +1488,54 @@
         .filter(Boolean)
         .map(line => line.replace(/^•\s*/, ""))
         .slice(0, 6);
+      
+      console.log("[RFP_SUMMARY] Parsed lines:", lines.length);
 
       if (lines.length === 0) {
         bodyEl.innerHTML = '<p class="text-muted">No summary details available.</p>';
         return;
       }
 
-      const itemsHtml = lines.map((line, index) => {
-        const [label, ...rest] = line.split(":");
-        const labelHtml = label ? `<strong>${label.trim()}</strong>` : "";
-        const desc = rest.join(":").trim();
-        const descHtml = desc ? ` — ${desc}` : "";
-        const delay = index * 0.05;
-        return `<li style="animation-delay: ${delay}s">${labelHtml}${descHtml}</li>`;
-      }).join("");
+      // Convert parsed text lines to bullet format
+      const parsedItems = lines.map(line => {
+        const colonIdx = line.indexOf(":");
+        if (colonIdx > 0 && colonIdx < 40) {
+          return { label: line.slice(0, colonIdx).trim(), short_desc: line.slice(colonIdx + 1).trim() };
+        }
+        return { label: "", short_desc: line };
+      });
 
-      bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
+      const html = buildBulletHtml(parsedItems);
+      console.log("[RFP_SUMMARY] Setting fallback innerHTML to:", html.substring(0, 200));
+      bodyEl.innerHTML = html;
+      } catch (err) {
+        console.error("[RFP_SUMMARY] ERROR in renderRfpSummary:", err);
+        const bodyEl = document.getElementById("rfp-summary-body");
+        if (bodyEl) {
+          bodyEl.innerHTML = '<p style="color: #f00;">Error rendering summary. See console for details.</p>';
+        }
+      }
     }
+    
+    // Global test function for debugging bullets in browser console
+    window.testRfpBullets = function() {
+      const testSummary = {
+        summary_bullets: [
+          { label: "Test Bullet 1", short_desc: "This is a test description for the first bullet point." },
+          { label: "Test Bullet 2", short_desc: "This is a test description for the second bullet point." },
+          { label: "Test Bullet 3", short_desc: "This is a test description for the third bullet point." }
+        ]
+      };
+      renderRfpSummary(testSummary);
+      console.log("[TEST] Bullets rendered. Check #rfp-summary-body element.");
+    };
 
     // GPT 5.1 Pro spec: renderSummaryCard - single source of truth for Step 2 AI Summary
     function renderSummaryCard(summary) {
+      console.log("[RENDER_SUMMARY_CARD] Called with summary:", summary);
+      console.log("[RENDER_SUMMARY_CARD] summary_bullets:", summary?.summary_bullets);
+      console.log("[RENDER_SUMMARY_CARD] rfp-summary-body exists:", !!document.getElementById('rfp-summary-body'));
+      
       const errorEl = document.getElementById('summary-error');
       const cardEl = document.getElementById('ai-summary-card');
       
