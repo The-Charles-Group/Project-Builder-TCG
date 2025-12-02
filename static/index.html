@@ -407,8 +407,8 @@
       </div>
 
       <!-- Project Scenario (Editable Table) -->
-      <div class="scenarios" style="margin-bottom: 20px;">
-        <div class="scenario">
+      <div class="scenarios" style="margin-bottom: 20px; grid-template-columns: 1fr;">
+        <div class="scenario" style="width: 100%;">
           <h3>Project Scenario</h3>
           <div id="scenarioA">(No data)</div>
         </div>
@@ -2242,26 +2242,60 @@
           deliverableName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${it.retainer_months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
         }
         
-        // Determine cadence based on retainer months
+        // Read cadence directly from item (set by savePricingRow), falling back to inference from retainer_months
         let cadenceValue = 'One-Time';
-        if (it.retainer_months) {
+        let periods = 1;
+        
+        // Map backend format to display format
+        const cadenceMap = {
+          'monthly': 'Monthly',
+          'quarterly': 'Quarterly', 
+          'semi_annual': 'Semi-Annual',
+          'annual': 'Annual',
+          'one_time': 'One-Time',
+          'Monthly': 'Monthly',
+          'Quarterly': 'Quarterly',
+          'Semi-Annual': 'Semi-Annual',
+          'Annual': 'Annual',
+          'One-Time': 'One-Time'
+        };
+        
+        // PRIORITY 1: Use explicit billing_cadence if set (saved by user in edit mode)
+        if (it.billing_cadence && it.billing_cadence !== 'One-Time' && it.billing_cadence !== 'one_time') {
+          cadenceValue = cadenceMap[it.billing_cadence] || it.billing_cadence;
+          
+          // PRIORITY 1a: Use explicit cadence_units if set
+          if (it.cadence_units && it.cadence_units > 0) {
+            periods = it.cadence_units;
+          } 
+          // PRIORITY 1b: Derive periods from retainer_months and cadence type
+          else if (it.retainer_months && it.retainer_months > 0) {
+            const monthsPerPeriod = {'Monthly': 1, 'Quarterly': 3, 'Semi-Annual': 6, 'Annual': 12}[cadenceValue] || 1;
+            periods = Math.ceil(it.retainer_months / monthsPerPeriod);
+          }
+          // PRIORITY 1c: Derive periods from cadence_price and total price
+          else if (it.cadence_price && it.cadence_price > 0 && it.price && it.price > 0) {
+            periods = Math.round(it.price / it.cadence_price);
+            if (periods < 1) periods = 1;
+          }
+        } 
+        // PRIORITY 2: Infer from retainer_months (legacy behavior)
+        else if (it.retainer_months && it.retainer_months > 0) {
           if (it.retainer_months === 1) cadenceValue = 'Monthly';
           else if (it.retainer_months === 3) cadenceValue = 'Quarterly';
           else if (it.retainer_months === 6) cadenceValue = 'Semi-Annual';
           else if (it.retainer_months === 12) cadenceValue = 'Annual';
-          else cadenceValue = `Monthly (${it.retainer_months}mo)`;
+          else if (it.retainer_months % 3 === 0) {
+            cadenceValue = 'Quarterly';
+            periods = it.retainer_months / 3;
+          } else {
+            cadenceValue = 'Monthly';
+            periods = it.retainer_months;
+          }
         }
         
-        // Calculate periods based on cadence
-        let periods = 1;
-        if (it.retainer_months) {
-          if (cadenceValue === 'Monthly') periods = it.retainer_months;
-          else if (cadenceValue === 'Quarterly') periods = Math.ceil(it.retainer_months / 3);
-          else if (cadenceValue === 'Semi-Annual') periods = Math.ceil(it.retainer_months / 6);
-          else if (cadenceValue === 'Annual') periods = Math.ceil(it.retainer_months / 12);
-        }
-        const pricePerPeriod = periods > 0 ? Math.round(it.price / periods) : it.price;
         const isRetainer = cadenceValue !== 'One-Time';
+        const pricePerPeriod = periods > 0 ? Math.round(it.price / periods) : it.price;
         
         html += `<tr data-row="${idx}" data-deliverable="${it.deliverable_code || it.deliverable}" ${isRetainer ? 'style="background: linear-gradient(90deg, rgba(139,92,246,0.05), rgba(139,92,246,0.02));"' : ''}>
           <td>${deliverableName}</td>
@@ -2629,7 +2663,12 @@
           'Annual': 'annual'
         };
         const billingCadence = billingCadenceMap[newCadence] || 'one_time';
-        item.billing_cadence = newCadence;
+        
+        // Set billing_cadence (CANONICAL lowercase value) and cadence_units on item BEFORE renderScenario
+        // CRITICAL: Use billingCadence (canonical) not newCadence (display string)
+        item.billing_cadence = billingCadence;
+        item.cadence_units = newPeriods;
+        item.cadence_price = pricePerPeriod;
         
         console.log(`[savePricingRow] Persisting to SCENARIO_STORE: deliverable=${deliverableCode} hours=${newHours} rate=${newRate} cadence=${newCadence} billing_cadence=${billingCadence} periods=${newPeriods} months=${months} price=${newPrice}`);
         
@@ -2653,6 +2692,27 @@
         } else {
           console.warn('[savePricingRow] ScenarioStore not available, edit not persisted to backend');
         }
+        
+        // CRITICAL: Re-assign cadence fields to item AFTER async operations to ensure they persist
+        // This prevents any race conditions from emit() or async callbacks overwriting our values
+        item.billing_cadence = billingCadence;
+        item.cadence_units = newPeriods;
+        item.cadence_price = pricePerPeriod;
+        item.retainer_months = months;
+        item.total_hours = newHours;
+        item.effective_rate = newRate;
+        item.price = newPrice;
+        
+        // Also update window global to ensure persistence across re-renders
+        window[`currentScenario_${targetId}`] = scenario;
+        
+        console.log(`[savePricingRow] Item after update:`, {
+          deliverable: item.deliverable,
+          billing_cadence: item.billing_cadence,
+          cadence_units: item.cadence_units,
+          cadence_price: item.cadence_price,
+          retainer_months: item.retainer_months
+        });
         
         // Re-render to update all display values properly
         renderScenario(targetId, scenario);
