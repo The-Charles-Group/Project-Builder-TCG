@@ -1374,20 +1374,27 @@
     // Spec: renderRfpSummary - parses summary_text into bullet list
     function renderRfpSummary(summary) {
       const bodyEl = document.getElementById("rfp-summary-body");
-      if (!bodyEl) return;
+      if (!bodyEl) {
+        console.error("[RFP_SUMMARY] Could not find element rfp-summary-body");
+        return;
+      }
 
       const raw = (summary.summary_text || "").trim();
+      console.log("[RFP_SUMMARY] raw summary_text:", JSON.stringify(raw.substring(0, 200)));
+      
       if (!raw) {
         bodyEl.innerHTML = '<p class="text-muted">No RFP summary available.</p>';
         return;
       }
 
-      // Split on newlines, clean up, and strip the leading bullet dot
+      // Split on newlines OR bullet markers (• followed by space) for robustness
       const lines = raw
-        .split(/\n+/)
+        .split(/\n+|(?=•\s)/)
         .map(line => line.trim())
         .filter(Boolean)
         .map(line => line.replace(/^•\s*/, ""));
+
+      console.log("[RFP_SUMMARY] Parsed lines:", lines.length, lines);
 
       const itemsHtml = lines
         .map(line => {
