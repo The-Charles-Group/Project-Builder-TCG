@@ -1761,17 +1761,12 @@
           console.warn('[BUILD] updateAIButtonStates function not found');
         }
         
-        // Render scenario A - use renderScenario which receives data directly as parameter
+        // Render scenario A
         if (typeof renderScenario === 'function') {
           renderScenario('scenarioA', scenarios.A);
           console.log('[BUILD] Rendered scenario A');
         } else {
           console.warn('[BUILD] renderScenario function not found');
-        }
-        
-        // Also update the unified pricing table for cadence editing (uses global SCENARIOS)
-        if (typeof updatePricingTable === 'function') {
-          updatePricingTable();
         }
         
         // Display budget information if provided
@@ -2226,112 +2221,70 @@
         <table id="${targetId}-table">
           <thead><tr>
             <th>Deliverable</th>
-            <th>Cadence</th>
-            <th style="width: 70px;">Units</th>
-            <th style="width: 80px;">Total Mo.</th>
             <th>Hours</th>
             <th>Rate (USD)</th>
-            <th style="width: 100px;">$/Month</th>
-            <th>Total Price</th>
+            <th>Price (USD)</th>
+            <th>Cadence</th>
             <th>Tasks</th>
+            <th style="width: 80px;">Actions</th>
           </tr></thead>
           <tbody>
       `;
       scenario.items.forEach((it, idx) => {
         const tasks = (it.schedule || []).map(t => t.task_group).join(', ');
         const rate = (typeof it.effective_rate !== 'undefined') ? it.effective_rate : (it.total_hours ? (it.price/it.total_hours) : 0);
-        const deliverableCode = it.deliverable_code || it.deliverable;
-        
-        // GPT 5.1 Pro spec: Map backend billing_cadence to UI cadence format
-        const backendCadence = it.billing_cadence || 'one_time';
-        const cadenceMapping = {
-          'one_time': 'ONE_TIME', 'monthly': 'MONTHLY', 'quarterly': 'QUARTERLY',
-          'semi_annual': 'SEMI_ANNUAL', 'annual': 'ANNUAL'
-        };
-        let cadenceValue = cadenceMapping[backendCadence] || 'ONE_TIME';
-        
-        // Fallback to retainer_months-based detection
-        if (cadenceValue === 'ONE_TIME' && it.retainer_months && it.retainer_months > 0) {
-          if (it.retainer_months >= 12) cadenceValue = 'MONTHLY';
-          else if (it.retainer_months >= 6) cadenceValue = 'SEMI_ANNUAL';
-          else if (it.retainer_months >= 3) cadenceValue = 'QUARTERLY';
-          else cadenceValue = 'MONTHLY';
-        }
-        
-        // Compute cadence_units and total_months
-        const monthsPerCadence = { 'ONE_TIME': 0, 'MONTHLY': 1, 'QUARTERLY': 3, 'SEMI_ANNUAL': 6, 'ANNUAL': 12 };
-        const cadenceUnits = it.cadence_units || (cadenceValue === 'MONTHLY' ? 12 : cadenceValue === 'QUARTERLY' ? 4 : cadenceValue === 'SEMI_ANNUAL' ? 2 : 1);
-        const totalMonths = it.retainer_months || (monthsPerCadence[cadenceValue] || 0) * cadenceUnits;
-        const isRetainer = cadenceValue !== 'ONE_TIME' && totalMonths > 0;
-        
-        // Compute prices
-        const totalPrice = it.price || (it.total_hours * rate);
-        const monthlyPrice = it.monthly_price || (isRetainer && totalMonths > 0 ? totalPrice / totalMonths : 0);
         
         let deliverableName = it.deliverable;
-        if (isRetainer) {
-          deliverableName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 Retainer</span>`;
+        if (it.retainer_months && it.retainer_months > 1) {
+          const monthlyPrice = Math.round(it.price / it.retainer_months);
+          deliverableName += ` <span style="color: var(--accent2); font-size: 11px;">🔄 ${it.retainer_months}mo (${window.fmtUSD0(monthlyPrice)}/mo)</span>`;
         }
         
-        html += `<tr data-row="${idx}" data-deliverable="${deliverableCode}" style="${isRetainer ? 'background: rgba(139,92,246,0.05);' : ''}">
+        // Determine cadence based on retainer months
+        let cadenceValue = 'One-Time';
+        if (it.retainer_months) {
+          if (it.retainer_months === 1) cadenceValue = 'Monthly';
+          else if (it.retainer_months === 3) cadenceValue = 'Quarterly';
+          else if (it.retainer_months === 6) cadenceValue = 'Semi-Annual';
+          else if (it.retainer_months === 12) cadenceValue = 'Annual';
+          else cadenceValue = `Monthly (${it.retainer_months}mo)`;
+        }
+        
+        html += `<tr data-row="${idx}" data-deliverable="${it.deliverable_code || it.deliverable}">
           <td>${deliverableName}</td>
-          <td class="editable-cadence">
-            <select class="cadence-select" data-deliverable="${deliverableCode}" 
-                    style="background: var(--card); color: var(--text); border: 1px solid var(--border); 
-                           border-radius: 4px; padding: 4px 8px; font-size: 0.9em; cursor: pointer; width: 100%;"
-                    onchange="updateCadenceFromTable('${targetId}', ${idx}, this.value)">
-              <option value="ONE_TIME" ${cadenceValue === 'ONE_TIME' ? 'selected' : ''}>One-Time</option>
-              <option value="MONTHLY" ${cadenceValue === 'MONTHLY' ? 'selected' : ''}>Monthly</option>
-              <option value="QUARTERLY" ${cadenceValue === 'QUARTERLY' ? 'selected' : ''}>Quarterly</option>
-              <option value="SEMI_ANNUAL" ${cadenceValue === 'SEMI_ANNUAL' ? 'selected' : ''}>Semi-Annual</option>
-              <option value="ANNUAL" ${cadenceValue === 'ANNUAL' ? 'selected' : ''}>Annual</option>
-            </select>
-          </td>
-          <td style="text-align: center;">
-            ${cadenceValue !== 'ONE_TIME' ? 
-              `<input type="number" id="units-${idx}" value="${cadenceUnits}" min="1" max="36" step="1"
-                      onchange="updateUnitsFromTable('${targetId}', ${idx}, this.value)"
-                      style="width: 55px; padding: 4px; border: 1px solid rgba(139,92,246,0.3); 
-                             border-radius: 4px; background: rgba(139,92,246,0.05); 
-                             color: var(--text); text-align: center; font-size: 0.9em;" />` :
-              '<span style="color: var(--muted);">-</span>'}
-          </td>
-          <td style="text-align: center; color: ${isRetainer ? 'var(--accent2)' : 'var(--muted)'}; font-weight: ${isRetainer ? '600' : '400'};">
-            ${isRetainer ? totalMonths : '-'}
-          </td>
           <td class="editable-hours" data-field="hours" data-original="${it.total_hours}">
-            <input type="number" value="${it.total_hours}" min="0" max="9999"
-                   onchange="updateHoursFromTable('${targetId}', ${idx}, this.value)"
-                   style="width: 70px; padding: 4px; border: 1px solid rgba(106,163,255,0.3); 
-                          border-radius: 4px; background: rgba(106,163,255,0.05); 
-                          color: var(--text); text-align: center; font-size: 0.9em;" />
+            <span class="display-value">${window.fmtInt(it.total_hours)}</span>
+            <input type="number" class="edit-input" style="display:none;width:80px;padding:4px;" min="0" max="9999" value="${it.total_hours}">
           </td>
           <td class="editable-rate" data-field="rate" data-original="${rate}">
-            <div style="display: flex; align-items: center; gap: 2px;">
-              <span style="color: var(--muted); font-size: 0.85em;">$</span>
-              <input type="number" value="${Math.round(rate)}" min="0" max="999999" step="5"
-                     onchange="updateRateFromTable('${targetId}', ${idx}, this.value)"
-                     style="width: 60px; padding: 4px; border: 1px solid rgba(106,163,255,0.3); 
-                            border-radius: 4px; background: rgba(106,163,255,0.05); 
-                            color: var(--text); text-align: center; font-size: 0.9em;" />
-            </div>
+            <span class="display-value">${window.fmtUSD2(rate)}</span>
+            <input type="number" class="edit-input" style="display:none;width:100px;padding:4px;" min="0" max="999999" step="0.01" value="${rate}">
           </td>
-          <td style="text-align: right;">
-            ${isRetainer ?
-              `<div style="display: flex; align-items: center; gap: 2px; justify-content: flex-end;">
-                <span style="color: var(--muted); font-size: 0.85em;">$</span>
-                <input type="number" id="monthly-${idx}" value="${Math.round(monthlyPrice)}" min="0" step="100"
-                       onchange="updateMonthlyFromTable('${targetId}', ${idx}, this.value)"
-                       style="width: 70px; padding: 4px; border: 1px solid rgba(139,92,246,0.3); 
-                              border-radius: 4px; background: rgba(139,92,246,0.05); 
-                              color: var(--accent2); text-align: right; font-size: 0.9em;" />
-              </div>` :
-              '<span style="color: var(--muted);">-</span>'}
-          </td>
-          <td class="calculated-price" style="text-align: right; font-weight: 600; color: ${isRetainer ? 'var(--accent2)' : 'var(--accent)'};">
-            ${window.fmtUSD0(totalPrice)}
+          <td class="calculated-price">${window.fmtUSD0(it.price)}</td>
+          <td class="editable-cadence">
+            <select class="cadence-select" data-deliverable="${it.deliverable_code || it.deliverable}" 
+                    style="background: var(--card); color: var(--text); border: 1px solid var(--border); 
+                           border-radius: 4px; padding: 4px 8px; font-size: 0.9em; cursor: pointer;"
+                    onchange="updateCadence('${targetId}', ${idx}, this.value)">
+              <option value="One-Time" ${cadenceValue === 'One-Time' ? 'selected' : ''}>One-Time</option>
+              <option value="Monthly" ${cadenceValue === 'Monthly' ? 'selected' : ''}>Monthly</option>
+              <option value="Quarterly" ${cadenceValue === 'Quarterly' ? 'selected' : ''}>Quarterly</option>
+              <option value="Semi-Annual" ${cadenceValue === 'Semi-Annual' ? 'selected' : ''}>Semi-Annual</option>
+              <option value="Annual" ${cadenceValue === 'Annual' ? 'selected' : ''}>Annual</option>
+            </select>
           </td>
           <td style="font-size:0.85em;color:var(--muted);">${tasks}</td>
+          <td class="actions">
+            <button onclick="editPricingRow('${targetId}', ${idx})" class="edit-btn" style="background:#3b82f6;color:white;border:none;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:0.85em;">
+              ✏️ Edit
+            </button>
+            <button onclick="savePricingRow('${targetId}', ${idx})" class="save-btn" style="display:none;background:#10b981;color:white;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:0.85em;margin-right:4px;">
+              Save
+            </button>
+            <button onclick="cancelPricingEdit('${targetId}', ${idx})" class="cancel-btn" style="display:none;background:#ef4444;color:white;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;font-size:0.85em;">
+              Cancel
+            </button>
+          </td>
         </tr>`;
       });
       html += `
@@ -2435,197 +2388,6 @@
         
         totalsDiv.innerHTML = html;
       }
-    }
-    
-    // GPT 5.1 Pro spec: Cadence update handler for new table format
-    function updateCadenceFromTable(targetId, rowIndex, newCadence) {
-      const scenario = window[`currentScenario_${targetId}`];
-      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
-      
-      const item = scenario.items[rowIndex];
-      const deliverableCode = item.deliverable_code || item.deliverable;
-      
-      // GPT 5.1 Pro spec: Map UI cadence to backend billing_cadence
-      const cadenceMapping = {
-        'ONE_TIME': 'one_time', 'MONTHLY': 'monthly', 'QUARTERLY': 'quarterly',
-        'SEMI_ANNUAL': 'semi_annual', 'ANNUAL': 'annual'
-      };
-      const billingCadence = cadenceMapping[newCadence] || 'one_time';
-      
-      // Compute cadence_units and retainer_months
-      const monthsPerCadence = { 'ONE_TIME': 0, 'MONTHLY': 1, 'QUARTERLY': 3, 'SEMI_ANNUAL': 6, 'ANNUAL': 12 };
-      let defaultUnits = 1;
-      if (newCadence === 'MONTHLY') defaultUnits = 12;
-      else if (newCadence === 'QUARTERLY') defaultUnits = 4;
-      else if (newCadence === 'SEMI_ANNUAL') defaultUnits = 2;
-      
-      const retainerMonths = (monthsPerCadence[newCadence] || 0) * defaultUnits;
-      const isRetainer = newCadence !== 'ONE_TIME' && retainerMonths > 0;
-      
-      // Update item
-      item.billing_cadence = billingCadence;
-      item.cadence_units = defaultUnits;
-      item.retainer_months = retainerMonths;
-      item.is_retainer = isRetainer;
-      
-      console.log(`[Cadence] Updated ${deliverableCode}: billing_cadence=${billingCadence}, cadence_units=${defaultUnits}, retainer_months=${retainerMonths}`);
-      
-      // Sync to backend via ScenarioStore
-      if (typeof updateCadenceType === 'function') {
-        updateCadenceType(deliverableCode, newCadence);
-      } else if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
-        ScenarioStore.patchScenarioItem(deliverableCode, {
-          billing_cadence: billingCadence,
-          cadence_units: defaultUnits,
-          retainer_months: retainerMonths,
-          is_retainer: isRetainer
-        });
-      }
-      
-      // Re-render table to show units input
-      renderScenario(targetId, scenario);
-    }
-    
-    // GPT 5.1 Pro spec: Units update handler
-    function updateUnitsFromTable(targetId, rowIndex, newUnits) {
-      const scenario = window[`currentScenario_${targetId}`];
-      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
-      
-      const item = scenario.items[rowIndex];
-      const deliverableCode = item.deliverable_code || item.deliverable;
-      const cadenceUnits = Math.max(1, Math.min(36, parseInt(newUnits) || 1));
-      
-      // Compute retainer_months based on cadence type
-      const cadence = item.billing_cadence || 'one_time';
-      const monthsPerCadence = { 'one_time': 0, 'monthly': 1, 'quarterly': 3, 'semi_annual': 6, 'annual': 12 };
-      const retainerMonths = (monthsPerCadence[cadence] || 0) * cadenceUnits;
-      
-      // Update item
-      item.cadence_units = cadenceUnits;
-      item.retainer_months = retainerMonths;
-      
-      console.log(`[Cadence] Updated ${deliverableCode}: cadence_units=${cadenceUnits}, retainer_months=${retainerMonths}`);
-      
-      // Sync to backend
-      if (typeof updatePeriods === 'function') {
-        updatePeriods(deliverableCode, cadenceUnits);
-      } else if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
-        ScenarioStore.patchScenarioItem(deliverableCode, {
-          cadence_units: cadenceUnits,
-          retainer_months: retainerMonths
-        });
-      }
-      
-      // Re-render to update total months display
-      renderScenario(targetId, scenario);
-    }
-    
-    // GPT 5.1 Pro spec: Hours update handler
-    function updateHoursFromTable(targetId, rowIndex, newHours) {
-      const scenario = window[`currentScenario_${targetId}`];
-      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
-      
-      const item = scenario.items[rowIndex];
-      const deliverableCode = item.deliverable_code || item.deliverable;
-      const hours = parseFloat(newHours) || 0;
-      
-      // Update item
-      item.total_hours = hours;
-      item.hours = hours;
-      item.Planned_Hours = hours;
-      
-      // Recalculate price
-      const rate = item.effective_rate || item.Rate_USD || 210;
-      const cadenceUnits = item.cadence_units || 1;
-      item.price = hours * rate * cadenceUnits;
-      
-      console.log(`[Pricing] Updated ${deliverableCode}: hours=${hours}, price=${item.price}`);
-      
-      // Sync to backend
-      if (typeof updateCustomHours === 'function') {
-        updateCustomHours(deliverableCode, hours);
-      } else if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
-        ScenarioStore.patchScenarioItem(deliverableCode, {
-          hours: hours,
-          Planned_Hours: hours
-        });
-      }
-      
-      // Update totals and re-render
-      scenario.totals.hours = scenario.items.reduce((sum, it) => sum + (it.total_hours || 0), 0);
-      scenario.totals.price = scenario.items.reduce((sum, it) => sum + (it.price || 0), 0);
-      renderScenario(targetId, scenario);
-    }
-    
-    // GPT 5.1 Pro spec: Rate update handler
-    function updateRateFromTable(targetId, rowIndex, newRate) {
-      const scenario = window[`currentScenario_${targetId}`];
-      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
-      
-      const item = scenario.items[rowIndex];
-      const deliverableCode = item.deliverable_code || item.deliverable;
-      const rate = parseFloat(newRate) || 210;
-      
-      // Update item
-      item.effective_rate = rate;
-      item.Rate_USD = rate;
-      item.blended_rate = rate;
-      
-      // Recalculate price
-      const hours = item.total_hours || item.hours || 0;
-      const cadenceUnits = item.cadence_units || 1;
-      item.price = hours * rate * cadenceUnits;
-      
-      console.log(`[Pricing] Updated ${deliverableCode}: rate=${rate}, price=${item.price}`);
-      
-      // Sync to backend
-      if (typeof updateCustomRate === 'function') {
-        updateCustomRate(deliverableCode, rate);
-      } else if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
-        ScenarioStore.patchScenarioItem(deliverableCode, {
-          Rate_USD: rate,
-          rate: rate
-        });
-      }
-      
-      // Update totals and re-render
-      scenario.totals.price = scenario.items.reduce((sum, it) => sum + (it.price || 0), 0);
-      renderScenario(targetId, scenario);
-    }
-    
-    // GPT 5.1 Pro spec: Monthly price update handler
-    function updateMonthlyFromTable(targetId, rowIndex, newMonthlyPrice) {
-      const scenario = window[`currentScenario_${targetId}`];
-      if (!scenario || !scenario.items || !scenario.items[rowIndex]) return;
-      
-      const item = scenario.items[rowIndex];
-      const deliverableCode = item.deliverable_code || item.deliverable;
-      const monthlyPrice = parseFloat(newMonthlyPrice) || 0;
-      
-      // Compute total price from monthly_price × retainer_months
-      const retainerMonths = item.retainer_months || 12;
-      const totalPrice = monthlyPrice * retainerMonths;
-      
-      // Update item
-      item.monthly_price = monthlyPrice;
-      item.price = totalPrice;
-      item.price_usd = totalPrice;
-      item.Price_USD = totalPrice;
-      
-      console.log(`[Cadence] Updated ${deliverableCode}: monthly_price=${monthlyPrice}, total_price=${totalPrice}`);
-      
-      // Sync to backend
-      if (typeof updateMonthlyPrice === 'function') {
-        updateMonthlyPrice(deliverableCode, monthlyPrice);
-      } else if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
-        ScenarioStore.patchScenarioItem(deliverableCode, {
-          monthly_price: monthlyPrice
-        });
-      }
-      
-      // Update totals and re-render
-      scenario.totals.price = scenario.items.reduce((sum, it) => sum + (it.price || 0), 0);
-      renderScenario(targetId, scenario);
     }
     
     // ISSUE 4: Functions for editing pricing table

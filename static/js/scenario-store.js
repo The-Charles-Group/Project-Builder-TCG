@@ -125,48 +125,40 @@
       this.recompute(); this.emit();
     },
     recompute() {
-      // GPT 5.1 Pro spec: Do NOT recalc prices client-side - let Python apply_cadence_to_item do it.
-      // This function now only aggregates read-only totals from backend-computed values.
       let hours = 0, oneTimeCost = 0, monthlyHours = 0, monthlyCost = 0;
       const rate = Number(this.state.blendedRate || DEFAULTS.blendedRate);
       for (const d of this.state.deliverables) {
-        // Sum component hours if deliverable hours not set
-        const dh = (typeof d.hours === "number" && d.hours > 0) ? d.hours
+        const dh = (typeof d.hours === "number") ? d.hours
                    : (d.components || []).reduce((s,c)=> s + (Number(c.hours||0)||0), 0);
         d.hours = Math.round(dh*10)/10;
         d.rate   = d.rate || rate;
-        
-        // Use backend-computed price if available, else estimate for display only
-        const backendPrice = d.price_usd || d.Price_USD || d.total_price || d.price;
-        if (backendPrice && backendPrice > 0) {
-          d.price = backendPrice;
-        }
-        
-        // Cadence classification for totals aggregation
-        const cad = d.billing_cadence || d.cadence || "one_time";
-        const isRetainer = d.is_retainer || (cad !== "one_time" && cad !== "One-Time");
-        
-        if (isRetainer) {
-          monthlyHours += d.monthly_hours || d.hours || 0;
-          monthlyCost += d.monthly_price || (d.price / (d.retainer_months || 1)) || 0;
+        const cad = d.cadence || "One-Time";
+        if (cad === "One-Time") {
+          d.price = Math.round(d.hours * d.rate);
+          oneTimeCost += d.price;
         } else {
-          oneTimeCost += d.price || 0;
+          const months = Number(d.months || 1);
+          d.price = Math.round(d.hours * d.rate * months);
+          monthlyHours += d.hours;
+          monthlyCost   += Math.round(d.hours * d.rate);
         }
-        hours += d.hours || 0;
-        
-        // Component aggregation (read-only)
+        hours += d.hours;
         for (const c of d.components || []) {
-          c.rate = c.rate || rate;
+          c.rate   = c.rate || rate;
           c.hours = Number(c.hours || 0);
-          const cPrice = c.price_usd || c.Price_USD || c.price;
-          if (cPrice && cPrice > 0) c.price = cPrice;
+          const ccad = c.cadence || d.cadence || "One-Time";
+          if (ccad === "One-Time") c.price = Math.round(c.hours * c.rate);
+          else {
+            const months = Number(c.months || d.months || 1);
+            c.price = Math.round(c.hours * c.rate * months);
+          }
         }
       }
-      this.state.totals.hours = Math.round(hours*10)/10;
-      this.state.totals.oneTimeCost = Math.round(oneTimeCost);
+      this.state.totals.hours              = Math.round(hours*10)/10;
+      this.state.totals.oneTimeCost        = oneTimeCost;
       this.state.totals.monthlyHours = Math.round(monthlyHours*10)/10;
-      this.state.totals.monthlyCost = Math.round(monthlyCost);
-      this.state.totals.grandTotal12 = Math.round(oneTimeCost + (monthlyCost * 12));
+      this.state.totals.monthlyCost        = monthlyCost;
+      this.state.totals.grandTotal12 = oneTimeCost + (monthlyCost * 12);
     },
     async save() {
       try { localStorage.setItem("working_scenario", JSON.stringify(this.state)); } catch(_){}
@@ -209,160 +201,47 @@
     },
     
     async _flushPatches() {
-      // GPT 5.1 Pro spec: Use /api/scenario/sync instead of /api/pricing/scenario/item
-      // This ensures cadence edits are processed by apply_cadence_to_item on the backend
       const sessionId = this.sessionId;
       if (!sessionId) return;
       
       const patches = Object.entries(this._pendingPatches);
-      if (patches.length === 0) return;
-      
       this._pendingPatches = {};
       
-      // Apply patches to local deliverables first
       for (const [patchId, updates] of patches) {
-        let delivId = patchId;
-        let componentId = null;
-        
-        if (patchId.includes("::")) {
-          const parts = patchId.split("::");
-          delivId = parts[0];
-          componentId = parts[1];
+        try {
+          let delivId = patchId;
+          let componentId = null;
+          
+          if (patchId.includes("::")) {
+            const parts = patchId.split("::");
+            delivId = parts[0];
+            componentId = parts[1];
+          }
+          
+          const r = await fetch("/api/pricing/scenario/item", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: sessionId,
+              deliverable_id: delivId,
+              component_id: componentId,
+              hours: updates.hours,
+              rate_usd: updates.rate,
+              cadence: updates.cadence,
+              months: updates.months
+            })
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          
+          console.log(`[ScenarioStore] PATCHED item ${patchId}:`, data.totals);
+          
+          this._updateTotalsFromBackend(data.totals);
+          this.emit();
+        } catch (e) {
+          console.warn(`[ScenarioStore] PATCH failed for ${patchId}:`, e.message);
         }
-        
-        const d = this.state.deliverables.find(x => x.id === delivId);
-        if (!d) continue;
-        
-        if (componentId) {
-          const c = (d.components || []).find(x => x.id === componentId);
-          if (c) Object.assign(c, updates);
-        } else {
-          Object.assign(d, updates);
-        }
       }
-      
-      // Now sync entire scenario to backend
-      await this.syncToBackend();
-    },
-    
-    // Scenario sync versioning for conflict detection
-    _clientVersion: 1,
-    _lastServerVersion: 0,
-    
-    async syncToBackend() {
-      // GPT 5.1 Pro spec: POST to /api/scenario/sync with full scenario
-      // Backend runs apply_cadence_to_item on each item and returns normalized data
-      const sessionId = this.sessionId;
-      if (!sessionId) {
-        console.warn("[ScenarioStore] No session_id, cannot sync to backend");
-        return null;
-      }
-      
-      try {
-        // Build scenario items array with correct field names for backend
-        const items = this.state.deliverables.map(d => ({
-          id: d.id,
-          deliverable_code: d.deliverable_code || d.id,
-          Row_ID: d.Row_ID,
-          title: d.title || d.name,
-          billing_cadence: d.billing_cadence || d.cadence || "one_time",
-          cadence_units: d.cadence_units || 1,
-          cadence_price: d.cadence_price,
-          monthly_price: d.monthly_price,
-          retainer_months: d.retainer_months || d.months,
-          is_retainer: d.is_retainer,
-          hours: d.hours,
-          Planned_Hours: d.Planned_Hours || d.hours,
-          Rate_USD: d.Rate_USD || d.rate,
-          price_usd: d.price_usd || d.Price_USD || d.price,
-          Price_USD: d.Price_USD || d.price_usd || d.price,
-          components: (d.components || []).map(c => ({
-            id: c.id,
-            title: c.title || c.name,
-            hours: c.hours,
-            Rate_USD: c.Rate_USD || c.rate,
-            price_usd: c.price_usd || c.Price_USD || c.price
-          }))
-        }));
-        
-        const payload = {
-          session_id: sessionId,
-          client_version: this._clientVersion++,
-          last_server_version: this._lastServerVersion,
-          scenario: {
-            items: items,
-            totals: this.state.totals
-          },
-          timestamp: Date.now()
-        };
-        
-        const r = await fetch("/api/scenario/sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        
-        if (!r.ok) throw new Error(await r.text());
-        const data = await r.json();
-        
-        console.log("[ScenarioStore] Synced to backend:", data);
-        
-        // Update version tracking
-        this._lastServerVersion = data.serverVersion || this._lastServerVersion;
-        
-        // If server has changes, update local state from server response
-        if (data.hasChanges && data.scenario) {
-          this._applyServerScenario(data.scenario);
-        }
-        
-        // Update totals if available
-        if (data.scenario && data.scenario.totals) {
-          this._updateTotalsFromBackend(data.scenario.totals);
-        }
-        
-        this.emit();
-        return data;
-        
-      } catch (e) {
-        console.warn("[ScenarioStore] Sync failed:", e.message);
-        return null;
-      }
-    },
-    
-    _applyServerScenario(serverScenario) {
-      // Apply server-computed values back to local deliverables
-      if (!serverScenario || !serverScenario.items) return;
-      
-      const serverItemsById = {};
-      for (const item of serverScenario.items) {
-        const id = item.id || item.deliverable_code || item.Row_ID;
-        if (id) serverItemsById[id] = item;
-      }
-      
-      for (const d of this.state.deliverables) {
-        const servItem = serverItemsById[d.id] || serverItemsById[d.deliverable_code];
-        if (!servItem) continue;
-        
-        // Apply backend-computed cadence fields
-        d.billing_cadence = servItem.billing_cadence || d.billing_cadence;
-        d.cadence_units = servItem.cadence_units || d.cadence_units;
-        d.cadence_price = servItem.cadence_price;
-        d.monthly_price = servItem.monthly_price;
-        d.retainer_months = servItem.retainer_months;
-        d.is_retainer = servItem.is_retainer;
-        d.monthly_hours = servItem.monthly_hours;
-        
-        // Apply backend-computed pricing
-        d.price_usd = servItem.price_usd || servItem.Price_USD;
-        d.Price_USD = servItem.Price_USD || servItem.price_usd;
-        d.price = d.price_usd || d.Price_USD;
-        
-        // Apply backend-computed hours
-        d.hours = servItem.hours || servItem.Planned_Hours || d.hours;
-        d.Planned_Hours = servItem.Planned_Hours || d.hours;
-      }
-      
-      console.log("[ScenarioStore] Applied server scenario to local state");
     },
     
     _updateTotalsFromBackend(totals) {
