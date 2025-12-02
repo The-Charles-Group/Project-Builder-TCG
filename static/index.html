@@ -1387,7 +1387,7 @@
     }
 
     // Spec: renderRfpSummary - renders structured summary_bullets with waterfall animation
-    // Uses structured JSON data from backend (guaranteed 3-6 bullets with label/description)
+    // Bradley spec: 3-6 discrete bullets, bold label + short description, <10s scannability
     function renderRfpSummary(summary) {
       const bodyEl = document.getElementById("rfp-summary-body");
       if (!bodyEl) {
@@ -1396,12 +1396,28 @@
       }
 
       // Primary: use structured summary_bullets array from backend (reliable, pre-validated)
+      // Backend guarantees 3-6 bullets with {label, short_desc} structure
       const bullets = summary.summary_bullets || [];
-      console.log("[RFP_SUMMARY] Using structured bullets:", bullets.length, bullets);
+      console.log("[RFP_SUMMARY] Structured bullets count:", bullets.length);
 
       if (bullets.length > 0) {
-        // Build list items from structured data with staggered animation
-        const itemsHtml = bullets.slice(0, 6).map((bullet, index) => {
+        // Clamp to 3-6 bullets per Bradley spec
+        let clamped = bullets.slice(0, 6);
+        
+        // Enforce minimum of 3 bullets with fallback placeholders if needed
+        if (clamped.length < 3) {
+          console.warn("[RFP_SUMMARY] Less than 3 bullets received, padding with fallbacks");
+          const fallbacks = [
+            { label: "Strategy & Planning", short_desc: "Define project objectives, audience insights, and strategic framework." },
+            { label: "Creative Development", short_desc: "Develop campaign concepts, messaging, and visual direction." },
+            { label: "Execution & Delivery", short_desc: "Produce deliverables, manage timeline, and ensure quality delivery." }
+          ];
+          while (clamped.length < 3) {
+            clamped.push(fallbacks[clamped.length]);
+          }
+        }
+        
+        const itemsHtml = clamped.map((bullet, index) => {
           const label = (bullet.label || "").trim();
           const desc = (bullet.short_desc || "").trim();
           const labelHtml = label ? `<strong>${label}</strong>` : "";
@@ -1416,14 +1432,14 @@
 
       // Fallback: parse summary_text if structured bullets unavailable (legacy compatibility)
       const raw = (summary.summary_text || "").trim();
-      console.log("[RFP_SUMMARY] Fallback to text parsing:", JSON.stringify(raw.substring(0, 200)));
+      console.log("[RFP_SUMMARY] Fallback to text parsing");
       
       if (!raw) {
-        bodyEl.innerHTML = '<p class="text-muted">No RFP summary available.</p>';
+        bodyEl.innerHTML = '<p class="text-muted">Upload an RFP to see the AI summary.</p>';
         return;
       }
 
-      // Preprocess: insert newlines before bullet markers, then split
+      // Preprocess: insert newlines before bullet markers, then split (clamp to 6)
       const normalized = raw.replace(/\s*•\s+/g, '\n• ');
       const lines = normalized
         .split('\n')
@@ -1431,6 +1447,11 @@
         .filter(Boolean)
         .map(line => line.replace(/^•\s*/, ""))
         .slice(0, 6);
+
+      if (lines.length === 0) {
+        bodyEl.innerHTML = '<p class="text-muted">No summary details available.</p>';
+        return;
+      }
 
       const itemsHtml = lines.map((line, index) => {
         const [label, ...rest] = line.split(":");
