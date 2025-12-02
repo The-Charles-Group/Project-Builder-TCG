@@ -307,11 +307,36 @@
           <button id="apply-btn">Apply Selection</button>
         </section>
 
-        <!-- Right Panel: AI Summary -->
+        <!-- Right Panel: AI Summary (GPT 5.1 Pro spec) -->
         <section id="right-panel">
-          <h3>AI Summary</h3>
-          <div id="wordcount"></div>
-          <pre id="summary"></pre>
+          <div id="ai-summary-card">
+            <!-- Header with AI tag and complexity pill -->
+            <div id="summary-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+              <span id="ai-planner-tag" style="font-weight: 600; color: var(--accent2);">GPT-5 Pro AI Planner</span>
+              <span id="complexity-pill" style="background: var(--accent); color: white; padding: 2px 10px; border-radius: 12px; font-size: 12px;">Complexity: Medium</span>
+            </div>
+            
+            <!-- Summary bullets (3-6 lines) -->
+            <div id="summary-bullets" style="margin-bottom: 16px; line-height: 1.6;"></div>
+            
+            <!-- Key Deliverables list -->
+            <div id="key-deliverables" style="margin-bottom: 16px;">
+              <h4 style="font-size: 14px; margin-bottom: 8px; color: var(--text);">Key Deliverables</h4>
+              <ul id="deliverables-list" style="list-style: disc; padding-left: 20px; font-size: 13px;"></ul>
+            </div>
+            
+            <!-- Meta row: Channels, Markets, Complexity -->
+            <div id="summary-meta" style="font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); padding-top: 12px;">
+              <div style="margin-bottom: 4px;"><strong>Channels:</strong> <span id="meta-channels">Not specified</span></div>
+              <div style="margin-bottom: 4px;"><strong>Markets:</strong> <span id="meta-markets">Not specified</span></div>
+              <div><strong>Word Count:</strong> <span id="wordcount">0</span>/500</div>
+            </div>
+            
+            <!-- Error fallback -->
+            <div id="summary-error" style="display: none; padding: 12px; background: var(--bg-card); border-radius: 8px; color: var(--text-muted);">
+              We couldn't generate an AI summary. You can still proceed using deliverables below.
+            </div>
+          </div>
           
           <!-- Retainer Suggestions -->
           <div id="retainer-hints" style="margin-top: 16px; display: none;">
@@ -1076,15 +1101,21 @@
       try {
         ensureStage2Dom();
 
+        // GPT 5.1 Pro spec: Get mode from Analysis Mode selector
+        const modeInput = document.getElementById('analysis-mode');
+        const mode = modeInput ? modeInput.value : 'fast';
+        
         const fd = new FormData();
         fd.append('file', fileEl.files[0]);
+        fd.append('mode', mode);  // GPT 5.1 Pro spec: Pass mode to backend
 
-        // 1) AI Summary (right panel, GPT-5 only)
+        // 1) AI Summary (right panel, GPT-5 based on mode)
         const sum = await fetch('/api/summarize_by_file', { method: 'POST', body: fd }).then(r => r.json());
         appState.aiSummary = sum;
-
-        setText('wordcount', `${sum.word_count}/500 words`);
-        setText('summary', sum.summary_text);
+        sum._mode = mode; // Track which mode was used
+        
+        // GPT 5.1 Pro spec: Use renderSummaryCard
+        renderSummaryCard(sum);
 
         // 2) DB suggestions (left) strictly from rules
         const sugg = await fetch('/api/suggest_by_file', { method: 'POST', body: fd }).then(r => r.json());
@@ -1186,11 +1217,15 @@
       btn.textContent = 'Analyzing...';
 
       try {
-        // Call AI Summary endpoint
+        // GPT 5.1 Pro spec: Get mode from Analysis Mode selector (hidden input)
+        const modeInput = document.getElementById('analysis-mode');
+        const mode = modeInput ? modeInput.value : 'fast';
+        
+        // Call AI Summary endpoint with mode
         const summaryRes = await fetch('/api/summarize', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ rfp_text: appState.currentRfpText })
+          body: JSON.stringify({ rfp_text: appState.currentRfpText, mode: mode })
         });
         
         if (!summaryRes.ok) {
@@ -1198,6 +1233,10 @@
         }
 
         appState.aiSummary = await summaryRes.json();
+        appState.aiSummary._mode = mode; // Track which mode was used
+        
+        // GPT 5.1 Pro spec: Use renderSummaryCard
+        renderSummaryCard(appState.aiSummary);
 
         await performReconciliation();
         
@@ -1305,12 +1344,91 @@
       }
     }
 
-    // Stage 2: Panel Updates
+    // GPT 5.1 Pro spec: renderSummaryCard - single source of truth for Step 2 AI Summary
+    function renderSummaryCard(summary) {
+      const errorEl = document.getElementById('summary-error');
+      const cardEl = document.getElementById('ai-summary-card');
+      
+      // Handle error case
+      if (!summary || summary.error) {
+        if (errorEl) errorEl.style.display = 'block';
+        return;
+      }
+      if (errorEl) errorEl.style.display = 'none';
+      
+      // Store as window global for other components
+      window.currentRfpSummary = summary;
+      
+      // Update AI Planner tag based on mode
+      const plannerTag = document.getElementById('ai-planner-tag');
+      if (plannerTag) {
+        const mode = summary._mode || 'fast';
+        plannerTag.textContent = mode === 'deep' ? 'GPT-5 Pro AI Planner' : 'Fast AI Planner';
+      }
+      
+      // Update complexity pill
+      const complexityPill = document.getElementById('complexity-pill');
+      if (complexityPill) {
+        const complexity = summary.complexity || 'Not specified';
+        complexityPill.textContent = `Complexity: ${complexity}`;
+        // Color code by complexity
+        if (complexity === 'High') {
+          complexityPill.style.background = '#dc3545';
+        } else if (complexity === 'Low') {
+          complexityPill.style.background = '#28a745';
+        } else {
+          complexityPill.style.background = 'var(--accent)';
+        }
+      }
+      
+      // Render summary as bullets (split on newlines)
+      const bulletsEl = document.getElementById('summary-bullets');
+      if (bulletsEl && summary.summary_text) {
+        const lines = summary.summary_text.split('\n').filter(l => l.trim());
+        const bulletHtml = lines.map(line => {
+          const text = line.startsWith('•') ? line : '• ' + line;
+          return `<div style="margin-bottom: 6px;">${text}</div>`;
+        }).join('');
+        bulletsEl.innerHTML = bulletHtml;
+      }
+      
+      // Render Key Deliverables list
+      const deliverablesList = document.getElementById('deliverables-list');
+      if (deliverablesList && summary.deliverables) {
+        const listHtml = summary.deliverables.map(d => {
+          const label = d.label || d;
+          const desc = d.short_desc ? ` <span style="color: var(--text-muted); font-size: 11px;">(${d.short_desc})</span>` : '';
+          return `<li>${label}${desc}</li>`;
+        }).join('');
+        deliverablesList.innerHTML = listHtml;
+      }
+      
+      // Update meta row
+      const channelsEl = document.getElementById('meta-channels');
+      if (channelsEl) {
+        channelsEl.textContent = (summary.channels && summary.channels.length > 0) 
+          ? summary.channels.join(', ') 
+          : 'Not specified';
+      }
+      
+      const marketsEl = document.getElementById('meta-markets');
+      if (marketsEl) {
+        marketsEl.textContent = (summary.markets && summary.markets.length > 0) 
+          ? summary.markets.join(', ') 
+          : 'Not specified';
+      }
+      
+      // Word count
+      const wordcountEl = document.getElementById('wordcount');
+      if (wordcountEl) {
+        wordcountEl.textContent = summary.word_count || 0;
+      }
+    }
+    
+    // Legacy alias for backward compatibility
     function updateRightPanel() {
       if (!appState.aiSummary) return;
-      
-      document.getElementById('wordcount').textContent = `${appState.aiSummary.word_count}/500 words`;
-      document.getElementById('summary').textContent = appState.aiSummary.summary_text;
+      renderSummaryCard(appState.aiSummary);
     }
     
     async function updateLeftPanel() {

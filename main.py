@@ -719,7 +719,8 @@ LAST_UPLOAD_FILENAME: str | None = None
 RFP_TEXT_CACHE_TEXTAREA: str | None = None  # Text from textarea input
 RFP_TEXT_CACHE_FILE: str | None = None       # Text from uploaded file
 RFP_TEXT_CACHE: str | None = None            # Merged text (backward compatibility)
-# RFP_SUMMARY_CACHE removed - frontend holds window.currentRfpSummary instead
+# GPT 5.1 Pro spec: RFP_SUMMARY_CACHE restored for GET /api/rfp/summary endpoint
+RFP_SUMMARY_CACHE: Optional[Dict[str, Any]] = None  # Stores last computed RfpSummary as dict
 
 # SCENARIO_STORE: Unified storage for session_id -> scenario data
 # Syncs Gantt ↔ Pricing ↔ XML data through a single source of truth
@@ -4449,14 +4450,20 @@ class RfpSummaryItem(BaseModel):
     label: str                       # deliverable name (human-friendly)
     short_desc: str                  # <= 2 sentences
     tasks: list[str] | None = []     # optional, zero or more tasks (strings)
+    deliverable_code: Optional[str] = None  # optional code for DB matching
 
 class RfpSummary(BaseModel):
     summary_text: str                # rendered text for right panel (<= 500 words)
     deliverables: list[RfpSummaryItem]
     word_count: int
+    # GPT 5.1 Pro spec: new fields for Step 2 card
+    channels: List[str] = []         # marketing channels (Paid Social, OOH, etc.)
+    markets: List[str] = []          # geographic markets (Nashville, US, etc.)
+    complexity: Optional[str] = None # Low | Medium | High
 
 class SummarizePayload(BaseModel):
     rfp_text: str | None = None      # optional if using file route
+    mode: str = "fast"               # "fast" | "deep" - fast uses GPT-5 mini, deep uses GPT-5 Pro
 
 # --- Reconcile (Stage 2, middle panel) ---
 class ReconcilePayload(BaseModel):
@@ -4758,40 +4765,71 @@ def validate_ai_response(rfp_text: str, ai_deliverables: List[dict]) -> bool:
     
     return True
 
-def ai_summarize_rfp_text(text: str) -> RfpSummary:
+def _build_summary_text(deliverables: list) -> str:
     """
-    Call GPT‑5 (max compute) with a structured prompt that returns JSON:
-      { "deliverables": [{"label": "...", "short_desc": "...", "tasks": [".."]}, ...] }
-    and a prose summary <= 500 words.
-    This function intentionally avoids any DB lookups.
+    GPT 5.1 Pro spec: Build digestible bullet-point summary from deliverables.
+    Returns newline-separated bullet lines (3-6 bullets max).
+    """
+    if not deliverables:
+        return "No clear deliverables were detected in the RFP. Please review the uploaded document."
+    
+    bullets = []
+    for d in deliverables[:6]:  # Max 6 bullets
+        label = (d.get("label") if isinstance(d, dict) else getattr(d, "label", "")).strip()
+        desc = (d.get("short_desc") if isinstance(d, dict) else getattr(d, "short_desc", "")).strip()
+        if desc:
+            bullets.append(f"• {label}: {desc}")
+        else:
+            bullets.append(f"• {label}")
+    return "\n".join(bullets)
+
+def ai_summarize_rfp_text(text: str, mode: str = "fast") -> RfpSummary:
+    """
+    GPT 5.1 Pro spec: Call GPT to extract deliverables, channels, markets, complexity.
+    
+    Args:
+        text: RFP text to analyze
+        mode: "fast" uses GPT-5 mini, "deep" uses GPT-5 Pro
+    
+    Returns:
+        RfpSummary with all fields populated
     """
     global RFP_SUMMARY_CACHE
+    
+    # GPT 5.1 Pro spec: fast uses GPT-5 mini, deep uses GPT-5 Pro
+    model = "gpt-5-mini" if mode == "fast" else "gpt-5"
+    print(f"[AI_SUMMARIZE] Using mode={mode}, model={model}")
+    
     try:
-        # Create structured prompt for GPT-5
+        # GPT 5.1 Pro spec: Updated prompt to extract all required fields
         system_prompt = """
-You are an agency executive producer.
+You are an agency executive producer analyzing RFPs.
 Read the RFP text and output JSON ONLY in this exact schema:
 
 {
   "deliverables": [
     {"label": "...", "short_desc": "...", "tasks": ["...", "..."]}
-  ]
+  ],
+  "channels": ["Paid Social", "OOH", "Search", ...],
+  "markets": ["Nashville", "US", ...],
+  "complexity": "Low" | "Medium" | "High"
 }
 
 Guidelines:
-- Identify 3–8 concrete agency deliverables needed to fulfill the request:
-  strategy, campaign creative, content production (video/audio/stills), social/community, editorial web/livestream, experiential/IRL, media planning/buying, measurement & reporting, program management/timeline.
-- Each "short_desc" is ≤2 sentences, specific to this RFP, action‑oriented.
-- Use common agency taxonomy for "label" so it will match a database later (e.g., "Brand Strategy", "Campaign Creative", "Content Production (Video/Audio)", "Social Media & Community", "Editorial Microsite & Livestream", "Experiential Activation", "Media Planning & Buying", "Measurement & Reporting", "Program Management & Timeline").
+- Extract 5–10 key deliverables with short 1-2 sentence descriptions specific to this RFP.
+- Use common agency taxonomy for "label" (e.g., "Brand Strategy", "Campaign Creative", "Content Production", "Social Media & Community", "Experiential Activation", "Media Planning & Buying", "Measurement & Reporting", "Program Management & Timeline").
+- Infer marketing channels as a short list (max 8): use canonical names like "Paid Social", "Search", "OOH", "PR", "Experiential", "Digital Video", "CRM", "Influencer", "Email", "Display", "TV", "Radio", "Print".
+- Infer markets (cities/regions/countries) mentioned or implied in the RFP.
+- Estimate complexity based on scope, channels, and markets: Low (1-2 channels, single market, simple deliverables), Medium (3-5 channels, multi-market, moderate deliverables), High (6+ channels, global, complex deliverables).
 - Do NOT quote the RFP; summarize the work we must deliver.
 - Keep total text concise (UI cap is 500 words).
-- IMPORTANT: Your response MUST be specific to the actual RFP content provided. Do not use generic templates.
+- IMPORTANT: Your response MUST be specific to the actual RFP content provided.
 """
 
-        user_prompt = f"Analyze this RFP text and extract the key deliverables:\n\n{text[:8000]}"  # Limit input size
+        user_prompt = f"Analyze this RFP text and extract deliverables, channels, markets, and complexity:\n\n{text[:8000]}"
         
         response = openai_client.chat.completions.create(
-            model="gpt-5",  # Use GPT-5 directly
+            model=model,  # GPT 5.1 Pro spec: use mode-selected model
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -4804,10 +4842,18 @@ Guidelines:
         result = json.loads(response.choices[0].message.content)
         deliverables = result.get("deliverables", [])
         
+        # GPT 5.1 Pro spec: Extract new fields
+        channels = [c.strip() for c in result.get("channels", []) if c and c.strip()]
+        markets = [m.strip() for m in result.get("markets", []) if m and m.strip()]
+        complexity = (result.get("complexity") or "").strip().title() or "Medium"
+        
     except Exception as e:
         print(f"OpenAI error (using smarter fallback): {e}")
         t = (text or "").lower()
         deliverables = []
+        channels = []
+        markets = []
+        complexity = "Medium"
 
         def add(label, desc, *keys):
             if any(k in t for k in keys) and not any(d["label"] == label for d in deliverables):
@@ -4843,6 +4889,18 @@ Guidelines:
             deliverables = [{"label":"Program Management & Timeline",
                              "short_desc":"Create a production timeline and rollout schedule with milestones and owners.",
                              "tasks":[]}]
+        
+        # GPT 5.1 Pro spec: Infer channels/markets from text for fallback
+        channel_keywords = {"paid social": "Paid Social", "social media": "Paid Social", "ooh": "OOH", "out of home": "OOH",
+                           "search": "Search", "seo": "Search", "sem": "Search", "video": "Digital Video", 
+                           "display": "Display", "pr ": "PR", "public relations": "PR", "email": "Email",
+                           "influencer": "Influencer", "experiential": "Experiential", "event": "Experiential"}
+        for kw, ch in channel_keywords.items():
+            if kw in t and ch not in channels:
+                channels.append(ch)
+        
+        # Infer complexity from deliverable count
+        complexity = "Low" if len(deliverables) <= 3 else ("High" if len(deliverables) >= 7 else "Medium")
 
     # Validate deliverables match the RFP (prevent contamination)
     if not validate_ai_response(text, deliverables):
@@ -4859,20 +4917,31 @@ Guidelines:
     for d in deliverables:
         d["short_desc"] = _truncate_to_2_sentences(d.get("short_desc",""))
 
-    # concise prose capped at 500 words
-    bullets = [f"• {d['label']}: {d['short_desc']}" for d in deliverables]
-    prose = "\n".join(bullets)
+    # GPT 5.1 Pro spec: Use _build_summary_text helper for digestible bullets
+    prose = _build_summary_text(deliverables)
     words = _count_words(prose)
     if words > 500:
         # trim from the end
-        # (simple conservative trimming; UI also shows a counter)
+        bullets = prose.split("\n")
         while bullets and _count_words("\n".join(bullets)) > 500:
             bullets.pop()
         prose = "\n".join(bullets)
         words = _count_words(prose)
 
-    summary = RfpSummary(summary_text=prose, deliverables=[RfpSummaryItem(**d) for d in deliverables], word_count=words)
-    # No global cache mutation - frontend holds window.currentRfpSummary instead
+    # GPT 5.1 Pro spec: Include channels, markets, complexity in response
+    summary = RfpSummary(
+        summary_text=prose, 
+        deliverables=[RfpSummaryItem(**d) for d in deliverables], 
+        word_count=words,
+        channels=channels,
+        markets=markets,
+        complexity=complexity
+    )
+    
+    # GPT 5.1 Pro spec: Cache summary for GET /api/rfp/summary endpoint
+    RFP_SUMMARY_CACHE = summary.model_dump()
+    print(f"[AI_SUMMARIZE] Cached summary: channels={channels}, markets={markets}, complexity={complexity}")
+    
     return summary
 
 # --- Name matching for reconciliation (deterministic; DB only used here) ---
@@ -10506,7 +10575,7 @@ def api_summarize(p: SummarizePayload):
         raise HTTPException(400, "rfp_text is required for /api/summarize (use /api/summarize_by_file for uploads).")
     
     # Store textarea text separately and merge with file text if present
-    global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE
+    global RFP_TEXT_CACHE_TEXTAREA, RFP_TEXT_CACHE_FILE, RFP_TEXT_CACHE, RFP_SUMMARY_CACHE
     
     RFP_TEXT_CACHE_TEXTAREA = (p.rfp_text or "").strip() or None
     textarea_text = RFP_TEXT_CACHE_TEXTAREA or ""
@@ -10523,15 +10592,33 @@ def api_summarize(p: SummarizePayload):
     # Cache merged text for backward compatibility
     RFP_TEXT_CACHE = merged_text
     
-    return ai_summarize_rfp_text(merged_text)
+    # GPT 5.1 Pro spec: Pass mode parameter (fast/deep) to ai_summarize_rfp_text
+    mode = p.mode or "fast"
+    print(f"[API_SUMMARIZE] Processing with mode={mode}")
+    summary = ai_summarize_rfp_text(merged_text, mode=mode)
+    
+    # GPT 5.1 Pro spec: Cache for GET endpoint
+    RFP_SUMMARY_CACHE = summary.model_dump()
+    
+    return summary
 
-# Removed /api/rfp/summary_cache endpoint - frontend holds window.currentRfpSummary instead
+@app.get("/api/rfp/summary")
+def api_get_rfp_summary():
+    """
+    GPT 5.1 Pro spec: Return cached RFP summary for frontend page load.
+    Prevents re-processing RFP on every refresh.
+    """
+    global RFP_SUMMARY_CACHE
+    if RFP_SUMMARY_CACHE is None:
+        return {"error": "No summary cached", "summary_text": "", "deliverables": [], "word_count": 0, "channels": [], "markets": [], "complexity": None}
+    return RFP_SUMMARY_CACHE
 
 @app.post("/api/summarize_by_file")
 async def api_summarize_by_file(
     files: List[UploadFile] = File(...), 
     background_tasks: BackgroundTasks = None,
-    analyze_images: bool = Form(True)  # User preference for image analysis
+    analyze_images: bool = Form(True),  # User preference for image analysis
+    mode: str = Form("fast")  # GPT 5.1 Pro spec: fast/deep mode
 ):
     # Validate we have at least one file
     if not files:
@@ -10591,8 +10678,9 @@ async def api_summarize_by_file(
     # NEW: remember for default project name (use first file)
     LAST_UPLOAD_FILENAME = filenames[0] if filenames else "upload"
     
-    # Get summary using GPT-5
-    summary = ai_summarize_rfp_text(merged_text)
+    # GPT 5.1 Pro spec: Get summary with mode parameter
+    print(f"[API_SUMMARIZE_BY_FILE] Processing with mode={mode}")
+    summary = ai_summarize_rfp_text(merged_text, mode=mode)
     
     # Return summary with job_ids for progress tracking
     # Use .dict() for Pydantic v1 compatibility
