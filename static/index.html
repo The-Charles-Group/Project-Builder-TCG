@@ -317,7 +317,7 @@
             </div>
             
             <!-- Summary bullets (3-6 lines) -->
-            <div id="summary-bullets" style="margin-bottom: 16px; line-height: 1.6;"></div>
+            <div id="rfp-summary-body" style="margin-bottom: 16px; line-height: 1.6;"></div>
             
             <!-- Key Deliverables list -->
             <div id="key-deliverables" style="margin-bottom: 16px;">
@@ -1371,44 +1371,34 @@
       }
     }
 
-    // GPT 5.1 Pro spec: renderRfpSummary - uses summary_bullets when available, falls back to summary_text
+    // Spec: renderRfpSummary - parses summary_text into bullet list
     function renderRfpSummary(summary) {
-      const bodyEl = document.getElementById("summary-bullets");
+      const bodyEl = document.getElementById("rfp-summary-body");
       if (!bodyEl) return;
 
-      // Use summary_bullets when available, fall back to parsing summary_text
-      const bullets =
-        (summary.summary_bullets && summary.summary_bullets.length)
-          ? summary.summary_bullets.map(b => ({
-              label: b.label || "",
-              short_desc: b.short_desc || ""
-            }))
-          : (summary.summary_text || "")
-              .split(/\n+/)
-              .map(line => line.trim())
-              .filter(Boolean)
-              .map(line => {
-                // Strip leading bullet marker "• "
-                line = line.replace(/^•\s*/, "");
-                // _build_summary_text uses "Label: description" format
-                // Split on first colon as per spec
-                const [label, ...rest] = line.split(":");
-                return {
-                  label: (label || "").trim(),
-                  short_desc: rest.join(":").trim()
-                };
-              });
-
-      if (!bullets.length) {
+      const raw = (summary.summary_text || "").trim();
+      if (!raw) {
         bodyEl.innerHTML = '<p class="text-muted">No RFP summary available.</p>';
         return;
       }
 
-      const itemsHtml = bullets.map(b => {
-        const labelHtml = b.label ? `<strong>${b.label}</strong>` : "";
-        const descHtml  = b.short_desc ? ` — ${b.short_desc}` : "";
-        return `<li>${labelHtml}${descHtml}</li>`;
-      }).join("");
+      // Split on newlines, clean up, and strip the leading bullet dot
+      const lines = raw
+        .split(/\n+/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => line.replace(/^•\s*/, ""));
+
+      const itemsHtml = lines
+        .map(line => {
+          // Bold the label before the colon, like "Brand Strategy"
+          const [label, ...rest] = line.split(":");
+          const labelHtml = label ? `<strong>${label.trim()}</strong>` : "";
+          const desc = rest.join(":").trim();
+          const descHtml = desc ? ` — ${desc}` : "";
+          return `<li>${labelHtml}${descHtml}</li>`;
+        })
+        .join("");
 
       bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
     }

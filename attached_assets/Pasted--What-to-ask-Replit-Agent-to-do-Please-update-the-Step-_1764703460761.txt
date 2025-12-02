@@ -1,0 +1,95 @@
+📌 What to ask Replit Agent to do
+
+Please update the Step 2 “RFP Summary” card so the summary is rendered as a proper bullet list (like the Key Deliverables list) in both Fast and Deep modes. The backend is already returning summary.summary_text as newline‑separated bullet lines starting with •. 
+
+step 3 fixing cadence_12-01-25
+
+1) Frontend: render summary_text as <ul><li> bullets
+
+In the JS that renders the RFP Summary card (the same file where we currently set the text of the summary paragraph):
+
+Give the summary body a stable element ID (if it doesn’t already have one). For example in the HTML/template:
+
+<div id="rfp-summary-body"></div>
+
+
+Replace the current “just drop the text in” behavior (e.g. innerText = summary.summary_text) with a helper that builds a <ul> like the Key Deliverables section:
+
+function renderRfpSummary(summary) {
+  const bodyEl = document.getElementById("rfp-summary-body");
+  if (!bodyEl) return;
+
+  const raw = (summary.summary_text || "").trim();
+  if (!raw) {
+    bodyEl.innerHTML = '<p class="text-muted">No RFP summary available.</p>';
+    return;
+  }
+
+  // Split on newlines, clean up, and strip the leading bullet dot
+  const lines = raw
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => line.replace(/^•\s*/, ""));
+
+  const itemsHtml = lines
+    .map(line => {
+      // Optional: bold the label before the colon, like “Brand Strategy”
+      const [label, ...rest] = line.split(":");
+      const labelHtml = label ? `<strong>${label.trim()}</strong>` : "";
+      const desc = rest.join(":").trim();
+      const descHtml = desc ? ` — ${desc}` : "";
+      return `<li>${labelHtml}${descHtml}</li>`;
+    })
+    .join("");
+
+  bodyEl.innerHTML = `<ul class="rfp-summary-list">${itemsHtml}</ul>`;
+}
+
+
+Add a tiny bit of CSS so it looks clean (similar spacing to Key Deliverables):
+
+.rfp-summary-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.rfp-summary-list li {
+  line-height: 1.4;
+}
+
+
+After every successful /api/summarize or /api/rfp/summary response, always call this helper:
+
+fetch("/api/summarize", { method: "POST", body: ... })
+  .then(res => res.json())
+  .then(summary => {
+    window.currentRfpSummary = summary;
+    renderRfpSummary(summary);  // <-- call for BOTH fast and deep
+    // existing code that updates Key Deliverables, Channels, Markets, Complexity stays the same
+  });
+
+
+The toggle between Fast AI Planner and GPT‑5 Pro AI Planner already passes mode: "fast" or "deep" to the backend. Both modes should still share this same renderRfpSummary helper; the only difference is the text the model generates.
+
+2) Backend (no big change needed, just confirm)
+
+In main.py, we already have _build_summary_text returning newline‑separated bullet lines with leading • for each deliverable, max 6 bullets. 
+
+step 3 fixing cadence_12-01-25
+
+Just confirm that ai_summarize_rfp_text is using this helper for summary.summary_text in both fast and deep modes (it is currently). 
+
+step 3 fixing cadence_12-01-25
+
+
+No further backend change is required for the UI bullet list to work.
+
+Once this is wired:
+
+Fast & Deep mode both show the same clean bullet layout (same HTML/CSS).
+
+Deep mode will just have richer text inside those bullets because it’s using the larger GPT‑5 model.
