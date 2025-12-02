@@ -1,0 +1,235 @@
+1. Backend: make the bullets short & structured
+
+You already have the LLM adapter + _build_summary_text in main.py that turns deliverables into bullets. 
+
+step 3 fixing cadence_12-01-25
+
+Right now each short_desc can still be long, so each bullet is chunky. Let’s tighten it up.
+
+1.1 Add a word‑based truncation helper
+
+In the LLM adapter section (right after _truncate_to_2_sentences), add:
+
+def _truncate_words(s: str, max_words: int = 30) -> str:
+    """Trim text to at most max_words words."""
+    words = re.findall(r"\b\w+\b", s or "")
+    if len(words) <= max_words:
+        return (s or "").strip()
+    return " ".join(words[:max_words]).strip() + "…"
+
+
+(You already import re above in that section, so you’re covered. 
+
+step 3 fixing cadence_12-01-25
+
+)
+
+1.2 Use it when normalizing deliverables
+
+In ai_summarize_rfp_text(text: str, mode: str = "fast") you’ve got this “enforce constraints” loop: 
+
+step 3 fixing cadence_12-01-25
+
+for d in deliverables:
+    d["short_desc"] = _truncate_to_2_sentences(d.get("short_desc",""))
+
+
+Change it to:
+
+for d in deliverables:
+    # first clamp to max 2 sentences, then clamp to ~30 words
+    desc = _truncate_to_2_sentences(d.get("short_desc", ""))
+    d["short_desc"] = _truncate_words(desc, 30)
+
+
+Result: each bullet becomes something like:
+
+• Brand Strategy: Position the hotel and residences, define key audiences, and set the strategic platform for all marketing.
+
+instead of a mini‑essay.
+
+1.3 Keep _build_summary_text as the single source of truth
+
+You already generate summary_text from deliverables via _build_summary_text, limited to 6 bullets and joined with \n: 
+
+step 3 fixing cadence_12-01-25
+
+prose = _build_summary_text(deliverables)
+words = _count_words(prose)
+...
+summary = RfpSummary(
+    summary_text=prose,
+    deliverables=[RfpSummaryItem(**d) for d in deliverables],
+    word_count=words,
+    channels=channels,
+    markets=markets,
+    complexity=complexity,
+)
+
+
+Leave that pattern as-is — it’s good. We’ll fix how the frontend renders those \ns.
+
+1.4 Make sure there is only one ai_summarize_rfp_text
+
+The doc still contains an older ai_summarize_rfp_text(text: str) version and an old /api/summarize that don’t know about mode, channels, markets, or complexity. 
+
+step 3 fixing cadence_12-01-25
+
+Ask Replit Agent to:
+
+Delete / comment out any older def ai_summarize_rfp_text(text: str) that:
+
+has no mode parameter, and
+
+returns only deliverables + prose.
+
+Keep only the ai_summarize_rfp_text(text: str, mode: str = "fast") version that:
+
+chooses model = "gpt-5-mini" if mode == "fast" else "gpt-5", and
+
+returns RfpSummary with channels, markets, and complexity. 
+
+step 3 fixing cadence_12-01-25
+
+Same thing for /api/summarize: keep the one that takes SummarizePayload with mode and sets RFP_SUMMARY_CACHE. 
+
+step 3 fixing cadence_12-01-25
+
+That guarantees both fast & deep use the same summary pipeline; deep just swaps the model to full GPT‑5.
+
+1.5 Wire mode through the file‑upload endpoint too
+
+Right now api_summarize_by_file still calls ai_summarize_rfp_text(merged_text) without a mode. 
+
+step 3 fixing cadence_12-01-25
+
+Change the signature to accept mode as a form field, and pass it through:
+
+@app.post("/api/summarize_by_file")
+async def api_summarize_by_file(
+    files: List[UploadFile] = File(...),
+    background_tasks: BackgroundTasks = None,
+    analyze_images: bool = Form(True),
+    mode: str = Form("fast"),  # or "deep" as your default
+):
+    ...
+    summary = ai_summarize_rfp_text(merged_text, mode=mode)
+
+
+Now both:
+
+/api/summarize (textarea)
+
+/api/summarize_by_file (uploads)
+
+obey the same fast/deep toggle and still return channels / markets / complexity in the same shape. 
+
+step 3 fixing cadence_12-01-25
+
+2. Frontend: render real bullets instead of a “clunky paragraph”
+
+Backend is already giving you newline‑separated bullets in summary.summary_text (e.g. "• Brand Strategy: ...\n• Brand Identity: ..."). 
+
+step 3 fixing cadence_12-01-25
+
+But the UI is almost certainly doing something like:
+
+summaryTextEl.textContent = summary.summary_text;
+
+
+which collapses newlines into spaces, hence your screenshot.
+
+2.1 Render as a <ul> / <li> list
+
+Where you render the RFP summary card in Step 2:
+
+Give the body area an ID, e.g. <div id="rfp-summary-body"></div>.
+
+Replace the plain text assignment with something like:
+
+function renderSummaryCard(summary) {
+  const body = document.getElementById("rfp-summary-body");
+  body.innerHTML = "";
+
+  const bullets = (summary.summary_text || "")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  const ul = document.createElement("ul");
+  ul.className = "rfp-summary-bullets";
+
+  bullets.forEach(line => {
+    const li = document.createElement("li");
+    // strip the leading "• " if present
+    li.textContent = line.replace(/^•\s*/, "");
+    ul.appendChild(li);
+  });
+
+  body.appendChild(ul);
+
+  // Key Deliverables list, channels/markets/complexity pills
+  // keep using summary.deliverables, summary.channels, summary.markets, summary.complexity
+}
+
+
+If you’re in React, same idea:
+
+const bullets = (summary.summary_text || "")
+  .split("\n")
+  .map(l => l.trim())
+  .filter(Boolean);
+
+<ul className="rfp-summary-bullets">
+  {bullets.map((line, i) => (
+    <li key={i}>{line.replace(/^•\s*/, "")}</li>
+  ))}
+</ul>
+
+2.2 A tiny bit of CSS so it feels clean
+.rfp-summary-bullets {
+  list-style: disc;
+  padding-left: 1.25rem;
+  margin: 0;
+}
+
+.rfp-summary-bullets li + li {
+  margin-top: 0.25rem;
+  line-height: 1.4;
+}
+
+
+Combined with the shorter ~30‑word descriptions from the backend, this will read like a neat 3–6 line checklist instead of a wall of text.
+
+3. Make sure fast & deep both reflect this
+
+From the UI side, make sure the same mode flag is sent everywhere:
+
+When calling /api/summarize:
+
+fetch("/api/summarize", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    rfp_text: currentRfpText,
+    mode: summaryMode, // "fast" or "deep"
+  }),
+});
+
+
+When calling /api/summarize_by_file, append the mode:
+
+const form = new FormData();
+files.forEach(f => form.append("files", f));
+form.append("mode", summaryMode);
+
+
+Because the backend logic is identical for both modes (only the model name changes), both fast and deep will:
+
+Produce the same bullet‑style summary_text
+
+Populate deliverables
+
+Fill channels, markets, and complexity consistently. 
+
+step 3 fixing cadence_12-01-25
