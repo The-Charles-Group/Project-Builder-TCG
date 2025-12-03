@@ -1,4 +1,54 @@
 // ================================================================================
+// Toast Notification Utility
+// ================================================================================
+function showToast(message, type = 'info') {
+  // Create toast container if it doesn't exist
+  let container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.style.cssText = `
+      position: fixed; bottom: 20px; right: 20px; z-index: 10000;
+      display: flex; flex-direction: column; gap: 10px;
+    `;
+    document.body.appendChild(container);
+  }
+  
+  // Create toast element
+  const toast = document.createElement('div');
+  const bgColor = type === 'success' ? 'rgba(16, 185, 129, 0.95)' : 
+                  type === 'error' ? 'rgba(220, 38, 38, 0.95)' : 
+                  'rgba(139, 92, 246, 0.95)';
+  
+  toast.style.cssText = `
+    padding: 12px 20px; background: ${bgColor}; color: white;
+    border-radius: 8px; font-weight: 500; font-size: 0.9em;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3); max-width: 350px;
+    animation: slideIn 0.3s ease-out;
+  `;
+  toast.textContent = message;
+  
+  container.appendChild(toast);
+  
+  // Auto-remove after 3 seconds
+  setTimeout(() => {
+    toast.style.animation = 'slideOut 0.3s ease-in';
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+// Add toast animations to head
+if (!document.getElementById('toast-styles')) {
+  const style = document.createElement('style');
+  style.id = 'toast-styles';
+  style.textContent = `
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+  `;
+  document.head.appendChild(style);
+}
+
+// ================================================================================
 // Theme Management - Dark/Light Mode Toggle
 // ================================================================================
 function toggleTheme() {
@@ -3157,10 +3207,14 @@ function showScenarioComparison(original, rebuilt) {
   modal.innerHTML = `
     <div style="background: var(--card); border: 1px solid var(--accent); border-radius: 12px; 
                 padding: 24px; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto;">
-      <h3 style="margin: 0 0 20px; color: var(--accent);">📊 Scenario Comparison</h3>
+      <h3 style="margin: 0 0 12px; color: var(--accent);">📊 Scenario Comparison</h3>
+      <p style="margin: 0 0 20px; font-size: 0.85em; color: var(--muted);">Click a version to select it</p>
       
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-        <div style="padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px;">
+        <div id="version-original-box" style="padding: 16px; background: rgba(255,255,255,0.05); border-radius: 8px; 
+                    cursor: pointer; border: 2px solid transparent; transition: all 0.2s ease;"
+             onmouseover="this.style.background='rgba(255,255,255,0.1)'; this.style.borderColor='var(--muted)';"
+             onmouseout="this.style.background='rgba(255,255,255,0.05)'; this.style.borderColor='transparent';">
           <h4 style="margin: 0 0 12px; color: var(--muted);">Version 1 (Original)</h4>
           <div style="font-size: 0.9em;">
             ${originalBreakdown.oneTime > 0 ? `<div>One-Time: <strong>$${originalBreakdown.oneTime.toLocaleString()}</strong></div>` : ''}
@@ -3171,9 +3225,15 @@ function showScenarioComparison(original, rebuilt) {
               <strong>Total: $${originalGrandTotal.toLocaleString()}</strong>
             </div>
           </div>
+          <div style="margin-top: 10px; font-size: 0.8em; color: var(--muted); text-align: center;">
+            🔄 Click to rollback
+          </div>
         </div>
         
-        <div style="padding: 16px; background: rgba(139, 92, 246, 0.1); border-radius: 8px;">
+        <div id="version-rebuilt-box" style="padding: 16px; background: rgba(139, 92, 246, 0.1); border-radius: 8px;
+                    cursor: pointer; border: 2px solid var(--accent); transition: all 0.2s ease;"
+             onmouseover="this.style.background='rgba(139, 92, 246, 0.2)';"
+             onmouseout="this.style.background='rgba(139, 92, 246, 0.1)';">
           <h4 style="margin: 0 0 12px; color: var(--accent);">Version ${pricingData.rebuildVersion || 2} (Rebuilt)</h4>
           <div style="font-size: 0.9em;">
             ${rebuiltBreakdown.oneTime > 0 ? `<div>One-Time: <strong>$${rebuiltBreakdown.oneTime.toLocaleString()}</strong></div>` : ''}
@@ -3183,6 +3243,9 @@ function showScenarioComparison(original, rebuilt) {
             <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);">
               <strong>Total: $${rebuiltGrandTotal.toLocaleString()}</strong>
             </div>
+          </div>
+          <div style="margin-top: 10px; font-size: 0.8em; color: var(--accent); text-align: center;">
+            ✓ Currently selected
           </div>
         </div>
       </div>
@@ -3197,7 +3260,7 @@ function showScenarioComparison(original, rebuilt) {
         </div>
       </div>
       
-      <button onclick="this.parentElement.parentElement.remove()" 
+      <button id="comparison-close-btn"
               style="width: 100%; padding: 10px; background: var(--accent); color: white; 
                      border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
         Close
@@ -3206,6 +3269,60 @@ function showScenarioComparison(original, rebuilt) {
   `;
   
   document.body.appendChild(modal);
+  
+  // Add click handlers for version selection
+  const originalBox = modal.querySelector('#version-original-box');
+  const rebuiltBox = modal.querySelector('#version-rebuilt-box');
+  const closeBtn = modal.querySelector('#comparison-close-btn');
+  
+  // Click Version 1 (Original) - Rollback to baseline
+  originalBox.addEventListener('click', async () => {
+    try {
+      originalBox.style.opacity = '0.6';
+      originalBox.innerHTML = '<div style="text-align: center; padding: 20px;"><div class="spinner"></div><div style="margin-top: 10px;">Rolling back...</div></div>';
+      
+      const response = await fetch('/api/pricing/reset_from_step2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: SessionManager?.currentSessionId || 'A' })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('[ROLLBACK] Reset to baseline successful:', result);
+        
+        // Refresh the pricing display
+        if (typeof refreshPricingData === 'function') {
+          await refreshPricingData();
+        }
+        if (typeof updatePricingTable === 'function') {
+          updatePricingTable();
+        }
+        
+        // Close modal and show success message
+        modal.remove();
+        showToast('✅ Rolled back to original pricing', 'success');
+      } else {
+        throw new Error('Reset failed');
+      }
+    } catch (err) {
+      console.error('[ROLLBACK] Error:', err);
+      showToast('❌ Rollback failed: ' + err.message, 'error');
+      modal.remove();
+    }
+  });
+  
+  // Click Version 2 (Rebuilt) - Keep current and close
+  rebuiltBox.addEventListener('click', () => {
+    console.log('[COMPARISON] Keeping rebuilt version');
+    modal.remove();
+    showToast('✓ Keeping rebuilt pricing', 'success');
+  });
+  
+  // Close button
+  closeBtn.addEventListener('click', () => {
+    modal.remove();
+  });
 }
 
 // Helper function to extract deliverable tasks
