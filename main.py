@@ -4972,8 +4972,24 @@ Guidelines:
         words = _count_words(prose)
 
     # GPT 5.1 Pro spec: Build summary_bullets for structured UI rendering
+    # Prepend business context bullets BEFORE deliverable bullets
     summary_bullets = []
-    for d in deliverables[:6]:
+    
+    # Add business context bullets first (if present)
+    if business_overview and business_overview.strip():
+        summary_bullets.append({
+            "label": "Business Overview",
+            "short_desc": business_overview.strip(),
+        })
+    if why_this_rfp and why_this_rfp.strip():
+        summary_bullets.append({
+            "label": "Why this RFP",
+            "short_desc": why_this_rfp.strip(),
+        })
+    
+    # Then add deliverable bullets (max 4 if we have context, else 6)
+    max_deliverables = 4 if len(summary_bullets) > 0 else 6
+    for d in deliverables[:max_deliverables]:
         summary_bullets.append({
             "label": d.get("label", "").strip(),
             "short_desc": d.get("short_desc", "").strip(),
