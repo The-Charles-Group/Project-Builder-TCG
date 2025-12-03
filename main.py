@@ -14052,6 +14052,99 @@ def download_shipped_project(ship_id: str):
         media_type="application/zip"
     )
 
+def calculate_resource_risk(scen: dict, tasks: list, metadata: dict) -> dict:
+    """
+    Inspect timeline tasks and estimate idle-time risk per resource.
+    Returns a dict with:
+      {
+        "summary": {
+          "high_risk_count": int,
+          "total_idle_cost": float
+        },
+        "items": [
+          {
+            "resource": str,
+            "waiting_days": int,
+            "idle_cost": float,
+            "risk_level": "Low" | "Medium" | "High",
+            "recommendation": str,
+          }, ...
+        ]
+      }
+    """
+    if not tasks:
+        return {"summary": {"high_risk_count": 0, "total_idle_cost": 0.0}, "items": []}
+
+    hours_per_day = float(metadata.get("hours_per_day", 6))
+    blended_rate = float(scen.get("blended_rate") or DEFAULT_BILLABLE_RATE_USD)
+    hourly_rate = blended_rate
+
+    from collections import defaultdict
+    by_resource: dict = defaultdict(list)
+    
+    for t in tasks:
+        for r in t.get("resources", []):
+            name = r if isinstance(r, str) else r.get("name", "Unknown")
+            try:
+                start = datetime.datetime.fromisoformat(t["start"].replace("Z", "+00:00"))
+                end = datetime.datetime.fromisoformat(t["end"].replace("Z", "+00:00"))
+            except Exception:
+                continue
+            by_resource[name].append({"start": start, "end": end, "task": t})
+
+    items = []
+    for resource_name, r_tasks in by_resource.items():
+        if not r_tasks:
+            continue
+        r_tasks.sort(key=lambda x: x["start"])
+
+        total_idle_days = 0
+        for i in range(len(r_tasks) - 1):
+            cur = r_tasks[i]
+            nxt = r_tasks[i + 1]
+            gap_days = (nxt["start"].date() - cur["end"].date()).days - 1
+            if gap_days > 0:
+                total_idle_days += gap_days
+
+        if total_idle_days <= 0:
+            continue
+
+        idle_hours = total_idle_days * hours_per_day
+        idle_cost = idle_hours * hourly_rate
+
+        if total_idle_days >= 60 or idle_cost >= 50000:
+            risk_level = "High"
+        elif total_idle_days >= 15 or idle_cost >= 10000:
+            risk_level = "Medium"
+        else:
+            risk_level = "Low"
+
+        recommendation = (
+            "Consider reassigning tasks or adjusting timeline to reduce idle time."
+            if risk_level in ("Medium", "High")
+            else "No immediate action needed."
+        )
+
+        items.append({
+            "resource": resource_name,
+            "waiting_days": int(total_idle_days),
+            "idle_cost": round(float(idle_cost), 2),
+            "risk_level": risk_level,
+            "recommendation": recommendation,
+        })
+
+    high_items = [x for x in items if x["risk_level"] == "High"]
+    total_idle_cost = sum(x["idle_cost"] for x in high_items)
+
+    return {
+        "summary": {
+            "high_risk_count": len(high_items),
+            "total_idle_cost": round(float(total_idle_cost), 2),
+        },
+        "items": items,
+    }
+
+
 @app.post("/api/timeline/save")
 async def save_timeline(request: dict):
     """
@@ -14166,6 +14259,16 @@ async def save_timeline(request: dict):
         print(f"[TIMELINE SAVE] Saved {len(tasks)} tasks for scenario {scenario_letter}")
         print(f"[TIMELINE SAVE] Duration: {total_duration} days, Resources: {len(resource_allocation)}")
         
+        departments_set = set()
+        for item in scen.get("items", []):
+            dept = item.get("Service_Department") or item.get("service_department")
+            if dept:
+                departments_set.add(str(dept))
+        departments = sorted(departments_set)
+        department_count = len(departments)
+        
+        resource_risk = calculate_resource_risk(scen, tasks, metadata)
+        
         return {
             "success": True,
             "message": f"Timeline saved successfully for scenario {scenario_letter}",
@@ -14175,6 +14278,9 @@ async def save_timeline(request: dict):
                 "critical_path_count": len(critical_path),
                 "resource_count": len(resource_allocation),
                 "resource_allocation": resource_allocation,
+                "departments": departments,
+                "departments_count": department_count,
+                "resource_risk": resource_risk,
                 "saved_at": scen["timeline_last_saved"]
             },
             "scenario": scen  # Return updated scenario for frontend sync

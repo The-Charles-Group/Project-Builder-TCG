@@ -910,6 +910,132 @@ let timelineReasoning = null;
 // CRITICAL FIX: Prevent reentrancy freeze when dragging tasks
 let isSyncing = false;
 
+// GPT-5.1 Pro: Timeline metrics state for real-time updates
+let timelineMetrics = null;
+let resourceRisk = null;
+
+// GPT-5.1 Pro: Debounced timeline save function for real-time metrics updates
+const saveTimelineWithMetrics = debounce(async function(tasks) {
+  const session_id = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
+  if (!session_id || !tasks || tasks.length === 0) {
+    console.log('[Timeline Metrics] Skipping save - no session or tasks');
+    return;
+  }
+  
+  try {
+    console.log('[Timeline Metrics] Saving timeline with', tasks.length, 'tasks');
+    
+    const existingMetadata = window.ScenarioStore?.state?.timelineMetadata || {};
+    const mergedMetadata = {
+      ...existingMetadata,
+      hours_per_day: window.ScenarioStore?.state?.hoursPerDay || existingMetadata.hours_per_day || 6
+    };
+    
+    const response = await fetch('/api/timeline/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: session_id,
+        tasks: tasks,
+        metadata: mergedMetadata,
+        reasoning: timelineReasoning || {}
+      })
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      console.log('[Timeline Metrics] Save response:', result.metrics);
+      
+      timelineMetrics = result.metrics || null;
+      resourceRisk = result.metrics?.resource_risk || null;
+      
+      updateTimelineHeaderChips();
+      renderResourceRiskPanel();
+    } else {
+      console.warn('[Timeline Metrics] Save failed:', await response.text());
+    }
+  } catch (error) {
+    console.error('[Timeline Metrics] Error saving timeline:', error);
+  }
+}, 400);
+
+// GPT-5.1 Pro: Update header chips with timeline metrics
+function updateTimelineHeaderChips() {
+  const durationEl = document.getElementById('meta-duration');
+  const tasksEl = document.getElementById('meta-tasks');
+  const criticalEl = document.getElementById('meta-critical');
+  const departmentsEl = document.getElementById('meta-departments');
+  const metadataContainer = document.getElementById('timeline-metadata');
+  
+  if (timelineMetrics) {
+    if (metadataContainer) metadataContainer.style.display = 'block';
+    if (durationEl) durationEl.textContent = `${timelineMetrics.total_duration_days || 0} days`;
+    if (tasksEl) tasksEl.textContent = timelineMetrics.total_tasks || 0;
+    if (criticalEl) criticalEl.textContent = timelineMetrics.critical_path_count || 0;
+    if (departmentsEl) departmentsEl.textContent = timelineMetrics.departments_count || '-';
+  }
+}
+
+// GPT-5.1 Pro: Render Resource Risk Management panel
+function renderResourceRiskPanel() {
+  const section = document.getElementById('resource-risk-section');
+  const summary = document.getElementById('resource-risk-summary');
+  const tbody = document.getElementById('resource-risk-tbody');
+  
+  if (!section) return;
+  
+  section.style.display = 'block';
+  
+  if (!resourceRisk || !resourceRisk.items || resourceRisk.items.length === 0) {
+    if (summary) {
+      summary.innerHTML = `<span style="color: var(--muted);">No resource idle-time risks detected. Resources are efficiently allocated across the timeline.</span>`;
+      summary.style.background = 'rgba(16, 185, 129, 0.1)';
+      summary.style.borderColor = 'rgba(16, 185, 129, 0.2)';
+    }
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="5" style="padding: 20px; text-align: center; color: var(--muted);">All resources are optimally scheduled with no idle gaps.</td></tr>`;
+    }
+    return;
+  }
+  
+  const highRiskCount = resourceRisk.summary?.high_risk_count || 0;
+  const totalIdleCost = resourceRisk.summary?.total_idle_cost || 0;
+  const totalRiskCount = resourceRisk.items.length;
+  
+  if (summary) {
+    if (highRiskCount > 0) {
+      summary.innerHTML = `<strong>${highRiskCount} high-risk resource conflicts detected.</strong> Total potential idle cost: <strong>$${totalIdleCost.toLocaleString()}</strong>`;
+      summary.style.background = 'rgba(239, 68, 68, 0.15)';
+      summary.style.borderColor = 'rgba(239, 68, 68, 0.3)';
+    } else {
+      summary.innerHTML = `<span style="color: #10b981;">No high-risk resource conflicts.</span> ${totalRiskCount} resource(s) with idle time identified. Review below.`;
+      summary.style.background = 'rgba(16, 185, 129, 0.1)';
+      summary.style.borderColor = 'rgba(16, 185, 129, 0.2)';
+    }
+  }
+  
+  if (tbody) {
+    const sortedItems = [...resourceRisk.items].sort((a, b) => b.idle_cost - a.idle_cost);
+    
+    tbody.innerHTML = sortedItems.map(item => {
+      const riskColor = item.risk_level === 'High' ? '#ef4444' : 
+                        item.risk_level === 'Medium' ? '#f59e0b' : '#10b981';
+      const riskBg = item.risk_level === 'High' ? 'rgba(239, 68, 68, 0.2)' : 
+                     item.risk_level === 'Medium' ? 'rgba(245, 158, 11, 0.2)' : 'rgba(16, 185, 129, 0.2)';
+      
+      return `<tr>
+        <td style="padding: 10px; border-bottom: 1px solid var(--border);">${item.resource}</td>
+        <td style="padding: 10px; border-bottom: 1px solid var(--border);">${item.waiting_days} days</td>
+        <td style="padding: 10px; border-bottom: 1px solid var(--border);">$${item.idle_cost.toLocaleString()}</td>
+        <td style="padding: 10px; border-bottom: 1px solid var(--border);">
+          <span style="background: ${riskBg}; color: ${riskColor}; padding: 4px 8px; border-radius: 4px; font-size: 0.85em; font-weight: 600;">${item.risk_level}</span>
+        </td>
+        <td style="padding: 10px; border-bottom: 1px solid var(--border); font-size: 0.9em; color: var(--text-muted);">${item.recommendation}</td>
+      </tr>`;
+    }).join('');
+  }
+}
+
 // Pricing and Retainer State
 let pricingData = {
   deliverables: new Map(),
@@ -1074,6 +1200,9 @@ async function initializeGanttChart(tasks = []) {
           // Show save button
           const saveBtn = document.getElementById('btn-save-timeline');
           if (saveBtn) saveBtn.style.display = '';
+          
+          // GPT-5.1 Pro: Trigger debounced full timeline save for metrics updates
+          saveTimelineWithMetrics(currentTimelineTasks);
         } finally {
           // CRITICAL FIX: Always release lock, even if error occurs
           isSyncing = false;
@@ -4201,6 +4330,9 @@ async function generateAITimeline(retryAttempt = 0) {
       // Show metadata
       const metadataDiv = document.getElementById('timeline-metadata');
       if (metadataDiv) metadataDiv.style.display = '';
+      
+      // GPT-5.1 Pro: Trigger initial timeline save to populate metrics and resource risk
+      saveTimelineWithMetrics(currentTimelineTasks);
       
       // ISSUE FIX 2: Show PDF Download and Save Changes buttons after successful timeline generation
       // These should stay visible permanently once timeline is generated
