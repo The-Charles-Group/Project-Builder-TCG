@@ -1,0 +1,160 @@
+2️⃣ Make the RFP Summary explain the business + “why” the work is needed
+
+Right now ai_summarize_rfp_text only asks the model for deliverables, channels, markets, complexity, and summary_text is built purely from the deliverable bullets.
+
+step 3 fixing cadence_12-01-25
+
+ 
+
+step 3 fixing cadence_12-01-25
+
+You want the right‑hand Step‑2 panel to also say:
+
+What kind of business/client this is
+
+Why they’re issuing the RFP / what they’re trying to achieve
+
+Backend changes to request from the devs
+
+A. Extend the RfpSummary model
+
+In the RfpSummary Pydantic class, add two optional fields for this context:
+
+step 3 fixing cadence_12-01-25
+
+class RfpSummary(BaseModel):
+    summary_text: str
+    deliverables: list[RfpSummaryItem]
+    word_count: int
+
+    # Existing fields
+    channels: List[str] = []
+    markets: List[str] = []
+    complexity: Optional[str] = None
+    summary_bullets: List[Dict[str, str]] = []
+
+    # NEW fields
+    business_overview: Optional[str] = None   # Who the client is / what they do
+    why_this_rfp: Optional[str] = None        # Why they need this work now
+
+
+Make sure any places that construct RfpSummary include these (see below).
+
+B. Update the AI JSON schema in ai_summarize_rfp_text
+
+In ai_summarize_rfp_text, update the system_prompt JSON schema description so the model also returns business_overview and why_this_rfp. Right now the schema in the prompt only has deliverables, channels, markets, complexity.
+
+step 3 fixing cadence_12-01-25
+
+Ask the dev to change it conceptually to:
+
+{
+  "business_overview": "...",
+  "why_this_rfp": "...",
+  "deliverables": [ { "label": "...", "short_desc": "...", "tasks": ["...", "..."] } ],
+  "channels": ["...", "..."],
+  "markets": ["...", "..."],
+  "complexity": "Low" | "Medium" | "High"
+}
+
+
+and add guidelines like:
+
+business_overview: 1–2 sentences on who the client is, what category they’re in, and what they’re launching or promoting.
+
+why_this_rfp: 1–2 sentences on the business problem / objectives and why they’re seeking agency support (launch, growth, new market, etc.).
+
+C. Parse those new fields from the AI result
+
+After parsing structured_data in ai_summarize_rfp_text, pull the two new fields out:
+
+business_overview = (structured_data.get("business_overview") or "").strip()
+why_this_rfp = (structured_data.get("why_this_rfp") or "").strip()
+
+
+In the exception/fallback path (where the code synthesizes generic deliverables), set them to safe generic strings so the API doesn’t break if the model call fails, for example:
+
+if not business_overview:
+    business_overview = "Brand or organization seeking marketing support (details unclear from the RFP extract)."
+
+if not why_this_rfp:
+    why_this_rfp = "They need strategy, creative and media support to achieve their marketing and growth objectives."
+
+
+D. Prepend these to summary_text
+
+summary_text is currently created by _build_summary_text(deliverables) which returns a newline‑separated list of bullet lines (max 6).
+
+step 3 fixing cadence_12-01-25
+
+ 
+
+step 3 fixing cadence_12-01-25
+
+Change that section so it prepends “Business Overview” and “Why this RFP” bullets before the deliverable bullets:
+
+# Existing bullets from deliverables
+prose = _build_summary_text(deliverables)
+
+# NEW: prepend business + why bullets if present
+context_bullets = []
+if business_overview:
+    context_bullets.append(f"• Business Overview: {business_overview}")
+if why_this_rfp:
+    context_bullets.append(f"• Why this RFP: {why_this_rfp}")
+
+if context_bullets:
+    prose = "\n".join(context_bullets + [prose])
+
+words = _count_words(prose)
+if words > 500:
+    prose_bullets = prose.split("\n")
+    while prose_bullets and _count_words("\n".join(prose_bullets)) > 500:
+        prose_bullets.pop()
+    prose = "\n".join(prose_bullets)
+    words = _count_words(prose)
+
+
+This keeps the existing Step‑2 UI behavior (it still just renders summary_text as newline‑separated bullets), but now the first two bullets are about the business and the why, followed by the deliverable bullets the screenshot shows.
+
+E. Include the new fields in the RfpSummary constructor
+
+At the bottom of ai_summarize_rfp_text, where summary = RfpSummary(...) is created, include the new values:
+
+step 3 fixing cadence_12-01-25
+
+summary = RfpSummary(
+    summary_text=prose,
+    deliverables=[RfpSummaryItem(**d) for d in deliverables],
+    word_count=words,
+    channels=channels,
+    markets=markets,
+    complexity=complexity,
+    summary_bullets=summary_bullets,
+    business_overview=business_overview,
+    why_this_rfp=why_this_rfp,
+)
+
+
+Everything that already uses summary_text and summary_bullets will continue to work. The front‑end can optionally use business_overview and why_this_rfp as separate fields later if you want to style them differently.
+
+Front‑end note
+
+If the Step‑2 panel currently just does:
+
+summary.summary_text.split("\n").map(line => <p>{line}</p>)
+
+
+no change is needed. You’ll just start seeing:
+
+• Business Overview: ...
+
+• Why this RFP: ...
+
+• Brand Strategy: ...
+
+• Brand Guidelines & Style Guide: ...
+
+etc.
+
+which is exactly the extra context you wanted.
