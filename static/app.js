@@ -7189,6 +7189,9 @@ function applySmartSelection(mode = 'ai') {
       feedbackDiv.remove();
     }, 5000);
   }
+  
+  // GPT-5.1 Pro: Update Selection Summary to reflect SmartSelectionState counts
+  updateSummaryCounts();
 }
 
 // Make function available globally
@@ -8429,28 +8432,51 @@ function renderComponentsEmptyState(message = 'Select a deliverable to view comp
 
 // Update summary counts and render chips with remove buttons
 function updateSummaryCounts() {
-  const delivCount = APB.step2.selectedCodes.size;
+  // GPT-5.1 Pro: Check if SmartSelectionState is populated (Smart Selection was applied)
+  // If so, use SmartSelectionState for accurate counts; otherwise fall back to APB.step2
+  const useSmartState = SmartSelectionState.selectedDeliverableCodes.length > 0;
   
-  // Count components
-  let compCount = 0;
-  Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSet]) => {
-    if (APB.step2.selectedCodes.has(code)) {
-      compCount += compSet.size;
-    }
-  });
+  let delivCount, compCount, l3Count;
   
-  // Count L3 - only for selected components (fixes Task 4)
-  let l3Count = 0;
-  Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
-    const [code, compName] = key.split('::');
-    // Only count if deliverable is selected AND component is selected
-    if (APB.step2.selectedCodes.has(code)) {
-      const compSet = APB.step2.selectedComponentsByCode[code];
-      if (compSet && compSet.has(compName)) {
-        l3Count += l3Set.size;
+  if (useSmartState) {
+    // Use SmartSelectionState for accurate counts
+    delivCount = SmartSelectionState.selectedDeliverableCodes.length;
+    
+    // Count components from SmartSelectionState
+    compCount = 0;
+    Object.values(SmartSelectionState.selectedComponentsMap).forEach(compArray => {
+      compCount += Array.isArray(compArray) ? compArray.length : 0;
+    });
+    
+    // Count L3 from SmartSelectionState (curated tasks)
+    l3Count = getSmartSelectionL3Count();
+    
+    console.log(`[UpdateSummaryCounts] Using SmartSelectionState: ${delivCount} delivs, ${compCount} comps, ${l3Count} tasks`);
+  } else {
+    // Fall back to APB.step2 for manual selections
+    delivCount = APB.step2.selectedCodes.size;
+    
+    // Count components
+    compCount = 0;
+    Object.entries(APB.step2.selectedComponentsByCode).forEach(([code, compSet]) => {
+      if (APB.step2.selectedCodes.has(code)) {
+        compCount += compSet.size;
       }
-    }
-  });
+    });
+    
+    // Count L3 - only for selected components (fixes Task 4)
+    l3Count = 0;
+    Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
+      const [code, compName] = key.split('::');
+      // Only count if deliverable is selected AND component is selected
+      if (APB.step2.selectedCodes.has(code)) {
+        const compSet = APB.step2.selectedComponentsByCode[code];
+        if (compSet && compSet.has(compName)) {
+          l3Count += l3Set.size;
+        }
+      }
+    });
+  }
   
   // Update DOM with counts
   const delivEl = document.getElementById('s2-summary-deliverables');
