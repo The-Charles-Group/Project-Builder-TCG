@@ -1,0 +1,129 @@
+1️⃣ Wire AI Suggest Retainer Items → Scenario table → XML
+Desired behavior
+
+In Step 2, user clicks “🤖 AI Suggest Retainer Items”.
+
+Modal shows which deliverables should be retainers + suggested months.
+
+When the user hits “Apply & Proceed to Pricing”:
+
+Step 3’s Project Scenario table shows the same retainer status + months.
+
+That same info flows through to the XML export (retainer type, months, pricing).
+
+Backend notes (already implemented, just need to be used)
+
+BuildPayload (used by /api/build) already has a retainers field.
+
+step 3 fixing cadence_12-01-25
+
+/api/build builds a ret_map = _safe_retainer_map(payload.retainers) and passes those months into _scenario_for_deliverable(..., retainer_months=months) so retainer months are baked into the scenario.
+
+step 3 fixing cadence_12-01-25
+
+ 
+
+step 3 fixing cadence_12-01-25
+
+When /api/build is called with a session_id, it saves the result into the dual‑entry SCENARIO_STORE via set_baseline_and_scenario, which Step 3 and the export code already use.
+
+step 3 fixing cadence_12-01-25
+
+The XML export checks retainer_months, billing_cadence, etc., to decide if a deliverable is a retainer and how many months to show.
+
+step 3 fixing cadence_12-01-25
+
+The Step‑3 “Project Scenario” summary table (/api/pricing/rebuild_breakdown) reads billing_cadence and retainer_months from scenario items to display cadence & months.
+
+step 3 fixing cadence_12-01-25
+
+So: if Step 2 passes retainers into /api/build, the scenario table and XML will automatically reflect it. No new backend endpoints are needed.
+
+What to ask the Replit devs to do
+
+A. Step 2 – retainer suggestions modal
+
+Confirm the button “AI Suggest Retainer Items” calls:
+
+POST /api/pricing/retainer_suggest
+{
+  "rfp_text": <current RFP text>,   // can come from /api/rfp/cache
+  "deliverable_codes": [<selected deliverable codes from Step 2>]
+}
+
+
+(Endpoint is already defined as @app.post("/api/pricing/retainer_suggest") with RetainerSuggestionRequest.)
+
+step 3 fixing cadence_12-01-25
+
+In the modal, for each suggestion, keep at least:
+
+deliverable_code
+
+deliverable_name
+
+suggested_months (user‑editable)
+
+toggle/checkbox for “treat this as a retainer”
+
+B. Step 2 → Step 3: include retainers when building the scenario
+
+When the user clicks “Apply & Proceed to Pricing”:
+
+Collect enabled rows from the modal into:
+
+const retainers = enabledRows
+  .filter(r => r.months > 0)
+  .map(r => ({
+    deliverable_code: r.deliverableCode, // must be the DB deliverable code
+    months: r.months                     // integer 1–12 (or more if you allow)
+  }));
+
+
+Call the existing /api/build endpoint with the usual payload plus that retainers array and a session_id:
+
+POST /api/build
+{
+  "session_id": "<currentSessionId>",
+  "selected_deliverable_codes": [...],         // what you already send
+  "scenario_a": {...},                         // existing scenario spec
+  "pricing_mode": "Flat_Blended",
+  "blended_rate": 185,
+  "rate_band": "Standard_US",
+  "use_slack": true,
+  "slack_after_internal": 1,
+  "slack_after_client": 2,
+  "slack_global_pct": 0.05,
+  "project_start": "2025-01-15",
+  "project_name": "<project name>",
+  "client_budget_usd": <optional>,
+  "retainers": retainers                      // ✨ NEW: from Step‑2 modal
+}
+
+
+/api/build will turn retainers into a ret_map and pass the months into _scenario_for_deliverable as retainer_months, which drives downstream cadence/retainer behavior.
+
+step 3 fixing cadence_12-01-25
+
+ 
+
+step 3 fixing cadence_12-01-25
+
+After the call succeeds, navigate to Step 3 using the same session_id.
+Step 3 should then either reuse the scenario returned by /api/build, or call /api/scenarios with that session_id which re‑hydrates it from SCENARIO_STORE.
+
+step 3 fixing cadence_12-01-25
+
+C. Verify it flows to table + XML
+
+Acceptance checks for the dev:
+
+In Step 3, immediately after coming from Step 2:
+
+Project Scenario table rows that were marked as retainers show the cadence as “Monthly” (or whatever you default) and the correct month count.
+
+If Step 3 edits nothing and you go straight to export:
+
+XML export includes those deliverables with Retainer type and the right number of months / monthly hours (already handled by the export logic).
+
+step 3 fixing cadence_12-01-25
