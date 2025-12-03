@@ -291,6 +291,16 @@ const SessionManager = {
       window.pricingData.urgency.clear();
       window.pricingData.resourceTypes.clear();
       window.pricingData.discounts.clear();
+      window.pricingData.customHours.clear();
+      window.pricingData.customRates.clear();
+      window.pricingData.retainerMonths.clear();
+      window.pricingData.originalScenario = null;
+      window.pricingData.rebuildVersion = 0;
+    }
+    if (window.pricingDataEnhanced) {
+      window.pricingDataEnhanced.cadenceTypes.clear();
+      window.pricingDataEnhanced.periodsCount.clear();
+      window.pricingDataEnhanced.editMode.clear();
     }
     if (window.componentDataCache) {
       clearingLog.inMemory.push('componentDataCache');

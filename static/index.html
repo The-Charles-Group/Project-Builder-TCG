@@ -1912,6 +1912,12 @@
       
       console.log('[BUILD] Starting buildScenariosAB()...');
       
+      // Reset originalScenario so comparison modal captures fresh baseline
+      if (window.pricingData) {
+        window.pricingData.originalScenario = null;
+        window.pricingData.rebuildVersion = 0;
+      }
+      
       // Check all possible sources of selected deliverables
       const selectedFromAppState = appState.selectedCodes || [];
       const selectedFromGlobal = window.selectedCodes || [];
