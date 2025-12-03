@@ -5521,22 +5521,43 @@ async function buildFromCurrentSelection() {
   // Include L3 subtasks from APB.step2.selectedL3ByKey
   // Format: { deliverableCode: { component: [l3tasks...] } }
   // FIX: Ensure we only send strings, not objects
+  // GPT-5.1 Pro: Also include SmartSelectionState.selectedL3Map as fallback
   const l3Payload = {};
+  
+  // First, populate from SmartSelectionState if available (curated AI selections)
+  if (window.SmartSelectionState && Object.keys(window.SmartSelectionState.selectedL3Map).length > 0) {
+    console.log('[Build] Using SmartSelectionState.selectedL3Map for L3 payload');
+    for (const [delivCode, compMap] of Object.entries(window.SmartSelectionState.selectedL3Map)) {
+      if (codes.includes(delivCode)) {
+        if (!l3Payload[delivCode]) l3Payload[delivCode] = {};
+        for (const [compName, taskLabels] of Object.entries(compMap)) {
+          l3Payload[delivCode][compName] = Array.isArray(taskLabels) ? taskLabels : [];
+        }
+      }
+    }
+  }
+  
+  // Also include from APB.step2.selectedL3ByKey (may have additional manual selections)
   Object.entries(APB.step2.selectedL3ByKey).forEach(([key, l3Set]) => {
     const [code, component] = key.split('::');
     if (codes.includes(code) && l3Set && l3Set.size > 0) {
       if (!l3Payload[code]) l3Payload[code] = {};
-      // Convert Set to Array and ensure all items are strings
-      l3Payload[code][component] = Array.from(l3Set).map(item => {
-        if (typeof item === 'string') return item;
-        if (item && typeof item === 'object') {
-          const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
-          if (name && typeof name === 'string') return name;
-        }
-        return null;
-      }).filter(name => name && name !== '[object Object]' && name !== '');
+      // Only add if not already set by SmartSelectionState
+      if (!l3Payload[code][component]) {
+        // Convert Set to Array and ensure all items are strings
+        l3Payload[code][component] = Array.from(l3Set).map(item => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object') {
+            const name = item.Task_Label || item.task_label || item.name || item.title || item.label || '';
+            if (name && typeof name === 'string') return name;
+          }
+          return null;
+        }).filter(name => name && name !== '[object Object]' && name !== '');
+      }
     }
   });
+  
+  console.log('[Build] L3 payload:', l3Payload);
 
   // ISSUE 3 FIX: Build retainers payload from pricingData
   const retainersPayload = [];
@@ -6957,7 +6978,44 @@ function applyStep2SelectionMode(selectionMode) {
 window.initializeStep2SelectionMode = initializeStep2SelectionMode;
 window.applyStep2SelectionMode = applyStep2SelectionMode;
 
+// ========== SMART SELECTION STATE (GPT-5.1 Pro L3 Task Filtering) ==========
+// This structure tracks the curated selections from AI/TF-IDF Smart Selection
+// to ensure only AI-vetted L3 tasks flow through to Step 3, not all database tasks
+const SmartSelectionState = {
+  selectedDeliverableCodes: [],           // Array of deliverable codes
+  selectedComponentsMap: {},               // { deliverableCode: [componentNames...] }
+  selectedL3Map: {},                        // { deliverableCode: { componentName: [taskLabels...] } }
+  mode: null,                               // 'ai' or 'tfidf'
+  threshold: 70,                            // Current threshold percentage
+  lastApplied: null                         // Timestamp of last application
+};
+window.SmartSelectionState = SmartSelectionState;
+
+// Helper to clear SmartSelectionState
+function clearSmartSelectionState() {
+  SmartSelectionState.selectedDeliverableCodes = [];
+  SmartSelectionState.selectedComponentsMap = {};
+  SmartSelectionState.selectedL3Map = {};
+  SmartSelectionState.mode = null;
+  SmartSelectionState.lastApplied = null;
+  console.log('[SmartSelection] State cleared');
+}
+window.clearSmartSelectionState = clearSmartSelectionState;
+
+// Helper to get total L3 task count from SmartSelectionState
+function getSmartSelectionL3Count() {
+  let count = 0;
+  Object.values(SmartSelectionState.selectedL3Map).forEach(compMap => {
+    Object.values(compMap).forEach(taskList => {
+      count += Array.isArray(taskList) ? taskList.length : 0;
+    });
+  });
+  return count;
+}
+window.getSmartSelectionL3Count = getSmartSelectionL3Count;
+
 // Smart Selection Function - Select based on AI confidence or TF-IDF similarity threshold
+// GPT-5.1 Pro: Now populates SmartSelectionState with L3 tasks from l3_by_component
 function applySmartSelection(mode = 'ai') {
   // Get the appropriate threshold based on mode
   const thresholdInputId = mode === 'ai' ? 'ai-smart-threshold' : 'tfidf-smart-threshold';
@@ -6969,7 +7027,7 @@ function applySmartSelection(mode = 'ai') {
   
   const threshold = Math.max(0, Math.min(100, parseFloat(thresholdInput.value) || 70));
   const modeLabel = mode === 'ai' ? 'AI Confidence' : 'TF-IDF Similarity';
-  console.log(`Applying ${modeLabel} smart selection with threshold: ${threshold}%`);
+  console.log(`[SmartSelection] Applying ${modeLabel} with threshold: ${threshold}%`);
   
   // Check if AI data is available
   if (!window.lastAIPlan || !window.lastAIPlan.suggestions_by_department) {
@@ -6980,6 +7038,12 @@ function applySmartSelection(mode = 'ai') {
   
   // Clear all current selections first
   clearAllAISelections();
+  
+  // GPT-5.1 Pro: Clear and rebuild SmartSelectionState
+  clearSmartSelectionState();
+  SmartSelectionState.mode = mode;
+  SmartSelectionState.threshold = threshold;
+  SmartSelectionState.lastApplied = new Date().toISOString();
   
   let selectedDelivCount = 0;
   let selectedCompCount = 0;
@@ -7003,7 +7067,7 @@ function applySmartSelection(mode = 'ai') {
       }
       const delivCode = deliv.deliverable_code || deliv.code;
       
-      console.log(`Deliverable ${delivCode}: ${modeLabel}=${metricValue}% vs threshold ${threshold}%`);
+      console.log(`[SmartSelection] ${delivCode}: ${modeLabel}=${metricValue}% vs threshold ${threshold}%`);
       
       // Get the checkbox for this deliverable
       const delivCheckbox = document.querySelector(`.ai-deliv-checkbox[data-code="${delivCode}"]`);
@@ -7017,30 +7081,61 @@ function applySmartSelection(mode = 'ai') {
         delivCheckbox.checked = true;
         selectedDelivCount++;
         
+        // GPT-5.1 Pro: Add to SmartSelectionState
+        SmartSelectionState.selectedDeliverableCodes.push(delivCode);
+        SmartSelectionState.selectedComponentsMap[delivCode] = [];
+        SmartSelectionState.selectedL3Map[delivCode] = {};
+        
         // For components within this deliverable
         const components = deliv.components || [];
         for (const comp of components) {
+          const compName = comp.title || comp.name;
+          
           // Components inherit deliverable metric (since they don't have their own)
-          const compCheckbox = document.querySelector(`.ai-comp-checkbox[data-deliv="${delivCode}"][data-comp="${comp.title}"]`);
+          const compCheckbox = document.querySelector(`.ai-comp-checkbox[data-deliv="${delivCode}"][data-comp="${compName}"]`);
           if (compCheckbox) {
             compCheckbox.checked = true;
             selectedCompCount++;
             
-            // For tasks within this component
-            const tasks = comp.tasks || [];
-            for (const task of tasks) {
-              // Check if task was AI-selected
-              const taskCheckbox = document.querySelector(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${comp.title}"][data-task="${task.title}"]`);
-              if (taskCheckbox) {
-                // Only select AI-recommended tasks when deliverable meets threshold
-                if (task.ai_selected) {
-                  taskCheckbox.checked = true;
-                  selectedTaskCount++;
-                } else {
-                  taskCheckbox.checked = false;
-                }
+            // GPT-5.1 Pro: Add component to SmartSelectionState
+            SmartSelectionState.selectedComponentsMap[delivCode].push(compName);
+            
+            // GPT-5.1 Pro: Extract L3 tasks from l3_by_component (the key insight!)
+            // This is the curated task list from AI, not all database tasks
+            const l3ByComponent = deliv.l3_by_component || {};
+            const l3Tasks = l3ByComponent[compName] || [];
+            
+            // Extract just the task labels (not the full objects with why/confidence)
+            const taskLabels = l3Tasks.map(t => {
+              if (typeof t === 'string') return t;
+              return t.label || t.name || t.Task_Label || t.title || '';
+            }).filter(label => label);
+            
+            if (taskLabels.length > 0) {
+              SmartSelectionState.selectedL3Map[delivCode][compName] = taskLabels;
+              selectedTaskCount += taskLabels.length;
+              console.log(`[SmartSelection] ${delivCode}/${compName}: ${taskLabels.length} L3 tasks from l3_by_component`);
+            } else {
+              // Fallback: use tasks from comp.tasks if l3_by_component is missing
+              const fallbackTasks = (comp.tasks || [])
+                .filter(t => t.ai_selected)
+                .map(t => t.title || t.name || t.label || '')
+                .filter(label => label);
+              
+              if (fallbackTasks.length > 0) {
+                SmartSelectionState.selectedL3Map[delivCode][compName] = fallbackTasks;
+                selectedTaskCount += fallbackTasks.length;
+                console.log(`[SmartSelection] ${delivCode}/${compName}: ${fallbackTasks.length} L3 tasks from fallback`);
               }
             }
+            
+            // Update task checkboxes in UI (for visual feedback)
+            const allTaskLabelsForComp = SmartSelectionState.selectedL3Map[delivCode]?.[compName] || [];
+            const taskCheckboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compName}"]`);
+            taskCheckboxes.forEach(taskCb => {
+              const taskTitle = taskCb.dataset.task;
+              taskCb.checked = allTaskLabelsForComp.includes(taskTitle);
+            });
           }
         }
       } else {
@@ -7062,8 +7157,17 @@ function applySmartSelection(mode = 'ai') {
     }
   }
   
-  // Show feedback
-  const feedbackMessage = `${modeLabel} Selection Applied: ${selectedDelivCount} deliverables, ${selectedCompCount} components, ${selectedTaskCount} tasks selected (threshold: ${threshold}%)`;
+  // Log SmartSelectionState for debugging
+  console.log('[SmartSelection] State populated:', {
+    deliverables: SmartSelectionState.selectedDeliverableCodes.length,
+    components: Object.values(SmartSelectionState.selectedComponentsMap).flat().length,
+    tasks: getSmartSelectionL3Count(),
+    state: SmartSelectionState
+  });
+  
+  // Show feedback with accurate task count from SmartSelectionState
+  const actualTaskCount = getSmartSelectionL3Count();
+  const feedbackMessage = `${modeLabel} Selection Applied: ${selectedDelivCount} deliverables, ${selectedCompCount} components, ${actualTaskCount} tasks selected (threshold: ${threshold}%)`;
   console.log(feedbackMessage);
   
   // Show visual feedback (optional - add a temporary notification)
@@ -7176,158 +7280,210 @@ function clearAllAISelections() {
   document.querySelectorAll('.ai-comp-checkbox').forEach(cb => cb.checked = false);
   document.querySelectorAll('.ai-task-checkbox').forEach(cb => cb.checked = false);
   
+  // GPT-5.1 Pro: Also clear SmartSelectionState
+  clearSmartSelectionState();
+  
   console.log('Cleared all AI selections');
 }
 
 async function applyAllSelectedFromAI() {
-  // Collect selected deliverables
-  const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
+  // GPT-5.1 Pro: Use SmartSelectionState for curated L3 task filtering
+  // This ensures only AI-vetted tasks flow through, not all database tasks
+  
+  console.log('[ApplySelectedFromAI] Starting with SmartSelectionState:', SmartSelectionState);
+  
   let firstDelivCode = null;
   let firstCompName = null;
   
-  for (const delivCb of delivCheckboxes) {
-    const delivCode = delivCb.dataset.code;
+  // GPT-5.1 Pro: If SmartSelectionState has curated selections, use those
+  // Otherwise fall back to reading from DOM checkboxes
+  const useSmartState = SmartSelectionState.selectedDeliverableCodes.length > 0;
+  
+  if (useSmartState) {
+    console.log('[ApplySelectedFromAI] Using SmartSelectionState for curated L3 tasks');
     
-    // Track first selected deliverable
-    if (!firstDelivCode) {
-      firstDelivCode = delivCode;
+    // Process deliverables from SmartSelectionState
+    for (const delivCode of SmartSelectionState.selectedDeliverableCodes) {
+      if (!firstDelivCode) {
+        firstDelivCode = delivCode;
+      }
+      
+      // Add deliverable to selection if not already there
+      if (!selectionStore.deliverables.has(delivCode)) {
+        await selectDeliverable(delivCode);
+      }
+      
+      // Mark as AI-suggested for tracking
+      APB.step2.aiSuggestedCodes.add(delivCode);
+      
+      // Get components from SmartSelectionState
+      const selectedComps = new Set(SmartSelectionState.selectedComponentsMap[delivCode] || []);
+      
+      for (const compTitle of selectedComps) {
+        if (!firstCompName && delivCode === firstDelivCode) {
+          firstCompName = compTitle;
+        }
+        
+        // Ensure component is hydrated
+        if (!selectionStore.componentsByDeliv.get(delivCode)?.has(compTitle)) {
+          await hydrateComponentsFor(delivCode);
+        }
+        
+        // GPT-5.1 Pro: Use curated L3 tasks from SmartSelectionState
+        const curatedTasks = SmartSelectionState.selectedL3Map[delivCode]?.[compTitle] || [];
+        
+        if (curatedTasks.length > 0) {
+          const key = `${delivCode}::${compTitle}`;
+          selectionStore.l3ByComponent.set(key, new Set(curatedTasks));
+          console.log(`[ApplySelectedFromAI] Set ${curatedTasks.length} curated L3 tasks for ${key}`);
+        }
+      }
+      
+      // Store selected components
+      if (selectedComps.size > 0) {
+        selectionStore.componentsByDeliv.set(delivCode, selectedComps);
+        S2.selectedComponentsByCode[delivCode] = selectedComps;
+      }
     }
     
-    // Add deliverable to selection if not already there
-    if (!selectionStore.deliverables.has(delivCode)) {
-      await selectDeliverable(delivCode);
-    }
-    
-    // Mark as AI-suggested for tracking
-    APB.step2.aiSuggestedCodes.add(delivCode);
-    
-    // Collect selected components for this deliverable
-    const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]:checked`);
-    const selectedComps = new Set();
-    
-    for (const compCb of compCheckboxes) {
-      const compTitle = compCb.dataset.comp;
-      selectedComps.add(compTitle);
-      
-      // Track first component
-      if (!firstCompName && delivCode === firstDelivCode) {
-        firstCompName = compTitle;
-      }
-      
-      // Ensure component is hydrated
-      if (!selectionStore.componentsByDeliv.get(delivCode)?.has(compTitle)) {
-        await hydrateComponentsFor(delivCode);
-      }
-      
-      // Collect selected tasks for this component
-      const taskCheckboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compTitle}"]:checked`);
-      const selectedTasks = new Set();
-      
-      for (const taskCb of taskCheckboxes) {
-        selectedTasks.add(taskCb.dataset.task);
-      }
-      
-      // Store selected tasks
-      if (selectedTasks.size > 0) {
-        const key = `${delivCode}::${compTitle}`;
-        selectionStore.l3ByComponent.set(key, selectedTasks);
+    // Also sync to APB.step2.selectedL3ByKey for payload building
+    for (const delivCode of SmartSelectionState.selectedDeliverableCodes) {
+      const compMap = SmartSelectionState.selectedL3Map[delivCode] || {};
+      for (const [compName, taskLabels] of Object.entries(compMap)) {
+        const key = `${delivCode}::${compName}`;
+        APB.step2.selectedL3ByKey[key] = new Set(taskLabels);
       }
     }
     
-    // Store selected components in both selectionStore and S2 (for compatibility)
-    if (selectedComps.size > 0) {
-      selectionStore.componentsByDeliv.set(delivCode, selectedComps);
-      S2.selectedComponentsByCode[delivCode] = selectedComps;
+    console.log('[ApplySelectedFromAI] SmartSelectionState applied to selectionStore');
+    
+  } else {
+    // Fallback: Read from DOM checkboxes (original behavior)
+    console.log('[ApplySelectedFromAI] Falling back to DOM checkbox reading');
+    
+    const delivCheckboxes = document.querySelectorAll('.ai-deliv-checkbox:checked');
+    
+    for (const delivCb of delivCheckboxes) {
+      const delivCode = delivCb.dataset.code;
+      
+      if (!firstDelivCode) {
+        firstDelivCode = delivCode;
+      }
+      
+      if (!selectionStore.deliverables.has(delivCode)) {
+        await selectDeliverable(delivCode);
+      }
+      
+      APB.step2.aiSuggestedCodes.add(delivCode);
+      
+      const compCheckboxes = document.querySelectorAll(`.ai-comp-checkbox[data-deliv="${delivCode}"]:checked`);
+      const selectedComps = new Set();
+      
+      for (const compCb of compCheckboxes) {
+        const compTitle = compCb.dataset.comp;
+        selectedComps.add(compTitle);
+        
+        if (!firstCompName && delivCode === firstDelivCode) {
+          firstCompName = compTitle;
+        }
+        
+        if (!selectionStore.componentsByDeliv.get(delivCode)?.has(compTitle)) {
+          await hydrateComponentsFor(delivCode);
+        }
+        
+        const taskCheckboxes = document.querySelectorAll(`.ai-task-checkbox[data-deliv="${delivCode}"][data-comp="${compTitle}"]:checked`);
+        const selectedTasks = new Set();
+        
+        for (const taskCb of taskCheckboxes) {
+          selectedTasks.add(taskCb.dataset.task);
+        }
+        
+        if (selectedTasks.size > 0) {
+          const key = `${delivCode}::${compTitle}`;
+          selectionStore.l3ByComponent.set(key, selectedTasks);
+        }
+      }
+      
+      if (selectedComps.size > 0) {
+        selectionStore.componentsByDeliv.set(delivCode, selectedComps);
+        S2.selectedComponentsByCode[delivCode] = selectedComps;
+      }
     }
   }
   
-  // FIX: Fetch L2 tasks for ALL selected deliverables (not just the first one)
-  const allSelectedDelivs = Array.from(selectionStore.deliverables);
-  
-  for (const delivCode of allSelectedDelivs) {
-    // Get components for this deliverable
-    const components = selectionStore.componentsByDeliv.get(delivCode);
+  // GPT-5.1 Pro: Only fetch from database if SmartSelectionState wasn't used
+  // This prevents overwriting curated L3 tasks with all database tasks
+  if (!useSmartState) {
+    const allSelectedDelivs = Array.from(selectionStore.deliverables);
     
-    if (components && components.size > 0) {
-      const componentArray = Array.from(components);
+    for (const delivCode of allSelectedDelivs) {
+      const components = selectionStore.componentsByDeliv.get(delivCode);
       
-      try {
-        // Fetch L2 tasks in bulk for all selected components of this deliverable
-        const res = await fetch('/api/step2/l3/bulk', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            deliverable: delivCode,
-            components: componentArray
-          })
-        });
+      if (components && components.size > 0) {
+        const componentArray = Array.from(components);
         
-        if (res.ok) {
-          const l3Data = await res.json();
+        try {
+          const res = await fetch('/api/step2/l3/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              deliverable: delivCode,
+              components: componentArray
+            })
+          });
           
-          // FIX: Handle l3_by_component structure from API
-          const tasksData = l3Data.l3_by_component || l3Data;
-          
-          // Store L2 tasks for each component
-          for (const [compName, tasks] of Object.entries(tasksData)) {
-            const key = `${delivCode}::${compName}`;
-            if (!selectionStore.l3ByComponent.has(key)) {
-              selectionStore.l3ByComponent.set(key, new Set());
-            }
-            const existingTasks = selectionStore.l3ByComponent.get(key);
+          if (res.ok) {
+            const l3Data = await res.json();
+            const tasksData = l3Data.l3_by_component || l3Data;
             
-            // Handle array of tasks properly
-            if (Array.isArray(tasks)) {
-              tasks.forEach(task => {
-                // Ensure we always get a string value, not an object
-                let taskName;
-                if (typeof task === 'string') {
-                  taskName = task;
-                } else if (task && typeof task === 'object') {
-                  // Extract string from object - check all possible property names
-                  taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
-                  // If still no valid string, try converting to string
-                  if (!taskName && task.toString && task.toString() !== '[object Object]') {
-                    taskName = task.toString();
+            for (const [compName, tasks] of Object.entries(tasksData)) {
+              const key = `${delivCode}::${compName}`;
+              if (!selectionStore.l3ByComponent.has(key)) {
+                selectionStore.l3ByComponent.set(key, new Set());
+              }
+              const existingTasks = selectionStore.l3ByComponent.get(key);
+              
+              if (Array.isArray(tasks)) {
+                tasks.forEach(task => {
+                  let taskName;
+                  if (typeof task === 'string') {
+                    taskName = task;
+                  } else if (task && typeof task === 'object') {
+                    taskName = task.Task_Label || task.task_label || task.name || task.title || task.label || '';
+                    if (!taskName && task.toString && task.toString() !== '[object Object]') {
+                      taskName = task.toString();
+                    }
                   }
-                }
-                // Only add if we have a valid string
-                if (taskName && typeof taskName === 'string' && taskName !== '[object Object]') {
-                  existingTasks.add(taskName);
-                }
-              });
+                  if (taskName && typeof taskName === 'string' && taskName !== '[object Object]') {
+                    existingTasks.add(taskName);
+                  }
+                });
+              }
             }
+            
+            if (firstDelivCode && firstCompName) {
+              S2.activeComponentName = firstCompName;
+              await refreshL3Panel();
+            }
+            
+            console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(tasksData));
           }
-          
-          // Auto-activate first component if available
-          if (firstDelivCode && firstCompName) {
-            S2.activeComponentName = firstCompName;
-            // Trigger component panel refresh to show L2 tasks immediately
-            await refreshL3Panel();
+        } catch (error) {
+          console.error(`Failed to fetch L2 tasks for ${delivCode}:`, error);
+        }
+      } else {
+        try {
+          const generalTasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=general`);
+          if (generalTasks && generalTasks.length > 0) {
+            const key = `${delivCode}::general`;
+            selectionStore.l3ByComponent.set(key, new Set(generalTasks));
+            selectionStore.componentsByDeliv.set(delivCode, new Set(['general']));
+            S2.selectedComponentsByCode[delivCode] = new Set(['general']);
+            console.log(`Fetched L2 tasks for ${delivCode} (general fallback):`, generalTasks.length);
           }
-          
-          console.log(`Fetched L2 tasks for ${delivCode} components:`, Object.keys(tasksData));
+        } catch (error) {
+          console.warn(`No components or general tasks found for ${delivCode}:`, error);
         }
-      } catch (error) {
-        console.error(`Failed to fetch L2 tasks for ${delivCode}:`, error);
-      }
-    } else {
-      // Edge case: deliverable has no components, use "general" fallback
-      try {
-        const generalTasks = await api(`/api/l3?deliverable=${encodeURIComponent(delivCode)}&component=general`);
-        if (generalTasks && generalTasks.length > 0) {
-          // Store as "general" component
-          const key = `${delivCode}::general`;
-          selectionStore.l3ByComponent.set(key, new Set(generalTasks));
-          
-          // Also update the component map to have "general"
-          selectionStore.componentsByDeliv.set(delivCode, new Set(['general']));
-          S2.selectedComponentsByCode[delivCode] = new Set(['general']);
-          
-          console.log(`Fetched L2 tasks for ${delivCode} (general fallback):`, generalTasks.length);
-        }
-      } catch (error) {
-        console.warn(`No components or general tasks found for ${delivCode}:`, error);
       }
     }
   }
