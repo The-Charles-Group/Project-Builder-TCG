@@ -1,0 +1,246 @@
+1. What needs to happen conceptually
+
+When the user clicks:
+
+“Apply AI Smart Selection” or
+
+“Apply TF‑IDF Smart Selection”
+
+we want:
+
+Deliverables: only the selected deliverables.
+
+Components: only the components chosen by AI/TF‑IDF.
+
+Tasks: only the specific L3 tasks that AI/TF‑IDF chose for each component.
+
+Right now, step 3 is not wired: we pick the right deliverables & components, but we then default to all tasks in the database for those components.
+
+2. The backend contract to respect
+2.1. AI / TF‑IDF suggestion output
+
+The AI suggestion endpoint returns, per deliverable, something like:
+
+{
+  "deliverable_code": "DEL-0034",
+  "deliverable_name": "Brand Identity Development",
+  "components": [
+    { "name": "Brand Narrative", "confidence": 0.93, "why": "..." },
+    { "name": "Brand Values Statement and/or Proposition", "confidence": 0.88, "why": "..." }
+  ],
+  "l3_by_component": {
+    "Brand Narrative": [
+      { "label": "Client Review & Revisions", "why": "..." },
+      { "label": "Draft Narrative", "why": "..." },
+      { "label": "Final Packaging", "why": "..." }
+    ],
+    "Brand Values Statement and/or Proposition": [
+      { "label": "Inputs Review", "why": "..." },
+      { "label": "Internal Review & Critique", "why": "..." }
+    ]
+  }
+}
+
+
+The important bit is l3_by_component – that’s your “15 tasks”.
+
+2.2. What /api/scenarios expects from Step 2
+
+On the Step‑3 build side, the backend supports a field called selected_l3_map (or selectedL3Map / l3Map – it accepts several casings).
+
+Shape:
+
+{
+  "selectedDeliverableCodes": ["DEL-0034", "DEL-0050"],
+
+  "selectedComponentsMap": {
+    "DEL-0034": ["Brand Narrative", "Brand Values Statement and/or Proposition"],
+    "DEL-0050": ["Social Content Creator", "Campaign Strategy"]
+  },
+
+  "selectedL3Map": {
+    "DEL-0034": {
+      "Brand Narrative": [
+        "Client Review & Revisions",
+        "Draft Narrative",
+        "Final Packaging",
+        "Inputs Review",
+        "Internal Review & Critique"
+      ],
+      "Brand Values Statement and/or Proposition": [
+        "Inputs Review",
+        "Internal Review & Critique"
+      ]
+    },
+    "DEL-0050": {
+      "Social Content Creator": [
+        "Content Plan",
+        "Internal Review & Critique"
+      ]
+    }
+  }
+}
+
+
+Key rule: selectedL3Map[deliverable_code][component_name] must be a list of plain task labels (strings) that match the Task_Label values in the DB. The AI response gives you { label, why }; you just keep the label.
+
+If selectedL3Map is missing or empty, the backend falls back to all task groups / tasks for those deliverables. That’s where your “187” is coming from.
+
+3. Concrete instructions for the Replit agent (frontend wiring)
+3.1. Build a unified “smart selection” structure in the UI
+
+Find the React (or Vue/Svelte) component that renders:
+
+“AI Smart Select by Relevancy”
+
+“TF‑IDF Smart Select by Relevancy”
+
+The “Apply Selected to Manual Selection” button
+(Search strings: "Apply AI Smart Selection", "Apply TF-IDF Smart Selection", "Apply Selected to Manual Selection", "AI-Suggested Deliverables".)
+
+Introduce a client‑side state structure like:
+
+type SelectedL3Map = {
+  [deliverableCode: string]: {
+    [componentName: string]: string[]; // task labels
+  };
+};
+
+type SmartSelectionState = {
+  selectedDeliverableCodes: string[];
+  selectedComponentsMap: { [deliverableCode: string]: string[] };
+  selectedL3Map: SelectedL3Map;
+};
+
+
+When AI or TF‑IDF selection is applied (but before “Apply Selected to Manual Selection”):
+
+Start from the AI/TF‑IDF result list.
+
+Filter to only items above the slider threshold.
+
+Build SmartSelectionState like:
+
+const smartSelection: SmartSelectionState = {
+  selectedDeliverableCodes: [],
+  selectedComponentsMap: {},
+  selectedL3Map: {}
+};
+
+for (const deliv of aiResult.deliverables) {
+  if (!deliv.selected) continue; // or confidence >= threshold
+
+  const code = deliv.deliverable_code;
+
+  smartSelection.selectedDeliverableCodes.push(code);
+  smartSelection.selectedComponentsMap[code] = [];
+  smartSelection.selectedL3Map[code] = {};
+
+  for (const comp of deliv.components.filter(c => c.selected)) {
+    const compName = comp.name;
+    smartSelection.selectedComponentsMap[code].push(compName);
+
+    const l3 = deliv.l3_by_component?.[compName] || [];
+    smartSelection.selectedL3Map[code][compName] = l3.map(t => t.label); // keep only label
+  }
+}
+
+
+Store that smartSelection in component state when the user hits “Apply AI Smart Selection” or “Apply TF‑IDF Smart Selection”.
+
+3.2. Wire “Apply Selected to Manual Selection”
+
+When the user clicks “Apply Selected to Manual Selection”:
+
+Update the manual selection columns (Deliverables, Components, L2 Tasks):
+
+Deliverables column: mark only smartSelection.selectedDeliverableCodes as selected.
+
+Components column: for each selected deliverable, mark only the components in smartSelection.selectedComponentsMap[code] as selected.
+
+L2 Tasks column:
+
+Fetch the full task list per component as you do now (via step2_l3_bulk or equivalent).
+
+For each task row, set task.selected = smartSelection.selectedL3Map[code][component].includes(task.Task_Label).
+
+Everything else should be unselected by default.
+
+Fix the Selection Summary counters:
+
+Wherever you compute “L2 Tasks” in the bottom summary, change it to:
+
+const tasksCount = Object.values(smartSelection.selectedL3Map).reduce(
+  (sumForDeliverable, compMap) =>
+    sumForDeliverable +
+    Object.values(compMap).reduce(
+      (sumForComponent, taskList) => sumForComponent + taskList.length,
+      0
+    ),
+  0
+);
+
+
+Do not count all task rows for the components – only the ones in selectedL3Map.
+
+You should then see 15 tasks in the summary when AI/TF‑IDF picked 15 tasks.
+
+3.3. Send the L3 map to Step 3 /api/scenarios
+
+When the user clicks “Proceed to Pricing”:
+
+Find the code that calls /api/scenarios (search for "/api/scenarios" in the frontend).
+
+Make sure the payload includes:
+
+const payload = {
+  sessionId,                     // you already send this
+  selectedDeliverableCodes: smartSelection.selectedDeliverableCodes,
+  selectedComponentsMap: smartSelection.selectedComponentsMap,
+  selectedL3Map: smartSelection.selectedL3Map,
+  // ...all the existing things you already send:
+  // pricingMode, scenarioLetter, scenarioA, blendedRate, etc.
+};
+
+
+Backend accepts multiple casings, so any of these keys are okay:
+
+selected_l3_map
+
+selectedL3Map
+
+l3Map
+
+…but be consistent: pick one and stick to it. (I’d use selectedL3Map to match the other camelCase fields.)
+
+No backend code change should be needed here – the server already knows how to consume selectedL3Map and build a scenario that only uses those task groups.
+
+4. How TF‑IDF selection fits in
+
+For TF‑IDF (“TF‑IDF Smart Select by Relevancy”):
+
+The only difference is how you decide which deliverables/components are selected (based on TF‑IDF similarity score instead of AI confidence).
+
+Once you have the set of “chosen” deliverables/components, you can still:
+
+either re‑use l3_by_component from an AI call, or
+
+if TF‑IDF also returns per‑component tasks, normalize them into the same selectedL3Map structure.
+
+So both buttons should end up populating SmartSelectionState in the same shape.
+
+5. Quick sanity checks for the dev
+
+You can ask the Replit agent / dev to verify:
+
+Run an RFP where banner says: 8 deliverables, 42 components, 15 tasks.
+
+After “Apply Selected to Manual Selection”, the bottom Selection Summary should also say:
+
+Deliverables: 8
+
+Components: 42
+
+L2 Tasks: 15 (not 187)
+
+After “Proceed to Pricing” and building /api/scenarios, scenario.items should reflect fewer task groups / hours than the previous “everything” version.
