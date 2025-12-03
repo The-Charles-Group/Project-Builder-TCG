@@ -4462,6 +4462,9 @@ class RfpSummary(BaseModel):
     complexity: Optional[str] = None # Low | Medium | High
     # GPT 5.1 Pro spec: structured bullets for the UI
     summary_bullets: List[Dict[str, str]] = []
+    # GPT 5.1 Pro spec: Business context fields for "why" understanding
+    business_overview: Optional[str] = None   # Who the client is / what they do (1-2 sentences)
+    why_this_rfp: Optional[str] = None        # Why they need this work now (1-2 sentences)
 
 class SummarizePayload(BaseModel):
     rfp_text: str | None = None      # optional if using file route
@@ -4777,16 +4780,25 @@ def validate_ai_response(rfp_text: str, ai_deliverables: List[dict]) -> bool:
     
     return True
 
-def _build_summary_text(deliverables: list) -> str:
+def _build_summary_text(deliverables: list, business_overview: str = None, why_this_rfp: str = None) -> str:
     """
     GPT 5.1 Pro spec: Build digestible bullet-point summary from deliverables.
     Returns newline-separated bullet lines (3-6 bullets max).
+    Now also prepends Business Overview and Why this RFP bullets if provided.
     """
     if not deliverables:
         return "No clear deliverables were detected in the RFP. Please review the uploaded document."
     
+    # GPT 5.1 Pro spec: Start with business context bullets if provided
     bullets = []
-    for d in deliverables[:6]:  # Max 6 bullets
+    if business_overview and business_overview.strip():
+        bullets.append(f"• Business Overview: {business_overview.strip()}")
+    if why_this_rfp and why_this_rfp.strip():
+        bullets.append(f"• Why this RFP: {why_this_rfp.strip()}")
+    
+    # Then add deliverable bullets (max 6 to stay within word limit)
+    max_deliverables = 6 if not bullets else 4  # Fewer if we have context bullets
+    for d in deliverables[:max_deliverables]:
         label = (d.get("label") if isinstance(d, dict) else getattr(d, "label", "")).strip()
         desc = (d.get("short_desc") if isinstance(d, dict) else getattr(d, "short_desc", "")).strip()
         if desc:
@@ -4813,12 +4825,14 @@ def ai_summarize_rfp_text(text: str, mode: str = "fast") -> RfpSummary:
     print(f"[AI_SUMMARIZE] Using mode={mode}, model={model}")
     
     try:
-        # GPT 5.1 Pro spec: Updated prompt to extract all required fields
+        # GPT 5.1 Pro spec: Updated prompt to extract all required fields including business context
         system_prompt = """
 You are an agency executive producer analyzing RFPs.
 Read the RFP text and output JSON ONLY in this exact schema:
 
 {
+  "business_overview": "...",
+  "why_this_rfp": "...",
   "deliverables": [
     {"label": "...", "short_desc": "...", "tasks": ["...", "..."]}
   ],
@@ -4828,6 +4842,8 @@ Read the RFP text and output JSON ONLY in this exact schema:
 }
 
 Guidelines:
+- business_overview: 1-2 sentences on who the client is, what category/industry they're in, and what they're launching or promoting.
+- why_this_rfp: 1-2 sentences on the business problem/objectives and why they're seeking agency support (e.g., launch, growth, rebrand, new market entry, etc.).
 - Extract 5–10 key deliverables with short 1-2 sentence descriptions specific to this RFP.
 - Use common agency taxonomy for "label" (e.g., "Brand Strategy", "Campaign Creative", "Content Production", "Social Media & Community", "Experiential Activation", "Media Planning & Buying", "Measurement & Reporting", "Program Management & Timeline").
 - Infer marketing channels as a short list (max 8): use canonical names like "Paid Social", "Search", "OOH", "PR", "Experiential", "Digital Video", "CRM", "Influencer", "Email", "Display", "TV", "Radio", "Print".
@@ -4859,6 +4875,16 @@ Guidelines:
         markets = [m.strip() for m in result.get("markets", []) if m and m.strip()]
         complexity = (result.get("complexity") or "").strip().title() or "Medium"
         
+        # GPT 5.1 Pro spec: Extract business context fields with fallbacks
+        business_overview = (result.get("business_overview") or "").strip()
+        why_this_rfp = (result.get("why_this_rfp") or "").strip()
+        
+        # Ensure we have safe defaults if AI didn't provide these
+        if not business_overview:
+            business_overview = "Brand or organization seeking marketing support."
+        if not why_this_rfp:
+            why_this_rfp = "They need strategy, creative and execution support to achieve their marketing objectives."
+        
     except Exception as e:
         print(f"OpenAI error (using smarter fallback): {e}")
         t = (text or "").lower()
@@ -4866,6 +4892,9 @@ Guidelines:
         channels = []
         markets = []
         complexity = "Medium"
+        # GPT 5.1 Pro spec: Safe fallback for business context
+        business_overview = "Brand or organization seeking marketing support (details unclear from the RFP extract)."
+        why_this_rfp = "They need strategy, creative and media support to achieve their marketing and growth objectives."
 
         def add(label, desc, *keys):
             if any(k in t for k in keys) and not any(d["label"] == label for d in deliverables):
@@ -4931,8 +4960,8 @@ Guidelines:
         desc = _truncate_to_2_sentences(d.get("short_desc", ""))
         d["short_desc"] = _truncate_words(desc, 30)
 
-    # GPT 5.1 Pro spec: Use _build_summary_text helper for digestible bullets
-    prose = _build_summary_text(deliverables)
+    # GPT 5.1 Pro spec: Use _build_summary_text helper for digestible bullets with business context
+    prose = _build_summary_text(deliverables, business_overview=business_overview, why_this_rfp=why_this_rfp)
     words = _count_words(prose)
     if words > 500:
         # trim from the end
@@ -4950,7 +4979,7 @@ Guidelines:
             "short_desc": d.get("short_desc", "").strip(),
         })
 
-    # GPT 5.1 Pro spec: Include channels, markets, complexity, summary_bullets in response
+    # GPT 5.1 Pro spec: Include channels, markets, complexity, summary_bullets, and business context in response
     summary = RfpSummary(
         summary_text=prose, 
         deliverables=[RfpSummaryItem(**d) for d in deliverables], 
@@ -4958,7 +4987,9 @@ Guidelines:
         channels=channels,
         markets=markets,
         complexity=complexity,
-        summary_bullets=summary_bullets
+        summary_bullets=summary_bullets,
+        business_overview=business_overview,
+        why_this_rfp=why_this_rfp
     )
     
     # GPT 5.1 Pro spec: Cache summary for GET /api/rfp/summary endpoint
