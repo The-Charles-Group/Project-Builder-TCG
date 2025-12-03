@@ -2024,6 +2024,77 @@ const pricingDataEnhanced = {
   componentTasks: new Map(),    // deliverable_code -> array of tasks
 };
 
+// RETAINER HYDRATION: Dedicated function to hydrate cadence/periods from scenario items
+// Called after SCENARIOS.A is populated from /api/build or rebuild
+function hydrateRetainerCadenceFromScenario(scenario) {
+  if (!scenario || !scenario.items) {
+    console.log('[RETAINER HYDRATE] No scenario items to hydrate');
+    return;
+  }
+  
+  console.log('[RETAINER HYDRATE] Starting hydration for', scenario.items.length, 'items');
+  
+  // Build set of current scenario codes
+  const currentCodes = new Set(scenario.items.map(i => i.deliverable_code));
+  
+  // First, clear stale entries not in current scenario
+  for (const code of pricingDataEnhanced.cadenceTypes.keys()) {
+    if (!currentCodes.has(code)) {
+      pricingDataEnhanced.cadenceTypes.delete(code);
+      pricingDataEnhanced.periodsCount.delete(code);
+      pricingData.retainers.delete(code);
+      pricingData.deliverableTypes.delete(code);
+      console.log(`[RETAINER HYDRATE] Removed stale: ${code}`);
+    }
+  }
+  
+  // Now hydrate from scenario items
+  scenario.items.forEach(item => {
+    const code = item.deliverable_code;
+    
+    // Get retainer months from various possible locations
+    const retainerMonths = item.retainer_months || 
+                          (item.retainer && item.retainer.months) || 
+                          0;
+    
+    // Check if backend has retainer data
+    const hasBackendRetainerData = (item.billing_cadence && item.billing_cadence !== 'one_time') ||
+                                   retainerMonths > 0 ||
+                                   item.is_retainer;
+    
+    // Always hydrate from backend if backend has retainer data (override frontend)
+    if (hasBackendRetainerData) {
+      if (item.billing_cadence && item.billing_cadence !== 'one_time') {
+        const cadenceMap = { 'monthly': 'MONTHLY', 'quarterly': 'QUARTERLY', 'semi_annual': 'SEMI_ANNUAL' };
+        pricingDataEnhanced.cadenceTypes.set(code, cadenceMap[item.billing_cadence] || 'MONTHLY');
+        pricingData.deliverableTypes.set(code, 'RETAINER');
+        console.log(`[RETAINER HYDRATE] ${code}: billing_cadence=${item.billing_cadence}`);
+      } else if (retainerMonths > 0) {
+        pricingDataEnhanced.cadenceTypes.set(code, 'MONTHLY');
+        pricingData.deliverableTypes.set(code, 'RETAINER');
+        console.log(`[RETAINER HYDRATE] ${code}: retainer_months=${retainerMonths}`);
+      } else if (item.is_retainer) {
+        pricingDataEnhanced.cadenceTypes.set(code, 'MONTHLY');
+        pricingData.deliverableTypes.set(code, 'RETAINER');
+        console.log(`[RETAINER HYDRATE] ${code}: is_retainer=true`);
+      }
+      
+      // Set periods count
+      if (retainerMonths > 0) {
+        pricingDataEnhanced.periodsCount.set(code, retainerMonths);
+        pricingData.retainers.set(code, retainerMonths);
+        console.log(`[RETAINER HYDRATE] ${code}: periods=${retainerMonths}`);
+      }
+    }
+  });
+  
+  console.log('[RETAINER HYDRATE] Complete. cadenceTypes:', pricingDataEnhanced.cadenceTypes.size, 
+              'periodsCount:', pricingDataEnhanced.periodsCount.size);
+}
+
+// Expose globally for use after build
+window.hydrateRetainerCadenceFromScenario = hydrateRetainerCadenceFromScenario;
+
 // UNIFIED PRICING TABLE - Fully editable inline version
 function updatePricingTable() {
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
@@ -2035,6 +2106,23 @@ function updatePricingTable() {
   // Store original scenario on first load
   if (!pricingData.originalScenario) {
     pricingData.originalScenario = JSON.parse(JSON.stringify(scenario));
+  }
+  
+  // RETAINER WIRING: Safeguard call to hydrate function if maps are empty but scenario has retainer data
+  // Primary hydration happens in buildFromCurrentSelection() after SCENARIOS is populated
+  // This is a defensive fallback for edge cases (e.g., localStorage restore)
+  const hasRetainerItems = scenario.items.some(item => 
+    item.retainer_months > 0 || 
+    (item.retainer && item.retainer.months > 0) ||
+    item.is_retainer ||
+    (item.billing_cadence && item.billing_cadence !== 'one_time')
+  );
+  
+  if (hasRetainerItems && pricingDataEnhanced.cadenceTypes.size === 0) {
+    console.log('[RETAINER] Fallback hydration triggered in updatePricingTable');
+    if (window.hydrateRetainerCadenceFromScenario) {
+      window.hydrateRetainerCadenceFromScenario(scenario);
+    }
   }
   
   // Create comprehensive table HTML structure with ALWAYS EDITABLE inputs
@@ -3038,6 +3126,12 @@ async function rebuildScenario() {
     
     // Update current scenario
     SCENARIOS.A = rebuiltScenario;
+    
+    // RETAINER WIRING: Re-hydrate cadence/periods after rebuild
+    if (window.hydrateRetainerCadenceFromScenario) {
+      window.hydrateRetainerCadenceFromScenario(rebuiltScenario);
+    }
+    
     updatePricingCalculations();
     
     console.log('Scenario rebuilt successfully', rebuiltScenario);
@@ -5763,6 +5857,12 @@ async function buildFromCurrentSelection() {
   window.appState.scenarios = scenarios;
   window.latestScenarios = scenarios;
   window.SCENARIOS = scenarios;
+  
+  // RETAINER WIRING: Hydrate cadence/periods from scenario items immediately after SCENARIOS is populated
+  // This ensures retainer data from /api/build flows through to Step 3 UI before rendering
+  if (window.hydrateRetainerCadenceFromScenario) {
+    window.hydrateRetainerCadenceFromScenario(scenarios.A);
+  }
   
   // Persist SCENARIOS to localStorage for rebuild and other operations
   try {
