@@ -2146,6 +2146,9 @@ function updatePricingTable() {
             <th style="padding: 14px 12px; text-align: left; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); min-width: 150px;">
               Tasks
             </th>
+            <th style="padding: 14px 12px; text-align: center; color: var(--accent); font-weight: 600; border-bottom: 2px solid rgba(106,163,255,0.2); width: 60px;">
+              Edit
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -2251,6 +2254,16 @@ function updatePricingTable() {
         </td>
         <td style="padding: 8px; font-size: 0.85em; color: var(--muted);">
           ${formatTasksList(tasks)}
+        </td>
+        <td style="padding: 8px; text-align: center;">
+          <button onclick="openDeliverableEditor('${item.deliverable_code}', '${item.deliverable.replace(/'/g, "\\'")}')"
+                  style="padding: 6px 10px; background: rgba(106,163,255,0.2); border: 1px solid rgba(106,163,255,0.5); 
+                         border-radius: 4px; color: var(--accent); cursor: pointer; font-size: 0.8em; transition: all 0.2s;"
+                  onmouseover="this.style.background='rgba(106,163,255,0.3)'"
+                  onmouseout="this.style.background='rgba(106,163,255,0.2)'"
+                  title="Edit components for ${item.deliverable}">
+            ✏️
+          </button>
         </td>
       </tr>
     `;
@@ -5929,12 +5942,24 @@ async function buildFromCurrentSelection() {
   // Update AI button states now that scenario exists
   updateAIButtonStates();
 
-  // Show Step 3 and scroll
+  // Show Step 3 and scroll to pricing details section (not top of step3)
   const step3 = document.querySelector("#step3");
   if (step3) {
     step3.style.display = "block";
-    step3.scrollIntoView({ behavior: "smooth" });
   }
+  
+  // Scroll to pricing details section so user can review pricing first
+  // Use setTimeout to ensure DOM has rendered the pricing table
+  setTimeout(() => {
+    const pricingSection = document.querySelector("#pricing-details-section") || 
+                          document.querySelector("#pricing-table-wrapper") ||
+                          document.querySelector("#pricing-details-table");
+    if (pricingSection) {
+      pricingSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (step3) {
+      step3.scrollIntoView({ behavior: "smooth" });
+    }
+  }, 100);
 
   // Render Scenario A only
   if (window.renderScenario) {
@@ -10144,6 +10169,15 @@ async function onExport(which){
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
+
+// Open Deliverable Editor (wrapper for Edit button in pricing table)
+// This provides a user-friendly way to edit components from the pricing details table
+async function openDeliverableEditor(code, name) {
+  console.log('[EDIT] Opening deliverable editor for:', code, name);
+  // Delegate to the existing component picker modal
+  await openComponentPicker(code, name);
+}
+window.openDeliverableEditor = openDeliverableEditor;
 
 // Component Selection Functionality
 async function openComponentPicker(code, name) {
