@@ -2098,9 +2098,10 @@ const pricingDataEnhanced = {
 // UNIFIED PRICING TABLE - Fully editable inline version
 function updatePricingTable() {
   const container = document.getElementById('pricing-container') || document.getElementById('pricing-tbody')?.parentElement?.parentElement;
-  if (!container || !SCENARIOS) return;
+  const scenarios = getScenarioState();
+  if (!container || !scenarios) return;
   
-  const scenario = SCENARIOS.A || SCENARIOS[0];
+  const scenario = scenarios.A || scenarios[0];
   if (!scenario || !scenario.items) return;
   
   // Store original scenario on first load
@@ -2424,9 +2425,10 @@ function updatePricingTable() {
 
 // Update pricing summary panels - FIXED CALCULATION VERSION
 function updatePricingSummary() {
-  if (!SCENARIOS) return;
+  const scenarios = getScenarioState();
+  if (!scenarios) return;
   
-  const scenario = SCENARIOS.A || SCENARIOS[0];
+  const scenario = scenarios.A || scenarios[0];
   if (!scenario || !scenario.items) return;
   
   let oneTimeCount = 0;
@@ -3440,9 +3442,10 @@ function saveRowEdit(code) {
     }
   }
   
-  // Update scenario items with new values
-  if (SCENARIOS && SCENARIOS.A) {
-    SCENARIOS.A.items.forEach(item => {
+  // Update scenario items with new values using centralized accessor
+  const scenarios = getScenarioState();
+  if (scenarios && scenarios.A) {
+    scenarios.A.items.forEach(item => {
       if (item.deliverable_code === code) {
         const hours = pricingData.customHours.get(code);
         const rate = pricingData.customRates.get(code);
@@ -3644,9 +3647,10 @@ function updateRowTotals(code) {
     totalPriceCell.textContent = `$${totalPrice.toLocaleString()}`;
   }
   
-  // Update scenario data
-  if (SCENARIOS && SCENARIOS.A) {
-    const item = SCENARIOS.A.items.find(i => i.deliverable_code === code);
+  // Update scenario data using centralized accessor
+  const scenarios = getScenarioState();
+  if (scenarios && scenarios.A) {
+    const item = scenarios.A.items.find(i => i.deliverable_code === code);
     if (item) {
       item.total_hours = hours;
       item.effective_rate = rate;
@@ -3669,8 +3673,9 @@ async function exportPricingDetails() {
   const btn = document.getElementById('btn-export-pricing');
   const originalText = btn?.textContent || 'Export Pricing Details';
   
-  // Get the scenario (try memory first, then localStorage)
-  let scenario = window.SCENARIOS?.A;
+  // Get the scenario using centralized accessor (try memory first, then localStorage)
+  let scenariosState = getScenarioState();
+  let scenario = scenariosState?.A;
   
   if (!scenario) {
     console.log('[EXPORT] Trying to load scenario from localStorage...');
@@ -3679,7 +3684,7 @@ async function exportPricingDetails() {
       if (saved) {
         const scenarios = JSON.parse(saved);
         scenario = scenarios.A;
-        window.SCENARIOS = scenarios;  // Restore to memory
+        setScenarioState(scenarios);  // Sync both local and window variables
       }
     } catch (err) {
       console.error('[EXPORT] Failed to load from localStorage:', err);
@@ -3763,8 +3768,9 @@ async function exportScenario(fileFormat, buttonId) {
   const btn = document.getElementById(buttonId);
   const originalText = btn?.textContent || `Export ${fileFormat.toUpperCase()}`;
   
-  // Get the scenario (try memory first, then localStorage)
-  let scenario = window.SCENARIOS?.A;
+  // Get the scenario using centralized accessor (try memory first, then localStorage)
+  let scenariosState = getScenarioState();
+  let scenario = scenariosState?.A;
   
   if (!scenario) {
     console.log('[EXPORT] Trying to load scenario from localStorage...');
@@ -3773,7 +3779,7 @@ async function exportScenario(fileFormat, buttonId) {
       if (saved) {
         const scenarios = JSON.parse(saved);
         scenario = scenarios.A;
-        window.SCENARIOS = scenarios;  // Restore to memory
+        setScenarioState(scenarios);  // Sync both local and window variables
       }
     } catch (err) {
       console.error('[EXPORT] Failed to load from localStorage:', err);
@@ -4119,8 +4125,9 @@ function optimizePricingFallback() {
     return;
   }
   
-  // Simple optimization: scale hours to fit budget
-  const scenario = SCENARIOS?.A || SCENARIOS?.[0];
+  // Simple optimization: scale hours to fit budget using centralized accessor
+  const scenarios = getScenarioState();
+  const scenario = scenarios?.A || scenarios?.[0];
   if (scenario && scenario.totals) {
     const currentTotal = scenario.totals.price;
     const scaleFactor = clientBudget / currentTotal;
@@ -4541,10 +4548,10 @@ async function generateAITimeline(retryAttempt = 0) {
     const rfpText = APB.step2?.rfpText || document.getElementById('rfpText')?.value || '';
     
     // ISSUE FIX 4: Ensure timeline gets proper scenario items with actual count
-    // First check if SCENARIOS exists in memory, if not, try to load from localStorage
-    let SCENARIOS = window.SCENARIOS;
+    // First check if SCENARIOS exists in memory using centralized accessor, if not, try to load from localStorage
+    let scenariosState = getScenarioState();
     
-    if (!SCENARIOS) {
+    if (!scenariosState) {
       console.log('[TIMELINE] No SCENARIOS in memory, checking localStorage...');
       
       // Try to load from localStorage with session ID
@@ -4556,15 +4563,15 @@ async function generateAITimeline(retryAttempt = 0) {
       try {
         const savedScenarios = localStorage.getItem(storageKey);
         if (savedScenarios) {
-          SCENARIOS = JSON.parse(savedScenarios);
-          window.SCENARIOS = SCENARIOS; // Restore to memory
+          scenariosState = JSON.parse(savedScenarios);
+          setScenarioState(scenariosState); // Sync both local and window variables
           console.log('[TIMELINE] Loaded scenarios from localStorage with key:', storageKey);
         } else {
           // Try fallback key
           const fallbackScenarios = localStorage.getItem('latest_scenarios');
           if (fallbackScenarios) {
-            SCENARIOS = JSON.parse(fallbackScenarios);
-            window.SCENARIOS = SCENARIOS; // Restore to memory
+            scenariosState = JSON.parse(fallbackScenarios);
+            setScenarioState(scenariosState); // Sync both local and window variables
             console.log('[TIMELINE] Loaded scenarios from localStorage fallback');
           }
         }
@@ -4573,10 +4580,10 @@ async function generateAITimeline(retryAttempt = 0) {
       }
     }
     
-    const scenario = SCENARIOS?.A;
+    const scenario = scenariosState?.A;
     
     // Enhanced error diagnostics
-    if (!SCENARIOS) {
+    if (!scenariosState) {
       console.error('[TIMELINE] No SCENARIOS object found in memory or localStorage');
       alert('Error: No scenarios found. Please click "Build Scenario" in Step 3 first.');
       btn.disabled = false;
@@ -4586,7 +4593,7 @@ async function generateAITimeline(retryAttempt = 0) {
     }
     
     if (!scenario) {
-      console.error('[TIMELINE] SCENARIOS exists but no A scenario:', SCENARIOS);
+      console.error('[TIMELINE] SCENARIOS exists but no A scenario:', scenariosState);
       alert('Error: Scenario A not found. Please rebuild your scenario in Step 3.');
       btn.disabled = false;
       btn.textContent = '🤖 Generate AI Timeline';
@@ -5903,7 +5910,7 @@ async function buildFromCurrentSelection() {
   window.appState = window.appState || {};
   window.appState.scenarios = scenarios;
   window.latestScenarios = scenarios;
-  window.SCENARIOS = scenarios;
+  setScenarioState(scenarios);  // Use centralized setter to sync both local and window variables
   
   // Persist SCENARIOS to localStorage for rebuild and other operations
   try {
@@ -6268,8 +6275,8 @@ async function onRunReconcile() {
   const sessionId = SessionManager.startNewSession();
   console.log('[SESSION] New analysis session:', sessionId);
   
-  // Reset global state for fresh analysis
-  SCENARIOS = null;
+  // Reset global state for fresh analysis using centralized setter
+  setScenarioState(null);
   DELIVERABLES = [];
   DELIV_INDEX = {};
   DELIV_INDEX_LO = {};
@@ -10111,7 +10118,8 @@ function renderScenarios(data){
 }
 
 async function onExport(which){
-  if(!SCENARIOS){ alert("Build scenarios first."); return; }
+  const scenarios = getScenarioState();
+  if(!scenarios){ alert("Build scenarios first."); return; }
   
   // Get session_id from ScenarioManager (preferred) or SessionManager
   const sessionId = window.ScenarioManager?.state?.sessionId || 
@@ -10124,7 +10132,7 @@ async function onExport(which){
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({
       session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario
-      scenario: SCENARIOS[which]
+      scenario: scenarios[which]
     })
   });
   if(!res.ok){ alert("Export failed"); return; }
