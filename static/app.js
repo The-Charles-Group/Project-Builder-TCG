@@ -2822,7 +2822,8 @@ async function analyzeProjectRetainer() {
     rfpText = 'Analyze based on deliverable names only';
   }
   
-  if (!SCENARIOS || !SCENARIOS.A) {
+  const scenarios = getScenarioState();
+  if (!scenarios || !scenarios.A) {
     alert('Please build a scenario first (click Build Scenario button).');
     return;
   }
@@ -2835,7 +2836,7 @@ async function analyzeProjectRetainer() {
   
   try {
     // Get deliverables from current scenario
-    const deliverables = (SCENARIOS.A.items || []).map(item => ({
+    const deliverables = (scenarios.A.items || []).map(item => ({
       code: item.deliverable_code,
       name: item.deliverable
     }));
@@ -2863,7 +2864,7 @@ async function analyzeProjectRetainer() {
         pricingData.deliverableTypes.set(code, suggestion.type);
         
         // Update the actual scenario items
-        const scenarioItem = SCENARIOS.A.items.find(i => i.deliverable_code === code);
+        const scenarioItem = scenarios.A.items.find(i => i.deliverable_code === code);
         if (scenarioItem) {
           // Set retainer_months based on type
           if (suggestion.type === 'RETAINER') {
@@ -2878,7 +2879,7 @@ async function analyzeProjectRetainer() {
         }
         
         // Also apply to components (inherit from parent)
-        const item = SCENARIOS.A.items.find(i => i.deliverable_code === code);
+        const item = scenarios.A.items.find(i => i.deliverable_code === code);
         if (item && item.components) {
           item.components.forEach(comp => {
             const compKey = `${code}::${comp.name}`;
@@ -2891,7 +2892,7 @@ async function analyzeProjectRetainer() {
       
       // Re-render the scenario table to show updated types and cadence
       if (window.renderScenario) {
-        window.renderScenario('scenarioA', SCENARIOS.A);
+        window.renderScenario('scenarioA', scenarios.A);
       }
       
       // Update pricing calculations if the function exists
@@ -2938,7 +2939,8 @@ async function analyzeProjectRetainer() {
 
 // Update Pricing Function - saves all changes and recalculates
 async function updatePricing() {
-  if (!SCENARIOS || !SCENARIOS.A) {
+  const scenarios = getScenarioState();
+  if (!scenarios || !scenarios.A) {
     alert('No scenario to update. Please build a scenario first.');
     return;
   }
@@ -2954,7 +2956,7 @@ async function updatePricing() {
     updatePricingCalculations();
     
     // Save to scenario
-    const scenario = SCENARIOS.A;
+    const scenario = scenarios.A;
     scenario.items.forEach(item => {
       const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
       const customHours = pricingData.customHours.get(item.deliverable_code);
@@ -3006,8 +3008,8 @@ async function updatePricing() {
 
 // Re-build scenario with current pricing settings
 async function rebuildScenario() {
-  // Try to load from memory or localStorage
-  let scenariosToUse = window.SCENARIOS;
+  // Try to load from memory using centralized accessor
+  let scenariosToUse = getScenarioState();
   
   if (!scenariosToUse || !scenariosToUse.A) {
     console.log('[REBUILD] SCENARIOS not in memory, checking localStorage...');
@@ -3022,7 +3024,7 @@ async function rebuildScenario() {
       
       if (saved) {
         scenariosToUse = JSON.parse(saved);
-        window.SCENARIOS = scenariosToUse;  // Restore to memory
+        setScenarioState(scenariosToUse);  // Sync both local and window variables
         console.log('[REBUILD] Restored scenarios from localStorage');
       }
     } catch (err) {
@@ -3036,8 +3038,7 @@ async function rebuildScenario() {
     return;
   }
   
-  // Use the loaded scenarios
-  const SCENARIOS = scenariosToUse;
+  // scenariosToUse is now the reference to use (no shadowing const SCENARIOS)
   
   const btn = document.getElementById('btn-rebuild-scenario') || 
             document.querySelector('button[onclick*="rebuildScenario"]');
@@ -3050,7 +3051,7 @@ async function rebuildScenario() {
   try {
     // Store current version if not already stored
     if (!pricingData.originalScenario) {
-      pricingData.originalScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
+      pricingData.originalScenario = JSON.parse(JSON.stringify(scenariosToUse.A));
     }
     
     // Increment rebuild version
@@ -3058,7 +3059,7 @@ async function rebuildScenario() {
     pricingData.rebuildVersion++;
     
     // Create rebuilt scenario with custom values
-    const rebuiltScenario = JSON.parse(JSON.stringify(SCENARIOS.A));
+    const rebuiltScenario = JSON.parse(JSON.stringify(scenariosToUse.A));
     
     rebuiltScenario.items.forEach(item => {
       // Get cadence and periods for this deliverable
@@ -3107,8 +3108,9 @@ async function rebuildScenario() {
     // Show comparison modal
     showScenarioComparison(pricingData.originalScenario, rebuiltScenario);
     
-    // Update current scenario
-    SCENARIOS.A = rebuiltScenario;
+    // Update current scenario and sync to both local and window variables
+    scenariosToUse.A = rebuiltScenario;
+    setScenarioState(scenariosToUse);
     updatePricingCalculations();
     
     console.log('Scenario rebuilt successfully', rebuiltScenario);
@@ -3860,8 +3862,9 @@ async function optimizeAllPricing() {
   const btn = document.getElementById('btn-ai-optimize-pricing');
   if (!btn) return;
   
-  // Check for scenario
-  if (!SCENARIOS || !SCENARIOS.A) {
+  // Check for scenario using centralized accessor
+  const scenarios = getScenarioState();
+  if (!scenarios || !scenarios.A) {
     alert('Please build a scenario first before optimizing pricing.');
     return;
   }
@@ -3872,7 +3875,7 @@ async function optimizeAllPricing() {
   
   try {
     // Get current scenario data
-    const scenario = SCENARIOS.A;
+    const scenario = scenarios.A;
     if (!scenario || !scenario.items || scenario.items.length === 0) {
       alert('No scenario items to optimize. Please build a scenario first.');
       return;
