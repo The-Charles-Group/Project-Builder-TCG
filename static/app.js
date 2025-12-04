@@ -5930,26 +5930,25 @@ async function buildFromCurrentSelection() {
   // Update AI button states now that scenario exists
   updateAIButtonStates();
 
-  // Show Step 3 (proceedToPricing already scrolled to Step 3 top)
+  // Show Step 3
   const step3 = document.querySelector("#step3");
   if (step3) {
     step3.style.display = "block";
   }
   
-  // After Build Scenario completes, scroll to Grand Total + Summary panels
-  // Use setTimeout to ensure DOM has rendered the pricing summary
-  setTimeout(() => {
-    // Target the pricing summary panel (One-Time + Monthly sections + Grand Total)
-    const summaryPanel = document.querySelector(".pricing-summary-panel") || 
-                        document.querySelector("#grand-total-cost")?.closest('div') ||
-                        document.querySelector("#one-time-summary")?.closest('div');
-    if (summaryPanel) {
-      summaryPanel.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (step3) {
-      // Fallback to Step 3 if summary not found
-      step3.scrollIntoView({ behavior: "smooth" });
-    }
-  }, 150);
+  // Only scroll to Grand Total if explicitly triggered by Build Scenario button click
+  // (not when called from proceedToPricing which should stay at Step 3 top)
+  if (window._scrollToGrandTotalAfterBuild) {
+    window._scrollToGrandTotalAfterBuild = false; // Reset flag
+    setTimeout(() => {
+      const summaryPanel = document.querySelector(".pricing-summary-panel") || 
+                          document.querySelector("#grand-total-cost")?.closest('div') ||
+                          document.querySelector("#one-time-summary")?.closest('div');
+      if (summaryPanel) {
+        summaryPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 150);
+  }
 
   // Render Scenario A only
   if (window.renderScenario) {

@@ -383,33 +383,7 @@
         </section>
       </div>
       
-      <!-- Build Scenario Panel - MOVED TO TOP with Rebuild/Reset underneath -->
-      <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-          <div>
-            <h3 style="margin: 0 0 8px 0; color: var(--accent2); font-size: 1.1em;">🚀 Build Your Scenario First</h3>
-            <p style="color: var(--muted); font-size: 0.85em; margin: 0;">
-              Create your initial pricing scenario based on selected deliverables. This is required before using AI optimization features.
-            </p>
-          </div>
-          <div style="display: flex; flex-direction: column; gap: 8px; align-items: flex-end;">
-            <button id="btnBuild" class="btn-primary" style="background: var(--accent2); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1.1em;">
-              Build Scenario
-            </button>
-            <div style="display: flex; gap: 8px;">
-              <button id="btn-rebuild-scenario-top" onclick="rebuildScenario()" 
-                      style="background: var(--accent); color: white; padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85em;">
-                🔄 Rebuild
-              </button>
-              <button id="btn-reset-from-step2-top" onclick="rebuildFromStep2()" 
-                      style="background: rgba(255, 165, 0, 0.2); color: #FFA500; padding: 6px 12px; border: 1px solid #FFA500; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85em;"
-                      title="⚠️ Rebuilds scenario from Step 2 defaults — discards current pricing edits.">
-                ⚠️ Reset Step 2
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- Build Scenario Panel removed - buttons moved to Project Scenario header -->
       
       <!-- Project Configuration Grid -->
       <div class="grid" style="margin-bottom:20px;">
@@ -457,10 +431,26 @@
         </div>
       </div>
 
-      <!-- Project Scenario (Editable Table) -->
+      <!-- Project Scenario (Editable Table) with Build/Rebuild/Reset buttons -->
       <div class="scenarios" style="margin-bottom: 20px; grid-template-columns: 1fr;">
         <div class="scenario" style="width: 100%;">
-          <h3>Project Scenario</h3>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <h3 style="margin: 0;">Project Scenario</h3>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button id="btnBuild" class="btn-primary" style="background: var(--accent2); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.95em;">
+                🚀 Build Scenario
+              </button>
+              <button id="btn-rebuild-scenario-top" onclick="rebuildScenario()" 
+                      style="background: var(--accent); color: white; padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85em;">
+                🔄 Rebuild
+              </button>
+              <button id="btn-reset-from-step2-top" onclick="rebuildFromStep2()" 
+                      style="background: rgba(255, 165, 0, 0.2); color: #FFA500; padding: 6px 12px; border: 1px solid #FFA500; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85em;"
+                      title="Rebuilds scenario from Step 2 defaults - discards current pricing edits">
+                ⚠️ Reset
+              </button>
+            </div>
+          </div>
           <div id="scenarioA">(No data)</div>
         </div>
       </div>
@@ -2227,7 +2217,7 @@
     
     window.proceedToPricing = proceedToPricing;
 
-    // Function to update pricing display with scenario data
+    // Function to update pricing display with scenario data - with inline editing
     function updatePricingDisplay(scenario) {
       console.log('[PRICING] Updating display with scenario:', scenario);
       
@@ -2256,9 +2246,13 @@
       scenario.items.forEach((item, idx) => {
         const isRetainer = item.is_retainer || item.retainer;
         
-        // Main deliverable row with Edit button
+        // Main deliverable row with inline editing
         const delivCode = item.deliverable_code || item.code || '';
         const delivName = (item.deliverable || item.deliverable_name || 'Unknown').replace(/'/g, "\\'");
+        const hours = Math.round(item.total_hours || 0);
+        const rate = Math.round(item.effective_rate || item.blended_rate || scenario.blended_rate || 0);
+        const cost = item.price || 0;
+        
         const delivRow = document.createElement('tr');
         delivRow.style.cssText = 'border-bottom: 1px solid var(--border);';
         delivRow.setAttribute('data-deliverable', delivCode);
@@ -2266,57 +2260,99 @@
           <td style="padding: 10px; font-weight: 500; color: var(--text);">
             ${item.deliverable || item.deliverable_name || 'Unknown'}
           </td>
-          <td style="padding: 10px; text-align: center; color: var(--muted);">
-            ${isRetainer ? '🔄 Retainer' : '📦 One-Time'}
+          <td style="padding: 8px; text-align: center;">
+            <select id="pricing-type-${delivCode}" 
+                    onchange="updatePricingType('${delivCode}', this.value)"
+                    style="padding: 4px 8px; border: 1px solid rgba(139,92,246,0.4); border-radius: 4px; 
+                           background: rgba(139,92,246,0.1); color: var(--text); font-size: 0.85em; cursor: pointer;">
+              <option value="ONE_TIME" ${!isRetainer ? 'selected' : ''}>📦 One-Time</option>
+              <option value="RETAINER" ${isRetainer ? 'selected' : ''}>🔄 Retainer</option>
+            </select>
           </td>
-          <td style="padding: 10px; text-align: center; color: var(--text);">
-            ${Math.round(item.total_hours || 0)}
+          <td style="padding: 8px; text-align: center;">
+            <input type="number" id="pricing-hours-${delivCode}" value="${hours}" min="0" step="1"
+                   onchange="updatePricingHours('${delivCode}', this.value)"
+                   style="width: 70px; padding: 4px 6px; border: 1px solid rgba(106,163,255,0.3); 
+                          border-radius: 4px; background: rgba(106,163,255,0.05); color: var(--text); 
+                          text-align: center; font-size: 0.9em;" />
           </td>
-          <td style="padding: 10px; text-align: center; color: var(--text);">
-            $${Math.round(item.effective_rate || item.blended_rate || scenario.blended_rate || 0)}
+          <td style="padding: 8px; text-align: center;">
+            <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
+              <span style="color: var(--muted); font-size: 0.85em;">$</span>
+              <input type="number" id="pricing-rate-${delivCode}" value="${rate}" min="0" step="5"
+                     onchange="updatePricingRate('${delivCode}', this.value)"
+                     style="width: 60px; padding: 4px 6px; border: 1px solid rgba(106,163,255,0.3); 
+                            border-radius: 4px; background: rgba(106,163,255,0.05); color: var(--text); 
+                            text-align: center; font-size: 0.9em;" />
+            </div>
           </td>
-          <td style="padding: 10px; text-align: right; color: var(--accent); font-weight: 500;">
-            $${(item.price || 0).toLocaleString()}
+          <td id="pricing-cost-${delivCode}" style="padding: 10px; text-align: right; color: var(--accent); font-weight: 500;">
+            $${cost.toLocaleString()}
           </td>
           <td style="padding: 10px; color: var(--muted); font-size: 0.9em;">
             ${item.department || '-'}
           </td>
-          <td style="padding: 10px; text-align: center;">
+          <td style="padding: 8px; text-align: center;">
             <button onclick="openDeliverableEditor('${delivCode}', '${delivName}')"
                     style="padding: 4px 8px; background: rgba(106,163,255,0.2); border: 1px solid rgba(106,163,255,0.5); 
                            border-radius: 4px; color: var(--accent); cursor: pointer; font-size: 0.85em;"
-                    title="Edit components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
-              ✏️
+                    title="Add/remove components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
+              📋
             </button>
           </td>
         `;
         tbody.appendChild(delivRow);
         
-        // Add components if any - with Edit buttons
+        // Add components if any - with inline editing
         if (item.components && item.components.length > 0) {
           item.components.forEach(comp => {
             const compName = (comp.name || comp.component || 'Component').replace(/'/g, "\\'");
+            const compKey = `${delivCode}::${comp.name || comp.component}`;
+            const compHours = Math.round(comp.hours || 0);
+            const compRate = Math.round(comp.rate || rate);
+            const compCost = compHours * compRate;
+            
             const compRow = document.createElement('tr');
             compRow.style.cssText = 'background: rgba(0,0,0,0.2);';
-            compRow.setAttribute('data-component', `${delivCode}::${comp.name || comp.component}`);
+            compRow.setAttribute('data-component', compKey);
             compRow.setAttribute('data-parent', delivCode);
             compRow.innerHTML = `
               <td style="padding: 8px 8px 8px 32px; color: var(--muted); font-size: 0.9em;">
                 └─ ${comp.name || comp.component || 'Component'}
               </td>
-              <td style="padding: 8px; text-align: center;">-</td>
-              <td style="padding: 8px; text-align: center; color: var(--muted);">
-                ${Math.round(comp.hours || 0)}
+              <td style="padding: 8px; text-align: center; color: var(--muted); font-size: 0.8em;">
+                (inherit)
               </td>
-              <td style="padding: 8px; text-align: center;">-</td>
-              <td style="padding: 8px; text-align: right;">-</td>
-              <td style="padding: 8px;">-</td>
+              <td style="padding: 8px; text-align: center;">
+                <input type="number" id="pricing-hours-${compKey.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                       value="${compHours}" min="0" step="1"
+                       onchange="updateComponentPricingHours('${delivCode}', '${comp.name || comp.component}', this.value)"
+                       style="width: 60px; padding: 3px 5px; border: 1px solid rgba(139,92,246,0.3); 
+                              border-radius: 4px; background: rgba(139,92,246,0.05); color: var(--text); 
+                              text-align: center; font-size: 0.85em;" />
+              </td>
+              <td style="padding: 8px; text-align: center;">
+                <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
+                  <span style="color: var(--muted); font-size: 0.8em;">$</span>
+                  <input type="number" id="pricing-rate-${compKey.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                         value="${compRate}" min="0" step="5"
+                         onchange="updateComponentPricingRate('${delivCode}', '${comp.name || comp.component}', this.value)"
+                         style="width: 55px; padding: 3px 5px; border: 1px solid rgba(139,92,246,0.3); 
+                                border-radius: 4px; background: rgba(139,92,246,0.05); color: var(--text); 
+                                text-align: center; font-size: 0.85em;" />
+                </div>
+              </td>
+              <td id="pricing-cost-${compKey.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                  style="padding: 8px; text-align: right; color: var(--muted); font-size: 0.9em;">
+                $${compCost.toLocaleString()}
+              </td>
+              <td style="padding: 8px; color: var(--muted); font-size: 0.8em;">-</td>
               <td style="padding: 8px; text-align: center;">
                 <button onclick="openDeliverableEditor('${delivCode}', '${delivName}')"
-                        style="padding: 4px 8px; background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.4); 
-                               border-radius: 4px; color: #a78bfa; cursor: pointer; font-size: 0.8em;"
-                        title="Edit components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
-                  ✏️
+                        style="padding: 3px 6px; background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.4); 
+                               border-radius: 4px; color: #a78bfa; cursor: pointer; font-size: 0.75em;"
+                        title="Add/remove components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
+                  📋
                 </button>
               </td>
             `;
@@ -2388,6 +2424,176 @@
     
     // Make it globally accessible
     window.updatePricingDisplay = updatePricingDisplay;
+
+    // Inline editing handlers for Deliverable Pricing Details table
+    function updatePricingType(deliverableCode, type) {
+      console.log('[PRICING EDIT] Type changed:', deliverableCode, '->', type);
+      const isRetainer = type === 'RETAINER';
+      
+      // Update ScenarioStore
+      if (window.ScenarioStore) {
+        window.ScenarioStore.updateDeliverable(deliverableCode, {
+          is_retainer: isRetainer,
+          retainer: isRetainer
+        });
+      }
+      
+      // Also update pricingData if available
+      if (window.pricingData && window.pricingData.deliverableTypes) {
+        window.pricingData.deliverableTypes.set(deliverableCode, type);
+      }
+      
+      // Recalculate cost display
+      recalculatePricingCost(deliverableCode);
+    }
+    window.updatePricingType = updatePricingType;
+    
+    function updatePricingHours(deliverableCode, hours) {
+      const numHours = parseFloat(hours) || 0;
+      console.log('[PRICING EDIT] Hours changed:', deliverableCode, '->', numHours);
+      
+      // Get current rate
+      const rateInput = document.getElementById(`pricing-rate-${deliverableCode}`);
+      const rate = parseFloat(rateInput?.value) || 210;
+      
+      // Update ScenarioStore
+      if (window.ScenarioStore) {
+        window.ScenarioStore.updateDeliverable(deliverableCode, {
+          hours: numHours,
+          total_hours: numHours,
+          rate: rate,
+          rate_usd: rate
+        });
+      }
+      
+      // Also update pricingData if available
+      if (window.pricingData && window.pricingData.customHours) {
+        window.pricingData.customHours.set(deliverableCode, numHours);
+      }
+      
+      // Recalculate cost display
+      recalculatePricingCost(deliverableCode);
+    }
+    window.updatePricingHours = updatePricingHours;
+    
+    function updatePricingRate(deliverableCode, rate) {
+      const numRate = parseFloat(rate) || 210;
+      console.log('[PRICING EDIT] Rate changed:', deliverableCode, '->', numRate);
+      
+      // Get current hours
+      const hoursInput = document.getElementById(`pricing-hours-${deliverableCode}`);
+      const hours = parseFloat(hoursInput?.value) || 0;
+      
+      // Update ScenarioStore
+      if (window.ScenarioStore) {
+        window.ScenarioStore.updateDeliverable(deliverableCode, {
+          hours: hours,
+          total_hours: hours,
+          rate: numRate,
+          rate_usd: numRate,
+          blended_rate: numRate,
+          effective_rate: numRate
+        });
+      }
+      
+      // Also update pricingData if available
+      if (window.pricingData && window.pricingData.customRates) {
+        window.pricingData.customRates.set(deliverableCode, numRate);
+      }
+      
+      // Recalculate cost display
+      recalculatePricingCost(deliverableCode);
+    }
+    window.updatePricingRate = updatePricingRate;
+    
+    function updateComponentPricingHours(deliverableCode, componentName, hours) {
+      const numHours = parseFloat(hours) || 0;
+      const compKey = `${deliverableCode}::${componentName}`;
+      console.log('[PRICING EDIT] Component hours changed:', compKey, '->', numHours);
+      
+      // Get current rate
+      const safeKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
+      const rateInput = document.getElementById(`pricing-rate-${safeKey}`);
+      const rate = parseFloat(rateInput?.value) || 210;
+      
+      // Update ScenarioStore for component
+      if (window.ScenarioStore) {
+        window.ScenarioStore.updateComponent(deliverableCode, componentName, {
+          hours: numHours,
+          rate: rate
+        });
+      }
+      
+      // Also update pricingData if available
+      if (window.pricingData && window.pricingData.customHours) {
+        window.pricingData.customHours.set(compKey, numHours);
+      }
+      
+      // Recalculate cost display for this component
+      recalculateComponentPricingCost(deliverableCode, componentName);
+    }
+    window.updateComponentPricingHours = updateComponentPricingHours;
+    
+    function updateComponentPricingRate(deliverableCode, componentName, rate) {
+      const numRate = parseFloat(rate) || 210;
+      const compKey = `${deliverableCode}::${componentName}`;
+      console.log('[PRICING EDIT] Component rate changed:', compKey, '->', numRate);
+      
+      // Get current hours
+      const safeKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
+      const hoursInput = document.getElementById(`pricing-hours-${safeKey}`);
+      const hours = parseFloat(hoursInput?.value) || 0;
+      
+      // Update ScenarioStore for component
+      if (window.ScenarioStore) {
+        window.ScenarioStore.updateComponent(deliverableCode, componentName, {
+          hours: hours,
+          rate: numRate
+        });
+      }
+      
+      // Also update pricingData if available
+      if (window.pricingData && window.pricingData.customRates) {
+        window.pricingData.customRates.set(compKey, numRate);
+      }
+      
+      // Recalculate cost display for this component
+      recalculateComponentPricingCost(deliverableCode, componentName);
+    }
+    window.updateComponentPricingRate = updateComponentPricingRate;
+    
+    // Helper to recalculate and display cost for a deliverable row
+    function recalculatePricingCost(deliverableCode) {
+      const hoursInput = document.getElementById(`pricing-hours-${deliverableCode}`);
+      const rateInput = document.getElementById(`pricing-rate-${deliverableCode}`);
+      const costCell = document.getElementById(`pricing-cost-${deliverableCode}`);
+      
+      if (hoursInput && rateInput && costCell) {
+        const hours = parseFloat(hoursInput.value) || 0;
+        const rate = parseFloat(rateInput.value) || 0;
+        const cost = hours * rate;
+        costCell.textContent = `$${cost.toLocaleString()}`;
+      }
+    }
+    window.recalculatePricingCost = recalculatePricingCost;
+    
+    // Helper to recalculate and display cost for a component row
+    function recalculateComponentPricingCost(deliverableCode, componentName) {
+      const compKey = `${deliverableCode}::${componentName}`;
+      const safeKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
+      
+      const hoursInput = document.getElementById(`pricing-hours-${safeKey}`);
+      const rateInput = document.getElementById(`pricing-rate-${safeKey}`);
+      const costCell = document.getElementById(`pricing-cost-${safeKey}`);
+      
+      if (hoursInput && rateInput && costCell) {
+        const hours = parseFloat(hoursInput.value) || 0;
+        const rate = parseFloat(rateInput.value) || 0;
+        const cost = hours * rate;
+        costCell.textContent = `$${cost.toLocaleString()}`;
+      }
+    }
+    window.recalculateComponentPricingCost = recalculateComponentPricingCost;
 
     // Legacy functions removed - replaced by Stage 2 workflow
 
@@ -3472,7 +3678,10 @@
       if (applyBtn) applyBtn.onclick = applySelection;
       
       const btnBuild = document.getElementById('btnBuild');
-      if (btnBuild) btnBuild.onclick = buildScenariosAB;
+      if (btnBuild) btnBuild.onclick = () => {
+        window._scrollToGrandTotalAfterBuild = true; // Set flag for grand total scroll
+        buildScenariosAB();
+      };
       
       // Wire up new pricing buttons
       const btnExportPricing = document.getElementById('btn-export-pricing');
