@@ -1212,16 +1212,17 @@ async function initializeGanttChart(tasks = []) {
       custom_popup_html: function(task) {
         const start = new Date(task._start);
         const end = new Date(task._end);
-        const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+        const calendarDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+        const hours = task.hours || 0;
+        const effortDays = Math.ceil(hours / 8);
         
         return `
           <div class="gantt-popup" style="padding:12px;">
             <h5 style="margin:0 0 8px;">${task.name}</h5>
             <p style="margin:4px 0;"><strong>Department:</strong> ${task.department || 'N/A'}</p>
-            <p style="margin:4px 0;"><strong>Start:</strong> ${task.start}</p>
-            <p style="margin:4px 0;"><strong>End:</strong> ${task.end}</p>
-            <p style="margin:4px 0;"><strong>Duration:</strong> ${duration} days</p>
-            <p style="margin:4px 0;"><strong>Hours:</strong> ${task.hours || 0}</p>
+            <p style="margin:4px 0;"><strong>Hours:</strong> ${hours} (pricing effort)</p>
+            <p style="margin:4px 0;"><strong>Span:</strong> ${calendarDays} calendar days (${task.start} – ${task.end})</p>
+            <p style="margin:4px 0;color:#888;font-size:0.9em;">Effort days @ 8h/d ≈ ${effortDays} days</p>
             ${task.critical_path ? '<p style="margin:4px 0;color:#fbbf24;"><strong>⚡ Critical Path</strong></p>' : ''}
           </div>
         `;
@@ -1338,11 +1339,13 @@ async function initializeGanttChart(tasks = []) {
             taskElement.classList.add('critical-path');
           }
           
-          // FEATURE: Add hover tooltip showing start/end dates and duration
+          // FEATURE: Add hover tooltip showing hours, span, and effort days
           const taskData = tasks.find(t => t.id === task.id);
           if (taskData) {
-            const duration = calculateDuration(taskData.start, taskData.end);
-            const tooltipText = `${taskData.name} | Start: ${taskData.start} | End: ${taskData.end} | Duration: ${duration} days`;
+            const calendarDays = calculateDuration(taskData.start, taskData.end);
+            const hours = taskData.hours || 0;
+            const effortDays = Math.ceil(hours / 8);
+            const tooltipText = `${taskData.name} | Hours: ${hours} (effort) | Span: ${calendarDays} days (${taskData.start} – ${taskData.end}) | Effort: ~${effortDays} days @ 8h/d`;
             
             // Try to add tooltip to both the bar and its wrapper
             taskElement.setAttribute('title', tooltipText);

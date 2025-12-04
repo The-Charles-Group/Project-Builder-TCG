@@ -5721,6 +5721,215 @@ class WeightedScoresRequest(BaseModel):
     rfp_text: Optional[str] = None
     selection_mode: str = "confidence_only"  # "confidence_only" | "tfidf_only" | "both"
 
+# ========= Deliverable Compression (PM Waterfalling) =========
+DELIVERABLE_BUFFER_WORK_DAYS = int(os.environ.get("DELIVERABLE_BUFFER_WORK_DAYS", "0"))
+
+def add_business_days(start_date: datetime.date, business_days: int) -> datetime.date:
+    """Add business days (Mon-Fri) to a start date, skipping weekends."""
+    current = start_date
+    days_added = 0
+    while days_added < business_days:
+        current += datetime.timedelta(days=1)
+        if current.weekday() < 5:
+            days_added += 1
+    return current
+
+def calculate_business_days_between(start_date: datetime.date, end_date: datetime.date) -> int:
+    """Calculate the number of business days between two dates (inclusive of end)."""
+    if end_date < start_date:
+        return 0
+    days = 0
+    current = start_date
+    while current <= end_date:
+        if current.weekday() < 5:
+            days += 1
+        current += datetime.timedelta(days=1)
+    return max(1, days)
+
+def compress_deliverable_timeline(
+    tasks: List[Dict[str, Any]],
+    project_start: str,
+    buffer_work_days: int = None
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Compress L2 deliverables to chain end-to-start with minimal idle time.
+    
+    This implements "PM waterfalling" behavior where deliverables run back-to-back
+    instead of being spaced out according to RFP month buckets.
+    
+    Args:
+        tasks: List of timeline tasks with start/end dates
+        project_start: Project start date in ISO format (YYYY-MM-DD)
+        buffer_work_days: Number of working days between deliverables (default from env)
+    
+    Returns:
+        Tuple of (compressed_tasks, compression_metadata)
+    """
+    if buffer_work_days is None:
+        buffer_work_days = DELIVERABLE_BUFFER_WORK_DAYS
+    
+    if not tasks:
+        return tasks, {"compressed": False, "reason": "No tasks"}
+    
+    try:
+        project_start_dt = datetime.datetime.fromisoformat(project_start.replace('Z', '')).date()
+    except (ValueError, AttributeError):
+        print(f"[Compress] Invalid project_start: {project_start}, skipping compression")
+        return tasks, {"compressed": False, "reason": "Invalid project_start"}
+    
+    print(f"[Compress] Starting deliverable compression with buffer={buffer_work_days} work days")
+    print(f"[Compress] Project start: {project_start_dt}")
+    
+    deliverable_info = {}
+    deliverable_children = {}
+    
+    for task in tasks:
+        deliverable_code = task.get('deliverable_code', '')
+        if not deliverable_code:
+            continue
+        
+        is_milestone = task.get('is_milestone', False) or task.get('name', '').lower().endswith('approval') or task.get('name', '').lower().endswith('complete')
+        if is_milestone:
+            continue
+        
+        task_start = task.get('start', '')
+        task_end = task.get('end', '')
+        
+        if not task_start or not task_end:
+            continue
+        
+        try:
+            start_dt = datetime.datetime.fromisoformat(task_start.replace('Z', '')).date()
+            end_dt = datetime.datetime.fromisoformat(task_end.replace('Z', '')).date()
+        except (ValueError, AttributeError):
+            continue
+        
+        is_deliverable_level = (
+            task.get('component') is None or 
+            task.get('component') == '' or
+            task.get('name', '') == task.get('deliverable_name', '')
+        )
+        
+        if deliverable_code not in deliverable_info:
+            deliverable_info[deliverable_code] = {
+                'code': deliverable_code,
+                'name': task.get('deliverable_name', task.get('name', '')),
+                'min_start': start_dt,
+                'max_end': end_dt,
+                'duration_business_days': 0,
+                'original_start': start_dt,
+                'original_end': end_dt,
+            }
+            deliverable_children[deliverable_code] = []
+        
+        info = deliverable_info[deliverable_code]
+        if start_dt < info['min_start']:
+            info['min_start'] = start_dt
+            info['original_start'] = start_dt
+        if end_dt > info['max_end']:
+            info['max_end'] = end_dt
+            info['original_end'] = end_dt
+        
+        deliverable_children[deliverable_code].append(task)
+    
+    for code, info in deliverable_info.items():
+        info['duration_business_days'] = calculate_business_days_between(
+            info['min_start'], info['max_end']
+        )
+    
+    sorted_deliverables = sorted(
+        deliverable_info.values(),
+        key=lambda d: (d['min_start'], d['code'])
+    )
+    
+    if not sorted_deliverables:
+        print("[Compress] No deliverables found to compress")
+        return tasks, {"compressed": False, "reason": "No deliverables found"}
+    
+    print(f"[Compress] Found {len(sorted_deliverables)} deliverables to chain:")
+    for d in sorted_deliverables:
+        print(f"  - {d['code']}: {d['name'][:40]}... ({d['duration_business_days']} business days)")
+    
+    compression_map = {}
+    current_start = project_start_dt
+    
+    for i, deliverable in enumerate(sorted_deliverables):
+        code = deliverable['code']
+        duration = deliverable['duration_business_days']
+        
+        new_start = current_start
+        new_end = add_business_days(new_start, duration - 1) if duration > 1 else new_start
+        
+        old_start = deliverable['original_start']
+        shift_days = (new_start - old_start).days
+        
+        compression_map[code] = {
+            'old_start': old_start.isoformat(),
+            'old_end': deliverable['original_end'].isoformat(),
+            'new_start': new_start.isoformat(),
+            'new_end': new_end.isoformat(),
+            'shift_days': shift_days,
+            'duration_business_days': duration
+        }
+        
+        print(f"[Compress] {code}: {old_start} -> {new_start} (shifted {shift_days} days)")
+        
+        if buffer_work_days > 0:
+            current_start = add_business_days(new_end, buffer_work_days)
+        else:
+            current_start = add_business_days(new_end, 1)
+    
+    compressed_tasks = []
+    for task in tasks:
+        deliverable_code = task.get('deliverable_code', '')
+        
+        if deliverable_code not in compression_map:
+            compressed_tasks.append(task)
+            continue
+        
+        mapping = compression_map[deliverable_code]
+        shift_days = mapping['shift_days']
+        
+        if shift_days == 0:
+            compressed_tasks.append(task)
+            continue
+        
+        new_task = task.copy()
+        
+        task_start = task.get('start', '')
+        task_end = task.get('end', '')
+        
+        if task_start:
+            try:
+                start_dt = datetime.datetime.fromisoformat(task_start.replace('Z', '')).date()
+                new_start_dt = start_dt + datetime.timedelta(days=shift_days)
+                new_task['start'] = new_start_dt.isoformat()
+            except (ValueError, AttributeError):
+                pass
+        
+        if task_end:
+            try:
+                end_dt = datetime.datetime.fromisoformat(task_end.replace('Z', '')).date()
+                new_end_dt = end_dt + datetime.timedelta(days=shift_days)
+                new_task['end'] = new_end_dt.isoformat()
+            except (ValueError, AttributeError):
+                pass
+        
+        compressed_tasks.append(new_task)
+    
+    metadata = {
+        "compressed": True,
+        "buffer_work_days": buffer_work_days,
+        "deliverables_compressed": len(compression_map),
+        "compression_map": compression_map,
+        "project_start": project_start,
+        "new_project_end": current_start.isoformat() if sorted_deliverables else project_start
+    }
+    
+    print(f"[Compress] Compression complete: {len(compression_map)} deliverables chained")
+    
+    return compressed_tasks, metadata
+
 # ========= AI Timeline Generation =========
 class TimelineGenerationRequest(BaseModel):
     """Request model for AI timeline generation"""
@@ -6361,6 +6570,30 @@ async def generate_timeline(request: TimelineGenerationRequest):
                         request.optimization_mode,
                         use_intelligent_scheduler=False
                     )
+            
+            # DELIVERABLE COMPRESSION: Chain deliverables end-to-start with minimal idle time
+            # This implements "PM waterfalling" behavior instead of RFP month buckets
+            if 'tasks' in result and isinstance(result['tasks'], list) and request.project_start:
+                print(f"[Timeline] Applying deliverable compression to eliminate gaps...")
+                update_sse_job(job_id,
+                              status=StreamJobStatus.PROCESSING,
+                              progress=92.0,
+                              message="Compressing deliverable timeline for back-to-back scheduling...",
+                              current_stage="compressing_timeline")
+                
+                compressed_tasks, compression_metadata = compress_deliverable_timeline(
+                    result['tasks'],
+                    request.project_start,
+                    buffer_work_days=DELIVERABLE_BUFFER_WORK_DAYS
+                )
+                
+                result['tasks'] = compressed_tasks
+                
+                if 'metadata' not in result:
+                    result['metadata'] = {}
+                result['metadata']['compression'] = compression_metadata
+                
+                print(f"[Timeline] Compression complete: {compression_metadata.get('deliverables_compressed', 0)} deliverables chained")
             
             # Progress: Finalizing (90-100%)
             update_sse_job(job_id,
