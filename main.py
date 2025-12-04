@@ -105,11 +105,11 @@ def load_database_with_pickle_cache():
     # Import here to avoid circular dependency issues
     import glob
     
-    # Find the v4 Excel file
+    # Find the v3 Excel file
     xlsx_paths = [
-        "test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx",
-        "Replit_App_DB_READABLE_FullRows_v4.xlsx",
-        "data/Replit_App_DB_READABLE_FullRows_v4.xlsx"
+        "test_outputs/Replit_App_DB_READABLE_FullRows_v3.xlsx",
+        "Replit_App_DB_READABLE_FullRows_v3.xlsx",
+        "data/Replit_App_DB_READABLE_FullRows_v3.xlsx"
     ]
     
     xlsx_path = None
@@ -118,13 +118,13 @@ def load_database_with_pickle_cache():
             xlsx_path = path
             break
     
-    # If not found in standard locations, check attached_assets for timestamped v4 files
+    # If not found in standard locations, check attached_assets for timestamped v3 files
     if not xlsx_path:
-        v4_files = glob.glob("attached_assets/Replit_App_DB_READABLE_FullRows_v4_*.xlsx")
-        if v4_files:
+        v3_files = glob.glob("attached_assets/Replit_App_DB_READABLE_FullRows_v3_*.xlsx")
+        if v3_files:
             # Use the most recent file (highest timestamp)
-            xlsx_path = sorted(v4_files)[-1]
-            print(f"[STARTUP] Found timestamped v4 database: {xlsx_path}")
+            xlsx_path = sorted(v3_files)[-1]
+            print(f"[STARTUP] Found timestamped v3 database: {xlsx_path}")
     
     if not xlsx_path:
         print("[STARTUP] No database file found, creating mock database")
@@ -1556,24 +1556,23 @@ def _get_us_mx_holidays(year: int) -> list:
     return holidays
 
 
-def _find_v4_path() -> str | None:
+def _find_v3_path() -> str | None:
     import glob
     # Check for xlsx files first (including test_outputs directory)
     for p in [
-        "Replit_App_DB_READABLE_FullRows_v4b.xlsx",
-        "Replit_App_DB_READABLE_FullRows_v4.xlsx",
-        "test_outputs/Replit_App_DB_READABLE_FullRows_v4.xlsx",  # v4 in test_outputs
-        "data/Replit_App_DB_READABLE_FullRows_v4.xlsx",
+        "Replit_App_DB_READABLE_FullRows_v3.xlsx",
+        "test_outputs/Replit_App_DB_READABLE_FullRows_v3.xlsx",
+        "data/Replit_App_DB_READABLE_FullRows_v3.xlsx",
     ]:
         if os.path.exists(p):
             return p
-    # Check attached_assets for timestamped v4 files
-    v4_files = glob.glob("attached_assets/Replit_App_DB_READABLE_FullRows_v4_*.xlsx")
-    if v4_files:
-        return sorted(v4_files)[-1]  # Use most recent file
+    # Check attached_assets for timestamped v3 files
+    v3_files = glob.glob("attached_assets/Replit_App_DB_READABLE_FullRows_v3_*.xlsx")
+    if v3_files:
+        return sorted(v3_files)[-1]  # Use most recent file
     # Check for CSV bundle directory (canonical and timestamped variants)
     # Filter to only return directories, not ZIP files
-    csv_dirs = [d for d in glob.glob("Replit_App_DB_READABLE_FullRows_v4_csvs*") if os.path.isdir(d)]
+    csv_dirs = [d for d in glob.glob("Replit_App_DB_READABLE_FullRows_v3_csvs*") if os.path.isdir(d)]
     if csv_dirs:
         return csv_dirs[0]  # return first match
     return None
@@ -1613,10 +1612,10 @@ class AgencyDB:
         return f"{complexity}__{tier}_Hours"
 
     def load(self):
-        v4_path = _find_v4_path()
+        v3_path = _find_v3_path()
 
-        if v4_path:
-            self._load_from_v4_primary(v4_path)
+        if v3_path:
+            self._load_from_v3_primary(v3_path)
         else:
             # No database files found, create mock data
             self._create_mock_data()
@@ -1624,72 +1623,80 @@ class AgencyDB:
         return True
 
 
-    def _load_from_v4_primary(self, v4_path: str | None):
-        # Use the provided v4_path or fall back to searching for files
-        if v4_path and v4_path.endswith(".xlsx"):
+    def _load_from_v3_primary(self, v3_path: str | None):
+        # Use the provided v3_path or fall back to searching for files
+        if v3_path and v3_path.endswith(".xlsx"):
             # Excel file
-            self.src = v4_path
-            read = lambda sh: pd.read_excel(v4_path, sheet_name=sh)
-        elif v4_path and os.path.isdir(v4_path):
+            self.src = v3_path
+            read = lambda sh: pd.read_excel(v3_path, sheet_name=sh)
+        elif v3_path and os.path.isdir(v3_path):
             # CSV bundle directory
             def read_csv(sh):
-                path = os.path.join(v4_path, f"{sh}.csv")
+                path = os.path.join(v3_path, f"{sh}.csv")
                 if not os.path.exists(path):
                     raise FileNotFoundError(path)
                 return pd.read_csv(path)
             read = read_csv
-            self.src = v4_path
+            self.src = v3_path
         else:
             # Create minimal mock data for demo purposes
             self._create_mock_data()
             self.loaded = True
             return True
 
-        # Load sheets
+        # Helper for optional sheets
+        def read_optional(sheet_name, fallback=None):
+            try:
+                return read(sheet_name)
+            except (ValueError, FileNotFoundError):
+                print(f"[DB] Optional sheet '{sheet_name}' not found, using default")
+                return fallback
+        
+        # Load sheets - v3 sheet names
         self.all_rows          = read("All_Task_Rows")
         self.deliverables      = read("Deliverable_Index")
-        self.b_rules           = read("Bundle_Rules_Table")
-        self.b_defaults        = read("Bundle_Scenario_Defaults")
-        self.b_by_deliv        = read("Bundles_By_Deliverable")
-        self.b_hours_by_role   = read("Bundles_Hours_By_Role")
+        self.b_rules           = read_optional("Bundles_Rules", pd.DataFrame())  # v3 name
+        self.b_defaults        = read_optional("Bundle_Scenario_Defaults", pd.DataFrame())  # not in v3
+        self.b_by_deliv        = read_optional("Bundles_Map_By_Deliverable", pd.DataFrame())  # v3 name
+        self.b_hours_by_role   = read_optional("Bundles_Hours_By_Role", pd.DataFrame())
         self.role_rate_card    = read("Role_Rate_Card")
-        self.rate_matrix       = read("Role_Rate_Matrix")
-        self.rate_bands        = read("Rate_Bands")
-        self.timeline_params   = read("Timeline_Params")
-        self.timeline_scaling  = read("Timeline_Scaling")
-        self.timeline_weighting= read("Timeline_Weighting")
-        self.slack_settings    = read("Slack_Settings")
-        self.pricing_settings  = read("Pricing_Settings")
+        self.rate_matrix       = read_optional("Role_Rate_Matrix", pd.DataFrame())
+        self.rate_bands        = read_optional("Rate_Bands", pd.DataFrame())  # not in v3
+        self.timeline_params   = read_optional("Timeline_Params", pd.DataFrame())
+        self.timeline_scaling  = read_optional("Timeline_Scaling", pd.DataFrame())  # not in v3
+        self.timeline_weighting= read_optional("Timeline_Weighting", pd.DataFrame())  # not in v3
+        self.slack_settings    = read_optional("Slack_Settings", pd.DataFrame())  # not in v3
+        self.pricing_settings  = read_optional("Pricing_Settings", pd.DataFrame())
         # Override Default_Blended_Rate to ensure it uses the global constant
         if self.pricing_settings is not None and not self.pricing_settings.empty:
             mask = self.pricing_settings["Key"] == "Default_Blended_Rate"
             if mask.any():
                 self.pricing_settings.loc[mask, "Default"] = DEFAULT_BILLABLE_RATE_USD
-        self.scenario_templates= read("Scenario_Templates")
-        self.ui_options        = read("UI_Options")
-        self.rfp_rules         = read("RFP_Matching_Rules")
+        self.scenario_templates= read_optional("Scenario_Templates", pd.DataFrame())
+        self.ui_options        = read_optional("UI_Options", pd.DataFrame())  # not in v3
+        self.rfp_rules         = read_optional("RFP_Matching_Rules", pd.DataFrame())
 
         # Normalize
         for c in ["Deliverable_Code","Deliverable","Category"]:
             if c in self.deliverables.columns:
                 self.deliverables[c] = self.deliverables[c].astype(str)
 
-        # Normalize component column from v4 spreadsheet
+        # Normalize component column from v3 spreadsheet
         self._normalize_component_column()
-        # Normalize task label column from v4b spreadsheet
+        # Normalize task label column from v3 spreadsheet
         self._normalize_task_label_column()
         # Normalize role and seniority columns 
         self._normalize_role_and_seniority_columns()
         self._normalize_rate_card_seniority()
         
-        # normalize code columns from v4/v4b for canonical naming
+        # normalize code columns from v3 for canonical naming
         self._normalize_code_columns()
         
-        print(f"[DB] v4-primary loaded from: {self.src}")
+        print(f"[DB] v3-primary loaded from: {self.src}")
 
     def _normalize_component_column(self):
         """
-        Ensure self.all_rows has a 'Component' column populated from v4's Component_Task_L1 (Column F).
+        Ensure self.all_rows has a 'Component' column populated from v3's Component_Task_L1 (Column F).
         If other synonyms exist, prefer them in this order.
         """
         if self.all_rows is None or isinstance(self.all_rows, pd.DataFrame) and self.all_rows.empty:
@@ -1718,8 +1725,8 @@ class AgencyDB:
 
     def _normalize_task_label_column(self):
         """
-        Ensure self.all_rows has a 'Task_Label' column populated from v4b's Column G.
-        Map v4b column G → 'Task_Label' (UI-display name for tasks)
+        Ensure self.all_rows has a 'Task_Label' column populated from v3's Column G.
+        Map v3 column G → 'Task_Label' (UI-display name for tasks)
         """
         if self.all_rows is None or isinstance(self.all_rows, pd.DataFrame) and self.all_rows.empty:
             return
@@ -1735,7 +1742,7 @@ class AgencyDB:
             pass
 
         candidates = [preferred] if preferred else []
-        # common headers we've seen for column G in v4b
+        # common headers we've seen for column G in v3
         candidates += ["Task_Label", "Task_Name", "Task_L1", "Component_Task_L2", "Task"]
 
         cols_lc = {c.lower(): c for c in self.all_rows.columns}
@@ -1762,7 +1769,7 @@ class AgencyDB:
 
 
     def _normalize_code_columns(self):
-        """Map v4/v4b All_Task_Rows code columns to canonical names we use downstream."""
+        """Map v3 All_Task_Rows code columns to canonical names we use downstream."""
         if self.all_rows is None or isinstance(self.all_rows, pd.DataFrame) and self.all_rows.empty:
             return
         cols = {c.lower(): c for c in self.all_rows.columns}
@@ -1773,7 +1780,7 @@ class AgencyDB:
                     return cols[n.lower()]
             return None
 
-        # canonical: Deliverable_Code already exists in v4/v4b; keep synonyms just in case
+        # canonical: Deliverable_Code already exists in v3; keep synonyms just in case
         if isinstance(self.all_rows, pd.DataFrame) and "Deliverable_Code" not in self.all_rows.columns:
             alt = pick("Deliverable Code", "Deliv_Code", "DeliverableID")
             if alt: self.all_rows["Deliverable_Code"] = self.all_rows[alt].astype(str)
@@ -1928,7 +1935,7 @@ class AgencyDB:
     def _norm_token(self, s: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", str(s).strip().lower())
 
-    def _v4_complexity_tokens(self) -> list[str]:
+    def _v3_complexity_tokens(self) -> list[str]:
         toks = set()
         if self.all_rows is not None and isinstance(self.all_rows, pd.DataFrame):
             for c in self.all_rows.columns:
@@ -1936,7 +1943,7 @@ class AgencyDB:
                     toks.add(c.split("__", 1)[0])
         return sorted(toks)
 
-    def _v4_tier_tokens(self) -> list[str]:
+    def _v3_tier_tokens(self) -> list[str]:
         toks = set()
         if self.all_rows is not None and isinstance(self.all_rows, pd.DataFrame):
             for c in self.all_rows.columns:
@@ -1947,7 +1954,7 @@ class AgencyDB:
                         toks.add(parts[1].replace("_Hours", ""))
         return sorted(toks)
 
-    def _map_to_v4_token(self, label: str, candidates: list[str]) -> str:
+    def _map_to_v3_token(self, label: str, candidates: list[str]) -> str:
         if not label: return ""
         z = self._norm_token(label)
         # exact normalized match first
@@ -1962,8 +1969,8 @@ class AgencyDB:
         return candidates[0] if candidates else ""
 
     def drivers_complexities_tiers_v3(self) -> tuple[list[str], list[str]]:
-        """Return empty lists since v3 is no longer supported."""
-        return ([], [])
+        """Return complexity and tier tokens from v3 database."""
+        return (self._v3_complexity_tokens(), self._v3_tier_tokens())
 
     def _create_mock_data(self):
         """Create minimal mock data for demo purposes when database files are not available"""
@@ -2228,9 +2235,9 @@ class AgencyDB:
         col = f"{complexity}__{tier}_Hours"
         if self.all_rows is not None and isinstance(self.all_rows, pd.DataFrame) and col in self.all_rows.columns:
             return col
-        # try mapping display labels -> v4 tokens
-        c_tok = self._map_to_v4_token(complexity, self._v4_complexity_tokens())
-        t_tok = self._map_to_v4_token(tier,        self._v4_tier_tokens())
+        # try mapping display labels -> v3 tokens
+        c_tok = self._map_to_v3_token(complexity, self._v3_complexity_tokens())
+        t_tok = self._map_to_v3_token(tier,        self._v3_tier_tokens())
         col2 = f"{c_tok}__{t_tok}_Hours"
         if self.all_rows is None or not isinstance(self.all_rows, pd.DataFrame) or col2 not in self.all_rows.columns:
             raise HTTPException(400, f"Scenario column not found for ({complexity}, {tier}).")
@@ -2977,15 +2984,15 @@ class AgencyDB:
         return s.value_counts().idxmax() if not s.empty else ""
 
     def service_department_for_task(self, deliverable_code: str, component: str, task_group: str) -> str:
-        """Service department logic from v4 data."""
+        """Service department logic from v3 data."""
         return ""
 
     def service_department_for_component(self, deliverable_code: str, component: str, task_groups: list[str]) -> str:
-        """Service department logic from v4 data."""
+        """Service department logic from v3 data."""
         return ""
 
     def service_department_for_deliverable(self, deliverable_code: str, task_groups: list[str]) -> str:
-        """Service department logic from v4 data."""
+        """Service department logic from v3 data."""
         return ""
 
     def _majority_by_hours(self, sub: pd.DataFrame, col: str, scenario_col: str) -> str:
@@ -5060,7 +5067,7 @@ def _best_match(label: str, db_rows: pd.DataFrame) -> tuple[str,str,float] | Non
     return best
 
 def _average_spec_for(category: str) -> dict:
-    # Prefer a template key containing "MED" if present, else default constants already used in v4 hours
+    # Prefer a template key containing "MED" if present, else default constants already used in v3 hours
     row = DB.scenario_templates[DB.scenario_templates["Scenario_Key"].str.contains("MED", case=False, na=False)]
     if not row.empty:
         c = str(row.iloc[0]["Complexity"]); t = str(row.iloc[0]["Tier"])
@@ -6483,7 +6490,7 @@ def db_status():
     return {
         "loaded": DB.loaded,
         "source": DB.src,
-        "has_v4": ok(DB.all_rows),
+        "has_v3": ok(DB.all_rows),
         "sheets": {
             "all_rows": ok(DB.all_rows),
             "deliverables": ok(DB.deliverables),
