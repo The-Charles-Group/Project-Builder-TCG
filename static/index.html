@@ -2634,6 +2634,7 @@
     
     // Save pricing and show totals - called by Save button
     // Recalculates totals from current DOM values (no API call, no rebuild)
+    // Includes both deliverable-level and component-level costs
     function savePricingAndShowTotals() {
       console.log('[SAVE] Recalculating totals from current values...');
       
@@ -2641,7 +2642,7 @@
       let oneTimeCount = 0, oneTimeHours = 0, oneTimeCost = 0;
       let retainerCount = 0, retainerMonthlyHours = 0, retainerMonthlyCost = 0;
       
-      // Get all deliverable rows from the pricing table
+      // Get all rows from the pricing table
       const tbody = document.getElementById('pricing-tbody');
       if (!tbody) {
         console.warn('[SAVE] Pricing table not found');
@@ -2658,28 +2659,65 @@
         const cadenceSelect = document.getElementById(`cadence-${delivCode}`);
         const isRetainer = cadenceSelect?.value === 'RETAINER';
         
-        // Get hours and rate from inputs
-        const hoursInput = document.getElementById(`hours-${delivCode}`);
-        const rateInput = document.getElementById(`rate-${delivCode}`);
-        const hours = parseFloat(hoursInput?.value) || 0;
-        const rate = parseFloat(rateInput?.value) || 0;
-        const cost = hours * rate;
+        // Check if this deliverable has component rows
+        const componentRows = tbody.querySelectorAll(`tr[data-parent="${delivCode}"]`);
         
-        // Update the cost cell for this row
+        let delivHours = 0;
+        let delivCost = 0;
+        
+        if (componentRows.length > 0) {
+          // Sum up component costs
+          componentRows.forEach(compRow => {
+            const compKey = compRow.getAttribute('data-component');
+            if (!compKey) return;
+            
+            // Use sanitized key for DOM lookup
+            const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
+            const compHoursInput = document.getElementById(`hours-${safeCompKey}`);
+            const compRateInput = document.getElementById(`rate-${safeCompKey}`);
+            const compHours = parseFloat(compHoursInput?.value) || 0;
+            const compRate = parseFloat(compRateInput?.value) || 0;
+            const compCost = compHours * compRate;
+            
+            // Update component cost cell
+            const compCostCell = document.getElementById(`price-period-${safeCompKey}`);
+            if (compCostCell) {
+              compCostCell.textContent = `$${compCost.toLocaleString()}`;
+            }
+            
+            delivHours += compHours;
+            delivCost += compCost;
+          });
+          
+          // Update the deliverable row's hours and cost to reflect component totals
+          const delivHoursInput = document.getElementById(`hours-${delivCode}`);
+          if (delivHoursInput) {
+            delivHoursInput.value = Math.round(delivHours);
+          }
+        } else {
+          // No components - use deliverable-level values
+          const hoursInput = document.getElementById(`hours-${delivCode}`);
+          const rateInput = document.getElementById(`rate-${delivCode}`);
+          delivHours = parseFloat(hoursInput?.value) || 0;
+          const rate = parseFloat(rateInput?.value) || 0;
+          delivCost = delivHours * rate;
+        }
+        
+        // Update the deliverable cost cell
         const costCell = document.getElementById(`price-period-${delivCode}`);
         if (costCell) {
-          costCell.textContent = `$${cost.toLocaleString()}`;
+          costCell.textContent = `$${delivCost.toLocaleString()}`;
         }
         
         // Add to appropriate totals
         if (isRetainer) {
           retainerCount++;
-          retainerMonthlyHours += hours;
-          retainerMonthlyCost += cost;
+          retainerMonthlyHours += delivHours;
+          retainerMonthlyCost += delivCost;
         } else {
           oneTimeCount++;
-          oneTimeHours += hours;
-          oneTimeCost += cost;
+          oneTimeHours += delivHours;
+          oneTimeCost += delivCost;
         }
       });
       
