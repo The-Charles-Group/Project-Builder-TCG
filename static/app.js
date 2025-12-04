@@ -4534,11 +4534,6 @@ async function generateAITimeline(retryAttempt = 0) {
       if (saveButton) {
         saveButton.setAttribute('data-timeline-generated', 'true');
       }
-      
-      // Hide loading
-      loading.style.display = 'none';
-      btn.disabled = false;
-      btn.textContent = '🤖 Generate AI Timeline';
     }).catch(chartError => {
       console.error('Failed to initialize Gantt chart:', chartError);
       showTimelineError(
@@ -4546,6 +4541,13 @@ async function generateAITimeline(retryAttempt = 0) {
         'Timeline generated successfully but could not be displayed. Please refresh the page and try again.',
         true
       );
+    }).finally(() => {
+      // CRITICAL FIX: Always reset button state after timeline generation completes
+      // This ensures the button is never stuck even if chart initialization fails
+      loading.style.display = 'none';
+      btn.disabled = false;
+      btn.textContent = '🤖 Generate AI Timeline';
+      console.log('[Timeline] Button state reset in finally block');
     });
   };
   
