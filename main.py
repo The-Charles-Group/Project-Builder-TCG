@@ -12890,6 +12890,21 @@ def convert_excel_to_mspdi(
         forced_edges = set()
         existing_edges = set(filtered_edges)  # Use filtered edges (L5+ → L5+ already removed)
         
+        def parse_start_for_sort(row):
+            """Safely parse start date for sorting - handles both datetime and string formats"""
+            uid = row["UID"]
+            start_val = uid_to_sched.get(uid, {}).get("Start")
+            if start_val is None:
+                return datetime.datetime.min
+            if isinstance(start_val, datetime.datetime):
+                return start_val
+            if isinstance(start_val, str) and start_val:
+                try:
+                    return datetime.datetime.fromisoformat(start_val.replace("Z", ""))
+                except (ValueError, AttributeError):
+                    pass
+            return datetime.datetime.min
+        
         for parent_wbs, children in parent_to_children.items():
             if len(children) < 2:
                 continue  # Need at least 2 siblings to chain
@@ -12897,7 +12912,7 @@ def convert_excel_to_mspdi(
             # Sort siblings by Start date (fall back to datetime.min for deterministic ordering)
             children_sorted = sorted(
                 children,
-                key=lambda r: (uid_to_sched.get(r["UID"], {}).get("Start", datetime.datetime.min), r["WBS"])
+                key=lambda r: (parse_start_for_sort(r), r["WBS"])
             )
             
             # Chain consecutive siblings
