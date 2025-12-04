@@ -468,7 +468,6 @@
                 <th style="padding: 8px; text-align: center; color: var(--muted);">Rate</th>
                 <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
                 <th style="padding: 8px; text-align: left; color: var(--muted);">Resources</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted); width: 60px;">Edit</th>
               </tr>
             </thead>
             <tbody id="pricing-tbody">
@@ -2299,14 +2298,6 @@
           <td style="padding: 10px; color: var(--muted); font-size: 0.9em;">
             ${item.department || '-'}
           </td>
-          <td style="padding: 8px; text-align: center;">
-            <button onclick="openDeliverableEditor('${delivCode}', '${delivName}')"
-                    style="padding: 4px 8px; background: rgba(106,163,255,0.2); border: 1px solid rgba(106,163,255,0.5); 
-                           border-radius: 4px; color: var(--accent); cursor: pointer; font-size: 0.85em;"
-                    title="Add/remove components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
-              📋
-            </button>
-          </td>
         `;
         tbody.appendChild(delivRow);
         
@@ -2357,14 +2348,6 @@
                 $${compCost.toLocaleString()}
               </td>
               <td style="padding: 8px; color: var(--muted); font-size: 0.8em;">-</td>
-              <td style="padding: 8px; text-align: center;">
-                <button onclick="openDeliverableEditor('${delivCode}', '${delivName}')"
-                        style="padding: 3px 6px; background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.4); 
-                               border-radius: 4px; color: #a78bfa; cursor: pointer; font-size: 0.75em;"
-                        title="Add/remove components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
-                  📋
-                </button>
-              </td>
             `;
             tbody.appendChild(compRow);
           });
