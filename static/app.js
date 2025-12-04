@@ -1180,7 +1180,18 @@ async function initializeGanttChart(tasks = []) {
     return;
   }
   
-  // Clear any existing chart
+  // CRITICAL FIX: Properly destroy existing Gantt instance before creating new one
+  if (ganttChart) {
+    console.log('[Gantt] Destroying existing chart before creating new one');
+    try {
+      // Frappe Gantt doesn't have a destroy method, so we clear references and DOM
+      ganttChart = null;
+    } catch (e) {
+      console.warn('[Gantt] Error destroying old chart:', e);
+    }
+  }
+  
+  // Clear any existing chart DOM
   container.innerHTML = '';
   
   if (tasks.length === 0) {
@@ -4188,6 +4199,10 @@ window.generateAITimeline = generateAITimeline;
 window.showUserFriendlyError = showUserFriendlyError;
 window.cancelTimelineGeneration = cancelTimelineGeneration;
 
+// CRITICAL FIX: Global flag to prevent concurrent timeline generations
+let isTimelineGenerating = false;
+let currentTimelineEventSource = null;
+
 async function generateAITimeline(retryAttempt = 0) {
   const btn = document.getElementById('btn-generate-timeline');
   const loading = document.getElementById('timeline-loading');
@@ -4195,9 +4210,20 @@ async function generateAITimeline(retryAttempt = 0) {
   
   if (!btn || !loading || !container) return;
   
+  // CRITICAL FIX: Cancel any existing timeline generation before starting new one
+  if (isTimelineGenerating) {
+    console.log('[TIMELINE] Cancelling previous generation, starting new one');
+    if (currentTimelineEventSource) {
+      currentTimelineEventSource.close();
+      currentTimelineEventSource = null;
+    }
+  }
+  isTimelineGenerating = true;
+  
   // Get selected deliverables from Step 2
   const selectedCodes = readSelectedCodesFromUI();
   if (selectedCodes.length === 0) {
+    isTimelineGenerating = false;
     showUserFriendlyError('No deliverables selected', 'Please select at least one deliverable in Step 2 before generating a timeline.');
     return;
   }
@@ -4319,10 +4345,16 @@ async function generateAITimeline(retryAttempt = 0) {
   
   // Clean up function
   const cleanup = () => {
+    // CRITICAL FIX: Reset generation flag
+    isTimelineGenerating = false;
+    
     if (eventSource) {
       eventSource.close();
       eventSource = null;
     }
+    // Also clear global reference
+    currentTimelineEventSource = null;
+    
     if (heartbeatCheckInterval) {
       clearInterval(heartbeatCheckInterval);
       heartbeatCheckInterval = null;
@@ -4746,6 +4778,8 @@ async function generateAITimeline(retryAttempt = 0) {
     
     // Connect to SSE stream for progress updates
     eventSource = new EventSource(`/api/stream/${jobData.job_id}`);
+    // CRITICAL FIX: Store in global reference for cleanup when regenerating
+    currentTimelineEventSource = eventSource;
     
     // Start heartbeat monitoring
     startHeartbeatMonitor();
