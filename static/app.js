@@ -2356,26 +2356,14 @@ function updatePricingTable() {
               ${formatTasksList(compTasks)}
             </td>
             <td style="padding: 8px; text-align: center;">
-              ${compIsEditing ?
-                `<div style="display: flex; gap: 2px; justify-content: center;">
-                  <button onclick="saveRowEdit('${compKey}')"
-                          style="padding: 2px 8px; background: var(--accent2); border: none; 
-                                 border-radius: 3px; color: #08121e; font-size: 0.75em;">
-                    ✓
-                  </button>
-                  <button onclick="cancelRowEdit('${compKey}')"
-                          style="padding: 2px 8px; background: transparent; 
-                                 border: 1px solid var(--border); border-radius: 3px; 
-                                 color: var(--text); font-size: 0.75em;">
-                    ✗
-                  </button>
-                </div>` :
-                `<button onclick="enableRowEdit('${compKey}')"
-                        style="padding: 4px 12px; background: transparent; 
-                               border: 1px solid rgba(106,163,255,0.5); border-radius: 4px; 
-                               color: var(--accent); font-size: 0.8em;">
-                  Edit
-                </button>`}
+              <button onclick="openDeliverableEditor('${item.deliverable_code}', '${item.deliverable.replace(/'/g, "\\'")}')"
+                      style="padding: 4px 8px; background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.4); 
+                             border-radius: 4px; color: #a78bfa; cursor: pointer; font-size: 0.8em; transition: all 0.2s;"
+                      onmouseover="this.style.background='rgba(139,92,246,0.3)'"
+                      onmouseout="this.style.background='rgba(139,92,246,0.2)'"
+                      title="Edit components for ${item.deliverable}">
+                ✏️
+              </button>
             </td>
           </tr>
         `;
@@ -5942,24 +5930,26 @@ async function buildFromCurrentSelection() {
   // Update AI button states now that scenario exists
   updateAIButtonStates();
 
-  // Show Step 3 and scroll to pricing details section (not top of step3)
+  // Show Step 3 (proceedToPricing already scrolled to Step 3 top)
   const step3 = document.querySelector("#step3");
   if (step3) {
     step3.style.display = "block";
   }
   
-  // Scroll to pricing details section so user can review pricing first
-  // Use setTimeout to ensure DOM has rendered the pricing table
+  // After Build Scenario completes, scroll to Grand Total + Summary panels
+  // Use setTimeout to ensure DOM has rendered the pricing summary
   setTimeout(() => {
-    const pricingSection = document.querySelector("#pricing-details-section") || 
-                          document.querySelector("#pricing-table-wrapper") ||
-                          document.querySelector("#pricing-details-table");
-    if (pricingSection) {
-      pricingSection.scrollIntoView({ behavior: "smooth", block: "start" });
+    // Target the pricing summary panel (One-Time + Monthly sections + Grand Total)
+    const summaryPanel = document.querySelector(".pricing-summary-panel") || 
+                        document.querySelector("#grand-total-cost")?.closest('div') ||
+                        document.querySelector("#one-time-summary")?.closest('div');
+    if (summaryPanel) {
+      summaryPanel.scrollIntoView({ behavior: "smooth", block: "start" });
     } else if (step3) {
+      // Fallback to Step 3 if summary not found
       step3.scrollIntoView({ behavior: "smooth" });
     }
-  }, 100);
+  }, 150);
 
   // Render Scenario A only
   if (window.renderScenario) {

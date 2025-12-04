@@ -2256,9 +2256,12 @@
       scenario.items.forEach((item, idx) => {
         const isRetainer = item.is_retainer || item.retainer;
         
-        // Main deliverable row
+        // Main deliverable row with Edit button
+        const delivCode = item.deliverable_code || item.code || '';
+        const delivName = (item.deliverable || item.deliverable_name || 'Unknown').replace(/'/g, "\\'");
         const delivRow = document.createElement('tr');
         delivRow.style.cssText = 'border-bottom: 1px solid var(--border);';
+        delivRow.setAttribute('data-deliverable', delivCode);
         delivRow.innerHTML = `
           <td style="padding: 10px; font-weight: 500; color: var(--text);">
             ${item.deliverable || item.deliverable_name || 'Unknown'}
@@ -2278,14 +2281,25 @@
           <td style="padding: 10px; color: var(--muted); font-size: 0.9em;">
             ${item.department || '-'}
           </td>
+          <td style="padding: 10px; text-align: center;">
+            <button onclick="openDeliverableEditor('${delivCode}', '${delivName}')"
+                    style="padding: 4px 8px; background: rgba(106,163,255,0.2); border: 1px solid rgba(106,163,255,0.5); 
+                           border-radius: 4px; color: var(--accent); cursor: pointer; font-size: 0.85em;"
+                    title="Edit components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
+              ✏️
+            </button>
+          </td>
         `;
         tbody.appendChild(delivRow);
         
-        // Add components if any
+        // Add components if any - with Edit buttons
         if (item.components && item.components.length > 0) {
           item.components.forEach(comp => {
+            const compName = (comp.name || comp.component || 'Component').replace(/'/g, "\\'");
             const compRow = document.createElement('tr');
             compRow.style.cssText = 'background: rgba(0,0,0,0.2);';
+            compRow.setAttribute('data-component', `${delivCode}::${comp.name || comp.component}`);
+            compRow.setAttribute('data-parent', delivCode);
             compRow.innerHTML = `
               <td style="padding: 8px 8px 8px 32px; color: var(--muted); font-size: 0.9em;">
                 └─ ${comp.name || comp.component || 'Component'}
@@ -2297,6 +2311,14 @@
               <td style="padding: 8px; text-align: center;">-</td>
               <td style="padding: 8px; text-align: right;">-</td>
               <td style="padding: 8px;">-</td>
+              <td style="padding: 8px; text-align: center;">
+                <button onclick="openDeliverableEditor('${delivCode}', '${delivName}')"
+                        style="padding: 4px 8px; background: rgba(139,92,246,0.2); border: 1px solid rgba(139,92,246,0.4); 
+                               border-radius: 4px; color: #a78bfa; cursor: pointer; font-size: 0.8em;"
+                        title="Edit components for ${item.deliverable || item.deliverable_name || 'this deliverable'}">
+                  ✏️
+                </button>
+              </td>
             `;
             tbody.appendChild(compRow);
           });
