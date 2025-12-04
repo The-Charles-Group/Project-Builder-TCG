@@ -5346,17 +5346,17 @@ def api_options():
     # Prefer v3 Drivers (3 each)
     v3_complexities, v3_tiers = DB.drivers_complexities_tiers_v3()
     if not v3_complexities:
-        if DB.timeline_scaling is not None:
+        if DB.timeline_scaling is not None and not DB.timeline_scaling.empty and "Scale_Type" in DB.timeline_scaling.columns:
             v3_complexities = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Complexity"]["Key"].head(3).tolist()
-        else:
+        if not v3_complexities:
             v3_complexities = ["Basic", "Standard", "Advanced"]
     if not v3_tiers:
-        if DB.timeline_scaling is not None:
+        if DB.timeline_scaling is not None and not DB.timeline_scaling.empty and "Scale_Type" in DB.timeline_scaling.columns:
             v3_tiers = DB.timeline_scaling[DB.timeline_scaling["Scale_Type"]=="Tier"]["Key"].head(3).tolist()
-        else:
+        if not v3_tiers:
             v3_tiers = ["T1_LowVolume", "T2_MediumVolume", "T3_HighVolume"]
 
-    rate_bands = dedupe_list(DB.rate_bands["Band_Name"].head(3).tolist()) if DB.rate_bands is not None else []
+    rate_bands = dedupe_list(DB.rate_bands["Band_Name"].head(3).tolist()) if (DB.rate_bands is not None and not DB.rate_bands.empty and "Band_Name" in DB.rate_bands.columns) else []
     pricing_modes = dedupe_list(["Flat_Blended","Per_Resource"])  # Deduplicate
     
     # FIXED: Only return unique deliverables (L0 items)
