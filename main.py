@@ -1223,6 +1223,12 @@ def apply_cadence_to_item(new_item: dict, old_item: dict | None = None):
     if is_retainer:
         new_item["retainer"] = {**existing_retainer, "months": total_months}
         new_item["retainer_months"] = total_months
+    else:
+        # Item is no longer a retainer - clear all retainer state
+        new_item["retainer"] = {}
+        new_item["retainer_months"] = 0
+        new_item["monthly_price"] = 0
+        new_item["monthly_hours"] = 0
     
     rate = get_rate_from_item(new_item)
     total_price = get_price_from_item(new_item)
