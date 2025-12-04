@@ -6980,7 +6980,7 @@ function renderAIPlan(aiPlan) {
     let html = `
     <div style="margin-top: 20px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 style="margin: 0;">🤖 AI-Suggested Deliverables</h3>
+        <h3 style="margin: 0;">🤖 AI or TF-IDF Suggested Deliverables</h3>
         <div style="display: flex; gap: 8px;">
           <button onclick="selectAllAIDeliverables(true)" 
                   style="padding: 8px 16px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: all 0.2s;"
@@ -7013,7 +7013,7 @@ function renderAIPlan(aiPlan) {
                    id="ai-smart-threshold" 
                    min="0" 
                    max="100" 
-                   value="70"
+                   value="50"
                    style="width: 60px; padding: 6px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; color: var(--text); text-align: right;">
             <span style="color: var(--muted); font-size: 0.9em;">%</span>
             <button onclick="applySmartSelection('ai')" 
@@ -7042,7 +7042,7 @@ function renderAIPlan(aiPlan) {
                    id="tfidf-smart-threshold" 
                    min="0" 
                    max="100" 
-                   value="70"
+                   value="50"
                    style="width: 60px; padding: 6px 10px; background: var(--card); border: 1px solid var(--border); border-radius: 4px; color: var(--text); text-align: right;">
             <span style="color: var(--muted); font-size: 0.9em;">%</span>
             <button onclick="applySmartSelection('tfidf')" 
