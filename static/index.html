@@ -2261,7 +2261,7 @@
             ${item.deliverable || item.deliverable_name || 'Unknown'}
           </td>
           <td style="padding: 8px; text-align: center;">
-            <select id="pricing-type-${delivCode}" 
+            <select id="cadence-${delivCode}" 
                     onchange="updatePricingType('${delivCode}', this.value)"
                     style="padding: 4px 8px; border: 1px solid rgba(139,92,246,0.4); border-radius: 4px; 
                            background: rgba(139,92,246,0.1); color: var(--text); font-size: 0.85em; cursor: pointer;">
@@ -2270,7 +2270,7 @@
             </select>
           </td>
           <td style="padding: 8px; text-align: center;">
-            <input type="number" id="pricing-hours-${delivCode}" value="${hours}" min="0" step="1"
+            <input type="number" id="hours-${delivCode}" value="${hours}" min="0" step="1"
                    onchange="updatePricingHours('${delivCode}', this.value)"
                    style="width: 70px; padding: 4px 6px; border: 1px solid rgba(106,163,255,0.3); 
                           border-radius: 4px; background: rgba(106,163,255,0.05); color: var(--text); 
@@ -2279,14 +2279,14 @@
           <td style="padding: 8px; text-align: center;">
             <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
               <span style="color: var(--muted); font-size: 0.85em;">$</span>
-              <input type="number" id="pricing-rate-${delivCode}" value="${rate}" min="0" step="5"
+              <input type="number" id="rate-${delivCode}" value="${rate}" min="0" step="5"
                      onchange="updatePricingRate('${delivCode}', this.value)"
                      style="width: 60px; padding: 4px 6px; border: 1px solid rgba(106,163,255,0.3); 
                             border-radius: 4px; background: rgba(106,163,255,0.05); color: var(--text); 
                             text-align: center; font-size: 0.9em;" />
             </div>
           </td>
-          <td id="pricing-cost-${delivCode}" style="padding: 10px; text-align: right; color: var(--accent); font-weight: 500;">
+          <td id="price-period-${delivCode}" style="padding: 10px; text-align: right; color: var(--accent); font-weight: 500;">
             $${cost.toLocaleString()}
           </td>
           <td style="padding: 10px; color: var(--muted); font-size: 0.9em;">
@@ -2312,6 +2312,9 @@
             const compRate = Math.round(comp.rate || rate);
             const compCost = compHours * compRate;
             
+            // Sanitize compKey for use as HTML ID (replace non-alphanumeric with _)
+            const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
+            
             const compRow = document.createElement('tr');
             compRow.style.cssText = 'background: rgba(0,0,0,0.2);';
             compRow.setAttribute('data-component', compKey);
@@ -2324,9 +2327,9 @@
                 (inherit)
               </td>
               <td style="padding: 8px; text-align: center;">
-                <input type="number" id="pricing-hours-${compKey.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                <input type="number" id="hours-${safeCompKey}" 
                        value="${compHours}" min="0" step="1"
-                       onchange="updateComponentPricingHours('${delivCode}', '${comp.name || comp.component}', this.value)"
+                       onchange="updateComponentPricingHours('${delivCode}', '${(comp.name || comp.component).replace(/'/g, "\\'")}', this.value)"
                        style="width: 60px; padding: 3px 5px; border: 1px solid rgba(139,92,246,0.3); 
                               border-radius: 4px; background: rgba(139,92,246,0.05); color: var(--text); 
                               text-align: center; font-size: 0.85em;" />
@@ -2334,15 +2337,15 @@
               <td style="padding: 8px; text-align: center;">
                 <div style="display: flex; align-items: center; gap: 2px; justify-content: center;">
                   <span style="color: var(--muted); font-size: 0.8em;">$</span>
-                  <input type="number" id="pricing-rate-${compKey.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                  <input type="number" id="rate-${safeCompKey}" 
                          value="${compRate}" min="0" step="5"
-                         onchange="updateComponentPricingRate('${delivCode}', '${comp.name || comp.component}', this.value)"
+                         onchange="updateComponentPricingRate('${delivCode}', '${(comp.name || comp.component).replace(/'/g, "\\'")}', this.value)"
                          style="width: 55px; padding: 3px 5px; border: 1px solid rgba(139,92,246,0.3); 
                                 border-radius: 4px; background: rgba(139,92,246,0.05); color: var(--text); 
                                 text-align: center; font-size: 0.85em;" />
                 </div>
               </td>
-              <td id="pricing-cost-${compKey.replace(/[^a-zA-Z0-9]/g, '_')}" 
+              <td id="price-period-${safeCompKey}" 
                   style="padding: 8px; text-align: right; color: var(--muted); font-size: 0.9em;">
                 $${compCost.toLocaleString()}
               </td>
@@ -2426,82 +2429,91 @@
     window.updatePricingDisplay = updatePricingDisplay;
 
     // Inline editing handlers for Deliverable Pricing Details table
+    // These delegate to the established updateCustomHours/updateCustomRate pipeline in app.js
+    
     function updatePricingType(deliverableCode, type) {
       console.log('[PRICING EDIT] Type changed:', deliverableCode, '->', type);
-      const isRetainer = type === 'RETAINER';
       
-      // Update ScenarioStore
-      if (window.ScenarioStore) {
-        window.ScenarioStore.updateDeliverable(deliverableCode, {
-          is_retainer: isRetainer,
-          retainer: isRetainer
-        });
+      // Delegate to app.js updateDeliverableType if available
+      if (typeof window.updateDeliverableType === 'function') {
+        window.updateDeliverableType(deliverableCode, type);
+      } else {
+        // Fallback: Update pricingData and ScenarioStore directly
+        const isRetainer = type === 'RETAINER';
+        if (window.pricingData && window.pricingData.deliverableTypes) {
+          window.pricingData.deliverableTypes.set(deliverableCode, type);
+        }
+        if (window.ScenarioStore) {
+          window.ScenarioStore.updateDeliverable(deliverableCode, {
+            is_retainer: isRetainer,
+            retainer: isRetainer
+          });
+        }
       }
       
-      // Also update pricingData if available
-      if (window.pricingData && window.pricingData.deliverableTypes) {
-        window.pricingData.deliverableTypes.set(deliverableCode, type);
-      }
-      
-      // Recalculate cost display
+      // Recalculate cost display in this table
       recalculatePricingCost(deliverableCode);
     }
     window.updatePricingType = updatePricingType;
     
     function updatePricingHours(deliverableCode, hours) {
-      const numHours = parseFloat(hours) || 0;
-      console.log('[PRICING EDIT] Hours changed:', deliverableCode, '->', numHours);
+      console.log('[PRICING EDIT] Hours changed:', deliverableCode, '->', hours);
       
-      // Get current rate
-      const rateInput = document.getElementById(`pricing-rate-${deliverableCode}`);
-      const rate = parseFloat(rateInput?.value) || 210;
-      
-      // Update ScenarioStore
-      if (window.ScenarioStore) {
-        window.ScenarioStore.updateDeliverable(deliverableCode, {
-          hours: numHours,
-          total_hours: numHours,
-          rate: rate,
-          rate_usd: rate
-        });
+      // Delegate to app.js updateCustomHours which handles pricingData + ScenarioStore sync
+      if (typeof window.updateCustomHours === 'function') {
+        window.updateCustomHours(deliverableCode, hours);
+      } else {
+        // Fallback if app.js function not loaded yet
+        const numHours = parseFloat(hours) || 0;
+        if (window.pricingData && window.pricingData.customHours) {
+          window.pricingData.customHours.set(deliverableCode, numHours);
+        }
+        if (window.ScenarioStore) {
+          // Use canonical ID pattern (rate-${code})
+          const rateInput = document.getElementById(`rate-${deliverableCode}`);
+          const rate = parseFloat(rateInput?.value) || 210;
+          window.ScenarioStore.updateDeliverable(deliverableCode, {
+            hours: numHours,
+            total_hours: numHours,
+            rate: rate,
+            rate_usd: rate
+          });
+        }
       }
       
-      // Also update pricingData if available
-      if (window.pricingData && window.pricingData.customHours) {
-        window.pricingData.customHours.set(deliverableCode, numHours);
-      }
-      
-      // Recalculate cost display
+      // Recalculate cost display in this table
       recalculatePricingCost(deliverableCode);
     }
     window.updatePricingHours = updatePricingHours;
     
     function updatePricingRate(deliverableCode, rate) {
-      const numRate = parseFloat(rate) || 210;
-      console.log('[PRICING EDIT] Rate changed:', deliverableCode, '->', numRate);
+      console.log('[PRICING EDIT] Rate changed:', deliverableCode, '->', rate);
       
-      // Get current hours
-      const hoursInput = document.getElementById(`pricing-hours-${deliverableCode}`);
-      const hours = parseFloat(hoursInput?.value) || 0;
-      
-      // Update ScenarioStore
-      if (window.ScenarioStore) {
-        window.ScenarioStore.updateDeliverable(deliverableCode, {
-          hours: hours,
-          total_hours: hours,
-          rate: numRate,
-          rate_usd: numRate,
-          blended_rate: numRate,
-          effective_rate: numRate
-        });
+      // Delegate to app.js updateCustomRate which handles pricingData + ScenarioStore sync
+      if (typeof window.updateCustomRate === 'function') {
+        window.updateCustomRate(deliverableCode, rate);
+      } else {
+        // Fallback if app.js function not loaded yet
+        const numRate = parseFloat(rate) || 210;
+        if (window.pricingData && window.pricingData.customRates) {
+          window.pricingData.customRates.set(deliverableCode, numRate);
+        }
+        if (window.ScenarioStore) {
+          // Use canonical ID pattern (hours-${code})
+          const hoursInput = document.getElementById(`hours-${deliverableCode}`);
+          const hours = parseFloat(hoursInput?.value) || 0;
+          window.ScenarioStore.updateDeliverable(deliverableCode, {
+            hours: hours,
+            total_hours: hours,
+            rate: numRate,
+            rate_usd: numRate,
+            blended_rate: numRate,
+            effective_rate: numRate
+          });
+        }
       }
       
-      // Also update pricingData if available
-      if (window.pricingData && window.pricingData.customRates) {
-        window.pricingData.customRates.set(deliverableCode, numRate);
-      }
-      
-      // Recalculate cost display
+      // Recalculate cost display in this table
       recalculatePricingCost(deliverableCode);
     }
     window.updatePricingRate = updatePricingRate;
@@ -2509,24 +2521,27 @@
     function updateComponentPricingHours(deliverableCode, componentName, hours) {
       const numHours = parseFloat(hours) || 0;
       const compKey = `${deliverableCode}::${componentName}`;
+      const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
       console.log('[PRICING EDIT] Component hours changed:', compKey, '->', numHours);
       
-      // Get current rate
-      const safeKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
-      const rateInput = document.getElementById(`pricing-rate-${safeKey}`);
-      const rate = parseFloat(rateInput?.value) || 210;
+      // Update pricingData using raw compKey (for ScenarioStore compatibility)
+      if (window.pricingData && window.pricingData.customHours) {
+        window.pricingData.customHours.set(compKey, numHours);
+      }
+      
+      // Get rate from pricingData or DOM using sanitized ID pattern (rate-${safeCompKey})
+      let rate = window.pricingData?.customRates?.get(compKey);
+      if (rate === undefined) {
+        const rateInput = document.getElementById(`rate-${safeCompKey}`);
+        rate = parseFloat(rateInput?.value) || 210;
+      }
       
       // Update ScenarioStore for component
-      if (window.ScenarioStore) {
+      if (window.ScenarioStore && typeof window.ScenarioStore.updateComponent === 'function') {
         window.ScenarioStore.updateComponent(deliverableCode, componentName, {
           hours: numHours,
           rate: rate
         });
-      }
-      
-      // Also update pricingData if available
-      if (window.pricingData && window.pricingData.customHours) {
-        window.pricingData.customHours.set(compKey, numHours);
       }
       
       // Recalculate cost display for this component
@@ -2537,24 +2552,27 @@
     function updateComponentPricingRate(deliverableCode, componentName, rate) {
       const numRate = parseFloat(rate) || 210;
       const compKey = `${deliverableCode}::${componentName}`;
+      const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
       console.log('[PRICING EDIT] Component rate changed:', compKey, '->', numRate);
       
-      // Get current hours
-      const safeKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
-      const hoursInput = document.getElementById(`pricing-hours-${safeKey}`);
-      const hours = parseFloat(hoursInput?.value) || 0;
+      // Update pricingData using raw compKey (for ScenarioStore compatibility)
+      if (window.pricingData && window.pricingData.customRates) {
+        window.pricingData.customRates.set(compKey, numRate);
+      }
+      
+      // Get hours from pricingData or DOM using sanitized ID pattern (hours-${safeCompKey})
+      let hours = window.pricingData?.customHours?.get(compKey);
+      if (hours === undefined) {
+        const hoursInput = document.getElementById(`hours-${safeCompKey}`);
+        hours = parseFloat(hoursInput?.value) || 0;
+      }
       
       // Update ScenarioStore for component
-      if (window.ScenarioStore) {
+      if (window.ScenarioStore && typeof window.ScenarioStore.updateComponent === 'function') {
         window.ScenarioStore.updateComponent(deliverableCode, componentName, {
           hours: hours,
           rate: numRate
         });
-      }
-      
-      // Also update pricingData if available
-      if (window.pricingData && window.pricingData.customRates) {
-        window.pricingData.customRates.set(compKey, numRate);
       }
       
       // Recalculate cost display for this component
@@ -2563,15 +2581,26 @@
     window.updateComponentPricingRate = updateComponentPricingRate;
     
     // Helper to recalculate and display cost for a deliverable row
+    // Uses pricingData maps as source of truth, falls back to DOM (with canonical IDs)
     function recalculatePricingCost(deliverableCode) {
-      const hoursInput = document.getElementById(`pricing-hours-${deliverableCode}`);
-      const rateInput = document.getElementById(`pricing-rate-${deliverableCode}`);
-      const costCell = document.getElementById(`pricing-cost-${deliverableCode}`);
+      // Get hours from pricingData or DOM using canonical ID pattern (hours-${code})
+      let hours = window.pricingData?.customHours?.get(deliverableCode);
+      if (hours === undefined) {
+        const hoursInput = document.getElementById(`hours-${deliverableCode}`);
+        hours = parseFloat(hoursInput?.value) || 0;
+      }
       
-      if (hoursInput && rateInput && costCell) {
-        const hours = parseFloat(hoursInput.value) || 0;
-        const rate = parseFloat(rateInput.value) || 0;
-        const cost = hours * rate;
+      // Get rate from pricingData or DOM using canonical ID pattern (rate-${code})
+      let rate = window.pricingData?.customRates?.get(deliverableCode);
+      if (rate === undefined) {
+        const rateInput = document.getElementById(`rate-${deliverableCode}`);
+        rate = parseFloat(rateInput?.value) || 0;
+      }
+      
+      const cost = hours * rate;
+      // Update using canonical ID pattern (price-period-${code})
+      const costCell = document.getElementById(`price-period-${deliverableCode}`);
+      if (costCell) {
         costCell.textContent = `$${cost.toLocaleString()}`;
       }
     }
@@ -2580,16 +2609,26 @@
     // Helper to recalculate and display cost for a component row
     function recalculateComponentPricingCost(deliverableCode, componentName) {
       const compKey = `${deliverableCode}::${componentName}`;
-      const safeKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
+      const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
       
-      const hoursInput = document.getElementById(`pricing-hours-${safeKey}`);
-      const rateInput = document.getElementById(`pricing-rate-${safeKey}`);
-      const costCell = document.getElementById(`pricing-cost-${safeKey}`);
+      // Get hours from pricingData or DOM using sanitized ID pattern (hours-${safeCompKey})
+      let hours = window.pricingData?.customHours?.get(compKey);
+      if (hours === undefined) {
+        const hoursInput = document.getElementById(`hours-${safeCompKey}`);
+        hours = parseFloat(hoursInput?.value) || 0;
+      }
       
-      if (hoursInput && rateInput && costCell) {
-        const hours = parseFloat(hoursInput.value) || 0;
-        const rate = parseFloat(rateInput.value) || 0;
-        const cost = hours * rate;
+      // Get rate from pricingData or DOM using sanitized ID pattern (rate-${safeCompKey})
+      let rate = window.pricingData?.customRates?.get(compKey);
+      if (rate === undefined) {
+        const rateInput = document.getElementById(`rate-${safeCompKey}`);
+        rate = parseFloat(rateInput?.value) || 0;
+      }
+      
+      const cost = hours * rate;
+      // Update using sanitized ID pattern (price-period-${safeCompKey})
+      const costCell = document.getElementById(`price-period-${safeCompKey}`);
+      if (costCell) {
         costCell.textContent = `$${cost.toLocaleString()}`;
       }
     }
