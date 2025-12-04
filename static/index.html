@@ -2089,18 +2089,26 @@
           displayBudgetInfo(scenarios);
         }
         
-        // Show Steps 4 and 5, then jump to Step 4 with Scenario A timeline (if elements exist)
+        // Show Steps 4 and 5 WITHOUT scrolling - user stays on Pricing Details
         const step5 = document.getElementById('step5');
         if (step5) {
           step5.style.display = 'block';
           console.log('[BUILD] Showed Step 5');
         }
         
-        // Only show Step 4 if the timeline elements are ready
+        // Show Step 4 and render timeline, but DON'T scroll to it
         const step4 = document.getElementById('step4');
-        if (step4 && typeof showStep4 === 'function') {
-          showStep4('A');
-          console.log('[BUILD] Showed Step 4 with scenario A');
+        if (step4) {
+          step4.style.display = 'block';
+          // Render timeline without scrolling
+          if (typeof renderTimeline === 'function') {
+            try {
+              renderTimeline('A');
+            } catch (e) {
+              console.log('[BUILD] Timeline render skipped:', e.message);
+            }
+          }
+          console.log('[BUILD] Showed Step 4 (no scroll)');
         }
         
         console.log('[BUILD] Build process completed successfully!');
