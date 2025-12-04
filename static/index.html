@@ -2625,44 +2625,91 @@
     window.recalculateComponentPricingCost = recalculateComponentPricingCost;
     
     // Save pricing and show totals - called by Save button
-    async function savePricingAndShowTotals() {
-      console.log('[SAVE] Saving pricing and showing totals...');
+    // Recalculates totals from current DOM values (no API call, no rebuild)
+    function savePricingAndShowTotals() {
+      console.log('[SAVE] Recalculating totals from current values...');
       
-      // CRITICAL: Clear any pending auto-scroll flags to prevent rebuild from scrolling to pricing details
-      window._scrollToPricingDetailsAfterBuild = false;
-      window._scrollToGrandTotalAfterBuild = false;
+      // Initialize counters
+      let oneTimeCount = 0, oneTimeHours = 0, oneTimeCost = 0;
+      let retainerCount = 0, retainerMonthlyHours = 0, retainerMonthlyCost = 0;
       
-      // Show loading state on button
-      const btn = document.getElementById('btn-save-pricing');
-      const originalText = btn?.innerHTML;
-      if (btn) {
-        btn.innerHTML = '⏳ Saving...';
-        btn.disabled = true;
+      // Get all deliverable rows from the pricing table
+      const tbody = document.getElementById('pricing-tbody');
+      if (!tbody) {
+        console.warn('[SAVE] Pricing table not found');
+        return;
       }
       
-      try {
-        // Trigger a rebuild to recalculate all totals from current pricing data
-        if (typeof rebuildScenario === 'function') {
-          await rebuildScenario();
+      // Process each deliverable row (rows with data-deliverable attribute)
+      const delivRows = tbody.querySelectorAll('tr[data-deliverable]');
+      delivRows.forEach(row => {
+        const delivCode = row.getAttribute('data-deliverable');
+        if (!delivCode) return;
+        
+        // Get type (One-time or Retainer)
+        const cadenceSelect = document.getElementById(`cadence-${delivCode}`);
+        const isRetainer = cadenceSelect?.value === 'RETAINER';
+        
+        // Get hours and rate from inputs
+        const hoursInput = document.getElementById(`hours-${delivCode}`);
+        const rateInput = document.getElementById(`rate-${delivCode}`);
+        const hours = parseFloat(hoursInput?.value) || 0;
+        const rate = parseFloat(rateInput?.value) || 0;
+        const cost = hours * rate;
+        
+        // Update the cost cell for this row
+        const costCell = document.getElementById(`price-period-${delivCode}`);
+        if (costCell) {
+          costCell.textContent = `$${cost.toLocaleString()}`;
         }
         
-        // After rebuild, scroll to the summary/grand total section (One-time + Retainer + Grand Total)
-        setTimeout(() => {
-          const summaryPanel = document.querySelector('.pricing-summary-panel');
-          if (summaryPanel) {
-            summaryPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }
-        }, 300);
-        
-      } catch (error) {
-        console.error('[SAVE] Error saving pricing:', error);
-      } finally {
-        // Restore button state
-        if (btn) {
-          btn.innerHTML = originalText || '💾 Save & View Totals';
-          btn.disabled = false;
+        // Add to appropriate totals
+        if (isRetainer) {
+          retainerCount++;
+          retainerMonthlyHours += hours;
+          retainerMonthlyCost += cost;
+        } else {
+          oneTimeCount++;
+          oneTimeHours += hours;
+          oneTimeCost += cost;
         }
+      });
+      
+      // Update One-Time summary panel
+      const oneTimeCountEl = document.getElementById('one-time-count');
+      const oneTimeHoursEl = document.getElementById('one-time-hours');
+      const oneTimeCostEl = document.getElementById('one-time-cost');
+      if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
+      if (oneTimeHoursEl) oneTimeHoursEl.textContent = Math.round(oneTimeHours);
+      if (oneTimeCostEl) oneTimeCostEl.textContent = `$${oneTimeCost.toLocaleString()}`;
+      
+      // Update Retainer summary panel
+      const retainerCountEl = document.getElementById('retainer-count');
+      const retainerMonthlyHoursEl = document.getElementById('retainer-monthly-hours');
+      const retainerMonthlyCostEl = document.getElementById('retainer-monthly-cost');
+      const retainerAnnualCostEl = document.getElementById('retainer-annual-cost');
+      const annualRetainerCost = retainerMonthlyCost * 12;
+      if (retainerCountEl) retainerCountEl.textContent = retainerCount;
+      if (retainerMonthlyHoursEl) retainerMonthlyHoursEl.textContent = Math.round(retainerMonthlyHours);
+      if (retainerMonthlyCostEl) retainerMonthlyCostEl.textContent = `$${retainerMonthlyCost.toLocaleString()}`;
+      if (retainerAnnualCostEl) retainerAnnualCostEl.textContent = `$${annualRetainerCost.toLocaleString()}`;
+      
+      // Update Grand Total
+      const grandTotal = oneTimeCost + annualRetainerCost;
+      const grandTotalEl = document.getElementById('grand-total-cost');
+      if (grandTotalEl) {
+        grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
       }
+      
+      console.log('[SAVE] Totals updated - One-time:', oneTimeCost, 'Retainer (annual):', annualRetainerCost, 'Grand:', grandTotal);
+      
+      // Scroll to the summary section
+      setTimeout(() => {
+        const summaryPanel = document.querySelector('.pricing-summary-panel');
+        if (summaryPanel) {
+          summaryPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 100);
     }
     window.savePricingAndShowTotals = savePricingAndShowTotals;
 
