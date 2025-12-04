@@ -1223,12 +1223,15 @@ def apply_cadence_to_item(new_item: dict, old_item: dict | None = None):
     if is_retainer:
         new_item["retainer"] = {**existing_retainer, "months": total_months}
         new_item["retainer_months"] = total_months
+        new_item["is_retainer"] = True
     else:
         # Item is no longer a retainer - clear all retainer state
-        new_item["retainer"] = {}
+        # CRITICAL: Set retainer to None (not {}) because {} is truthy in JavaScript
+        new_item["retainer"] = None
         new_item["retainer_months"] = 0
         new_item["monthly_price"] = 0
         new_item["monthly_hours"] = 0
+        new_item["is_retainer"] = False
     
     rate = get_rate_from_item(new_item)
     total_price = get_price_from_item(new_item)
@@ -8474,6 +8477,8 @@ async def api_patch_scenario_item(payload: ScenarioItemPatch):
                       f"hours={item.get('hours')} "
                       f"cadence={item.get('billing_cadence')} "
                       f"retainer_months={item.get('retainer_months')} "
+                      f"is_retainer={item.get('is_retainer')} "
+                      f"retainer={item.get('retainer')} "
                       f"price={item.get('price')}")
                 break
         

@@ -256,6 +256,28 @@
           console.log(`[ScenarioStore] PATCHED item ${patchId}:`, data.totals);
           
           this._updateTotalsFromBackend(data.totals);
+          
+          // CRITICAL: Update is_retainer and retainer from backend response
+          // This ensures cadence changes (Retainer → One-Time) are reflected in local state
+          if (data.scenario && data.scenario.items) {
+            for (const backendItem of data.scenario.items) {
+              const itemId = backendItem.deliverable_code || backendItem.Deliverable_Code || backendItem.id;
+              if (String(itemId) === String(delivId)) {
+                // Merge backend item state into local state (especially is_retainer, retainer)
+                const localItem = this.state.deliverables.find(d => d.id === delivId || d.deliverable_code === delivId);
+                if (localItem) {
+                  localItem.is_retainer = backendItem.is_retainer;
+                  localItem.retainer = backendItem.retainer;
+                  localItem.retainer_months = backendItem.retainer_months;
+                  localItem.billing_cadence = backendItem.billing_cadence;
+                  localItem.cadence = backendItem.cadence || backendItem.billing_cadence;
+                  console.log(`[ScenarioStore] Synced is_retainer=${localItem.is_retainer} retainer=${localItem.retainer} for ${delivId}`);
+                }
+                break;
+              }
+            }
+          }
+          
           this.emit();
         } catch (e) {
           console.warn(`[ScenarioStore] PATCH failed for ${patchId}:`, e.message);
