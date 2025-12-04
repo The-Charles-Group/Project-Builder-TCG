@@ -2754,6 +2754,32 @@ function updateDeliverableType(deliverableCode, type) {
     if (!pricingData.retainerMonths.has(deliverableCode)) {
       pricingData.retainerMonths.set(deliverableCode, 12); // Default 12 months
     }
+    // Sync retainer state to ScenarioStore
+    if (window.ScenarioStore) {
+      window.ScenarioStore.updateDeliverable(deliverableCode, {
+        is_retainer: true,
+        billing_cadence: 'monthly',
+        retainer_months: pricingData.retainerMonths.get(deliverableCode) || 12
+      });
+    }
+  } else {
+    // FIX 1 (Frontend): Clear retainer fields when switching to ONE_TIME/PROJECT
+    // This prevents stale retainer flags from persisting and keeps UI in sync with backend
+    pricingData.retainerMonths.delete(deliverableCode);
+    if (pricingData.retainers) {
+      pricingData.retainers.delete(deliverableCode);
+    }
+    
+    // Clear retainer state in ScenarioStore
+    if (window.ScenarioStore) {
+      window.ScenarioStore.updateDeliverable(deliverableCode, {
+        is_retainer: false,
+        billing_cadence: 'one_time',
+        retainer_months: 0,
+        monthly_hours: 0,
+        retainer: null
+      });
+    }
   }
   
   updatePricingTable();

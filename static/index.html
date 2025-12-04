@@ -2442,10 +2442,28 @@
           window.pricingData.deliverableTypes.set(deliverableCode, type);
         }
         if (window.ScenarioStore) {
-          window.ScenarioStore.updateDeliverable(deliverableCode, {
-            is_retainer: isRetainer,
-            retainer: isRetainer
-          });
+          if (isRetainer) {
+            window.ScenarioStore.updateDeliverable(deliverableCode, {
+              is_retainer: true,
+              retainer: true,
+              billing_cadence: 'monthly',
+              retainer_months: 12
+            });
+          } else {
+            // FIX 1 (Frontend): Clear retainer fields when switching to ONE_TIME
+            window.ScenarioStore.updateDeliverable(deliverableCode, {
+              is_retainer: false,
+              retainer: false,
+              billing_cadence: 'one_time',
+              retainer_months: 0,
+              monthly_hours: 0
+            });
+          }
+        }
+        // Also clear from pricingData maps
+        if (!isRetainer && window.pricingData) {
+          if (window.pricingData.retainerMonths) window.pricingData.retainerMonths.delete(deliverableCode);
+          if (window.pricingData.retainers) window.pricingData.retainers.delete(deliverableCode);
         }
       }
       
@@ -3077,8 +3095,14 @@
       else if (newCadence === 'Semi-Annual') months = 6;
       else if (newCadence === 'Annual') months = 12;
       
-      // Update the item's retainer_months
+      // Update the item's retainer_months and is_retainer flag
       item.retainer_months = months;
+      item.is_retainer = months > 0;
+      if (months === 0) {
+        // FIX 1 (Frontend): Clear all retainer fields when switching to One-Time
+        item.monthly_hours = 0;
+        item.billing_cadence = 'one_time';
+      }
       
       // Update pricingData if available
       if (window.pricingData) {
@@ -3088,6 +3112,9 @@
         } else {
           window.pricingData.deliverableTypes.set(deliverableCode, 'PROJECT');
           window.pricingData.retainers.delete(deliverableCode);
+          if (window.pricingData.retainerMonths) {
+            window.pricingData.retainerMonths.delete(deliverableCode);
+          }
         }
       }
       
@@ -3128,14 +3155,21 @@
       console.log(`[updateCadence] Persisting to SCENARIO_STORE: deliverable=${deliverableCode} hours=${hours} rate=${rate} cadence=${newCadence} billing_cadence=${billingCadence} months=${months}`);
       
       if (typeof ScenarioStore !== 'undefined' && ScenarioStore.patchScenarioItem) {
-        ScenarioStore.patchScenarioItem(deliverableCode, {
+        const patchData = {
           hours: hours,
           rate_usd: rate,
           cadence: newCadence,
           billing_cadence: billingCadence,
+          is_retainer: months > 0,
+          retainer_months: months,
           cadence_units: months > 0 ? (newCadence === 'Monthly' ? months : Math.ceil(months / (newCadence === 'Quarterly' ? 3 : newCadence === 'Semi-Annual' ? 6 : 12))) : 1,
           months: months
-        });
+        };
+        // FIX 1 (Frontend): Explicitly clear retainer fields when switching to One-Time
+        if (months === 0) {
+          patchData.monthly_hours = 0;
+        }
+        ScenarioStore.patchScenarioItem(deliverableCode, patchData);
         console.log(`[updateCadence] ScenarioStore.patchScenarioItem called`);
       } else {
         console.warn('[updateCadence] ScenarioStore not available, cadence change not persisted to backend');

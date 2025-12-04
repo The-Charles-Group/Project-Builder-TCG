@@ -3908,23 +3908,41 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
             
             print(f"[WBS_SCALE] {dcode}: target_hours={target_hours}, source_hours={source_hours}, scale={hours_scale:.3f}, target_price={target_price}")
 
-            # Check if this is a retainer deliverable (support both old and new cadence fields)
-            months = int((d.get("retainer") or {}).get("months", 0) or d.get("retainer_months", 0))
+            # FIX 1: Normalize cadence/retainer fields with proper one_time handling
+            # Read months from nested retainer object or flat retainer_months field
+            months = int((d.get("retainer") or {}).get("months", 0) or d.get("retainer_months", 0) or 0)
             
-            # DEBUG: Log exact values going into export for retainer debugging
-            print(f"[DEBUG] EXPORT ITEM: {d.get('deliverable', dcode)[:40]} hours={target_hours} months={months} cadence={d.get('billing_cadence', 'one_time')}")
-            
-            # Also check billing_cadence for new cadence-based retainers
+            # Read billing_cadence and cadence_units robustly
             billing_cadence = (d.get("billing_cadence") or "one_time").lower()
             cadence_units = int(d.get("cadence_units") or 1)
+            
+            # Derive months from cadence when cadence is set but months is not
             if billing_cadence in ("monthly", "quarterly", "semi_annual", "annual") and months == 0:
-                # Calculate months from cadence
                 months_per_cadence = {"monthly": 1, "quarterly": 3, "semi_annual": 6, "annual": 12}.get(billing_cadence, 0)
                 months = months_per_cadence * cadence_units
             
+            # FIX 1 CRITICAL: Guard against stale retainer flags when cadence is one_time
+            # If user switched back to One-Time, force-clear all retainer metadata
+            if billing_cadence == "one_time":
+                months = 0
+                d["retainer_months"] = 0
+                d["is_retainer"] = False
+                d["monthly_hours"] = 0
+                d["monthly_price"] = 0
+                d["cadence_units"] = 1
+                if "retainer" in d and isinstance(d.get("retainer"), dict):
+                    d["retainer"]["months"] = 0
+                    d["retainer"]["monthly_hours"] = 0
+            
+            # DEBUG: Log exact values going into export for retainer debugging
+            print(f"[DEBUG] EXPORT ITEM: {d.get('deliverable', dcode)[:40]} hours={target_hours} months={months} cadence={billing_cadence}")
+            
+            # Read monthly values (will be 0 for one_time after guard above)
             monthly_hours = float(d.get("monthly_hours") or 0)
             monthly_price = float(d.get("monthly_price") or 0)
-            is_retainer = months > 0 or d.get("is_retainer", False)
+            
+            # Now compute is_retainer from the (potentially cleared) values
+            is_retainer = months > 0 or bool(d.get("is_retainer", False))
             deliverable_type = "Retainer" if is_retainer else "One-Time"
 
             # FIXED COST EXPORT: Use Step 3 price (target_price) as the authoritative cost
