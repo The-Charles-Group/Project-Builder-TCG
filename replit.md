@@ -43,7 +43,7 @@ Preferred communication style: Simple, everyday language.
 ### System Design Choices
 - **Data Storage Pattern**: Excel/CSV files as primary source for business rules and configuration, loaded into in-memory DataFrames.
 - **API Design**: RESTful endpoints for data loading, options retrieval, scenario generation, file uploads, and static file serving.
-- **Database Configuration**: Automatic switching based on environment (Replit's PostgreSQL for development, separate production database). `Replit_App_DB_READABLE_FullRows_v4.xlsx` loaded into `app.state.db` at startup, with pickle caching and fallback to mock data.
+- **Database Configuration**: Automatic switching based on environment (Replit's PostgreSQL for development, separate production database). `Replit_App_DB_READABLE_FullRows_v3.xlsx` loaded into `app.state.db` at startup, with pickle caching (410KB, loads in ~3ms with 1916 rows) and fallback to mock data. V3 database uses sheet names: `Bundles_Rules`, `Bundles_Map_By_Deliverable`, `Bundles_Hours_By_Role`. Optional sheets (not in v3): `Bundle_Scenario_Defaults`, `Rate_Bands`, `Timeline_Scaling`, `Timeline_Weighting`, `Slack_Settings`, `UI_Options`.
 
 ## External Dependencies
 
