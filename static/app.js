@@ -5936,16 +5936,17 @@ async function buildFromCurrentSelection() {
     step3.style.display = "block";
   }
   
-  // Only scroll to Grand Total if explicitly triggered by Build Scenario button click
+  // Only scroll to Pricing Details if explicitly triggered by Build Scenario button click
   // (not when called from proceedToPricing which should stay at Step 3 top)
-  if (window._scrollToGrandTotalAfterBuild) {
-    window._scrollToGrandTotalAfterBuild = false; // Reset flag
+  // User will then use "Save & View Totals" button to see Grand Total
+  if (window._scrollToPricingDetailsAfterBuild) {
+    window._scrollToPricingDetailsAfterBuild = false; // Reset flag
     setTimeout(() => {
-      const summaryPanel = document.querySelector(".pricing-summary-panel") || 
-                          document.querySelector("#grand-total-cost")?.closest('div') ||
-                          document.querySelector("#one-time-summary")?.closest('div');
-      if (summaryPanel) {
-        summaryPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      const pricingDetails = document.querySelector("#pricing-details-section") || 
+                             document.querySelector(".pricing-table-container") ||
+                             document.querySelector("#pricing-details-table")?.closest('div');
+      if (pricingDetails) {
+        pricingDetails.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     }, 150);
   }

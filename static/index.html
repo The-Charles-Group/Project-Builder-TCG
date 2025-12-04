@@ -476,6 +476,13 @@
             </tbody>
           </table>
         </div>
+        <!-- Save button in lower right -->
+        <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+          <button id="btn-save-pricing" onclick="savePricingAndShowTotals()" 
+                  style="background: linear-gradient(135deg, #3DDC97 0%, #2BB77F 100%); color: white; padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1em; box-shadow: 0 2px 8px rgba(61, 220, 151, 0.3);">
+            💾 Save & View Totals
+          </button>
+        </div>
       </div>
 
       <!-- Enhanced Summary Panel -->
@@ -2633,6 +2640,48 @@
       }
     }
     window.recalculateComponentPricingCost = recalculateComponentPricingCost;
+    
+    // Save pricing and show totals - called by Save button
+    async function savePricingAndShowTotals() {
+      console.log('[SAVE] Saving pricing and showing totals...');
+      
+      // CRITICAL: Clear any pending auto-scroll flags to prevent rebuild from scrolling to pricing details
+      window._scrollToPricingDetailsAfterBuild = false;
+      window._scrollToGrandTotalAfterBuild = false;
+      
+      // Show loading state on button
+      const btn = document.getElementById('btn-save-pricing');
+      const originalText = btn?.innerHTML;
+      if (btn) {
+        btn.innerHTML = '⏳ Saving...';
+        btn.disabled = true;
+      }
+      
+      try {
+        // Trigger a rebuild to recalculate all totals from current pricing data
+        if (typeof rebuildScenario === 'function') {
+          await rebuildScenario();
+        }
+        
+        // After rebuild, scroll to the summary/grand total section (One-time + Retainer + Grand Total)
+        setTimeout(() => {
+          const summaryPanel = document.querySelector('.pricing-summary-panel');
+          if (summaryPanel) {
+            summaryPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }, 300);
+        
+      } catch (error) {
+        console.error('[SAVE] Error saving pricing:', error);
+      } finally {
+        // Restore button state
+        if (btn) {
+          btn.innerHTML = originalText || '💾 Save & View Totals';
+          btn.disabled = false;
+        }
+      }
+    }
+    window.savePricingAndShowTotals = savePricingAndShowTotals;
 
     // Legacy functions removed - replaced by Stage 2 workflow
 
@@ -3718,7 +3767,7 @@
       
       const btnBuild = document.getElementById('btnBuild');
       if (btnBuild) btnBuild.onclick = () => {
-        window._scrollToGrandTotalAfterBuild = true; // Set flag for grand total scroll
+        window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
         buildScenariosAB();
       };
       
