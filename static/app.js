@@ -146,6 +146,17 @@ function applyGanttTheme() {
 let OPTIONS = null;       // cached /api/options
 let SCENARIOS = null;     // last built scenarios (A & B)
 let DELIVERABLES = [];    // [{deliverable_code, deliverable, category}]
+
+// Centralized scenario accessors to sync local variable with window.SCENARIOS
+// This prevents the "build a scenario first" bug where Step-2 sets window.SCENARIOS
+// but Step-3 functions check the local SCENARIOS variable which stays null
+const getScenarioState = () => window.SCENARIOS ?? SCENARIOS;
+const setScenarioState = (value) => { 
+  SCENARIOS = value; 
+  window.SCENARIOS = value; 
+};
+window.getScenarioState = getScenarioState;
+window.setScenarioState = setScenarioState;
 let DELIV_INDEX = {};     // code -> deliverable object lookup for fast rendering
 let DELIV_INDEX_LO = {};  // lowercase code lookup for defensive matching
 
