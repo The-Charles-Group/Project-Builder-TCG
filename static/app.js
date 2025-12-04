@@ -6502,6 +6502,20 @@ async function onRunReconcile() {
       aiAnalysisInterval = setInterval(() => pollAIAnalysis(jobInfo.job_id), 2000);
       pollAIAnalysis(jobInfo.job_id);
       
+      // Safety timeout: if analysis takes too long, re-enable button after 5 minutes
+      setTimeout(() => {
+        if (aiAnalysisInterval) {
+          console.warn('[AI Analysis] Analysis timeout reached (5 min), cleaning up...');
+          clearInterval(aiAnalysisInterval);
+          aiAnalysisInterval = null;
+          hideAIProgressBar();
+          if (btnAnalyze) {
+            btnAnalyze.disabled = false;
+            btnAnalyze.textContent = 'Analyze with AI';
+          }
+        }
+      }, 5 * 60 * 1000);
+      
       // Old SSE code commented out for now
       // const eventSource = new EventSource(`/api/stream/${jobInfo.job_id}`);
       
