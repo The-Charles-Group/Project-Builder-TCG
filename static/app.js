@@ -4232,6 +4232,204 @@ window.cancelTimelineGeneration = cancelTimelineGeneration;
 let isTimelineGenerating = false;
 let currentTimelineEventSource = null;
 
+// SHARED HELPER: Apply timeline completion results to UI (used by both normal completion and recovery)
+async function applyTimelineResults(result, options = {}) {
+  const { showNotification = false, notificationMessage = 'Timeline loaded!' } = options;
+  
+  // Show optional notification
+  if (showNotification) {
+    const notification = document.createElement('div');
+    notification.innerHTML = `
+      <div style="position: fixed; top: 20px; right: 20px; background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;">
+        <strong>✅ ${notificationMessage}</strong>
+      </div>
+    `;
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), 4000);
+  }
+  
+  // Clear pending job ID since we're completing
+  sessionStorage.removeItem('apb.timeline.pending_job_id');
+  
+  // Update both window and module-scoped variables
+  window.currentTimelineTasks = result.tasks || [];
+  window.timelineReasoning = result.reasoning || {};
+  if (typeof currentTimelineTasks !== 'undefined') {
+    currentTimelineTasks = window.currentTimelineTasks;
+  }
+  if (typeof timelineReasoning !== 'undefined') {
+    timelineReasoning = window.timelineReasoning;
+  }
+  
+  // Update UI panels
+  if (typeof updateReasoningPanel === 'function') {
+    updateReasoningPanel(result.reasoning);
+  }
+  
+  // Auto-show the reasoning panel
+  const reasoningPanel = document.getElementById('ai-reasoning-panel');
+  if (reasoningPanel) {
+    reasoningPanel.style.display = 'block';
+  }
+  
+  // Update metadata
+  if (typeof updateTimelineMetadata === 'function') {
+    updateTimelineMetadata(result.metadata);
+  }
+  
+  // Update resource risk table
+  if (typeof updateResourceRiskTable === 'function') {
+    updateResourceRiskTable(window.currentTimelineTasks, result.reasoning);
+  }
+  
+  // Initialize Gantt chart
+  const container = document.getElementById('gantt-container');
+  if (container && typeof initializeGanttChart === 'function') {
+    try {
+      await initializeGanttChart(window.currentTimelineTasks);
+      container.style.display = '';
+      
+      // Show metadata
+      const metadataDiv = document.getElementById('timeline-metadata');
+      if (metadataDiv) metadataDiv.style.display = '';
+      
+      // Save timeline with metrics
+      if (typeof saveTimelineWithMetrics === 'function') {
+        saveTimelineWithMetrics(window.currentTimelineTasks);
+      }
+      
+      // Show PDF Download button
+      const pdfButton = document.getElementById('gantt-pdf-button');
+      if (pdfButton) {
+        pdfButton.style.display = '';
+        console.log('[Timeline] PDF download button shown');
+      }
+      
+      // Show Save Changes button
+      const saveButton = document.getElementById('btn-save-timeline');
+      if (saveButton) {
+        saveButton.style.display = '';
+        saveButton.setAttribute('data-timeline-generated', 'true');
+        console.log('[Timeline] Save Changes button shown');
+      }
+    } catch (chartError) {
+      console.error('Failed to initialize Gantt chart:', chartError);
+      if (typeof showTimelineError === 'function') {
+        showTimelineError(
+          'Display Error',
+          'Timeline generated successfully but could not be displayed. Please refresh the page and try again.',
+          true
+        );
+      }
+    }
+  }
+  
+  // Reset button state
+  const btn = document.getElementById('btn-generate-timeline');
+  const loading = document.getElementById('timeline-loading');
+  if (loading) loading.style.display = 'none';
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '🤖 Generate AI Timeline';
+  }
+  
+  console.log('[Timeline] Results applied successfully');
+}
+
+// JOB RECOVERY: Check for pending jobs on page load
+async function checkForPendingTimelineJobs() {
+  const pendingJobId = sessionStorage.getItem('apb.timeline.pending_job_id');
+  if (!pendingJobId) return;
+  
+  console.log('[TIMELINE RECOVERY] Found pending job:', pendingJobId);
+  
+  try {
+    const response = await fetch(`/api/ai/jobs/${pendingJobId}`);
+    if (!response.ok) {
+      console.log('[TIMELINE RECOVERY] Job not found, clearing');
+      sessionStorage.removeItem('apb.timeline.pending_job_id');
+      return;
+    }
+    
+    const data = await response.json();
+    console.log('[TIMELINE RECOVERY] Job status:', data.status);
+    
+    if (data.status === 'completed' && data.result) {
+      console.log('[TIMELINE RECOVERY] Job completed! Restoring results...');
+      
+      // Use shared helper function for consistent completion workflow
+      await applyTimelineResults(data.result, {
+        showNotification: true,
+        notificationMessage: 'Timeline Recovered! Your previous generation completed.'
+      });
+    } else if (data.status === 'processing' || data.status === 'pending') {
+      console.log('[TIMELINE RECOVERY] Job still in progress, resuming polling...');
+      
+      // Show notification
+      const notification = document.createElement('div');
+      notification.id = 'timeline-recovery-notification';
+      notification.innerHTML = `
+        <div style="position: fixed; top: 20px; right: 20px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 16px 24px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10000;">
+          <strong>🔄 Timeline In Progress</strong><br>
+          <small>Your timeline generation is still running (${Math.round(data.progress || 0)}% complete)...</small>
+        </div>
+      `;
+      document.body.appendChild(notification);
+      
+      // Start polling for this job
+      const pollInterval = setInterval(async () => {
+        try {
+          const pollRes = await fetch(`/api/ai/jobs/${pendingJobId}`);
+          if (!pollRes.ok) {
+            clearInterval(pollInterval);
+            notification.remove();
+            sessionStorage.removeItem('apb.timeline.pending_job_id');
+            return;
+          }
+          
+          const pollData = await pollRes.json();
+          
+          // Update notification
+          const notifDiv = notification.querySelector('div');
+          if (notifDiv) {
+            notifDiv.querySelector('small').textContent = `Your timeline generation is still running (${Math.round(pollData.progress || 0)}% complete)...`;
+          }
+          
+          if (pollData.status === 'completed' && pollData.result) {
+            clearInterval(pollInterval);
+            notification.remove();
+            
+            // Use shared helper function for consistent completion workflow
+            await applyTimelineResults(pollData.result, {
+              showNotification: true,
+              notificationMessage: 'Timeline Complete! Loading now...'
+            });
+          } else if (pollData.status === 'failed') {
+            clearInterval(pollInterval);
+            sessionStorage.removeItem('apb.timeline.pending_job_id');
+            notification.remove();
+            console.log('[TIMELINE RECOVERY] Job failed:', pollData.error);
+          }
+        } catch (pollErr) {
+          console.error('[TIMELINE RECOVERY] Poll error:', pollErr);
+        }
+      }, 3000); // Poll every 3 seconds
+      
+    } else if (data.status === 'failed') {
+      console.log('[TIMELINE RECOVERY] Job failed, clearing');
+      sessionStorage.removeItem('apb.timeline.pending_job_id');
+    }
+  } catch (error) {
+    console.error('[TIMELINE RECOVERY] Error checking pending job:', error);
+    sessionStorage.removeItem('apb.timeline.pending_job_id');
+  }
+}
+
+// Run recovery check on page load
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(checkForPendingTimelineJobs, 1000); // Delay slightly to let page load
+});
+
 async function generateAITimeline(retryAttempt = 0) {
   const btn = document.getElementById('btn-generate-timeline');
   const loading = document.getElementById('timeline-loading');
@@ -4262,7 +4460,7 @@ async function generateAITimeline(retryAttempt = 0) {
   // Connection health tracking
   let lastHeartbeatTime = Date.now();
   let lastDataTime = Date.now();
-  const HEARTBEAT_TIMEOUT_MS = 30000; // 30 seconds without any data = real issue
+  const HEARTBEAT_TIMEOUT_MS = 10000; // 10 seconds without any data = switch to polling faster
   const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds if SSE fails
   
   // Polling fallback state
@@ -4400,7 +4598,7 @@ async function generateAITimeline(retryAttempt = 0) {
       const timeSinceLastData = Date.now() - lastDataTime;
       
       if (timeSinceLastData > HEARTBEAT_TIMEOUT_MS && !isPolling) {
-        console.log('[TIMELINE] No data for 30s, switching to polling fallback');
+        console.log('[TIMELINE] No data for 10s, switching to polling fallback');
         
         // Switch to polling mode
         if (eventSource) {
@@ -4512,76 +4710,17 @@ async function generateAITimeline(retryAttempt = 0) {
   
   // Helper function to handle timeline completion
   const handleTimelineCompletion = (result) => {
-    // ISSUE FIX 3: Update window.currentTimelineTasks so PDF export can access it
-    window.currentTimelineTasks = result.tasks || [];
-    currentTimelineTasks = window.currentTimelineTasks;
-    timelineReasoning = result.reasoning || {};
-    
-    // Update reasoning panel
-    updateReasoningPanel(result.reasoning);
-    
-    // Auto-show the reasoning panel when timeline is generated
-    const panel = document.getElementById('ai-reasoning-panel');
-    if (panel) {
-      panel.style.display = 'block';
-    }
-    
-    // Update metadata
-    updateTimelineMetadata(result.metadata);
-    
-    // Update resource risk table
-    updateResourceRiskTable(currentTimelineTasks, result.reasoning);
-    
-    // Initialize Gantt chart with AI-generated timeline
-    initializeGanttChart(currentTimelineTasks).then(() => {
-      // Show the container
-      container.style.display = '';
-      
-      // Show metadata
-      const metadataDiv = document.getElementById('timeline-metadata');
-      if (metadataDiv) metadataDiv.style.display = '';
-      
-      // GPT-5.1 Pro: Trigger initial timeline save to populate metrics and resource risk
-      saveTimelineWithMetrics(currentTimelineTasks);
-      
-      // ISSUE FIX 2: Show PDF Download and Save Changes buttons after successful timeline generation
-      // These should stay visible permanently once timeline is generated
-      const pdfButton = document.getElementById('gantt-pdf-button');
-      if (pdfButton) {
-        pdfButton.style.display = '';
-        console.log('[Timeline] PDF download button shown');
-      }
-      
-      const saveButton = document.getElementById('btn-save-timeline');
-      if (saveButton) {
-        saveButton.style.display = '';
-        console.log('[Timeline] Save Changes button shown and will stay visible');
-      }
-      
-      // ISSUE FIX 2: Defensive - ensure button stays visible even after other operations
-      // Set a flag to prevent it from being hidden
-      if (saveButton) {
-        saveButton.setAttribute('data-timeline-generated', 'true');
-      }
-    }).catch(chartError => {
-      console.error('Failed to initialize Gantt chart:', chartError);
-      showTimelineError(
-        'Display Error',
-        'Timeline generated successfully but could not be displayed. Please refresh the page and try again.',
-        true
-      );
-    }).finally(() => {
-      // CRITICAL FIX: Always reset button state after timeline generation completes
-      // This ensures the button is never stuck even if chart initialization fails
-      loading.style.display = 'none';
-      btn.disabled = false;
-      btn.textContent = '🤖 Generate AI Timeline';
-      console.log('[Timeline] Button state reset in finally block');
-    });
+    // Use the shared helper for consistent completion workflow
+    // This ensures recovery and normal completion use the same code path
+    applyTimelineResults(result, { showNotification: false });
   };
   
   // Helper function to handle timeline errors
   const handleTimelineError = (error) => {
+    // JOB RECOVERY: Clear pending job ID since we failed
+    sessionStorage.removeItem('apb.timeline.pending_job_id');
+    console.log('[TIMELINE] Cleared pending job ID after failure');
+    
     let errorMessage = 'Timeline generation failed. Please try again.';
     
     if (error) {
@@ -4806,6 +4945,10 @@ async function generateAITimeline(retryAttempt = 0) {
     
     // Store job ID for potential polling fallback
     jobId = jobData.job_id;
+    
+    // JOB RECOVERY: Store job ID in sessionStorage for page refresh recovery
+    sessionStorage.setItem('apb.timeline.pending_job_id', jobId);
+    console.log('[TIMELINE] Stored pending job ID for recovery:', jobId);
     
     // Connect to SSE stream for progress updates
     eventSource = new EventSource(`/api/stream/${jobData.job_id}`);
