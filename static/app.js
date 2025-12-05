@@ -2669,32 +2669,29 @@ function updatePricingSummary() {
     const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
     const isRetainer = (delivType === 'RETAINER');
     
-    // Get custom values or defaults
-    const hours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
-    const rate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 210;
-    const cost = hours * rate;
+    // Get custom values or defaults for deliverable level
+    const delivHours = pricingData.customHours.get(item.deliverable_code) || item.hours || 0;
+    const delivRate = pricingData.customRates.get(item.deliverable_code) || item.blended_rate || 210;
     
-    if (isRetainer) {
-      retainerCount++;
-      retainerMonthlyHours += hours;
-      retainerMonthlyCost += cost;
-      retainerItemsList.push(item.deliverable);
-    } else {
-      oneTimeCount++;
-      oneTimeHours += hours;
-      oneTimeCost += cost;
-      projectItemsList.push(item.deliverable);
-    }
+    // Check if this deliverable has components
+    const hasComponents = item.components && item.components.length > 0;
     
-    // Also count components (FIXED KEY FORMAT)
-    if (item.components && item.components.length > 0) {
+    if (hasComponents) {
+      // If has components, only count component hours (avoid double-counting)
+      // Deliverable total = sum of component hours, so we skip deliverable-level
+      let componentTotalHours = 0;
+      let componentTotalCost = 0;
+      
       item.components.forEach(comp => {
-        const compKey = `${item.deliverable_code}::${comp.name}`;  // Fixed to use :: separator
+        const compKey = `${item.deliverable_code}::${comp.name}`;
         const compType = pricingData.deliverableTypes.get(compKey) || delivType;
         const compIsRetainer = (compType === 'RETAINER');
         const compHours = pricingData.customHours.get(compKey) || comp.hours || 0;
-        const compRate = pricingData.customRates.get(compKey) || comp.rate || rate;
+        const compRate = pricingData.customRates.get(compKey) || comp.rate || delivRate;
         const compCost = compHours * compRate;
+        
+        componentTotalHours += compHours;
+        componentTotalCost += compCost;
         
         if (compIsRetainer) {
           retainerMonthlyHours += compHours;
@@ -2704,6 +2701,30 @@ function updatePricingSummary() {
           oneTimeCost += compCost;
         }
       });
+      
+      // Count the deliverable (but hours/cost come from components)
+      if (isRetainer) {
+        retainerCount++;
+        retainerItemsList.push(item.deliverable);
+      } else {
+        oneTimeCount++;
+        projectItemsList.push(item.deliverable);
+      }
+    } else {
+      // No components - count deliverable-level hours directly
+      const cost = delivHours * delivRate;
+      
+      if (isRetainer) {
+        retainerCount++;
+        retainerMonthlyHours += delivHours;
+        retainerMonthlyCost += cost;
+        retainerItemsList.push(item.deliverable);
+      } else {
+        oneTimeCount++;
+        oneTimeHours += delivHours;
+        oneTimeCost += cost;
+        projectItemsList.push(item.deliverable);
+      }
     }
   });
   
