@@ -431,11 +431,25 @@
         </div>
       </div>
 
-      <!-- Project Scenario (Editable Table) -->
+      <!-- Project Scenario (Editable Table) with Build/Rebuild/Reset buttons -->
       <div class="scenarios" style="margin-bottom: 20px; grid-template-columns: 1fr;">
         <div class="scenario" style="width: 100%;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
             <h3 style="margin: 0;">Project Scenario</h3>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button id="btnBuild" class="btn-primary" style="background: var(--accent2); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.95em;">
+                🚀 Build Scenario
+              </button>
+              <button id="btn-rebuild-scenario-top" onclick="rebuildScenario()" 
+                      style="background: var(--accent); color: white; padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85em;">
+                🔄 Rebuild
+              </button>
+              <button id="btn-reset-from-step2-top" onclick="rebuildFromStep2()" 
+                      style="background: rgba(255, 165, 0, 0.2); color: #FFA500; padding: 6px 12px; border: 1px solid #FFA500; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.85em;"
+                      title="Rebuilds scenario from Step 2 defaults - discards current pricing edits">
+                ⚠️ Reset
+              </button>
+            </div>
           </div>
           <div id="scenarioA">(No data)</div>
         </div>
@@ -461,27 +475,11 @@
             </tbody>
           </table>
         </div>
-        
-        <!-- Empty State Message (shown before Build is clicked) -->
-        <div id="pricing-empty-state" style="display: none; text-align: center; padding: 40px 20px; color: var(--muted); font-style: italic;">
-          <div style="font-size: 2em; margin-bottom: 12px;">📋</div>
-          <div style="font-size: 1.1em; margin-bottom: 8px;">No pricing data yet</div>
-          <div style="font-size: 0.9em;">Click "Build Scenario" below to generate pricing details</div>
-        </div>
-        
-        <!-- Build/Rebuild/Reset buttons - Single source of truth for calculations -->
-        <div id="pricing-action-buttons" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
-          <button id="btnBuild" class="btn-primary" style="background: var(--accent2); color: white; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1em;">
-            🚀 Build Scenario
-          </button>
-          <button id="btn-rebuild-scenario-top" onclick="rebuildScenario()" 
-                  style="background: var(--accent); color: white; padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.95em;">
-            🔄 Rebuild
-          </button>
-          <button id="btn-reset-from-step2-top" onclick="rebuildFromStep2()" 
-                  style="background: rgba(255, 165, 0, 0.2); color: #FFA500; padding: 10px 16px; border: 1px solid #FFA500; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.95em;"
-                  title="Rebuilds scenario from Step 2 defaults - discards current pricing edits">
-            ⚠️ Reset
+        <!-- Save button in lower right -->
+        <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+          <button id="btn-save-pricing" onclick="savePricingAndShowTotals()" 
+                  style="background: linear-gradient(135deg, #3DDC97 0%, #2BB77F 100%); color: white; padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 1em; box-shadow: 0 2px 8px rgba(61, 220, 151, 0.3);">
+            💾 Save & View Totals
           </button>
         </div>
       </div>
@@ -2066,12 +2064,6 @@
         if (typeof updatePricingDisplay === 'function' && scenarios.A) {
           updatePricingDisplay(scenarios.A);
           console.log('[BUILD] Updated pricing display with scenario A');
-          
-          // Hide empty state and show pricing table after successful build
-          const pricingEmptyState = document.getElementById('pricing-empty-state');
-          const pricingTableWrapper = document.getElementById('pricing-table-wrapper');
-          if (pricingEmptyState) pricingEmptyState.style.display = 'none';
-          if (pricingTableWrapper) pricingTableWrapper.style.display = 'block';
         } else {
           console.warn('[BUILD] updatePricingDisplay function not found or no scenario A');
         }
@@ -2225,53 +2217,13 @@
         )
       ));
       
-      console.log('[PROCEED] Selection synced successfully, showing Step 3 with both panels');
+      console.log('[PROCEED] Selection synced successfully, showing Step 3');
       
       // Show Step 3
       const step3 = document.getElementById('step3');
       if (step3) {
         step3.style.display = 'block';
-        
-        // Show loading state while Build runs
-        const pricingEmptyState = document.getElementById('pricing-empty-state');
-        const pricingTableWrapper = document.getElementById('pricing-table-wrapper');
-        
-        // Initially show empty state with loading message
-        if (pricingEmptyState) {
-          pricingEmptyState.style.display = 'block';
-          pricingEmptyState.innerHTML = `
-            <div style="text-align: center; padding: 40px 20px; color: var(--muted);">
-              <div style="font-size: 2em; margin-bottom: 10px;">⏳</div>
-              <p style="font-size: 1.1em;">Building scenario and calculating pricing...</p>
-            </div>
-          `;
-        }
-        if (pricingTableWrapper) pricingTableWrapper.style.display = 'none';
-        
         step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        
-        // AUTO-TRIGGER BUILD: Automatically build scenario when proceeding to pricing
-        // This populates BOTH Project Scenario and Pricing Details tables immediately
-        console.log('[PROCEED] Auto-triggering Build Scenario...');
-        setTimeout(() => {
-          window._scrollToPricingDetailsAfterBuild = false; // Don't double-scroll
-          if (typeof buildScenariosAB === 'function') {
-            buildScenariosAB();
-          } else if (typeof window.buildScenariosAB === 'function') {
-            window.buildScenariosAB();
-          } else {
-            console.error('[PROCEED] buildScenariosAB function not found!');
-            // Restore empty state with error message
-            if (pricingEmptyState) {
-              pricingEmptyState.innerHTML = `
-                <div style="text-align: center; padding: 40px 20px; color: var(--muted);">
-                  <div style="font-size: 2em; margin-bottom: 10px;">⚠️</div>
-                  <p style="font-size: 1.1em;">Could not auto-build scenario. Click "Build Scenario" below.</p>
-                </div>
-              `;
-            }
-          }
-        }, 100); // Small delay to let UI render first
       } else {
         console.error('[PROCEED] Step 3 element not found!');
       }
@@ -2698,9 +2650,37 @@
     }
     window.recalculateComponentPricingCost = recalculateComponentPricingCost;
     
-    // REMOVED: savePricingAndShowTotals function
-    // All pricing calculations now go through Build/Rebuild buttons (single source of truth)
-    // This eliminates the double-counting issue where separate calculations gave different results
+    // Save pricing and show totals - called by Save button
+    // Recalculates totals from current DOM values (no API call, no rebuild)
+    // Delegate to the centralized updatePricingSummary in app.js to avoid double-counting
+    function savePricingAndShowTotals() {
+      console.log('[SAVE] Delegating to updatePricingSummary for consistent totals...');
+      
+      // Use the centralized calculation from app.js which has the correct logic
+      if (typeof window.updatePricingSummary === 'function') {
+        window.updatePricingSummary();
+      } else if (typeof updatePricingSummary === 'function') {
+        updatePricingSummary();
+      } else {
+        console.warn('[SAVE] updatePricingSummary not found, cannot update totals');
+        return;
+      }
+      
+      // Log the updated values from the DOM
+      const oneTimeCost = document.getElementById('one-time-cost')?.textContent || '$0';
+      const retainerAnnual = document.getElementById('retainer-annual-cost')?.textContent || '$0';
+      const grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
+      console.log('[SAVE] Totals updated - One-time:', oneTimeCost, 'Retainer (annual):', retainerAnnual, 'Grand:', grandTotal);
+      
+      // Scroll to the summary section
+      setTimeout(() => {
+        const summaryPanel = document.querySelector('.pricing-summary-panel');
+        if (summaryPanel) {
+          summaryPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 100);
+    }
+    window.savePricingAndShowTotals = savePricingAndShowTotals;
 
     // Legacy functions removed - replaced by Stage 2 workflow
 

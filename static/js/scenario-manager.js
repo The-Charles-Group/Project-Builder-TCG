@@ -539,17 +539,6 @@
       }
       
       console.log('[ScenarioManager] 🔄 Rebuilding from Step 2 (reset=true)');
-      
-      // CRITICAL: Clear pricingData custom overrides to truly reset to Step 2 baseline
-      if (window.pricingData) {
-        window.pricingData.customHours = new Map();
-        window.pricingData.customRates = new Map();
-        window.pricingData.deliverableTypes = new Map();
-        window.pricingData.originalScenario = null;
-        window.pricingData.rebuildVersion = 0;
-        console.log('[ScenarioManager] Cleared pricingData customHours/customRates');
-      }
-      
       return this.buildScenario(true);  // Force reset
     },
     

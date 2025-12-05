@@ -2760,23 +2760,39 @@ function updatePricingSummary() {
     }
   }
   
-  // FIXED: Use the already-calculated oneTimeCost and retainerMonthlyCost
-  // These values properly account for component-level calculations and custom overrides
-  const annualRetainerCost = retainerMonthlyCost * 12;
-  const grandTotal = oneTimeCost + annualRetainerCost;
+  // FIX: Update Grand Total - ALWAYS use original unscaled prices
+  // Calculate the original total from items' original prices
+  let originalOneTimeCost = 0;
+  let originalRetainerMonthlyCost = 0;
+  
+  scenario.items.forEach(item => {
+    const isRetainer = item.is_retainer || item.retainer || 
+                      (item.cadence && item.cadence !== 'ONE_TIME');
+    
+    if (isRetainer) {
+      // Use original monthly price if available
+      originalRetainerMonthlyCost += item.original_monthly_price || item.monthly_price || 0;
+    } else {
+      // Use original price if available
+      originalOneTimeCost += item.original_price || item.price || 0;
+    }
+  });
+  
+  // Use original costs for Grand Total
+  const scenarioTotal = originalOneTimeCost;
+  const grandTotal = originalOneTimeCost + (originalRetainerMonthlyCost * 12);
   const grandTotalEl = document.getElementById('grand-total-cost');
   const grandBreakdownEl = document.getElementById('grand-total-breakdown');
   
   if (grandTotalEl) grandTotalEl.textContent = `$${Math.round(grandTotal).toLocaleString()}`;
   if (grandBreakdownEl) {
-    if (retainerMonthlyCost > 0) {
-      grandBreakdownEl.textContent = `One-time ($${Math.round(oneTimeCost).toLocaleString()}) + 12 months retainer ($${Math.round(annualRetainerCost).toLocaleString()})`;
+    // Always show scenario total even when retainer is $0
+    if (originalRetainerMonthlyCost > 0) {
+      grandBreakdownEl.textContent = `One-time ($${Math.round(originalOneTimeCost).toLocaleString()}) + 12 months retainer ($${Math.round(originalRetainerMonthlyCost * 12).toLocaleString()})`;
     } else {
-      grandBreakdownEl.textContent = `One-time total: $${Math.round(oneTimeCost).toLocaleString()}`;
+      grandBreakdownEl.textContent = `One-time total: $${Math.round(originalOneTimeCost).toLocaleString()}`;
     }
   }
-  
-  console.log('[GRAND TOTAL] Updated:', { oneTimeCost: Math.round(oneTimeCost), annualRetainer: Math.round(annualRetainerCost), grandTotal: Math.round(grandTotal) });
   
   // Render executive summary view
   if (typeof renderExecSimple === 'function') {
