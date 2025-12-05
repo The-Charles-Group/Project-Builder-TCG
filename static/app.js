@@ -6458,31 +6458,8 @@ async function fetchWithRetry(url, options = {}, maxRetries = 3, baseDelay = 200
   throw lastError || new Error('Request failed after multiple retries');
 }
 
-// Handle Fast/Deep mode selection
-window.setAnalysisMode = function(mode) {
-  const fastBtn = document.getElementById('mode-fast');
-  const deepBtn = document.getElementById('mode-deep');
-  const modeInput = document.getElementById('analysis-mode');
-  
-  // Set global variable for analysis
-  window.selectedAnalysisMode = mode;
-  
-  if (mode === 'fast') {
-    fastBtn.style.background = '#10b981';
-    fastBtn.style.color = 'white';
-    deepBtn.style.background = 'white';
-    deepBtn.style.color = '#6366f1';
-    modeInput.value = 'fast';
-  } else {
-    deepBtn.style.background = '#6366f1';
-    deepBtn.style.color = 'white';
-    fastBtn.style.background = 'white';
-    fastBtn.style.color = '#10b981';
-    modeInput.value = 'deep';
-  }
-  
-  console.log('Analysis mode set to:', mode);
-}
+// NOTE: setAnalysisMode is defined once later in the file (around line 7109) to avoid duplicate definitions
+// The single definition handles button styling, hidden input sync, and summary card updates
 
 // Step 1: Analyze with AI (NEW: uses GPT-5 Pro AI planner for Summary + Suggestions in one call)
 async function onRunReconcile() {
@@ -6537,6 +6514,12 @@ async function onRunReconcile() {
       const analyzeImages = analyzeToggle ? analyzeToggle.checked : true;
       form.append('analyze_images', analyzeImages);
       
+      // FIX: Add mode and tier parameters to FormData so backend uses correct model
+      const selectedTier = document.getElementById('processing-tier')?.value || 'balanced';
+      form.append('mode', analysisMode);
+      form.append('tier', selectedTier);
+      console.log(`[API] Sending to /api/summarize_by_file with mode=${analysisMode}, tier=${selectedTier}`);
+      
       const res = await fetchWithRetry('/api/summarize_by_file', { method: 'POST', body: form });
       if (!res.ok) {
         throw new Error(`Server error: ${res.status} ${res.statusText}`);
@@ -6565,10 +6548,13 @@ async function onRunReconcile() {
     if (rfpText && !fileEl?.files?.length) {
       try {
         updateAIProgress({ progress: 8, current_stage: 'Generating RFP summary...', elapsed_seconds: 0, eta_seconds: null });
+        // FIX: Include mode and tier in the JSON payload
+        const selectedTierForText = document.getElementById('processing-tier')?.value || 'balanced';
+        console.log(`[API] Sending to /api/summarize with mode=${analysisMode}, tier=${selectedTierForText}`);
         const summaryRes = await fetchWithRetry('/api/summarize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rfp_text: rfpText })
+          body: JSON.stringify({ rfp_text: rfpText, mode: analysisMode, tier: selectedTierForText })
         });
         
         if (summaryRes.ok) {
@@ -6599,15 +6585,13 @@ async function onRunReconcile() {
     
     updateAIProgress({ progress: 10, current_stage: 'Sending request to AI...', elapsed_seconds: 0, eta_seconds: null });
     
-    // Map mode to tier
-    const tierMap = {
-      'fast': 'mini',
-      'deep': 'thinking'
-    };
-    const tier = tierMap[analysisMode] || 'thinking';
+    // FIX: Read tier directly from dropdown instead of deriving from mode
+    // This ensures user's batch size selection (Pro, Balanced, etc.) is respected
+    const tier = document.getElementById('processing-tier')?.value || 'balanced';
     
     // Get selected mode (Fast or Deep) - use analysisMode variable
     const selectedMode = analysisMode || 'deep';
+    console.log(`[API] Sending to /api/ai/analyze with mode=${selectedMode}, tier=${tier}`);
     
     const aiRes = await fetchWithRetry('/api/ai/analyze', {
       method: 'POST',
