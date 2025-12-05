@@ -49,6 +49,215 @@ if (!document.getElementById('toast-styles')) {
 }
 
 // ================================================================================
+// Analysis Timeout Manager - Mode-aware timeout handling for Deep Mode
+// Prevents premature UI reset during long-running Deep Mode analysis
+// ================================================================================
+const AnalysisTimeoutManager = {
+  // Mode-specific timeouts (in milliseconds)
+  MODE_TIMEOUTS: {
+    fast: 5 * 60 * 1000,    // 5 minutes for Fast Mode
+    deep: 15 * 60 * 1000    // 15 minutes for Deep Mode
+  },
+  
+  // Inactivity threshold - only consider timeout if no progress for this long
+  INACTIVITY_THRESHOLD: 2 * 60 * 1000, // 2 minutes
+  
+  // State
+  currentMode: 'fast',
+  startTime: null,
+  lastProgressTime: null,
+  lastProgressValue: 0,
+  timeoutId: null,
+  warningShown: false,
+  bannerElement: null,
+  
+  // Start the timeout manager for a new analysis
+  start(mode = 'fast') {
+    this.reset();
+    this.currentMode = mode;
+    this.startTime = Date.now();
+    this.lastProgressTime = Date.now();
+    this.lastProgressValue = 0;
+    this.warningShown = false;
+    
+    const timeout = this.MODE_TIMEOUTS[mode] || this.MODE_TIMEOUTS.fast;
+    console.log(`[TimeoutManager] Started for ${mode} mode, timeout: ${timeout/1000/60} minutes`);
+    
+    // Start the watchdog timer - checks every 30 seconds
+    this.timeoutId = setInterval(() => this.checkTimeout(), 30000);
+  },
+  
+  // Record progress update from polling
+  recordProgress(progress, stage) {
+    const now = Date.now();
+    
+    // Only update lastProgressTime if progress actually changed
+    if (progress !== this.lastProgressValue || stage) {
+      this.lastProgressTime = now;
+      this.lastProgressValue = progress;
+      
+      // Hide warning banner if progress resumed
+      if (this.warningShown) {
+        this.hideWarningBanner();
+        this.warningShown = false;
+      }
+    }
+  },
+  
+  // Check if we should timeout
+  checkTimeout() {
+    if (!this.startTime) return;
+    
+    const now = Date.now();
+    const totalElapsed = now - this.startTime;
+    const timeSinceProgress = now - this.lastProgressTime;
+    const modeTimeout = this.MODE_TIMEOUTS[this.currentMode] || this.MODE_TIMEOUTS.fast;
+    
+    console.log(`[TimeoutManager] Check: elapsed=${Math.round(totalElapsed/1000)}s, since_progress=${Math.round(timeSinceProgress/1000)}s, mode=${this.currentMode}`);
+    
+    // Show warning if taking longer than expected but still receiving progress
+    if (totalElapsed > modeTimeout * 0.7 && !this.warningShown && timeSinceProgress < this.INACTIVITY_THRESHOLD) {
+      this.showWarningBanner('Analysis is taking longer than usual. Still working...');
+      this.warningShown = true;
+    }
+    
+    // Only consider aborting if:
+    // 1. Total time exceeds mode timeout AND
+    // 2. No progress received for INACTIVITY_THRESHOLD
+    if (totalElapsed > modeTimeout && timeSinceProgress > this.INACTIVITY_THRESHOLD) {
+      console.warn(`[TimeoutManager] Timeout triggered: no progress for ${Math.round(timeSinceProgress/1000)}s`);
+      this.showAbortConfirmation();
+    }
+  },
+  
+  // Show warning banner (non-blocking)
+  showWarningBanner(message) {
+    // Remove existing banner if any
+    this.hideWarningBanner();
+    
+    const banner = document.createElement('div');
+    banner.id = 'analysis-timeout-banner';
+    banner.style.cssText = `
+      position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
+      background: linear-gradient(135deg, #f59e0b, #d97706); color: white;
+      padding: 12px 24px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 10001; font-weight: 500; display: flex; align-items: center; gap: 10px;
+      animation: slideIn 0.3s ease-out;
+    `;
+    banner.innerHTML = `
+      <span style="font-size: 1.2em;">⏳</span>
+      <span>${message}</span>
+    `;
+    document.body.appendChild(banner);
+    this.bannerElement = banner;
+  },
+  
+  // Hide warning banner
+  hideWarningBanner() {
+    if (this.bannerElement) {
+      this.bannerElement.remove();
+      this.bannerElement = null;
+    }
+    const existing = document.getElementById('analysis-timeout-banner');
+    if (existing) existing.remove();
+  },
+  
+  // Show abort confirmation dialog (instead of auto-reset)
+  showAbortConfirmation() {
+    this.hideWarningBanner();
+    
+    const modal = document.createElement('div');
+    modal.id = 'analysis-abort-modal';
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.7); z-index: 10002;
+      display: flex; align-items: center; justify-content: center;
+    `;
+    modal.innerHTML = `
+      <div style="background: #1e293b; padding: 24px; border-radius: 12px; max-width: 400px; text-align: center; box-shadow: 0 8px 24px rgba(0,0,0,0.4);">
+        <h3 style="margin: 0 0 12px 0; color: #f59e0b;">⏳ Analysis Taking Longer Than Expected</h3>
+        <p style="color: #94a3b8; margin-bottom: 20px;">
+          The AI analysis has been running for a while without progress updates. 
+          This can happen with complex documents in Deep Mode.
+        </p>
+        <div style="display: flex; gap: 12px; justify-content: center;">
+          <button id="abort-keep-waiting" style="padding: 10px 20px; background: #6366f1; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Keep Waiting
+          </button>
+          <button id="abort-cancel-analysis" style="padding: 10px 20px; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">
+            Cancel Analysis
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    
+    // Handle button clicks
+    document.getElementById('abort-keep-waiting').onclick = () => {
+      modal.remove();
+      // Extend timeout by resetting progress time
+      this.lastProgressTime = Date.now();
+      this.warningShown = false;
+      showToast('Continuing to wait for analysis...', 'info');
+    };
+    
+    document.getElementById('abort-cancel-analysis').onclick = () => {
+      modal.remove();
+      this.forceAbort();
+    };
+  },
+  
+  // Force abort the analysis
+  forceAbort() {
+    console.warn('[TimeoutManager] User aborted analysis');
+    
+    // Clear polling interval
+    if (window.aiAnalysisInterval) {
+      clearInterval(window.aiAnalysisInterval);
+      window.aiAnalysisInterval = null;
+    }
+    
+    // Hide progress UI
+    if (typeof hideAIProgressBar === 'function') {
+      hideAIProgressBar();
+    }
+    
+    // Re-enable analyze button
+    const btnAnalyze = document.querySelector('#btnAnalyze');
+    if (btnAnalyze) {
+      btnAnalyze.disabled = false;
+      btnAnalyze.textContent = 'Analyze with AI';
+    }
+    
+    this.reset();
+    showToast('Analysis cancelled. You can try again.', 'info');
+  },
+  
+  // Complete the analysis (cleanup on success/failure)
+  complete() {
+    console.log('[TimeoutManager] Analysis completed, cleaning up');
+    this.hideWarningBanner();
+    this.reset();
+  },
+  
+  // Reset all state
+  reset() {
+    if (this.timeoutId) {
+      clearInterval(this.timeoutId);
+      this.timeoutId = null;
+    }
+    this.startTime = null;
+    this.lastProgressTime = null;
+    this.lastProgressValue = 0;
+    this.warningShown = false;
+    this.hideWarningBanner();
+  }
+};
+
+// Make aiAnalysisInterval accessible to timeout manager
+window.aiAnalysisInterval = null;
+
+// ================================================================================
 // Theme Management - Dark/Light Mode Toggle
 // ================================================================================
 function toggleTheme() {
@@ -6627,24 +6836,16 @@ async function onRunReconcile() {
       showAIProgressBar();
       updateAIProgress({ progress: 0, current_stage: 'Starting AI analysis...', elapsed_seconds: 0, eta_seconds: null });
       
+      // Start the mode-aware timeout manager BEFORE first poll
+      // This prevents premature reset during Deep Mode which takes 3-6+ minutes
+      AnalysisTimeoutManager.start(selectedMode);
+      
       // Start polling for job status (SSE not implemented for AI jobs yet)
       // Poll the correct endpoint for job status
-      aiAnalysisInterval = setInterval(() => pollAIAnalysis(jobInfo.job_id), 2000);
+      // Use window.aiAnalysisInterval so TimeoutManager can access it
+      window.aiAnalysisInterval = setInterval(() => pollAIAnalysis(jobInfo.job_id), 2000);
+      aiAnalysisInterval = window.aiAnalysisInterval;
       pollAIAnalysis(jobInfo.job_id);
-      
-      // Safety timeout: if analysis takes too long, re-enable button after 5 minutes
-      setTimeout(() => {
-        if (aiAnalysisInterval) {
-          console.warn('[AI Analysis] Analysis timeout reached (5 min), cleaning up...');
-          clearInterval(aiAnalysisInterval);
-          aiAnalysisInterval = null;
-          hideAIProgressBar();
-          if (btnAnalyze) {
-            btnAnalyze.disabled = false;
-            btnAnalyze.textContent = 'Analyze with AI';
-          }
-        }
-      }, 5 * 60 * 1000);
       
       // Old SSE code commented out for now
       // const eventSource = new EventSource(`/api/stream/${jobInfo.job_id}`);
@@ -6759,6 +6960,9 @@ async function onRunReconcile() {
     console.error('Error analyzing RFP:', error);
     hideAIProgressBar();
     
+    // Clean up timeout manager on error
+    AnalysisTimeoutManager.complete();
+    
     // Provide more user-friendly error messages
     let errorMessage = 'Error getting AI analysis: ';
     if (error.message.includes('502') || error.message.includes('Gateway timeout')) {
@@ -6816,6 +7020,9 @@ async function pollAIAnalysis(jobId) {
       }
       
       updateAIProgress(progressUpdate);
+      
+      // Record progress with timeout manager to prevent premature timeout
+      AnalysisTimeoutManager.recordProgress(data.progress, data.current_stage);
     }
     
     // Handle completion
@@ -6826,8 +7033,12 @@ async function pollAIAnalysis(jobId) {
       if (aiAnalysisInterval) {
         clearInterval(aiAnalysisInterval);
         aiAnalysisInterval = null;
+        window.aiAnalysisInterval = null;
         console.log('[AI Analysis] Stopped polling interval');
       }
+      
+      // Stop timeout manager
+      AnalysisTimeoutManager.complete();
       
       hideAIProgressBar();
       
@@ -6887,7 +7098,11 @@ async function pollAIAnalysis(jobId) {
       if (aiAnalysisInterval) {
         clearInterval(aiAnalysisInterval);
         aiAnalysisInterval = null;
+        window.aiAnalysisInterval = null;
       }
+      
+      // Stop timeout manager
+      AnalysisTimeoutManager.complete();
       
       hideAIProgressBar();
       

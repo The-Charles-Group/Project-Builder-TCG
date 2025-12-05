@@ -167,7 +167,9 @@ class AIAnalysisJob:
 
 # Global job store
 AI_JOB_STORE: Dict[str, AIAnalysisJob] = {}
-AI_JOB_TTL_SECONDS = 300  # Clean up jobs after 5 minutes
+# Increased from 300 to 900 to support Deep Mode which takes 3-6+ minutes
+# This ensures job results are available when frontend finishes polling
+AI_JOB_TTL_SECONDS = int(os.environ.get('AI_JOB_TTL_SECONDS', 900))  # 15 minutes default
 
 def cleanup_ai_jobs():
     """Remove expired completed/failed jobs to prevent memory leaks"""
