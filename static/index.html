@@ -2232,25 +2232,46 @@
       if (step3) {
         step3.style.display = 'block';
         
-        // Show empty state for pricing table (before Build is clicked)
+        // Show loading state while Build runs
         const pricingEmptyState = document.getElementById('pricing-empty-state');
         const pricingTableWrapper = document.getElementById('pricing-table-wrapper');
-        const pricingTbody = document.getElementById('pricing-tbody');
         
-        // Check if we have pricing data already
-        const hasPricingData = pricingTbody && pricingTbody.children.length > 0;
-        
-        if (!hasPricingData) {
-          // Show empty state, hide table wrapper
-          if (pricingEmptyState) pricingEmptyState.style.display = 'block';
-          if (pricingTableWrapper) pricingTableWrapper.style.display = 'none';
-        } else {
-          // Data exists - show table, hide empty state
-          if (pricingEmptyState) pricingEmptyState.style.display = 'none';
-          if (pricingTableWrapper) pricingTableWrapper.style.display = 'block';
+        // Initially show empty state with loading message
+        if (pricingEmptyState) {
+          pricingEmptyState.style.display = 'block';
+          pricingEmptyState.innerHTML = `
+            <div style="text-align: center; padding: 40px 20px; color: var(--muted);">
+              <div style="font-size: 2em; margin-bottom: 10px;">⏳</div>
+              <p style="font-size: 1.1em;">Building scenario and calculating pricing...</p>
+            </div>
+          `;
         }
+        if (pricingTableWrapper) pricingTableWrapper.style.display = 'none';
         
         step3.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        
+        // AUTO-TRIGGER BUILD: Automatically build scenario when proceeding to pricing
+        // This populates BOTH Project Scenario and Pricing Details tables immediately
+        console.log('[PROCEED] Auto-triggering Build Scenario...');
+        setTimeout(() => {
+          window._scrollToPricingDetailsAfterBuild = false; // Don't double-scroll
+          if (typeof buildScenariosAB === 'function') {
+            buildScenariosAB();
+          } else if (typeof window.buildScenariosAB === 'function') {
+            window.buildScenariosAB();
+          } else {
+            console.error('[PROCEED] buildScenariosAB function not found!');
+            // Restore empty state with error message
+            if (pricingEmptyState) {
+              pricingEmptyState.innerHTML = `
+                <div style="text-align: center; padding: 40px 20px; color: var(--muted);">
+                  <div style="font-size: 2em; margin-bottom: 10px;">⚠️</div>
+                  <p style="font-size: 1.1em;">Could not auto-build scenario. Click "Build Scenario" below.</p>
+                </div>
+              `;
+            }
+          }
+        }, 100); // Small delay to let UI render first
       } else {
         console.error('[PROCEED] Step 3 element not found!');
       }
