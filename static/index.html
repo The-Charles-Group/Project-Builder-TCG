@@ -2652,120 +2652,25 @@
     
     // Save pricing and show totals - called by Save button
     // Recalculates totals from current DOM values (no API call, no rebuild)
-    // Includes both deliverable-level and component-level costs
+    // Delegate to the centralized updatePricingSummary in app.js to avoid double-counting
     function savePricingAndShowTotals() {
-      console.log('[SAVE] Recalculating totals from current values...');
+      console.log('[SAVE] Delegating to updatePricingSummary for consistent totals...');
       
-      // Initialize counters
-      let oneTimeCount = 0, oneTimeHours = 0, oneTimeCost = 0;
-      let retainerCount = 0, retainerMonthlyHours = 0, retainerMonthlyCost = 0;
-      
-      // Get all rows from the pricing table
-      const tbody = document.getElementById('pricing-tbody');
-      if (!tbody) {
-        console.warn('[SAVE] Pricing table not found');
+      // Use the centralized calculation from app.js which has the correct logic
+      if (typeof window.updatePricingSummary === 'function') {
+        window.updatePricingSummary();
+      } else if (typeof updatePricingSummary === 'function') {
+        updatePricingSummary();
+      } else {
+        console.warn('[SAVE] updatePricingSummary not found, cannot update totals');
         return;
       }
       
-      // Process each deliverable row (rows with data-deliverable attribute)
-      const delivRows = tbody.querySelectorAll('tr[data-deliverable]');
-      delivRows.forEach(row => {
-        const delivCode = row.getAttribute('data-deliverable');
-        if (!delivCode) return;
-        
-        // Get type (One-time or Retainer)
-        const cadenceSelect = document.getElementById(`cadence-${delivCode}`);
-        const isRetainer = cadenceSelect?.value === 'RETAINER';
-        
-        // Check if this deliverable has component rows
-        const componentRows = tbody.querySelectorAll(`tr[data-parent="${delivCode}"]`);
-        
-        let delivHours = 0;
-        let delivCost = 0;
-        
-        if (componentRows.length > 0) {
-          // Sum up component costs
-          componentRows.forEach(compRow => {
-            const compKey = compRow.getAttribute('data-component');
-            if (!compKey) return;
-            
-            // Use sanitized key for DOM lookup
-            const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
-            const compHoursInput = document.getElementById(`hours-${safeCompKey}`);
-            const compRateInput = document.getElementById(`rate-${safeCompKey}`);
-            const compHours = parseFloat(compHoursInput?.value) || 0;
-            const compRate = parseFloat(compRateInput?.value) || 0;
-            const compCost = compHours * compRate;
-            
-            // Update component cost cell
-            const compCostCell = document.getElementById(`price-period-${safeCompKey}`);
-            if (compCostCell) {
-              compCostCell.textContent = `$${compCost.toLocaleString()}`;
-            }
-            
-            delivHours += compHours;
-            delivCost += compCost;
-          });
-          
-          // Update the deliverable row's hours and cost to reflect component totals
-          const delivHoursInput = document.getElementById(`hours-${delivCode}`);
-          if (delivHoursInput) {
-            delivHoursInput.value = Math.round(delivHours);
-          }
-        } else {
-          // No components - use deliverable-level values
-          const hoursInput = document.getElementById(`hours-${delivCode}`);
-          const rateInput = document.getElementById(`rate-${delivCode}`);
-          delivHours = parseFloat(hoursInput?.value) || 0;
-          const rate = parseFloat(rateInput?.value) || 0;
-          delivCost = delivHours * rate;
-        }
-        
-        // Update the deliverable cost cell
-        const costCell = document.getElementById(`price-period-${delivCode}`);
-        if (costCell) {
-          costCell.textContent = `$${delivCost.toLocaleString()}`;
-        }
-        
-        // Add to appropriate totals
-        if (isRetainer) {
-          retainerCount++;
-          retainerMonthlyHours += delivHours;
-          retainerMonthlyCost += delivCost;
-        } else {
-          oneTimeCount++;
-          oneTimeHours += delivHours;
-          oneTimeCost += delivCost;
-        }
-      });
-      
-      // Update One-Time summary panel
-      const oneTimeCountEl = document.getElementById('one-time-count');
-      const oneTimeHoursEl = document.getElementById('one-time-hours');
-      const oneTimeCostEl = document.getElementById('one-time-cost');
-      if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
-      if (oneTimeHoursEl) oneTimeHoursEl.textContent = Math.round(oneTimeHours);
-      if (oneTimeCostEl) oneTimeCostEl.textContent = `$${oneTimeCost.toLocaleString()}`;
-      
-      // Update Retainer summary panel
-      const retainerCountEl = document.getElementById('retainer-count');
-      const retainerMonthlyHoursEl = document.getElementById('retainer-monthly-hours');
-      const retainerMonthlyCostEl = document.getElementById('retainer-monthly-cost');
-      const retainerAnnualCostEl = document.getElementById('retainer-annual-cost');
-      const annualRetainerCost = retainerMonthlyCost * 12;
-      if (retainerCountEl) retainerCountEl.textContent = retainerCount;
-      if (retainerMonthlyHoursEl) retainerMonthlyHoursEl.textContent = Math.round(retainerMonthlyHours);
-      if (retainerMonthlyCostEl) retainerMonthlyCostEl.textContent = `$${retainerMonthlyCost.toLocaleString()}`;
-      if (retainerAnnualCostEl) retainerAnnualCostEl.textContent = `$${annualRetainerCost.toLocaleString()}`;
-      
-      // Update Grand Total
-      const grandTotal = oneTimeCost + annualRetainerCost;
-      const grandTotalEl = document.getElementById('grand-total-cost');
-      if (grandTotalEl) {
-        grandTotalEl.textContent = `$${grandTotal.toLocaleString()}`;
-      }
-      
-      console.log('[SAVE] Totals updated - One-time:', oneTimeCost, 'Retainer (annual):', annualRetainerCost, 'Grand:', grandTotal);
+      // Log the updated values from the DOM
+      const oneTimeCost = document.getElementById('one-time-cost')?.textContent || '$0';
+      const retainerAnnual = document.getElementById('retainer-annual-cost')?.textContent || '$0';
+      const grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
+      console.log('[SAVE] Totals updated - One-time:', oneTimeCost, 'Retainer (annual):', retainerAnnual, 'Grand:', grandTotal);
       
       // Scroll to the summary section
       setTimeout(() => {
