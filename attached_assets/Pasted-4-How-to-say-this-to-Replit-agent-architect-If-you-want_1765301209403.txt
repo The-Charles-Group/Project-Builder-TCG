@@ -1,0 +1,49 @@
+4. How to say this to Replit agent + architect
+
+If you want to hand them concrete instructions, you can phrase it like this:
+
+Goal: In Workfront, L2 deliverables should form a clean end‑to‑start waterfall (no “work‑wait‑work‑wait”), while child tasks stay within their parent deliverable. We don’t care if Workfront slightly adjusts exact dates; we do care that dependencies and constraints describe a tight chain.
+
+Implementation checklist (high level, not code):
+
+In convert_excel_to_mspdi (XML export):
+
+For deliverable tasks (OutlineLevel = 2, non‑milestone):
+
+Set ManuallyScheduled = 0 (or drop it).
+
+Don’t write ManualStart, ManualFinish, ManualDuration, ManualWork.
+
+Set ConstraintType = 0 (“As Soon As Possible”).
+
+Exception: the very first deliverable can retain a fixed start if desired (project start gate).
+
+Build an L2‑only FS chain in <PredecessorLink>:
+
+Sort L2 deliverables in the same order as Step‑4 scenario / PDF.
+
+For each deliverable after the first:
+
+Add a single FS predecessor to the previous deliverable (Type=1, LinkLag=0).
+
+Skip top‑level milestones (Strategy Approval, Creative Approval, Launch Complete); keep their current constraints and predecessors.
+
+For child tasks (OutlineLevel ≥ 3):
+
+Keep dependencies internal to their deliverable where possible.
+
+Avoid cross‑deliverable predecessors unless they align with the L2 chain (e.g., last task of B → first task of C, which is effectively the same as Dᴮ → Dᶜ).
+
+Step‑4 Gantt & PDFs:
+
+Either:
+
+Continue to use your compress_deliverable_timeline() as the source of truth for deliverable dates and make sure those dates are consistent with the L2 chain you’re exporting, or
+
+Derive the Step‑4 view directly from the same deliverable chain you write into XML.
+
+If they implement that, you should see:
+
+In Workfront: deliverable rows form a clean staircase, each bar starting right after the previous one ends (minus weekends), with arrows simply going from one bar to the next.
+
+Inside each deliverable: nicely flowing child tasks, but the top‑level view no longer looks “all over the place.”
