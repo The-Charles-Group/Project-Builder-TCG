@@ -3210,6 +3210,120 @@ async function analyzeProjectRetainer() {
   }
 }
 
+// Sync scenario to backend before rebuilding pricing
+async function syncScenarioToBackend(scenario) {
+  const sessionId = window.APB?.sessionId || 
+                   sessionStorage.getItem('apb.session_id') || 
+                   'default';
+  
+  try {
+    const response = await fetch('/api/scenario/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId,
+        scenario: scenario,
+        selections: {},
+        client_version: Date.now(),
+        last_server_version: 0,
+        timestamp: Date.now()
+      })
+    });
+    
+    if (!response.ok) {
+      console.error('[PRICING] scenario sync failed:', response.status);
+      return false;
+    }
+    
+    const data = await response.json();
+    console.log('[PRICING] Scenario synced to backend, version:', data.serverVersion);
+    return true;
+  } catch (error) {
+    console.error('[PRICING] Error syncing scenario:', error);
+    return false;
+  }
+}
+
+// Rebuild pricing from backend - single source of truth for totals
+async function rebuildPricingFromBackend(scenarioToSync = null) {
+  const sessionId = window.APB?.sessionId || 
+                   sessionStorage.getItem('apb.session_id') || 
+                   'default';
+  
+  try {
+    // Sync scenario to backend first if provided
+    if (scenarioToSync) {
+      const synced = await syncScenarioToBackend(scenarioToSync);
+      if (!synced) {
+        console.warn('[PRICING] Scenario sync failed, proceeding with rebuild anyway');
+      }
+    }
+    
+    const response = await fetch('/api/pricing/rebuild_breakdown', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId })
+    });
+    
+    if (!response.ok) {
+      console.error('[PRICING] rebuild_breakdown failed:', response.status);
+      return null;
+    }
+    
+    const data = await response.json();
+    if (!data.success) {
+      console.error('[PRICING] rebuild_breakdown error:', data.error);
+      return null;
+    }
+    
+    console.log('[PRICING] Backend rebuild complete:', data.summary);
+    
+    // Update Grand Total from backend summary (single source of truth)
+    const grandTotalEl = document.getElementById('grand-total-cost');
+    if (grandTotalEl && data.summary?.grand_total) {
+      grandTotalEl.textContent = `$${Math.round(data.summary.grand_total.price).toLocaleString()}`;
+      console.log('[PRICING] Grand Total updated from backend:', data.summary.grand_total.price);
+    }
+    
+    // Update One-Time summary card
+    const oneTimeCostEl = document.getElementById('one-time-cost');
+    const oneTimeHoursEl = document.getElementById('one-time-hours');
+    if (oneTimeCostEl && data.summary?.one_time) {
+      oneTimeCostEl.textContent = `$${Math.round(data.summary.one_time.price).toLocaleString()}`;
+    }
+    if (oneTimeHoursEl && data.summary?.one_time) {
+      oneTimeHoursEl.textContent = `${Math.round(data.summary.one_time.hours).toLocaleString()} hrs`;
+    }
+    
+    // Update Retainer summary card
+    const retainerCostEl = document.getElementById('retainer-cost');
+    const retainerHoursEl = document.getElementById('retainer-hours');
+    if (retainerCostEl && data.summary?.retainer) {
+      retainerCostEl.textContent = `$${Math.round(data.summary.retainer.price).toLocaleString()}`;
+    }
+    if (retainerHoursEl && data.summary?.retainer) {
+      retainerHoursEl.textContent = `${Math.round(data.summary.retainer.hours).toLocaleString()} hrs`;
+    }
+    
+    // Update breakdown description
+    const grandBreakdownEl = document.getElementById('grand-total-breakdown');
+    if (grandBreakdownEl && data.summary) {
+      const oneTime = data.summary.one_time?.price || 0;
+      const retainer = data.summary.retainer?.price || 0;
+      if (retainer > 0) {
+        grandBreakdownEl.textContent = `One-time ($${Math.round(oneTime).toLocaleString()}) + Retainer ($${Math.round(retainer).toLocaleString()})`;
+      } else {
+        grandBreakdownEl.textContent = `One-time total: $${Math.round(oneTime).toLocaleString()}`;
+      }
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('[PRICING] Error calling rebuild_breakdown:', error);
+    return null;
+  }
+}
+
 // Update Pricing Function - saves all changes and recalculates
 async function updatePricing() {
   const scenarios = getScenarioState();
@@ -3225,10 +3339,7 @@ async function updatePricing() {
   }
   
   try {
-    // Recalculate all totals
-    updatePricingCalculations();
-    
-    // Save to scenario
+    // Save edits to local scenario first
     const scenario = scenarios.A;
     scenario.items.forEach(item => {
       const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
@@ -3254,14 +3365,24 @@ async function updatePricing() {
       }
     });
     
-    // Update displays
-    updatePricingTable();
-    updatePricingSummary();
+    // Sync scenario to backend FIRST, get authoritative totals
+    const backendData = await rebuildPricingFromBackend(scenario);
     
-    // Show success message
+    // Update displays AFTER backend sync (backend is single source of truth)
+    updatePricingCalculations();
+    updatePricingTable();
+    // Skip updatePricingSummary() - rebuildPricingFromBackend already updated DOM from backend
+    
+    // Show success message with backend-verified totals
+    let grandTotal = '$0';
+    if (backendData?.summary?.grand_total) {
+      grandTotal = `$${Math.round(backendData.summary.grand_total.price).toLocaleString()}`;
+    } else {
+      grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
+    }
+    
     const oneTimeCount = document.getElementById('one-time-count')?.textContent || '0';
     const retainerCount = document.getElementById('retainer-count')?.textContent || '0';
-    const grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
     
     alert(`✅ Pricing Updated Successfully!\n\n` +
           `📦 One-Time Items: ${oneTimeCount}\n` +
@@ -3385,6 +3506,9 @@ async function rebuildScenario() {
     scenariosToUse.A = rebuiltScenario;
     setScenarioState(scenariosToUse);
     updatePricingCalculations();
+    
+    // Sync rebuilt scenario to backend and refresh totals from single source of truth
+    await rebuildPricingFromBackend(rebuiltScenario);
     
     console.log('Scenario rebuilt successfully', rebuiltScenario);
     
