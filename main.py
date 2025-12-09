@@ -13396,12 +13396,12 @@ def convert_excel_to_mspdi(
                     print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
                 
                 if TIGHT_WATERFALL_ENABLED:
-                    # TIGHT WATERFALL MODE: ASAP constraint, no Manual* tags
+                    # TIGHT WATERFALL MODE: ASAP constraint, ManuallyScheduled=0
                     # FS chain between deliverables is built after all tasks are created
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
-                    # NO ManuallyScheduled, ManualStart, ManualFinish, ManualDuration, ManualWork
-                    # ConstraintType=0 (As Soon As Possible) - no ConstraintDate
+                    SubElement(task, "ManuallyScheduled").text = "0"  # Explicit auto-scheduling
+                    # ConstraintType=0 (As Soon As Possible) - no ConstraintDate needed
                     SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
                     print(f"[XML EXPORT] ⛓️ TIGHT WATERFALL: Deliverable with ASAP constraint: {name_txt} (WBS {r['WBS']})")
                 else:
@@ -13881,6 +13881,57 @@ def convert_excel_to_mspdi(
         if TIGHT_WATERFALL_ENABLED:
             print(f"\n[TIGHT WATERFALL] Building L2 deliverable FS chain...")
             
+            # ──────────────────────────────────────────────────────────────────────
+            # STEP A: Collect all L2 deliverable UIDs for cleanup
+            # ──────────────────────────────────────────────────────────────────────
+            l2_deliverable_uids = set()
+            for task_elem in tasks_elem.findall("Task"):
+                outline_elem = task_elem.find("OutlineLevel")
+                uid_elem = task_elem.find("UID")
+                wbs_elem = task_elem.find("WBS")
+                
+                if outline_elem is not None and uid_elem is not None and wbs_elem is not None:
+                    outline_level = int(outline_elem.text)
+                    uid = int(uid_elem.text)
+                    wbs = wbs_elem.text
+                    
+                    # L2 = OutlineLevel 2, not root
+                    if outline_level == 2 and uid != 1 and wbs != "1":
+                        l2_deliverable_uids.add(uid)
+            
+            print(f"[TIGHT WATERFALL] Identified {len(l2_deliverable_uids)} L2 deliverable UIDs")
+            
+            # ──────────────────────────────────────────────────────────────────────
+            # STEP B: Remove any existing L2→L2 PredecessorLinks (pre-chain cleanup)
+            # ──────────────────────────────────────────────────────────────────────
+            l2_links_removed = 0
+            for task_elem in tasks_elem.findall("Task"):
+                outline_elem = task_elem.find("OutlineLevel")
+                uid_elem = task_elem.find("UID")
+                
+                if outline_elem is not None and uid_elem is not None:
+                    outline_level = int(outline_elem.text)
+                    uid = int(uid_elem.text)
+                    
+                    # Only clean L2 deliverables
+                    if outline_level == 2 and uid in l2_deliverable_uids:
+                        # Remove any PredecessorLink pointing to another L2 deliverable
+                        for pred_link in list(task_elem.findall("PredecessorLink")):
+                            pred_uid_elem = pred_link.find("PredecessorUID")
+                            if pred_uid_elem is not None:
+                                pred_uid = int(pred_uid_elem.text or "0")
+                                if pred_uid in l2_deliverable_uids:
+                                    task_elem.remove(pred_link)
+                                    l2_links_removed += 1
+                                    name_elem = task_elem.find("Name")
+                                    task_name = name_elem.text if name_elem is not None else "Unknown"
+                                    print(f"[TIGHT WATERFALL] 🗑️ Removed existing L2→L2 link: UID {pred_uid} → UID {uid} ({task_name[:30]})")
+            
+            if l2_links_removed > 0:
+                print(f"[TIGHT WATERFALL] Cleaned {l2_links_removed} existing L2→L2 PredecessorLink(s)")
+            else:
+                print(f"[TIGHT WATERFALL] No existing L2→L2 links to clean")
+            
             # Helper function to detect milestones (excluded from chain)
             def is_milestone_task(task_elem):
                 """Check if a task is a milestone (zero duration, milestone flag, or specific names)"""
@@ -13958,6 +14009,42 @@ def convert_excel_to_mspdi(
             if l2_deliverables:
                 first = l2_deliverables[0]
                 print(f"[TIGHT WATERFALL] 🚀 First deliverable (no predecessor): {first['name'][:40]} (WBS {first['wbs']})")
+            
+            # ──────────────────────────────────────────────────────────────────────
+            # STEP D: Sanity check - no deliverable should have >1 deliverable predecessor
+            # ──────────────────────────────────────────────────────────────────────
+            deliverable_graph = {uid: [] for uid in l2_deliverable_uids}
+            
+            for task_elem in tasks_elem.findall("Task"):
+                uid_elem = task_elem.find("UID")
+                outline_elem = task_elem.find("OutlineLevel")
+                
+                if uid_elem is not None and outline_elem is not None:
+                    uid = int(uid_elem.text or "0")
+                    outline_level = int(outline_elem.text or "0")
+                    
+                    if outline_level == 2 and uid in l2_deliverable_uids:
+                        for pred_link in task_elem.findall("PredecessorLink"):
+                            pred_uid_elem = pred_link.find("PredecessorUID")
+                            if pred_uid_elem is not None:
+                                pred_uid = int(pred_uid_elem.text or "0")
+                                if pred_uid in l2_deliverable_uids:
+                                    deliverable_graph[uid].append(pred_uid)
+            
+            # Validate: each deliverable should have at most 1 deliverable predecessor
+            sanity_check_errors = []
+            for uid, preds in deliverable_graph.items():
+                if len(preds) > 1:
+                    sanity_check_errors.append(f"Deliverable UID {uid} has {len(preds)} deliverable predecessors: {preds}")
+                    print(f"[TIGHT WATERFALL] ❌ SANITY CHECK FAILED: Deliverable UID {uid} has {len(preds)} deliverable predecessors: {preds}")
+            
+            if not sanity_check_errors:
+                print(f"[TIGHT WATERFALL] ✅ Sanity check passed: All deliverables have ≤1 deliverable predecessor")
+            else:
+                # HARD FAILURE: Abort export if sanity check fails
+                error_msg = f"TIGHT WATERFALL sanity check failed: {len(sanity_check_errors)} deliverable(s) with multiple predecessors. " + "; ".join(sanity_check_errors[:3])
+                print(f"[TIGHT WATERFALL] ❌ ABORTING EXPORT: {error_msg}")
+                raise ValueError(error_msg)
 
         # Compute project summary start/finish from children (no more hardcoded dates)
         if tasks_elem is not None:
