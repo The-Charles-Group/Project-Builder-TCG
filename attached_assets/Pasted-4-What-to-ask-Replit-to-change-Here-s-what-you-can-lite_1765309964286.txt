@@ -1,0 +1,100 @@
+4. What to ask Replit to change
+
+Here’s what you can literally paste to them as implementation instructions.
+
+A. On Step 3 initial load
+
+Goal: When Step 3 opens (after “Proceed to Pricing”), it should already be in the “authoritative” state — as if you had clicked Save & View Totals once.
+
+Ask them to:
+
+After Step 2 calls /api/pricing/build_scenario and gets a session_id + scenario:
+
+Store session_id in the Step 3 state.
+
+Store the initial scenario in the local Step 3 model.
+
+As soon as Step 3 mounts:
+
+Call /api/pricing/rebuild_breakdown with { session_id } to get:
+
+Updated scenario totals (if any)
+
+Deliverable breakdown
+
+Summary cards (one‑time, retainer, grand total)
+
+Use that response to:
+
+Populate the Pricing Details table rows.
+
+Populate the One‑Time / Retainer / Grand Total cards.
+
+UI layout:
+
+Render Pricing Details and Project Scenario side‑by‑side or stacked so both are visible by default (no tabs/hidden panel by default).
+
+This ensures the first thing you see in Step 3 is already aligned with the backend breakdown.
+
+B. Replace Save & View Totals with Build Scenario
+
+Right now there is:
+
+A “Save & View Totals” button that calls the old calc path.
+
+An “Update Pricing” flow that Replit wired to:
+
+syncScenarioToBackend() → /api/scenario/sync
+
+rebuildPricingFromBackend() → /api/pricing/rebuild_breakdown
+
+Ask them to:
+
+Delete the Save & View Totals button from the UI.
+
+No click handler, no call to /api/pricing/rebuild_breakdown from there.
+
+Move the canonical pricing flow onto the “Build Scenario” button.
+
+In pseudo-code:
+
+async function handleBuildScenarioClick() {
+  const scenario = getLocalScenario();        // whatever the UI is editing
+
+  // 1) Sync to backend (SCENARIO_STORE)
+  await syncScenarioToBackend(scenario);      // POST /api/scenario/sync
+
+  // 2) Get authoritative breakdown + totals from backend
+  const { breakdown, summary } =
+    await rebuildPricingFromBackend(scenario); // POST /api/pricing/rebuild_breakdown
+
+  // 3) Update UI from backend response
+  applyBreakdownToUI(breakdown, summary);     // cards + table
+}
+
+
+syncScenarioToBackend should send { session_id, scenario, client_version, ... } to /api/scenario/sync, as they’re already doing.
+
+rebuildPricingFromBackend should call /api/pricing/rebuild_breakdown with { session_id }, not recompute totals only on the client.
+
+Make this same function the only way to refresh totals.
+
+If there is still an “Update Pricing” button in the Pricing Details tab, have it call the same handler as the new “Build Scenario” button, or simply remove “Update Pricing” and keep only “Build Scenario”.
+
+Result:
+
+Any change in the Pricing Details grid → click Build Scenario → backend synced → cards and grand total updated from backend, exactly once, through one codepath.
+
+C. Confirm exports still use the same scenario
+
+Exports (Excel / XML / Final Ship) already read from the scenario built/synced in SCENARIO_STORE / _CURRENT_SCENARIOS. For example:
+
+XML export builds WBS from scenario_a passed in, and _inflate_components_if_missing is used for safety. 
+
+12:09:25 - step 3 component box
+
+final_ship stores the provided scenarios and generates exports from them. 
+
+12:09:25 - step 3 component box
+
+As long as Step 3 always syncs the scenario via /api/scenario/sync before you export or final‑ship, all of your Pricing Details tweaks will be reflected in the XML and Excel, not just the UI.
