@@ -10216,7 +10216,8 @@ def api_export_xml(payload: Union[ExportXMLPayload, dict]):
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=False  # Workfront compatibility: no alphanumeric WBS
+            add_deliverable_milestones=False,  # Workfront compatibility: no alphanumeric WBS
+            compressed_timeline=scenario.get("timeline")  # TASK 1: Use compressed timeline as source of truth
         )
         
         # Post-process XML to parallelize identical task names (optional)
@@ -10290,7 +10291,8 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project,
             pricing_mode=scenario_a.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_a.get("rate_band", "Standard_US"),
-            blended_rate=scenario_a.get("blended_rate")
+            blended_rate=scenario_a.get("blended_rate"),
+            compressed_timeline=scenario_a.get("timeline")
         )
         
         # Post-process Scenario A XML
@@ -10320,7 +10322,8 @@ def api_export_workbook_xml(payload: ExportWorkbookXMLPayload):
             project_name=project,
             pricing_mode=scenario_b.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario_b.get("rate_band", "Standard_US"),
-            blended_rate=scenario_b.get("blended_rate")
+            blended_rate=scenario_b.get("blended_rate"),
+            compressed_timeline=scenario_b.get("timeline")
         )
         
         # Post-process Scenario B XML
@@ -10403,7 +10406,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenA.get("pricing_mode", "Flat_Blended"),
             rate_band=scenA.get("rate_band", "Standard_US"),
-            blended_rate=scenA.get("blended_rate")
+            blended_rate=scenA.get("blended_rate"),
+            compressed_timeline=scenA.get("timeline")
         )
         # Post-process Scenario A XML
         final_xml_a = out_xml_a
@@ -10426,7 +10430,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenB.get("pricing_mode", "Flat_Blended"),
             rate_band=scenB.get("rate_band", "Standard_US"),
-            blended_rate=scenB.get("blended_rate")
+            blended_rate=scenB.get("blended_rate"),
+            compressed_timeline=scenB.get("timeline")
         )
         # Post-process Scenario B XML
         final_xml_b = out_xml_b
@@ -10449,7 +10454,8 @@ def api_export_workbook_xml_abc(p: ExportWorkbookXMLABCPayload):
             project_name=project,
             pricing_mode=scenC.get("pricing_mode", "Flat_Blended"),
             rate_band=scenC.get("rate_band", "Standard_US"),
-            blended_rate=scenC.get("blended_rate")
+            blended_rate=scenC.get("blended_rate"),
+            compressed_timeline=scenC.get("timeline")
         )
         # Post-process Scenario C XML
         final_xml_c = out_xml_c
@@ -11762,7 +11768,8 @@ def convert_excel_to_mspdi(
     pricing_mode: str = "Flat_Blended",      # <— NEW: pricing mode
     rate_band: str = "Standard_US",          # <— NEW: rate band
     blended_rate: Optional[float] = None,    # <— NEW: blended rate
-    add_deliverable_milestones: bool = False # <— NEW: toggle for START/END anchors
+    add_deliverable_milestones: bool = False, # <— NEW: toggle for START/END anchors
+    compressed_timeline: Optional[Dict[str, Any]] = None  # <— TASK 1: Compressed timeline for single source of truth
 ) -> Dict[str, int]:
     """
     Convert Excel WBS data to Microsoft Project XML (MSPDI) format with multi-resource merge capability.
@@ -12434,6 +12441,66 @@ def convert_excel_to_mspdi(
                 "PlannedHours": r["PlannedHours"],
                 "DurationHours": duration_hours
             }
+
+        # TASK 1: Apply compressed_timeline as single source of truth for L2 deliverable dates
+        # This ensures Step-4 Gantt and XML export use the same schedule
+        if compressed_timeline:
+            print(f"[XML EXPORT] 🎯 Applying compressed timeline as source of truth for L2 dates")
+            timeline_tasks = compressed_timeline.get("tasks", [])
+            
+            # Build lookup: deliverable_code -> (start_date, end_date)
+            timeline_lookup = {}
+            for task in timeline_tasks:
+                deliv_code = str(task.get("deliverable_code", "") or "").strip()
+                if not deliv_code:
+                    continue
+                
+                start_str = task.get("start") or task.get("Start_Date") or task.get("start_date")
+                end_str = task.get("end") or task.get("End_Date") or task.get("end_date")
+                
+                if start_str and end_str:
+                    try:
+                        start_dt = datetime.datetime.fromisoformat(str(start_str).replace('Z', ''))
+                        end_dt = datetime.datetime.fromisoformat(str(end_str).replace('Z', ''))
+                        timeline_lookup[deliv_code] = (start_dt, end_dt)
+                    except (ValueError, AttributeError):
+                        pass
+            
+            print(f"[XML EXPORT] 📅 Found {len(timeline_lookup)} deliverables in compressed timeline")
+            
+            # Apply timeline dates to L2 deliverables in uid_to_sched
+            applied_count = 0
+            for r in rows:
+                outline_level = r["WBS"].count(".") + 1 if r["WBS"] else 0
+                if outline_level != 2:
+                    continue  # Only L2 deliverables
+                
+                deliv_code = r.get("DeliverableCode", "")
+                if deliv_code in timeline_lookup:
+                    start_dt, end_dt = timeline_lookup[deliv_code]
+                    
+                    # Combine with standard work hours (08:00 start, 17:00 end)
+                    if isinstance(start_dt, datetime.datetime) and start_dt.hour == 0:
+                        start_dt = datetime.datetime.combine(start_dt.date(), datetime.time(8, 0))
+                    if isinstance(end_dt, datetime.datetime) and end_dt.hour == 0:
+                        end_dt = datetime.datetime.combine(end_dt.date(), datetime.time(17, 0))
+                    
+                    # Calculate duration from calendar span
+                    calendar_days = (end_dt.date() - start_dt.date()).days + 1
+                    duration_hours = calendar_days * 8.0
+                    
+                    # Override uid_to_sched with compressed timeline dates
+                    uid = r["UID"]
+                    old_start = uid_to_sched[uid]["Start"]
+                    uid_to_sched[uid]["Start"] = start_dt
+                    uid_to_sched[uid]["Finish"] = end_dt
+                    uid_to_sched[uid]["DurationHours"] = duration_hours
+                    
+                    shift_days = (start_dt.date() - old_start.date()).days if hasattr(old_start, 'date') else 0
+                    print(f"[XML EXPORT] ✅ L2 {deliv_code}: {old_start.date() if hasattr(old_start, 'date') else 'N/A'} → {start_dt.date()} (shift={shift_days}d)")
+                    applied_count += 1
+            
+            print(f"[XML EXPORT] 📊 Applied compressed timeline to {applied_count} L2 deliverables")
 
         # Build UID-based children mapping for rollup (as expected by patch)
         wbs_to_uid = {r["WBS"]: r["UID"] for r in rows}
@@ -13324,6 +13391,26 @@ def convert_excel_to_mspdi(
             else:
                 SubElement(task_elem, "CostType").text = "0"  # Role Hourly (default)
 
+        # TASK 2: Pre-compute first L2 deliverable UID for TIGHT WATERFALL first-deliverable exception
+        # First deliverable gets SNET (ConstraintType=5), subsequent get ASAP (ConstraintType=0)
+        first_l2_deliverable_uid = None
+        if TIGHT_WATERFALL_ENABLED:
+            l2_candidates = []
+            for r in rows:
+                outline_level = r["WBS"].count(".") + 1 if r["WBS"] else 0
+                is_root = r["WBS"] == "1"
+                if outline_level == 2 and not is_root:
+                    l2_candidates.append({"uid": r["UID"], "wbs": r["WBS"]})
+            
+            # Sort by WBS order (natural order: 1.1, 1.2, 1.3, ...)
+            if l2_candidates:
+                def wbs_sort_key(item):
+                    parts = item["wbs"].split(".")
+                    return [int(p) if p.isdigit() else p for p in parts]
+                l2_candidates.sort(key=wbs_sort_key)
+                first_l2_deliverable_uid = l2_candidates[0]["uid"]
+                print(f"[TIGHT WATERFALL] 🎯 First L2 deliverable UID={first_l2_deliverable_uid} (WBS {l2_candidates[0]['wbs']}) will use SNET constraint")
+
         # Tasks
         tasks_elem = SubElement(project, "Tasks")
         for task_id, r in enumerate(rows, 1):
@@ -13396,14 +13483,31 @@ def convert_excel_to_mspdi(
                     print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
                 
                 if TIGHT_WATERFALL_ENABLED:
-                    # TIGHT WATERFALL MODE: ASAP constraint, ManuallyScheduled=0
+                    # TIGHT WATERFALL MODE: ASAP for most, SNET for first (start gate)
                     # FS chain between deliverables is built after all tasks are created
                     SubElement(task, "Type").text = "1"  # Fixed Duration
                     SubElement(task, "IsEffortDriven").text = "0"
                     SubElement(task, "ManuallyScheduled").text = "0"  # Explicit auto-scheduling
-                    # ConstraintType=0 (As Soon As Possible) - no ConstraintDate needed
-                    SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
-                    print(f"[XML EXPORT] ⛓️ TIGHT WATERFALL: Deliverable with ASAP constraint: {name_txt} (WBS {r['WBS']})")
+                    
+                    # TASK 2: First deliverable gets SNET (start gate), others get ASAP
+                    if r["UID"] == first_l2_deliverable_uid:
+                        # First deliverable: SNET constraint with project start date
+                        start_date_str = uid_to_sched[r["UID"]]["Start"]
+                        if isinstance(start_date_str, datetime.datetime):
+                            constraint_date = start_date_str.strftime("%Y-%m-%dT08:00:00")
+                        elif 'T' in str(start_date_str):
+                            date_part = str(start_date_str).split('T')[0]
+                            constraint_date = f"{date_part}T08:00:00"
+                        else:
+                            constraint_date = f"{start_date_str}T08:00:00"
+                        
+                        SubElement(task, "ConstraintType").text = "5"  # Start No Earlier Than
+                        SubElement(task, "ConstraintDate").text = constraint_date
+                        print(f"[TIGHT WATERFALL] 🎯 First deliverable SNET: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+                    else:
+                        # Subsequent deliverables: ASAP (FS chain will constrain them)
+                        SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
+                        print(f"[TIGHT WATERFALL] ⛓️ Deliverable with ASAP constraint: {name_txt} (WBS {r['WBS']})")
                 else:
                     # LEGACY MODE: Manual Scheduling tags to lock parent timelines
                     SubElement(task, "Type").text = "1"  # Fixed Duration
@@ -13829,6 +13933,52 @@ def convert_excel_to_mspdi(
         # 1. WBS remapping (drops stale references)
         # 2. L5+ → L5+ filtering (enables parallel role execution)
         # 3. Sibling auto-chaining (adds waterfall dependencies for L2/L3/L4)
+        
+        # ──────────────────────────────────────────────────────────────────────
+        # TASK 3: Filter cross-deliverable dependencies for L3+ tasks
+        # Keep dependencies internal to their deliverable (as per GPT 5.1 Pro spec)
+        # ──────────────────────────────────────────────────────────────────────
+        def get_root_deliverable_wbs(wbs):
+            """Extract root deliverable WBS (first 2 segments: 1.1, 1.2, etc.)"""
+            if not wbs:
+                return None
+            parts = wbs.split(".")
+            if len(parts) >= 2:
+                return ".".join(parts[:2])  # e.g., "1.2" from "1.2.3.1"
+            return None
+        
+        # Build WBS-to-outline-level mapping
+        wbs_to_outline = {}
+        for r in rows:
+            wbs = r["WBS"]
+            outline_level = wbs.count(".") + 1
+            wbs_to_outline[wbs] = outline_level
+        
+        # Filter edges: keep L3+ edges only if same root deliverable
+        filtered_edges = set()
+        cross_deliv_dropped = 0
+        for pred_wbs, succ_wbs in all_edges:
+            pred_level = wbs_to_outline.get(pred_wbs, 0)
+            succ_level = wbs_to_outline.get(succ_wbs, 0)
+            
+            # Only filter if BOTH tasks are L3+ (OutlineLevel >= 3)
+            if pred_level >= 3 and succ_level >= 3:
+                pred_deliv = get_root_deliverable_wbs(pred_wbs)
+                succ_deliv = get_root_deliverable_wbs(succ_wbs)
+                
+                if pred_deliv != succ_deliv:
+                    # Cross-deliverable edge - DROP IT
+                    cross_deliv_dropped += 1
+                    continue
+            
+            # Keep the edge
+            filtered_edges.add((pred_wbs, succ_wbs))
+        
+        if cross_deliv_dropped > 0:
+            print(f"[TASK 3] 🔒 Filtered {cross_deliv_dropped} cross-deliverable L3+ edges (keeping internal dependencies only)")
+        
+        # Replace all_edges with filtered set
+        all_edges = filtered_edges
         
         # Add PredecessorLink elements for all final edges
         # WATERFALL FIX: Use wbs_to_new_uid which has remapped UIDs after chronological sort
@@ -15260,7 +15410,8 @@ def api_xml_export_flexible(payload: XMLExportPayload):
             pricing_mode=scenario.get("pricing_mode", "Flat_Blended"),
             rate_band=scenario.get("rate_band", "Standard_US"),
             blended_rate=scenario.get("blended_rate"),
-            add_deliverable_milestones=payload.add_milestones
+            add_deliverable_milestones=payload.add_milestones,
+            compressed_timeline=scenario.get("timeline")  # TASK 1: Use compressed timeline as source of truth
         )
         
         # Post-process XML if parallelization is enabled
