@@ -3830,8 +3830,12 @@
               });
               
               // Sync to backend and get authoritative totals
-              await rebuildPricingFromBackend(scenario);
-              console.log('[BUILD] ✅ Pricing synced and totals updated from backend');
+              if (typeof window.rebuildPricingFromBackend === 'function') {
+                await window.rebuildPricingFromBackend(scenario);
+                console.log('[BUILD] ✅ Pricing synced and totals updated from backend');
+              } else {
+                console.warn('[BUILD] rebuildPricingFromBackend not available yet');
+              }
             }
           } else {
             // No scenario yet: create initial scenario from Step 2 selections
@@ -3845,8 +3849,12 @@
               console.log('[BUILD] ✅ Initial scenario created, syncing to backend for authoritative totals');
               
               // Sync the new scenario to backend and get authoritative totals
-              await rebuildPricingFromBackend(scenarios.A);
-              console.log('[BUILD] ✅ Initial scenario synced and totals updated from backend');
+              if (typeof window.rebuildPricingFromBackend === 'function') {
+                await window.rebuildPricingFromBackend(scenarios.A);
+                console.log('[BUILD] ✅ Initial scenario synced and totals updated from backend');
+              } else {
+                console.warn('[BUILD] rebuildPricingFromBackend not available yet');
+              }
             } else {
               console.warn('[BUILD] ⚠️ buildScenariosAB completed but no valid scenario found');
             }

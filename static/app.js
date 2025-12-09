@@ -3296,10 +3296,11 @@ async function rebuildPricingFromBackend(scenarioToSync = null) {
     if (oneTimeCostEl) oneTimeCostEl.textContent = `$${Math.round(oneTimePrice).toLocaleString()}`;
     
     // Monthly Retainer section (correct element IDs from index.html)
+    // Backend now returns monthly price/hours and total_price for grand total
     const retainerCount = data.summary?.retainer?.count || 0;
     const retainerMonthlyHours = data.summary?.retainer?.hours || 0;
     const retainerMonthlyPrice = data.summary?.retainer?.price || 0;
-    const retainerAnnualPrice = retainerMonthlyPrice * 12;
+    const retainerTotalPrice = data.summary?.retainer?.total_price || (retainerMonthlyPrice * 12);
     
     const retainerCountEl = document.getElementById('retainer-count');
     const retainerHoursEl = document.getElementById('retainer-monthly-hours');
@@ -3309,10 +3310,10 @@ async function rebuildPricingFromBackend(scenarioToSync = null) {
     if (retainerCountEl) retainerCountEl.textContent = retainerCount;
     if (retainerHoursEl) retainerHoursEl.textContent = retainerMonthlyHours.toFixed(1);
     if (retainerCostEl) retainerCostEl.textContent = `$${Math.round(retainerMonthlyPrice).toLocaleString()}`;
-    if (retainerAnnualEl) retainerAnnualEl.textContent = `$${Math.round(retainerAnnualPrice).toLocaleString()}`;
+    if (retainerAnnualEl) retainerAnnualEl.textContent = `$${Math.round(retainerTotalPrice).toLocaleString()}`;
     
     // Grand Total section
-    const grandTotalPrice = data.summary?.grand_total?.price || (oneTimePrice + retainerAnnualPrice);
+    const grandTotalPrice = data.summary?.grand_total?.price || (oneTimePrice + retainerTotalPrice);
     const grandTotalEl = document.getElementById('grand-total-cost');
     const grandBreakdownEl = document.getElementById('grand-total-breakdown');
     
@@ -3323,7 +3324,7 @@ async function rebuildPricingFromBackend(scenarioToSync = null) {
     
     if (grandBreakdownEl) {
       if (retainerMonthlyPrice > 0) {
-        grandBreakdownEl.textContent = `One-time ($${Math.round(oneTimePrice).toLocaleString()}) + 12 months retainer ($${Math.round(retainerAnnualPrice).toLocaleString()})`;
+        grandBreakdownEl.textContent = `One-time ($${Math.round(oneTimePrice).toLocaleString()}) + Retainer total ($${Math.round(retainerTotalPrice).toLocaleString()})`;
       } else {
         grandBreakdownEl.textContent = `One-time total: $${Math.round(oneTimePrice).toLocaleString()}`;
       }
