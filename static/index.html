@@ -455,27 +455,9 @@
         </div>
       </div>
 
-      <!-- Pricing Details Table -->
-      <div class="pricing-table-container" id="pricing-details-section" style="margin-bottom: 20px;">
-        <h3 style="font-size: 1.1em; margin-bottom: 12px; color: var(--text);">📊 Deliverable Pricing Details</h3>
-        <div id="pricing-table-wrapper" style="background: #0b0e13; border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto;">
-          <table id="pricing-details-table" style="width: 100%; border-collapse: collapse;">
-            <thead>
-              <tr style="border-bottom: 2px solid var(--border);">
-                <th style="padding: 8px; text-align: left; color: var(--muted);">Deliverable / Component</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Type</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Hours</th>
-                <th style="padding: 8px; text-align: center; color: var(--muted);">Rate</th>
-                <th style="padding: 8px; text-align: right; color: var(--muted);">Cost</th>
-                <th style="padding: 8px; text-align: left; color: var(--muted);">Resources</th>
-              </tr>
-            </thead>
-            <tbody id="pricing-tbody">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-        </div>
-        <!-- Save button removed - Build Scenario now handles sync + totals -->
+      <!-- Pricing Details Container - Dynamically populated by updatePricingTable() -->
+      <div class="pricing-table-container" id="pricing-container" style="margin-bottom: 20px;">
+        <!-- Dynamic pricing grid will be rendered here by updatePricingTable() -->
       </div>
 
       <!-- Enhanced Summary Panel -->
@@ -2105,21 +2087,9 @@
           console.log('[BUILD] Showed Step 4 (no scroll)');
         }
         
-        // CRITICAL: Sync scenario to backend and get authoritative totals
-        // This ensures Step 3 opens with backend-aligned pricing data
-        console.log('[BUILD] Syncing scenario to backend for authoritative totals...');
-        if (typeof window.rebuildPricingFromBackend === 'function') {
-          try {
-            const backendData = await window.rebuildPricingFromBackend(scenarios.A);
-            if (backendData?.summary) {
-              console.log('[BUILD] Backend totals:', backendData.summary);
-            }
-          } catch (syncErr) {
-            console.warn('[BUILD] Backend sync failed, using local totals:', syncErr.message);
-          }
-        } else {
-          console.warn('[BUILD] rebuildPricingFromBackend not available, using local totals');
-        }
+        // NOTE: rebuildPricingFromBackend is called by the Build Scenario button handler
+        // AFTER buildScenariosAB completes. This ensures timing doesn't cause issues.
+        // The authoritative totals sync is handled there, not here.
         
         console.log('[BUILD] Build process completed successfully!');
         
@@ -3820,7 +3790,7 @@
           return;
         }
         
-        window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
+        window._scrollToPricingDetailsAfterBuild = true;
         window._isBuildingSyncing = true;
         
         // Update button to show loading state
@@ -3829,23 +3799,54 @@
         btnBuild.disabled = true;
         
         try {
-          // Check if a scenario has ever been built - use flag instead of async state check
           if (window._scenarioHasBeenBuilt) {
-            // Scenario exists: preserve grid edits via updatePricing (sync + rebuild)
-            // Use silent mode to avoid popup - UI already shows updated totals
-            console.log('[BUILD] Scenario exists - using updatePricing() to preserve grid edits');
-            await updatePricing({ silent: true });
-            console.log('[BUILD] ✅ Pricing updated successfully');
+            // Scenario exists: collect edits, sync to backend, rebuild totals
+            console.log('[BUILD] Scenario exists - syncing edits and rebuilding totals');
+            
+            // Apply pricingData edits to scenario before syncing
+            const scenarios = getScenarioState();
+            if (scenarios && scenarios.A) {
+              const scenario = scenarios.A;
+              scenario.items.forEach(item => {
+                const delivType = pricingData.deliverableTypes.get(item.deliverable_code) || 'PROJECT';
+                const customHours = pricingData.customHours.get(item.deliverable_code);
+                const customRate = pricingData.customRates.get(item.deliverable_code);
+                
+                if (customHours !== undefined) item.hours = customHours;
+                if (customRate !== undefined) item.blended_rate = customRate;
+                item.price = (item.hours || 0) * (item.blended_rate || 210);
+                item.is_retainer = (delivType === 'RETAINER');
+                
+                if (item.components) {
+                  item.components.forEach(comp => {
+                    const compKey = `${item.deliverable_code}::${comp.name}`;
+                    const compHours = pricingData.customHours.get(compKey);
+                    const compRate = pricingData.customRates.get(compKey);
+                    if (compHours !== undefined) comp.hours = compHours;
+                    if (compRate !== undefined) comp.rate = compRate;
+                    comp.price = (comp.hours || 0) * (comp.rate || item.blended_rate || 210);
+                  });
+                }
+              });
+              
+              // Sync to backend and get authoritative totals
+              await rebuildPricingFromBackend(scenario);
+              console.log('[BUILD] ✅ Pricing synced and totals updated from backend');
+            }
           } else {
             // No scenario yet: create initial scenario from Step 2 selections
             console.log('[BUILD] No scenario yet - using buildScenariosAB() for initial creation');
             await buildScenariosAB();
             
-            // Only mark as built if we actually have a valid scenario now
+            // Check if scenario was created successfully
             const scenarios = window.SCENARIOS || (typeof getScenarioState === 'function' ? getScenarioState() : null);
             if (scenarios && scenarios.A && scenarios.A.items && scenarios.A.items.length > 0) {
               window._scenarioHasBeenBuilt = true;
-              console.log('[BUILD] ✅ Initial scenario created successfully');
+              console.log('[BUILD] ✅ Initial scenario created, syncing to backend for authoritative totals');
+              
+              // Sync the new scenario to backend and get authoritative totals
+              await rebuildPricingFromBackend(scenarios.A);
+              console.log('[BUILD] ✅ Initial scenario synced and totals updated from backend');
             } else {
               console.warn('[BUILD] ⚠️ buildScenariosAB completed but no valid scenario found');
             }
@@ -3853,10 +3854,6 @@
         } catch (err) {
           console.error('[BUILD] Build/Update failed:', err);
           alert('Error building scenario: ' + (err.message || 'Unknown error. Please try again.'));
-          // Reset flag if initial build failed
-          if (!window._scenarioHasBeenBuilt) {
-            console.log('[BUILD] Resetting _scenarioHasBeenBuilt flag due to error');
-          }
         } finally {
           window._isBuildingSyncing = false;
           btnBuild.textContent = originalText;

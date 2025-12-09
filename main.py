@@ -8832,31 +8832,39 @@ async def api_rebuild_breakdown(payload: RebuildBreakdownPayload):
         
         breakdown = list(deliverable_summary.values())
         
-        # Compute summary cards
+        # Compute summary cards with counts
         one_time_hours = 0.0
         one_time_price = 0.0
+        one_time_count = 0
         retainer_hours = 0.0
         retainer_price = 0.0
+        retainer_count = 0
         
         for d in breakdown:
             cadence = (d.get("cadence") or "One-Time").lower()
-            if "month" in cadence or "retainer" in cadence:
+            is_retainer = d.get("is_retainer", False) or "month" in cadence or "retainer" in cadence
+            if is_retainer:
                 retainer_hours += d["hours"]
                 retainer_price += d["price"]
+                retainer_count += 1
             else:
                 one_time_hours += d["hours"]
                 one_time_price += d["price"]
+                one_time_count += 1
         
         summary = {
             "one_time": {
+                "count": one_time_count,
                 "hours": round(one_time_hours, 2),
                 "price": round(one_time_price, 2)
             },
             "retainer": {
+                "count": retainer_count,
                 "hours": round(retainer_hours, 2),
                 "price": round(retainer_price, 2)
             },
             "grand_total": {
+                "count": one_time_count + retainer_count,
                 "hours": round(one_time_hours + retainer_hours, 2),
                 "price": round(one_time_price + retainer_price, 2)
             }
