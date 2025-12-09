@@ -3809,9 +3809,26 @@
       if (applyBtn) applyBtn.onclick = applySelection;
       
       const btnBuild = document.getElementById('btnBuild');
-      if (btnBuild) btnBuild.onclick = () => {
+      if (btnBuild) btnBuild.onclick = async () => {
         window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
-        buildScenariosAB();
+        
+        // Check if a scenario already exists - if so, use updatePricing to preserve edits
+        const existingScenarios = window.SCENARIOS || (typeof getScenarioState === 'function' ? getScenarioState() : null);
+        if (existingScenarios && existingScenarios.A && existingScenarios.A.items && existingScenarios.A.items.length > 0) {
+          // Scenario exists: preserve grid edits via updatePricing (sync + rebuild)
+          // Use silent mode to avoid popup - UI already shows updated totals
+          console.log('[BUILD] Scenario exists - using updatePricing() to preserve grid edits');
+          try {
+            await updatePricing({ silent: true });
+          } catch (err) {
+            console.error('[BUILD] updatePricing failed:', err);
+            alert('Error updating pricing. Please try again.');
+          }
+        } else {
+          // No scenario yet: create initial scenario from Step 2 selections
+          console.log('[BUILD] No scenario yet - using buildScenariosAB() for initial creation');
+          buildScenariosAB();
+        }
       };
       
       // Wire up new pricing buttons

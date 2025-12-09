@@ -3325,7 +3325,10 @@ async function rebuildPricingFromBackend(scenarioToSync = null) {
 }
 
 // Update Pricing Function - saves all changes and recalculates
-async function updatePricing() {
+// options.silent: suppress success alert (used by Build Scenario button)
+async function updatePricing(options = {}) {
+  const { silent = false } = options;
+  
   const scenarios = getScenarioState();
   if (!scenarios || !scenarios.A) {
     alert('No scenario to update. Please build a scenario first.');
@@ -3333,9 +3336,16 @@ async function updatePricing() {
   }
   
   const btn = document.getElementById('btn-update-pricing');
+  const buildBtn = document.getElementById('btnBuild');
+  
+  // Disable both buttons during update
   if (btn) {
     btn.disabled = true;
     btn.textContent = '🔄 Updating...';
+  }
+  if (buildBtn) {
+    buildBtn.disabled = true;
+    buildBtn.textContent = '🔄 Updating...';
   }
   
   try {
@@ -3373,21 +3383,25 @@ async function updatePricing() {
     updatePricingTable();
     // Skip updatePricingSummary() - rebuildPricingFromBackend already updated DOM from backend
     
-    // Show success message with backend-verified totals
-    let grandTotal = '$0';
-    if (backendData?.summary?.grand_total) {
-      grandTotal = `$${Math.round(backendData.summary.grand_total.price).toLocaleString()}`;
+    // Show success message only if not silent (Build Scenario uses silent mode)
+    if (!silent) {
+      let grandTotal = '$0';
+      if (backendData?.summary?.grand_total) {
+        grandTotal = `$${Math.round(backendData.summary.grand_total.price).toLocaleString()}`;
+      } else {
+        grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
+      }
+      
+      const oneTimeCount = document.getElementById('one-time-count')?.textContent || '0';
+      const retainerCount = document.getElementById('retainer-count')?.textContent || '0';
+      
+      alert(`✅ Pricing Updated Successfully!\n\n` +
+            `📦 One-Time Items: ${oneTimeCount}\n` +
+            `🔄 Retainer Items: ${retainerCount}\n` +
+            `💰 Grand Total: ${grandTotal}`);
     } else {
-      grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
+      console.log('[PRICING] Update complete (silent mode)');
     }
-    
-    const oneTimeCount = document.getElementById('one-time-count')?.textContent || '0';
-    const retainerCount = document.getElementById('retainer-count')?.textContent || '0';
-    
-    alert(`✅ Pricing Updated Successfully!\n\n` +
-          `📦 One-Time Items: ${oneTimeCount}\n` +
-          `🔄 Retainer Items: ${retainerCount}\n` +
-          `💰 Grand Total: ${grandTotal}`);
     
   } catch (error) {
     console.error('Error updating pricing:', error);
@@ -3396,6 +3410,10 @@ async function updatePricing() {
     if (btn) {
       btn.disabled = false;
       btn.textContent = '💾 Update Pricing';
+    }
+    if (buildBtn) {
+      buildBtn.disabled = false;
+      buildBtn.textContent = '🚀 Build Scenario';
     }
   }
 }
