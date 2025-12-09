@@ -1,0 +1,213 @@
+What we want
+
+On Step 3:
+
+Step 2 → Step 3 transition: still builds the initial scenario from selected deliverables (via /api/scenarios or /api/build) and seeds SCENARIO_STORE. No change.
+
+Inside Step 3:
+
+Edits in the Pricing Details grid update a local scenario object.
+
+Clicking Build Scenario (green button) should:
+
+Take the current scenario from the UI,
+
+POST /api/scenario/sync to push it into SCENARIO_STORE,
+
+Call POST /api/pricing/rebuild_breakdown to recompute totals,
+
+Repaint the 2nd panel and the summary cards from the backend response.
+
+That makes Build Scenario = “save + recompute from this exact grid” and becomes the single source of truth for Step 3, exports, and Gantt.
+
+Concrete Replit changes
+
+Below is code you can hand to the Replit agent / paste into your Step‑3 JS file.
+
+1. Scenario sync helper (front‑end)
+
+Add this near the top of your Step‑3 script (or wherever your other helpers live):
+
+// Keep track of scenario sync versions for /api/scenario/sync
+let scenarioClientVersion = 0;
+let scenarioServerVersion = 0;
+
+// Push the current scenario from the UI into SCENARIO_STORE
+async function syncScenarioToBackend(scenario) {
+  const sessionId = window.currentSessionId;  // use your existing session id variable
+  if (!sessionId) {
+    console.warn("[pricing] No session id found; skipping /api/scenario/sync");
+    return;
+  }
+
+  scenarioClientVersion += 1;
+
+  const payload = {
+    session_id: sessionId,
+    client_version: scenarioClientVersion,
+    last_server_version: scenarioServerVersion,
+    scenario,
+    selections: window.currentSelections || {}, // whatever you already track
+    timestamp: Date.now(),
+    checksum: null
+  };
+
+  const res = await fetch("/api/scenario/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    console.error("[pricing] syncScenarioToBackend failed", data);
+    throw new Error(data.error || data.detail || "Failed to sync scenario");
+  }
+
+  // Track latest server version so conflict detection works
+  if (typeof data.serverVersion === "number") {
+    scenarioServerVersion = data.serverVersion;
+  }
+
+  // If the server tells us it has newer data, apply it back to the UI
+  if (data.hasChanges && data.scenario) {
+    window.currentScenario = data.scenario;
+    // Reuse your existing renderer that takes a scenario and repaints Step 3
+    if (typeof window.renderScenarioFromBackend === "function") {
+      window.renderScenarioFromBackend(data.scenario);
+    }
+  }
+
+  return data;
+}
+
+// (Optional) expose globally if you want to call it from other steps
+window.syncScenarioToBackend = syncScenarioToBackend;
+
+
+If Replit already created a syncScenarioToBackend function earlier, you don’t need to duplicate it – just make sure it looks like this logically (sync → update SCENARIO_STORE → optionally update UI).
+
+2. Pricing rebuild helper
+
+Add this helper, which wires sync + /api/pricing/rebuild_breakdown + UI updates:
+
+async function rebuildPricingFromBackend(scenario) {
+  const sessionId = window.currentSessionId;
+  if (!sessionId) {
+    console.warn("[pricing] No session id for rebuild_breakdown");
+    return;
+  }
+
+  // 1) Push current grid edits into SCENARIO_STORE
+  await syncScenarioToBackend(scenario);
+
+  // 2) Ask backend to recompute Deliverable Pricing Details + summary cards
+  const res = await fetch("/api/pricing/rebuild_breakdown", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    console.error("[pricing] rebuild_breakdown failed", data);
+    throw new Error(data.error || data.detail || "Failed to rebuild pricing breakdown");
+  }
+
+  // 3) Update UI using your existing renderers
+  if (typeof window.renderPricingDetailsTable === "function") {
+    window.renderPricingDetailsTable(data.breakdown);  // 2nd panel rows
+  }
+  if (typeof window.renderPricingSummaryCards === "function") {
+    window.renderPricingSummaryCards(data.summary);    // One-Time, Retainer, Grand Total
+  }
+
+  // Keep the latest summary around if you need it elsewhere
+  window.currentPricingSummary = data.summary;
+
+  return data;
+}
+
+window.rebuildPricingFromBackend = rebuildPricingFromBackend;
+
+
+Again: if Replit already created window.rebuildPricingFromBackend, just ensure it wraps /api/scenario/sync and /api/pricing/rebuild_breakdown in this order.
+
+3. Make updatePricing() use that pipeline
+
+Find your existing updatePricing() function (it’s currently wired to “Optimize All Pricing” / other controls) and make it look like this:
+
+// Collect scenario from both the Project Scenario table and the Pricing Details grid
+function collectScenarioFromUi() {
+  // IMPORTANT: Reuse whatever you already had here.
+  // This function should build a full "scenario" object with .items[], .totals, etc
+  // from the Step 3 UI state.
+
+  return window.currentScenario || {}; // placeholder – replace with your actual collector
+}
+
+async function updatePricing() {
+  // 1) Build an in-memory scenario from the current UI
+  const scenario = collectScenarioFromUi();
+
+  // 2) Sync + rebuild via backend (single source of truth)
+  await rebuildPricingFromBackend(scenario);
+}
+
+
+Expose it if you need:
+
+window.updatePricing = updatePricing;
+
+4. Re‑wire the Build Scenario button on Step 3
+
+Right now the green button is probably wired to buildScenario0A$() (or to /api/scenarios). That’s what’s resetting your grid.
+
+Change that so it just calls updatePricing().
+
+If it’s inline HTML:
+
+<!-- OLD -->
+<!-- <button id="btnBuildScenario" onclick="buildScenario0A$()">Build Scenario</button> -->
+
+<!-- NEW -->
+<button id="btnBuildScenario" onclick="updatePricing()">Build Scenario</button>
+
+
+If it uses an event listener:
+
+// OLD
+// document.getElementById("btnBuildScenario")
+//   .addEventListener("click", buildScenario0A$);
+
+// NEW
+document.getElementById("btnBuildScenario")
+  .addEventListener("click", () => {
+    updatePricing().catch(err => console.error("[pricing] Build Scenario failed", err));
+  });
+
+
+Leave the Step‑2 → Step‑3 transition alone (that can still call buildScenario0A$ or /api/scenarios once, to create the initial scenario and seed the baseline/working copies in SCENARIO_STORE).
+
+5. Why this fixes your two main issues
+
+Edits in the 2nd panel don’t “stick” when you click Build Scenario
+
+Before: Build Scenario called /api/scenarios using the last scenario in SCENARIO_STORE, which hadn’t been updated with your grid edits → the table snapped back to defaults.
+
+After: Build Scenario calls updatePricing() → collectScenarioFromUi() → syncScenarioToBackend() → /api/pricing/rebuild_breakdown. The scenario in SCENARIO_STORE is the one you just edited, so the grid and cards reflect those numbers.
+
+Exports / Gantt don’t pick up Step‑3 edits
+
+The export + timeline endpoints already build from get_working_scenario(session_id) (i.e. the scenario in SCENARIO_STORE). 
+
+12:09:25 - step 3 component box
+
+As long as you call syncScenarioToBackend() before:
+
+clicking Build Scenario,
+
+clicking Export Pricing Details / XML, or
+
+generating the Gantt,
+then all three use the exact same, recomputed scenario.
