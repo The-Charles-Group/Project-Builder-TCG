@@ -4585,6 +4585,7 @@ window.updateCustomHours = updateCustomHours;
 window.updateCustomRate = updateCustomRate;
 window.analyzeProjectRetainer = analyzeProjectRetainer;
 window.rebuildScenario = rebuildScenario;
+window.updatePricing = updatePricing;
 window.syncScenarioToBackend = syncScenarioToBackend;
 window.rebuildPricingFromBackend = rebuildPricingFromBackend;
 window.enableRowEdit = enableRowEdit;

@@ -3808,26 +3808,59 @@
       const applyBtn = document.getElementById('apply-btn');
       if (applyBtn) applyBtn.onclick = applySelection;
       
+      // Track whether a scenario has ever been successfully built in this session
+      window._scenarioHasBeenBuilt = false;
+      window._isBuildingSyncing = false;
+      
       const btnBuild = document.getElementById('btnBuild');
       if (btnBuild) btnBuild.onclick = async () => {
-        window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
+        // Prevent rapid clicks during sync
+        if (window._isBuildingSyncing) {
+          console.log('[BUILD] Already syncing, ignoring click');
+          return;
+        }
         
-        // Check if a scenario already exists - if so, use updatePricing to preserve edits
-        const existingScenarios = window.SCENARIOS || (typeof getScenarioState === 'function' ? getScenarioState() : null);
-        if (existingScenarios && existingScenarios.A && existingScenarios.A.items && existingScenarios.A.items.length > 0) {
-          // Scenario exists: preserve grid edits via updatePricing (sync + rebuild)
-          // Use silent mode to avoid popup - UI already shows updated totals
-          console.log('[BUILD] Scenario exists - using updatePricing() to preserve grid edits');
-          try {
+        window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
+        window._isBuildingSyncing = true;
+        
+        // Update button to show loading state
+        const originalText = btnBuild.textContent;
+        btnBuild.textContent = '🔄 Building...';
+        btnBuild.disabled = true;
+        
+        try {
+          // Check if a scenario has ever been built - use flag instead of async state check
+          if (window._scenarioHasBeenBuilt) {
+            // Scenario exists: preserve grid edits via updatePricing (sync + rebuild)
+            // Use silent mode to avoid popup - UI already shows updated totals
+            console.log('[BUILD] Scenario exists - using updatePricing() to preserve grid edits');
             await updatePricing({ silent: true });
-          } catch (err) {
-            console.error('[BUILD] updatePricing failed:', err);
-            alert('Error updating pricing. Please try again.');
+            console.log('[BUILD] ✅ Pricing updated successfully');
+          } else {
+            // No scenario yet: create initial scenario from Step 2 selections
+            console.log('[BUILD] No scenario yet - using buildScenariosAB() for initial creation');
+            await buildScenariosAB();
+            
+            // Only mark as built if we actually have a valid scenario now
+            const scenarios = window.SCENARIOS || (typeof getScenarioState === 'function' ? getScenarioState() : null);
+            if (scenarios && scenarios.A && scenarios.A.items && scenarios.A.items.length > 0) {
+              window._scenarioHasBeenBuilt = true;
+              console.log('[BUILD] ✅ Initial scenario created successfully');
+            } else {
+              console.warn('[BUILD] ⚠️ buildScenariosAB completed but no valid scenario found');
+            }
           }
-        } else {
-          // No scenario yet: create initial scenario from Step 2 selections
-          console.log('[BUILD] No scenario yet - using buildScenariosAB() for initial creation');
-          buildScenariosAB();
+        } catch (err) {
+          console.error('[BUILD] Build/Update failed:', err);
+          alert('Error building scenario: ' + (err.message || 'Unknown error. Please try again.'));
+          // Reset flag if initial build failed
+          if (!window._scenarioHasBeenBuilt) {
+            console.log('[BUILD] Resetting _scenarioHasBeenBuilt flag due to error');
+          }
+        } finally {
+          window._isBuildingSyncing = false;
+          btnBuild.textContent = originalText;
+          btnBuild.disabled = false;
         }
       };
       
