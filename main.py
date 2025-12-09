@@ -8832,57 +8832,33 @@ async def api_rebuild_breakdown(payload: RebuildBreakdownPayload):
         
         breakdown = list(deliverable_summary.values())
         
-        # Compute summary cards with counts
-        # Note: retainer items store TOTAL price/hours across all months.
-        # We compute monthly values per-deliverable using actual retainer_months.
+        # Compute summary cards
         one_time_hours = 0.0
         one_time_price = 0.0
-        one_time_count = 0
-        retainer_total_hours = 0.0  # Total hours across entire retainer period
-        retainer_total_price = 0.0  # Total price across entire retainer period
-        retainer_monthly_hours = 0.0  # Sum of monthly hours for display
-        retainer_monthly_price = 0.0  # Sum of monthly prices for display
-        retainer_count = 0
+        retainer_hours = 0.0
+        retainer_price = 0.0
         
         for d in breakdown:
             cadence = (d.get("cadence") or "One-Time").lower()
-            is_retainer = d.get("is_retainer", False) or "month" in cadence or "retainer" in cadence
-            if is_retainer:
-                # Get actual retainer months (default 12 for backward compatibility)
-                months = int(d.get("months") or 12)
-                if months <= 0:
-                    months = 12
-                
-                retainer_total_hours += d["hours"]
-                retainer_total_price += d["price"]
-                
-                # Compute monthly values for this deliverable
-                retainer_monthly_hours += d["hours"] / months
-                retainer_monthly_price += d["price"] / months
-                
-                retainer_count += 1
+            if "month" in cadence or "retainer" in cadence:
+                retainer_hours += d["hours"]
+                retainer_price += d["price"]
             else:
                 one_time_hours += d["hours"]
                 one_time_price += d["price"]
-                one_time_count += 1
         
         summary = {
             "one_time": {
-                "count": one_time_count,
                 "hours": round(one_time_hours, 2),
                 "price": round(one_time_price, 2)
             },
             "retainer": {
-                "count": retainer_count,
-                "hours": round(retainer_monthly_hours, 2),  # Monthly hours for UI
-                "price": round(retainer_monthly_price, 2),  # Monthly price for UI
-                "total_hours": round(retainer_total_hours, 2),  # Total retainer hours
-                "total_price": round(retainer_total_price, 2)  # Total retainer price for grand total
+                "hours": round(retainer_hours, 2),
+                "price": round(retainer_price, 2)
             },
             "grand_total": {
-                "count": one_time_count + retainer_count,
-                "hours": round(one_time_hours + retainer_total_hours, 2),  # All hours
-                "price": round(one_time_price + retainer_total_price, 2)  # One-time + total retainer
+                "hours": round(one_time_hours + retainer_hours, 2),
+                "price": round(one_time_price + retainer_price, 2)
             }
         }
         

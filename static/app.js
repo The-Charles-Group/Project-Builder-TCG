@@ -2334,9 +2334,9 @@ function updatePricingTable() {
   
   // Create comprehensive table HTML structure with ALWAYS EDITABLE inputs
   let tableHTML = `
-    <div class="pricing-details-table-wrapper" style="margin: 20px 0;">
-      <h3 style="color: var(--accent); margin-bottom: 16px; font-size: 1.1em;">
-        📊 Deliverable Pricing Details
+    <div class="unified-pricing-table" style="margin: 20px 0;">
+      <h3 style="color: var(--accent); margin-bottom: 16px; font-size: 1.3em;">
+        📊 Unified Pricing Details (Direct Edit)
       </h3>
       
       <table id="pricing-details-table" style="width: 100%; border-collapse: separate; border-spacing: 0; background: var(--card); border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -2643,8 +2643,8 @@ function updatePricingTable() {
     container.innerHTML = tableHTML;
   }
   
-  // NOTE: Summary updates now come from rebuildPricingFromBackend() - single source of truth
-  // Do NOT call updatePricingSummary() here as it would use stale client-side data
+  // Update any other summary sections that might exist
+  updatePricingSummary();
 }
 
 // Update pricing summary panels - FIXED CALCULATION VERSION
@@ -3244,8 +3244,7 @@ async function syncScenarioToBackend(scenario) {
   }
 }
 
-// Rebuild pricing from backend - SINGLE SOURCE OF TRUTH for ALL totals
-// This function updates ALL pricing summary elements from backend response
+// Rebuild pricing from backend - single source of truth for totals
 async function rebuildPricingFromBackend(scenarioToSync = null) {
   const sessionId = window.APB?.sessionId || 
                    sessionStorage.getItem('apb.session_id') || 
@@ -3279,62 +3278,44 @@ async function rebuildPricingFromBackend(scenarioToSync = null) {
     
     console.log('[PRICING] Backend rebuild complete:', data.summary);
     
-    // ========== UPDATE ALL PRICING SUMMARY ELEMENTS FROM BACKEND ==========
-    // This is the SINGLE SOURCE OF TRUTH - all UI elements get their values here
-    
-    // One-Time Deliverables section (correct element IDs from index.html)
-    const oneTimeCount = data.summary?.one_time?.count || 0;
-    const oneTimeHours = data.summary?.one_time?.hours || 0;
-    const oneTimePrice = data.summary?.one_time?.price || 0;
-    
-    const oneTimeCountEl = document.getElementById('one-time-count');
-    const oneTimeHoursEl = document.getElementById('one-time-hours');
-    const oneTimeCostEl = document.getElementById('one-time-cost');
-    
-    if (oneTimeCountEl) oneTimeCountEl.textContent = oneTimeCount;
-    if (oneTimeHoursEl) oneTimeHoursEl.textContent = oneTimeHours.toFixed(1);
-    if (oneTimeCostEl) oneTimeCostEl.textContent = `$${Math.round(oneTimePrice).toLocaleString()}`;
-    
-    // Monthly Retainer section (correct element IDs from index.html)
-    // Backend now returns monthly price/hours and total_price for grand total
-    const retainerCount = data.summary?.retainer?.count || 0;
-    const retainerMonthlyHours = data.summary?.retainer?.hours || 0;
-    const retainerMonthlyPrice = data.summary?.retainer?.price || 0;
-    const retainerTotalPrice = data.summary?.retainer?.total_price || (retainerMonthlyPrice * 12);
-    
-    const retainerCountEl = document.getElementById('retainer-count');
-    const retainerHoursEl = document.getElementById('retainer-monthly-hours');
-    const retainerCostEl = document.getElementById('retainer-monthly-cost');
-    const retainerAnnualEl = document.getElementById('retainer-annual-cost');
-    
-    if (retainerCountEl) retainerCountEl.textContent = retainerCount;
-    if (retainerHoursEl) retainerHoursEl.textContent = retainerMonthlyHours.toFixed(1);
-    if (retainerCostEl) retainerCostEl.textContent = `$${Math.round(retainerMonthlyPrice).toLocaleString()}`;
-    if (retainerAnnualEl) retainerAnnualEl.textContent = `$${Math.round(retainerTotalPrice).toLocaleString()}`;
-    
-    // Grand Total section
-    const grandTotalPrice = data.summary?.grand_total?.price || (oneTimePrice + retainerTotalPrice);
+    // Update Grand Total from backend summary (single source of truth)
     const grandTotalEl = document.getElementById('grand-total-cost');
-    const grandBreakdownEl = document.getElementById('grand-total-breakdown');
-    
-    if (grandTotalEl) {
-      grandTotalEl.textContent = `$${Math.round(grandTotalPrice).toLocaleString()}`;
-      console.log('[PRICING] Grand Total updated from backend:', grandTotalPrice);
+    if (grandTotalEl && data.summary?.grand_total) {
+      grandTotalEl.textContent = `$${Math.round(data.summary.grand_total.price).toLocaleString()}`;
+      console.log('[PRICING] Grand Total updated from backend:', data.summary.grand_total.price);
     }
     
-    if (grandBreakdownEl) {
-      if (retainerMonthlyPrice > 0) {
-        grandBreakdownEl.textContent = `One-time ($${Math.round(oneTimePrice).toLocaleString()}) + Retainer total ($${Math.round(retainerTotalPrice).toLocaleString()})`;
+    // Update One-Time summary card
+    const oneTimeCostEl = document.getElementById('one-time-cost');
+    const oneTimeHoursEl = document.getElementById('one-time-hours');
+    if (oneTimeCostEl && data.summary?.one_time) {
+      oneTimeCostEl.textContent = `$${Math.round(data.summary.one_time.price).toLocaleString()}`;
+    }
+    if (oneTimeHoursEl && data.summary?.one_time) {
+      oneTimeHoursEl.textContent = `${Math.round(data.summary.one_time.hours).toLocaleString()} hrs`;
+    }
+    
+    // Update Retainer summary card
+    const retainerCostEl = document.getElementById('retainer-cost');
+    const retainerHoursEl = document.getElementById('retainer-hours');
+    if (retainerCostEl && data.summary?.retainer) {
+      retainerCostEl.textContent = `$${Math.round(data.summary.retainer.price).toLocaleString()}`;
+    }
+    if (retainerHoursEl && data.summary?.retainer) {
+      retainerHoursEl.textContent = `${Math.round(data.summary.retainer.hours).toLocaleString()} hrs`;
+    }
+    
+    // Update breakdown description
+    const grandBreakdownEl = document.getElementById('grand-total-breakdown');
+    if (grandBreakdownEl && data.summary) {
+      const oneTime = data.summary.one_time?.price || 0;
+      const retainer = data.summary.retainer?.price || 0;
+      if (retainer > 0) {
+        grandBreakdownEl.textContent = `One-time ($${Math.round(oneTime).toLocaleString()}) + Retainer ($${Math.round(retainer).toLocaleString()})`;
       } else {
-        grandBreakdownEl.textContent = `One-time total: $${Math.round(oneTimePrice).toLocaleString()}`;
+        grandBreakdownEl.textContent = `One-time total: $${Math.round(oneTime).toLocaleString()}`;
       }
     }
-    
-    console.log('[PRICING] ✅ All summary elements updated from backend:', {
-      oneTime: { count: oneTimeCount, hours: oneTimeHours, price: oneTimePrice },
-      retainer: { count: retainerCount, hours: retainerMonthlyHours, price: retainerMonthlyPrice },
-      grandTotal: grandTotalPrice
-    });
     
     return data;
   } catch (error) {
@@ -3344,10 +3325,7 @@ async function rebuildPricingFromBackend(scenarioToSync = null) {
 }
 
 // Update Pricing Function - saves all changes and recalculates
-// options.silent: suppress success alert (used by Build Scenario button)
-async function updatePricing(options = {}) {
-  const { silent = false } = options;
-  
+async function updatePricing() {
   const scenarios = getScenarioState();
   if (!scenarios || !scenarios.A) {
     alert('No scenario to update. Please build a scenario first.');
@@ -3355,16 +3333,9 @@ async function updatePricing(options = {}) {
   }
   
   const btn = document.getElementById('btn-update-pricing');
-  const buildBtn = document.getElementById('btnBuild');
-  
-  // Disable both buttons during update
   if (btn) {
     btn.disabled = true;
     btn.textContent = '🔄 Updating...';
-  }
-  if (buildBtn) {
-    buildBtn.disabled = true;
-    buildBtn.textContent = '🔄 Updating...';
   }
   
   try {
@@ -3402,25 +3373,21 @@ async function updatePricing(options = {}) {
     updatePricingTable();
     // Skip updatePricingSummary() - rebuildPricingFromBackend already updated DOM from backend
     
-    // Show success message only if not silent (Build Scenario uses silent mode)
-    if (!silent) {
-      let grandTotal = '$0';
-      if (backendData?.summary?.grand_total) {
-        grandTotal = `$${Math.round(backendData.summary.grand_total.price).toLocaleString()}`;
-      } else {
-        grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
-      }
-      
-      const oneTimeCount = document.getElementById('one-time-count')?.textContent || '0';
-      const retainerCount = document.getElementById('retainer-count')?.textContent || '0';
-      
-      alert(`✅ Pricing Updated Successfully!\n\n` +
-            `📦 One-Time Items: ${oneTimeCount}\n` +
-            `🔄 Retainer Items: ${retainerCount}\n` +
-            `💰 Grand Total: ${grandTotal}`);
+    // Show success message with backend-verified totals
+    let grandTotal = '$0';
+    if (backendData?.summary?.grand_total) {
+      grandTotal = `$${Math.round(backendData.summary.grand_total.price).toLocaleString()}`;
     } else {
-      console.log('[PRICING] Update complete (silent mode)');
+      grandTotal = document.getElementById('grand-total-cost')?.textContent || '$0';
     }
+    
+    const oneTimeCount = document.getElementById('one-time-count')?.textContent || '0';
+    const retainerCount = document.getElementById('retainer-count')?.textContent || '0';
+    
+    alert(`✅ Pricing Updated Successfully!\n\n` +
+          `📦 One-Time Items: ${oneTimeCount}\n` +
+          `🔄 Retainer Items: ${retainerCount}\n` +
+          `💰 Grand Total: ${grandTotal}`);
     
   } catch (error) {
     console.error('Error updating pricing:', error);
@@ -3429,10 +3396,6 @@ async function updatePricing(options = {}) {
     if (btn) {
       btn.disabled = false;
       btn.textContent = '💾 Update Pricing';
-    }
-    if (buildBtn) {
-      buildBtn.disabled = false;
-      buildBtn.textContent = '🚀 Build Scenario';
     }
   }
 }
@@ -4604,7 +4567,6 @@ window.updateCustomHours = updateCustomHours;
 window.updateCustomRate = updateCustomRate;
 window.analyzeProjectRetainer = analyzeProjectRetainer;
 window.rebuildScenario = rebuildScenario;
-window.updatePricing = updatePricing;
 window.syncScenarioToBackend = syncScenarioToBackend;
 window.rebuildPricingFromBackend = rebuildPricingFromBackend;
 window.enableRowEdit = enableRowEdit;
