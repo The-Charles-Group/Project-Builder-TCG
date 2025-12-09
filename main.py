@@ -1508,6 +1508,12 @@ WF_COLUMNS = [
 # XML post-processing: disable parallelization to preserve role-to-role predecessor chains
 PARALLELIZE_IDENTICAL_NAMES = os.getenv("PARALLELIZE_IDENTICAL_NAMES", "false").lower() == "true"
 
+# TIGHT WATERFALL: L2 deliverables chain back-to-back with ASAP constraints and FS dependencies
+# When enabled: L2 deliverables get ConstraintType=0 (ASAP), DurationFormat=7, no Manual* tags,
+# and an FS chain is built between consecutive deliverables (sorted by WBS order).
+# When disabled: Legacy behavior with SNET constraint (ConstraintType=2), Manual* tags, no L2 chain.
+TIGHT_WATERFALL_ENABLED = os.getenv("TIGHT_WATERFALL_ENABLED", "true").lower() == "true"
+
 # Scenario multipliers - A only (B/C removed for simplicity)
 SCENARIO_MULT = {
     "A": {"hours_mult": 1.00, "qa_pct": 0.05, "pm_pct": 0.10, "strip_optional": True}
@@ -13348,9 +13354,14 @@ def convert_excel_to_mspdi(
             SubElement(task, "Summary").text = "1" if is_summary else "0"
             
             # GPT-5 PRO FIX: Conditional DurationFormat based on manual scheduling
-            # 53 (Elapsed Days + Manual) for manually scheduled tasks (deliverables, non-root summaries)
-            # 7 (Elapsed Days) for auto-scheduled tasks (root, leaf)
-            is_manually_scheduled = is_deliverable or (is_summary and not is_root)
+            # TIGHT_WATERFALL: Deliverables use DurationFormat=7 (auto-scheduled) when enabled
+            # Legacy: 53 (Elapsed Days + Manual) for manually scheduled tasks
+            # 7 (Elapsed Days) for auto-scheduled tasks (root, leaf, and deliverables in tight waterfall mode)
+            if TIGHT_WATERFALL_ENABLED and is_deliverable:
+                # TIGHT WATERFALL: Deliverables are auto-scheduled with ASAP constraint
+                is_manually_scheduled = False
+            else:
+                is_manually_scheduled = is_deliverable or (is_summary and not is_root)
             SubElement(task, "DurationFormat").text = "53" if is_manually_scheduled else "7"
             
             # GPT-5 PRO FIX: Reordered branches to prevent overlap (root → deliverable → summary → leaf)
@@ -13363,8 +13374,9 @@ def convert_excel_to_mspdi(
                 # Root does NOT get Manual* tags or Type/IsEffortDriven per GPT-5 Pro spec
             
             elif is_deliverable:
-                # DELIVERABLE TASKS (OutlineLevel=2): SNET constraint + Manual* tags if has children
-                # Deliverables are direct children of Project Summary with SNET to lock start dates
+                # DELIVERABLE TASKS (OutlineLevel=2)
+                # TIGHT WATERFALL: ASAP constraint, no Manual* tags, FS chain (built later)
+                # LEGACY: SNET constraint + Manual* tags if has children
                 SubElement(task, "Work").text = "PT0M"
                 
                 # FIX: Calculate actual Duration from Start/Finish dates (not hardcoded PT480M)
@@ -13383,27 +13395,37 @@ def convert_excel_to_mspdi(
                     SubElement(task, "Duration").text = "PT480M"
                     print(f"[XML EXPORT] ⚠️ Duration fallback for {name_txt[:40]}: {e}")
                 
-                # Manual Scheduling tags to lock parent timelines
-                SubElement(task, "Type").text = "1"  # Fixed Duration
-                SubElement(task, "IsEffortDriven").text = "0"
-                SubElement(task, "ManuallyScheduled").text = "1"
-                SubElement(task, "ManualStart").text = "1"
-                SubElement(task, "ManualFinish").text = "1"
-                SubElement(task, "ManualDuration").text = "1"
-                SubElement(task, "ManualWork").text = "1"
-                
-                # SNET constraint to lock deliverable start date
-                start_date_str = uid_to_sched[r["UID"]]["Start"]
-                if 'T' in start_date_str:
-                    date_part = start_date_str.split('T')[0]
-                    constraint_date = f"{date_part}T08:00:00"
+                if TIGHT_WATERFALL_ENABLED:
+                    # TIGHT WATERFALL MODE: ASAP constraint, no Manual* tags
+                    # FS chain between deliverables is built after all tasks are created
+                    SubElement(task, "Type").text = "1"  # Fixed Duration
+                    SubElement(task, "IsEffortDriven").text = "0"
+                    # NO ManuallyScheduled, ManualStart, ManualFinish, ManualDuration, ManualWork
+                    # ConstraintType=0 (As Soon As Possible) - no ConstraintDate
+                    SubElement(task, "ConstraintType").text = "0"  # As Soon As Possible
+                    print(f"[XML EXPORT] ⛓️ TIGHT WATERFALL: Deliverable with ASAP constraint: {name_txt} (WBS {r['WBS']})")
                 else:
-                    constraint_date = f"{start_date_str}T08:00:00"
-                
-                SubElement(task, "ConstraintType").text = "2"  # Start No Earlier Than
-                SubElement(task, "ConstraintDate").text = constraint_date
-                
-                print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
+                    # LEGACY MODE: Manual Scheduling tags to lock parent timelines
+                    SubElement(task, "Type").text = "1"  # Fixed Duration
+                    SubElement(task, "IsEffortDriven").text = "0"
+                    SubElement(task, "ManuallyScheduled").text = "1"
+                    SubElement(task, "ManualStart").text = "1"
+                    SubElement(task, "ManualFinish").text = "1"
+                    SubElement(task, "ManualDuration").text = "1"
+                    SubElement(task, "ManualWork").text = "1"
+                    
+                    # SNET constraint to lock deliverable start date
+                    start_date_str = uid_to_sched[r["UID"]]["Start"]
+                    if 'T' in start_date_str:
+                        date_part = start_date_str.split('T')[0]
+                        constraint_date = f"{date_part}T08:00:00"
+                    else:
+                        constraint_date = f"{start_date_str}T08:00:00"
+                    
+                    SubElement(task, "ConstraintType").text = "2"  # Start No Earlier Than
+                    SubElement(task, "ConstraintDate").text = constraint_date
+                    
+                    print(f"[XML EXPORT] 🔒 Applied SNET constraint to deliverable: {name_txt} (WBS {r['WBS']}, Start={constraint_date})")
             
             elif is_summary and not is_root:
                 # NON-ROOT SUMMARY TASKS (OutlineLevel 2-5): Calculate actual duration from Start/Finish
@@ -13852,6 +13874,90 @@ def convert_excel_to_mspdi(
         
         if skipped_zero_duration > 0:
             print(f"[VALIDATION] ⏭️  Skipped {skipped_zero_duration} PredecessorLink(s) with zero-duration tasks")
+
+        # ═══════════════════════════════════════════════════════════════════════════
+        # TIGHT WATERFALL: Build L2-only Finish-to-Start chain between deliverables
+        # ═══════════════════════════════════════════════════════════════════════════
+        if TIGHT_WATERFALL_ENABLED:
+            print(f"\n[TIGHT WATERFALL] Building L2 deliverable FS chain...")
+            
+            # Helper function to detect milestones (excluded from chain)
+            def is_milestone_task(task_elem):
+                """Check if a task is a milestone (zero duration, milestone flag, or specific names)"""
+                # Check Milestone flag
+                milestone_elem = task_elem.find("Milestone")
+                if milestone_elem is not None and milestone_elem.text == "1":
+                    return True
+                
+                # Check for zero duration (PT0M)
+                duration_elem = task_elem.find("Duration")
+                if duration_elem is not None and duration_elem.text == "PT0M":
+                    return True
+                
+                # Check for milestone-like names
+                name_elem = task_elem.find("Name")
+                if name_elem is not None:
+                    name_lower = (name_elem.text or "").lower()
+                    milestone_keywords = ["approval", "sign-off", "signoff", "milestone", "launch complete", "kick-off", "kickoff"]
+                    if any(kw in name_lower for kw in milestone_keywords):
+                        return True
+                
+                return False
+            
+            # Collect all L2 deliverables (OutlineLevel=2, non-root, non-milestone)
+            l2_deliverables = []
+            for task_elem in tasks_elem.findall("Task"):
+                outline_elem = task_elem.find("OutlineLevel")
+                uid_elem = task_elem.find("UID")
+                wbs_elem = task_elem.find("WBS")
+                
+                if outline_elem is not None and uid_elem is not None and wbs_elem is not None:
+                    outline_level = int(outline_elem.text)
+                    uid = int(uid_elem.text)
+                    wbs = wbs_elem.text
+                    
+                    # L2 = OutlineLevel 2, not root (UID=1 or WBS="1"), not milestone
+                    if outline_level == 2 and uid != 1 and wbs != "1" and not is_milestone_task(task_elem):
+                        l2_deliverables.append({
+                            "uid": uid,
+                            "wbs": wbs,
+                            "task_elem": task_elem,
+                            "name": task_elem.find("Name").text if task_elem.find("Name") is not None else "Unknown"
+                        })
+            
+            # Sort by WBS order (natural order: 1.1, 1.2, 1.3, ...)
+            def wbs_sort_key(item):
+                """Sort WBS segments numerically (handles 1.10 > 1.2)"""
+                parts = item["wbs"].split(".")
+                return [int(p) if p.isdigit() else p for p in parts]
+            
+            l2_deliverables.sort(key=wbs_sort_key)
+            
+            print(f"[TIGHT WATERFALL] Found {len(l2_deliverables)} L2 deliverables for chaining")
+            
+            # Build FS chain: each deliverable (after the first) gets a PredecessorLink to the previous
+            l2_chain_count = 0
+            for i in range(1, len(l2_deliverables)):
+                prev_deliv = l2_deliverables[i - 1]
+                curr_deliv = l2_deliverables[i]
+                
+                # Add PredecessorLink to current deliverable's task element
+                pred_link = SubElement(curr_deliv["task_elem"], "PredecessorLink")
+                SubElement(pred_link, "PredecessorUID").text = str(prev_deliv["uid"])
+                SubElement(pred_link, "Type").text = "1"          # 1 = Finish-to-Start
+                SubElement(pred_link, "CrossProject").text = "0"
+                SubElement(pred_link, "LinkLag").text = "0"
+                SubElement(pred_link, "LagFormat").text = "7"     # 7 = days
+                
+                l2_chain_count += 1
+                print(f"[TIGHT WATERFALL] ⛓️ {prev_deliv['name'][:30]} (UID {prev_deliv['uid']}) → {curr_deliv['name'][:30]} (UID {curr_deliv['uid']})")
+            
+            print(f"[TIGHT WATERFALL] ✅ Created {l2_chain_count} FS links in L2 deliverable chain")
+            
+            # Log the first deliverable (no predecessor)
+            if l2_deliverables:
+                first = l2_deliverables[0]
+                print(f"[TIGHT WATERFALL] 🚀 First deliverable (no predecessor): {first['name'][:40]} (WBS {first['wbs']})")
 
         # Compute project summary start/finish from children (no more hardcoded dates)
         if tasks_elem is not None:
