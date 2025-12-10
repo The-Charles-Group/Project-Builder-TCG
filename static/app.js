@@ -3416,6 +3416,8 @@ let scenarioServerVersion = 0;
 function updateScenarioItem(deliverableCode, componentName, updater) {
   if (!window.SCENARIO_A || !Array.isArray(window.SCENARIO_A.items)) {
     console.warn('[PRICING] No SCENARIO_A or items array');
+    // Still set dirty flag so Update Pricing button works
+    pricingDetailsDirty = true;
     return;
   }
   
@@ -3426,25 +3428,35 @@ function updateScenarioItem(deliverableCode, componentName, updater) {
   
   if (!item) {
     console.warn('[PRICING] Item not found:', deliverableCode);
+    // Still set dirty flag so Update Pricing button works
+    pricingDetailsDirty = true;
     return;
   }
   
-  // If componentName is provided, update the component; otherwise update the deliverable
+  // If componentName is provided, try to update the component
+  // If component not found, apply update to the parent deliverable
+  // (component edits are also tracked in window.pricingData.customHours)
   if (componentName) {
     const comp = (item.components || []).find(c => 
       String(c.name || c.Component) === String(componentName)
     );
     if (comp) {
       updater(comp);
+      console.log('[PRICING] Component updated:', deliverableCode, componentName);
     } else {
-      console.warn('[PRICING] Component not found:', deliverableCode, componentName);
+      // Component not found in SCENARIO_A - this is normal since scenario items
+      // are at deliverable level. Component edits are tracked in pricingData.
+      // Apply the update to the deliverable level for pricing recalculation.
+      console.log('[PRICING] Component edit tracked (deliverable-level):', deliverableCode, componentName);
+      // We still mark dirty so Update Pricing will recalculate from pricingData
     }
   } else {
     updater(item);
+    console.log('[PRICING] Deliverable updated:', deliverableCode);
   }
   
   pricingDetailsDirty = true;
-  console.log('[PRICING] Scenario item updated, dirty flag set:', deliverableCode, componentName);
+  console.log('[PRICING] Dirty flag set:', deliverableCode, componentName || '(deliverable)');
 }
 
 // Handler for hours change in Pricing Details table
@@ -3671,7 +3683,81 @@ async function onUpdatePricingDetailsClick() {
   }
   
   try {
-    // Sync scenario to backend and get authoritative totals
+    // GPT 5.1 Pro: Aggregate ALL component hours from DOM into SCENARIO_A items
+    // This ensures we capture both edited and unedited component hours
+    if (window.SCENARIO_A && window.SCENARIO_A.items) {
+      console.log('[PRICING] Aggregating ALL component hours from DOM...');
+      
+      // Collect all hours inputs from the pricing details table
+      // IDs are sanitized: "hours-DEL_0008__Component_Name" (underscores instead of special chars)
+      const hoursInputs = document.querySelectorAll('input[id^="hours-DEL"]');
+      const rateInputs = document.querySelectorAll('input[id^="rate-DEL"]');
+      
+      // Group component hours and rates by deliverable code
+      const deliverableHours = new Map();
+      const deliverableRates = new Map();
+      
+      hoursInputs.forEach(input => {
+        // ID format: "hours-DEL_XXXX__ComponentName" (sanitized)
+        // Need to extract deliverable code
+        const idPart = input.id.replace('hours-', '');
+        // Match DEL-XXXX or DEL_XXXX pattern at the start
+        const match = idPart.match(/^(DEL[-_]\d+)/i);
+        if (match) {
+          // Normalize to DEL-XXXX format
+          const delivCode = match[1].replace('_', '-').toUpperCase();
+          if (!deliverableHours.has(delivCode)) {
+            deliverableHours.set(delivCode, 0);
+          }
+          deliverableHours.set(delivCode, deliverableHours.get(delivCode) + (parseFloat(input.value) || 0));
+        }
+      });
+      
+      // Get rates from inputs (use last rate for each deliverable as representative)
+      rateInputs.forEach(input => {
+        const idPart = input.id.replace('rate-', '');
+        const match = idPart.match(/^(DEL[-_]\d+)/i);
+        if (match) {
+          const delivCode = match[1].replace('_', '-').toUpperCase();
+          const rate = parseFloat(input.value) || 210;
+          // Keep track of rates - we'll average or use first non-default
+          if (!deliverableRates.has(delivCode) || rate !== 210) {
+            deliverableRates.set(delivCode, rate);
+          }
+        }
+      });
+      
+      console.log('[PRICING] DOM aggregated hours:', Object.fromEntries(deliverableHours));
+      console.log('[PRICING] DOM aggregated rates:', Object.fromEntries(deliverableRates));
+      
+      // Update SCENARIO_A items with aggregated totals
+      for (const item of window.SCENARIO_A.items) {
+        const delivCode = (item.deliverable_code || item.Deliverable_Code || '').toUpperCase();
+        if (deliverableHours.has(delivCode)) {
+          const newHours = deliverableHours.get(delivCode);
+          const rate = deliverableRates.get(delivCode) || item.effective_rate || item.blended_rate || 210;
+          const newPrice = Math.round(newHours * rate * 100) / 100;
+          
+          console.log(`[PRICING] Updating ${delivCode}: ${item.total_hours || 0}h -> ${newHours}h, $${item.price || 0} -> $${newPrice}`);
+          
+          // Update all hour/price fields
+          item.total_hours = newHours;
+          item.Planned_Hours = newHours;
+          item.hours = newHours;
+          item.price = newPrice;
+          item.Price_USD = newPrice;
+          item.price_usd = newPrice;
+          
+          if (deliverableRates.has(delivCode)) {
+            item.effective_rate = rate;
+            item.blended_rate = rate;
+            item.Rate_USD = rate;
+          }
+        }
+      }
+    }
+    
+    // Sync updated scenario to backend and get authoritative totals
     const backendData = await rebuildPricingFromBackend(window.SCENARIO_A);
     
     if (!backendData) {
