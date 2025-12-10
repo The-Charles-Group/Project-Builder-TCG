@@ -516,6 +516,9 @@ const SessionManager = {
       window.pricingData.retainerMonths.clear();
       window.pricingData.originalScenario = null;
       window.pricingData.rebuildVersion = 0;
+      // Clear delta tracking maps
+      if (window.pricingData.originalComponentHours) window.pricingData.originalComponentHours.clear();
+      if (window.pricingData.hoursDeltas) window.pricingData.hoursDeltas.clear();
     }
     if (window.pricingDataEnhanced) {
       window.pricingDataEnhanced.cadenceTypes.clear();
@@ -1329,7 +1332,10 @@ let pricingData = {
   retainerMonths: new Map(),   // Maps deliverable_code -> number of months for retainers
   originalScenario: null,       // Store original scenario for comparison
   rebuildVersion: 0,            // Track rebuild versions
-  resourceBreakdown: new Map()  // Maps deliverable_code -> resource allocation
+  resourceBreakdown: new Map(), // Maps deliverable_code -> resource allocation
+  // Delta-based pricing: track original hours and user deltas
+  originalComponentHours: new Map(), // Maps compKey -> original hours (set when table renders)
+  hoursDeltas: new Map()             // Maps compKey -> delta (new - original)
 };
 
 // Cache for component data per deliverable code
@@ -3703,67 +3709,42 @@ async function onUpdatePricingDetailsClick() {
   }
   
   try {
-    // GPT 5.1 Pro: Aggregate COMPONENT-LEVEL hours from DOM into SCENARIO_A items
-    // IMPORTANT: Only read component inputs (with __ separator), NOT deliverable-level inputs
-    // Deliverable inputs already contain the sum, so reading both = double counting
-    if (window.SCENARIO_A && window.SCENARIO_A.items) {
-      console.log('[PRICING] Aggregating COMPONENT-LEVEL hours from DOM...');
+    // DELTA-BASED PRICING: Apply only user's hour deltas to scenario totals
+    // This avoids the problem of DOM defaults not matching scenario allocations
+    if (window.SCENARIO_A && window.SCENARIO_A.items && window.pricingData?.hoursDeltas) {
+      console.log('[PRICING] Applying DELTA-BASED updates...');
       
-      // Collect all hours inputs from the pricing details table
-      // Component IDs have format: "hours-DEL_0008__Component_Name" (with __ separator)
-      // Deliverable IDs have format: "hours-DEL_0008" (no __ separator)
-      // We ONLY want component inputs to avoid double-counting
-      const allHoursInputs = document.querySelectorAll('input[id^="hours-DEL"]');
-      const allRateInputs = document.querySelectorAll('input[id^="rate-DEL"]');
+      // Group deltas by deliverable code
+      const deliverableDeltas = new Map();
       
-      // Filter to only component-level inputs (those with __ in the ID)
-      const componentHoursInputs = Array.from(allHoursInputs).filter(input => input.id.includes('__'));
-      const componentRateInputs = Array.from(allRateInputs).filter(input => input.id.includes('__'));
-      
-      console.log(`[PRICING] Found ${componentHoursInputs.length} component inputs (filtered from ${allHoursInputs.length} total)`);
-      
-      // Group component hours and rates by deliverable code
-      const deliverableHours = new Map();
-      const deliverableRates = new Map();
-      
-      componentHoursInputs.forEach(input => {
-        // ID format: "hours-DEL_XXXX__ComponentName" (sanitized)
-        const idPart = input.id.replace('hours-', '');
-        // Extract deliverable code (before the __ separator)
-        const delivCodePart = idPart.split('__')[0];
-        // Normalize to DEL-XXXX format
-        const delivCode = delivCodePart.replace('_', '-').toUpperCase();
+      for (const [compKey, delta] of window.pricingData.hoursDeltas.entries()) {
+        if (delta === 0) continue; // Skip unchanged components
         
-        if (!deliverableHours.has(delivCode)) {
-          deliverableHours.set(delivCode, 0);
+        // Extract deliverable code from compKey (format: "DEL-XXXX::ComponentName")
+        const delivCode = compKey.split('::')[0].toUpperCase();
+        
+        if (!deliverableDeltas.has(delivCode)) {
+          deliverableDeltas.set(delivCode, 0);
         }
-        deliverableHours.set(delivCode, deliverableHours.get(delivCode) + (parseFloat(input.value) || 0));
-      });
+        deliverableDeltas.set(delivCode, deliverableDeltas.get(delivCode) + delta);
+        
+        console.log(`[PRICING DELTA] ${compKey}: delta=${delta}, deliverable ${delivCode} cumulative=${deliverableDeltas.get(delivCode)}`);
+      }
       
-      // Get rates from component inputs
-      componentRateInputs.forEach(input => {
-        const idPart = input.id.replace('rate-', '');
-        const delivCodePart = idPart.split('__')[0];
-        const delivCode = delivCodePart.replace('_', '-').toUpperCase();
-        const rate = parseFloat(input.value) || 210;
-        // Keep track of rates - use first non-default rate
-        if (!deliverableRates.has(delivCode) || rate !== 210) {
-          deliverableRates.set(delivCode, rate);
-        }
-      });
+      console.log('[PRICING] Deliverable deltas to apply:', Object.fromEntries(deliverableDeltas));
       
-      console.log('[PRICING] Component-level aggregated hours:', Object.fromEntries(deliverableHours));
-      console.log('[PRICING] Component-level aggregated rates:', Object.fromEntries(deliverableRates));
-      
-      // Update SCENARIO_A items with aggregated component totals
+      // Apply deltas to SCENARIO_A items
       for (const item of window.SCENARIO_A.items) {
         const delivCode = (item.deliverable_code || item.Deliverable_Code || '').toUpperCase();
-        if (deliverableHours.has(delivCode)) {
-          const newHours = deliverableHours.get(delivCode);
-          const rate = deliverableRates.get(delivCode) || item.effective_rate || item.blended_rate || 210;
+        
+        if (deliverableDeltas.has(delivCode)) {
+          const delta = deliverableDeltas.get(delivCode);
+          const originalHours = item.total_hours || 0;
+          const newHours = Math.max(0, originalHours + delta); // Don't go negative
+          const rate = item.effective_rate || item.blended_rate || 210;
           const newPrice = Math.round(newHours * rate * 100) / 100;
           
-          console.log(`[PRICING] Updating ${delivCode}: ${item.total_hours || 0}h -> ${newHours}h, $${item.price || 0} -> $${newPrice}`);
+          console.log(`[PRICING] Applying delta to ${delivCode}: ${originalHours}h + ${delta}h = ${newHours}h, $${item.price || 0} -> $${newPrice}`);
           
           // Update all hour/price fields
           item.total_hours = newHours;
@@ -3772,14 +3753,14 @@ async function onUpdatePricingDetailsClick() {
           item.price = newPrice;
           item.Price_USD = newPrice;
           item.price_usd = newPrice;
-          
-          if (deliverableRates.has(delivCode)) {
-            item.effective_rate = rate;
-            item.blended_rate = rate;
-            item.Rate_USD = rate;
-          }
         }
       }
+      
+      // Clear deltas after applying (they've been incorporated into scenario)
+      window.pricingData.hoursDeltas.clear();
+      // Update original hours to match new values (for next edit cycle)
+      window.pricingData.originalComponentHours.clear();
+      console.log('[PRICING] Cleared deltas and originals for next edit cycle');
     }
     
     // Sync updated scenario to backend and get authoritative totals

@@ -2334,6 +2334,16 @@
             const compRate = Math.round(comp.rate || rate);
             const compCost = compHours * compRate;
             
+            // DELTA-BASED PRICING: Always set baseline hours when rendering component
+            // Must REPLACE (not conditionally seed) to avoid stale baselines after rebuilds
+            if (window.pricingData && window.pricingData.originalComponentHours) {
+              window.pricingData.originalComponentHours.set(compKey, compHours);
+              // Clear any stale delta for this component (fresh render = no user edits yet)
+              if (window.pricingData.hoursDeltas) {
+                window.pricingData.hoursDeltas.delete(compKey);
+              }
+            }
+            
             // Sanitize compKey for use as HTML ID (replace non-alphanumeric with _)
             const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
             
@@ -2555,6 +2565,21 @@
       const compKey = `${deliverableCode}::${componentName}`;
       const safeCompKey = compKey.replace(/[^a-zA-Z0-9]/g, '_');
       console.log('[PRICING EDIT] Component hours changed:', compKey, '->', numHours);
+      
+      // DELTA-BASED PRICING: Calculate delta from original value
+      if (window.pricingData && window.pricingData.originalComponentHours && window.pricingData.hoursDeltas) {
+        const originalHours = window.pricingData.originalComponentHours.get(compKey);
+        if (originalHours !== undefined) {
+          const delta = numHours - originalHours;
+          window.pricingData.hoursDeltas.set(compKey, delta);
+          console.log('[PRICING DELTA] Component:', compKey, 'Original:', originalHours, 'New:', numHours, 'Delta:', delta);
+        } else {
+          // First time editing this component - store current as original
+          window.pricingData.originalComponentHours.set(compKey, numHours);
+          window.pricingData.hoursDeltas.set(compKey, 0);
+          console.log('[PRICING DELTA] Stored initial hours for:', compKey, '=', numHours);
+        }
+      }
       
       // Update pricingData using raw compKey (for ScenarioStore compatibility)
       if (window.pricingData && window.pricingData.customHours) {
