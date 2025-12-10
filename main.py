@@ -1284,6 +1284,7 @@ def merge_scenario_from_sync(session_id: str):
         "planned_hours", "Planned_Hours", "hours",
         "retainer", "retainer_months", "monthly_hours", "monthly_price",
         "is_retainer", "Rate_USD", "rate_usd",
+        "component_hours", "component_hours_override",
     }
     
     # If no old scenario exists, just use the new one directly
@@ -4053,12 +4054,33 @@ def build_wbs_with_pricing(scenario: dict, project_name: str) -> pd.DataFrame:
                 if not comps:
                     comps = ["Work Package"]
             
-            # SCALING: Apply hours_scale to component hours so they sum to target_hours
-            comp_hours_map_month_raw = DB.hours_by_component(dcode, tg_order, scen_col)
-            comp_hours_map_scaled = {k: v * hours_scale for k, v in comp_hours_map_month_raw.items()}
+            # GPT 5.1 Pro: Check for component_hours overrides from Step 3 edits
+            # These are user-edited component hours that should override DB-calculated values
+            component_overrides = d.get("component_hours") or d.get("component_hours_override") or {}
             
-            # If not a retainer, treat "month" as the whole - use SCALED hours
-            base_comp_hours_display = _largest_remainder(parent_hours_display, comp_hours_map_scaled)
+            if component_overrides:
+                # Normalize keys to strings to match DB component labels
+                overrides = {str(k): float(v) for k, v in component_overrides.items()}
+                override_total = sum(overrides.values())
+                
+                if override_total > 0:
+                    # Trust the overrides as the TOTAL; also align parent hours with sum
+                    parent_hours_display = int(round(override_total))
+                    set_hours_on_item(d, override_total)
+                    
+                    # Use overrides directly (no DB-based proportional scaling)
+                    base_comp_hours_display = {k: int(round(v)) for k, v in overrides.items()}
+                    print(f"[WBS Builder] Using component_hours overrides for {dcode}: {base_comp_hours_display}")
+                else:
+                    # Fallback to current DB-based logic
+                    comp_hours_map_month_raw = DB.hours_by_component(dcode, tg_order, scen_col)
+                    comp_hours_map_scaled = {k: v * hours_scale for k, v in comp_hours_map_month_raw.items()}
+                    base_comp_hours_display = _largest_remainder(parent_hours_display, comp_hours_map_scaled)
+            else:
+                # No overrides -> legacy behaviour (DB-based proportional scaling)
+                comp_hours_map_month_raw = DB.hours_by_component(dcode, tg_order, scen_col)
+                comp_hours_map_scaled = {k: v * hours_scale for k, v in comp_hours_map_month_raw.items()}
+                base_comp_hours_display = _largest_remainder(parent_hours_display, comp_hours_map_scaled)
 
             prev_comp_wbs = ""
 

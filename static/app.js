@@ -3245,6 +3245,21 @@ async function syncScenarioToBackend(scenario) {
                    sessionStorage.getItem('apb.session_id') || 
                    'default';
   
+  // Log component_hours status for debugging
+  if (scenario && scenario.items) {
+    const itemsWithComponentHours = scenario.items.filter(
+      item => item.component_hours && Object.keys(item.component_hours).length > 0
+    );
+    if (itemsWithComponentHours.length > 0) {
+      console.log('[PRICING] Syncing scenario with component_hours:', 
+        itemsWithComponentHours.map(i => ({
+          code: i.deliverable_code || i.Deliverable_Code,
+          component_hours: i.component_hours
+        }))
+      );
+    }
+  }
+  
   try {
     const response = await fetch('/api/scenario/sync', {
       method: 'POST',
@@ -3488,11 +3503,100 @@ function updateScenarioItem(deliverableCode, componentName, updater) {
   console.log('[PRICING] Dirty flag set:', deliverableCode, componentName || '(deliverable)');
 }
 
+// GPT 5.1 Pro: Find scenario item by deliverable code
+function findScenarioItemByCode(dcode) {
+  if (!window.SCENARIO_A || !window.SCENARIO_A.items) return null;
+  return window.SCENARIO_A.items.find(
+    it => String(it.deliverable_code || it.code || it.Deliverable_Code) === String(dcode)
+  ) || null;
+}
+
+// GPT 5.1 Pro: Apply pricing edit to scenario with component_hours tracking
+// This ensures component-level edits are tracked and parent totals are recalculated
+function applyPricingEditToScenario(dcode, component, field, value) {
+  const item = findScenarioItemByCode(dcode);
+  if (!item) {
+    console.warn('[PRICING] applyPricingEditToScenario: item not found for', dcode);
+    return;
+  }
+  
+  // 1) Ensure we have a component_hours map per deliverable
+  item.component_hours = item.component_hours || {};
+  
+  if (component) {
+    // Editing a component row
+    if (field === 'hours') {
+      item.component_hours[component] = value;
+      console.log('[PRICING] Component hours updated:', dcode, component, '=', value);
+    }
+    if (field === 'rate') {
+      // Optionally support component-level rate overrides in the future
+      item.component_rates = item.component_rates || {};
+      item.component_rates[component] = value;
+    }
+  } else {
+    // Editing the deliverable header row
+    if (field === 'hours') {
+      item.Planned_Hours = value;
+      item.planned_hours = value;
+      item.hours = value;
+      item.total_hours = value;
+    }
+    if (field === 'rate') {
+      item.rate = value;
+      item.Rate_USD = value;
+      item.rate_usd = value;
+      item.blended_rate = value;
+      item.effective_rate = value;
+    }
+  }
+  
+  // 2) When a component hours changes, re-sum and update header hours too
+  if (component && field === 'hours') {
+    const sum = Object.values(item.component_hours)
+      .map(v => Number(v) || 0)
+      .reduce((a, b) => a + b, 0);
+    
+    item.Planned_Hours = sum;
+    item.planned_hours = sum;
+    item.hours = sum;
+    item.total_hours = sum;
+    
+    console.log('[PRICING] Parent hours recalculated from components:', dcode, '=', sum);
+    
+    // Also update the header Hours input in the UI so user sees it
+    const headerInput = document.getElementById(`hours-${dcode}`);
+    if (headerInput) {
+      headerInput.value = sum.toString();
+    }
+    
+    // Update price based on rate
+    const rate = item.Rate_USD || item.rate_usd || item.blended_rate || item.effective_rate || 210;
+    const price = Math.round(sum * rate * 100) / 100;
+    item.Price_USD = price;
+    item.price_usd = price;
+    item.price = price;
+    
+    // Update price display in UI
+    const priceCell = document.querySelector(`#pricing-row-${dcode} .price-cell, tr[data-deliverable="${dcode}"] .price-cell`);
+    if (priceCell) {
+      priceCell.textContent = `$${price.toLocaleString()}`;
+    }
+  }
+  
+  window.pricingDetailsDirty = true;
+  pricingDetailsDirty = true;
+}
+
 // Handler for hours change in Pricing Details table
 function onPricingDetailHoursChange(deliverableCode, componentName, newHoursStr) {
   const hours = parseFloat(newHoursStr) || 0;
   const defaultRate = window.DEFAULT_BILLABLE_RATE_USD || 210;
   
+  // Use new component_hours tracking
+  applyPricingEditToScenario(deliverableCode, componentName, 'hours', hours);
+  
+  // Also update via legacy path for backwards compatibility
   updateScenarioItem(deliverableCode, componentName, (item) => {
     // Update both snake_case and PascalCase versions for compatibility
     item.Planned_Hours = hours;
@@ -3512,6 +3616,10 @@ function onPricingDetailHoursChange(deliverableCode, componentName, newHoursStr)
 function onPricingDetailRateChange(deliverableCode, componentName, newRateStr) {
   const rate = parseFloat(newRateStr) || 0;
   
+  // Use new component_hours tracking for rate changes too
+  applyPricingEditToScenario(deliverableCode, componentName, 'rate', rate);
+  
+  // Also update via legacy path for backwards compatibility
   updateScenarioItem(deliverableCode, componentName, (item) => {
     // Update both snake_case and PascalCase versions for compatibility
     item.Rate_USD = rate;
@@ -3527,19 +3635,54 @@ function onPricingDetailRateChange(deliverableCode, componentName, newRateStr) {
   });
 }
 
+// GPT 5.1 Pro: Delegated change handler for Pricing Details inputs
+// This provides a unified event handler for all pricing grid changes
+function onPricingDetailsChange(e) {
+  const input = e.target;
+  if (!input.matches('input, select')) return;
+  
+  const dcode = input.dataset.deliverableCode || input.closest('[data-deliverable-code]')?.dataset.deliverableCode;
+  const component = input.dataset.componentName || input.closest('[data-component-name]')?.dataset.componentName || null;
+  const field = input.dataset.field || (input.id?.includes('hours') ? 'hours' : input.id?.includes('rate') ? 'rate' : null);
+  
+  if (!dcode || !field) return;
+  
+  const value = input.type === 'number' ? parseFloat(input.value || '0') : input.value;
+  
+  console.log('[PRICING] Delegated change handler:', { dcode, component, field, value });
+  
+  applyPricingEditToScenario(dcode, component, field, value);
+  window.pricingDetailsDirty = true;
+}
+
+// Setup delegated event listener for pricing-details panel
+function setupPricingDetailsEventDelegation() {
+  const pricingDetails = document.getElementById('pricing-details');
+  if (pricingDetails) {
+    pricingDetails.removeEventListener('change', onPricingDetailsChange);
+    pricingDetails.addEventListener('change', onPricingDetailsChange);
+    console.log('[PRICING] Delegated event handler attached to pricing-details');
+  }
+}
+
 // GPT 5.1 Pro: COMPLETE FIX - Collect ALL scenario data from UI
 // This reads BOTH metadata AND hours/rates from DOM inputs
 // Returns a deep copy of the scenario with all current DOM values applied
 function collectScenarioFromUi(scenario) {
-  if (!scenario) {
-    console.warn('[PRICING] collectScenarioFromUi - no scenario provided');
+  // CRITICAL: Always use window.SCENARIO_A as authoritative source if available
+  // This ensures component_hours edits from applyPricingEditToScenario() are preserved
+  const sourceScenario = window.SCENARIO_A || scenario;
+  
+  if (!sourceScenario) {
+    console.warn('[PRICING] collectScenarioFromUi - no scenario available (neither SCENARIO_A nor passed scenario)');
     return null;
   }
   
+  console.log('[PRICING] collectScenarioFromUi - using', window.SCENARIO_A ? 'window.SCENARIO_A' : 'passed scenario', 'as source');
   console.log('[PRICING] collectScenarioFromUi - collecting metadata AND hours/rates from DOM');
   
-  // Create a deep copy to avoid mutating the original
-  const collectedScenario = JSON.parse(JSON.stringify(scenario));
+  // Create a deep copy from the authoritative source to preserve component_hours
+  const collectedScenario = JSON.parse(JSON.stringify(sourceScenario));
   
   // ========== PART 1: Collect metadata ==========
   const projectStartInput = document.getElementById('projectStart') || document.getElementById('project-start-input');
@@ -3574,6 +3717,7 @@ function collectScenarioFromUi(scenario) {
   
   // ========== PART 2: Collect DELIVERABLE hours/rates from DOM inputs ==========
   // The DOM has inputs with IDs like: hours-DEL001, rate-DEL001
+  // IMPORTANT: If item has component_hours, do NOT overwrite hours from DOM - use component_hours sum
   document.querySelectorAll('tr[data-deliverable]').forEach(row => {
     const delivCode = row.getAttribute('data-deliverable');
     if (!delivCode) return;
@@ -3589,13 +3733,32 @@ function collectScenarioFromUi(scenario) {
       );
       
       if (item) {
-        if (hoursInput) {
+        // Check if item has component_hours - if so, derive hours from that map
+        const hasComponentHours = item.component_hours && Object.keys(item.component_hours).length > 0;
+        
+        if (hasComponentHours) {
+          // Use component_hours sum instead of DOM value
+          const componentHoursSum = Object.values(item.component_hours)
+            .map(v => Number(v) || 0)
+            .reduce((a, b) => a + b, 0);
+          
+          if (componentHoursSum > 0) {
+            item.hours = componentHoursSum;
+            item.total_hours = componentHoursSum;
+            item.Planned_Hours = componentHoursSum;
+            item.planned_hours = componentHoursSum;
+            console.log(`[PRICING] Preserved component_hours-derived total for ${delivCode}: ${componentHoursSum}h`);
+          }
+        } else if (hoursInput) {
+          // No component_hours, use DOM value
           const hours = parseFloat(hoursInput.value) || 0;
           item.hours = hours;
           item.total_hours = hours;
           item.Planned_Hours = hours;
           item.planned_hours = hours;
         }
+        
+        // Rate always comes from DOM
         if (rateInput) {
           const rate = parseFloat(rateInput.value) || 210;
           item.blended_rate = rate;
@@ -3603,6 +3766,7 @@ function collectScenarioFromUi(scenario) {
           item.Rate_USD = rate;
           item.rate_usd = rate;
         }
+        
         // Recalculate price
         const h = item.hours || item.Planned_Hours || 0;
         const r = item.blended_rate || item.Rate_USD || 210;
@@ -3610,7 +3774,7 @@ function collectScenarioFromUi(scenario) {
         item.Price_USD = h * r;
         item.price_usd = h * r;
         
-        console.log(`[PRICING] Collected deliverable ${delivCode}: ${h}h @ $${r} = $${h * r}`);
+        console.log(`[PRICING] Collected deliverable ${delivCode}: ${h}h @ $${r} = $${h * r}${hasComponentHours ? ' (from component_hours)' : ''}`);
       }
     }
   });
@@ -3699,6 +3863,57 @@ function collectScenarioFromUi(scenario) {
       item.Price_USD = h * r;
       item.price_usd = h * r;
     });
+  }
+  
+  // ========== PART 5: Merge component_hours from live SCENARIO_A items ==========
+  // The applyPricingEditToScenario() function updates window.SCENARIO_A.items with component_hours
+  // We must copy these into the collected scenario so they reach the backend
+  if (window.SCENARIO_A && window.SCENARIO_A.items && collectedScenario.items) {
+    // Build a map of live items by deliverable code
+    const liveItemsByCode = {};
+    for (const liveItem of window.SCENARIO_A.items) {
+      const code = liveItem.deliverable_code || liveItem.Deliverable_Code;
+      if (code) {
+        liveItemsByCode[code] = liveItem;
+      }
+    }
+    
+    // Copy component_hours from live items to collected items
+    for (const item of collectedScenario.items) {
+      const code = item.deliverable_code || item.Deliverable_Code;
+      const liveItem = liveItemsByCode[code];
+      
+      if (liveItem && liveItem.component_hours && Object.keys(liveItem.component_hours).length > 0) {
+        // Copy component_hours map to collected item
+        item.component_hours = { ...liveItem.component_hours };
+        console.log(`[PRICING] Merged component_hours for ${code}:`, item.component_hours);
+        
+        // Recalculate parent hours from component_hours sum
+        const sum = Object.values(item.component_hours)
+          .map(v => Number(v) || 0)
+          .reduce((a, b) => a + b, 0);
+        
+        if (sum > 0) {
+          item.hours = sum;
+          item.total_hours = sum;
+          item.Planned_Hours = sum;
+          item.planned_hours = sum;
+          
+          // Recalculate price
+          const rate = item.blended_rate || item.Rate_USD || 210;
+          item.price = sum * rate;
+          item.Price_USD = sum * rate;
+          item.price_usd = sum * rate;
+          
+          console.log(`[PRICING] Updated ${code} from component_hours: ${sum}h @ $${rate} = $${sum * rate}`);
+        }
+      }
+      
+      // Also copy component_rates if present
+      if (liveItem && liveItem.component_rates && Object.keys(liveItem.component_rates).length > 0) {
+        item.component_rates = { ...liveItem.component_rates };
+      }
+    }
   }
   
   console.log('[PRICING] collectScenarioFromUi complete:', {
@@ -3920,6 +4135,10 @@ async function initPricingStep() {
 // Export GPT 5.1 Pro functions to global scope
 window.pricingDetailsDirty = false;
 window.updateScenarioItem = updateScenarioItem;
+window.findScenarioItemByCode = findScenarioItemByCode;
+window.applyPricingEditToScenario = applyPricingEditToScenario;
+window.onPricingDetailsChange = onPricingDetailsChange;
+window.setupPricingDetailsEventDelegation = setupPricingDetailsEventDelegation;
 window.onPricingDetailHoursChange = onPricingDetailHoursChange;
 window.onPricingDetailRateChange = onPricingDetailRateChange;
 window.collectScenarioFromUi = collectScenarioFromUi;
@@ -3930,7 +4149,10 @@ window.initPricingStep = initPricingStep;
 // GPT 5.1 Pro: Call initPricingStep on app.js load to hydrate SCENARIO_A from backend
 // This is called directly from app.js to avoid timing issues with window.onload
 console.log('[APP.JS] GPT 5.1 Pro exports complete, calling initPricingStep...');
-initPricingStep().catch(err => {
+initPricingStep().then(() => {
+  // Setup delegated event listener after init completes
+  setupPricingDetailsEventDelegation();
+}).catch(err => {
   console.log('[APP.JS] initPricingStep completed (no working scenario yet or expected error):', err?.message || 'OK');
 });
 
