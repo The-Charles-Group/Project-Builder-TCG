@@ -3597,6 +3597,12 @@ async function onStep3BuildScenarioClick() {
   }
   
   try {
+    // 0) Flush any pending ScenarioStore patches first
+    if (window.ScenarioStore && typeof window.ScenarioStore.flushPatchesNow === 'function') {
+      console.log('[PRICING] Flushing pending ScenarioStore patches...');
+      await window.ScenarioStore.flushPatchesNow();
+    }
+    
     // 1) Collect metadata from UI (does NOT regenerate items)
     collectScenarioFromUi(window.SCENARIO_A);
     
@@ -3695,11 +3701,7 @@ async function onStep3BuildScenarioClick() {
 async function onUpdatePricingDetailsClick() {
   console.log('[PRICING] onUpdatePricingDetailsClick - dirty:', pricingDetailsDirty);
   
-  if (!pricingDetailsDirty) {
-    console.log('[PRICING] No changes to save');
-    return;
-  }
-  
+  // Always allow sync even if not dirty (user might want to refresh from backend)
   if (!window.SCENARIO_A) {
     alert('No scenario to update. Please build a scenario first.');
     return;
@@ -3712,6 +3714,13 @@ async function onUpdatePricingDetailsClick() {
   }
   
   try {
+    // STEP 1: Flush any pending ScenarioStore patches to backend first
+    // This prevents race conditions between debounced patches and the sync
+    if (window.ScenarioStore && typeof window.ScenarioStore.flushPatchesNow === 'function') {
+      console.log('[PRICING] Flushing pending ScenarioStore patches...');
+      await window.ScenarioStore.flushPatchesNow();
+    }
+    
     // GPT 5.1 Pro CASCADE SYSTEM: SCENARIO_A.items are now updated in real-time
     // by updateDeliverableTotalFromComponents when component hours/rates change.
     // We just need to sync the current state to backend.
@@ -3736,7 +3745,10 @@ async function onUpdatePricingDetailsClick() {
     }
     console.log('[PRICING] Cleared deltas for next edit cycle');
     
-    // Sync updated scenario to backend and get authoritative totals
+    // STEP 2: Collect metadata from UI (updates SCENARIO_A in place)
+    collectScenarioFromUi(window.SCENARIO_A);
+    
+    // STEP 3: Sync updated scenario to backend and get authoritative totals
     const backendData = await rebuildPricingFromBackend(window.SCENARIO_A);
     
     if (!backendData) {
@@ -4539,6 +4551,11 @@ async function exportPricingDetails() {
   }
   
   try {
+    // GPT 5.1 Pro: Flush pending patches and sync before export - pass the scenario
+    if (window.ensureScenarioSyncedBeforeExport) {
+      await window.ensureScenarioSyncedBeforeExport(scenario, 'A');
+    }
+    
     const projectName = document.getElementById('projectName')?.value || 'Project';
     const formatSelect = document.getElementById('export-format');
     const fileFormat = formatSelect?.value || 'xlsx';
@@ -4634,6 +4651,11 @@ async function exportScenario(fileFormat, buttonId) {
   }
   
   try {
+    // GPT 5.1 Pro: Flush pending patches and sync before export - pass the scenario
+    if (window.ensureScenarioSyncedBeforeExport) {
+      await window.ensureScenarioSyncedBeforeExport(scenario, 'A');
+    }
+    
     const projectName = document.getElementById('projectName')?.value || 'Project';
     
     console.log('[EXPORT] Calling /api/export with format:', fileFormat);
@@ -11145,6 +11167,13 @@ async function onExport(which){
   const scenarios = getScenarioState();
   if(!scenarios){ alert("Build scenarios first."); return; }
   
+  const scenarioToExport = scenarios[which];
+  
+  // GPT 5.1 Pro: Flush pending patches and sync before export - pass the correct scenario
+  if (window.ensureScenarioSyncedBeforeExport) {
+    await window.ensureScenarioSyncedBeforeExport(scenarioToExport, which);
+  }
+  
   // Get session_id from ScenarioManager (preferred) or SessionManager
   const sessionId = window.ScenarioManager?.state?.sessionId || 
                     window.SessionManager?.currentSessionId ||
@@ -11156,7 +11185,7 @@ async function onExport(which){
     headers:{"Content-Type":"application/json"},
     body: JSON.stringify({
       session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario
-      scenario: scenarios[which]
+      scenario: scenarioToExport
     })
   });
   if(!res.ok){ alert("Export failed"); return; }
@@ -11818,6 +11847,14 @@ S2.els.btnApply?.addEventListener('click', s2ApplyAndBuild);
 
 // ========== XML Export Functions ==========
 async function exportXMLScenario(letter) {
+  // Get the scenario to export
+  const scen = window.getScenario?.(letter);
+  
+  // GPT 5.1 Pro: Flush pending patches and sync before export - pass the correct scenario
+  if (window.ensureScenarioSyncedBeforeExport) {
+    await window.ensureScenarioSyncedBeforeExport(scen, letter);
+  }
+  
   // WORKFRONT COMPATIBILITY: Anchors disabled (alphanumeric WBS breaks Workfront import)
   const addAnchors = false;
   

@@ -2965,6 +2965,45 @@
       return (s && Array.isArray(s.items) && s.items.length) ? s : null;
     };
 
+    // GPT 5.1 Pro: Ensure scenario is synced to backend before any export
+    // This flushes pending patches, collects UI state, syncs, and rebuilds totals
+    // @param scenario - The scenario object to sync (optional, defaults to SCENARIO_A)
+    // @param letter - The scenario letter 'A' or 'B' (optional, for logging)
+    async function ensureScenarioSyncedBeforeExport(scenario, letter = 'A') {
+      // Use provided scenario or fall back to SCENARIO_A
+      const scen = scenario || window.SCENARIO_A || window.getScenario?.('A');
+      if (!scen) {
+        console.warn('[Export] No scenario to sync before export');
+        return false;
+      }
+      
+      try {
+        // 1) Flush any pending ScenarioStore patches
+        if (window.ScenarioStore && typeof window.ScenarioStore.flushPatchesNow === 'function') {
+          console.log(`[Export] Flushing pending ScenarioStore patches for Scenario ${letter}...`);
+          await window.ScenarioStore.flushPatchesNow();
+        }
+        
+        // 2) Collect metadata from UI if collectScenarioFromUi exists
+        if (typeof window.collectScenarioFromUi === 'function') {
+          window.collectScenarioFromUi(scen);
+        }
+        
+        // 3) Sync scenario to backend
+        if (typeof window.syncScenarioToBackend === 'function') {
+          console.log(`[Export] Syncing Scenario ${letter} to backend before export...`);
+          await window.syncScenarioToBackend(scen);
+        }
+        
+        console.log(`[Export] Scenario ${letter} synced successfully before export`);
+        return true;
+      } catch (err) {
+        console.warn(`[Export] Pre-export sync failed for Scenario ${letter}:`, err.message);
+        return false;
+      }
+    }
+    window.ensureScenarioSyncedBeforeExport = ensureScenarioSyncedBeforeExport;
+
     async function onExportScenario(letter) {
       const scen = window.getScenario(letter);
       if (!scen) { alert('Build scenarios first.'); return; }
@@ -2975,15 +3014,8 @@
                         localStorage.getItem('apb.currentSession');
       console.log('[Export] Using session_id:', sessionId);
       
-      // CRITICAL: Sync scenario to backend before export to ensure SCENARIO_STORE is fresh
-      if (typeof window.syncScenarioToBackend === 'function' && scen) {
-        try {
-          console.log('[Export] Syncing scenario to backend before Excel export...');
-          await window.syncScenarioToBackend(scen);
-        } catch (syncErr) {
-          console.warn('[Export] Pre-export sync failed, proceeding with current data:', syncErr.message);
-        }
-      }
+      // GPT 5.1 Pro: Use unified pre-export sync function - pass the correct scenario
+      await ensureScenarioSyncedBeforeExport(scen, letter);
 
       const payload = {
         session_id: sessionId,  // NEW: Prefer SCENARIO_STORE working scenario (preserves Step 3 edits)
@@ -3004,15 +3036,8 @@
       // Get session_id to access Gantt-edited timeline data from SCENARIO_STORE
       const sessionId = window.SessionManager ? window.SessionManager.getCurrentSessionId() : null;
       
-      // CRITICAL: Sync scenario to backend before export to ensure SCENARIO_STORE is fresh
-      if (typeof window.syncScenarioToBackend === 'function' && scen) {
-        try {
-          console.log('[Export] Syncing scenario to backend before XML export...');
-          await window.syncScenarioToBackend(scen);
-        } catch (syncErr) {
-          console.warn('[Export] Pre-export sync failed, proceeding with current data:', syncErr.message);
-        }
-      }
+      // GPT 5.1 Pro: Use unified pre-export sync function - pass the correct scenario
+      await ensureScenarioSyncedBeforeExport(scen, letter);
       
       // Always include Start/End anchors (checkbox removed - now always enabled)
       const addAnchors = true;
@@ -4026,6 +4051,7 @@
       if (applyBtn) applyBtn.onclick = applySelection;
       
       // GPT 5.1 Pro: Build Scenario button uses different handlers for initial vs subsequent builds
+      // scenarioBootstrapped flag prevents duplicate resets after initial Step 2 → Step 3 transition
       const btnBuild = document.getElementById('btnBuild');
       if (btnBuild) btnBuild.onclick = async () => {
         window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
@@ -4033,26 +4059,31 @@
         // If we already have SCENARIO_A (Step 3 already populated), use the edit-preserving handler
         // Otherwise, use buildScenariosAB for initial scenario creation (Step 2 → Step 3)
         if (window.SCENARIO_A && window.SCENARIO_A.items && window.SCENARIO_A.items.length > 0) {
-          console.log('[BUILD] Existing SCENARIO_A found, preserving edits');
+          console.log('[BUILD] Existing SCENARIO_A found, preserving edits (NOT resetting to defaults)');
           
-          // Try to use onStep3BuildScenarioClick from app.js
-          // This preserves user edits to hours/rates instead of resetting to defaults
+          // CRITICAL: Use onStep3BuildScenarioClick which preserves user edits
+          // DO NOT fall back to buildScenariosAB as it resets all edits
           if (window.onStep3BuildScenarioClick) {
             console.log('[BUILD] Calling onStep3BuildScenarioClick');
             try {
               await window.onStep3BuildScenarioClick();
             } catch (err) {
               console.error('[BUILD] onStep3BuildScenarioClick error:', err);
-              // Fall back to buildScenariosAB if there's an error
-              await buildScenariosAB();
+              // DO NOT fall back to buildScenariosAB - this would reset edits!
+              // Instead, show the error to the user
+              alert('Error syncing scenario: ' + err.message);
             }
           } else {
-            console.warn('[BUILD] onStep3BuildScenarioClick not available, using buildScenariosAB');
-            await buildScenariosAB();
+            // onStep3BuildScenarioClick not loaded yet - try to sync manually
+            console.warn('[BUILD] onStep3BuildScenarioClick not available, attempting manual sync');
+            if (window.ScenarioStore?.flushPatchesNow) await window.ScenarioStore.flushPatchesNow();
+            if (window.rebuildPricingFromBackend) await window.rebuildPricingFromBackend(window.SCENARIO_A);
           }
         } else {
           console.log('[BUILD] No SCENARIO_A, using buildScenariosAB (initial build from Step 2)');
           await buildScenariosAB();
+          // Mark scenario as bootstrapped after initial build
+          window._scenarioBootstrapped = true;
         }
       };
       
