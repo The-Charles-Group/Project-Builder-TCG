@@ -3400,6 +3400,382 @@ async function updatePricing() {
   }
 }
 
+// ============================================================================
+// GPT 5.1 Pro Step 3 Pricing Implementation
+// Single Source of Truth: SCENARIO_STORE via sync + rebuild_breakdown flow
+// ============================================================================
+
+// Track whether Pricing Details have been edited (dirty flag)
+let pricingDetailsDirty = false;
+
+// Track scenario sync versions for conflict detection
+let scenarioClientVersion = 0;
+let scenarioServerVersion = 0;
+
+// Helper to update a scenario item by deliverable code and component name
+function updateScenarioItem(deliverableCode, componentName, updater) {
+  if (!window.SCENARIO_A || !Array.isArray(window.SCENARIO_A.items)) {
+    console.warn('[PRICING] No SCENARIO_A or items array');
+    return;
+  }
+  
+  // Find the matching item in SCENARIO_A.items
+  const item = window.SCENARIO_A.items.find(i =>
+    String(i.deliverable_code || i.Deliverable_Code) === String(deliverableCode)
+  );
+  
+  if (!item) {
+    console.warn('[PRICING] Item not found:', deliverableCode);
+    return;
+  }
+  
+  // If componentName is provided, update the component; otherwise update the deliverable
+  if (componentName) {
+    const comp = (item.components || []).find(c => 
+      String(c.name || c.Component) === String(componentName)
+    );
+    if (comp) {
+      updater(comp);
+    } else {
+      console.warn('[PRICING] Component not found:', deliverableCode, componentName);
+    }
+  } else {
+    updater(item);
+  }
+  
+  pricingDetailsDirty = true;
+  console.log('[PRICING] Scenario item updated, dirty flag set:', deliverableCode, componentName);
+}
+
+// Handler for hours change in Pricing Details table
+function onPricingDetailHoursChange(deliverableCode, componentName, newHoursStr) {
+  const hours = parseFloat(newHoursStr) || 0;
+  const defaultRate = window.DEFAULT_BILLABLE_RATE_USD || 210;
+  
+  updateScenarioItem(deliverableCode, componentName, (item) => {
+    // Update both snake_case and PascalCase versions for compatibility
+    item.Planned_Hours = hours;
+    item.planned_hours = hours;
+    item.hours = hours;
+    item.total_hours = hours;
+    
+    const rate = item.Rate_USD || item.rate_usd || item.blended_rate || item.effective_rate || defaultRate;
+    const price = Math.round(hours * rate * 100) / 100;
+    item.Price_USD = price;
+    item.price_usd = price;
+    item.price = price;
+  });
+}
+
+// Handler for rate change in Pricing Details table
+function onPricingDetailRateChange(deliverableCode, componentName, newRateStr) {
+  const rate = parseFloat(newRateStr) || 0;
+  
+  updateScenarioItem(deliverableCode, componentName, (item) => {
+    // Update both snake_case and PascalCase versions for compatibility
+    item.Rate_USD = rate;
+    item.rate_usd = rate;
+    item.blended_rate = rate;
+    item.effective_rate = rate;
+    
+    const hours = item.Planned_Hours || item.planned_hours || item.hours || item.total_hours || 0;
+    const price = Math.round(hours * rate * 100) / 100;
+    item.Price_USD = price;
+    item.price_usd = price;
+    item.price = price;
+  });
+}
+
+// Collect scenario-level metadata from UI (project_start, pricing_mode, rate_band, etc.)
+// IMPORTANT: This does NOT regenerate items - it only updates metadata
+function collectScenarioFromUi(scenario) {
+  if (!scenario) return;
+  
+  console.log('[PRICING] collectScenarioFromUi - updating metadata only (NOT regenerating items)');
+  
+  // Read project start from UI
+  const projectStartInput = document.getElementById('projectStart') || document.getElementById('project-start-input');
+  if (projectStartInput?.value) {
+    scenario.project_start = projectStartInput.value;
+  }
+  
+  // Read pricing mode from UI
+  const pricingModeSelect = document.getElementById('pricingMode') || document.getElementById('pricing-mode-select');
+  if (pricingModeSelect?.value) {
+    scenario.pricing_mode = pricingModeSelect.value;
+  }
+  
+  // Read rate band from UI
+  const rateBandSelect = document.getElementById('rateBand') || document.getElementById('rate-band-select');
+  if (rateBandSelect?.value) {
+    scenario.rate_band = rateBandSelect.value;
+  }
+  
+  // Read blended rate from UI
+  const blendedRateInput = document.getElementById('blendedRate');
+  if (blendedRateInput?.value) {
+    scenario.blended_rate = parseFloat(blendedRateInput.value) || 210;
+  }
+  
+  // Read complexity from UI
+  const complexitySelect = document.getElementById('complexity');
+  if (complexitySelect?.value) {
+    scenario.complexity = complexitySelect.value;
+  }
+  
+  // Read volume tier from UI
+  const volumeTierSelect = document.getElementById('volumeTier');
+  if (volumeTierSelect?.value) {
+    scenario.tier = volumeTierSelect.value;
+  }
+  
+  // IMPORTANT: Do NOT regenerate scenario.items here
+  // The items array already contains user edits that we want to preserve
+  
+  console.log('[PRICING] Metadata collected:', {
+    project_start: scenario.project_start,
+    pricing_mode: scenario.pricing_mode,
+    rate_band: scenario.rate_band
+  });
+}
+
+// Step 3 Build Scenario button handler (preserves edits, does NOT rebuild from database)
+async function onStep3BuildScenarioClick() {
+  console.log('[PRICING] onStep3BuildScenarioClick - preserving edits, syncing to backend');
+  
+  if (!window.SCENARIO_A) {
+    console.warn('[PRICING] No SCENARIO_A found, cannot build');
+    alert('No scenario to build. Please complete Step 2 first.');
+    return;
+  }
+  
+  const btn = document.getElementById('btnBuild');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Syncing...';
+  }
+  
+  try {
+    // 1) Collect metadata from UI (does NOT regenerate items)
+    collectScenarioFromUi(window.SCENARIO_A);
+    
+    // 2) Apply any pricingData edits to SCENARIO_A.items (from the pricingData maps)
+    if (window.SCENARIO_A.items && pricingData) {
+      window.SCENARIO_A.items.forEach(item => {
+        const code = item.deliverable_code || item.Deliverable_Code;
+        
+        // Apply custom hours if set
+        const customHours = pricingData.customHours.get(code);
+        if (customHours !== undefined) {
+          item.hours = customHours;
+          item.total_hours = customHours;
+          item.Planned_Hours = customHours;
+        }
+        
+        // Apply custom rate if set
+        const customRate = pricingData.customRates.get(code);
+        if (customRate !== undefined) {
+          item.blended_rate = customRate;
+          item.effective_rate = customRate;
+          item.Rate_USD = customRate;
+        }
+        
+        // Apply deliverable type if set
+        const delivType = pricingData.deliverableTypes.get(code);
+        if (delivType) {
+          item.is_retainer = (delivType === 'RETAINER');
+        }
+        
+        // Recalculate price
+        const hours = item.hours || item.total_hours || 0;
+        const rate = item.blended_rate || item.effective_rate || 210;
+        item.price = Math.round(hours * rate * 100) / 100;
+        item.Price_USD = item.price;
+        
+        // Apply component edits
+        if (item.components) {
+          item.components.forEach(comp => {
+            const compKey = `${code}::${comp.name || comp.Component}`;
+            const compHours = pricingData.customHours.get(compKey);
+            const compRate = pricingData.customRates.get(compKey);
+            
+            if (compHours !== undefined) {
+              comp.hours = compHours;
+              comp.Planned_Hours = compHours;
+            }
+            if (compRate !== undefined) {
+              comp.rate = compRate;
+              comp.Rate_USD = compRate;
+            }
+            
+            const ch = comp.hours || comp.Planned_Hours || 0;
+            const cr = comp.rate || comp.Rate_USD || item.blended_rate || 210;
+            comp.price = Math.round(ch * cr * 100) / 100;
+            comp.Price_USD = comp.price;
+          });
+        }
+      });
+    }
+    
+    // 3) Sync scenario to backend and get authoritative totals
+    const backendData = await rebuildPricingFromBackend(window.SCENARIO_A);
+    
+    if (!backendData) {
+      console.warn('[PRICING] Backend rebuild returned null');
+      alert('Failed to sync pricing with backend. Please try again.');
+      return;
+    }
+    
+    // 4) Update local displays
+    if (typeof updatePricingCalculations === 'function') {
+      updatePricingCalculations();
+    }
+    if (typeof updatePricingTable === 'function') {
+      updatePricingTable();
+    }
+    
+    // 5) Clear dirty flag on success
+    pricingDetailsDirty = false;
+    
+    console.log('[PRICING] Build complete with backend totals:', backendData.summary);
+    
+  } catch (error) {
+    console.error('[PRICING] Error in onStep3BuildScenarioClick:', error);
+    alert('Error building scenario: ' + error.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '🚀 Build Scenario';
+    }
+  }
+}
+
+// Update Pricing Details button handler
+async function onUpdatePricingDetailsClick() {
+  console.log('[PRICING] onUpdatePricingDetailsClick - dirty:', pricingDetailsDirty);
+  
+  if (!pricingDetailsDirty) {
+    console.log('[PRICING] No changes to save');
+    return;
+  }
+  
+  if (!window.SCENARIO_A) {
+    alert('No scenario to update. Please build a scenario first.');
+    return;
+  }
+  
+  const btn = document.getElementById('update-pricing-details');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⏳ Updating...';
+  }
+  
+  try {
+    // Sync scenario to backend and get authoritative totals
+    const backendData = await rebuildPricingFromBackend(window.SCENARIO_A);
+    
+    if (!backendData) {
+      console.warn('[PRICING] Backend rebuild returned null, keeping dirty flag');
+      alert('Failed to update pricing. Please try again.');
+      return;
+    }
+    
+    // Clear dirty flag on success
+    pricingDetailsDirty = false;
+    
+    console.log('[PRICING] Update complete with backend totals:', backendData.summary);
+    
+  } catch (error) {
+    console.error('[PRICING] Error updating pricing:', error);
+    alert('Error updating pricing: ' + error.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '💾 Update Pricing';
+    }
+  }
+}
+
+// Initialize Step 3 Pricing on load
+async function initPricingStep() {
+  const sessionId = window.APB?.sessionId || 
+                   sessionStorage.getItem('apb.session_id') || 
+                   'default';
+  
+  console.log('[PRICING] initPricingStep - loading working scenario for session:', sessionId);
+  
+  try {
+    // 1) Get existing working scenario (don't rebuild)
+    const resp = await fetch('/api/scenarios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        session_id: sessionId, 
+        reset: false  // IMPORTANT: reuse working scenario, don't rebuild baseline
+      })
+    });
+    
+    // Handle non-200 responses gracefully (422 = no scenario exists yet, which is expected)
+    if (!resp.ok) {
+      if (resp.status === 422) {
+        console.log('[PRICING] No working scenario exists yet (422) - will be created by Step 2 builder');
+      } else {
+        console.warn('[PRICING] API returned status', resp.status, '- waiting for Step 2 builder');
+      }
+      // This is expected for new sessions - buildScenariosAB will be called from Step 2
+      return;
+    }
+    
+    const data = await resp.json();
+    
+    // Check if we have a valid scenario
+    if (!data.ok || !data.scenarios || !data.scenarios.A) {
+      console.warn('[PRICING] No working scenario found, need to seed from Step 2 builder');
+      // This is expected for new sessions - buildScenariosAB will be called from Step 2
+      return;
+    }
+    
+    // 2) Store scenario in memory
+    window.SCENARIO_A = data.scenarios.A;
+    window.SCENARIOS = data.scenarios;
+    
+    console.log('[PRICING] Loaded working scenario:', {
+      items: window.SCENARIO_A.items?.length,
+      project_start: window.SCENARIO_A.project_start
+    });
+    
+    // 3) Sync + rebuild both panels + cards from backend
+    await rebuildPricingFromBackend(window.SCENARIO_A);
+    
+    console.log('[PRICING] Step 3 initialized with backend totals');
+    
+  } catch (error) {
+    // Network errors or JSON parsing failures
+    console.log('[PRICING] Init failed (expected for new session):', error.message);
+  }
+}
+
+// Export GPT 5.1 Pro functions to global scope
+window.pricingDetailsDirty = false;
+window.updateScenarioItem = updateScenarioItem;
+window.onPricingDetailHoursChange = onPricingDetailHoursChange;
+window.onPricingDetailRateChange = onPricingDetailRateChange;
+window.collectScenarioFromUi = collectScenarioFromUi;
+window.onStep3BuildScenarioClick = onStep3BuildScenarioClick;
+window.onUpdatePricingDetailsClick = onUpdatePricingDetailsClick;
+window.initPricingStep = initPricingStep;
+
+// GPT 5.1 Pro: Call initPricingStep on app.js load to hydrate SCENARIO_A from backend
+// This is called directly from app.js to avoid timing issues with window.onload
+console.log('[APP.JS] GPT 5.1 Pro exports complete, calling initPricingStep...');
+initPricingStep().catch(err => {
+  console.log('[APP.JS] initPricingStep completed (no working scenario yet or expected error):', err?.message || 'OK');
+});
+
+// ============================================================================
+// End GPT 5.1 Pro Step 3 Pricing Implementation
+// ============================================================================
+
 // Re-build scenario with current pricing settings
 async function rebuildScenario() {
   // Try to load from memory using centralized accessor

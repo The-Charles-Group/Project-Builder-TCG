@@ -475,7 +475,13 @@
             </tbody>
           </table>
         </div>
-        <!-- Save button removed - Build Scenario now handles sync + totals -->
+        <!-- GPT 5.1 Pro: Update Pricing button for Pricing Details edits -->
+        <div style="display: flex; justify-content: flex-end; margin-top: 12px; gap: 8px;">
+          <button id="update-pricing-details" onclick="window.onUpdatePricingDetailsClick && window.onUpdatePricingDetailsClick()" 
+                  style="background: var(--accent); color: white; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.9em;">
+            💾 Update Pricing
+          </button>
+        </div>
       </div>
 
       <!-- Enhanced Summary Panel -->
@@ -2032,7 +2038,9 @@
         
         // FIX #1: Set window.SCENARIOS (THIS WAS MISSING!)
         window.SCENARIOS = scenarios;
-        console.log('[BUILD] Set window.SCENARIOS:', window.SCENARIOS);
+        // GPT 5.1 Pro: Also set SCENARIO_A for edit-preserving handler detection
+        window.SCENARIO_A = scenarios.A;
+        console.log('[BUILD] Set window.SCENARIOS and window.SCENARIO_A:', window.SCENARIOS);
         
         // FIX #2: Save scenarios to localStorage for persistence between steps
         try {
@@ -3808,10 +3816,25 @@
       const applyBtn = document.getElementById('apply-btn');
       if (applyBtn) applyBtn.onclick = applySelection;
       
+      // GPT 5.1 Pro: Build Scenario button uses different handlers for initial vs subsequent builds
       const btnBuild = document.getElementById('btnBuild');
       if (btnBuild) btnBuild.onclick = () => {
         window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
-        buildScenariosAB();
+        
+        // If we already have SCENARIO_A (Step 3 already populated), use the edit-preserving handler
+        // Otherwise, use buildScenariosAB for initial scenario creation (Step 2 → Step 3)
+        if (window.SCENARIO_A && window.SCENARIO_A.items && window.SCENARIO_A.items.length > 0) {
+          console.log('[BUILD] Using onStep3BuildScenarioClick (preserves edits)');
+          if (typeof window.onStep3BuildScenarioClick === 'function') {
+            window.onStep3BuildScenarioClick();
+          } else {
+            console.warn('[BUILD] onStep3BuildScenarioClick not found, falling back to buildScenariosAB');
+            buildScenariosAB();
+          }
+        } else {
+          console.log('[BUILD] Using buildScenariosAB (initial build from Step 2)');
+          buildScenariosAB();
+        }
       };
       
       // Wire up new pricing buttons
@@ -3851,6 +3874,9 @@
       }
       
       // Step 2 -> Stage 2 transition is now handled in app.js onRunReconcile function
+      
+      // Note: GPT 5.1 Pro initPricingStep is now called directly from app.js after exports
+      // This avoids timing issues with window.onload vs defer script execution
     });
     
     // Hook up export buttons (Scenario A only)
