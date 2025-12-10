@@ -3818,22 +3818,32 @@
       
       // GPT 5.1 Pro: Build Scenario button uses different handlers for initial vs subsequent builds
       const btnBuild = document.getElementById('btnBuild');
-      if (btnBuild) btnBuild.onclick = () => {
+      if (btnBuild) btnBuild.onclick = async () => {
         window._scrollToPricingDetailsAfterBuild = true; // Set flag for pricing details scroll
         
         // If we already have SCENARIO_A (Step 3 already populated), use the edit-preserving handler
         // Otherwise, use buildScenariosAB for initial scenario creation (Step 2 → Step 3)
         if (window.SCENARIO_A && window.SCENARIO_A.items && window.SCENARIO_A.items.length > 0) {
-          console.log('[BUILD] Using onStep3BuildScenarioClick (preserves edits)');
-          if (typeof window.onStep3BuildScenarioClick === 'function') {
-            window.onStep3BuildScenarioClick();
+          console.log('[BUILD] Existing SCENARIO_A found, preserving edits');
+          
+          // Try to use onStep3BuildScenarioClick from app.js
+          // This preserves user edits to hours/rates instead of resetting to defaults
+          if (window.onStep3BuildScenarioClick) {
+            console.log('[BUILD] Calling onStep3BuildScenarioClick');
+            try {
+              await window.onStep3BuildScenarioClick();
+            } catch (err) {
+              console.error('[BUILD] onStep3BuildScenarioClick error:', err);
+              // Fall back to buildScenariosAB if there's an error
+              await buildScenariosAB();
+            }
           } else {
-            console.warn('[BUILD] onStep3BuildScenarioClick not found, falling back to buildScenariosAB');
-            buildScenariosAB();
+            console.warn('[BUILD] onStep3BuildScenarioClick not available, using buildScenariosAB');
+            await buildScenariosAB();
           }
         } else {
-          console.log('[BUILD] Using buildScenariosAB (initial build from Step 2)');
-          buildScenariosAB();
+          console.log('[BUILD] No SCENARIO_A, using buildScenariosAB (initial build from Step 2)');
+          await buildScenariosAB();
         }
       };
       

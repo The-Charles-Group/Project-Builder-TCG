@@ -969,7 +969,7 @@ def _recompute_totals(scn: dict) -> dict:
     for item in items:
         # Get hours from item (using backward-compatible lookup)
         hours = 0.0
-        for key in ["Planned_Hours", "planned_hours", "hours"]:
+        for key in ["Planned_Hours", "planned_hours", "hours", "total_hours"]:
             if key in item and item[key] not in (None, ""):
                 try:
                     hours = float(item[key])
@@ -979,7 +979,7 @@ def _recompute_totals(scn: dict) -> dict:
         
         # Check if item has cadence-based pricing (price_usd or total_price already set)
         cadence_price = None
-        for key in ["price_usd", "total_price"]:
+        for key in ["price_usd", "total_price", "price", "Price_USD"]:
             if key in item and item[key] not in (None, ""):
                 try:
                     cadence_price = float(item[key])
@@ -1019,7 +1019,7 @@ def _recompute_totals(scn: dict) -> dict:
 
 def get_rate_from_item(item: dict) -> float:
     """Get rate from item, checking multiple field name conventions."""
-    for key in ["Rate_USD", "rate_usd", "rate", "Blended_Rate_USD", "blended_rate_usd"]:
+    for key in ["Rate_USD", "rate_usd", "rate", "Blended_Rate_USD", "blended_rate_usd", "effective_rate", "blended_rate"]:
         if key in item and item[key] not in (None, ""):
             try:
                 return float(item[key])
@@ -1029,7 +1029,7 @@ def get_rate_from_item(item: dict) -> float:
 
 def get_hours_from_item(item: dict) -> float:
     """Get hours from item, checking multiple field name conventions."""
-    for key in ["Planned_Hours", "planned_hours", "hours"]:
+    for key in ["Planned_Hours", "planned_hours", "hours", "total_hours"]:
         if key in item and item[key] not in (None, ""):
             try:
                 return float(item[key])
@@ -8812,9 +8812,9 @@ async def api_rebuild_breakdown(payload: RebuildBreakdownPayload):
                     "components": []
                 }
             
-            hours = float(item.get("Planned_Hours") or item.get("hours") or 0)
-            price = float(item.get("Price_USD") or item.get("price_usd") or 0)
-            rate = float(item.get("Rate_USD") or item.get("rate_usd") or DEFAULT_BILLABLE_RATE_USD)
+            hours = get_hours_from_item(item)
+            price = float(item.get("Price_USD") or item.get("price_usd") or item.get("price") or item.get("total_price") or 0)
+            rate = get_rate_from_item(item) or DEFAULT_BILLABLE_RATE_USD
             
             deliverable_summary[deliv_code]["hours"] += hours
             deliverable_summary[deliv_code]["price"] += price
